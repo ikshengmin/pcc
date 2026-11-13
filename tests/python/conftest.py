@@ -66,7 +66,7 @@ def python_program_compiler(request):
     compiler = request.getfixturevalue("native_pcc1_compiler")
 
     def compile_program(source, output, *, backend, runtime_archive,
-                        ir_scaffold_mode="on"):
+                        ir_scaffold_mode="on", object_inputs=()):
         env = dict(os.environ)
         env.pop("LC_ALL", None)
         env.update(
@@ -82,6 +82,14 @@ def python_program_compiler(request):
         )
         command = [str(compiler), "--backend", backend, "--ir-scaffold", ir_scaffold_mode,
                    str(source), "-o", str(output)]
+        # Match the public typed object-input route. Never use raw link_args,
+        # whose strict native wrapper deliberately rejects object-shaped paths.
+        assert isinstance(object_inputs, (tuple, list))
+        for value in object_inputs:
+            path = os.fspath(value)
+            assert isinstance(path, str) and not path.startswith(("-", "@"))
+            assert path.lower().endswith((".o", ".obj"))
+            command.extend(("--link-arg", path))
         # stderr streams into its file, so a gate killed mid-compile keeps
         # the coordinator and worker timing printed so far. The 400 s compile
         # budget matches the prior-worker gate's NATIVE_GATE_TIMEOUT_S.

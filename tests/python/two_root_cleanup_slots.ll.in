@@ -1,0 +1,48 @@
+; Check the real helper's postcondition before any caller frame is retired.
+; Inputs remain owned by the Python caller. No replacement cleanup body.
+; Status 1: an operand slot survived; status 2: selecting exception changed.
+@two_root_cleanup_probe_map = internal constant i32 __SLOT_COUNT__
+declare void @py_incref(ptr)
+declare void @py_raise(ptr)
+declare ptr @py_current_exception()
+declare void @py_clear_exception()
+declare void @pcc_gc_frame_enter(ptr, ptr)
+declare void @pcc_gc_frame_leave(ptr)
+declare void @pcc_gc_store_root(ptr, ptr)
+declare void @py_cleanup_two_roots_preserving_exception(ptr, ptr)
+
+define i64 @test_two_root_cleanup_slots(ptr %value, ptr %error) {
+entry:
+  %roots = alloca [__SLOT_COUNT__ x ptr], align __POINTER_SIZE__
+  ; Named layout: first operand, second operand, selecting exception.
+  %first = getelementptr i8, ptr %roots, i64 __FIRST_OFFSET__
+  %second = getelementptr i8, ptr %roots, i64 __SECOND_OFFSET__
+  %saved = getelementptr i8, ptr %roots, i64 __EXCEPTION_OFFSET__
+  call void @py_incref(ptr %value)
+  call void @py_incref(ptr %value)
+  call void @py_incref(ptr %error)
+  store ptr %value, ptr %first
+  store ptr %value, ptr %second
+  store ptr %error, ptr %saved
+  call void @pcc_gc_frame_enter(ptr @two_root_cleanup_probe_map, ptr %roots)
+  %rooted_error = load ptr, ptr %saved
+  call void @py_raise(ptr %rooted_error)
+  call void @py_cleanup_two_roots_preserving_exception(ptr %first, ptr %second)
+  %first_after = load ptr, ptr %first
+  %second_after = load ptr, ptr %second
+  %first_empty = icmp eq ptr %first_after, null
+  %second_empty = icmp eq ptr %second_after, null
+  %slots_empty = and i1 %first_empty, %second_empty
+  %pending = call ptr @py_current_exception()
+  %selected = load ptr, ptr %saved
+  %same_exception = icmp eq ptr %pending, %selected
+  %exception_status = select i1 %same_exception, i64 0, i64 2
+  %status = select i1 %slots_empty, i64 %exception_status, i64 1
+  call void @py_clear_exception()
+  call void @pcc_gc_store_root(ptr %saved, ptr null)
+  ; On failure, also retire any owner the broken helper left behind.
+  call void @pcc_gc_store_root(ptr %second, ptr null)
+  call void @pcc_gc_store_root(ptr %first, ptr null)
+  call void @pcc_gc_frame_leave(ptr %roots)
+  ret i64 %status
+}

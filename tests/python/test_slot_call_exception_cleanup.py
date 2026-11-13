@@ -589,12 +589,12 @@ TWO_ROOT_PROGRAM = textwrap.dedent('''\
 ''')
 
 
-def _assert_two_root_program_error_edge():
+def _assert_two_root_program_error_edge(program=TWO_ROOT_PROGRAM):
     from tests.python.test_owned_cleanup_helper_ir import verify_stackmaps
     from tests.python.test_shared_call_binding import _function
     from tests.python.test_slot_call_lexical_roots import _emit
 
-    codegen, text = _emit(TWO_ROOT_PROGRAM, "two_root_cleanup")
+    codegen, text = _emit(program, "two_root_cleanup")
     verify_stackmaps(text)
     body = _function(text, "user_two_root_cleanup_probe")
     assert "@py_list_new(" not in body and "@py_tuple_from_list(" not in body
@@ -694,14 +694,42 @@ def test_two_root_cleanup_program_reference_and_error_edge(tmp_path):
 def test_two_root_cleanup_error_path_native_five_gc(
     python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
 ):
-    # Native execution under all five modes is separate from the deterministic
-    # moving-root and hostile intermediate-TLS witnesses in helper-body tests.
+    from tests.python.two_root_lifecycle_support import (
+        TRACING_TWO_ROOT_PROGRAM,
+        assert_compiler_two_root_error_edge,
+        assert_two_root_slots_native,
+    )
+
+    # Preserve the original immediate-death witness on GC0. GC1-GC4 have
+    # no reference counts: their release postcondition and collection death
+    # are separate observations, not alternative acceptable event orders.
     (tmp_path / "two-root-cleanup.ll").write_text(_assert_two_root_program_error_edge())
+    (tmp_path / "two-root-tracing-cleanup.ll").write_text(
+        _assert_two_root_program_error_edge(TRACING_TWO_ROOT_PROGRAM),
+    )
     mode = request.node.callspec.params["python_program_compiler"]
+    counted = tmp_path / "gc0"
+    tracing = tmp_path / "tracing"
+    slots = tmp_path / "slots"
+    for directory in (counted, tracing, slots):
+        directory.mkdir()
     assert_owned_program(
-        TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path,
+        TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", counted,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
-        provenance_probe="2",
+        provenance_probe="2", backends=(0,),
+        emitted_ir_check=assert_compiler_two_root_error_edge,
+    )
+    # This native ABI witness checks NULL slots and the original TLS error
+    # before any observing/producer thread can exit and hide a leaked root.
+    assert_two_root_slots_native(
+        python_program_compiler, mode, explicit_owned_runtime, slots, capfd,
+    )
+    assert_owned_program(
+        TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tracing,
+        python_program_compiler, mode, explicit_owned_runtime, capfd,
+        provenance_probe="2", backends=(1, 2, 3, 4),
+        reference_arguments=("cyclic-reference",),
+        emitted_ir_check=assert_compiler_two_root_error_edge,
     )
 
 

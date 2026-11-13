@@ -380,6 +380,9 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/owned_ir_validation.py",
         "tests/python/owned_regression_support.py",
         "tests/python/process_timeout.py",
+        "tests/python/two_root_lifecycle_support.py",
+        "tests/python/two_root_cleanup_slots.ll.in",
+        "tests/python/test_two_root_lifecycle_support.py",
     )
     assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
                and node.value.id == "TWO_ROOT_CLEANUP_INPUTS"

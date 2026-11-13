@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Bounded host-pcc0 object regressions using the terminal Stage1 runtime.
 
-Five common compiles and twenty-five native executions, plus one Win64
+Seven common executable compiles and thirty native executions, plus one Win64
 callback/root compile and five executions, with no archive/compiler provisioning.
+The two-root split adds two executable compiles and five executions within the
+unchanged 300-second total budget; budget fit must be established in CI.
 This independent gate does not qualify Stage1, pcc1 or a self-host fixed point.
 """
 
@@ -13,6 +15,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import uuid
 
@@ -79,6 +82,7 @@ def expected_programs():
     from tests.python.test_object_type_identity import PROGRAM
     from tests.python.test_slot_call_exception_cleanup import TWO_ROOT_PROGRAM
     from tests.python.test_super_call_result_roots import NATIVE_SOURCE
+    from tests.python.two_root_lifecycle_support import TRACING_TWO_ROOT_PROGRAM
 
     return {
         "object-identity": (PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n"),
@@ -86,6 +90,7 @@ def expected_programs():
         "dict-copy-result": (dict_method_program("copy"), "DICT_METHOD_OWNERS_OK\n"),
         "dict-pop-result": (dict_method_program("pop"), "DICT_METHOD_OWNERS_OK\n"),
         "two-root-cleanup": (TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n"),
+        "two-root-tracing": (TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n"),
     }
 
 
@@ -105,46 +110,156 @@ def verify_native_image(binary):
     return {"format": "pe", "libraries": libraries}
 
 
-def verify_program_receipts(directory, runtime):
+def read_receipt(path):
+    def unique_pairs(pairs):
+        result = {}
+        for key, value in pairs:
+            assert key not in result, "duplicate receipt key: " + key
+            result[key] = value
+        return result
+
+    return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
+
+
+def expected_backends(label):
+    return [0] if label == "two-root-cleanup" else (
+        [1, 2, 3, 4] if label == "two-root-tracing" else list(range(5))
+    )
+
+
+def verify_executions(record, binary, backends, output, *, strict=False):
+    if strict:
+        assert record["gc_backends"] == backends
+        assert all(type(gc) is int for gc in record["gc_backends"])
+    executions = record["executions"]
+    assert [row["gc_backend"] for row in executions] == backends
+    for row in executions:
+        assert type(row["gc_backend"]) is int
+        assert row["command"] == [str(binary)]
+        assert (row["returncode"], row["stdout"], row["stderr"]) == (0, output, "")
+    return [
+        {"requested_gc_backend": row["gc_backend"],
+         **{key: value for key, value in row.items() if key != "gc_backend"}}
+        for row in executions
+    ]
+
+
+def verify_common_identity(record, source, binary, runtime, run_id, *, strict=False):
+    assert record["status"] == "PASS"
+    if strict:
+        assert run_id and record["run_id"] == run_id, "stale native execution receipt"
+    assert record["compiler_fixture_parameter"] == record["compiler_mode"] == "pcc0"
+    assert record["backend"] == "self"
+    assert record["source_sha256"] == sha(source)
+    assert record["runtime_archive"] == runtime["path"]
+    assert record["runtime_sha256"] == runtime["hashes"][""]
+    if strict:
+        assert binary.is_absolute() and record["binary_path"] == str(binary)
+    assert record["binary_sha256"] == sha(binary)
+
+
+def verify_two_root_ir(directory, record, label):
+    from tests.python.two_root_lifecycle_support import assert_compiler_two_root_error_edge
+
+    dump = directory / "executable-ir"
+    paths = sorted(dump.iterdir())
+    assert paths and all(path.is_file() and not path.is_symlink() for path in paths)
+    assert all(re.fullmatch(r"self_backend_input_[0-9]+\.ll", path.name) for path in paths)
+    assert {path.name for path in paths} == {
+        "self_backend_input_" + str(index) + ".ll" for index in range(len(paths))
+    }, "missing or duplicate executable IR module"
+    inventory = {path.name: sha(path) for path in paths}
+    assert record["executable_input_ir"] == inventory, "executable IR inventory differs"
+    assert len(set(inventory.values())) == len(inventory), "duplicate executable IR module"
+    modules = [path.read_text(encoding="utf-8") for path in paths]
+    # These distinct emitted string constants bind the collection mode to
+    # its own executable input rather than accepting the other's fail edge.
+    markers = {"two-root-cleanup": "TWO_ROOT_CLEANUP_EXCEPTION_OK",
+               "two-root-tracing": "TWO_ROOT_TRACING_CLEANUP_OK"}
+    # The owned IR renderer escapes every i8 byte as \HH. Decode the
+    # string payloads, preserving module boundaries for the verifier below.
+    literals = []
+    for module in modules:
+        for payload in re.findall(r'c"((?:[^"\\]|\\[0-9a-fA-F]{2})*)"', module):
+            literals.append(re.sub(r"\\([0-9a-fA-F]{2})",
+                                   lambda match: chr(int(match[1], 16)), payload))
+    assert any(markers[label] in literal for literal in literals), "wrong two-root executable IR source"
+    assert all(not any(marker in literal for literal in literals)
+               for key, marker in markers.items() if key != label)
+    assert_compiler_two_root_error_edge(modules)
+
+
+def expected_slot_object(ir_text, target):
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    return emit_owned_object(ir_text, target)
+
+
+def verify_two_root_slots(directory, runtime, run_id, lifecycle_root):
+    from tests.python.two_root_lifecycle_support import SLOT_PROBE_PROGRAM, cleanup_slots_ir
+
+    paths = sorted(directory.rglob("slot-postcondition.json"))
+    assert len(paths) == 1, "missing or duplicate two-root slot postcondition receipt"
+    path = paths[0]
+    assert path.parent == lifecycle_root / "slots", "unpaired two-root slot receipt"
+    record = read_receipt(path)
+    assert record["schema"] == "pcc.two-root-slots.v1"
+    source, binary = path.parent / "slots.py", path.parent / "slots.out"
+    assert source.read_text(encoding="utf-8") == SLOT_PROBE_PROGRAM
+    verify_common_identity(record, source, binary, runtime, run_id, strict=True)
+    assert record["target"] == runtime["target"]
+    assert record["probe_object_producer"] == "host-pcc-owned-object-emitter"
+    probe_ir, helper = path.parent / "slots.ll", path.parent / "slots.o"
+    expected_ir = cleanup_slots_ir(runtime["target"])
+    assert probe_ir.read_bytes() == expected_ir.encode("utf-8"), "wrong slot postcondition IR"
+    assert record["probe_ir_sha256"] == sha(probe_ir)
+    assert helper.read_bytes() == expected_slot_object(expected_ir, runtime["target"])
+    assert record["probe_object_sha256"] == sha(helper)
+    linkage = record["linkage"]
+    assert linkage["schema"] == "pcc.owned-image-linkage.v1"
+    assert linkage["libpython"] == "off" and linkage["binary_sha256"] == sha(binary)
+    executions = verify_executions(record, binary, list(range(5)), "TWO_ROOT_SLOTS_OK\n", strict=True)
+    return {"receipt": str(path), **record, "image": verify_native_image(binary),
+            "executions": executions}
+
+
+def verify_program_receipts(directory, runtime, run_id):
     expected = expected_programs()
     paths = sorted(directory.rglob("ownership-regression.json"))
-    assert len(expected) == len(NODES), "native node/source manifest count differs"
-    assert len(paths) <= len(NODES), "unexpected native execution receipt count"
-    results = {}
+    assert len(expected) == len(NODES) + 1, "native node/source manifest count differs"
+    assert len(paths) <= len(expected), "unexpected native execution receipt count"
+    results, two_root_directories = {}, {}
     for path in paths:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = read_receipt(path)
         source = path.parent / "program.py"
         binary = path.parent / "program.out"
-        # Text comparison is intentional: Windows writes CRLF, while the
-        # recorded source digest still binds the exact bytes on that runner.
+        # Windows writes CRLF; text binds source semantics while the digest
+        # still binds its exact bytes on that runner.
         program = source.read_text(encoding="utf-8")
         labels = [label for label, (text, _output) in expected.items() if text == program]
         assert len(labels) == 1, "unexpected or duplicate source-program receipt"
         label = labels[0]
         _program, output = expected.pop(label)
-        assert record["status"] == "PASS"
-        assert record["compiler_fixture_parameter"] == record["compiler_mode"] == "pcc0"
-        assert record["backend"] == "self"
-        assert record["source_sha256"] == sha(source)
-        assert record["runtime_archive"] == runtime["path"]
-        assert record["runtime_sha256"] == runtime["hashes"][""]
-        assert record["binary_sha256"] == sha(binary)
+        split = label in ("two-root-cleanup", "two-root-tracing")
+        verify_common_identity(record, source, binary, runtime, run_id, strict=split)
         oracle = record["reference"]
+        arguments = ["cyclic-reference"] if label == "two-root-tracing" else []
+        if split:
+            assert oracle["command"] == [sys.executable, str(source), *arguments]
         assert (oracle["returncode"], oracle["stdout"], oracle["stderr"]) == (0, output, "")
-        executions = record["executions"]
-        assert [row["gc_backend"] for row in executions] == list(range(5))
-        for row in executions:
-            assert row["command"] == [str(binary)]
-            assert (row["returncode"], row["stdout"], row["stderr"]) == (0, output, "")
-        results[label] = {
-            "receipt": str(path), **record, "image": verify_native_image(binary),
-            "executions": [
-                {"requested_gc_backend": row["gc_backend"],
-                 **{key: value for key, value in row.items() if key != "gc_backend"}}
-                for row in executions
-            ],
-        }
+        if label in ("two-root-cleanup", "two-root-tracing"):
+            name = "gc0" if label == "two-root-cleanup" else "tracing"
+            assert path.parent.name == name, "swapped two-root receipt directory"
+            two_root_directories[label] = path.parent.parent
+            verify_two_root_ir(path.parent, record, label)
+        executions = verify_executions(record, binary, expected_backends(label), output, strict=split)
+        results[label] = {"receipt": str(path), **record,
+                          "image": verify_native_image(binary), "executions": executions}
     assert not expected, "missing native execution receipts: " + ", ".join(sorted(expected))
+    assert len(set(two_root_directories.values())) == 1, "unpaired two-root lifecycle receipts"
+    results["two-root-slots"] = verify_two_root_slots(
+        directory, runtime, run_id, two_root_directories["two-root-cleanup"],
+    )
     return results
 
 
@@ -248,7 +363,7 @@ def run(out):
         save(receipt_path, receipt)
         try:
             run_pytest(out, NAME, nodes, env, integration=True, timeout=TIMEOUT_S)
-            receipt["programs"] = verify_program_receipts(out / NAME, runtime)
+            receipt["programs"] = verify_program_receipts(out / NAME, runtime, run_id)
             if WINDOWS_NODES[0] in nodes:
                 receipt["programs"]["win64-home-callback"] = verify_win64_callback_receipt(
                     out / NAME, runtime, run_id,

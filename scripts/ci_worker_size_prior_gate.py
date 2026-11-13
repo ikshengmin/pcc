@@ -264,6 +264,9 @@ TWO_ROOT_CLEANUP_INPUTS = (
     "tests/owned_ir_validation.py",
     "tests/python/owned_regression_support.py",
     "tests/python/process_timeout.py",
+    "tests/python/two_root_lifecycle_support.py",
+    "tests/python/two_root_cleanup_slots.ll.in",
+    "tests/python/test_two_root_lifecycle_support.py",
 )
 RUNTIME_ABI_CHUNK_TEST = "tests/python/test_runtime_abi_chunking.py"
 GC_RELOCATION_PAGE_CURSOR_MODEL_TEST = "tests/python/test_gc_relocation_page_cursor_model.py"

@@ -26,6 +26,7 @@ def explicit_owned_runtime(request, monkeypatch):
     assert selected, "Set PCC_RUNTIME_ARCHIVE to a source-matched owned archive"
     monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
     monkeypatch.setenv("PCC_NO_AUTO_PCC1", "1")
+    monkeypatch.setenv("PCC_TEST_COMPILER_STRICT", "1")
     archive = request.getfixturevalue("pcc_runtime_archive")
     assert archive == Path(selected).resolve(strict=True)
 
@@ -74,13 +75,13 @@ def _record_execution(directory, label, command, environment):
     return record
 
 
-def assert_reference_program(program, expected, directory):
+def assert_reference_program(program, expected, directory, *, arguments=()):
     source = directory / "program.py"
     source.write_text(program)
     environment = dict(os.environ)
     environment.pop("LC_ALL", None)
     result = _record_execution(
-        directory, "reference", [sys.executable, str(source)], environment,
+        directory, "reference", [sys.executable, str(source), *arguments], environment,
     )
     assert (result["returncode"], result["stdout"], result["stderr"]) == (
         0, expected, "",
@@ -98,8 +99,16 @@ def assert_owned_program(
     capfd,
     *,
     provenance_probe=None,
+    backends=tuple(range(5)),
+    reference_arguments=(),
+    emitted_ir_check=None,
 ):
-    source, oracle = assert_reference_program(program, expected, directory)
+    backends = tuple(backends)
+    assert backends and len(backends) == len(set(backends))
+    assert all(type(backend) is int and 0 <= backend < 5 for backend in backends)
+    source, oracle = assert_reference_program(
+        program, expected, directory, arguments=reference_arguments,
+    )
     binary = directory / "program.out"
     requested_compiler_mode = compiler_mode
     if compiler.__module__ == "tests.pcc1_route":
@@ -107,25 +116,43 @@ def assert_owned_program(
         compiler_mode = "pcc1-routed"
     receipt = {
         "status": "RUNNING",
+        "run_id": os.environ.get("PCC_NATIVE_OBJECT_GATE_RUN_ID", ""),
         "compiler_fixture_parameter": requested_compiler_mode,
         "compiler_mode": compiler_mode,
         "backend": "self",
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
+        "binary_path": str(binary.resolve()),
         "runtime_archive": str(archive),
         "runtime_sha256": hashlib.sha256(archive.read_bytes()).hexdigest(),
         "reference": oracle,
+        "gc_backends": list(backends),
         "executions": [],
     }
     receipt_path = directory / "ownership-regression.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     try:
-        compiler(
-            str(source),
-            str(binary),
-            backend="self",
-            ir_scaffold_mode="on",
-            runtime_archive=str(archive),
-        )
+        # Capture the IR consumed by this executable emission, not a second
+        # host/native --emit-llvm invocation with merely matching source.
+        with pytest.MonkeyPatch.context() as patch:
+            if emitted_ir_check is not None:
+                dump = directory / "executable-ir"
+                dump.mkdir()  # Fresh and empty: stale output is never evidence.
+                patch.setenv("PCC_DEBUG_SELF_IR_DUMP_DIR", str(dump))
+            compiler(
+                str(source), str(binary), backend="self", ir_scaffold_mode="on",
+                runtime_archive=str(archive),
+            )
+        if emitted_ir_check is not None:
+            emitted = sorted(dump.glob("self_backend_input_*.ll"))
+            assert emitted, "Executable compiler produced no self-backend IR receipt"
+            # Preserve module scope: internal map names may legally repeat.
+            emitted_ir_check([path.read_text() for path in emitted])
+            receipt["executable_input_ir"] = {
+                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                for path in emitted
+            }
+            assert hashlib.sha256(source.read_bytes()).hexdigest() == receipt["source_sha256"]
+            assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["runtime_sha256"]
     except Exception as error:
         receipt["status"] = "COMPILE_FAILED"
         receipt["error"] = type(error).__name__ + ": " + str(error)
@@ -151,7 +178,7 @@ def assert_owned_program(
     receipt["linkage"] = linkage
     receipt["libpython"] = linkage["libpython"]
     receipt["binary_sha256"] = linkage["binary_sha256"]
-    for backend in range(5):
+    for backend in backends:
         environment = dict(
             os.environ,
             PCC_GC_BACKEND=str(backend),

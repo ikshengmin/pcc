@@ -21,28 +21,83 @@ from tests.python import owned_regression_support as support
 ROOT = Path(__file__).resolve().parents[1]
 
 
+RUN_ID = "host-control-run"
+
+
+def _receipt_label(path):
+    return {"gc0": "two-root-cleanup", "tracing": "two-root-tracing"}.get(
+        path.parent.name, path.parent.name,
+    )
+
+
+def _slot_receipt(directory, runtime):
+    from tests.python.two_root_lifecycle_support import SLOT_PROBE_PROGRAM, cleanup_slots_ir
+
+    directory.mkdir(parents=True)
+    source, binary = directory / "slots.py", directory / "slots.out"
+    source.write_text(SLOT_PROBE_PROGRAM, encoding="utf-8")
+    binary.write_bytes(b"host-only slot binary; never executed")
+    ir_text = cleanup_slots_ir(runtime["target"])
+    probe_ir, helper = directory / "slots.ll", directory / "slots.o"
+    probe_ir.write_text(ir_text, encoding="utf-8", newline="\n")
+    helper.write_bytes(gate.expected_slot_object(ir_text, runtime["target"]))
+    record = {
+        "schema": "pcc.two-root-slots.v1", "status": "PASS", "run_id": RUN_ID,
+        "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0", "backend": "self",
+        "target": runtime["target"], "source_sha256": gate.sha(source),
+        "runtime_archive": runtime["path"], "runtime_sha256": runtime["hashes"][""],
+        "binary_path": str(binary), "binary_sha256": gate.sha(binary),
+        "probe_ir_sha256": gate.sha(probe_ir), "probe_object_sha256": gate.sha(helper),
+        "probe_object_producer": "host-pcc-owned-object-emitter",
+        "linkage": {"schema": "pcc.owned-image-linkage.v1", "libpython": "off",
+                    "binary_sha256": gate.sha(binary)},
+        "gc_backends": list(range(5)),
+        "executions": [{"command": [str(binary)], "gc_backend": gc, "returncode": 0,
+                        "stdout": "TWO_ROOT_SLOTS_OK\n", "stderr": ""} for gc in range(5)],
+    }
+    path = directory / "slot-postcondition.json"
+    path.write_text(json.dumps(record), encoding="utf-8")
+    return path
+
+
 def _receipts(directory, runtime):
+    from tests.python.test_two_root_lifecycle_support import EDGE_IR
+
     paths = []
     for label, (program, output) in gate.expected_programs().items():
-        work = directory / label
+        split = label in ("two-root-cleanup", "two-root-tracing")
+        work = (directory / "two-root" / ("gc0" if label == "two-root-cleanup" else "tracing")
+                if split else directory / label)
         work.mkdir(parents=True)
         source = work / "program.py"
         source.write_text(program, encoding="utf-8")
         binary = work / "program.out"
-        binary.write_bytes(b"host-only receipt control; never executed")
-        oracle = {"command": [sys.executable, str(source)],
+        binary.write_bytes(("host-only receipt control; never executed: " + label).encode())
+        arguments = ["cyclic-reference"] if label == "two-root-tracing" else []
+        oracle = {"command": [sys.executable, str(source), *arguments],
                   "returncode": 0, "stdout": output, "stderr": ""}
+        backends = gate.expected_backends(label)
         record = {
-            "status": "PASS", "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0",
+            "status": "PASS", "run_id": RUN_ID,
+            "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0",
             "backend": "self", "source_sha256": gate.sha(source),
             "runtime_archive": runtime["path"], "runtime_sha256": runtime["hashes"][""],
-            "binary_sha256": gate.sha(binary), "reference": oracle,
-            "executions": [{**oracle, "command": [str(binary)], "gc_backend": gc}
-                           for gc in range(5)],
+            "binary_path": str(binary), "binary_sha256": gate.sha(binary), "reference": oracle,
+            "gc_backends": backends,
+            "executions": [{**oracle, "command": [str(binary)], "gc_backend": gc} for gc in backends],
         }
+        if split:
+            dump = work / "executable-ir"
+            dump.mkdir()
+            module = dump / "self_backend_input_0.ll"
+            escaped = "".join("\\" + format(byte, "02X") for byte in output.encode())
+            module.write_text(EDGE_IR + '@marker = constant [' + str(len(output))
+                              + ' x i8] c"' + escaped + '"\n')
+            record["executable_input_ir"] = {module.name: gate.sha(module)}
         path = work / "ownership-regression.json"
         path.write_text(json.dumps(record), encoding="utf-8")
         paths.append(path)
+    _slot_receipt(directory / "two-root" / "slots", runtime)
     return paths
 
 
@@ -69,11 +124,15 @@ def admitted(tmp_path, monkeypatch):
     # Common-program controls remain platform-independent; the Windows
     # extension has its own selection and receipt controls below.
     monkeypatch.setattr(gate, "selected_nodes", lambda: gate.NODES)
+    from tests.python import test_owned_cleanup_helper_ir as stackmaps
+    monkeypatch.setattr(stackmaps, "verify_stackmaps", lambda text: None)
+    monkeypatch.setattr(gate.uuid, "uuid4", lambda: SimpleNamespace(hex=RUN_ID))
+    monkeypatch.setattr(gate, "expected_slot_object", lambda ir, target: b"host-only object:" + ir.encode())
     return source, runtime
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_twenty_five_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_thirty_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -105,10 +164,11 @@ def test_gate_reuses_terminal_runtime_and_records_twenty_five_executions(tmp_pat
     assert result["stage1_status"] == stage_status
     assert set(result["programs"]) == {
         "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
+        "two-root-tracing", "two-root-slots",
     }
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 25
-    for row in result["programs"].values():
-        assert [item["requested_gc_backend"] for item in row["executions"]] == list(range(5))
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 30
+    for label, row in result["programs"].items():
+        assert [item["requested_gc_backend"] for item in row["executions"]] == gate.expected_backends(label)
         assert all("gc_backend" not in item for item in row["executions"])
     assert json.loads((tmp_path / (gate.NAME + ".json")).read_text()) == result
 
@@ -206,15 +266,16 @@ def test_run_failure_or_identity_drift_is_never_a_pass(tmp_path, monkeypatch, ad
     "foreign-program", "duplicate-program",
 ))
 @pytest.mark.parametrize("label", (
-    "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
+    "object-identity", "super-result", "dict-copy-result", "dict-pop-result",
+    "two-root-cleanup", "two-root-tracing",
 ))
-def test_native_evidence_requires_exact_source_and_all_five_successes(
+def test_native_evidence_requires_exact_source_and_requested_collectors(
     tmp_path, monkeypatch, admitted, change, label,
 ):
     _source, runtime = admitted
     directory = tmp_path / "receipts"
     paths = _receipts(directory, runtime)
-    path = next(path for path in paths if path.parent.name == label)
+    path = next(path for path in paths if _receipt_label(path) == label)
     record = json.loads(path.read_text())
     fields = {"failed-receipt": ("status", "FAIL"), "pcc1": ("compiler_fixture_parameter", "pcc1"),
               "routed-pcc1": ("compiler_mode", "pcc1-routed"), "llvm": ("backend", "llvm"),
@@ -229,15 +290,15 @@ def test_native_evidence_requires_exact_source_and_all_five_successes(
     elif change == "missing-gc":
         record["executions"].pop()
     elif change == "duplicate-gc":
-        record["executions"][-1]["gc_backend"] = 0
+        record["executions"].append(copy.deepcopy(record["executions"][0]))
     elif change == "failed-gc":
-        record["executions"][2]["returncode"] = 124
+        record["executions"][-1]["returncode"] = 124
     elif change == "wrong-output":
-        record["executions"][2]["stdout"] = "wrong"
+        record["executions"][-1]["stdout"] = "wrong"
     elif change == "stderr":
-        record["executions"][2]["stderr"] = "unexpected diagnostic"
+        record["executions"][-1]["stderr"] = "unexpected diagnostic"
     elif change == "wrong-command":
-        record["executions"][2]["command"] = [sys.executable]
+        record["executions"][-1]["command"] = [sys.executable]
     elif change == "foreign-program":
         (path.parent / "program.py").write_text("print('unrelated')")
     elif change == "duplicate-program":
@@ -247,13 +308,13 @@ def test_native_evidence_requires_exact_source_and_all_five_successes(
     if change == "missing-receipt":
         path.unlink()
     with pytest.raises(AssertionError):
-        gate.verify_program_receipts(directory, runtime)
+        gate.verify_program_receipts(directory, runtime, RUN_ID)
 
 
 @pytest.mark.parametrize("missing", (
     ("dict-copy-result",), ("dict-pop-result",),
-    ("dict-copy-result", "dict-pop-result"), ("two-root-cleanup",),
-), ids=("copy", "pop", "both", "two-root"))
+    ("dict-copy-result", "dict-pop-result"), ("two-root-cleanup",), ("two-root-tracing",),
+), ids=("copy", "pop", "both", "two-root", "tracing"))
 def test_missing_native_evidence_names_the_absent_program_and_fails_gate(
     tmp_path, monkeypatch, admitted, missing,
 ):
@@ -261,7 +322,7 @@ def test_missing_native_evidence_names_the_absent_program_and_fails_gate(
 
     def run(out, name, *args, **kwargs):
         for path in _receipts(out / name, runtime):
-            if path.parent.name in missing:
+            if _receipt_label(path) in missing:
                 path.unlink()
 
     monkeypatch.setattr(gate, "run_pytest", run)
@@ -291,6 +352,7 @@ def test_gate_selects_exact_dict_pcc0_nodes_and_program_sources():
 
 def test_gate_selects_exact_two_root_pcc0_node_and_program_source():
     from tests.python.test_slot_call_exception_cleanup import TWO_ROOT_PROGRAM
+    from tests.python.two_root_lifecycle_support import TRACING_TWO_ROOT_PROGRAM
 
     assert gate.NODES[4:] == (
         "tests/python/test_slot_call_exception_cleanup.py::"
@@ -298,6 +360,9 @@ def test_gate_selects_exact_two_root_pcc0_node_and_program_source():
     )
     assert gate.expected_programs()["two-root-cleanup"] == (
         TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n",
+    )
+    assert gate.expected_programs()["two-root-tracing"] == (
+        TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n",
     )
     assert set(prior.TWO_ROOT_CLEANUP_INPUTS) <= set(gate.TEST_INPUTS)
     assert len(gate.NODES) == len(set(gate.NODES)) == 5
@@ -427,9 +492,17 @@ def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch,
 def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypatch):
     from tests.python import test_slot_call_exception_cleanup as probe
 
-    calls = []
+    from tests.python import two_root_lifecycle_support as lifecycle
+
+    calls, slots, ir_programs = [], [], []
     monkeypatch.setattr(probe, "assert_owned_program", lambda *args, **kwargs: calls.append((args, kwargs)))
-    monkeypatch.setattr(probe, "_assert_two_root_program_error_edge", lambda: "host-only IR control\n")
+    monkeypatch.setattr(lifecycle, "assert_two_root_slots_native", lambda *args: slots.append(args))
+
+    def check(program=probe.TWO_ROOT_PROGRAM):
+        ir_programs.append(program)
+        return "host-only IR control\n"
+
+    monkeypatch.setattr(probe, "_assert_two_root_program_error_edge", check)
     compiler, archive, capfd = object(), object(), object()
     request = SimpleNamespace(node=SimpleNamespace(
         callspec=SimpleNamespace(params={"python_program_compiler": "pcc0"}),
@@ -437,9 +510,20 @@ def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypa
     probe.test_two_root_cleanup_error_path_native_five_gc(
         compiler, request, archive, tmp_path, capfd,
     )
-    assert calls == [((probe.TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path,
-                      compiler, "pcc0", archive, capfd), {"provenance_probe": "2"})]
-    assert (tmp_path / "two-root-cleanup.ll").read_text() == "host-only IR control\n"
+    assert calls == [
+        ((probe.TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path / "gc0",
+          compiler, "pcc0", archive, capfd),
+         {"provenance_probe": "2", "backends": (0,),
+          "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
+        ((lifecycle.TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tmp_path / "tracing",
+          compiler, "pcc0", archive, capfd),
+         {"provenance_probe": "2", "backends": (1, 2, 3, 4), "reference_arguments": ("cyclic-reference",),
+          "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
+    ]
+    assert slots == [(compiler, "pcc0", archive, tmp_path / "slots", capfd)]
+    assert ir_programs == [probe.TWO_ROOT_PROGRAM, lifecycle.TRACING_TWO_ROOT_PROGRAM]
+    for name in ("two-root-cleanup.ll", "two-root-tracing-cleanup.ll"):
+        assert (tmp_path / name).read_text() == "host-only IR control\n"
     tree = ast.parse((ROOT / gate.NODES[4].split("::")[0]).read_text())
     native = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                   and node.name == "test_two_root_cleanup_error_path_native_five_gc")
@@ -524,6 +608,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
         "tests/python/test_gc_phase_attribution.py",
         "tests/python/test_gc_phase_counter_widths.py",
         "tests/test_ci_native_object_regressions.py",
+        "tests/python/test_two_root_lifecycle_support.py",
         "tests/test_ci_native_ordering_gate.py",
         "tests/python/test_user_ordering_exhaustion.py",
     ]
@@ -648,8 +733,8 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     assert result["status"] == "PASS" and result["nodes"] == list(nodes)
     assert result["tree_rss_limit_bytes"] == 17179869184
     assert result["observed_collector_witness"] is False
-    assert len(result["programs"]) == 6
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 30
+    assert len(result["programs"]) == 8
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 35
     extra = result["programs"]["win64-home-callback"]
     assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is True
     assert [row["requested_gc_backend"] for row in extra["executions"]] == list(range(5))
@@ -710,7 +795,7 @@ def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
     elif change == "boolean-gc":
         record["executions"][1]["requested_gc_backend"] = True
     elif change == "failed-gc":
-        record["executions"][2]["returncode"] = 124
+        record["executions"][-1]["returncode"] = 124
     elif change == "wrong-output":
         record["executions"][2]["stdout"] = "616\n"
     elif change == "stderr":
@@ -780,3 +865,186 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
     assert "assert result == 616" in probe.MANAGED_CALLBACK_SOURCE
     assert 'assert caller_only[0]["answer"] == 73' in probe.MANAGED_CALLBACK_SOURCE
     assert 'assert collector() == int(os.environ["PCC_GC_BACKEND"])' in probe.MANAGED_CALLBACK_SOURCE
+
+
+@pytest.mark.parametrize("label", ("two-root-cleanup", "two-root-tracing"))
+@pytest.mark.parametrize("change", (
+    "stale-run", "missing-run", "binary-path", "requested-collectors", "boolean-collector",
+    "reference-mode", "native-cycle", "missing-ir", "ir-digest", "extra-module",
+    "missing-module", "duplicate-module", "swapped-ir", "wrong-cleanup", "wrong-map",
+    "wrong-module-map", "duplicate-receipt", "duplicate-json-key", "unpaired", "swapped-source",
+))
+def test_two_root_split_receipts_fail_closed(tmp_path, monkeypatch, admitted, label, change):
+    _source, runtime = admitted
+    directory = tmp_path / "receipts"
+    paths = _receipts(directory, runtime)
+    path = next(path for path in paths if _receipt_label(path) == label)
+    record = json.loads(path.read_text())
+    module = path.parent / "executable-ir/self_backend_input_0.ll"
+    if change == "stale-run":
+        record["run_id"] = "old-run"
+    elif change == "missing-run":
+        record.pop("run_id")
+    elif change == "binary-path":
+        record["binary_path"] = str(path.parent.parent / "wrong.out")
+    elif change == "requested-collectors":
+        record["gc_backends"] = list(range(5))
+    elif change == "boolean-collector":
+        value = bool(record["gc_backends"][0])
+        record["gc_backends"][0] = value
+        record["executions"][0]["gc_backend"] = value
+    elif change == "reference-mode":
+        record["reference"]["command"] = [sys.executable, str(path.parent / "program.py")]
+        if label == "two-root-cleanup":
+            record["reference"]["command"].append("cyclic-reference")
+    elif change == "native-cycle":
+        record["executions"][0]["command"].append("cyclic-reference")
+    elif change == "missing-ir":
+        record.pop("executable_input_ir")
+    elif change == "ir-digest":
+        record["executable_input_ir"][module.name] = "wrong"
+    elif change == "extra-module":
+        module.with_name("unrecorded.ll").write_text("foreign module")
+    elif change == "missing-module":
+        module.unlink()
+    elif change == "duplicate-module":
+        extra = module.with_name("self_backend_input_1.ll")
+        extra.write_bytes(module.read_bytes())
+        record["executable_input_ir"][extra.name] = gate.sha(extra)
+    elif change == "swapped-ir":
+        other = next(other for other in paths if _receipt_label(other) in
+                     {"two-root-cleanup", "two-root-tracing"} - {label})
+        module.write_bytes((other.parent / "executable-ir" / module.name).read_bytes())
+        record["executable_input_ir"][module.name] = gate.sha(module)
+    elif change in ("wrong-cleanup", "wrong-map", "wrong-module-map"):
+        text = module.read_text()
+        if change == "wrong-cleanup":
+            text = text.replace("@py_cleanup_two_roots_preserving_exception", "@missing_cleanup")
+        else:
+            text = text.replace("constant i32 1", "constant i32 2")
+        module.write_text(text)
+        record["executable_input_ir"][module.name] = gate.sha(module)
+        if change == "wrong-module-map":
+            extra = module.with_name("self_backend_input_1.ll")
+            extra.write_text("@map = internal constant i32 1\n")
+            record["executable_input_ir"][extra.name] = gate.sha(extra)
+    elif change == "swapped-source":
+        other_label = "two-root-tracing" if label == "two-root-cleanup" else "two-root-cleanup"
+        source = path.parent / "program.py"
+        source.write_text(gate.expected_programs()[other_label][0])
+        record["source_sha256"] = gate.sha(source)
+    path.write_text(json.dumps(record))
+    if change == "duplicate-json-key":
+        path.write_text(path.read_text().replace('{', '{"status": "PASS", ', 1))
+    elif change == "duplicate-receipt":
+        extra = directory / "duplicate"
+        extra.mkdir()
+        (extra / path.name).write_text(path.read_text())
+    elif change == "unpaired":
+        extra = directory / "unpaired"
+        extra.mkdir()
+        moved = path.parent.rename(extra / path.parent.name)
+        # Rebind paths so the sibling-pair invariant, not a stale path alone,
+        # must reject independently valid evidence from another test root.
+        moved_record = json.loads((moved / path.name).read_text())
+        moved_record["binary_path"] = str(moved / "program.out")
+        moved_record["reference"]["command"][1] = str(moved / "program.py")
+        for row in moved_record["executions"]:
+            row["command"] = [str(moved / "program.out")]
+        (moved / path.name).write_text(json.dumps(moved_record))
+    with pytest.raises((AssertionError, KeyError, FileNotFoundError)):
+        gate.verify_program_receipts(directory, runtime, RUN_ID)
+
+
+@pytest.mark.parametrize("change", (
+    "missing", "duplicate", "stale", "schema", "pcc1", "routed-pcc1", "llvm", "target",
+    "source", "source-digest", "runtime-path", "runtime-digest", "binary-path", "binary-digest",
+    "ir-digest", "object-digest", "object-producer", "first-slot", "second-slot", "tls",
+    "ir-crlf", "object-with-rehashed-digest", "missing-gc", "duplicate-gc", "boolean-gc",
+    "failed-gc", "wrong-output", "stderr", "native-command", "linkage", "linkage-digest",
+))
+def test_two_root_native_slot_postcondition_is_mandatory(tmp_path, monkeypatch, admitted, change):
+    _source, runtime = admitted
+    directory = tmp_path / "receipts"
+    _receipts(directory, runtime)
+    path = directory / "two-root/slots/slot-postcondition.json"
+    record = json.loads(path.read_text())
+    fields = {
+        "stale": ("run_id", "old-run"), "schema": ("schema", "other"),
+        "pcc1": ("compiler_fixture_parameter", "pcc1"), "routed-pcc1": ("compiler_mode", "pcc1-routed"),
+        "llvm": ("backend", "llvm"), "target": ("target", "other-target"),
+        "source-digest": ("source_sha256", "wrong"), "runtime-path": ("runtime_archive", "other.a"),
+        "runtime-digest": ("runtime_sha256", "wrong"), "binary-path": ("binary_path", "other.out"),
+        "binary-digest": ("binary_sha256", "wrong"), "ir-digest": ("probe_ir_sha256", "wrong"),
+        "object-digest": ("probe_object_sha256", "wrong"), "object-producer": ("probe_object_producer", "llvm"),
+    }
+    if change in fields:
+        key, value = fields[change]
+        record[key] = value
+    elif change == "source":
+        source = path.parent / "slots.py"
+        source.write_text("print('TWO_ROOT_SLOTS_OK')\n")
+        record["source_sha256"] = gate.sha(source)
+    elif change in ("first-slot", "second-slot", "tls", "ir-crlf"):
+        probe_ir = path.parent / "slots.ll"
+        data = probe_ir.read_bytes()
+        if change == "ir-crlf":
+            data = data.replace(b"\n", b"\r\n")
+        else:
+            original = {"first-slot": b"%first_empty = icmp eq ptr %first_after, null",
+                        "second-slot": b"%second_empty = icmp eq ptr %second_after, null",
+                        "tls": b"%same_exception = icmp eq ptr %pending, %selected"}[change]
+            assert original in data
+            data = data.replace(original, original.replace(b"icmp eq ptr", b"icmp ne ptr"))
+        probe_ir.write_bytes(data)
+        record["probe_ir_sha256"] = gate.sha(probe_ir)
+    elif change == "object-with-rehashed-digest":
+        helper = path.parent / "slots.o"
+        helper.write_bytes(helper.read_bytes() + b"wrong object")
+        record["probe_object_sha256"] = gate.sha(helper)
+    elif change == "missing-gc":
+        record["executions"].pop()
+    elif change == "duplicate-gc":
+        record["executions"][-1]["gc_backend"] = 0
+    elif change == "boolean-gc":
+        record["gc_backends"][1] = record["executions"][1]["gc_backend"] = True
+    elif change == "failed-gc":
+        record["executions"][2]["returncode"] = 1
+    elif change == "wrong-output":
+        record["executions"][2]["stdout"] = "wrong\n"
+    elif change == "stderr":
+        record["executions"][2]["stderr"] = "unexpected diagnostic"
+    elif change == "native-command":
+        record["executions"][2]["command"] = [sys.executable]
+    elif change == "linkage":
+        record["linkage"]["libpython"] = "on"
+    elif change == "linkage-digest":
+        record["linkage"]["binary_sha256"] = "wrong"
+    path.write_text(json.dumps(record))
+    if change == "missing":
+        path.unlink()
+    elif change == "duplicate":
+        extra = directory / "duplicate"
+        extra.mkdir()
+        (extra / path.name).write_text(path.read_text())
+    with pytest.raises((AssertionError, KeyError, FileNotFoundError)):
+        gate.verify_program_receipts(directory, runtime, RUN_ID)
+
+
+def test_two_root_encoded_markers_and_legacy_receipts_keep_distinct_contracts(tmp_path, admitted):
+    _source, runtime = admitted
+    directory = tmp_path / "receipts"
+    paths = _receipts(directory, runtime)
+    for path in paths:
+        if _receipt_label(path) in ("two-root-cleanup", "two-root-tracing"):
+            text = (path.parent / "executable-ir/self_backend_input_0.ll").read_text()
+            assert "TWO_ROOT_" not in text and r"\54\57\4F\5F\52\4F\4F\54" in text
+        else:
+            record = json.loads(path.read_text())
+            for key in ("run_id", "binary_path", "gc_backends"):
+                record.pop(key)
+            path.write_text(json.dumps(record))
+    result = gate.verify_program_receipts(directory, runtime, RUN_ID)
+    assert len(result) == 7
+    assert result["two-root-cleanup"]["reference"]["command"][-1].endswith("program.py")
+    assert result["two-root-tracing"]["reference"]["command"][-1] == "cyclic-reference"
