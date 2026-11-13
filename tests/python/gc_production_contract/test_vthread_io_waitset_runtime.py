@@ -9,8 +9,6 @@ from pathlib import Path
 
 import pytest
 
-from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
-
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
@@ -316,9 +314,8 @@ int main(int argc, char **argv) {
 
 
 @pytest.fixture(scope="module")
-def _io_waitset_runtime_exe(tmp_path_factory):
+def _io_waitset_runtime_exe(tmp_path_factory, threaded_pcc_runtime_archive):
     tmp = tmp_path_factory.mktemp("gc_vthread_io_waitset_runtime")
-    work_runtime = cached_threaded_pcc_python_runtime()
     src = tmp / "vthread_io_waitset_runtime.c"
     src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
     exe = tmp / "vthread_io_waitset_runtime_bin"
@@ -326,10 +323,10 @@ def _io_waitset_runtime_exe(tmp_path_factory):
         [
             os.environ.get("CC", "cc"),
             "-std=c11",
-            f"-I{work_runtime / 'include'}",
-            f"-I{work_runtime / 'src'}",
+            f"-I{RUNTIME_DIR / 'include'}",
+            f"-I{RUNTIME_DIR / 'src'}",
             str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
+            str(threaded_pcc_runtime_archive),
             "-pthread",
             "-lm",
             "-o",
