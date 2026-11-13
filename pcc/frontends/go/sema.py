@@ -1108,6 +1108,18 @@ class Analyzer:
             elif expr.kind != "call" or expr.symbol is None:
                 raise GoDiagnostic(expr.token, "only function calls may be expression statements")
             return
+        if kind == "defer":
+            # The deferred call is checked as an expression statement would be
+            # (https://go.dev/ref/spec#Defer_statements). Running it at function
+            # exit, also while panicking, and recover() need the shared unwinding
+            # design; terminal panics assume no deferred call exists.
+            expr = statement.exprs[0]
+            self.expression(expr)
+            if expr.kind != "builtin_io" and (expr.kind != "call" or expr.symbol is None):
+                raise GoDiagnostic(expr.token, "defer requires a function call")
+            raise UnsupportedGo(statement.token, 'go.unsupported.defer',
+                                "deferred calls require function-exit sequencing and panic/recover unwinding, "
+                                "which are not implemented")
         if kind == "return":
             expected = result_types(self.function.result)
             if not statement.exprs and expected:

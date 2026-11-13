@@ -197,7 +197,7 @@ def test_invalid_original_class_model_is_not_accepted(text, message):
     ("class Record{static int value=42;}", "class initialization"),
     ("class Record{int hashCode(){return 42;}}", "inherited-method"),
     ("class Record extends Other{}", "inheritance"),
-    ("class Record{static {}}", "static initializer execution"),
+    # `class Record{static {}}` moved to test_source_static_initializers.
 ])
 def test_unimplemented_class_semantics_remain_explicit(text, message):
     with pytest.raises(UnsupportedJava, match=message):

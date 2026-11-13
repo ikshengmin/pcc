@@ -100,7 +100,7 @@ SEMANTIC_BOUNDARIES = [
     ("_ = 1 << -1", "", "negative shift"),
     ("panic(1)", "", "unsupported builtin panic"),
     ("go f()", "func f() {}", "unsupported statement"),
-    ("defer f()", "func f() {}", "unsupported statement"),
+    ("defer f()", "func f() {}", "deferred calls require"),  # formerly "unsupported statement"
     ("var x string", "", "declared and not used"),
     ("var x []int", "", "slice types require"),
     ("var true bool", "", "shadowing predeclared"),

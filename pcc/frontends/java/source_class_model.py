@@ -179,6 +179,9 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         return None
 
     def field_read(self, node, field, *, explicit_receiver=False):
+        if ("static" in field.modifiers and not explicit_receiver and "." not in node.value
+                and field.owner == self.program.name):
+            self.check_static_field_read(node, field)
         if (self.current_field is not None and not explicit_receiver and "." not in node.value
                 and field.owner == self.program.name and field.ordinal >= self.current_field.ordinal
                 and ("static" in field.modifiers) == ("static" in self.current_field.modifiers)):
@@ -264,6 +267,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             node.kind = "receiver_call"
 
     def statement(self, node, assigned):
+        self.enter_static_statement(node)
         if node.kind == "throw":
             return self.throw_statement(node, assigned)
         if node.kind == "enhanced_for":
@@ -274,6 +278,8 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             return self.array_assignment(node, assigned)
         if self.current_initializer is not None and node.kind == "return":
             node.token.error("return is not permitted in an instance initializer")
+        if self.current_static_initializer is not None and node.kind == "return":
+            node.token.error("return is not permitted in a static initializer")
         if node.kind == "constructor_call":
             if node is not self.active_constructor_call:
                 node.token.error("constructor invocation must be first in a constructor body")
@@ -298,6 +304,8 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             return set(assigned)
         implicit_field = (node.kind == "assign" and not any(node.token.text in scope for scope in self.scopes)
                           and node.token.text in self.fields)
+        if implicit_field and self.static_field_assignment(node, assigned):
+            return set(assigned)
         if node.kind == "field_assign" or implicit_field:
             field = self.fields.get(node.token.text)
             if implicit_field and "static" in field.modifiers:
@@ -342,6 +350,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         return super().statement(node, assigned)
 
     def analyze(self):
+        self.analyze_static_initializers(SourceMethod)
         for initializer in self.program.instance_initializers:
             self.method = SourceMethod(initializer.token, "void", (), initializer, owner=self.program.name)
             self.scopes, self.controls, self.constant_locals = [{}], [], {}

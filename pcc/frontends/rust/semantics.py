@@ -239,6 +239,26 @@ class Checker:
             raise token.error("struct literal syntax for tuple or unit variants is not implemented")
         return owner, enum, variant
 
+    def tuple_struct_construction(self, expr, callee, record, path, children):
+        """`S(a, b)` / `S::<T>(a)`: the tuple struct's constructor, checked and
+        lowered as the struct expression `S { 0: a, 1: b }` it is equivalent to
+        (Rust Reference expressions/struct-expr.html#tuple-struct-expression)."""
+        name = record.token.text
+        if not record.tuple_fields:
+            raise callee.token.error(f"expected function, tuple struct or tuple variant, found struct `{name}` (rustc E0423)")
+        arguments = children[1:]
+        if len(arguments) != len(record.fields):
+            raise expr.token.error(f"this struct takes {len(record.fields)} field(s) but {len(arguments)} "
+                                   "were supplied (rustc E0061)")
+        from dataclasses import replace
+        binding = record.declaration_name
+        if isinstance(path, TypeApplication):
+            binding = TypeApplication(binding, path.arguments)
+        expr.kind, expr.binding, expr.children = "construct", binding, arguments
+        expr.value = [replace(argument.token, kind="integer", text=str(index))
+                      for index, argument in enumerate(arguments)]
+        return self.expression(expr)
+
     def construct_struct_variant(self, expr, children):
         """`E::V { a: x, b }`: fields evaluate in source order and are stored
         at their declaration positions (an `enum_construct` with a mapping)."""
@@ -898,6 +918,9 @@ class Checker:
                     selected = pinned_method or self.methods.lookup(owner, associated_name, callee.token)
                     if selected is not None:
                         fn, fixed_arguments = selected
+            if isinstance(fn, Record):
+                # `module::S(..)`: a tuple struct constructor through a module path.
+                return self.tuple_struct_construction(expr, callee, fn, None, children)
             if fn is None and callee.kind == "variant":
                 if explicit_arguments is not None:
                     raise callee.token.error("type arguments on enum constructor segments are not implemented; supply them on the enum owner")
@@ -928,6 +951,11 @@ class Checker:
                     raise callee.token.error("only unshadowed direct function calls are supported")
                 fn = (self.module_resolution.function(name, self.current_module, callee.token)
                       if self.module_resolution is not None else self.names.get(name))
+                if fn is None and self.module_resolution is None:
+                    record = self.records.get(name) or self.generics.definitions.get(name)
+                    fn = record if isinstance(record, Record) else None
+                if isinstance(fn, Record):
+                    return self.tuple_struct_construction(expr, callee, fn, path, children)
                 if fn is None and name in self.const_names:
                     kind_name = 'static' if isinstance(self.const_names[name], StaticItem) else 'constant'
                     raise callee.token.error(f'expected function, found {kind_name} {name!r} (rustc E0618)')

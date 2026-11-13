@@ -178,6 +178,10 @@ class _Loader:
             items[key] = ItemDeclaration(ItemId(identity, namespace, token.text), item.public, item)
         for item in body.records + body.enums + body.traits + body.modules + body.crate_aliases:
             register('type', item)
+        for record in body.records:
+            if record.tuple_fields:
+                # A tuple struct's constructor also names it in the value namespace.
+                register('value', record)
         for function in body.functions:
             if function.implementation is None:
                 register('value', function)

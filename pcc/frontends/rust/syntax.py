@@ -368,6 +368,9 @@ class Record:
     helper_attributes: tuple = ()
     # `T: 'a + 'static`: (type parameter token, lifetime tokens), in order.
     outlives_bounds: tuple = ()
+    # `struct S(T, U);`: positional fields named 0, 1, ... and a constructor
+    # in the value namespace (Rust Reference items/structs.html).
+    tuple_fields: bool = False
 
     @property
     def declaration_name(self):
@@ -1016,10 +1019,29 @@ class Parser:
         outlives_bounds = tuple(self.last_outlives_bounds)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
-        self.expect("{")
         from .derives import helper_attributes
         fields, field_docs, field_public, retained = [], [], [], []
-        while not self.accept("}"):
+        tuple_fields = self.accept("(")
+        if tuple_fields:
+            # TupleStruct: `struct S<..>(Vis? Type, ..) WhereClause? ;`. Field
+            # names are the decimal indices that `s.0` uses.
+            while not self.accept(")"):
+                field_docs.append(self.documentation())
+                retained.extend(helper_attributes(self, helpers))
+                field_public.append(parse_visibility(self))
+                start = self.token
+                fields.append((replace(start, kind="integer", text=str(len(fields))), self.type()))
+                if len(fields) > 64:
+                    raise start.error("tuple struct field count exceeds implementation limit (64)")
+                if self.accept(")"):
+                    break
+                self.expect(",")
+            if self.token.text == "where":
+                raise self.token.error("generic where constraints and traits are not implemented")
+            self.expect(";")
+        else:
+            self.expect("{")
+        while not tuple_fields and not self.accept("}"):
             field_docs.append(self.documentation())
             retained.extend(helper_attributes(self, helpers))
             field_public.append(parse_visibility(self))
@@ -1031,7 +1053,8 @@ class Parser:
             self.expect(",")
         self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public,
                                    tuple(field_public), lifetime_parameters=lifetime_parameters,
-                                   helper_attributes=tuple(retained), outlives_bounds=outlives_bounds))
+                                   helper_attributes=tuple(retained), outlives_bounds=outlives_bounds,
+                                   tuple_fields=tuple_fields))
 
     def module_body(self):
         # Reuse the exact token/source coordinate space. No slicing, rewriting,

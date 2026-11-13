@@ -216,6 +216,62 @@ class _SweepBoundary:
 
 
 def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
+    # The native counterpart must prove these actual edges, not infer them
+    # from refcounts: the selected tracing backends use count-free ownership.
+    fixture = (SOURCE.parents[3] / "tests/fixtures/native/gc_tracing_pending_verdict.c").read_text()
+    graph = fixture.split("static int graph_matches(int count) {", 1)[1].split(
+        "static int inject_candidates(int count) {", 1)[0]
+    assert "py_instance_get_field(watched[index], 0)" in graph
+    assert "peer == watched[mode == 4 ? 1 - index : index]" in graph
+    assert "py_list_len(roots[KEEPER]) != (mode == 1 ? 1 : 0)" in graph
+    assert "py_list_get(roots[KEEPER], 0)" in graph
+    assert "py_list_len(interior) == 1" in graph
+    assert "py_list_get(interior, 0)" in graph
+    assert "target == watched[0]" in graph
+    for owned in ("peer", "target", "interior"):
+        assert f"py_decref({owned})" in graph
+    admission = fixture.split("static int inject_candidates(int count) {", 1)[1].split(
+        "static int weak_matches", 1)[0]
+    assert "if (pcc_gc_backend4_no_refcounts != 1) return 159;" in admission
+    assert "pcc_gc_object_is_known_no_lock(obj) != 1" in admission
+    assert "(header->flags & (PINNED | DEAD)) != 0" in admission
+    assert "if (!graph_matches(count)) return 158;" in admission
+    assert admission.index("return 130;") < admission.index("graph_matches(count)")
+    assert admission.index("graph_matches(count)") < admission.index("| CANDIDATE;")
+    assert "header->refcount !=" not in admission
+    assert "flags=0x%x refcount=%lld" in admission
+    # Keep compound-failure operands visible without changing the predicates
+    # or inspecting potentially reclaimed objects. This is source wiring,
+    # not execution coverage of the native diagnostic paths.
+    diagnostic = fixture.split("static void report_live_verdict_failure(", 1)[1].split(
+        "static int run_mode(void) {", 1)[0]
+    for field in (
+        "status=%d phase=%d mode=%d effective_backend=%lld",
+        "finalizers=%d expected_finalizers=%d",
+        "weak_callbacks=%d expected_weak_callbacks=0",
+        "collected=%lld expected_collected=0",
+        "known_first=%d expected_known_first=1",
+        "known_second=%d gc_callbacks=%d callback_error=%d",
+    ):
+        assert field in diagnostic
+    assert (
+        "status, phase, mode, (long long)pcc_gc_backend(), "
+        "finalizers, expected_finalizers, weak_callbacks, (long long)collected, "
+        "known_first, known_second, gc_callbacks, callback_error);"
+    ) in " ".join(diagnostic.split())
+    assert "watched[" not in diagnostic
+    assert "py_" not in diagnostic
+    assert "pcc_gc_collect" not in diagnostic
+    run = fixture.split("static int run_mode(void) {", 1)[1].split("int main(", 1)[0]
+    for status, expected in ((143, "0"), (150, "count")):
+        assert (
+            f"if (finalizers != {expected} || weak_callbacks != 0 || collected != 0 "
+            "|| known_first != 1) { "
+            f"report_live_verdict_failure({status}, {expected}, collected, known_first, known_second); "
+            f"return {status}; "
+            "}"
+        ) in " ".join(run.split())
+    assert fixture.count("report_live_verdict_failure(") == 3
     boundary = _SweepBoundary()
     root = boundary.object("root", candidate=False)
     middle = boundary.object("middle", candidate=False)

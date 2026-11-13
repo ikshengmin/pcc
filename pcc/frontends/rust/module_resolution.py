@@ -237,6 +237,8 @@ class ModuleResolution(ModuleNamespaces):
                 item = declaration.syntax
                 if isinstance(item, (Module, CrateSelfAlias)):
                     continue
+                if isinstance(item, Record) and declaration.identity.namespace == 'value':
+                    continue  # a tuple struct's constructor; the type entry owns its identity
                 item.item_identity = declaration.identity
                 if isinstance(item, Record):
                     self.records.append(item)

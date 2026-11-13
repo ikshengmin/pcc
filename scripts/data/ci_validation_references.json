@@ -1,5 +1,39 @@
 {
   "functions": {
+    "tests/python/test_native_min_max_i64_ownership.py": {
+      "test_i64_min_max_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls assert_reference_program to execute the explicit i64 min/max semantic corpus in actual CPython. Checks empty ValueError messages, defaults, singleton and signed i64 boundary values. This reference does not establish native compilation, collector ownership or Stage2 acceptance."
+        ]
+      },
+      "test_i64_min_max_five_gc": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls assert_owned_program, which first executes the same corpus in actual CPython and then compares self-backed native results using the existing pcc0/pcc1 compiler fixtures and five collector selectors. This mixed reference/native test belongs to the reference lane; requested fixture labels do not alone establish actual compiler routing. The separate boxed-item allocation test is native-only and remains integration."
+        ]
+      }
+    },
+    "tests/cpp/test_cpp_protected_base_constructors.py": {
+      "test_reference_compiler_returns_the_same_value": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.darwin_execution.run_reference_cpp, which builds the unchanged protected-base-constructor units and observer with the selected development C++17 compiler and executes the result. Owned native execution remains a separate test."
+        ]
+      },
+      "test_reference_compiler_rejects_the_same_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.darwin_execution.reference_rejects for each unchanged inaccessible-constructor source using the selected development C++17 compiler with -pedantic-errors and -fsyntax-only."
+        ]
+      },
+      "test_programs_execute_against_real_cpp17_reference_on_linux": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls tests.cpp.sizeof_execution.execute_row_pair on unchanged protected-base-constructor units, retaining owned artifacts and executing an actual C++17 reference compiled by compile_reference_cpp with PCC_CPP_ORACLE or g++."
+        ]
+      }
+    },
     "tests/cpp/test_cpp_static_data_members.py": {
       "test_reference_compiler_returns_the_same_value": {
         "activity": "external-reference",
@@ -2133,6 +2167,21 @@
         ]
       }
     },
+    "tests/rust/test_rust_data_outlives_bounds.py": {
+      "test_checked_program_runs_with_owned_compile_assemble_and_link": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls actual tests.rust.certification_support.certify_source for the unchanged PROGRAM and aarch64-apple-darwin target before run_owned_u64_function compiles, assembles, links and executes it through PCC. Conditional records preserve the original ordinary/integration lane, not optional certification; the actual check and Darwin prerequisites remain mandatory."
+        ]
+      },
+      "test_rustc_gives_the_same_verdicts_and_value": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls run_rustc_str_function, which builds the unchanged PROGRAM and observer with actual development rustc and executes the result, then directly invokes rustc --emit=metadata on six outlives-bound sources: four accepted and two rejected with E0261/E0637. This oracle does not certify the owned execution sibling."
+        ]
+      }
+    },
     "tests/rust/test_rust_derives.py": {
       "test_rustc_rejects_the_same_sources_with_the_recorded_codes": {
         "activity": "external-reference",
@@ -2951,6 +3000,22 @@
         "activity": "mandatory-same-input-certification-and-owned-contract",
         "reason": [
           "Runs the identical JSON string corpus in actual CPython and self-backed native code on five collectors. Compares exact UTF-8 hex output and decoded codepoints, including host-generated canonical backspace/form-feed JSON inputs. This mixed comparison does not establish Stage2 or fixed-point execution."
+        ]
+      }
+    },
+    "tests/java/test_source_static_initializers.py": {
+      "test_static_initializer_originals_against_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on unchanged static-initializer originals. The selected development JDK compiles and executes positive sources and rejects invalid sources through ArrayModelReference. This optional oracle does not certify owned compilation or execute the PCC runtime."
+        ]
+      }
+    },
+    "tests/go/test_defer_statements.py": {
+      "test_reference_accepts_and_rejects_the_same_sources": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls reference_rejection on unchanged valid and invalid defer originals, invoking the selected development Go toolchain build command and checking compiler outcomes and diagnostics. This optional oracle does not execute binaries or provide an owned production fallback."
         ]
       }
     }

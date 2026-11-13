@@ -57,6 +57,8 @@ CASES = [
     ('method-values', original('type T int;func(t T)f(){}', 'var t T;_=t.f')),
     ('function-values', original(body='f:=func()int{return 1};_=f')),
     ('function-values', original('func f(g func()int)int{return 1}')),
+    ('defer', original('func f(){}', 'defer f()')),
+    ('defer', original(body='defer println(1)')),
     ('dynamic-string-conversion', original('func f(x int)string{return string(x)}')),
     ('dynamic-string-concatenation', original('func f(a,b string)string{return a+b}')),
     ('division-panic', original('func f(a,b int)int{return a/b}')),

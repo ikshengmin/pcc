@@ -112,6 +112,42 @@ def test_trait_bound_rustc_oracle_has_a_separate_reference_lane():
             "reference" if name == reference else "ordinary")
 
 
+def test_outlives_rustc_oracle_keeps_certified_owned_execution_in_its_lane():
+    module = "tests/rust/test_rust_data_outlives_bounds.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference = "test_rustc_gives_the_same_verdicts_and_value"
+    owned = "test_checked_program_runs_with_owned_compile_assemble_and_link"
+    assert set(registry[module]) == {reference, owned}
+    assert registry[module][reference]["activity"] == "external-reference"
+    assert not registry[module][reference].get("conditional")
+    assert registry[module][owned]["activity"] == "mandatory-same-input-certification-and-owned-contract"
+    assert registry[module][owned]["conditional"] is True
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert {reference, owned} <= functions.keys()
+    for name, function in functions.items():
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert classify(module, name, integration, registry) == (
+            "reference" if name == reference else "integration" if integration else "ordinary")
+    # A conditional record documents the mandatory certifier; it is not a waiver
+    # and must never move this owned contract into the optional reference lane.
+    assert classify(module, owned, False, registry) == "ordinary"
+    assert classify(module, owned, True, registry) == "integration"
+    calls = {name: {ast.unparse(node.func) for node in ast.walk(function)
+                    if isinstance(node, ast.Call)} for name, function in functions.items()}
+    assert {"run_rustc_str_function", "subprocess.run"} <= calls[reference]
+    assert {"certify_source", "run_owned_u64_function"} <= calls[owned]
+    assert "certify_source" not in calls[reference]
+    assert "run_owned_u64_function" not in calls[reference]
+    for name in (reference, owned):
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in functions[name].decorator_list}
+        assert "pytest.mark.pcc_gate" in marks
+
+
 def test_go_function_literal_reference_keeps_owned_checks_in_their_original_lane():
     module = "tests/go/test_function_literal_syntax.py"
     registry = json.loads(run.REFERENCES.read_text())["functions"]
@@ -1546,3 +1582,125 @@ def test_static_data_member_references_keep_owned_checks_in_their_original_lane(
             assert not registry[module][name].get("conditional")
         assert classify(module, name, integration, registry) == (
             "reference" if name in references else "integration" if integration else "ordinary")
+
+
+def test_protected_base_constructor_references_keep_owned_checks_in_their_lane():
+    module = "tests/cpp/test_cpp_protected_base_constructors.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference_calls = {
+        "test_reference_compiler_returns_the_same_value": "run_reference_cpp",
+        "test_reference_compiler_rejects_the_same_sources": "reference_rejects",
+        "test_programs_execute_against_real_cpp17_reference_on_linux": "execute_row_pair",
+    }
+    owned_calls = {
+        "test_programs_compile_to_stable_linux_artifacts": "compile_host_cpp",
+        "test_programs_run_natively_with_owned_compile_assemble_and_link": "run_owned_cpp",
+        "test_inaccessible_constructors_are_ordinary_errors": "CppParser",
+    }
+    assert set(registry[module]) == set(reference_calls)
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert reference_calls.keys() | owned_calls.keys() == functions.keys()
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        assert (reference_calls | owned_calls)[name] in calls
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name == "test_programs_execute_against_real_cpp17_reference_on_linux")
+        if name in reference_calls:
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert not calls & set(reference_calls.values())
+        assert classify(module, name, integration, registry) == (
+            "reference" if name in reference_calls else "ordinary")
+
+
+def test_i64_min_max_oracles_keep_native_only_ownership_in_integration():
+    module = "tests/python/test_native_min_max_i64_ownership.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    reference_calls = {
+        "test_i64_min_max_reference": "assert_reference_program",
+        "test_i64_min_max_five_gc": "assert_owned_program",
+    }
+    native_only = "test_i64_min_max_releases_boxed_items"
+    ir_only = "test_i64_fold_publishes_each_item_before_cleanup"
+    assert set(registry[module]) == set(reference_calls)
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert functions.keys() == reference_calls.keys() | {native_only, ir_only}
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name in {"test_i64_min_max_five_gc", native_only})
+        if name in reference_calls:
+            assert reference_calls[name] in calls
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert not calls & set(reference_calls.values())
+        if name == native_only:
+            assert {"python_program_compiler", "run_process_group_timeout"} <= calls
+        assert classify(module, name, integration, registry) == (
+            "reference" if name in reference_calls
+            else "integration" if name == native_only else "ordinary")
+
+
+@pytest.mark.parametrize("module,reference,helper,reference_integration,siblings", [
+    (
+        'tests/java/test_source_static_initializers.py',
+        'test_static_initializer_originals_against_selected_jdk_only',
+        'check_originals_reference', True, {
+            'test_a_block_without_fields_is_still_a_step',
+            'test_blocks_and_initializers_are_steps_in_textual_order_and_blank_finals_are_slots',
+            'test_former_empty_static_block_rows_are_checked_steps',
+            'test_invalid_static_initializer_originals_fail_as_java_errors',
+            'test_native_domain_still_rejects_static_initialization',
+            'test_nested_blank_final_assignments_stay_explicit',
+            'test_obligation_names_each_step_and_the_static_reference_root',
+            'test_reference_typed_blank_finals_keep_the_static_reference_boundary',
+            'test_static_initializer_originals_are_checked_in_the_class_model',
+        },
+    ),
+    (
+        'tests/go/test_defer_statements.py',
+        'test_reference_accepts_and_rejects_the_same_sources',
+        'reference_rejection', False, {
+            'test_a_deferred_function_literal_reports_the_function_value_gap_first',
+            'test_defer_keeps_its_call',
+            'test_deferred_calls_are_an_explicit_checker_gap',
+            'test_invalid_defer_statements_are_source_errors',
+            'test_math_bits_external_test_package_now_stops_at_a_type_assertion',
+        },
+    ),
+])
+def test_static_initializer_and_defer_oracles_preserve_owned_sibling_lanes(
+        module, reference, helper, reference_integration, siblings):
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    assert set(registry[module]) == {reference}
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert functions.keys() == siblings | {reference}
+    for name, function in functions.items():
+        calls = {node.func.id for node in ast.walk(function)
+                 if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        assert integration == (name == reference and reference_integration)
+        if name == reference:
+            assert helper in calls
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        else:
+            assert helper not in calls
+        assert classify(module, name, integration, registry) == (
+            "reference" if name == reference else "ordinary")
