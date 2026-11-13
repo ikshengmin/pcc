@@ -23,7 +23,9 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_GEN
 from pcc.frontends.python.codegen.generator_lowering import (
+    _spill_function,
     emit_generator_may_park_child,
+    generator_expr_suspends,
     generator_frame_result_value,
     generator_may_park_child_slot,
     take_generator_frame_result,
@@ -193,6 +195,21 @@ class NativeVirtualThreadLoweringMixin:
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
         roots = []
+        lexical_context = None
+        previous_lexical = False
+        lexical_state = 0
+        function = _spill_function(self)
+        if function is not None:
+            fd, owner = function
+            if not any(generator_expr_suspends(self, arg, fd, owner) for arg in args):
+                # Deferred invocation returns a continuation without driving it.
+                # Only evaluating source operands can introduce a resume edge
+                # here. Retire these lexical roots before driving the child;
+                # the child itself retains its existing persistent frame cell.
+                lexical_context = self._generator_ctx_stack[-1]
+                previous_lexical = lexical_context.get("lexical_slot_operands", False)
+                lexical_state = lexical_context["next_state"]
+                lexical_context["lexical_slot_operands"] = True
         try:
             # These owners are enrolled in the persistent generator frame.
             # A later argument may suspend before the callback is invoked.
@@ -238,6 +255,10 @@ class NativeVirtualThreadLoweringMixin:
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
+            if lexical_context is not None:
+                lexical_context["lexical_slot_operands"] = previous_lexical
+                if lexical_context["next_state"] != lexical_state:
+                    raise L1CodegenError("deferred call operands introduced a resume edge")
         return self._drive_or_take_frame_result(
             expr, "pcc.virtual_thread.call", child_slot, child_root_ptr, False,
         )
