@@ -1254,11 +1254,12 @@
       "chapter_ids": [
         "interfaces"
       ],
-      "scope": "General interface values, concrete boxing, dispatch, assertions, equality and runtime-bearing storage remain explicitly unimplemented. Basic declarations, canonical signatures, method sets and unresolved compiler plans are separately recorded; only existing exact Error() string nil-only transport reaches IR. This whole-runtime capability and its historical evidence are not renewed.",
+      "scope": "General interface values, concrete boxing, dispatch, assertions, equality and runtime-bearing storage remain explicitly unimplemented. Basic declarations, canonical signatures, method sets and unresolved compiler plans are separately recorded; only existing exact Error() string nil-only transport reaches IR. This whole-runtime capability and its historical evidence are not renewed. Type assertions `x.(T)` parse; a non-interface operand and an undefined asserted type are ordinary errors at gc's positions, and an assertion on an interface value (and `x.(type)`, type switches) is reported under this capability.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
+        "tests/go/test_type_assertions.py"
       ],
       "diagnostics": [
         "go.unsupported.interface-types"

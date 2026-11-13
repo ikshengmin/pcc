@@ -1146,6 +1146,16 @@ class GoParser:
             self.fail(token, f"unsupported expression token {token.text!r}")
         while True:
             if self.accept("."):
+                if self.at("("):
+                    # https://go.dev/ref/spec#Type_assertions: PrimaryExpr "." "(" Type ")".
+                    open_token = self.take("(")
+                    if self.at("type"):
+                        self.unsupported(self.current, 'go.unsupported.interface-types',
+                                         "type switches require interface dynamic types, which are not implemented")
+                    target = self.datatype()
+                    self.take(")")
+                    left = Expr("type_assert", open_token, target, [left])
+                    continue
                 member = self.take("name")
                 left = Expr("selector", member, member.text, [left])
             elif self.named_literals and self.at("{") and left.kind in ("name", "selector") and not left.parenthesized:

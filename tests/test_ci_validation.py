@@ -1677,7 +1677,6 @@ def test_i64_min_max_oracles_keep_native_only_ownership_in_integration():
             'test_defer_keeps_its_call',
             'test_deferred_calls_are_an_explicit_checker_gap',
             'test_invalid_defer_statements_are_source_errors',
-            'test_math_bits_external_test_package_now_stops_at_a_type_assertion',
         },
     ),
 ])
