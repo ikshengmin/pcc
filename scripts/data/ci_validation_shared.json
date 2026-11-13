@@ -309,6 +309,8 @@
     "tests/python/test_attribute_error_import_filter_native.py",
     "tests/python/test_pipeline_profile.py",
     "tests/python/test_roadmap_deepwire.py",
-    "tests/c/test_c_natural_record_layout.py"
+    "tests/c/test_c_natural_record_layout.py",
+    "tests/python/test_pcc_json_whole_string_paths.py",
+    "tests/python/test_py_frontend_ast_wire.py"
   ]
 }

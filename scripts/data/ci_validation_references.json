@@ -2909,6 +2909,14 @@
           "Calls tests.rust.test_rust_supertraits.test_genuine_rustc_rejects_the_same_invalid_obligations on an unproven Self: Sized call; requires actual source-attributed rustc rejection."
         ]
       }
+    },
+    "tests/python/test_pcc_json_whole_string_paths.py": {
+      "test_native_json_whole_string_paths_match_cpython": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "reason": [
+          "Runs the identical JSON string corpus in actual CPython and self-backed native code on five collectors. Compares exact UTF-8 hex output and decoded codepoints, including host-generated canonical backspace/form-feed JSON inputs. This mixed comparison does not establish Stage2 or fixed-point execution."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",
