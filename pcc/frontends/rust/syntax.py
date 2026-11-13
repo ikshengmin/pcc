@@ -348,6 +348,7 @@ class Record:
     item_identity: object = None
     lifetime_parameters: tuple[Token, ...] = ()
     derives: tuple = ()
+    helper_attributes: tuple = ()
 
     @property
     def declaration_name(self):
@@ -369,6 +370,7 @@ class Enumeration:
     item_identity: object = None
     lifetime_parameters: tuple[Token, ...] = ()
     derives: tuple = ()
+    helper_attributes: tuple = ()
 
     @property
     def declaration_name(self):
@@ -886,16 +888,18 @@ class Parser:
             result.append(Documentation(token, value, inner, (start_offset, end_offset), "attribute", options))
         return tuple(result)
 
-    def record(self, repr_c: bool, documentation=(), public=False) -> None:
+    def record(self, repr_c: bool, documentation=(), public=False, helpers=False) -> None:
         name = self.name()
         parameters = self.generic_parameters(allow_lifetimes=True)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
-        fields, field_docs, field_public = [], [], []
+        from .derives import helper_attributes
+        fields, field_docs, field_public, retained = [], [], [], []
         while not self.accept("}"):
             field_docs.append(self.documentation())
+            retained.extend(helper_attributes(self, helpers))
             field_public.append(parse_visibility(self))
             field = self.name()
             self.expect(":")
@@ -904,7 +908,8 @@ class Parser:
                 break
             self.expect(",")
         self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public,
-                                   tuple(field_public), lifetime_parameters=lifetime_parameters))
+                                   tuple(field_public), lifetime_parameters=lifetime_parameters,
+                                   helper_attributes=tuple(retained)))
 
     def module_body(self):
         # Reuse the exact token/source coordinate space. No slicing, rewriting,
@@ -1103,6 +1108,7 @@ class Parser:
                 docs = []
                 inline_attributes = []
                 derives = []
+                helpers = []
                 while True:
                     docs.extend(self.documentation())
                     if not self.accept("#"):
@@ -1151,6 +1157,10 @@ class Parser:
                         derives.extend(derive_attribute(self, attribute, attribute_start))
                         continue
                     else:
+                        from .derives import has_procedural_derive, helper_attribute
+                        if has_procedural_derive(derives):
+                            helpers.append(helper_attribute(self, attribute))
+                            continue
                         raise attribute.error("unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted")
                     self.expect("]")
                 if docs and self.token.kind == "eof":
@@ -1311,16 +1321,20 @@ class Parser:
                 if self.accept("enum"):
                     if repr_c or no_mangle:
                         raise self.token.error("enum repr(C) and no_mangle are not supported")
-                    self.enumeration(enum_repr, tuple(docs), public=public)
+                    from .derives import has_procedural_derive
+                    self.enumeration(enum_repr, tuple(docs), public=public, helpers=has_procedural_derive(derives))
                     self.enums[-1].derives = tuple(derives)
+                    self.enums[-1].helper_attributes = tuple(helpers) + self.enums[-1].helper_attributes
                     continue
                 if enum_repr is not None:
                     raise self.token.error("integer repr applies only to an enum")
                 if self.accept("struct"):
                     if no_mangle:
                         raise self.token.error("no_mangle is supported only on extern C function definitions")
-                    self.record(repr_c, tuple(docs), public=public)
+                    from .derives import has_procedural_derive
+                    self.record(repr_c, tuple(docs), public=public, helpers=has_procedural_derive(derives))
                     self.records[-1].derives = tuple(derives)
+                    self.records[-1].helper_attributes = tuple(helpers) + self.records[-1].helper_attributes
                     continue
                 if repr_c:
                     raise self.token.error("repr(C) applies only to a struct")
@@ -1907,21 +1921,24 @@ class Parser:
             raise expr.token.error("qualified trait items require a direct call; stored function values are not implemented")
         return expr
 
-    def enumeration(self, representation, documentation=(), public=False) -> None:
+    def enumeration(self, representation, documentation=(), public=False, helpers=False) -> None:
         name = self.name()
         parameters = self.generic_parameters(allow_lifetimes=True)
         lifetime_parameters = tuple(self.last_lifetime_parameters)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
-        variants, payloads, variant_docs, payload_docs = [], {}, [], {}
+        from .derives import helper_attributes
+        variants, payloads, variant_docs, payload_docs, retained = [], {}, [], {}, []
         while not self.accept("}"):
             variant_docs.append(self.documentation())
+            retained.extend(helper_attributes(self, helpers))
             variant = self.name()
             if self.accept("("):
                 fields, field_docs = [], []
                 while not self.accept(")"):
                     field_docs.append(self.documentation())
+                    retained.extend(helper_attributes(self, helpers))
                     fields.append(self.type())
                     if self.accept(")"):
                         break
@@ -1944,7 +1961,7 @@ class Parser:
         self.enums.append(Enumeration(name, variants, representation, payloads=payloads, public=public,
                                       type_parameters=parameters, documentation=documentation,
                                       variant_documentation=tuple(variant_docs), payload_documentation=payload_docs,
-                                      lifetime_parameters=lifetime_parameters))
+                                      lifetime_parameters=lifetime_parameters, helper_attributes=tuple(retained)))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:

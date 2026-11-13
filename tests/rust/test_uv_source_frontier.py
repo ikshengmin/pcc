@@ -25,9 +25,10 @@ FRONTIER = (
     ("crates/uv/src/bin/uv.rs", "4:14: external crate dependency loading is not implemented"),
     # `@` patterns, tool lint paths, feature cfg (self-update is off), the
     # lifetime argument of `BaseClientBuilder<'a>`, the built-in derives of
-    # `GlobalInitialization` and its `const fn` method with `matches!` parse;
-    # line 112 is `#[error(..)]`, the helper attribute of a thiserror derive.
-    ("crates/uv/src/lib.rs", "112:3: unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted"),
+    # `GlobalInitialization` and its `const fn` method with `matches!` parse,
+    # and thiserror's helper attributes are retained (its derive is a semantic
+    # gap); line 121 is `format!(..)`.
+    ("crates/uv/src/lib.rs", "121:36: macro invocations require macro-by-example expansion"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped. What
     # remains is the gate on every input: PCC has no owned borrow checker,
@@ -36,9 +37,9 @@ FRONTIER = (
     ("crates/uv-version/src/lib.rs", "experimental Rust frontend has no borrow checker"),
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off), the const
     # item and `#[derive(Debug, thiserror::Error)]` parse (the thiserror derive
-    # is a semantic gap); line 104 is the variant helper attribute
-    # `#[error(..)]` of that procedural derive.
-    ("crates/uv-lock/src/lock/mod.rs", "104:5: expected an identifier"),
+    # is a semantic gap) and its retained helper attributes parse; line 105 is
+    # the named-field variant `UnsupportedVersion { supported: u32, .. }`.
+    ("crates/uv-lock/src/lock/mod.rs", "105:24: named enum payload fields are not implemented"),
 )
 
 

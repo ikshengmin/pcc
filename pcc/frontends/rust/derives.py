@@ -130,3 +130,48 @@ def equality_gap(checker, ty):
     if ty in INTEGERS | {'bool', '()'}:
         return None
     return f"{ty} has no structural equality here"
+
+
+@dataclass(frozen=True)
+class HelperAttribute:
+    """An inert attribute owned by a procedural derive, kept as written.
+
+    `#[error(..)]`, `#[from]`, `#[source]`, `#[serde(..)]`: only the derive
+    macro gives them meaning, and that derive is itself an explicit semantic
+    gap, so they are retained (never interpreted) and parsing continues.
+    """
+    token: object
+    name: str
+    tokens: tuple
+
+
+def has_procedural_derive(derives):
+    return any(derive.name not in BUILTIN_DERIVES for derive in derives)
+
+
+def helper_attribute(parser, first):
+    """Consume one attribute whose first path token was taken, through `]`."""
+    start = parser.pos - 1
+    name = first.text
+    while parser.accept('::'):
+        name += '::' + parser.name().text
+    while parser.token.text != ']':
+        if parser.token.kind == 'eof':
+            raise first.error('unterminated attribute')
+        if parser.token.text in {'(', '[', '{'}:
+            parser.skip_token_tree()
+        else:
+            parser.take()
+    parser.expect(']')
+    return HelperAttribute(first, name, tuple(parser.tokens[start:parser.pos]))
+
+
+def helper_attributes(parser, allowed):
+    """Field/variant attributes: retained helpers when a procedural derive
+    owns them; otherwise left for the ordinary parser to diagnose."""
+    found = []
+    while allowed and parser.token.text == '#' and parser.tokens[parser.pos + 1].text == '[':
+        parser.take()
+        parser.take()
+        found.append(helper_attribute(parser, parser.take()))
+    return found

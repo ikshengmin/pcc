@@ -135,3 +135,35 @@ def test_rustc_build_of_the_fixture_agrees(tmp_path):
 @pytest.mark.parametrize('target', ['x86_64-unknown-linux-gnu', 'arm64-apple-darwin'])
 def test_fixture_cross_emits_both_targets(target):
     assert compile_source(FIXTURE, target_triple=target).emit_object()
+
+
+THISERROR_SHAPE = """#[derive(Debug, thiserror::Error)]
+#[error("uv was installed through {source}")]
+struct Installed { #[source] inner: u64, source: u64 }
+#[derive(Debug, thiserror::Error)]
+enum Failure { #[error("a")] A, #[error(transparent)] B(#[from] u64) }
+pub fn f(){}"""
+
+
+def test_procedural_derive_helper_attributes_are_retained_not_interpreted():
+    parser = Parser(THISERROR_SHAPE)
+    parser.parse()
+    record, = parser.records
+    enum, = parser.enums
+    assert [(h.name, h.token.line) for h in record.helper_attributes] == [('error', 2), ('source', 3)]
+    assert [(h.name, h.token.line) for h in enum.helper_attributes] == [('error', 5), ('error', 5), ('from', 5)]
+    assert ''.join(token.text for token in record.helper_attributes[0].tokens) == 'error("uv was installed through {source}")]'
+    # The owning derive is still the explicit semantic gap.
+    with pytest.raises(RustError, match='procedural-macro expansion is not implemented'):
+        compile_source(THISERROR_SHAPE)
+
+
+@pytest.mark.parametrize('source,message', [
+    # Without a procedural derive to own them, unknown attributes stay errors.
+    ('#[error("x")] struct S{x:u64} pub fn f(){}', 'unsupported Rust attribute'),
+    ('#[derive(Debug)] #[error("x")] struct S{x:u64}', 'unsupported Rust attribute'),
+    ('struct R{#[allow(missing_docs)]pub x:u64}', 'expected an identifier'),
+])
+def test_unowned_attributes_keep_their_errors(source, message):
+    with pytest.raises(RustError, match=message):
+        compile_source(source)
