@@ -1225,6 +1225,7 @@ def _capture_worker_manifests(processes, observed_processes, *, verified_argv=No
 def _inherited_observer_deadline(environment, cap, requested_deadline):
     """Observe inside the original recovery deadline, without issuing a budget."""
     try:
+        inherited_cap = int(environment["PCC_WORKER_TREE_BUDGET_BYTES"])
         schema, retries, grace, deadline = environment["PCC_WORKER_TREE_RECOVERY"].split("\t")
         retries = tuple(float(value) for value in retries.split(","))
         grace, deadline = float(grace), float(deadline)
@@ -1235,7 +1236,8 @@ def _inherited_observer_deadline(environment, cap, requested_deadline):
             or not math.isfinite(requested_deadline)
             or requested_deadline <= time.monotonic()
             or not math.isfinite(deadline) or deadline <= time.monotonic()
-            or cap <= 0 or environment.get("PCC_WORKER_TREE_BUDGET_BYTES") != str(cap)
+            or not 0 < inherited_cap <= cap
+            or environment["PCC_WORKER_TREE_BUDGET_BYTES"] != str(inherited_cap)
             or not environment.get("PCC_WORKER_TREE_STATE_PATH")):
         raise ProcessTreeSampleError("invalid or exhausted inherited observer budget")
     return min(requested_deadline, deadline)
@@ -1350,22 +1352,17 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
     )
     preserve_worker_budget = getattr(args, "preserve_worker_budget", False)
     if preserve_worker_budget:
-        if (args.max_tree_rss_bytes <= 0
-                or environment.get("PCC_WORKER_TREE_BUDGET_BYTES") != str(args.max_tree_rss_bytes)
-                or not environment.get("PCC_WORKER_TREE_STATE_PATH")
-                or not environment.get("PCC_WORKER_TREE_RECOVERY", "").startswith(
-                    "pcc.worker-tree-recovery.v1\t")):
-            payload.update(status="SAMPLER_ERROR", returncode=None, sample_count=0,
-                           error="nested measurement requires the matching outer worker budget")
-            _persist(result_path, payload)
-            raise ProcessTreeSampleError(payload["error"])
+        # Keep the ancestor's cap and complete-tree observations together.
+        # A tighter local cap needs multiple accounting scopes; reject that
+        # unsupported combination rather than discard ancestor/sibling RSS.
         try:
             deadline = _inherited_observer_deadline(environment, args.max_tree_rss_bytes, deadline)
         except ProcessTreeSampleError as exc:
+            message = "nested measurement requires the matching outer worker budget; " + str(exc)
             payload.update(status="SAMPLER_ERROR", returncode=None, sample_count=0,
-                           error=str(exc))
+                           error=message)
             _persist(result_path, payload)
-            raise
+            raise ProcessTreeSampleError(message) from exc
     if args.max_tree_rss_bytes > 0 and not preserve_worker_budget:
         environment["PCC_WORKER_TREE_STATE_PATH"] = worker_state_path
         environment["PCC_WORKER_TREE_BUDGET_BYTES"] = str(args.max_tree_rss_bytes)
@@ -1789,7 +1786,7 @@ def run(args: argparse.Namespace) -> dict[str, object]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--preserve-worker-budget", action="store_true",
-                        help="retain matching outer worker observations and original recovery deadline")
+                        help="retain outer worker observations/cap no greater than the local cap and original recovery deadline")
     parser.add_argument("--result", required=True)
     parser.add_argument("--samples", required=True)
     parser.add_argument("--stdout", required=True)

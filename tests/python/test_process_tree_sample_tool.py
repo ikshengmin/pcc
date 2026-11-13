@@ -17,13 +17,13 @@ ROOT = Path(__file__).resolve().parents[2]
 TOOL = ROOT / "scripts" / "run_process_tree_sample.py"
 
 
-def _load_tool_module():
+def _load_tool_module(path=TOOL):
     spec = importlib.util.spec_from_file_location(
-        "pcc_process_tree_sample_test_module", TOOL
+        "pcc_process_tree_sample_test_module", path
     )
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
-    scripts_path = str(TOOL.parent)
+    scripts_path = str(path.parent)
     sys.path.insert(0, scripts_path)
     try:
         spec.loader.exec_module(module)
@@ -1619,3 +1619,133 @@ def test_stage1_clean_environment_forwards_recovery_only_with_guard_state():
     assignment = inner.body[0]
     assert ast.unparse(assignment.targets[0]) == "env['" + recovery_key + "']"
     assert ast.unparse(assignment.value) == "os.environ['" + recovery_key + "']"
+
+
+def _nested_guard_environment(cap, state_path, deadline):
+    return {
+        "PCC_WORKER_TREE_BUDGET_BYTES": str(cap),
+        "PCC_WORKER_TREE_STATE_PATH": str(state_path),
+        "PCC_WORKER_TREE_RECOVERY": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t" + str(deadline),
+    }
+
+
+@pytest.mark.parametrize("cap", [3754835968, 8 * 1024**3])
+@pytest.mark.parametrize("ancestor_deadline", [120.0, 900.0])
+def test_nested_guard_uses_earlier_deadline_without_reissuing_contract(
+    monkeypatch, cap, ancestor_deadline,
+):
+    tool = _load_tool_module()
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 100.0)
+    environment = _nested_guard_environment(cap, "/outer/state.tsv", ancestor_deadline)
+    original = dict(environment)
+    assert tool._inherited_observer_deadline(environment, 8 * 1024**3, 700.0) == min(
+        ancestor_deadline, 700.0
+    )
+    assert environment == original
+
+
+@pytest.mark.parametrize("change", [
+    {"PCC_WORKER_TREE_BUDGET_BYTES": None},
+    {"PCC_WORKER_TREE_STATE_PATH": None},
+    {"PCC_WORKER_TREE_RECOVERY": None},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": ""},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "invalid"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "03754835968"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "+3754835968"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": " 3754835968"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "3754835968 "},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "3_754_835_968"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "0"},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": str(9 * 1024**3)},
+    {"PCC_WORKER_TREE_STATE_PATH": ""},
+    {"PCC_WORKER_TREE_RECOVERY": "malformed"},
+    {"PCC_WORKER_TREE_RECOVERY": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t99"},
+    {"PCC_WORKER_TREE_RECOVERY": "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\tnan"},
+])
+def test_nested_guard_rejects_incompatible_contract_before_launch(tmp_path, monkeypatch, change):
+    tool = _load_tool_module()
+    monkeypatch.setattr(tool.time, "monotonic", lambda: 100.0)
+    environment = _nested_guard_environment(3754835968, tmp_path / "outer.tsv", time.monotonic() + 300)
+    for name, value in change.items():
+        if value is None:
+            environment.pop(name)
+        else:
+            environment[name] = value
+    for name in ("PCC_WORKER_TREE_BUDGET_BYTES", "PCC_WORKER_TREE_STATE_PATH",
+                 "PCC_WORKER_TREE_RECOVERY"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    args = _mac_ci_guard_args(tool, tmp_path, automatic=False)
+    args.darwin_preflight_reserve_bytes = 0
+    args.max_tree_rss_bytes = 8 * 1024**3
+    args.preserve_worker_budget = True
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("invalid inherited contract launched a child")
+
+    monkeypatch.setattr(tool.subprocess, "Popen", forbidden)
+    with pytest.raises(tool.ProcessTreeSampleError, match="inherited observer"):
+        tool.run(args)
+    receipt = json.loads((tmp_path / "result.json").read_text())
+    assert receipt["status"] == "SAMPLER_ERROR"
+    assert not (tmp_path / "result.json.worker-rss.tsv").exists()
+
+
+@pytest.mark.parametrize("cap", [3754835968, 8 * 1024**3])
+def test_nested_guard_retains_outer_state_and_sibling_admission(tmp_path, monkeypatch, cap):
+    from pcc.frontends.python import worker_resource_plan as plan
+
+    tool = _load_tool_module()
+    if tool.compile_ab is None:
+        # As in the compile-window fixture, synthetic process operations on
+        # Windows still need the real support module for provenance hashes.
+        monkeypatch.setattr(tool, "compile_ab", _load_tool_module(
+            TOOL.with_name("run_pcc_compile_ab.py")
+        ))
+    state_path = tmp_path / "outer.tsv"
+    now = time.monotonic()
+    # The inner sampler sees PID 123 only. The outer snapshot also includes
+    # wrapper 10 and sibling 124, neither of which may disappear from capacity.
+    state = ("pcc.worker-tree-rss.v1\n" + str(now) + "\n" + str(cap)
+             + "\n10\t1\t1000\n123\t10\t2000\n124\t10\t3000\n")
+    state_path.write_text(state)
+    environment = _nested_guard_environment(cap, state_path, now + 300)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    launched = []
+
+    class Child:
+        pid = 123
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    def launch(command, **kwargs):
+        launched.append(kwargs["env"])
+        return Child()
+
+    monkeypatch.setattr(tool.subprocess, "Popen", launch)
+    monkeypatch.setattr(tool, "_process_identity", lambda pid: tool._ProcessIdentity(pid, 1, (1, 0)))
+    tables = iter([({123: (1, 2000, "synthetic-native-worker")}, 0), ({}, 0)])
+    monkeypatch.setattr(tool, "_timed_process_table",
+                        lambda **kwargs: (*next(tables), tool.time.monotonic()))
+    monkeypatch.setattr(tool, "_process_table", lambda **kwargs: next(tables))
+    args = _mac_ci_guard_args(tool, tmp_path, automatic=False)
+    args.darwin_preflight_reserve_bytes = 0
+    args.max_tree_rss_bytes = 8 * 1024**3
+    args.preserve_worker_budget = True
+    receipt = tool.run(args)
+    assert receipt["status"] == "COMPLETE"
+    assert receipt["max_tree_rss_bytes"] == 8 * 1024**3
+    assert all(launched[0][name] == value for name, value in environment.items())
+    assert all(receipt["environment"][name] == value for name, value in environment.items())
+    assert state_path.read_text() == state
+    assert not (tmp_path / "result.json.worker-rss.tsv").exists()
+    monkeypatch.setattr(plan.time, "monotonic", lambda: now)
+    outside, observed = plan.read_tree_state(str(state_path), cap, 123, [], include_owner=True)
+    assert outside == 4000 and observed[123] == 2000
+    assert plan.available_worker_bytes(cap, observed[123], outside) == (
+        cap - 6000 - plan.RSS_HEADROOM_BYTES
+    )

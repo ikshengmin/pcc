@@ -1217,6 +1217,7 @@ def _bootstrap_stage_sampler_command(
     *,
     profile_dir: Path,
     stage: int,
+    environment: dict[str, str] | None = None,
 ) -> tuple[list[str], Path, Path]:
     prefix = profile_dir / ("stage" + str(stage) + ".process")
     result_path = Path(str(prefix) + ".result.json")
@@ -1247,6 +1248,13 @@ def _bootstrap_stage_sampler_command(
         "--",
         *command,
     ]
+    if environment is not None and any(name in environment for name in (
+        "PCC_WORKER_TREE_BUDGET_BYTES", "PCC_WORKER_TREE_STATE_PATH",
+        "PCC_WORKER_TREE_RECOVERY",
+    )):
+        # Presence, not truthiness: partial or invalid inheritance must fail
+        # closed in the sampler, never silently establish a fresh budget.
+        sampler_command.insert(sampler_command.index("--"), "--preserve-worker-budget")
     return sampler_command, stdout_path, stderr_path
 
 
@@ -1298,6 +1306,7 @@ def _run_bootstrap_stage(
             cmd,
             profile_dir=profile_dir,
             stage=stage,
+            environment=env,
         )
     )
     sampled = run_process_group_timeout(
@@ -2015,3 +2024,42 @@ def test_bootstrap_success_manifest_rejects_partial_timeout_and_forced_rebuild(
     )
     assert reused is False
     assert "forces a fresh backend" in reason
+
+
+@pytest.mark.parametrize("inherited", [
+    {},
+    {"PCC_WORKER_TREE_BUDGET_BYTES": "3754835968"},
+    {"PCC_WORKER_TREE_STATE_PATH": ""},
+    {"PCC_WORKER_TREE_RECOVERY": "malformed"},
+])
+def test_bootstrap_stage_wires_inherited_worker_contract(tmp_path, monkeypatch, inherited):
+    import sys
+
+    module = sys.modules[__name__]
+    for name in ("PCC_WORKER_TREE_BUDGET_BYTES", "PCC_WORKER_TREE_STATE_PATH",
+                 "PCC_WORKER_TREE_RECOVERY"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in inherited.items():
+        monkeypatch.setenv(name, value)
+    monkeypatch.setattr(module, "_configure_bootstrap_compiler_caches", lambda env: None)
+    captured = []
+
+    class CapturedLaunch(Exception):
+        pass
+
+    def capture(command, *, timeout, env):
+        captured.append((command, timeout, env))
+        raise CapturedLaunch
+
+    monkeypatch.setattr(module, "run_process_group_timeout", capture)
+    with pytest.raises(CapturedLaunch):
+        _run_bootstrap_stage(tmp_path, "0", tmp_path / "runtime.a", stage=2,
+                             frontend_jobs=6, self_backend_jobs=2, cpu_ids=(),
+                             profile_dir=tmp_path / "profile")
+    command, timeout, env = captured[0]
+    assert ("--preserve-worker-budget" in command) == bool(inherited)
+    assert command[command.index("--max-tree-rss-bytes") + 1] == str(8 * 1024**3)
+    assert command[command.index("--timeout") + 1] == "600"
+    assert timeout == 660
+    assert env["PCC_BOOTSTRAP_PY_FRONTEND_JOBS"] == "6"
+    assert all(env[name] == value for name, value in inherited.items())
