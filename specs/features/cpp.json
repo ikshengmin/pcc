@@ -3217,11 +3217,14 @@
       "chapter_ids": [
         "cstddef.syn"
       ],
-      "scope": "Owned size_t/ptrdiff_t target aliases, distinct nullptr_t and repeated header acquisition. max_align_t is deliberately incomplete; offsetof and byte operations remain unavailable. Linux x86_64 runtime only; other target assertions are syntax/type checks, not native ABI qualification. Host pcc0/self only; no native pcc1, bootstrap, five-GC, TinyXML2 whole-project, NumPy or full C++17 acceptance.",
+      "scope": "Owned size_t/ptrdiff_t target aliases, distinct nullptr_t and repeated header acquisition. max_align_t is deliberately incomplete; offsetof and byte operations remain unavailable. Linux x86_64 runtime only; other target assertions are syntax/type checks, not native ABI qualification. Host pcc0/self only; no native pcc1, bootstrap, five-GC, TinyXML2 whole-project, NumPy or full C++17 acceptance. The stddef.h compatibility spelling forwards to the same owned declarations (N4659 [depr.c.headers]); its companion tests cover global names, include order, nested acquisition, NULL and cross-object calls. This spelling addition and its ordinary/integration/system-header-reference checks are CI-only UNRUN; historical evidence below does not qualify them.",
       "status": "supported",
       "tests": [
         "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_has_stable_public_owned_artifacts",
-        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference"
+        "tests/cpp/test_cpp_cstddef_header.py::test_real_cstddef_original_executes_with_separate_system_header_reference",
+        "tests/cpp/test_cpp_stddef_header.py::test_stddef_global_aliases_share_cstddef_identity",
+        "tests/cpp/test_cpp_stddef_header.py::test_stddef_aliases_link_across_owned_objects",
+        "tests/cpp/test_cpp_stddef_header.py::test_stddef_originals_execute_against_real_system_header_reference"
       ],
       "diagnostics": [],
       "evidence": [
