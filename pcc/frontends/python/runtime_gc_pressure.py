@@ -80,6 +80,12 @@ pcc_gc_pressure_tracing_completed = extern("pcc_gc_pressure_tracing_completed", 
         source = _function(source, "pcc_gc_granule_object_publish",
             "    if observed == GC_STATE_RESERVED or observed == GC_STATE_LIVE:\n",
             "    if observed == GC_STATE_RESERVED:\n        pcc_gc_pressure_note_publication()\n    if observed == GC_STATE_RESERVED or observed == GC_STATE_LIVE:\n")
+        # pcc_gc_alloc publishes fresh object cells here without the general
+        # pointer-registration path. Count the same RESERVED-to-LIVE CAS,
+        # before its cache seed; an idempotent LIVE answer is not a new object.
+        source = _function(source, "pcc_allocator_object_publish_fresh",
+            "    if observed != GC_STATE_RESERVED and observed != GC_STATE_LIVE:\n",
+            "    if observed == GC_STATE_RESERVED:\n        pcc_gc_pressure_note_publication()\n    if observed != GC_STATE_RESERVED and observed != GC_STATE_LIVE:\n")
     elif module == "freestanding_ascii_chars":
         source = _function(source, "ascii_image_char",
             "    if pcc_gc_pointer_register(out) < 0:\n        return null()",
