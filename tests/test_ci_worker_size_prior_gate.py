@@ -1587,7 +1587,58 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert "if: always()" in preflight
     assert "name: bootstrap-${{ matrix.platform }}" in other
     assert "name: bootstrap-macos-arm64" in mac
-    assert "continue-on-error:" not in text and "max-parallel:" not in text
+    def require_fail_closed_error_policy(workflow):
+        # Only aggregate evidence downloads may fail before reconciliation.
+        # Test execution and the final coverage verdict must still fail closed.
+        assert "max-parallel:" not in workflow
+        before, coverage = workflow.split("\n  source-platform-coverage:\n", 1)
+        coverage, after = coverage.split("\n  numpy-source-frontier:\n", 1)
+        assert "continue-on-error:" not in before + after
+        allowed = {
+            "Download authoritative exact-source plan",
+            "Download every source producer without merging directories",
+        }
+        steps = re.split(r"(?m)^      - name: ", coverage)
+        assert "continue-on-error:" not in steps[0]
+        downloads = set()
+        verdict = None
+        for step in steps[1:]:
+            name = step.splitlines()[0]
+            if "continue-on-error:" in step:
+                assert name in allowed and name not in downloads
+                assert step.count("continue-on-error:") == 1
+                assert "\n        continue-on-error: true\n" in step
+                assert "\n        uses: actions/download-artifact@v7\n" in step
+                assert not re.search(r"(?m)^        run:", step)
+                downloads.add(name)
+            if name == "Fail closed on unresolved source-platform coverage":
+                assert verdict is None
+                verdict = step
+        assert downloads == allowed
+        assert verdict == (
+            "Fail closed on unresolved source-platform coverage\n"
+            "        if: always()\n"
+            "        run: python scripts/ci_validation_coverage.py "
+            '--plan "$RUNNER_TEMP/source-coverage-plan/validation-plan.json" '
+            '--artifacts "$RUNNER_TEMP/source-coverage-artifacts" '
+            '--out "$RUNNER_TEMP/source-coverage.json"\n'
+        )
+
+    require_fail_closed_error_policy(text)
+    # Keep negative controls in this existing node: no host-census drift.
+    for invalid in (
+        text.replace("\n  source-platform-coverage:\n", "\n  source-platform-coverage:\n    continue-on-error: true\n"),
+        text.replace("      - name: Fail closed on unresolved source-platform coverage\n",
+                     "      - name: Fail closed on unresolved source-platform coverage\n        continue-on-error: true\n"),
+        text.replace("      - name: Download authoritative exact-source plan\n",
+                     "      - name: Download authoritative exact-source plan\n        run: false\n"),
+        text.replace("        run: python scripts/ci_validation_coverage.py ",
+                     "        run: python scripts/not_the_coverage_gate.py "),
+        text.replace('--out "$RUNNER_TEMP/source-coverage.json"\n',
+                     '--out "$RUNNER_TEMP/source-coverage.json" || true\n'),
+    ):
+        with pytest.raises(AssertionError):
+            require_fail_closed_error_policy(invalid)
     header, jobs = text.split("\njobs:\n", 1)
     assert text.count("concurrency:") == 1 and "concurrency:" not in jobs
     concurrency = header.split("\nconcurrency:\n", 1)[1].strip("\n")
