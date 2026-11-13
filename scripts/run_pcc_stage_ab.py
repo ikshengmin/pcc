@@ -685,75 +685,141 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "sources": source_manifests,
         "runtime_archive": str(runtime_archive),
         "runtime_archive_sha256": ab.sha256_path(runtime_archive),
+        "requested_stages": args.stages,
+        "resource_limits": {
+            "stage1_timeout_s": args.stage1_timeout,
+            "stage2_timeout_s": args.stage2_timeout,
+            "smoke_timeout_s": args.smoke_timeout,
+            "max_tree_rss_bytes": args.max_tree_rss_bytes,
+            "frontend_jobs": args.frontend_jobs,
+            "self_backend_jobs": args.self_backend_jobs,
+            "gc_backend": args.gc_backend,
+        },
         "pairs": [],
     }
     _persist(manifest_path, manifest)
     source_by_arm = {"baseline": baseline_source, "candidate": candidate_source}
     starting_runtime_hash = manifest["runtime_archive_sha256"]
-    with ab._performance_lock():
-        first_pair_index = args.first_pair_index
-        for pair_index in range(first_pair_index, first_pair_index + args.pairs):
-            pair_root = output / ("pair-" + str(pair_index))
-            pair_root.mkdir()
-            pair: dict[str, Any] = {"index": pair_index, "order": pair_order(pair_index)}
-            manifest["active_pair"] = pair
-            _persist(manifest_path, manifest)
-            for arm in pair["order"]:
-                arm_root = pair_root / arm
-                arm_root.mkdir()
-                print(
-                    "[stage-ab] pair=" + str(pair_index) + " arm=" + arm + " stage1 begin",
-                    flush=True,
-                )
-                stage1_record = _run_stage1(
-                    arm=arm,
-                    source_root=source_by_arm[arm],
-                    runtime_archive=runtime_archive,
-                    arm_root=arm_root,
-                    args=args,
-                    ab=ab,
-                    stage1=stage1,
-                    sampler=sampler,
-                )
-                arm_record: dict[str, Any] = {"stage1": stage1_record}
-                if args.stages == "stage1-stage2":
+    try:
+        with ab._performance_lock():
+            first_pair_index = args.first_pair_index
+            for pair_index in range(first_pair_index, first_pair_index + args.pairs):
+                pair_root = output / ("pair-" + str(pair_index))
+                pair_root.mkdir()
+                pair: dict[str, Any] = {"index": pair_index, "order": pair_order(pair_index)}
+                for arm in pair["order"]:
+                    pair[arm] = {
+                        "stage_status": {
+                            "stage1": "NOT_RUN",
+                            "stage2": (
+                                "NOT_RUN" if args.stages == "stage1-stage2"
+                                else "NOT_REQUESTED"
+                            ),
+                        },
+                    }
+                manifest["active_pair"] = pair
+                _persist(manifest_path, manifest)
+                for arm in pair["order"]:
+                    arm_root = pair_root / arm
+                    arm_root.mkdir()
+                    arm_record = pair[arm]
+                    arm_record["stage_status"]["stage1"] = "RUNNING"
+                    _persist(manifest_path, manifest)
                     print(
-                        "[stage-ab] pair=" + str(pair_index) + " arm=" + arm + " stage2 begin",
+                        "[stage-ab] pair=" + str(pair_index) + " arm=" + arm + " stage1 begin",
                         flush=True,
                     )
-                    arm_record["stage2"] = _run_stage2(
+                    stage1_record = _run_stage1(
                         arm=arm,
-                        pair_index=pair_index,
-                        stage1_record=stage1_record,
+                        source_root=source_by_arm[arm],
+                        runtime_archive=runtime_archive,
                         arm_root=arm_root,
                         args=args,
                         ab=ab,
+                        stage1=stage1,
                         sampler=sampler,
                     )
-                assert_stage_envelope_parity(arm_record, arm=arm)
-                pair[arm] = arm_record
-                manifest["active_pair"] = pair
+                    # Retain the admitted Stage1 even if Stage2 never returns.
+                    arm_record["stage1"] = stage1_record
+                    arm_record["stage_status"]["stage1"] = "COMPLETE"
+                    _persist(manifest_path, manifest)
+                    if args.stages == "stage1-stage2":
+                        arm_record["stage_status"]["stage2"] = "RUNNING"
+                        _persist(manifest_path, manifest)
+                        print(
+                            "[stage-ab] pair=" + str(pair_index) + " arm=" + arm + " stage2 begin",
+                            flush=True,
+                        )
+                        arm_record["stage2"] = _run_stage2(
+                            arm=arm,
+                            pair_index=pair_index,
+                            stage1_record=stage1_record,
+                            arm_root=arm_root,
+                            args=args,
+                            ab=ab,
+                            sampler=sampler,
+                        )
+                        arm_record["stage_status"]["stage2"] = "COMPLETE"
+                        _persist(manifest_path, manifest)
+                    assert_stage_envelope_parity(arm_record, arm=arm)
+                    manifest["active_pair"] = pair
+                    _persist(manifest_path, manifest)
+                manifest["pairs"].append(pair)
+                manifest.pop("active_pair", None)
                 _persist(manifest_path, manifest)
-            manifest["pairs"].append(pair)
-            manifest.pop("active_pair", None)
-            _persist(manifest_path, manifest)
-            if (
-                pair["baseline"]["stage1"]["normalized_environment_sha256"]
-                != pair["candidate"]["stage1"]["normalized_environment_sha256"]
-            ):
-                raise StageABError("paired Stage1 environments differ after normalization")
-        if ab.sha256_path(runtime_archive) != starting_runtime_hash:
-            raise StageABError("runtime archive changed during stage A/B")
-        ending_sources = {
-            arm: stage1.source_manifest(source_by_arm[arm], ab)
-            for arm in source_by_arm
+                if (
+                    pair["baseline"]["stage1"]["normalized_environment_sha256"]
+                    != pair["candidate"]["stage1"]["normalized_environment_sha256"]
+                ):
+                    raise StageABError("paired Stage1 environments differ after normalization")
+            if ab.sha256_path(runtime_archive) != starting_runtime_hash:
+                raise StageABError("runtime archive changed during stage A/B")
+            ending_sources = {
+                arm: stage1.source_manifest(source_by_arm[arm], ab)
+                for arm in source_by_arm
+            }
+            if ending_sources != source_manifests:
+                raise StageABError("source snapshot changed during stage A/B")
+        manifest["summary"] = summarize_pairs(manifest["pairs"])
+        manifest["status"] = "COMPLETE"
+        manifest["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        _persist(manifest_path, manifest)
+    except BaseException as exc:
+        # Preserve the original failure, including interruption. A process kill
+        # cannot run this handler; its last durable checkpoint stays RUNNING.
+        status = (
+            "INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit))
+            else "FAILED"
+        )
+        active_pair = manifest.get("active_pair", {})
+        for arm in ("baseline", "candidate"):
+            for stage, state in active_pair.get(arm, {}).get("stage_status", {}).items():
+                if state == "RUNNING":
+                    active_pair[arm]["stage_status"][stage] = status
+        manifest["status"] = status
+        manifest["failure"] = {
+            "exception_type": type(exc).__name__,
+            "message": str(exc),
         }
-        if ending_sources != source_manifests:
-            raise StageABError("source snapshot changed during stage A/B")
-    manifest["summary"] = summarize_pairs(manifest["pairs"])
-    manifest["status"] = "COMPLETE"
-    manifest["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
-    _persist(manifest_path, manifest)
+        manifest["finished_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
+        # A summary or final-write failure must not leave a success claim in
+        # the failure receipt. Stage artifacts and completed pairs stay intact.
+        manifest.pop("summary", None)
+        manifest.pop("completed_at_utc", None)
+        try:
+            _persist(manifest_path, manifest)
+        except Exception as receipt_error:
+            try:
+                print(
+                    "stage A/B warning: could not persist failure receipt: "
+                    + str(receipt_error),
+                    file=sys.stderr,
+                )
+            except Exception:
+                # Storage and stderr can fail together. Neither may replace
+                # the stage exception that determines the caller's outcome.
+                pass
+        raise
     return manifest
 
 
@@ -796,9 +862,8 @@ def main(argv: list[str] | None = None) -> int:
         manifest = run(args)
     except (OSError, ValueError, KeyError, StageABError, RuntimeError) as exc:
         # RuntimeError covers the dynamically-loaded tools' CompileABError /
-        # Stage1BuildError subclasses, which run() re-raises verbatim; KeyError
-        # covers a stage1 receipt missing a required environment key.  Both
-        # previously escaped as raw tracebacks with the manifest left RUNNING.
+        # Stage1BuildError subclasses, which run() re-raises verbatim after
+        # checkpointing failure; KeyError covers a missing receipt field.
         print("stage A/B error: " + str(exc), file=sys.stderr)
         return 1
     print(
