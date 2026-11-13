@@ -31,6 +31,11 @@
       "id": "typing.aliases",
       "title": "The type statement",
       "url": "https://docs.python.org/3.15/reference/simple_stmts.html#the-type-statement"
+    },
+    {
+      "id": "pcc.runtime.fd-waits",
+      "title": "PCC native virtual-thread fd-wait contract",
+      "url": "https://github.com/ikshengmin/pcc/blob/71fad9093a00824969b47d1c5be4ad0c018848f0/docs/virtual-thread-io.md"
     }
   ],
   "features": [
@@ -87,6 +92,60 @@
       "diagnostics": [
         "PCC-PY-TYPE-ALIAS-UNIMPLEMENTED"
       ],
+      "evidence": []
+    },
+    {
+      "id": "python.pcc.observed-fd-wait",
+      "title": "Register virtual-thread fd readiness after a nonblocking observation",
+      "chapter_ids": [
+        "pcc.runtime.fd-waits"
+      ],
+      "scope": "PCC-specific native runtime API, not Python language-standard coverage. The new wait entry shares registration, cancellation, deadline and root ownership with the existing eager probe entry. Source implementation is present; full-feature/native-pcc1 acceptance is unrecorded, and no performance gain is claimed by this row.",
+      "implementation": {
+        "status": "supported",
+        "source_revision": "71fad9093a00824969b47d1c5be4ad0c018848f0",
+        "sources": [
+          {
+            "path": "pcc/virtual_thread.py",
+            "sha256": "d9818bb82ea1ca63798a82798bc01adfb30da49fd6ceb95ae7ae79f8ffd33829"
+          },
+          {
+            "path": "pcc/runtime/py/py_virtual_thread_runtime.py",
+            "sha256": "d6c6d0e9332265ef867a1bf6aa002921fbeceaaf22916567be61348cef6d6d67"
+          },
+          {
+            "path": "pcc/runtime/include/py_runtime.h",
+            "sha256": "b02f99b5fa912b3461bd64a70a4a69c6794c38ab235247bcfaa44c1d04e07793"
+          },
+          {
+            "path": "pcc/frontends/python/codegen/native_virtual_thread.py",
+            "sha256": "e6ce05d383c82e5ac3cd8dbe34ffce724da1240e952267ed5bbd2d23c0ef9154"
+          },
+          {
+            "path": "pcc/frontends/python/codegen/runtime_abi.py",
+            "sha256": "45f64cbae517479797d673d7ad4c26ab2fcedaacf9e402eb5b0354cbf01244b3"
+          },
+          {
+            "path": "pcc/frontends/python/codegen/vthread_effect_analysis.py",
+            "sha256": "b299968f6b9872f17719cbb366a4d1ea6753d221ab92bdde48cdd1c6900be941"
+          },
+          {
+            "path": "pcc/frontends/python/codegen/native_modules.py",
+            "sha256": "b3c7a636a37d5b3a13092eeaf60b3abd203d522117974d6898b2aff6bdbd214e"
+          },
+          {
+            "path": "pcc/frontends/python/pipeline_import_policy.py",
+            "sha256": "0b32fee9dafff5c03195dfb8a5813dde361b37f916fe0fd66bcacbd9ce4c7e18"
+          }
+        ]
+      },
+      "acceptance": [],
+      "tests": [
+        "tests/python/test_vthread_observed_fd_wait.py::test_wait_operation_is_native_and_effect_visible_through_aliases",
+        "tests/python/test_vthread_observed_fd_wait.py::test_wait_entries_share_registration_with_only_the_requested_probe",
+        "tests/python/gc_production_contract/test_vthread_io_waitset_runtime.py::test_production_io_waitset_modes_preserve_roots"
+      ],
+      "diagnostics": [],
       "evidence": []
     }
   ],
