@@ -1503,3 +1503,27 @@ def test_campaign_keyboard_interrupt_persists_terminal_status_and_propagates(
         assert receipt["unattempted"] == [entry["canonical_nodeid"] for entry in rows[6:]]
         assert not (out / "batch-001" / "outcomes.json").exists()
         assert not (out / "batch-002").exists()
+
+
+def test_static_data_member_references_keep_owned_checks_in_their_original_lane():
+    module = "tests/cpp/test_cpp_static_data_members.py"
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    references = {
+        "test_reference_compiler_returns_the_same_value",
+        "test_reference_compiler_rejects_the_same_sources",
+        "test_programs_execute_against_real_cpp17_reference_on_linux",
+    }
+    assert set(registry[module]) == references
+    tree = ast.parse((ROOT / module).read_text())
+    functions = {node.name: node for node in tree.body
+                 if isinstance(node, ast.FunctionDef) and node.name.startswith("test_")}
+    assert references <= functions.keys()
+    for name, function in functions.items():
+        marks = {ast.unparse(mark.func if isinstance(mark, ast.Call) else mark)
+                 for mark in function.decorator_list}
+        integration = "pytest.mark.integration" in marks
+        if name in references:
+            assert registry[module][name]["activity"] == "external-reference"
+            assert not registry[module][name].get("conditional")
+        assert classify(module, name, integration, registry) == (
+            "reference" if name in references else "integration" if integration else "ordinary")
