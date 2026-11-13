@@ -32,6 +32,7 @@ class Scheduler:
             "pcc_vthread_ready_count_py": 0,
             "pcc_vthread_carrier_steal_count_py": 0,
             "pcc_vthread_local_poll_budget_py": 0,
+            "pcc_vthread_injection_pending_py": 0,
         }
         self.memory = {}
         self.queue_locked = None
@@ -55,6 +56,7 @@ class Scheduler:
             "_counter_add": self.counter_add,
             "_counter_set": lambda slot, value: self.words.__setitem__(slot[0], value),
             "load_ptr": lambda slot, offset: self.memory.get((slot, offset)),
+            "global_load_ptr": lambda name: self.memory.get(((name, 0), 0)),
             "store_ptr": lambda slot, offset, value: self.memory.__setitem__((slot, offset), value),
             "ptr_is_null": lambda value: int(value is None),
             "null": lambda: None,
