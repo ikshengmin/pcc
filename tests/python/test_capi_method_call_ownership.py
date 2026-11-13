@@ -845,8 +845,10 @@ def test_real_entry_and_body_ir_enforce_the_slot_boundary(tmp_path, monkeypatch)
         assert '@pcc_gc_frame_enter(' not in body
         assert '@pcc_gc_store_root' not in body
     entry = function_body(raw, 'pcc_capi_method_call_entry')
-    assert entry.count('@pcc_gc_note_frame_enter_checked(') == 2
-    assert entry.index('@pcc_thread_no_park_enter(') < entry.index('@pcc_gc_note_frame_enter_checked(')
+    # Both stack frames register through the checked local-frame entry the
+    # compiler selects for stack_alloc frames.
+    assert entry.count('@pcc_gc_note_frame_enter_local_checked(') == 2
+    assert entry.index('@pcc_thread_no_park_enter(') < entry.index('@pcc_gc_note_frame_enter_local_checked(')
     assert entry.index('@pcc_thread_no_park_exit(') < entry.index('@pcc_capi_method_call_into(')
     invoke = function_body(raw, 'pcc_capi_method_invoke_into')
     assert '@pcc_capi_is_type_object_value(' in invoke

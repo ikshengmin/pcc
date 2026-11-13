@@ -83,8 +83,12 @@ def test_runtime_object_comparison_has_one_behavior_owner():
     owner_source = textwrap.dedent(
         inspect.getsource(CompareMembershipLoweringMixin._emit_runtime_object_compare)
     )
+    # Class operands take _emit_compare's frame-rooted helper; both are the
+    # owner's callers.
     caller_source = textwrap.dedent(
         inspect.getsource(CompareMembershipLoweringMixin._emit_compare)
+    ) + textwrap.dedent(
+        inspect.getsource(CompareMembershipLoweringMixin._emit_frame_rooted_object_compare)
     )
     owner_strings = {
         node.value
