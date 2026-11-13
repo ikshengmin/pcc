@@ -167,7 +167,14 @@ def test_valueclass_hot_loop_zero_allocation_oracle_and_escape_semantics(tmp_pat
         instance_allocations = [
             event for event in allocations if int(event.get("value1", 0)) >= 100
         ]
-        assert len(instance_allocations) == 2, instance_allocations
+        # The two escaped boxes are the program's last instance allocations;
+        # imported providers' module objects (weakref initializes its own)
+        # carry other class tags and do not depend on the loop.
+        assert instance_allocations, allocations
+        point_tag = int(instance_allocations[-1]["value1"])
+        point_boxes = [event for event in instance_allocations
+                       if int(event["value1"]) == point_tag]
+        assert len(point_boxes) == 2, instance_allocations
         return proc.stdout.strip().splitlines(), allocations
 
     baseline_output, baseline_allocations = compile_and_run(0)
@@ -992,8 +999,9 @@ def test_valueclass_constructor_conditional_expr_projection_boxes_valuebox():
     ir_text = _generate_ir(source)
     main_ir = ir_text[ir_text.index("define i32 @main") :]
 
-    assert "ternary_obj_true" in main_ir
-    assert "ternary_obj_false" in main_ir
+    # Both arms of the conditional expression are slot-call producers.
+    assert "call.slot.if.true" in main_ir
+    assert "call.slot.if.false" in main_ir
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@py_instance_new\b", main_ir)
@@ -1197,7 +1205,8 @@ def test_valueclass_constructor_set_builtin_literal_source_projection_boxes_valu
     ir_text = _generate_ir(source)
     main_ir = ir_text[ir_text.index("define i32 @main") :]
 
-    assert re.search(r"\bcall\b[^\n]*@py_set_add\b", main_ir)
+    # set(iterable) consumes its built sequence in one runtime call.
+    assert re.search(r"\bcall\b[^\n]*@py_set_from_iterable\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@py_instance_new\b", main_ir)
@@ -1315,7 +1324,8 @@ def test_valueclass_constructor_sequence_builtin_literal_source_boxes_valuebox()
     main_ir = ir_text[ir_text.index("define i32 @main") :]
 
     assert re.search(r"\bcall\b[^\n]*@py_list_append\b", main_ir)
-    assert re.search(r"\bcall\b[^\n]*@py_tuple_set_item\b", main_ir)
+    # A tuple literal publishes its rooted items in one runtime call.
+    assert re.search(r"\bcall\b[^\n]*@py_tuple_from_owned_roots\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@py_instance_new\b", main_ir)
@@ -1555,7 +1565,7 @@ def test_valueclass_constructor_builtin_object_boundary_boxes_valuebox():
     assert re.search(r"\bcall\b[^\n]*@py_obj_hash\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_obj_repr\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_obj_str\b", main_ir)
-    assert re.search(r"\bcall\b[^\n]*@py_obj_format\b", main_ir)
+    assert re.search(r"\bcall\b[^\n]*@py_builtin_format\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_new\b", main_ir)
     assert re.search(r"\bcall\b[^\n]*@py_valuebox_set_field\b", main_ir)
     assert not re.search(r"\bcall\b[^\n]*@user_value_mod_Segment___init__\b", main_ir)
@@ -1892,7 +1902,7 @@ def test_valueclass_payload_unbox_rejects_wrong_dyn_type(tmp_path):
         """)
     ir_text = _generate_ir(source)
     assert "py_obj_isinstance" in ir_text
-    assert "value.Point.unbox.typeerror" in ir_text
+    assert "value.unbox.wrong.type" in ir_text
 
     src = tmp_path / "valueclass_unbox_wrong_type.py"
     exe = tmp_path / "valueclass_unbox_wrong_type"
