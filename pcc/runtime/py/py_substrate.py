@@ -108,6 +108,7 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
+pcc_thread_exit_unregisters = extern("pcc_thread_exit_unregisters", (), c_int64)
 
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_pointer_register = extern(
@@ -488,11 +489,39 @@ def py_tls_exc_set(exc) -> None:
         return
 
     # Publish the empty slot before unlinking its root node so a collector can
-    # never retain the value through a node that is being retired.  Clearing
-    # also makes raw-pthread exit safe without a platform-specific TLS
-    # destructor: normal exception teardown leaves no address into dead TLS.
+    # never retain the value through a node that is being retired.
     global_store_ptr("py_tls_current_exc_storage", null())
     _exc_pending_transition(was_set, 0)
+    if ptr_is_null(handle) == 0 and _exc_root_handle_released_when_empty() != 0:
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        global_store_ptr("py_tls_current_exc_root_handle", null())
+
+
+def _exc_root_handle_released_when_empty() -> int:
+    """Whether an emptied exception slot also unregisters its root node.
+
+    The node names this thread's TLS slot, so it must be gone before the
+    pthread's TLS is. A thread started by pcc_thread_start always exits
+    through pcc_thread_unregister_current, which retires the node
+    (py_tls_exc_retire_root), so it keeps the node registered meanwhile: an
+    empty root costs a collector nothing, while registering and unregistering
+    on every raise and every clear took the global scheduler-root list lock
+    twice per exception. Any other thread (the main thread, a raw pthread
+    the runtime registered lazily) has no such exit, so it still releases the
+    node whenever its slot empties and no address into dead TLS remains.
+    """
+    if pcc_thread_exit_unregisters() != 0:
+        return 0
+    return 1
+
+
+@c_abi_export("py_tls_exc_retire_root")
+def py_tls_exc_retire_root() -> None:
+    """Unregister this thread's exception root; its slot must be empty."""
+    if ptr_is_null(global_load_ptr("py_tls_current_exc_storage")) == 0:
+        pcc_platform_abort()
+        return
+    handle = global_load_ptr("py_tls_current_exc_root_handle")
     if ptr_is_null(handle) == 0:
         pcc_gc_scheduler_root_unregister_handle(handle)
         global_store_ptr("py_tls_current_exc_root_handle", null())
@@ -517,7 +546,16 @@ def py_tls_exc_swap_slot(slot) -> None:
             pcc_platform_abort()
             return
         global_store_ptr("py_tls_current_exc_root_handle", handle)
-    pcc_py_gc_minor_graph_lock()
+    # Both slots are roots of this thread alone. In container mode every
+    # collector scans roots in a stopped world and shades a stored value
+    # during a mark, and no poll separates the two stores, so the exchange
+    # needs no graph lock; serializing every raise and every clear of every
+    # thread on it collapsed four-worker raise to 0.3-0.5x of one worker.
+    # Without container mode (the provenance probe) the graph lock stays.
+    graph_locked: int = 0
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0:
+        graph_locked = 1
+        pcc_py_gc_minor_graph_lock()
     incoming = pcc_gc_load_ptr(null(), slot)
     previous = pcc_gc_load_ptr(null(), global_addr("py_tls_current_exc_storage"))
     pcc_gc_note_slot_write_barrier(null(), global_addr("py_tls_current_exc_storage"), incoming)
@@ -528,12 +566,13 @@ def py_tls_exc_swap_slot(slot) -> None:
     was_set: int = 1
     if ptr_is_null(previous):
         was_set = 0
-    pcc_py_gc_minor_graph_unlock()
+    if graph_locked != 0:
+        pcc_py_gc_minor_graph_unlock()
     now_set: int = 1
     if empty != 0:
         now_set = 0
     _exc_pending_transition(was_set, now_set)
-    if empty != 0 and ptr_is_null(handle) == 0:
+    if empty != 0 and ptr_is_null(handle) == 0 and _exc_root_handle_released_when_empty() != 0:
         pcc_gc_scheduler_root_unregister_handle(handle)
         global_store_ptr("py_tls_current_exc_root_handle", null())
 

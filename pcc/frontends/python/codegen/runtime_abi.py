@@ -3318,6 +3318,8 @@ def _cross_object_signatures_part_15():
     # Live bytes are published per thread in batches.
     "pcc_gc_live_bytes_note": (("c_int64",), "c_void"),
     "pcc_gc_live_bytes_flush": ((), "c_void"),
+    # A registered thread keeps its exception root until it unregisters.
+    "py_tls_exc_retire_root": ((), "c_void"),
     }
 
 

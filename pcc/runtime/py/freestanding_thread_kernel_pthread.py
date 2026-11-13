@@ -92,6 +92,11 @@ define_thread_local_ptr_null("pcc_tls_thread_id_py")
 # Only the owning thread reads or writes it.
 define_thread_local_ptr_null("pcc_tls_thread_state_py")
 define_thread_local_i32("pcc_tls_unregister_in_progress_py", 0)
+# 1 while this thread runs under _thread_trampoline, whose exit always
+# reaches pcc_thread_unregister_current. A raw pthread the runtime registers
+# lazily has no such exit, so per-thread state it publishes elsewhere must
+# not outlive its use (py_substrate's exception root).
+define_thread_local_i32("pcc_tls_exit_unregisters_py", 0)
 define_thread_local_ptr_null("pcc_tls_parked_epoch_py")
 define_global_ptr_null("pcc_world_lock_py")
 define_global_ptr_null("pcc_world_cond_py")
@@ -190,6 +195,7 @@ pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
 py_clear_exception = extern("py_clear_exception", (), c_void)
+py_tls_exc_retire_root = extern("py_tls_exc_retire_root", (), c_void)
 pcc_diagnostics_runtime_log_event_code = extern(
     "pcc_diagnostics_runtime_log_event_code",
     (c_int64, c_int64, c_int64, c_int64, c_ptr),
@@ -580,6 +586,12 @@ def pcc_thread_registered() -> int:
     if ptr_to_int(load_ptr(global_addr("pcc_tls_thread_id_py"), 0)) != 0:
         return 1
     return 0
+
+
+@c_abi_export("pcc_thread_exit_unregisters")
+def pcc_thread_exit_unregisters() -> int:
+    """Whether this thread's exit is certain to unregister it."""
+    return load_i32(global_addr("pcc_tls_exit_unregisters_py"), 0)
 
 
 @c_abi_export("pcc_thread_is_running")
@@ -1760,8 +1772,11 @@ def pcc_thread_unregister_current() -> None:
     store_i32(global_addr("pcc_tls_unregister_in_progress_py"), 0, 1)
     # The current-exception slot owns its reference and, in the pcc-Python
     # runtime, publishes its native-TLS address through the common GC root
-    # registry.  Retire both before the pthread's TLS storage disappears.
+    # registry, which a live thread keeps while its slot is empty.  Retire
+    # both before the pthread's TLS storage disappears.
     py_clear_exception()
+    py_tls_exc_retire_root()
+    store_i32(global_addr("pcc_tls_exit_unregisters_py"), 0, 0)
     pcc_gc_thread_unregister_buffers()
     pcc_allocator_thread_cache_drain()
     if _world_init() != 0:
@@ -1821,6 +1836,7 @@ def _thread_trampoline(start):
     handle = load_ptr(start, 16)
     free(start)
     pcc_current_thread_id()
+    store_i32(global_addr("pcc_tls_exit_unregisters_py"), 0, 1)
     pcc_thread_safepoint()
     _thread_log(thread_enter_event, 0, handle)
     result = call_ptr1(entry, arg)

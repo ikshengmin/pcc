@@ -30,8 +30,13 @@ class _Memory:
         self.value = self.make(PY_TYPE_LIST)
         self.none = self.make(PY_TYPE_NONE, 1)
         self.latest = {id(self.cls): self.cls, id(self.value): self.value}
+        # Container mode reads 0: this model relocates objects at its GC
+        # points, as a collector without container mode may.
+        container_mode = _Slots(8)
+        container_mode.fields[0] = 0
         self.maps = {"pcc_exc_construct_borrowed_frame_map": -2,
-                     "pcc_exc_construct_owned_frame_map": 2}
+                     "pcc_exc_construct_owned_frame_map": 2,
+                     "pcc_gc_list_container_mode": container_mode}
         self.namespace = self._namespace()
         parsed = ast.parse(PORT.read_text(), filename=str(PORT))
         functions = [node for node in parsed.body if isinstance(node, ast.FunctionDef)]

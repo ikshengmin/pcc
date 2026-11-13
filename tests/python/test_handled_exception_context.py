@@ -114,6 +114,8 @@ def _implicit_chainer(on_lock=None):
         "stack_alloc": lambda _size: {},
         "pcc_gc_backend": lambda: 0,
         "pcc_gc_load_ptr": lambda _owner, pointer: load(pointer),
+        # The raw read of the caller's context slot (empty-context return).
+        "load_ptr": lambda pointer, offset: load(pointer) if offset == 0 else None,
         "pcc_gc_store_ptr_plan_init": lambda plan, _owner, _backend: plan.clear(),
         "pcc_gc_store_ptr_plan_commit_locked": commit,
         "pcc_gc_store_ptr_plan_finish": finish,

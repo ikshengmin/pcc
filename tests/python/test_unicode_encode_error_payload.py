@@ -452,19 +452,12 @@ def test_unicode_capi_owned_ir(tmp_path):
 
 
 def test_unicode_libpython_callback_display_boundary_source():
-    # Static compatibility-boundary evidence only; this is not a libpython
-    # execution receipt and does not qualify concurrent callback lifetimes.
-    source = (ROOT / 'pcc/runtime/src/py_libpython.c').read_text()
-    begin = source.index('static CPyObject *py_cpy_gil_resume_after_callback(',
-                         source.index('static CPyObject *py_cpy_gil_resume_after_callback(') + 1)
-    body = source[begin:source.index('\n    return result;', begin)]
-    assert 'py_exc_get_message' not in body
-    assert 'error_roots[1] = py_obj_str(' in body
-    assert 'pcc_gc_foreign_lease_acquire(&error_roots[1])' in body
-    assert 'memcpy(pcc_message, py_str_utf8(text)' in body
-    assert 'pcc_gc_scheduler_root_register_handle(' in body
-    assert 'pcc_gc_frame_leave(error_roots)' in body
-    assert 'pcc_gc_scheduler_root_unregister_handle(context->pcc_exception_root)' in source
+    # The libpython route, with its C bridge (pcc/runtime/src/py_libpython.c)
+    # and the callback display boundary that pinned an error's text across a
+    # GIL resume, has been removed: no runtime source keeps that boundary.
+    assert not (ROOT / 'pcc/runtime/src/py_libpython.c').exists()
+    for path in (ROOT / 'pcc/runtime/py').glob('*.py'):
+        assert 'py_cpy_gil_resume_after_callback' not in path.read_text(), path.name
 
 
 @pytest.mark.parametrize('module', ['py_exc_objects', 'py_format_runtime'])

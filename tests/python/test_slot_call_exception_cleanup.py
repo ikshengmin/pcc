@@ -89,11 +89,15 @@ class CleanupModel(CallObjectLoweringMixin):
             pcc_platform_abort=lambda: pytest.fail("TLS root registration failed"),
             pcc_py_gc_minor_graph_lock=lambda: None,
             pcc_py_gc_minor_graph_unlock=lambda: None,
+            # Container mode reads 0 and the thread has no unregistering exit,
+            # so the swap keeps the graph lock and releases an emptied root.
+            load_i32=lambda name, offset: 0,
+            pcc_thread_exit_unregisters=lambda: 0,
             pcc_gc_note_slot_write_barrier=lambda *_: None,
             store_ptr=lambda slot, offset, value: self.roots.__setitem__(slot, value),
             atomic_rmw_i64=self.count_pending,
         )
-        load_functions(RUNTIME / "py_substrate.py", {"py_tls_exc_swap_slot"}, self.swap_ns)
+        load_functions(RUNTIME / "py_substrate.py", {"py_tls_exc_swap_slot", "_exc_root_handle_released_when_empty"}, self.swap_ns)
 
     def position(self, block):
         self.builder._block = block

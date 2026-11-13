@@ -106,11 +106,18 @@ def _exc_store_constructed_slot(owned, values, value_offset: int, field_offset: 
     # Fresh construction slots contain NULL/None, so this store has no user
     # destructor tail. Reload both operands under the normal graph lease;
     # a callee's implicit poll cannot invalidate the raw field address.
-    pcc_py_gc_minor_graph_lock()
+    # In container mode the exception is still this thread's alone and an
+    # object a running thread names never moves, so the store needs no
+    # graph lock (every raise of every thread queued on it).
+    graph_locked: int = 0
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0:
+        graph_locked = 1
+        pcc_py_gc_minor_graph_lock()
     e = pcc_gc_load_ptr(null(), owned)
     value = pcc_gc_load_ptr(null(), ptr_add(values, value_offset))
     pcc_gc_store_ptr(e, ptr_add(e, field_offset), value)
-    pcc_py_gc_minor_graph_unlock()
+    if graph_locked != 0:
+        pcc_py_gc_minor_graph_unlock()
 
 
 def _exc_construct_body(borrowed, owned, msg) -> int:
@@ -280,6 +287,11 @@ def py_exc_set_implicit_context_slots(exception_slot, context_slot) -> None:
     Explicit cause and suppression fields are never changed here.
     """
     if ptr_is_null(exception_slot) or ptr_is_null(context_slot):
+        return
+    # No exception is being handled (a raise outside an except block): there
+    # is no context to set or cycle to break. The caller's slot is its own
+    # root, and NULL is NULL through any forwarding.
+    if ptr_is_null(load_ptr(context_slot, 0)) != 0:
         return
     sever = stack_alloc(128)
     replace = stack_alloc(128)
