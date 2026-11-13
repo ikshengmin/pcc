@@ -7949,6 +7949,13 @@ def infer_module(
     new_body = tuple(new_body)
     if ctx.freestanding:
         _validate_freestanding_plain_int_stmts(new_body)
+    else:
+        # Function-local tuples that never escape keep their elements in
+        # hidden locals instead of a tuple (tuple_scalar_replacement).
+        from pcc.frontends.python.tuple_scalar_replacement import (
+            scalar_replace_local_tuples,
+        )
+        new_body = scalar_replace_local_tuples(new_body)
     return replace(m, body=new_body)
 
 
