@@ -81,6 +81,8 @@ EXTERN_DEFAULTS = {
     "pcc_gc_page_of": lambda obj: 0,
     "pcc_gc_page_evacuating": lambda page: 0,
     "pcc_gc_page_set_evacuating": lambda page, evacuating: None,
+    # Modeled objects have no logical zpage either.
+    "pcc_gc_backend4_zpage_find": lambda obj: 0,
 }
 
 
@@ -153,10 +155,16 @@ def _bind_abi_constants(path, names, namespace) -> None:
 
 def with_local_helpers(path, names) -> set[str]:
     """``names`` plus every same-module function they use, transitively:
-    called, or passed by name (a visitor callback)."""
+    called, passed by name (a visitor callback), or named by its exported
+    symbol in ``function_addr("...")`` (a callback address)."""
     functions = _module_functions(str(path))
     missing = set(names) - set(functions)
     assert not missing, f"{Path(path).name} defines no {sorted(missing)}"
+    by_export = {
+        _exported_name(node): name
+        for name, node in functions.items()
+        if _exported_name(node) is not None
+    }
     selected: set[str] = set()
     pending = list(names)
     while pending:
@@ -171,6 +179,15 @@ def with_local_helpers(path, names) -> set[str]:
                 and node.id in functions
             ):
                 pending.append(node.id)
+            elif (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Name)
+                and node.func.id == "function_addr"
+                and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value in by_export
+            ):
+                pending.append(by_export[node.args[0].value])
     return selected
 
 

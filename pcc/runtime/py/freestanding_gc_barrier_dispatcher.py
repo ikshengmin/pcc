@@ -232,7 +232,7 @@ def pcc_gc_step(budget: i64) -> i64:
                 marks_finished: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
                 selection_due: i64 = 0
                 # Selection ranks the object slabs by the live cells the
-                # finished mark left (pcc_gc_backend4_select_relocation_pages).
+                # finished mark left.
                 if marks_finished != load_i64(global_addr("pcc_gc_backend4_selection_commit"), 0):
                     selection_due = 1
                 if processed < budget and may_relocate != 0:

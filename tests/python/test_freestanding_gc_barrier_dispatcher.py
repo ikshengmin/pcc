@@ -80,7 +80,6 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_thread_no_park_exit",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
-    "pcc_gc_backend4_zpage_head",
     # The gate's automatic GC4 step leaves a due mark to its gate.
     "pcc_gc_in_auto_step",
     # GC4's step advances empty-page quarantine.
@@ -104,6 +103,7 @@ RAW_GLOBAL_IMPORTS = {
     # conservative pins only with selection, pending pages or edges.
     "pcc_gc_backend4_selection_commit",
     "pcc_gc_backend4_evacuation_page_head",
+    "pcc_gc_backend4_slab_evacuation_head",
 }
 
 
@@ -331,8 +331,10 @@ class _AutoStepModel:
             "pcc_gc_tracing_finish_commits": 0,
             "pcc_gc_backend4_selection_commit": -1,
             "pcc_gc_backend4_evacuation_page_head": 0,
-            # GC4 objects are allocator cells and register no logical zpage.
+            # GC4 objects are allocator cells and register no logical zpage;
+            # their pages are object slabs (6bda7e915).
             "pcc_gc_backend4_zpage_head": 0,
+            "pcc_gc_backend4_slab_evacuation_head": 0,
             "pcc_gc_forwarding_population": 0,
             "pcc_gc_mark_active": 0,
             "pcc_gc_cycle_requested": 0,
@@ -390,20 +392,20 @@ def test_gc4_automatic_step_leaves_a_requested_mark_to_its_gate():
 
 def test_gc4_automatic_steps_select_relocation_pages_once_per_finished_mark():
     model = _AutoStepModel()
-    # Selection scores logical zpages: with none registered (GC4's objects
-    # are allocator cells) a finished mark selects nothing and costs no pin
-    # scan, and the selection stays due.
-    assert model.step() == ["remembered", "aging", "drain"]
-    assert model.cells["pcc_gc_backend4_selection_commit"] == -1
-    model.cells["pcc_gc_backend4_zpage_head"] = 0x2000
-    # The first step selects; later steps of the same mark only drain.
+    # Selection ranks object slabs by the live cells a finished mark left:
+    # the first step after it selects; later steps of the same mark only
+    # drain.
     assert model.step() == ["remembered", "aging", "pins", "drain", "select"]
     assert model.cells["pcc_gc_backend4_selection_commit"] == 0
     assert model.step() == ["remembered", "aging", "drain"]
-    # Selected pages, or edges left to remap, still refresh pins first.
+    # Selected logical zpages or slabs, or edges left to remap, still
+    # refresh pins first.
     model.cells["pcc_gc_backend4_evacuation_page_head"] = 0x1000
     assert model.step() == ["remembered", "aging", "pins", "drain"]
     model.cells["pcc_gc_backend4_evacuation_page_head"] = 0
+    model.cells["pcc_gc_backend4_slab_evacuation_head"] = 0x3000
+    assert model.step() == ["remembered", "aging", "pins", "drain"]
+    model.cells["pcc_gc_backend4_slab_evacuation_head"] = 0
     model.cells["pcc_gc_forwarding_population"] = 2
     # An idle step with edges also retires them (unchanged).
     assert model.step() == ["remembered", "aging", "pins", "drain", "retire"]

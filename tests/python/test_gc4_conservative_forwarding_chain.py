@@ -105,7 +105,11 @@ def test_snapshot_chain_helper_compiles_as_part_of_strict_runtime(tmp_path, monk
             r"(?ms)^define [^\n]*@pcc_gc_conservative_pin_snapshot_owners\(.*?^\}", ir
         )
         assert snapshot is not None
-        assert re.search(r"call void @" + symbol + r"\(ptr [^,\n]+, i64 ", snapshot.group(0))
+        # The IR printer may spell the callee's function type in the call.
+        assert re.search(
+            r"call void (?:\([^)\n]*\) )?@" + symbol + r"\(ptr [^,\n]+, i64 ",
+            snapshot.group(0),
+        )
         assert emit_owned_object(ir, target)[:4] == b"\x7fELF"
 
 

@@ -16,8 +16,13 @@ KNOWN = RUNTIME / "freestanding_gc_root_operations.py"
 
 class State:
     def __init__(self, kind, flags, backend, count, retire_at_lock=False):
+        # Every tracing collector is count-free; GC4 resolves a read only
+        # in the stopped window between a move and its remap (remap owed,
+        # 4e2feca72). GC3 moves nothing (03cbd1849).
         self.words = {('pcc_gc_backend_selected', 0): backend,
-                      ('pcc_gc_relocation_barrier_forwards', 0): count}
+                      ('pcc_gc_relocation_barrier_forwards', 0): count,
+                      ('pcc_gc_nonmoving_count_free', 0): int(backend != 0),
+                      ('pcc_gc_backend4_remap_owed', 0): 1}
         self.index = {}
         self.forward = {}
         self.probes = []
@@ -90,10 +95,10 @@ def test_no_edge_compatibility_and_guarded_headers():
         assert state.ns[entry](state.obj) == state.obj
         assert state.words['pcc_gc_relocation_barrier_forwards', 0] == count
         clears = (kind == 'known' and flags & 2048
-                  and (entry == '_note_relocation_read_unlocked' or backend in (3, 4)))
+                  and (entry == '_note_relocation_read_unlocked' or backend == 4))
         assert state.writes == ([(state.obj, 12, flags & ~2048)] if clears else [])
         if kind in ('null', 'tagged') or (entry == 'pcc_gc_note_relocation_read'
-                                         and backend not in (3, 4)):
+                                         and backend != 4):
             assert state.probes == [] and state.locks == []
         elif entry == '_note_relocation_read_unlocked':
             assert state.probes[0] == ('forward', state.obj)
@@ -108,7 +113,7 @@ def test_retirement_between_fast_check_and_graph_lock_does_not_read_header():
 
 
 def test_known_unforwarded_read_keeps_fast_path():
-    for backend in (3, 4):
+    for backend in (4,):
         state = State('known', 8, backend, 7)
         assert state.ns['pcc_gc_note_relocation_read'](state.obj) == state.obj
         assert state.probes == [('object', state.obj)]
