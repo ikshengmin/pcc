@@ -106,6 +106,26 @@ SEMANTICS = (
 )
 
 
+# Python reference: expression evaluation order and lambda default values
+# (Language Reference sections 6.16 and 6.14). These lambdas do not capture
+# total: the default runs in the enclosing scope, and the body reads its arg.
+LAMBDA_DEFAULTS = (
+    "def lambda_default_add() -> None:\n"
+    "    total = 10 ** 30\n"
+    "    result = total + len([lambda value=(total := 7): value])\n"
+    "    print(result, total)\n"
+    "\n"
+    "def lambda_default_compare() -> None:\n"
+    "    total = 10 ** 30\n"
+    "    result = total > len([lambda value=(total := 0): value])\n"
+    "    print(result, total)\n"
+    "\n"
+    "lambda_default_add()\n"
+    "lambda_default_compare()\n"
+)
+SEMANTICS += LAMBDA_DEFAULTS
+
+
 def _env() -> dict[str, str]:
     env = os.environ.copy()
     env.pop("LC_ALL", None)
@@ -155,3 +175,41 @@ def test_reloaded_local_operands_match_cpython_on_every_backend(tmp_path):
         run = subprocess.run([str(exe)], text=True, capture_output=True, timeout=120, env=env)
         assert run.returncode == 0, (backend, run.stderr)
         assert run.stdout == expected.stdout, (backend, run.stdout, expected.stdout)
+
+
+def test_rebinding_scan_visits_lambda_defaults_and_comprehension_filters():
+    from pcc.frontends.python.codegen.exact_int_lowering import (
+        ExactIntLoweringMixin,
+        _exact_int_expr_rebinds_name,
+    )
+    from pcc.frontends.python.py_lift import parse_and_lift
+
+    host = ExactIntLoweringMixin()
+    host.env = {"total": None}
+    host._cpy_env_flags = {}
+    for source, rebinds in (
+        ("len([lambda value=(total := 7): value])", True),
+        ("len([item for item in (1,) if (total := 7)])", True),
+        ("pick(value=(total := 7))", True),
+        ("len([lambda value=(other := 7): value])", False),
+        ("len([lambda value=7: value])", False),
+        ("len([lambda value: value])", False),
+    ):
+        module = parse_and_lift(
+            "result = total + " + source + "\n", "rebinding.py", "rebinding"
+        )
+        expr = module.body[0].value
+        assert _exact_int_expr_rebinds_name(expr.rhs, "total") is rebinds
+        assert not _exact_int_expr_rebinds_name(expr.rhs, "untouched")
+        assert host._exact_int_lhs_reloads_from_local(
+            expr.lhs, expr.rhs, False
+        ) is (not rebinds)
+
+
+def test_lambda_default_rebinding_preserves_left_operand_roots(tmp_path):
+    _, ll_path = _compile(tmp_path, "lambda_defaults", LAMBDA_DEFAULTS, emit_llvm=True)
+    ll = ll_path.read_text(encoding="utf-8")
+    addition = _function_body(ll, "lambda_default_add")
+    comparison = _function_body(ll, "lambda_default_compare")
+    assert "exact.int.lhs.rooted" in addition
+    assert "exact.int.compare.lhs.rooted" in comparison

@@ -13,7 +13,7 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 from pcc.frontends.python.codegen.vthread_effect_analysis import vthread_delegate_frame_name
 from pcc.frontends.python.codegen.hoist_analysis import _dataclass_field_names, _dataclass_field_value
-from pcc.frontends.python.py_ast import assignment_storage_annotation
+from pcc.frontends.python.py_ast import Lambda, assignment_storage_annotation
 
 
 _I1 = ir.IntType(1)
@@ -50,7 +50,13 @@ def _exact_int_expr_rebinds_name(expr, ident: str) -> bool:
         if isinstance(node, Expr):
             for field in _dataclass_field_names(node):
                 if field != "span" and field != "ty":
-                    pending.append(_dataclass_field_value(node, field, None))
+                    if field == "params" and isinstance(node, Lambda):
+                        # Arg records are not Expr nodes, but lambda defaults
+                        # execute in the enclosing scope when it is created.
+                        for param in node.params:
+                            pending.append(param.default)
+                    else:
+                        pending.append(_dataclass_field_value(node, field, None))
     return False
 
 
