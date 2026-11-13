@@ -11,6 +11,8 @@ import re
 
 import pytest
 
+from tests.python.root_slot_barrier_model import install_locked_root_slot_barrier
+
 from tests.python.test_compiled_module_parent_publication import _Block, _Memory
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -72,6 +74,10 @@ class ImportMemory(_Memory):
             pcc_py_gc_minor_graph_unlock=lambda: None,
             py_tls_exc_swap_slot=self.swap_error, pcc_platform_abort=self.abort,
         )
+        # The import helpers' _adopt barriers a published root slot through
+        # pcc_gc_note_root_slot_barrier; outside container mode it takes the
+        # graph lock this model's relocation gate observes.
+        install_locked_root_slot_barrier(self.ns)
         for source in (import_source, CAPSULE):
             tree = ast.parse(source.read_text(), filename=str(source))
             nodes = [n for n in tree.body if isinstance(n, ast.FunctionDef)
