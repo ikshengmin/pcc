@@ -336,8 +336,10 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_bound_find_protocol.py',
               'tests/python/test_str_method_slot_models.py',
               'tests/test_ci_native_find_protocol.py',
-              'tests/python/test_str_len_protocol.py')
-# Exact default-marker collection: 84 modules, 3784 ordinary raw nodes.
+              'tests/python/test_str_len_protocol.py',
+              'tests/python/test_worker_observation_scope.py')
+# Expected default-marker inventory: 85 modules, 3795 ordinary raw nodes.
+# Observation-scope increment is source-counted; CI must verify collection.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
@@ -346,7 +348,7 @@ HOST_COUNTS = (
     84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
     43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41,
-    35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2,
+    35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 11,
 )
 PHASES = ("preflight", "stage1", "pcc1")
 

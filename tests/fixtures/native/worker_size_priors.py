@@ -106,6 +106,8 @@ def child(root, case, index, growth):
         write(root, "overlap" + str(index), "all-three-started")
         for peer in range(3):
             wait_file(root, "overlap" + str(peer))
+    elif case == "scope":
+        pass  # A real, immediately completing child for split-pool history.
     elif index == 0:
         wait_file(root, "started.1.1")
         wait_file(root, "peer-report-ready")
@@ -173,6 +175,71 @@ def verify_model(root):
         pass
     else:
         raise AssertionError("zero observation prior was accepted")
+
+
+def scope_pool(root, index, budget, observations=None):
+    task = make_task(root, index, 1)
+    task["class"] = root + "|scope-export"
+    task["observation_owner"] = root
+    pool.run_resource_worker_processes(
+        [command(root, "scope", index, 0)], [task], 1, budget,
+        observations=observations,
+    )
+    record = read(root, "started." + str(index) + ".1").split("\t")
+    pid, token = int(record[0]), record[1]
+    assert record[2:] == [sys.implementation.name, str(workers._worker_collector())]
+    report = policy.read_worker_resource(task["report_path"], pid, token)
+    assert report is not None and report[0] == "complete" and report[2] > 0
+    if sys.implementation.name == "pcc":
+        assert _raw_poll(pid) == 127
+    return task, report[2]
+
+
+def verify_observation_scope(root, budget):
+    # Real emitted pool calls, not a host-only mock or successful import.
+    # Keep the original process watchdog and hard tree cap unchanged.
+    state = root + "/observation-owner"
+    os.makedirs(state, exist_ok=False)
+    global_history = pool._RESOURCE_OBSERVATIONS
+    global_count = len(global_history)
+    with pool.ResourceObservationScope(state) as scope:
+        task, first_peak = scope_pool(state, 0, budget)
+        history = scope.history
+        assert pool._default_resource_observations([task]) is history
+        assert len(history) == 1 and history[0][2] == first_peak
+        first_estimate = policy.estimated_task_bytes(task, history)
+        with pool.ResourceObservationScope(state + "/nested") as nested:
+            assert pool._default_resource_observations((task,)) is history
+            nested_task = dict(task)
+            nested_task["observation_owner"] = state + "/nested"
+            assert pool._default_resource_observations([nested_task]) is nested.history
+            assert pool._default_resource_observations([task, nested_task]) is global_history
+            second_task, second_peak = scope_pool(state, 1, budget)
+            assert scope.history is history and len(history) == 2
+            assert [row[2] for row in history] == [first_peak, second_peak]
+            assert policy.estimated_task_bytes(second_task, history) >= first_estimate
+            assert nested.history == []
+        assert state + "/nested" not in pool._RESOURCE_OBSERVATION_OWNERS
+        assert pool._RESOURCE_OBSERVATION_OWNERS[state] is scope
+    assert state not in pool._RESOURCE_OBSERVATION_OWNERS
+    assert len(history) == 2 and len(global_history) == global_count
+    assert pool._default_resource_observations([task]) is global_history
+    explicit = []
+    try:
+        with pool.ResourceObservationScope(state) as repeated:
+            assert repeated.history == [] and repeated.history is not history
+            explicit_task, explicit_peak = scope_pool(state, 2, budget, explicit)
+            assert len(explicit) == 1 and explicit[0][2] == explicit_peak
+            assert repeated.history == [] and len(history) == 2
+            raise ValueError("scope unwind witness")
+    except ValueError as error:
+        assert str(error) == "scope unwind witness"
+    else:
+        raise AssertionError("scope exception was swallowed")
+    assert state not in pool._RESOURCE_OBSERVATION_OWNERS
+    assert len(explicit) == 1 and len(history) == 2
+    assert len(global_history) == global_count
+    assert pool._default_resource_observations([explicit_task]) is global_history
 
 
 def _windows_stage1_phase(root, boundary):
@@ -269,6 +336,8 @@ def run_case(root, case):
                 samples = [sample[2] for sample in observations if sample[0] == tasks[index]["class"]]
                 assert samples == [report[2]]
     assert len(set(pids)) == len(pids) and len(set(tokens)) == len(tokens)
+    if case == "width":
+        verify_observation_scope(root, budget)
     assert pool._HOST_WORKERS == {}
     assert not pool._NATIVE_LIVE_WORKERS and pool._NATIVE_COMPLETED_WORKERS == {}
     write(root, "complete", sys.implementation.name + "\t" + str(workers._worker_collector()))

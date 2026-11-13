@@ -1178,7 +1178,9 @@ def compile_parallel_uncached(
         "multi_frontend_worker_concurrency",
         export_safe_jobs if native_owned_lanes else jobs,
     )
-    with tempfile.TemporaryDirectory(prefix="pcc_frontends_python_workers_") as tmp:
+    from pcc.frontends.python.worker_process_pool import ResourceObservationScope
+
+    with tempfile.TemporaryDirectory(prefix="pcc_frontends_python_workers_") as tmp, ResourceObservationScope(tmp):
         ir_dir = artifact_dir if artifact_dir else os.path.join(tmp, "ir")
         if host_indexed_split:
             ir_dir = os.path.abspath(ir_dir)

@@ -3204,59 +3204,61 @@ def _build_unique_external_class_preload_index(native_exports, work_dir=""):
 
 def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
     from pcc.frontends.python.preload_delta_worker import WORKER_ARG, read_result
+    from pcc.frontends.python.worker_process_pool import ResourceObservationScope
 
     # pcc1 compiles tempfile and shutil as CPython modules, so a function
     # calling them becomes a raising no-libpython stub there; os only.
     state = os.path.join(work_dir, "preload_deltas")
     os.makedirs(state, exist_ok=True)
     created = []
-    try:
-        exports_path = os.path.join(state, "exports.json")
-        created.append(exports_path)
-        _write_native_exports_wire(exports_path, native_exports, {})
-        width = max(1, min(jobs, len(roots)))
-        commands = []
-        outputs = []
-        # Changing concurrency must not change a task's retained delta heap.
-        # Contiguous fixed-size shards preserve root order on collection.
-        for start in range(0, len(roots), _PRELOAD_DELTA_ROOTS_PER_CHUNK):
-            index = start // _PRELOAD_DELTA_ROOTS_PER_CHUNK
-            chunk = roots[start:start + _PRELOAD_DELTA_ROOTS_PER_CHUNK]
-            roots_path = os.path.join(state, "roots_" + str(index) + ".txt")
-            out_path = os.path.join(state, "deltas_" + str(index) + ".json")
-            created.append(roots_path)
-            created.append(out_path)
-            created.append(out_path + ".partial")
-            created.append(out_path + ".rss")
-            created.append(out_path + ".rss.tmp")
-            created.append(out_path + ".rss.admission.tsv")
-            with open(roots_path, "w", encoding="utf-8") as stream:
-                stream.write("\n".join(chunk) + "\n")
-            parts = [_shell_quote_arg(part) for part in prefix]
-            parts.append(_shell_quote_arg(WORKER_ARG))
-            parts.append(_shell_quote_arg(exports_path))
-            parts.append(_shell_quote_arg(roots_path))
-            parts.append(_shell_quote_arg(out_path))
-            commands.append(
-                _python_frontend_worker_env_prefix() + " " + _join_strings(parts, " ")
-            )
-            outputs.append(out_path)
-        _run_python_frontend_worker_commands(commands, max_parallel=width)
-        deltas = {}
-        for out_path in outputs:
-            deltas.update(read_result(out_path))
-        for root in roots:
-            if root not in deltas:
-                raise PyPipelineError("preload delta workers omitted root " + root)
-        return deltas
-    finally:
-        for path in created:
-            if os.path.isfile(path):
-                os.unlink(path)
+    with ResourceObservationScope(state):
         try:
-            os.rmdir(state)
-        except OSError:
-            pass
+            exports_path = os.path.join(state, "exports.json")
+            created.append(exports_path)
+            _write_native_exports_wire(exports_path, native_exports, {})
+            width = max(1, min(jobs, len(roots)))
+            commands = []
+            outputs = []
+            # Changing concurrency must not change a task's retained delta heap.
+            # Contiguous fixed-size shards preserve root order on collection.
+            for start in range(0, len(roots), _PRELOAD_DELTA_ROOTS_PER_CHUNK):
+                index = start // _PRELOAD_DELTA_ROOTS_PER_CHUNK
+                chunk = roots[start:start + _PRELOAD_DELTA_ROOTS_PER_CHUNK]
+                roots_path = os.path.join(state, "roots_" + str(index) + ".txt")
+                out_path = os.path.join(state, "deltas_" + str(index) + ".json")
+                created.append(roots_path)
+                created.append(out_path)
+                created.append(out_path + ".partial")
+                created.append(out_path + ".rss")
+                created.append(out_path + ".rss.tmp")
+                created.append(out_path + ".rss.admission.tsv")
+                with open(roots_path, "w", encoding="utf-8") as stream:
+                    stream.write("\n".join(chunk) + "\n")
+                parts = [_shell_quote_arg(part) for part in prefix]
+                parts.append(_shell_quote_arg(WORKER_ARG))
+                parts.append(_shell_quote_arg(exports_path))
+                parts.append(_shell_quote_arg(roots_path))
+                parts.append(_shell_quote_arg(out_path))
+                commands.append(
+                    _python_frontend_worker_env_prefix() + " " + _join_strings(parts, " ")
+                )
+                outputs.append(out_path)
+            _run_python_frontend_worker_commands(commands, max_parallel=width)
+            deltas = {}
+            for out_path in outputs:
+                deltas.update(read_result(out_path))
+            for root in roots:
+                if root not in deltas:
+                    raise PyPipelineError("preload delta workers omitted root " + root)
+            return deltas
+        finally:
+            for path in created:
+                if os.path.isfile(path):
+                    os.unlink(path)
+            try:
+                os.rmdir(state)
+            except OSError:
+                pass
 
 
 def _build_python_frontend_shared_exports_parallel(

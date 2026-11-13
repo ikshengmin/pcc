@@ -26,6 +26,50 @@ _HOST_WORKERS = {}
 _NATIVE_LIVE_WORKERS = set()
 _NATIVE_COMPLETED_WORKERS = {}
 _RESOURCE_OBSERVATIONS = []
+_RESOURCE_OBSERVATION_OWNERS = {}
+
+
+class ResourceObservationScope:
+    """Own calibration history for one private worker-directory lifetime.
+
+    Split pools share this history until their directory owner exits. No
+    cleanup rewrites another owner's list or the legacy global default.
+    """
+
+    def __init__(self, directory):
+        self.directory = directory
+        self.history = []
+
+    def __enter__(self):
+        if self.directory in _RESOURCE_OBSERVATION_OWNERS:
+            raise ValueError("worker observation directory already has an owner")
+        _RESOURCE_OBSERVATION_OWNERS[self.directory] = self
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        if _RESOURCE_OBSERVATION_OWNERS.get(self.directory) is self:
+            del _RESOURCE_OBSERVATION_OWNERS[self.directory]
+        return False
+
+
+def _default_resource_observations(tasks):
+    # Only opt-in plain task inventories can select an owner. Custom inputs,
+    # mixed directories and unregistered callers retain their old default.
+    if (type(tasks) is not list and type(tasks) is not tuple) or not tasks:
+        return _RESOURCE_OBSERVATIONS
+    directory = None
+    for task in tasks:
+        if type(task) is not dict or any(type(key) is not str for key in task):
+            return _RESOURCE_OBSERVATIONS
+        task_directory = task.get("observation_owner")
+        if type(task_directory) is not str:
+            return _RESOURCE_OBSERVATIONS
+        if directory is None:
+            directory = task_directory
+        elif task_directory != directory:
+            return _RESOURCE_OBSERVATIONS
+    owner = _RESOURCE_OBSERVATION_OWNERS.get(directory)
+    return owner.history if owner is not None else _RESOURCE_OBSERVATIONS
 
 
 def _command_spec(command):
@@ -198,7 +242,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         return
     validate_handoff_slots(tasks)
     if observations is None:
-        observations = _RESOURCE_OBSERVATIONS
+        observations = _default_resource_observations(tasks)
     specs = []
     for command, task in zip(commands, tasks):
         argv, vector = _command_spec(command)
