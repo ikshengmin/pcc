@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """Reuse a successful Stage1 compiler/runtime for find and str length qualification.
 
-Two explicit pcc0/pcc1 compiles and ten requested five-GC executions.
-Each executable imports all six find cases, then the complete str length case.
+Four explicit pcc0/pcc1 compiles and twenty requested five-GC executions.
+The find executables import all six find cases and the str length case; the
+container-bitset executables exercise arbitrary-precision scaffold operands.
 No compiler or runtime provisioning, timeout extension, or Stage1 replay.
 """
 
@@ -31,6 +32,8 @@ from scripts.ci_worker_size_prior_gate import (
 NAME = "native-find-protocol"
 TIMEOUT_S = 300
 TEST = "tests/python/test_bound_find_protocol.py"
+BITSETS_TEST = "tests/python/test_exact_int_container_bitsets.py"
+PROGRAM_CASES = ("find", "container_bitsets")
 CASES = (
     "exact_binary", "str_payload", "binary_order", "str_order",
     "arity_kwargs", "custom_lookup",
@@ -39,9 +42,13 @@ MODES = ("pcc0", "pcc1")
 NODES = tuple(
     TEST + "::test_bound_find_and_str_len_owned_native_five_gc[" + mode + "]"
     for mode in MODES
+) + tuple(
+    BITSETS_TEST + "::test_container_bitsets_owned_native_five_gc[" + mode + "]"
+    for mode in MODES
 )
 TEST_INPUTS = (
     TEST,
+    BITSETS_TEST,
     "tests/python/test_str_len_protocol.py",
     "scripts/ci_native_find_protocol.py",
     "scripts/ci_worker_size_prior_gate.py",
@@ -72,6 +79,7 @@ def verify_receipts(directory, runtime):
         PROGRAMS,
     )
     from tests.python.test_str_len_protocol import EXPECTED, PROGRAM
+    from tests.python.test_exact_int_container_bitsets import PROGRAM as BITSETS_PROGRAM
 
     assert tuple(PROGRAMS) == CASES, "find node/program inventory differs"
     assert tuple(NATIVE_MODULES.values()) == tuple(PROGRAMS.values())
@@ -83,7 +91,11 @@ def verify_receipts(directory, runtime):
     assert FIND_AND_STR_LEN_NATIVE_SOURCE == NATIVE_SOURCE + "import str_len_protocol\n"
     assert EXPECTED == "STR_LEN_OK\n"
     assert FIND_AND_STR_LEN_NATIVE_OUTPUT == "BOUND_FIND_OK\n" * 6 + EXPECTED
-    remaining = set(MODES)
+    expected_programs = {
+        "find": (FIND_AND_STR_LEN_NATIVE_SOURCE, FIND_AND_STR_LEN_NATIVE_OUTPUT),
+        "container_bitsets": (BITSETS_PROGRAM, "CONTAINER_BITSETS_OK\n"),
+    }
+    remaining = {(case, mode) for case in PROGRAM_CASES for mode in MODES}
     paths = sorted(directory.rglob("ownership-regression.json"))
     assert len(paths) == len(NODES), "missing or extra native find receipts"
     results = []
@@ -91,16 +103,25 @@ def verify_receipts(directory, runtime):
         record = json.loads(path.read_text(encoding="utf-8"))
         source = path.parent / "program.py"
         binary = path.parent / "program.out"
-        assert source.read_text(encoding="utf-8") == FIND_AND_STR_LEN_NATIVE_SOURCE
-        module_hashes = json.loads((path.parent / "native-module-manifest.json").read_text(encoding="utf-8"))
-        assert set(module_hashes) == set(FIND_AND_STR_LEN_NATIVE_MODULES), "find/length module inventory differs"
-        for name, text in FIND_AND_STR_LEN_NATIVE_MODULES.items():
-            member = path.parent / name
-            assert member.read_bytes() == text.encode("utf-8"), "find/length case source changed"
-            assert module_hashes[name] == sha(member), "find/length case bytes changed"
+        # The shared producer writes program.py with text-mode newlines.
+        # Match its exact platform bytes, then bind the recorded source hash.
+        source_bytes = source.read_bytes()
+        matching = [case for case, (text, _) in expected_programs.items()
+                    if source_bytes == text.replace("\n", os.linesep).encode("utf-8")]
+        assert len(matching) == 1, "unexpected native program source bytes"
+        case = matching[0]
+        module_hashes = {}
+        if case == "find":
+            module_hashes = json.loads((path.parent / "native-module-manifest.json").read_text(encoding="utf-8"))
+            assert set(module_hashes) == set(FIND_AND_STR_LEN_NATIVE_MODULES), "find/length module inventory differs"
+            for name, text in FIND_AND_STR_LEN_NATIVE_MODULES.items():
+                member = path.parent / name
+                assert member.read_bytes() == text.encode("utf-8"), "find/length case source changed"
+                assert module_hashes[name] == sha(member), "find/length case bytes changed"
         mode = record["compiler_fixture_parameter"]
-        assert mode in remaining, "duplicate or unexpected native find mode"
-        remaining.remove(mode)
+        pair = (case, mode)
+        assert pair in remaining, "duplicate or unexpected native program/compiler pair"
+        remaining.remove(pair)
         assert record["status"] == "PASS" and record["compiler_mode"] == mode
         assert record["backend"] == "self" and record["libpython"] == "off"
         assert record["source_sha256"] == sha(source)
@@ -108,7 +129,7 @@ def verify_receipts(directory, runtime):
         assert record["runtime_sha256"] == runtime["hashes"][""]
         assert record["binary_sha256"] == sha(binary)
         assert record["linkage"] == inspect_owned_image(binary.read_bytes())
-        expected = (0, FIND_AND_STR_LEN_NATIVE_OUTPUT, "")
+        expected = (0, expected_programs[case][1], "")
         reference = record["reference"]
         assert tuple(reference[key] for key in ("returncode", "stdout", "stderr")) == expected
         executions = record["executions"]
@@ -116,9 +137,11 @@ def verify_receipts(directory, runtime):
         for row in executions:
             assert row["command"] == [str(binary)]
             assert tuple(row[key] for key in ("returncode", "stdout", "stderr")) == expected
-        results.append({"cases": [*CASES, "str_len_protocol"], "mode": mode, "receipt": str(path),
-                        "module_sha256": module_hashes, **record})
-    assert not remaining, "missing native find compiler mode"
+        results.append({**record, "program_case": case,
+                        "cases": [*CASES, "str_len_protocol"] if case == "find" else [case],
+                        "mode": mode, "receipt": str(path),
+                        "module_sha256": module_hashes})
+    assert not remaining, "missing native program/compiler pair"
     return results
 
 
@@ -129,7 +152,8 @@ def run(out):
     receipt = {
         "schema": "pcc.native-find-protocol.v1", "status": "RUNNING",
         "nodes": list(NODES), "timeout_s": TIMEOUT_S,
-        "compiler_modes": list(MODES), "qualifies_fixed_point": False,
+        "compiler_modes": list(MODES), "program_cases": list(PROGRAM_CASES),
+        "qualifies_fixed_point": False,
         "observed_collector_witness": False,
         "collector_evidence": "gc_backend records the requested PCC_GC_BACKEND; "
                               "collector selection is not independently observed",

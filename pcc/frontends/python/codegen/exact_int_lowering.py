@@ -1004,6 +1004,18 @@ class ExactIntLoweringMixin:
             "pcc.u64",
         ):
             return False
+        if isinstance(expr, Subscript):
+            # A managed container stores Python objects, not bounded i64
+            # payloads. Its ordinary int element annotation is no range proof,
+            # including in raw-scaffold functions without an int signature.
+            # Admit the existing exact-object load before arithmetic, compares
+            # or local planning can narrow a bignum. Explicit machine ints
+            # returned above; value arrays keep their separate payload lane.
+            return (
+                not getattr(self, "_freestanding_module", False)
+                and isinstance(expr.obj.ty, (DictType, ListType, TupleType))
+                and not isinstance(expr.idx, Slice)
+            )
         if isinstance(expr, Attr):
             # An ordinary object's int field has no machine-width range
             # proof. Preserve its object projection when planning a local;
