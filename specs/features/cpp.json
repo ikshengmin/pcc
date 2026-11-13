@@ -2675,10 +2675,14 @@
       "chapter_ids": [
         "cstdio.syn"
       ],
-      "scope": "Original unmodified TinyXML2 public frontend currently stops at missing cstdio. No successful header, runtime stdio or whole-project qualification is inferred from earlier cctype/climits headers. Standard library chapter expansion remains outstanding.",
+      "scope": "The owned C++ cstdio declaration surface and stdio.h spelling share global/std declarations, C linkage, FILE storage and macros. The stdio.h wrapper is C++ header acquisition, not a C-language header or stdio runtime implementation. Its include-order, nested-lookup, unresolved-runtime, unsupported-capacity/target and original-system-header reference tests are CI-only UNRUN. fpos_t storage, capacity contracts, non-Linux-x86_64 va_list and complete owned runtime/project qualification remain missing. NumPy source run 43333697160 at 48aeab446b4250e56aa6ab87f939da9329085b92 stopped at stdio.h and generated _numpyconfig.h; this source-only correction does not qualify NumPy, TinyXML2, native pcc1, five-GC or full C++17.",
       "status": "missing",
       "tests": [
-        "tests/cpp/test_cpp_projects.py"
+        "tests/cpp/test_cpp_projects.py",
+        "tests/cpp/test_cpp_cstdio_header.py",
+        "tests/cpp/test_cpp_stdio_header.py::test_stdio_inclusion_retains_global_types_and_one_c_linkage_entity",
+        "tests/cpp/test_cpp_stdio_header.py::test_stdio_call_keeps_an_unresolved_owned_runtime_dependency",
+        "tests/cpp/test_cpp_stdio_header.py::test_stdio_originals_execute_against_system_header_reference"
       ],
       "diagnostics": [],
       "evidence": []

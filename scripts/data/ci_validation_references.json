@@ -558,6 +558,14 @@
         ]
       }
     },
+    "tests/cpp/test_cpp_stdio_header.py": {
+      "test_stdio_originals_execute_against_system_header_reference": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles and executes unchanged repeated/mixed stdio.h/cstdio and cross-object sources with the owned host-pcc0/self route and an explicit C++17 reference via compile_reference_cpp using real system headers. Exact return code, four-byte stdout and empty stderr are required. No-call programs prove header acquisition/type identity only, not I/O runtime semantics, native pcc1, NumPy, five-GC or full C++17 acceptance."
+        ]
+      }
+    },
     "tests/cpp/test_cpp_cstdio_header.py": {
       "test_preserved_va_list_storage_original_executes_against_cpp17_reference": {
         "activity": "external-reference",

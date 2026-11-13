@@ -107,8 +107,11 @@ def test_std_import_does_not_create_a_second_overload_candidate():
 
 @pytest.mark.parametrize('header', ('ctype.h', 'stdio.h', 'vector'))
 def test_missing_cpp_headers_do_not_fall_back_to_c_or_host_headers(header):
+    # <stdio.h> now has an owned spelling. Keep this original no-fallback node:
+    # opting out of owned headers must not expose C/fake-libc or host headers.
+    cpp_args = ['-nostdinc'] if header == 'stdio.h' else None
     with pytest.raises(RuntimeError, match='header not found: ' + re.escape(header)):
-        preprocess_cpp('#include <' + header + '>\n')
+        preprocess_cpp('#include <' + header + '>\n', cpp_args=cpp_args)
 
 
 def test_explicit_nostdinc_disables_owned_defaults():
