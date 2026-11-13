@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def run_worker(steps, ready_count, io_waits=0, io_ready=0):
     events = []
-    state = {"steps": 0, "stop": 0, "carriers": 0, "failures": 0}
+    state = {"steps": 0, "stop": 0, "carriers": 0, "failures": 0, "sleepers": 0}
     tls = {"pcc_current_virtual_thread_carrier_py": -1}
 
     def counter(key):
@@ -49,7 +49,18 @@ def run_worker(steps, ready_count, io_waits=0, io_ready=0):
         io(0)
         return step()
 
+    def sleeper_count(operation, key, offset, delta, order):
+        assert (operation, key, offset, order) == (
+            "add", "pcc_vthread_sleepers_py", 0, "seq_cst",
+        )
+        before = state["sleepers"]
+        state["sleepers"] += delta
+        assert state["sleepers"] >= 0
+        return before
+
     ns = {
+        "atomic_rmw_i64": sleeper_count,
+        "atomic_fence": lambda order: None,
         "atomic_load_i64": lambda key, offset, order: {
             "pcc_vthread_io_count_py": io_waits,
             "pcc_vthread_io_ready_pending_py": io_ready,
@@ -69,12 +80,16 @@ def run_worker(steps, ready_count, io_waits=0, io_ready=0):
         "null": lambda: 0,
     }
     path = ROOT / "pcc/runtime/py/py_virtual_thread_runtime.py"
-    node = next(n for n in ast.parse(path.read_text()).body
-                if isinstance(n, ast.FunctionDef) and n.name == "_persistent_carrier_worker")
-    node.decorator_list = []
-    exec(compile(ast.Module(body=[node], type_ignores=[]), str(path), "exec"), ns)
+    names = {"_persistent_carrier_worker", "_carrier_wait_locked"}
+    nodes = [n for n in ast.parse(path.read_text()).body
+             if isinstance(n, ast.FunctionDef) and n.name in names]
+    assert {node.name for node in nodes} == names
+    for node in nodes:
+        node.decorator_list = []
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(path), "exec"), ns)
     ns["_persistent_carrier_worker"](0)
     assert state["carriers"] == 0
+    assert state["sleepers"] == 0
     assert tls["pcc_current_virtual_thread_carrier_py"] == -1
     return events, state
 
