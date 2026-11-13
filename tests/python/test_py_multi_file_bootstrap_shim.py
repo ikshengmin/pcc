@@ -3261,7 +3261,13 @@ class MultiFileBootstrapShimTests(unittest.TestCase):
         ).start()
         end = ir_text.index("\ndefine ", start + 1)
         expr_lifter_ir = ir_text[start:end]
-        self.assertIn("@.pyattr.expr", expr_lifter_ir)
+        # ``s.expr`` reads the declared first field of ``py_parse._Expr``
+        # through the class layout: no by-name lookup, no kind dispatch.
+        self.assertRegex(
+            expr_lifter_ir,
+            r"call ptr \(ptr, i32\) @py_instance_get_field\(ptr %s\.[0-9.]+, i32 0\)",
+        )
+        self.assertNotIn("@.pyattr.expr", expr_lifter_ir)
         self.assertNotIn("@.pyattr.kind_id", expr_lifter_ir)
 
     def test_native_type_infer_stack_compiles_without_libpython(self):
