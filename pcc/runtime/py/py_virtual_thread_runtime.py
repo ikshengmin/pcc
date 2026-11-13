@@ -837,13 +837,12 @@ def _carrier_pop_locked(queue, owner: int):
     if owner != 0:
         turn_slot = _carrier_turn_slot(queue)
         turn = load_i64(turn_slot, 0)
-        # Preserve locality for a small ready set. With more than one ready
-        # batch, FIFO prevents the same hot tail from repeatedly overtaking
-        # older work (including completed IO) across many batches.
-        take_front = 0
-        if turn % 16 == 15 or _counter(global_addr("pcc_vthread_ready_count_py")) > 64:
-            take_front = 1
-        store_i64(turn_slot, 0, (turn + 1) % 16)
+        # Alternate old work and newly readied work. Pure FIFO under a large
+        # cohort put a newly woken I/O owner behind the whole cohort; mostly
+        # LIFO let a hot tail repeatedly overtake old work. Each end now gets
+        # one of every two owner pops, while thieves still take the front.
+        take_front = turn & 1
+        store_i64(turn_slot, 0, take_front ^ 1)
     index = begin
     if take_front == 0:
         index = (begin + length - 1) % 256

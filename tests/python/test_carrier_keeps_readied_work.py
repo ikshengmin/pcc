@@ -215,10 +215,14 @@ def test_local_lifo_cannot_starve_older_work_or_injection():
     scheduler = Scheduler(1, 0)
     scheduler.push("old")
     scheduler.push("hot")
-    for _ in range(15):
-        assert scheduler.pop() == "hot"
-        scheduler.push("hot")
-    assert scheduler.pop() == "old"
+    for _ in range(16):
+        node = scheduler.pop()
+        if node == "old":
+            break
+        assert node == "hot"
+        scheduler.push(node)
+    else:
+        pytest.fail("a repeatedly readied tail starved older work")
     scheduler.words["pcc_current_virtual_thread_carrier_py"] = -1
     scheduler.push("external")
     scheduler.words["pcc_current_virtual_thread_carrier_py"] = 0
@@ -230,6 +234,25 @@ def test_local_lifo_cannot_starve_older_work_or_injection():
             break
         scheduler.push(node)
     assert served[-1] == "external"
+
+
+@pytest.mark.parametrize("cohort", [4, 64, 255])
+@pytest.mark.parametrize("owner_turn", [0, 1])
+def test_old_work_and_new_io_wakeup_both_get_prompt_owner_service(cohort, owner_turn):
+    scheduler = Scheduler(1, 0)
+    for node in range(cohort):
+        scheduler.push(node)
+    queue = scheduler.namespace["_carrier_queue"](0)
+    turn_slot = scheduler.namespace["_carrier_turn_slot"](queue)
+    scheduler.store_word(turn_slot, 0, owner_turn)
+    scheduler.push("io-wakeup")
+    # This is the listener's observed shape: an I/O wakeup is appended to a
+    # populated local queue. The old FIFO-on-large-cohort rule delayed it
+    # behind every old task; a pure-LIFO replacement would starve node 0.
+    assert set(scheduler.pop() for _ in range(2)) == {0, "io-wakeup"}
+    remaining = [scheduler.pop() for _ in range(cohort - 1)]
+    assert sorted(remaining) == list(range(1, cohort))
+    assert scheduler.pop() is None
 
 
 def test_closing_and_reopening_preserve_queued_roots_and_injection_order():
