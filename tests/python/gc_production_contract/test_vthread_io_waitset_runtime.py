@@ -14,6 +14,7 @@ from tests.runtime_build_cache import cached_threaded_pcc_python_runtime
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
 RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
+pytestmark = pytest.mark.xdist_group(name="vthread_io_waitset_runtime")
 
 
 _SOURCE = r"""
@@ -76,6 +77,37 @@ static int check_socket_ready(void) {
     close(fds[0]);
     close(fds[1]);
     return pcc_gc_scheduler_root_count() == 0;
+}
+
+static int check_data_readiness_precedes_disconnect_cleanup(void) {
+    int data[2], closed[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, data) != 0) return 0;
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, closed) != 0) return 0;
+    PyObject *reader = new_vthread();
+    PyObject *cleanup = new_vthread();
+    if (reader == NULL || cleanup == NULL) return 0;
+    /* Register cleanup last so the wait-list walk encounters it first. */
+    if (py_virtual_thread_block_on_fd(reader, data[0], POLLIN, -1) != 0) return 0;
+    if (py_virtual_thread_block_on_fd(cleanup, closed[0], POLLIN, -1) != 0) return 0;
+    close(closed[1]);
+    if (write(data[1], "r", 1) != 1) return 0;
+    if (py_virtual_thread_poll_io(0) != 2) return 0;
+    PyObject *ready = py_virtual_thread_poll_ready();
+    if (ready != reader) return 0;
+    if (py_virtual_thread_complete(ready, py_None) != 0) return 0;
+    pcc_gc_release(ready);
+    ready = py_virtual_thread_poll_ready();
+    if (ready != cleanup) return 0;
+    if (py_virtual_thread_complete(ready, py_None) != 0) return 0;
+    pcc_gc_release(ready);
+    pcc_gc_release(reader);
+    pcc_gc_release(cleanup);
+    close(data[0]);
+    close(data[1]);
+    close(closed[0]);
+    return py_virtual_thread_ready_count() == 0
+        && py_virtual_thread_io_wait_count() == 0
+        && pcc_gc_scheduler_root_count() == 0;
 }
 
 static int check_timeout(void) {
@@ -263,6 +295,7 @@ int main(int argc, char **argv) {
     int ok = py_virtual_thread_io_backend() == expected
         && check_pipe_ready()
         && check_socket_ready()
+        && check_data_readiness_precedes_disconnect_cleanup()
         && check_timeout()
         && check_same_fd_waiters()
         && check_complete_cancels_wait()

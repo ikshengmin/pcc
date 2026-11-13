@@ -3234,7 +3234,13 @@ def py_virtual_thread_poll_io(timeout_ms: int) -> int:
             if valid:
                 store_ptr(thread, 64, null())
                 store_i64(thread, 120, 0)
-                _ready_commit(thread, ready_node, 1)
+                # A disconnect/timeout cohort still needs cleanup, but must
+                # not fill the priority lane ahead of new read/write events.
+                # Ordinary service remains bounded by the I/O dispatch budget.
+                io_ready: int = 1
+                if hit == 0 or (bits & 56) != 0:
+                    io_ready = 0
+                _ready_commit(thread, ready_node, io_ready)
                 woken = woken + 1
                 _effect(11, 3, 0, 1)
             elif (
