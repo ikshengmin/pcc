@@ -42,7 +42,7 @@ shared source-lock loader and records each root's first blocker:
 | `crates/uv/src/bin/uv.rs` | `3:3` `#[cfg(feature = ...)]` needs a checked Cargo configuration |
 | `crates/uv/src/lib.rs` | `1:15` tool lint path in `#![deny(clippy::print_stdout, ...)]` |
 | `crates/uv-version/src/lib.rs` | `5:5` `env!` macro invocation |
-| `crates/uv-lock/src/lock/mod.rs` | `87:4` restricted visibility `pub(crate) mod export;` |
+| `crates/uv-lock/src/lock/mod.rs` | `94:3` `#[cfg(test)]` needs a checked Cargo configuration |
 
 Both roots formerly stopped in the lexer at `@` (`lib.rs:1515:34`, the
 `run_variant @ (ToolCommand::Uvx(_) | ToolCommand::Run(_))` binding, and
@@ -54,7 +54,9 @@ are now parsed into one checked import per leaf
 (`tests/rust/programs/use_grouped_tree.rs`), and `pub use` re-exports
 (`pub use crate::lock::deserialize::Error as CanonicalLockError;`, formerly
 `74:5`) resolve with rustc's E0364/E0365 visibility checks
-(`tests/rust/programs/use_public_reexport.rs`).
+(`tests/rust/programs/use_public_reexport.rs`). Restricted visibility
+(`pub(crate) mod export;`, formerly `87:4`) is owned too
+(`tests/rust/programs/visibility_restricted.rs`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

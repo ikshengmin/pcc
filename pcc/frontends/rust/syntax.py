@@ -4,6 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field, replace
 
 from .crate_policy import CratePolicy
+from .visibility import parse_visibility, restriction_components
 from .types import ArrayLength, FixedArrayType, SharedReference, TupleType, TypeApplication
 
 
@@ -338,8 +339,8 @@ class Record:
     type_parameters: tuple[Token, ...] = ()
     documentation: tuple[Documentation, ...] = ()
     field_documentation: tuple[tuple[Documentation, ...], ...] = ()
-    public: bool = False
-    field_public: tuple[bool, ...] = ()
+    public: object = False  # False, True or a VisibilityRestriction
+    field_public: tuple[object, ...] = ()
     item_identity: object = None
 
     @property
@@ -452,6 +453,8 @@ class Parser:
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
         self.uses = []
+        # Every parsed `pub(...)`, shared with inline child-module parsers.
+        self.visibility_restrictions = []
         self.line_offsets = [0]
         for index, char in enumerate(source):
             if char == "\n":
@@ -829,7 +832,7 @@ class Parser:
         fields, field_docs, field_public = [], [], []
         while not self.accept("}"):
             field_docs.append(self.documentation())
-            field_public.append(self.accept("pub"))
+            field_public.append(parse_visibility(self))
             field = self.name()
             self.expect(":")
             fields.append((field, self.type()))
@@ -1065,7 +1068,7 @@ class Parser:
                 self.expect("]")
             if docs and self.token.kind == "eof":
                 raise docs[-1].token.error("outer documentation attribute has no following item")
-            public = self.accept("pub")
+            public = parse_visibility(self)
             from .inline_attributes import require_function_target
             require_function_target(self, inline_attributes)
             if cfg_attributes and not (self.token.text == 'extern' and self.tokens[self.pos + 1].text == 'crate'):
@@ -1166,7 +1169,7 @@ class Parser:
                 while not self.accept("}"):
                     from .inline_attributes import function_attributes
                     method_docs, method_inline = function_attributes(self)
-                    visible = self.accept("pub")
+                    visible = parse_visibility(self)
                     require_function_target(self, method_inline)
                     unsafe = self.accept("unsafe")
                     if trait_name is not None and (visible or unsafe):
@@ -1237,7 +1240,7 @@ class Parser:
                     while not self.accept("}"):
                         from .inline_attributes import function_attributes
                         declaration_docs, declaration_inline = function_attributes(self)
-                        visible = self.accept("pub")
+                        visible = parse_visibility(self)
                         require_function_target(self, declaration_inline)
                         functions.append(self.function("C", visible, False, True, declaration=True,
                             documentation=declaration_docs, inline_attributes=declaration_inline))
@@ -1247,6 +1250,11 @@ class Parser:
         if _inline:
             self.expect("}")
         self.validate_attribute_context()
+        if not _module and not (self.modules or self.crate_aliases or self.uses):
+            # A single-module crate: every restriction is owned by the root.
+            # Module crates validate each one against its owner in resolution.
+            for restriction in self.visibility_restrictions:
+                restriction_components(restriction, (), self.crate_policy.edition)
         return functions
 
     def validate_crate_policy(self):

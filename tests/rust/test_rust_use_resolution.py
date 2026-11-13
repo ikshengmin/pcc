@@ -233,7 +233,7 @@ INVALID = (
     ('reexport-private-module', 'mod a{mod inner{} pub use self::inner as i;} fn answer()->u64{42}',
      'is private, and cannot be re-exported', 'E0365'),
     ('reexport-crate-private', 'fn top()->u64{1} mod a{pub use crate::top;} fn answer()->u64{42}',
-     'is private, and cannot be re-exported', 'E0364'),
+     'only public within the crate, and cannot be re-exported outside', 'E0364'),
     # The re-export does not make its private source path nameable.
     ('reexport-source-path-private', 'mod a{mod inner{pub fn v()->u64{42}} pub use self::inner::v;} pub fn answer()->u64{a::inner::v()}',
      'private item', 'E0603'),

@@ -188,19 +188,28 @@ def test_outlined_file_error_keeps_its_original_path_line_and_column():
     assert sources == before
 
 
+# rustc 1.92.0 rejects both remaining rows with E0433; the other four former
+# rows are valid Rust and are now positive (below). Restricted visibility is
+# covered in tests/rust/test_rust_restricted_visibility.py.
+@pytest.mark.parametrize('source,message', [
+    ('pub(super) fn f(){}', 'too many leading super'),
+    ('pub(in crate::scope) struct R{n:u64}', 'restricted to ancestor modules'),
+])
+def test_restricted_visibility_remains_rejected_before_lowering(source, message, monkeypatch):
+    from pcc.frontends.rust.lowering import Lowerer
+    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('restricted visibility reached IR'))
+    with pytest.raises(RustError, match=message):
+        compile_rust(source, experimental_rustc_checked=True)
+
+
 @pytest.mark.parametrize('source', [
     'pub(crate) mod child{}',
-    'pub(super) fn f(){}',
-    'pub(in crate::scope) struct R{n:u64}',
     'pub(crate) enum E{A}',
     'pub(crate) trait T{fn f();}',
     'struct R{pub(crate) n:u64}',
 ])
-def test_restricted_visibility_remains_rejected_before_lowering(source, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('restricted visibility reached IR'))
-    with pytest.raises(RustError):
-        compile_rust(source, experimental_rustc_checked=True)
+def test_former_restricted_visibility_rows_now_compile(source):
+    compile_rust(source, experimental_rustc_checked=True)
 
 
 def test_source_file_count_limit_counts_unreachable_supplied_files():

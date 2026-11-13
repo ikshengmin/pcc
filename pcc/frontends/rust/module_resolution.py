@@ -16,6 +16,7 @@ from .crate_context import (
 from .generics import PRIMITIVES
 from .syntax import CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError
 from .types import TypeApplication
+from .visibility import scope_components, within
 
 
 # A bare use target can resolve in the language prelude even when this frontend
@@ -25,6 +26,9 @@ _LANGUAGE_PRIMITIVE_USE_TARGETS = PRIMITIVES | {
     'char', 'str', 'i8', 'i16', 'i128', 'u8', 'u16', 'u128',
     'f16', 'f32', 'f64', 'f128',
 }
+
+
+_NOT_REEXPORTED = object()
 
 
 class ModuleNamespaces:
@@ -46,6 +50,17 @@ class ModuleNamespaces:
         self._uses = {}
         self._resolved_uses = {}
         self._resolving_uses = set()
+        # Every restricted visibility names an ancestor of its owner, checked
+        # eagerly for items, fields and uses, whether or not they are used.
+        for module in self.modules.values():
+            owner = module.identity
+            for declaration in module.items.values():
+                self._scope(declaration.public, owner)
+            for record in module.body.records:
+                for visibility in record.field_public:
+                    self._scope(visibility, owner)
+            for item in module.body.uses:
+                self._scope(item.public, owner)
         for module in self.modules.values():
             imports = self._uses[module.identity] = {}
             for item in module.body.uses:
@@ -63,11 +78,25 @@ class ModuleNamespaces:
     def root(self):
         return self.crate.root.identity
 
+    def _scope(self, visibility, owner):
+        """None for unrestricted `pub`, else the module whose subtree sees it."""
+        components = scope_components(visibility, owner.components, self.policy.edition)
+        return None if components is None else ModuleId(owner.crate, components)
+
+    @staticmethod
+    def _within(requester, scope):
+        return scope is None or (requester.crate == scope.crate and
+                                 within(requester.components, scope.components))
+
+    @classmethod
+    def _inside(cls, inner, outer):
+        """Whether every module seeing scope `inner` also sees scope `outer`."""
+        if outer is None:
+            return True
+        return inner is not None and cls._within(inner, outer)
+
     def visible(self, declaration, requester):
-        owner = declaration.identity.module
-        return (declaration.public or
-                requester.crate == owner.crate and
-                requester.components[:len(owner.components)] == owner.components)
+        return self._within(requester, self._scope(declaration.public, declaration.identity.module))
 
     def has_local_type_binding(self, name, module):
         """Lexical items/imports only, excluding every implicit prelude."""
@@ -92,11 +121,12 @@ class ModuleNamespaces:
             # A simple use imports every modeled namespace, not whichever one
             # the first consumer happens to request. Canonical declaration
             # identity stays at the target, separately from alias visibility.
+            reexport = self._scope(item.public, module)
             for namespace in ('type', 'value'):
                 declaration = self.resolve(path, namespace, module, item.token,
                                            _use_root=self.policy.edition == 2015,
                                            _optional_final=True,
-                                           _reexport=item.public)
+                                           _reexport=reexport)
                 if declaration is None:
                     continue
                 # Generic normalization and associated-path lookup still
@@ -120,18 +150,18 @@ class ModuleNamespaces:
             self._resolving_uses.remove(key)
 
     def _binding(self, module, namespace, name, requester, token):
-        """The declaration a name denotes in `module`, and whether that
-        binding (the item itself, or the use binding naming it) is public."""
+        """The declaration a name denotes in `module`, and the visibility
+        scope of that binding (the item itself, or the use binding naming it)."""
         declaration = self.modules[module].items.get((namespace, name))
         if declaration is not None:
-            return declaration, declaration.public
+            return declaration, self._scope(declaration.public, module)
         item = self._uses[module].get(name)
         if item is None:
-            return None, False
-        if not item.public and (requester.crate != module.crate or
-                requester.components[:len(module.components)] != module.components):
+            return None, module
+        scope = self._scope(item.public, module)
+        if not self._within(requester, scope):
             raise token.error(f'private use binding {name!r} is inaccessible from this module')
-        return self._bind_use(module, name).get(namespace), item.public
+        return self._bind_use(module, name).get(namespace), scope
 
     def _start(self, path, requester, token):
         parts = path.split('::')
@@ -152,17 +182,18 @@ class ModuleNamespaces:
         return current, parts
 
     def resolve(self, path, namespace, requester, token, *, _use_root=False, _optional_final=False,
-                _reexport=False):
+                _reexport=_NOT_REEXPORTED):
         current, parts = self._start(path, requester, token)
         if _use_root and path.split('::', 1)[0] not in {'crate', 'self', 'super'}:
             current = self.root
         for index, name in enumerate(parts):
             space = namespace if index == len(parts) - 1 else 'type'
-            declaration, public = self._binding(current, space, name, requester, token)
+            declaration, scope = self._binding(current, space, name, requester, token)
             implicit = index == 0 and space == 'type' and path.split('::', 1)[0] not in {'crate', 'self', 'super'}
             if declaration is None and implicit:
                 declaration = self.extern_prelude.get(name)
-                public = declaration is not None and declaration.public
+                if declaration is not None:
+                    scope = self._scope(declaration.public, declaration.identity.module)
             if declaration is None:
                 if implicit and name in self.policy.implicit_extern_prelude:
                     raise token.error('implicit library/prelude source dependency is unavailable; external crate loading is not implemented')
@@ -172,9 +203,11 @@ class ModuleNamespaces:
             if not self.visible(declaration, requester):
                 raise token.error(f'private item {name!r} is inaccessible from this module')
             if index == len(parts) - 1:
-                # A re-export cannot widen visibility: the re-exported binding
-                # (an item or another use binding) must itself be `pub`.
-                if _reexport and not public:
+                # A use cannot widen visibility (rustc E0364/E0365): its own
+                # scope must lie inside the re-exported binding's scope.
+                if _reexport is not _NOT_REEXPORTED and not self._inside(_reexport, scope):
+                    if scope == ModuleId(scope.crate, ()):
+                        raise token.error(f'{name!r} is only public within the crate, and cannot be re-exported outside')
                     raise token.error(f'{name!r} is private, and cannot be re-exported')
                 return declaration
             if isinstance(declaration.syntax, CrateSelfAlias):
@@ -264,10 +297,9 @@ class ModuleResolution(ModuleNamespaces):
     def field_access(self, record, index, requester, token):
         if record.item_identity is not None:
             self.type_access(record.item_identity.binding_key, requester, token)
-        if record.item_identity is None or record.field_public[index]:
+        if record.item_identity is None:
             return
-        owner = record.item_identity.module
-        if requester.crate != owner.crate or requester.components[:len(owner.components)] != owner.components:
+        if not self._within(requester, self._scope(record.field_public[index], record.item_identity.module)):
             raise token.error(f'private field {record.fields[index][0].text!r} is inaccessible from this module')
 
 
