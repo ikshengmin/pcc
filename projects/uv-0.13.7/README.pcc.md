@@ -47,7 +47,7 @@ predicate is `cfg(test)`, which the test asserts.
 | Root | First blocker |
 |---|---|
 | `crates/uv/src/bin/uv.rs` | `4:14` `extern crate uv_performance_memory_allocator;` (active under default features) needs external crate loading |
-| `crates/uv/src/lib.rs` | `105:9` the `matches!` macro in that `const fn` method's body |
+| `crates/uv/src/lib.rs` | `112:3` `#[error(..)]` helper attribute of `#[derive(Debug, thiserror::Error)]` |
 | `crates/uv-version/src/lib.rs` | none in the frontend: the whole root compiles, and with the value-only attestation an owned native build prints `0.13.7`; without it, the global gate (no owned borrow checker) remains |
 | `crates/uv-lock/src/lock/mod.rs` | `104:5` `#[error(..)]` variant helper attribute of the `thiserror::Error` procedural derive |
 
@@ -86,7 +86,8 @@ an actual rustc check, as PCC has no owned lifetime analysis. Built-in derives
 (`tests/rust/programs/derives.rs`); `thiserror::Error` is a procedural derive
 from another crate and stays a semantic gap. `const fn` items and inherent
 methods (formerly `lib.rs:104:5`) are ordinary run-time functions
-(`tests/rust/programs/const_fn.rs`).
+(`tests/rust/programs/const_fn.rs`), and core's `matches!` (formerly `lib.rs:105:9`)
+expands to its defining match (`tests/rust/programs/matches.rs`).
 
 ```sh
 uv run pytest -x -q tests/rust/test_uv_source_frontier.py

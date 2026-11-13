@@ -1,4 +1,9 @@
-"""Built-in expression macros `env!` and `option_env!` over an owned environment.
+"""Core expression macros: `env!` / `option_env!` and `matches!`.
+
+`matches!(expression, pattern $(if guard)? $(,)?)` is defined by core as
+`match expression { pattern => true, _ => false }`; it is expanded into
+exactly that match (core/src/macros/mod.rs, Rust 1.92.0). A guard needs match
+guards, which are not implemented, so it stays an explicit gap.
 
 Rust std documentation, macros `env` and `option_env` (retrieved 2026-11-13),
 with argument rules and messages observed from rustc 1.92.0. rustc reads its
@@ -103,3 +108,26 @@ def expand_expression_macro(parser, token):
         return Expr('string', token, value)
     raise token.error(f"option_env!({name!r}) yields Option<&'static str>; the core Option model and "
                       'runtime string values are not implemented')
+
+
+def expand_matches(parser, token):
+    """`matches!(value, pattern)` -> `match value { pattern => true, _ => false }`."""
+    from .syntax import Expr, Pattern
+    parser.expect('!')
+    opener = parser.take()
+    closer = _DELIMITERS.get(opener.text)
+    if closer is None:
+        raise opener.error('expected one of `(`, `[` or `{` after matches!')
+    if parser.token.text == closer:
+        raise parser.token.error('matches! requires a value and a pattern')
+    scrutinee = parser.expression()
+    parser.expect(',')
+    pattern = parser.pattern()
+    if parser.token.text == 'if':
+        raise parser.token.error('matches! guards require match guards, which are not implemented')
+    parser.accept(',')
+    parser.expect(closer)
+    expansion = MacroExpansion(token, 'matches', (), None)
+    parser.macro_expansions.append(expansion)
+    return Expr('match', token, [pattern, Pattern('wildcard', token)],
+                [scrutinee, Expr('bool', token, True), Expr('bool', token, False)])
