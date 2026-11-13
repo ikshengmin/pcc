@@ -2089,6 +2089,20 @@
         ]
       }
     },
+    "tests/rust/test_rust_derives.py": {
+      "test_rustc_rejects_the_same_sources_with_the_recorded_codes": {
+        "activity": "external-reference",
+        "reason": [
+          "Invokes actual development rustc on every unchanged REJECTED derive source and requires a nonzero status with the recorded Rust diagnostic code. This reference verdict does not certify owned compilation or execution."
+        ]
+      },
+      "test_rustc_build_of_the_fixture_agrees": {
+        "activity": "external-reference",
+        "reason": [
+          "Builds the unchanged derives.rs fixture with actual development rustc through run_rustc_str_function and executes its observer, requiring exact derives agree output. The separate owned compile/assemble/link/run test stays in its original lane; this reference does not establish native pcc1 or whole-project acceptance."
+        ]
+      }
+    },
     "tests/rust/test_rust_enum_rematch.py": {
       "test_development_only_rustc_rejects_same_retained_enum_rematch": {
         "activity": "external-reference",
