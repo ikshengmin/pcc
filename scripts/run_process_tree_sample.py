@@ -1411,14 +1411,42 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
             raise ProcessTreeSampleError(
                 "performance lock rejected before target launch: " + str(exc)
             ) from exc
-        with stdout_path.open("wb") as stdout_stream, stderr_path.open(
-            "wb"
-        ) as stderr_stream, samples_path.open("w", encoding="utf-8") as samples_stream:
-            samples_stream.write(
-                "elapsed_s\ttree_rss_bytes\tprocess_count\tlargest_pid\t"
-                "largest_rss_bytes\tlargest_command\n"
-            )
-            samples_stream.flush()
+        with contextlib.ExitStack() as output_context:
+            opened_artifacts = {}
+            try:
+                stdout_stream = output_context.enter_context(stdout_path.open("wb"))
+                opened_artifacts["stdout"] = str(stdout_path)
+                stderr_stream = output_context.enter_context(stderr_path.open("wb"))
+                opened_artifacts["stderr"] = str(stderr_path)
+                samples_stream = output_context.enter_context(
+                    samples_path.open("w", encoding="utf-8")
+                )
+                opened_artifacts["samples"] = str(samples_path)
+                samples_stream.write(
+                    "elapsed_s\ttree_rss_bytes\tprocess_count\tlargest_pid\t"
+                    "largest_rss_bytes\tlargest_command\n"
+                )
+                samples_stream.flush()
+            except OSError as exc:
+                # This handler ends before Popen: stream-close errors after
+                # launch must never be classified as an unstarted target.
+                payload.update(
+                    {
+                        "status": "SAMPLER_ERROR",
+                        "completed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
+                        "elapsed_s": time.monotonic() - started,
+                        "returncode": None,
+                        "sample_count": 0,
+                        "error": type(exc).__name__ + ": " + str(exc),
+                        "artifacts": opened_artifacts,
+                    }
+                )
+                message = "output preparation failed before target launch: " + str(exc)
+                try:
+                    _persist(result_path, payload)
+                except OSError as receipt_error:
+                    message += "; could not persist failure receipt: " + str(receipt_error)
+                raise ProcessTreeSampleError(message) from exc
             try:
                 process = subprocess.Popen(
                     command,

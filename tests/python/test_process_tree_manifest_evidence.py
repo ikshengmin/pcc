@@ -701,3 +701,173 @@ def test_process_tree_sampler_launch_failure_has_terminal_receipt(
     assert Path(receipt["artifacts"]["stdout"]).read_bytes() == b""
     assert Path(receipt["artifacts"]["stderr"]).read_bytes() == b""
     assert len(Path(receipt["artifacts"]["samples"]).read_text().splitlines()) == 1
+
+
+def _output_failure_args(tool, tmp_path):
+    return tool._parser().parse_args([
+        "--result", str(tmp_path / "result.json"),
+        "--samples", str(tmp_path / "samples.tsv"),
+        "--stdout", str(tmp_path / "stdout"),
+        "--stderr", str(tmp_path / "stderr"),
+        "--cwd", str(tmp_path), "--timeout", "5",
+        "--no-performance-lock", "--", "must-not-launch",
+    ])
+
+
+@pytest.mark.parametrize("failure", ["stdout", "stderr", "samples", "write", "flush"])
+def test_output_preparation_failure_retains_terminal_receipt(
+    tool, tmp_path, monkeypatch, failure,
+):
+    args = _output_failure_args(tool, tmp_path)
+    original_open = Path.open
+    paths = {Path(getattr(args, name)): name for name in ("stdout", "stderr", "samples")}
+    opened = []
+    original_error = OSError("injected " + failure + " failure")
+
+    class HeaderStream:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return self.stream.__exit__(*exc)
+
+        def write(self, text):
+            if failure == "write":
+                raise original_error
+            return self.stream.write(text)
+
+        def flush(self):
+            if failure == "flush":
+                raise original_error
+            return self.stream.flush()
+
+    def open_output(path, *a, **kw):
+        name = paths.get(path)
+        if name == failure:
+            raise original_error
+        stream = original_open(path, *a, **kw)
+        if name:
+            opened.append((name, stream))
+        return HeaderStream(stream) if name == "samples" else stream
+
+    def forbidden(*a, **kw):
+        pytest.fail("output setup failure must not launch, sample, or signal")
+
+    monkeypatch.setattr(Path, "open", open_output)
+    monkeypatch.setattr(tool.subprocess, "Popen", forbidden)
+    monkeypatch.setattr(tool, "_timed_process_table", forbidden)
+    monkeypatch.setattr(tool, "_terminate_owned_processes", forbidden)
+    previous_sigint = signal.getsignal(signal.SIGINT)
+    with pytest.raises(tool.ProcessTreeSampleError, match="output preparation failed") as caught:
+        tool.run(args)
+    assert caught.value.__cause__ is original_error
+    assert signal.getsignal(signal.SIGINT) == previous_sigint
+    assert all(stream.closed for _, stream in opened)
+    receipt = json.loads(Path(args.result).read_text())
+    assert receipt["status"] == "SAMPLER_ERROR"
+    assert receipt["schema"] == "pcc.process_tree_sample.v1"
+    assert receipt["returncode"] is None and receipt["sample_count"] == 0
+    assert receipt["completed_at_utc"] >= receipt["started_at_utc"]
+    assert receipt["elapsed_s"] >= 0 and receipt["timeout_s"] == 5
+    assert receipt["error"] == "OSError: " + str(original_error)
+    assert receipt["artifacts"] == {name: getattr(args, name) for name, _ in opened}
+    if failure in paths.values():
+        assert not Path(getattr(args, failure)).exists()
+
+
+def test_output_failure_receipt_storage_failure_preserves_original_reason(
+    tool, tmp_path, monkeypatch, capsys,
+):
+    args = _output_failure_args(tool, tmp_path)
+    original_open = Path.open
+    original_persist = tool._persist
+
+    def fail_stdout(path, *a, **kw):
+        if path == Path(args.stdout):
+            raise OSError("stdout denied")
+        return original_open(path, *a, **kw)
+
+    def fail_terminal(path, payload):
+        if payload["status"] == "SAMPLER_ERROR":
+            raise OSError("receipt storage unavailable")
+        return original_persist(path, payload)
+
+    monkeypatch.setattr(Path, "open", fail_stdout)
+    monkeypatch.setattr(tool, "_persist", fail_terminal)
+    monkeypatch.setattr(tool.subprocess, "Popen", lambda *a, **kw: pytest.fail("target launch"))
+    monkeypatch.setattr(tool, "_parser", lambda: SimpleNamespace(parse_args=lambda argv: args))
+    assert tool.main([]) == 2
+    error = capsys.readouterr().err
+    assert "stdout denied" in error and "could not persist failure receipt" in error
+    assert "receipt storage unavailable" in error
+    # Failed storage leaves the last durable checkpoint; do not claim recovery.
+    assert json.loads(Path(args.result).read_text())["status"] == "RUNNING"
+
+
+@pytest.mark.parametrize("existing", ["result", "stdout", "stderr", "samples"])
+def test_output_preparation_does_not_rewrite_existing_evidence(
+    tool, tmp_path, monkeypatch, existing,
+):
+    args = _output_failure_args(tool, tmp_path)
+    path = Path(getattr(args, existing))
+    path.write_bytes(b"existing evidence\n")
+    monkeypatch.setattr(tool.subprocess, "Popen", lambda *a, **kw: pytest.fail("target launch"))
+    with pytest.raises(tool.ProcessTreeSampleError, match="refusing existing output"):
+        tool.run(args)
+    assert path.read_bytes() == b"existing evidence\n"
+    if existing != "result":
+        assert not Path(args.result).exists()
+
+
+def test_postlaunch_output_close_error_is_not_classified_as_prelaunch(
+    tool, tmp_path, monkeypatch,
+):
+    args = _output_failure_args(tool, tmp_path)
+    original_open = Path.open
+    launched, cleaned = [], []
+
+    class CloseFailure:
+        def __init__(self, stream):
+            self.stream = stream
+
+        def __enter__(self):
+            return self.stream
+
+        def __exit__(self, *exc):
+            self.stream.__exit__(*exc)
+            raise OSError("post-launch close failed")
+
+    def open_output(path, *a, **kw):
+        stream = original_open(path, *a, **kw)
+        return CloseFailure(stream) if path == Path(args.stderr) else stream
+
+    child = SimpleNamespace(pid=10, returncode=None)
+
+    def launch(*a, **kw):
+        launched.append(True)
+        return child
+
+    def fail_sample(**kw):
+        raise OSError("sampling failed")
+
+    def cleanup(process, observed):
+        cleaned.append(process)
+        process.returncode = -signal.SIGTERM
+
+    monkeypatch.setattr(Path, "open", open_output)
+    monkeypatch.setattr(tool.subprocess, "Popen", launch)
+    monkeypatch.setattr(tool, "_process_identity", lambda pid: tool._ProcessIdentity(10, 1, (100, 0)))
+    monkeypatch.setattr(tool, "_timed_process_table", fail_sample)
+    monkeypatch.setattr(tool, "_capture_terminal_argv", lambda *a: ({}, {}))
+    monkeypatch.setattr(tool, "_capture_worker_manifests", lambda *a, **kw: {})
+    monkeypatch.setattr(tool, "_terminate_owned_processes", cleanup)
+    with pytest.raises(OSError, match="post-launch close failed"):
+        tool.run(args)
+    assert launched == [True] and cleaned == [child]
+    # Post-launch close failure is an unchanged boundary, not a no-child claim.
+    receipt = json.loads(Path(args.result).read_text())
+    assert receipt["status"] == "RUNNING"
+    assert "returncode" not in receipt and "completed_at_utc" not in receipt
