@@ -858,13 +858,35 @@ class Parser:
                           uses=child.uses)
 
     def use_declaration(self, token, public, documentation):
-        """Retain a bounded SimplePath; resolution owns every actual binding."""
+        """Retain bounded SimplePaths; resolution owns every actual binding.
+
+        Rust Reference items/use-declarations.html: a grouped UseTree
+        `prefix::{tree, ...}` (including an empty prefix, `use {a, b::c};`,
+        nesting and a trailing comma) declares one binding per leaf, with the
+        prefix and leaf paths concatenated, exactly as separate simple use
+        declarations would. Every leaf keeps the declaration's `use` token,
+        documentation and source span; resolution checks each one, used or
+        not. Globs, absolute paths, `self` leaves and empty groups remain gaps.
+        """
         from .attribute_metadata import offset
         if public:
             raise token.error('public use/reexports require visibility-merge resolution, which is not implemented')
-        if self.token.text in {'::', '*', '{'}:
-            raise self.token.error('absolute, glob and grouped use declarations are not implemented')
-        path = []
+        if self.token.text == '::':
+            raise self.token.error('absolute use paths are not implemented')
+        leaves = []
+        self.use_tree(token, (), leaves, 0)
+        end = self.expect(';')
+        span = (offset(self, token), offset(self, end) + 1)
+        for path, alias in leaves:
+            self.uses.append(UseDeclaration(token, path, alias, documentation, span))
+
+    def use_tree(self, token, prefix, leaves, depth):
+        if self.token.text == '*':
+            raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
+        if self.token.text == '{':
+            self.use_group(token, prefix, leaves, depth)
+            return
+        path = list(prefix)
         while True:
             if self.token.text in {'crate', 'self', 'super'}:
                 if path and not (self.token.text == 'super' and all(p.text == 'super' for p in path)):
@@ -876,8 +898,11 @@ class Parser:
                 raise token.error('use path exceeds implementation limit (128 segments)')
             if not self.accept('::'):
                 break
-            if self.token.text in {'*', '{'}:
-                raise self.token.error('glob and grouped use declarations are not implemented')
+            if self.token.text == '*':
+                raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
+            if self.token.text == '{':
+                self.use_group(token, tuple(path), leaves, depth)
+                return
         alias = None
         if self.accept('as'):
             if self.token.text == '_':
@@ -885,9 +910,23 @@ class Parser:
             alias = self.name()
         if path[-1].kind != 'name':
             raise path[-1].error('use paths naming a module qualifier alone are not implemented')
-        end = self.expect(';')
-        self.uses.append(UseDeclaration(token, tuple(path), alias, documentation,
-            (offset(self, token), offset(self, end) + 1)))
+        if len(leaves) >= 4096:
+            raise token.error('use declaration binding count exceeds implementation limit (4096)')
+        leaves.append((tuple(path), alias))
+
+    def use_group(self, token, prefix, leaves, depth):
+        opener = self.expect('{')
+        if depth >= 32:
+            raise opener.error('use tree nesting exceeds implementation limit (32)')
+        if self.token.text == '}':
+            raise opener.error('empty use groups require binding-free path resolution, which is not implemented')
+        while True:
+            self.use_tree(token, prefix, leaves, depth + 1)
+            if self.accept('}'):
+                return
+            self.expect(',')
+            if self.accept('}'):
+                return
 
     def extern_crate_item(self, token, start, public, documentation):
         """Parse the real extern-crate grammar, including inactive items."""

@@ -21,7 +21,8 @@ FRONTIER = (
     # lint path in `#![deny(clippy::print_stdout, clippy::print_stderr)]`.
     ("crates/uv/src/lib.rs", "1:15: expected ',', found '::'"),
     ("crates/uv-version/src/lib.rs", "5:5: macro invocations require macro-by-example expansion"),
-    ("crates/uv-lock/src/lock/mod.rs", "3:23: glob and grouped use declarations are not implemented"),
+    # Grouped use trees now parse (lines 3-72); line 74 is a `pub use` re-export.
+    ("crates/uv-lock/src/lock/mod.rs", "74:5: public use/reexports require visibility-merge resolution"),
 )
 
 

@@ -29,7 +29,7 @@ from tests.rust.certification_support import actual_check_prerequisite, certify_
 
 PROGRAMS = ('use_function_alias', 'use_module_alias', 'use_type_alias',
             'use_forward_alias', 'use_parent_scope', 'use_crate_self_alias',
-            'use_value_primitive_alias', 'use_reference_alias')
+            'use_value_primitive_alias', 'use_grouped_tree', 'use_reference_alias')
 PROJECT = 'projects/fallible-streaming-iterator-0.1.9/src/lib.rs'
 PROJECT_SHA256 = '7fb7428997bdd89c3ee0818ecee642f8d93882c9c66171c9c6194b732f337089'
 
@@ -88,6 +88,30 @@ def test_use_syntax_retains_tokens_docs_and_original_codepoint_span():
     assert (item.token.line, item.token.column, item.token.source_path) == (3, 1, 'src/lib.rs')
     assert text[slice(*item.source_span)] == 'use self::target::value as read;'
     assert parser.modules[0].body.uses == []
+
+
+def test_grouped_use_tree_declares_one_simple_use_per_leaf():
+    # Former gap row ('group', 'use a::{value};') is now this positive form.
+    text = ('mod a{pub fn value(){} pub mod b{pub fn v(){} pub fn w(){}}}\n'
+            '/// grouped\nuse self::a::{value, b::{v as read, w,},};\nuse {a::b::v};')
+    parser = Parser(text, source_path='src/lib.rs')
+    parser.parse()
+    assert [('::'.join(token.text for token in item.path), item.binding.text)
+            for item in parser.uses] == [
+        ('self::a::value', 'value'), ('self::a::b::v', 'read'),
+        ('self::a::b::w', 'w'), ('a::b::v', 'v')]
+    last = parser.uses[-1]
+    assert {(item.token.line, item.token.column) for item in parser.uses[:3]} == {(3, 1)}
+    assert all(item.documentation[0].text == ' grouped' for item in parser.uses[:3])
+    assert {text[slice(*item.source_span)] for item in parser.uses[:3]} == {
+        'use self::a::{value, b::{v as read, w,},};'}
+    assert text[slice(*last.source_span)] == 'use {a::b::v};'
+
+
+def test_use_tree_nesting_has_an_explicit_bound():
+    text = 'mod a{pub fn value(){}} use ' + 'a::{' * 33 + 'value' + '}' * 33 + ';'
+    with pytest.raises(RustError, match='use tree nesting exceeds implementation limit'):
+        Parser(text).parse()
 
 
 def test_use_parser_advances_associated_types_but_keeps_fn_bounds_explicit(monkeypatch):
@@ -184,6 +208,9 @@ INVALID = (
     ('private-alias', 'mod a{pub fn value(){}} mod b{use crate::a::value as hidden;} fn answer(){b::hidden();}', 'private use binding', 'E0603'),
     ('binding-conflict', 'mod a{pub fn value(){}} use a::value; fn value(){}', 'duplicate imported value-namespace', 'E0255'),
     ('cycle', 'use self::b as a; use self::a as b;', 'cyclic use bindings', 'E0432'),
+    # Every leaf of a grouped use tree is resolved and checked like a simple use.
+    ('group-unresolved', 'mod a{} use a::{missing}; fn answer()->u64{42}', 'unknown use target', 'E0432'),
+    ('group-private', 'mod a{fn hidden(){}} use a::{hidden}; fn answer()->u64{42}', 'private item', 'E0603'),
 )
 
 
@@ -260,11 +287,13 @@ def test_marker_shadow_query_counts_imported_types_but_not_value_only_names(name
 
 
 GAPS = (
-    ('glob', 'mod a{pub fn value(){}} use a::*;', 'glob and grouped'),
-    ('group', 'mod a{pub fn value(){}} use a::{value};', 'glob and grouped'),
+    ('glob', 'mod a{pub fn value(){}} use a::*;', 'glob use declarations'),
+    ('group-glob', 'mod a{pub fn value(){}} use a::{*};', 'glob use declarations'),
+    ('group-self', 'mod a{pub fn value(){}} use a::{self};', 'nonleading self/crate/super'),
+    ('empty-group', 'mod a{pub fn value(){}} use a::{};', 'empty use groups'),
     ('reexport', 'mod a{pub fn value(){}} pub use a::value;', 'public use/reexports'),
     ('anonymous', 'mod a{pub fn value(){}} use a::value as _;', 'anonymous use'),
-    ('absolute', 'mod a{pub fn value(){}} use ::a::value;', 'absolute, glob and grouped'),
+    ('absolute', 'mod a{pub fn value(){}} use ::a::value;', 'absolute use paths'),
     ('trailing-self', 'mod a{} use a::self as alias;', 'nonleading self/crate/super'),
     ('duplicate-spelling', 'mod a{pub fn value(){}} use a::value as first; use a::value as first;', 'namespace-merge resolution'),
     ('no-owned-core', '#![no_std] use core::cmp;', 'implicit library/prelude source dependency is unavailable'),
