@@ -33,6 +33,7 @@ unmodified compatibility, or claim any package build, import, test, or GC result
 | --- | --- | --- |
 | C/C++ | NumPy | Selected real-package acceptance target. Its build requires native compilers and dependencies; successful compilation of a sample is not a NumPy package pass. |
 | Rust | orjson | Selected real-package acceptance target. Track its actual Python FFI/build dependencies separately from the whole PyO3 ecosystem. |
+| Rust | uv (executable) | User request (2026-11-13): “添加 numpy uv 支持”, answering “两者都做” when offered a uv-lock NumPy flow or uv as a Rust package project. The Python package manager itself is a large edition-2024 executable workspace distributed as a maturin wheel. Pinned bounded roots live in `projects/uv-0.13.7`; NumPy installation through uv locks is a separate `pcc sync --locked` feature. |
 | Go | go-enry / its Python package | Recommended research candidate, not a package-specific selection attributed to the user. It already exposes useful Go language-detection functionality to Python using a C shared library and cffi. |
 | Java | ZXing core plus a new PCC Python binding | Recommended staged acceptance candidate. Start with the bounded Reed-Solomon source subset, then expand to a QR decoding/API subset. Do not describe the new binding as unmodified pyzxing compatibility. |
 | Java + Rust | extractous / Tika native | Later, larger integration candidate. Its existing native-extension shape is useful evidence, but its GraalVM/Tika dependency scope makes it unsuitable as the first Java-frontend acceptance target. |
@@ -41,6 +42,7 @@ Primary sources:
 
 - [NumPy source build requirements](https://numpy.org/doc/stable/building/).
 - [orjson build dependencies](https://github.com/ijl/orjson/blob/master/Cargo.toml)
+- [uv 0.13.7 workspace manifest](https://github.com/astral-sh/uv/blob/316c827e058c16b71d5c507a20729c2995a7bcce/Cargo.toml).
   and [PyO3's description of direct `pyo3-ffi` usage](https://github.com/PyO3/pyo3/blob/main/pyo3-ffi/README.md).
 - [go-enry library and Python binding documentation](https://github.com/go-enry/go-enry).
 - [ZXing core build/dependency manifest](https://github.com/zxing/zxing/blob/master/core/pom.xml),

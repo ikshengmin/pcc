@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "project": "uv",
+  "version": "0.13.7",
+  "repository": "https://github.com/astral-sh/uv",
+  "release_url": "https://github.com/astral-sh/uv/releases/tag/0.13.7",
+  "revision": "316c827e058c16b71d5c507a20729c2995a7bcce",
+  "license": "MIT OR Apache-2.0",
+  "edition": 2024,
+  "rust_version": "1.97.0",
+  "toolchain_channel": "1.99.0",
+  "crate_type": "bin",
+  "build_backend": "maturin",
+  "build_backend_requirement": "maturin>=1.0,<2.0",
+  "complete_build_closure": false,
+  "selection": "workspace manifests/lock/toolchain, licenses, the uv executable entry and library root, uv-version and the uv-lock format module; NOT the 87-crate workspace or its crates.io closure",
+  "sdist_cross_check": {
+    "url": "https://files.pythonhosted.org/packages/71/73/0021f6679b1b686f2fdb7cb9914a9d953428644e3057b173edc181d1590c/uv-0.13.7.tar.gz",
+    "sha256": "5e766791cb825d7a07e2ef9e622d307b48754fb682a31ba7bc5f272fab9ea395",
+    "identical": 9,
+    "differs": [
+      "Cargo.lock",
+      "crates/uv/Cargo.toml",
+      "crates/uv-version/Cargo.toml"
+    ],
+    "reason": "maturin sdist packaging adds readme fields and prunes dev-only lock entries"
+  },
+  "total_bytes": 829301,
+  "rust_roots": [
+    "crates/uv/src/bin/uv.rs",
+    "crates/uv/src/lib.rs",
+    "crates/uv-version/src/lib.rs",
+    "crates/uv-lock/src/lock/mod.rs"
+  ],
+  "files": [
+    {
+      "path": "Cargo.toml",
+      "role": "workspace-manifest",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "workspace.package.license",
+      "sha256": "fb3a9829bcca897de697880783b6262f986ab6a3fdaf8ffa051a39e79b13dc51",
+      "size": 24705,
+      "git_blob": "da83d87ab286c47fd2a18e868b00b0b4d9264c39",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/Cargo.toml"
+    },
+    {
+      "path": "Cargo.lock",
+      "role": "dependency-lock",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "workspace.package.license",
+      "sha256": "888a278b0bf71d66142fe520431d53b0a8b5f2f5864846acc9a1a4f2270952e9",
+      "size": 200059,
+      "git_blob": "8fb832a352695afad8c015fac044df3b84efffc5",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/Cargo.lock"
+    },
+    {
+      "path": "pyproject.toml",
+      "role": "python-package-manifest",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "project.license",
+      "sha256": "4092f71e82353cb21e783343b3771758eb5ee9153be62e079022e82aa6d4dc08",
+      "size": 7093,
+      "git_blob": "713ad109beb1645259e77b21e117cf7f59bcb23b",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/pyproject.toml"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "role": "toolchain-pin",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "workspace.package.license",
+      "sha256": "ff13c9224217a4ccd63320d8b89cc82d7fa64da14a627e499f9f18db4c6602d0",
+      "size": 31,
+      "git_blob": "b6cff89e61d4d3bd3d8fbfd302f49a3e3a9dc211",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/rust-toolchain.toml"
+    },
+    {
+      "path": "LICENSE-MIT",
+      "role": "license-text",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "license file",
+      "sha256": "860e3d7a86b84e6a7012c7a635fc64df475cebc6cce34dfeb73a5982ec58176c",
+      "size": 1077,
+      "git_blob": "014835144877ea9c926d027ece3e1a26290cf481",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/LICENSE-MIT"
+    },
+    {
+      "path": "LICENSE-APACHE",
+      "role": "license-text",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "license file",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "size": 11357,
+      "git_blob": "261eeb9e9f8b2b4b0d119366dda99c6fd7d35c64",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/LICENSE-APACHE"
+    },
+    {
+      "path": "crates/uv/Cargo.toml",
+      "role": "crate-manifest",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "license.workspace",
+      "sha256": "da7d47c7e74257757f829eefe7b5f7c78c6dd8e3cdbe5a2671e9c895f6ee0377",
+      "size": 8017,
+      "git_blob": "14b538faf5ddb8e3d7f604b7a78788cd4e23e791",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv/Cargo.toml"
+    },
+    {
+      "path": "crates/uv/src/bin/uv.rs",
+      "role": "rust-root-executable",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "crate license.workspace",
+      "sha256": "826c952b35014db0ad9c07a780471235a0da52fb7b1408975c3087cf67eb4332",
+      "size": 465,
+      "git_blob": "ee178a739b3b4dff2eca44984997ae8288de07f9",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv/src/bin/uv.rs"
+    },
+    {
+      "path": "crates/uv/src/lib.rs",
+      "role": "rust-root-library",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "crate license.workspace",
+      "sha256": "3ccf524667e21c7fe92b160cf155e75a616852c3a2af4fb0ea79b9d7d0618a3b",
+      "size": 122475,
+      "git_blob": "b9f0679a01ee03436b520c6f738862f088d38d44",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv/src/lib.rs"
+    },
+    {
+      "path": "crates/uv-version/Cargo.toml",
+      "role": "crate-manifest",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "license.workspace",
+      "sha256": "011ec2b917a77fde50e4aef70fe813a7307281cb3cdfae5a4181cee5f411b96b",
+      "size": 367,
+      "git_blob": "8f2ea2a6c4cfd18ce6940f5b29fd31b86a4c5116",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv-version/Cargo.toml"
+    },
+    {
+      "path": "crates/uv-version/src/lib.rs",
+      "role": "rust-root-library",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "crate license.workspace",
+      "sha256": "56244bd779ca7895cc41f4e0dd12ec8d298f3fa34d4553e776f2c8aa050c88ae",
+      "size": 355,
+      "git_blob": "20a8940a121643c78223dc80da78cf1fbe2a9817",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv-version/src/lib.rs"
+    },
+    {
+      "path": "crates/uv-lock/src/lock/mod.rs",
+      "role": "rust-root-module",
+      "license": "MIT OR Apache-2.0",
+      "license_evidence": "crate license.workspace",
+      "sha256": "e8daae56f9606010cda53e5808b4b0958b2988eab83a1a37c3c021a9f9d30a49",
+      "size": 453300,
+      "git_blob": "9bcce103ff4cf07c7080a4e4087cb52d3bcd7143",
+      "url": "https://raw.githubusercontent.com/astral-sh/uv/316c827e058c16b71d5c507a20729c2995a7bcce/crates/uv-lock/src/lock/mod.rs"
+    }
+  ]
+}
