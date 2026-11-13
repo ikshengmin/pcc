@@ -18,6 +18,7 @@ from pcc.support.managed_objects import ManagedValuePlan, unmet_requirements
 from .diagnostics import JavaError, UnsupportedJava
 from .managed_objects import PRIMITIVE_SIZES, class_value_plan, reference_value_plan
 from .source_array_model import ArrayModelAnalyzer
+from .source_class_initialization import ClassInitializationAnalyzer, class_initialization_plan
 from .source_construction_model import ClassConstructionAnalyzer, ClassConstructionObligation
 from .source_integral_arithmetic_model import IntegralArithmeticModelAnalyzer, integral_arithmetic_context
 from .source_project import SourceProject
@@ -76,6 +77,9 @@ class SourceClassModel:
     compiler_context_obligations: tuple = ()
     semantic_context_complete: bool = False
     managed_value: ManagedValuePlan | None = None
+    # JLS 12.4.2 step 9: non-constant static final fields in textual order.
+    class_initialization_steps: tuple = ()
+    static_fields: tuple = ()
 
     @property
     def managed_requirements(self):
@@ -84,7 +88,7 @@ class SourceClassModel:
 
 
 class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassConstructionAnalyzer,
-                    StringModelAnalyzer, ArrayModelAnalyzer, SourceAnalyzer):
+                    StringModelAnalyzer, ArrayModelAnalyzer, ClassInitializationAnalyzer, SourceAnalyzer):
     def __init__(self, program, project):
         super().__init__(program, project)
         self.constructor_edge = {}
@@ -159,7 +163,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         if "static" in field.modifiers and isinstance(field.dtype, BootstrapStringType):
             return self.evaluate_string_field(field)
         if "static" in field.modifiers:
-            return super().evaluate_field(field)
+            return self.evaluate_static_field(field)
         if self.field_states.get(field.token.text) == "complete":
             return None
         previous = self.current_field
@@ -295,8 +299,11 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         implicit_field = (node.kind == "assign" and not any(node.token.text in scope for scope in self.scopes)
                           and node.token.text in self.fields)
         if node.kind == "field_assign" or implicit_field:
-            self.require_receiver(node.token)
             field = self.fields.get(node.token.text)
+            if implicit_field and "static" in field.modifiers:
+                # Every static field here is final (JLS 8.3.1.2), in any context.
+                node.token.error("cannot assign a final constant field " + node.token.text)
+            self.require_receiver(node.token)
             if field is None:
                 node.token.error("undefined instance field " + node.token.text)
             if "static" in field.modifiers or "final" in field.modifiers:
@@ -382,6 +389,7 @@ class ClassModelProject(SourceProject):
         self._class_constructions = {}
         self._throw_sites = {}
         self._integral_arithmetic_sites = {}
+        self._class_initializations = {}
         super().__init__(programs, analyzer_type=ClassAnalyzer)
         self.models = {}
 
@@ -392,7 +400,18 @@ class ClassModelProject(SourceProject):
         constructions = tuple(obligation for _, obligation in sorted(self._class_constructions.items()))
         throws = tuple(obligation for _, obligation in sorted(self._throw_sites.items()))
         arithmetic = tuple(obligation for _, obligation in sorted(self._integral_arithmetic_sites.items()))
-        return strings + constructions + throws + arithmetic
+        initializations = tuple(obligation for program in self.programs
+                                for obligation in class_initialization_plan(
+                                    program, self._class_initializations.get(program.name, ()))[2])
+        return strings + constructions + throws + arithmetic + initializations
+
+    @property
+    def class_initialization_context_complete(self):
+        """No step-9 class variables, never evidence of initialization support."""
+        return not any(self._class_initializations.values())
+
+    def record_class_initialization(self, program, field):
+        self._class_initializations.setdefault(program.name, []).append(field)
 
     @property
     def integral_arithmetic_context_complete(self):
@@ -522,12 +541,15 @@ class ClassModelProject(SourceProject):
                 payload_size, alignment = None, None
             obligations = tuple(item for item in self.compiler_context_obligations
                                 if item.owner == program.name)
+            steps, static_slots, _ = class_initialization_plan(
+                program, self._class_initializations.get(program.name, ()))
             managed_value = class_value_plan(program, slots, payload_size, alignment,
                 requirements=tuple(requirement for item in obligations for requirement in item.requirements))
             self.models[program.name] = SourceClassModel(program,
                 tuple(self.analyzers[program.name].constructors.values()), tuple(slots), payload_size, alignment,
                 program.initialization_steps,
-                compiler_context_obligations=obligations, managed_value=managed_value)
+                compiler_context_obligations=obligations, managed_value=managed_value,
+                class_initialization_steps=steps, static_fields=static_slots)
         return self
 
 

@@ -213,7 +213,8 @@ def test_array_field_length_and_component_store_keep_runtime_check_order():
 
 @pytest.mark.parametrize("members,code", [
     ("final int[] values;ArrayExample(){values=new int[]{42};}", "java.unsupported.final-instance-fields"),
-    ("static final int[] values={42};", "java.unsupported.array-storage"),
+    # Original static array field moved verbatim to
+    # test_source_class_initialization_model (class-initialization step).
     ("int[][] values;", "java.unsupported.array-model-shape"),
     ("float[] values;", "java.unsupported.array-model-shape"),
 ])

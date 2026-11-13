@@ -253,7 +253,8 @@ GAPS = [
     ("array-expression-target", original("int[] a={84};int d=2;return (a[0]/=d);"), "assignment-expression-target"),
     ("float-remainder", original("float n=85.0f,d=43.0f;return (int)(n%d);"), "floating-remainder"),
     ("double-remainder-compound", original("double n=85.0,d=43.0;n%=d;return (int)n;"), "floating-remainder"),
-    ("nonconstant-static-initializer", "class ArrayExample{static final int VALUE=1/0;}", "static-initialization"),
+    # Original nonconstant static initializer moved verbatim to
+    # test_source_class_initialization_model (class-initialization step).
 ]
 
 ADMITTED_ORIGINALS = (
@@ -630,9 +631,10 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
     assert node.arithmetic_plan is None  # Parsing never proves typed runtime plans.
     with pytest.raises(UnsupportedJava) as class_error:
         analyze_class_sources(sources)
-    # SmallPrimes.PRIMES, a static array field, needs class initialization.
-    assert class_error.value.code == "java.unsupported.array-storage"
-    assert PRODUCTION[1] + ":39:18:" in str(class_error.value)
+    # SmallPrimes.PRIMES and PRIMES_LAST are class-initialization steps now;
+    # the int[] type argument of Entry<Set<Integer>, int[]> is next.
+    assert class_error.value.code == "java.unsupported.generic-declarations"
+    assert PRODUCTION[1] + ":90:38:" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
     # The String constant variable folds; the enhanced for and the nextPrime
@@ -661,14 +663,17 @@ def test_complete_original_smallprimes_arithmetic_sites_and_upstream_tests_stay_
 
 
 def test_complete_smallprimes_original_still_stops_at_static_array_storage():
+    # The name is retained because a frozen ledger acceptance row cites it;
+    # the static array field at :39 now parses (test_source_class_initialization_model)
+    # and the complete original stops at the int[] type argument at :90.
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     path = PRODUCTION[1]
     before = sources[path]
     with pytest.raises(UnsupportedJava) as caught:
         SourceParser(sources[path], path, class_model=True).parse()
-    assert caught.value.code == "java.unsupported.array-storage"
-    assert path + ":39:" in str(caught.value)
+    assert caught.value.code == "java.unsupported.generic-declarations"
+    assert path + ":90:38:" in str(caught.value)
     assert sources[path] == before and before.encode("utf-8") == files[path]
 
 
