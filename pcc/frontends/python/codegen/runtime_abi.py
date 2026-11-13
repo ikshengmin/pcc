@@ -407,6 +407,9 @@ def _runtime_signatures_part_7():
     "pcc_gc_frame_leave_mapped": (_VOID, [_PTR], False),
     "pcc_gc_frame_enter_lifo_mapped": (_VOID, [_PTR, _PTR], False),
     "pcc_gc_frame_leave_lifo_mapped": (_VOID, [_PTR], False),
+    # A container literal's own fresh container, rooted while it is filled.
+    "pcc_gc_temp_root_enter_fresh": (_VOID, [_PTR, _PYOBJ], False),
+    "pcc_gc_temp_root_leave_fresh": (_VOID, [_PTR], False),
     # ---- Bool ------------------------------------------------------
     "py_bool_from_bit": (_PYOBJ, [_I32], False),
     # ---- Int (tagged + bignum) ------------------------------------

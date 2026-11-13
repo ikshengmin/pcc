@@ -241,6 +241,10 @@ PyObject *pcc_gc_resolve_owned_ptr(PyObject *value);
 void      pcc_gc_store_ptr(PyObject *owner, PyObject **slot, PyObject *value);
 void      pcc_gc_store_root(PyObject **slot, PyObject *value);
 void      pcc_gc_store_root_take(PyObject **slot, PyObject *value); /* consumes value's reference */
+/* A literal's fresh container while it is filled: uncounted and unpinned in
+ * container mode, the counted pinned root otherwise; cleared only by leave. */
+void      pcc_gc_temp_root_enter_fresh(PyObject **slot, PyObject *value);
+void      pcc_gc_temp_root_leave_fresh(PyObject **slot);
 /* The private, registered slot already owns a freshly returned reference. */
 int64_t   pcc_gc_publish_owned_root(PyObject **slot);
 /* Consume value into a heap slot under GC0. Other collectors return 0 with

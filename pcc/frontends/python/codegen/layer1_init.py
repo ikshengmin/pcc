@@ -358,6 +358,9 @@ class Layer1InitMixin:
         self._gc_rooted_local_order: list[str] = []
         self._borrowed_gc_rooted_local_names: set[str] = set()
         self._pinned_gc_rooted_local_names: set[str] = set()
+        # Temporary roots of a literal's own fresh container (ids of their
+        # slots): every clear takes pcc_gc_temp_root_leave_fresh.
+        self._fresh_container_root_slots: set[int] = set()
         self._container_temp_root_slot_names: list[str] = []
         self._lambda_lexical_shadow_names: set[str] = set()
         self._suppress_implicit_gc_roots = False

@@ -1729,6 +1729,15 @@ class OwnershipLoweringMixin:
                     # still uses this return's names, environment and ownership.
                     shared_pinned_slots.append(alloca)
                     continue
+                if id(alloca) in self._fresh_container_root_slots:
+                    # A literal's fresh-container root clears as it was set.
+                    self.builder.call(
+                        self.runtime["pcc_gc_temp_root_leave_fresh"],
+                        [self._as_gc_ptr(
+                            alloca, name=self._fresh("gc.root.cleanup.ptr"),
+                        )],
+                    )
+                    continue
                 pinned = self.builder.load(
                     alloca,
                     name=self._fresh("gc.root.cleanup.unpin"),

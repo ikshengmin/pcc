@@ -410,6 +410,74 @@ class LiteralLoweringMixin:
             )
         return slot
 
+    def _enter_fresh_container_temp_root(
+        self,
+        value: ir.Value,
+        label: str,
+    ) -> ir.Value:
+        """_enter_container_temp_root for the container a literal has just
+        allocated and owns while it fills the elements.
+
+        The slot and its frame registration are the same; the runtime decides
+        the root's form (pcc_gc_temp_root_enter_fresh): in container mode,
+        where no object a running thread names moves, the owner's reference
+        keeps the container and the slot holds it uncounted and unpinned. The
+        slot is recorded so every clear of it -- the literal's own leave, an
+        error cleanup's, a function exit's -- takes the matching
+        pcc_gc_temp_root_leave_fresh. Generator and parking frames keep the
+        counted, pinned root across their suspensions.
+        """
+        if not isinstance(value.type, ir.PointerType) or getattr(
+            self, "_generator_ctx_stack", ()
+        ):
+            return self._enter_container_temp_root(value, label)
+        persistent_thread_root = (
+            self.current_func_def is not None
+            and getattr(self, "_runtime_threads_enabled", False)
+        )
+        slot = None
+        if persistent_thread_root:
+            from pcc.frontends.python.codegen.frame_root_groups import allocate_function_root
+
+            slot = allocate_function_root(self, label + ".tmp.root", False)
+        if slot is None:
+            slot = self._alloca_in_entry(
+                _CSTR,
+                name=label + ".tmp.root",
+                init_null=True,
+            )
+        rooted_value = value
+        if rooted_value.type != _CSTR:
+            rooted_value = self.builder.bitcast(
+                value,
+                _CSTR,
+                name=self._fresh(label + ".tmp.ptr"),
+            )
+        self._fresh_container_root_slots.add(id(slot))
+        self.builder.call(
+            self.runtime["pcc_gc_temp_root_enter_fresh"],
+            [
+                self._as_gc_ptr(slot, name=self._fresh(label + ".tmp.root.ptr")),
+                rooted_value,
+            ],
+        )
+        if persistent_thread_root:
+            root_name = self._fresh(label + ".tmp.root.local")
+            self.env[root_name] = (slot, _CSTR, DynType(name="dyn"))
+            self._pinned_gc_rooted_local_names.add(root_name)
+            self._ensure_local_gc_frame_root(
+                root_name,
+                slot,
+                _CSTR,
+                self._gc_one_slot_frame_map(),
+            )
+        else:
+            self._emit_current_gc_frame_enter_lifo(
+                self._gc_one_slot_frame_map(),
+                slot,
+            )
+        return slot
+
     def _leave_container_temp_root(self, slot: ir.Value) -> None:
         if isinstance(slot, ir.Constant):
             return
@@ -417,6 +485,17 @@ class LiteralLoweringMixin:
             slot,
             name=self._fresh("container.tmp.root.ptr"),
         )
+        if id(slot) in self._fresh_container_root_slots:
+            self.builder.call(
+                self.runtime["pcc_gc_temp_root_leave_fresh"],
+                [slot_ptr],
+            )
+            if not (
+                self.current_func_def is not None
+                and getattr(self, "_runtime_threads_enabled", False)
+            ):
+                self._emit_gc_frame_leave_lifo_for_slot(slot)
+            return
         pinned = self.builder.call(
             self.runtime["pcc_gc_load_ptr"],
             [ir.Constant(_CSTR, None), slot_ptr],
@@ -475,7 +554,7 @@ class LiteralLoweringMixin:
         # nor anything they call sets a Python exception (py_list_append does,
         # on MemoryError, which is why its check stays).  The check here had no
         # reachable edge and cost two blocks per container literal.
-        lst_root = self._enter_container_temp_root(lst, "literal.splat.list")
+        lst_root = self._enter_fresh_container_temp_root(lst, "literal.splat.list")
 
         for elem in elems:
             is_splat = (
@@ -544,7 +623,7 @@ class LiteralLoweringMixin:
         self._emit_post_call_err_check(
             rooted_release_on_error=((lst, lst_root),),
         )
-        tup_root = self._enter_container_temp_root(tup, "literal.splat.tuple")
+        tup_root = self._enter_fresh_container_temp_root(tup, "literal.splat.tuple")
         self._leave_container_temp_root(lst_root)
         self._gc_release(lst)
         self._leave_container_temp_root(tup_root)
@@ -683,7 +762,7 @@ class LiteralLoweringMixin:
             # The root protects the container while its elements are built;
             # an empty literal builds nothing.
             lst_root = (
-                self._enter_container_temp_root(lst, "list")
+                self._enter_fresh_container_temp_root(lst, "list")
                 if expr.elems
                 else ir.Constant(_CSTR, None)
             )
@@ -878,7 +957,7 @@ class LiteralLoweringMixin:
             cpy_release_on_error=tuple(pending_owned),
             pinned_release_on_error=tuple(pending_pins),
         )
-        lst_root = self._enter_container_temp_root(lst, "list")
+        lst_root = self._enter_fresh_container_temp_root(lst, "list")
         for op_kind, value, value_ty, is_cpy, src_expr, pinned in ops:
             rooted_on_error = ((lst, lst_root),)
             pin_entry = None
@@ -969,7 +1048,7 @@ class LiteralLoweringMixin:
         # nor anything they call sets a Python exception (py_list_append does,
         # on MemoryError, which is why its check stays).  The check here had no
         # reachable edge and cost two blocks per container literal.
-        dict_root = self._enter_container_temp_root(d, "dict")
+        dict_root = self._enter_fresh_container_temp_root(d, "dict")
         for k_expr, v_expr in expr.pairs:
             if isinstance(k_expr, Name) and k_expr.ident == "**":
                 m_obj = self._emit_expr_with_cpy_operand_cleanup(
@@ -1372,7 +1451,7 @@ class LiteralLoweringMixin:
             # on MemoryError, which is why its check stays).  The check here had no
             # reachable edge and cost two blocks per container literal.
             dict_root = (
-                self._enter_container_temp_root(d, "dict")
+                self._enter_fresh_container_temp_root(d, "dict")
                 if expr.pairs
                 else ir.Constant(_CSTR, None)
             )
@@ -1684,7 +1763,7 @@ class LiteralLoweringMixin:
             cpy_release_on_error=tuple(pending_owned),
             pinned_release_on_error=tuple(pending_pins),
         )
-        dict_root = self._enter_container_temp_root(d, "dict")
+        dict_root = self._enter_fresh_container_temp_root(d, "dict")
         for (
             k,
             k_ty,
@@ -1831,7 +1910,7 @@ class LiteralLoweringMixin:
             [],
             name=self._fresh("dict.new"),
         )
-        out_root = self._enter_container_temp_root(out, "dict")
+        out_root = self._enter_fresh_container_temp_root(out, "dict")
         if len(expr.args) == 0:
             for kw_name, kw_expr in expr.kwargs:
                 key_obj = self._emit_str_literal(kw_name)
@@ -2312,7 +2391,7 @@ class LiteralLoweringMixin:
                 # on MemoryError, which is why its check stays).  The check here had no
                 # reachable edge and cost two blocks per container literal.
                 tup_root = (
-                    self._enter_container_temp_root(tup, "tuple")
+                    self._enter_fresh_container_temp_root(tup, "tuple")
                     if expr.elems
                     else ir.Constant(_CSTR, None)
                 )
@@ -2426,7 +2505,7 @@ class LiteralLoweringMixin:
                 cpy_release_on_error=tuple(pending_owned),
                 pinned_release_on_error=tuple(pending_pins),
             )
-            tup_root = self._enter_container_temp_root(tup, "tuple")
+            tup_root = self._enter_fresh_container_temp_root(tup, "tuple")
             for i, (
                 _op_kind,
                 value,
@@ -2607,7 +2686,7 @@ class LiteralLoweringMixin:
             cpy_release_on_error=tuple(pending_owned),
             pinned_release_on_error=tuple(pending_pins),
         )
-        lst_root = self._enter_container_temp_root(lst, "tuple.splat.list")
+        lst_root = self._enter_fresh_container_temp_root(lst, "tuple.splat.list")
         for op_kind, value, value_ty, is_cpy, pinned, src_expr in ops:
             rooted_on_error = ((lst, lst_root),)
             pin_entry = None
@@ -2694,7 +2773,7 @@ class LiteralLoweringMixin:
         self._emit_post_call_err_check(
             rooted_release_on_error=((lst, lst_root),),
         )
-        tup_root = self._enter_container_temp_root(tup, "tuple.splat")
+        tup_root = self._enter_fresh_container_temp_root(tup, "tuple.splat")
         fn = self.current_function
         idx_slot = self._alloca_in_entry(_I64, name="tup.splat.idx.addr")
         self.builder.store(ir.Constant(_I64, 0), idx_slot)

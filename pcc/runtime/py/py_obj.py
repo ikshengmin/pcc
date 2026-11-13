@@ -1265,6 +1265,39 @@ def pcc_gc_store_root(slot, value) -> None:
     pcc_gc_store_root_plan_finish(plan)
 
 
+@c_abi_export("pcc_gc_temp_root_enter_fresh")
+def pcc_gc_temp_root_enter_fresh(slot, value) -> None:
+    """Root a container the caller has just allocated and owns while it fills
+    the container's literal elements.
+
+    In container mode (pcc_gc_list_container_mode: GC0 and the nonmoving
+    count-free collectors, no provenance probe) no object a running thread
+    names moves: the caller's own reference keeps the container alive (GC0
+    finds it through that count) and a tracing mark reaches it through this
+    registered slot or the stopped stack. The slot then holds it uncounted
+    and unpinned, a plain store. Any other mode keeps the counted, pinned
+    root (unpin of the slot's previous value, pin, pcc_gc_store_root).
+    Only pcc_gc_temp_root_leave_fresh clears such a slot.
+    """
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        store_ptr(slot, 0, value)
+        return
+    pcc_gc_unpin(load_ptr(slot, 0))
+    pcc_gc_pin(value)
+    pcc_gc_store_root(slot, value)
+
+
+@c_abi_export("pcc_gc_temp_root_leave_fresh")
+def pcc_gc_temp_root_leave_fresh(slot) -> None:
+    """Clear a slot pcc_gc_temp_root_enter_fresh filled (an empty one too)."""
+    if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
+        store_ptr(slot, 0, null())
+        return
+    pinned = pcc_gc_load_ptr(null(), slot)
+    pcc_gc_store_root(slot, null())
+    pcc_gc_unpin(pinned)
+
+
 @c_abi_export("pcc_gc_store_root_take")
 def pcc_gc_store_root_take(slot, value) -> None:
     # Ownership-transferring root store: the caller's reference to ``value``

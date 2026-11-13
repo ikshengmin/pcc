@@ -151,18 +151,25 @@ class ReturnLoweringMixin:
                     name=self._fresh("ret.shared.unpin"),
                 )
                 self.builder.position_at_end(cleanup)
-                pinned = self.builder.load(
-                    slot, name=self._fresh("gc.root.cleanup.unpin"),
-                )
-                self.builder.call(
-                    self.runtime["pcc_gc_unpin"],
-                    [self._value_available_at_insertion_point(pinned)],
-                )
-                self.builder.call(
-                    self.runtime["pcc_gc_store_root"],
-                    [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr")),
-                     ir.Constant(_CSTR, None)],
-                )
+                if id(slot) in self._fresh_container_root_slots:
+                    # A literal's fresh-container root clears as it was set.
+                    self.builder.call(
+                        self.runtime["pcc_gc_temp_root_leave_fresh"],
+                        [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr"))],
+                    )
+                else:
+                    pinned = self.builder.load(
+                        slot, name=self._fresh("gc.root.cleanup.unpin"),
+                    )
+                    self.builder.call(
+                        self.runtime["pcc_gc_unpin"],
+                        [self._value_available_at_insertion_point(pinned)],
+                    )
+                    self.builder.call(
+                        self.runtime["pcc_gc_store_root"],
+                        [self._as_gc_ptr(slot, name=self._fresh("gc.root.cleanup.ptr")),
+                         ir.Constant(_CSTR, None)],
+                    )
                 self.builder.branch(head)
                 # Keep both identity-key owners alive; publish only a complete
                 # node. IR slots/blocks have no structural equality contract.

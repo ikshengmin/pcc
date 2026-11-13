@@ -194,6 +194,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_owned_dynamic_call_values",
     "_owned_local_names",
     "_pinned_gc_rooted_local_names",
+    "_fresh_container_root_slots",
     "_post_call_frame_blocks",
     "_prefer_native_callable_values",
     "_printf",

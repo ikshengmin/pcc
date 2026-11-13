@@ -89,16 +89,18 @@ def probe(stop):
         swaps = [match.start() for match in re.finditer(r"@py_tls_exc_swap_slot\(", block)]
         assert len(swaps) == 2
         clear = block.index("@py_clear_exception(")
-        unpin = block.index("@pcc_gc_unpin(")
+        # The literal's own fresh container clears its root (and its pin,
+        # outside container mode) in one call before the terminal decref.
+        unroot = block.index("@pcc_gc_temp_root_leave_fresh(")
         release = block.index("@pcc_gc_release(")
-        assert swaps[0] < unpin < release < clear < swaps[1]
+        assert swaps[0] < unroot < release < clear < swaps[1]
+        assert "@pcc_gc_store_root(" not in block[swaps[0]:release]
         if threads:
             # The persistent frame leaves at function exit; this edge only
-            # clears the container owner and pin before terminal decref.
+            # clears the container's root before terminal decref.
             assert "@pcc_gc_frame_leave_lifo(" not in block
-            assert swaps[0] < block.index("@pcc_gc_store_root(") < unpin
         else:
-            assert swaps[0] < block.index("@pcc_gc_frame_leave_lifo(") < unpin
+            assert unroot < block.index("@pcc_gc_frame_leave_lifo(") < release
 
 
 @pytest.mark.parametrize("target", ("x86_64-linux", "aarch64-darwin"))
