@@ -242,7 +242,9 @@ def test_disabled_items_with_unimplemented_forms_are_skipped(item):
     functions = parser.parse()
     assert [f.token.text for f in functions] == ['after']
     configured, = parser.conditional_items
-    assert not configured.enabled and configured.item == ()
+    # Parsed and rolled back, or (for a form PCC cannot parse) skipped as a
+    # token tree; either way the disabled item declares nothing.
+    assert not configured.enabled
     assert source[slice(*configured.source_span)] == item
     assert parser.macro_expansions == [] and not parser.uses and not parser.consts
     assert 'define' in compile_source(source).ir_text

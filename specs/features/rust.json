@@ -2549,6 +2549,20 @@
       "status": "missing"
     },
     {
+      "id": "rust.types.slice-syntax",
+      "title": "Slice type syntax with an explicit semantic gap",
+      "chapter_ids": [
+        "rust.ref.10.1.8"
+      ],
+      "scope": "Explicitly unimplemented semantics with owned syntax: `[T]` parses as a SliceType carrying its token so a source can be read past it. Slices (unsized referents, fat pointers, unsizing coercions, len/indexing/iteration) are not implemented; every use is reported at the slice's own token as the slice gap, before the generic checked-reference boundary and in the checked semantic model alike.",
+      "tests": [
+        "tests/rust/test_rust_slice_syntax.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

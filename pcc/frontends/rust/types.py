@@ -23,6 +23,21 @@ class SharedReference:
         return "&" + ((self.lifetime + " ") if self.lifetime else "") + ("mut " if self.mutable else "") + str(self.referent)
 
 
+@dataclass(frozen=True)
+class SliceType:
+    """`[T]`, parsed so a source can be read past it; slices (unsized
+    referents, fat pointers, unsizing) are not implemented, and every use is
+    reported at `token` before any other reference boundary."""
+    element: object
+    token: object = field(default=None, compare=False)
+
+    def __str__(self) -> str:
+        return "[" + str(self.element) + "]"
+
+
+SLICE_GAP = "slice types and array-to-slice unsizing are not implemented"
+
+
 # `&'static str`: string-literal data. It is a plain Copy value type here:
 # literals are its only source and no borrow of a local can produce one, so
 # it needs no lifetime analysis. `&str` with any other lifetime is still an

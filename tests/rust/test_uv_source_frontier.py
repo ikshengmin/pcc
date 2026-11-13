@@ -38,9 +38,9 @@ FRONTIER = (
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off), the const
     # item and `#[derive(Debug, thiserror::Error)]` parse (the thiserror derive
     # is a semantic gap), its retained helper attributes, the struct-like
-    # variants and the `static .. LazyLock<..>` items parse; line 364 has the
-    # slice parameter `supported_environments: &[MarkerTree]`.
-    ("crates/uv-lock/src/lock/mod.rs", "364:30: slice types and array-to-slice unsizing are not implemented"),
+    # variants, the `static .. LazyLock<..>` items and slice types (a
+    # semantic gap) parse; line 422 returns `impl Iterator<Item = ..> + '_`.
+    ("crates/uv-lock/src/lock/mod.rs", "422:25: unsupported Rust type 'impl'"),
 )
 
 

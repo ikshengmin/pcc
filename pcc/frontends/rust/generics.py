@@ -11,8 +11,8 @@ from pcc.support.instantiation import InstanceRegistry
 
 from .syntax import Enumeration
 from .types import (
-    INTEGER_TYPES, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter,
-    is_static_str,
+    INTEGER_TYPES, SLICE_GAP, STATIC_STR, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
+    TypeParameter, is_static_str,
 )
 
 PRIMITIVES = INTEGER_TYPES | {"bool", "()"}
@@ -30,6 +30,8 @@ def children(ty):
         return ty.arguments
     if isinstance(ty, SharedReference):
         return (ty.referent,)
+    if isinstance(ty, SliceType):
+        return (ty.element,)
     return ()
 
 
@@ -94,6 +96,8 @@ class GenericDeclarations:
                                    for t in ty.elements))
         if is_static_str(ty):
             return STATIC_STR
+        if isinstance(ty, SliceType):
+            raise (ty.token or token).error(SLICE_GAP)
         if isinstance(ty, SharedReference):
             return SharedReference(self.normalize(ty.referent, token, scope, placeholder_context=placeholder_context),
                                    ty.mutable, ty.lifetime)

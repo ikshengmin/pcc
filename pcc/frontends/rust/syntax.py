@@ -5,7 +5,7 @@ from dataclasses import dataclass, field, replace
 
 from .crate_policy import CratePolicy
 from .visibility import parse_visibility, restriction_components
-from .types import ArrayLength, FixedArrayType, SharedReference, TupleType, TypeApplication
+from .types import ArrayLength, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication
 
 
 class RustError(ValueError):
@@ -594,8 +594,8 @@ class Parser:
             return text
         if text == "[":
             element = self.type()
-            if self.token.text == "]":
-                raise token.error("slice types and array-to-slice unsizing are not implemented")
+            if self.accept("]"):
+                return SliceType(element, token)
             self.expect(";")
             length = self.expression()
             self.expect("]")

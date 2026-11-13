@@ -9,7 +9,7 @@ pointer lowering through a caller-attestation flag.
 from dataclasses import fields, is_dataclass
 
 from .syntax import ConstItem, Expr, RustError, StaticItem
-from .types import SharedReference, is_static_str
+from .types import SLICE_GAP, SharedReference, SliceType, is_static_str
 
 
 REFERENCE_CHECK_REQUIRED = (
@@ -53,6 +53,29 @@ def contains_references(*roots):
     return False
 
 
+def first_slice(*roots):
+    """The first slice type in the structure, reported before the generic
+    reference boundary because no check could admit it."""
+    pending, seen = list(roots), set()
+    while pending:
+        value = pending.pop()
+        if value is None or isinstance(value, (str, bytes, int, bool)) or id(value) in seen:
+            continue
+        seen.add(id(value))
+        if isinstance(value, SliceType):
+            return value
+        if isinstance(value, dict):
+            pending.extend(value.values())
+        elif isinstance(value, (tuple, list)):
+            pending.extend(value)
+        elif is_dataclass(value) and not isinstance(value, type):
+            pending.extend(getattr(value, item.name) for item in fields(value))
+    return None
+
+
 def reject_uncertified_references(*roots):
+    slice_type = first_slice(*roots)
+    if slice_type is not None and slice_type.token is not None:
+        raise slice_type.token.error(SLICE_GAP)
     if contains_references(*roots):
         raise RustError(REFERENCE_CHECK_REQUIRED)
