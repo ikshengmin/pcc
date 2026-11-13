@@ -342,6 +342,7 @@ class Record:
     public: object = False  # False, True or a VisibilityRestriction
     field_public: tuple[object, ...] = ()
     item_identity: object = None
+    lifetime_parameters: tuple[Token, ...] = ()
 
     @property
     def declaration_name(self):
@@ -361,6 +362,7 @@ class Enumeration:
     payload_documentation: dict[str, tuple[tuple[Documentation, ...], ...]] = field(default_factory=dict)
     public: bool = False
     item_identity: object = None
+    lifetime_parameters: tuple[Token, ...] = ()
 
     @property
     def declaration_name(self):
@@ -585,7 +587,9 @@ class Parser:
                     raise segment.error("expected a type path segment")
                 text += "::" + segment.text
             if self.token.text == "<":
-                return TypeApplication(text, self.type_arguments())
+                lifetimes = []
+                arguments = self.type_arguments(lifetimes=lifetimes)
+                return TypeApplication(text, arguments, tuple(lifetimes))
             return text
         raise token.error(f"unsupported Rust type {text!r}; references and traits are not implemented")
 
@@ -602,7 +606,10 @@ class Parser:
             return True
         return False
 
-    def type_arguments(self, *, allow_empty=False) -> tuple[object, ...]:
+    def type_arguments(self, *, allow_empty=False, lifetimes=None) -> tuple[object, ...]:
+        """Generic type arguments. With a `lifetimes` list, leading lifetime
+        arguments (`'a`, `'_`, `'static`) are collected into it (Rust
+        Reference paths.html#paths-in-expressions, GenericArgs)."""
         start = self.expect("<")
         self.type_argument_depth += 1
         if self.type_argument_depth > 16:
@@ -614,8 +621,16 @@ class Parser:
                     return ()
                 raise start.error("empty/inferred generic arguments are not implemented; supply explicit types")
             while True:
-                arguments.append(self.type())
-                if len(arguments) > 16:
+                if self.token.kind == "lifetime":
+                    lifetime = self.take()
+                    if lifetimes is None:
+                        raise lifetime.error("lifetime arguments in this generic argument list are not implemented")
+                    if arguments:
+                        raise lifetime.error("lifetime arguments must be provided before type arguments (rustc E0747)")
+                    lifetimes.append(lifetime.text)
+                else:
+                    arguments.append(self.type())
+                if len(arguments) + (len(lifetimes) if lifetimes is not None else 0) > 16:
                     raise start.error("generic argument count exceeds implementation limit (16)")
                 if self.generic_close():
                     return tuple(arguments)
@@ -862,7 +877,8 @@ class Parser:
 
     def record(self, repr_c: bool, documentation=(), public=False) -> None:
         name = self.name()
-        parameters = self.generic_parameters()
+        parameters = self.generic_parameters(allow_lifetimes=True)
+        lifetime_parameters = tuple(self.last_lifetime_parameters)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
@@ -876,7 +892,8 @@ class Parser:
             if self.accept("}"):
                 break
             self.expect(",")
-        self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public, tuple(field_public)))
+        self.records.append(Record(name, fields, repr_c, parameters, documentation, tuple(field_docs), public,
+                                   tuple(field_public), lifetime_parameters=lifetime_parameters))
 
     def module_body(self):
         # Reuse the exact token/source coordinate space. No slicing, rewriting,
@@ -1849,7 +1866,8 @@ class Parser:
 
     def enumeration(self, representation, documentation=(), public=False) -> None:
         name = self.name()
-        parameters = self.generic_parameters()
+        parameters = self.generic_parameters(allow_lifetimes=True)
+        lifetime_parameters = tuple(self.last_lifetime_parameters)
         if self.token.text == "where":
             raise self.token.error("generic where constraints and traits are not implemented")
         self.expect("{")
@@ -1882,7 +1900,8 @@ class Parser:
             raise name.error("explicit discriminants on an enum with payloads require an integer repr")
         self.enums.append(Enumeration(name, variants, representation, payloads=payloads, public=public,
                                       type_parameters=parameters, documentation=documentation,
-                                      variant_documentation=tuple(variant_docs), payload_documentation=payload_docs))
+                                      variant_documentation=tuple(variant_docs), payload_documentation=payload_docs,
+                                      lifetime_parameters=lifetime_parameters))
 
     def pattern(self, *, alternatives=True) -> Pattern:
         if alternatives:

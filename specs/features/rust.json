@@ -2457,6 +2457,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.generics.lifetime-arguments",
+      "title": "Lifetime generic arguments and data lifetime parameters",
+      "chapter_ids": [
+        "rust.ref.6.14",
+        "rust.ref.12.4"
+      ],
+      "scope": "Qualification missing, not implementation missing: type paths take leading lifetime arguments (`Type<'a, T>`, `'_`, `'static`; a lifetime after a type argument is rejected, rustc E0747) and structs/enums take lifetime parameters; both are retained as syntax. PCC has no owned lifetime analysis, so without an actual rustc check every explicit lifetime stays an explicit boundary; after one, lifetime arguments are erased from type identity (lifetime-only arguments leave the plain nominal type) and only their arity is rechecked against the declaration (E0107). Reference fields in data remain the separate aggregate-reference-storage gap. Verdicts agree with local rustc 1.92.0; the checked semantic model is exercised directly (never certification), and no program with these forms is executed. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_lifetime_arguments.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.enums.payload-values",
       "title": "Tagged payload enums and by-value bindings",
       "chapter_ids": [

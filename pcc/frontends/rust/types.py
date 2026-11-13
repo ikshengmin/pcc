@@ -38,12 +38,18 @@ def is_static_str(ty, *, elided_is_static=False):
 
 @dataclass(frozen=True)
 class TypeApplication:
-    """Nominal application, resolved within one declaration-owning checker."""
+    """Nominal application, resolved within one declaration-owning checker.
+
+    `lifetimes` keeps the written lifetime arguments (`Type<'a, T>`) for
+    diagnostics only: they are erased from type identity, as lifetimes are
+    once an actual rustc check has proved them.
+    """
     name: str
     arguments: tuple[object, ...]
+    lifetimes: tuple[str, ...] = field(default=(), compare=False)
 
     def __str__(self) -> str:
-        return self.name + "<" + ", ".join(map(str, self.arguments)) + ">"
+        return self.name + "<" + ", ".join([*self.lifetimes, *map(str, self.arguments)]) + ">"
 
 
 @dataclass(frozen=True)

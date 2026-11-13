@@ -23,9 +23,10 @@ FRONTIER = (
     # Default features enable performance-memory-allocator, so the cfg-gated
     # `extern crate uv_performance_memory_allocator;` is active.
     ("crates/uv/src/bin/uv.rs", "4:14: external crate dependency loading is not implemented"),
-    # `@` patterns, tool lint paths and feature cfg (self-update is off) are
-    # owned; line 70 has the lifetime `'a`.
-    ("crates/uv/src/lib.rs", "70:75: unsupported Rust type \"'a\"; references and traits are not implemented"),
+    # `@` patterns, tool lint paths, feature cfg (self-update is off) and the
+    # lifetime argument of `BaseClientBuilder<'a>` (line 70) parse; line 94 is
+    # `#[derive(Debug, Copy, Clone, Eq, PartialEq)]`.
+    ("crates/uv/src/lib.rs", "94:3: unsupported Rust attribute; only repr(C) records and no_mangle functions are admitted"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped. What
     # remains is the gate on every input: PCC has no owned borrow checker,

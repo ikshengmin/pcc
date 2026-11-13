@@ -98,12 +98,22 @@ class GenericDeclarations:
             return SharedReference(self.normalize(ty.referent, token, scope, placeholder_context=placeholder_context),
                                    ty.mutable, ty.lifetime)
         if isinstance(ty, TypeApplication):
+            lifetimes = ty.lifetimes
+            if lifetimes and not self.checker.externally_checked:
+                raise token.error("explicit lifetime arguments require a matching external rustc check record")
             ty = TypeApplication(self.canonical_name(ty.name, token, scope), ty.arguments)
             if ty.name in scope or ty.name in PRIMITIVES:
                 raise token.error("generic arguments require a named generic data declaration")
             declaration = self.definitions.get(ty.name)
             if declaration is None:
                 raise token.error(f"unsupported Rust type {ty.name!r}")
+            if len(lifetimes) > len(declaration.lifetime_parameters):
+                raise token.error(f"{ty.name} takes {len(declaration.lifetime_parameters)} lifetime arguments "
+                                  f"but {len(lifetimes)} were supplied (rustc E0107)")
+            if not ty.arguments and not declaration.type_parameters:
+                # Only lifetimes were written: after the actual check they are
+                # erased, leaving the plain nominal type.
+                return ty.name
             if len(ty.arguments) != len(declaration.type_parameters):
                 raise token.error(f"generic argument count mismatch for {ty.name}")
             arguments = tuple(self.normalize(t, token, scope, placeholder_context=placeholder_context)
@@ -137,6 +147,9 @@ class GenericDeclarations:
 
     def prepare(self):
         for name, declaration in self.definitions.items():
+            if declaration.lifetime_parameters and not self.checker.externally_checked:
+                raise declaration.lifetime_parameters[0].error(
+                    "lifetime parameters on data declarations require a matching external rustc check record")
             if declaration.item_identity is not None:
                 self.checker.current_module = declaration.item_identity.module
             scope = {}

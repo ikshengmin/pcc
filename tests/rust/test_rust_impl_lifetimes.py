@@ -36,5 +36,8 @@ def test_uncertified_impl_lifetimes_are_an_explicit_gap():
 
 @pytest.mark.parametrize('text', ["struct T<'a>{n:&'a u64}", "enum E<'a>{A(&'a u64)}"])
 def test_data_declaration_lifetimes_stay_an_explicit_gap(text):
-    with pytest.raises(RustError, match='lifetime parameters on data declarations are not implemented'):
-        Parser(text).parse()
+    # They now parse (tests/rust/test_rust_lifetime_arguments.py); without an
+    # actual rustc check they remain an explicit semantic boundary.
+    Parser(text).parse()
+    with pytest.raises(RustError, match='lifetime parameters on data declarations require a matching external rustc check'):
+        analyze_source(text)
