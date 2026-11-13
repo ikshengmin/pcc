@@ -10,6 +10,7 @@ automatic source ACCEPT/DENY verdict.
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 import datetime as dt
 import hashlib
 import importlib.util
@@ -69,6 +70,240 @@ def _load_module(path: Path, name: str):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+# This is also the producer closure the CI caller must freeze. Deferred native
+# execution remains owned by the existing bootstrap path.
+GUARDED_PRODUCER_FILES = (
+    "scripts/run_pcc_stage_ab.py", "scripts/run_pcc_stage1_build.py",
+    "scripts/run_pcc_compile_ab.py", "scripts/run_process_tree_sample.py",
+    "scripts/bootstrap.py", "scripts/run_pcc_native_deferred.py",
+    "scripts/file_lock.py",
+)
+
+
+_GUARDED_RESULTS = {}
+
+
+class _InheritedStageContext:
+    def __init__(self, ab, token, budget):
+        self.ab, self.token, self.budget = ab, token, budget
+        self.functions = {name: getattr(ab, name) for name in (
+            "_validated_worker_budget", "_run_process", "_performance_lock",
+        )}
+        self.tools = [ab._path_receipt(REPO_ROOT / name)
+                      for name in GUARDED_PRODUCER_FILES]
+
+    def verify(self):
+        if (self.ab._HELD_PERFORMANCE_LOCK is not self.token
+                or self.ab._ACTIVE_WORKER_BUDGET is not self.budget
+                or any(getattr(self.ab, name) is not fn
+                       for name, fn in self.functions.items())):
+            raise StageABError("inherited stage lock/module ownership changed")
+        self.budget.verify()
+        for receipt in self.tools:
+            self.ab._verify_receipt(receipt, "inherited stage producer")
+        self.budget.verify()
+
+    def timeout(self, requested):
+        self.verify()
+        return self.budget.remaining_timeout(requested)
+
+
+def _verify_inherited(args):
+    context = getattr(args, "_inherited_stage_context", None)
+    if context is not None:
+        context.verify()
+    return context
+
+
+def run_guarded(
+    args: argparse.Namespace, *, ab, performance_lock_token: object,
+    guard_result_path: Path, expected_guard_command: list[str],
+    expected_guard_cwd: Path, campaign_deadline_monotonic: float,
+) -> dict[str, Any]:
+    """Reuse the caller's actual lock, admission and absolute campaign deadline.
+
+    The original watchdog remains responsible for the entire campaign, including
+    preparation and publication. Child samplers only observe bounded subtrees;
+    their worker mailbox and recovery deadline remain those of the outer guard.
+    This entry point produces evidence, never a promotion verdict.
+    """
+    if (Path(ab.__file__).resolve(strict=True) != COMPILE_AB_TOOL.resolve(strict=True)
+            or ab._validated_worker_budget.__globals__ is not vars(ab)
+            or ab._run_process.__globals__ is not vars(ab)
+            or performance_lock_token is None
+            or ab._HELD_PERFORMANCE_LOCK is not performance_lock_token
+            or ab._ACTIVE_WORKER_BUDGET is not None):
+        raise StageABError("guarded stages require the caller's live module and lock")
+    if (not getattr(args, "measure_compile_window", False)
+            or args.stages != "stage1-stage2"
+            or args.frontend_jobs != 2 or args.self_backend_jobs != 2
+            or args.pairs <= 0 or args.first_pair_index <= 0):
+        raise StageABError("guarded stages require matched windows and Stage1 jobs=2/backend=2")
+    budget = ab._validated_worker_budget(
+        guard_result_path=guard_result_path,
+        expected_guard_command=expected_guard_command,
+        expected_guard_cwd=expected_guard_cwd,
+        campaign_deadline_monotonic=campaign_deadline_monotonic,
+    )
+    if args.max_tree_rss_bytes != budget.max_tree_rss_bytes:
+        raise StageABError("stage cap differs from original admitted campaign cap")
+    # Do not mutate caller arguments or make an environment flag authoritative.
+    owned_args = argparse.Namespace(**vars(args))
+    context = _InheritedStageContext(ab, performance_lock_token, budget)
+    owned_args._inherited_stage_context = context
+    ab._ACTIVE_WORKER_BUDGET = budget
+    try:
+        context.verify()
+        result = _run(owned_args, ab=ab)
+        # Strong references retain both the caller module and the exact result;
+        # parsed/caller-created JSON cannot acquire this finalization authority.
+        _GUARDED_RESULTS[id(result)] = (result, context, _canonical_sha256(result))
+        verify_guarded_result(result, ab=ab, performance_lock_token=performance_lock_token)
+        return result
+    except BaseException as exc:
+        _record_inherited_failure(context, exc)
+        raise
+    finally:
+        ab._ACTIVE_WORKER_BUDGET = None
+
+
+def _record_inherited_failure(context, exc):
+    path = getattr(context, "manifest_path", None)
+    if path is None:
+        return
+    try:
+        manifest = _read_json(path)
+        manifest.update(status="FAILED", failure={"exception_type": type(exc).__name__,
+                                                  "message": str(exc)})
+        manifest.pop("summary", None)
+        manifest.pop("completed_at_utc", None)
+        _persist(path, manifest)
+    except Exception:
+        # Never replace the guard/child failure with a storage failure.
+        pass
+
+
+def _seal_stage_record(context, record, *, source_manifest=None):
+    """Seal at completion, not after later pairs could mutate early artifacts."""
+    context.verify()
+    ab = context.ab
+    measurement = record["compile_measurement"]
+    for key in ("result", "samples"):
+        if ab.sha256_path(Path(measurement[key])) != measurement[key + "_sha256"]:
+            raise StageABError("compile-window artifact changed before sealing")
+    if _read_json(Path(record["result_path"])) != record["result"]:
+        raise StageABError("stage result changed before sealing")
+    paths = {Path(record["compiler"]), Path(record["result_path"]),
+             Path(measurement["result"]), Path(measurement["samples"])}
+    if "compiler_sha256" in record:
+        if ab.sha256_path(Path(record["compiler"])) != record["compiler_sha256"]:
+            raise StageABError("stage compiler changed before sealing")
+    if source_manifest is not None:
+        snapshot = Path(record["source_snapshot"])
+        if context.source_manifest(snapshot, ab) != source_manifest:
+            raise StageABError("Stage1 snapshot differs from original input")
+        context.sources.append((snapshot, source_manifest, "snapshot"))
+        receipt_path = Path(record["receipt_path"])
+        compiler = Path(record["compiler"])
+        loaded = ab._load_build_receipt(
+            receipt_path, arm=context.current_arm,
+            compiler_sha256=ab.sha256_path(compiler),
+            runtime_sha256=record["runtime_sha256"],
+            compiler_size_bytes=compiler.stat().st_size,
+        )
+        build_manifest_path = receipt_path.parent / "manifest.json"
+        build_manifest = _read_json(build_manifest_path)
+        context.builds.append((loaded["receipt"], build_manifest["runtime_bundle"]))
+        paths.update((build_manifest_path, Path(loaded["source_manifest_path"])))
+        paths.update(Path(value) for value in loaded["artifact_paths"].values())
+        # Private bytecode/work caches are mutable by native publication. Only
+        # immutable producer/runtime evidence belongs in this closure.
+        for directory in ("producer-tools", "runtime-bundle"):
+            paths.update(path for path in (receipt_path.parent / directory).rglob("*")
+                         if path.is_file())
+        paths.update((Path(record["receipt_path"]), Path(record["runtime_archive"])))
+        if ab.sha256_path(Path(record["runtime_archive"])) != record["runtime_sha256"]:
+            raise StageABError("Stage1 runtime changed before sealing")
+    # Preserve ordinary process-tree evidence separately from matched windows.
+    process = record["process"]
+    process_path = Path(record["process_result_path"])
+    if _read_json(process_path) != process:
+        raise StageABError("ordinary process observation changed before sealing")
+    paths.add(process_path)
+    ordinary_samples = process.get("artifacts", {}).get("samples")
+    ordinary_digest = process.get("target_window", {}).get("samples_sha256")
+    if (not isinstance(ordinary_samples, str) or not ordinary_samples
+            or not ab._is_sha256(ordinary_digest)
+            or ab.sha256_path(Path(ordinary_samples)) != ordinary_digest):
+        raise StageABError("ordinary process samples changed before sealing")
+    for key in ("result", "samples", "stdout", "stderr"):
+        value = process.get("artifacts", {}).get(key)
+        if value is not None:
+            paths.add(Path(value))
+    context.result_files.extend(ab._path_receipt(path) for path in sorted(paths))
+    context.verify()
+
+
+def _verify_stage_closure(context):
+    ab = context.ab
+    for receipt, runtime_bundle in context.builds:
+        context.verify()
+        ab._verify_runtime_bundle(runtime_bundle)
+        for index, tool in enumerate(receipt["external_tools"]):
+            ab.verify_portable_file_receipt(tool, "stage external tool " + str(index))
+        host = Path(receipt["environment"]["PCC_HOST_PYTHON"])
+        if ab.host_python_runtime_evidence(host) != receipt["host_python_runtime"]:
+            raise StageABError("host Python runtime changed after Stage1")
+        context.verify()
+
+
+def _verify_stage_sources(context):
+    for source, expected, kind in context.sources:
+        context.verify()
+        if kind == "snapshot":
+            context.ab._verify_source_snapshot(
+                source, expected, "retained stage source snapshot", require_read_only=True,
+            )
+        elif kind == "original":
+            # Full frozen roots legitimately contain files outside the build
+            # closure. Preserve their existing immutable-source contract.
+            context.require_immutable_source(source, context.ab)
+            if context.source_manifest(source, context.ab) != expected:
+                raise StageABError("stage source changed after production")
+        else:
+            raise StageABError("unknown retained stage source scope")
+        context.verify()
+
+
+def verify_guarded_result(result, *, ab, performance_lock_token):
+    """Revalidate a result produced here before campaign publication, in budget."""
+    entry = _GUARDED_RESULTS.get(id(result))
+    if entry is None or entry[0] is not result:
+        raise StageABError("stage result has no live source-owned producer")
+    _, context, identity = entry
+    if context.ab is not ab or context.token is not performance_lock_token:
+        raise StageABError("stage finalizer caller differs from original owner")
+    previous = ab._ACTIVE_WORKER_BUDGET
+    if previous is not None and previous is not context.budget:
+        raise StageABError("another worker budget is active")
+    ab._ACTIVE_WORKER_BUDGET = context.budget
+    try:
+        context.verify()
+        if _canonical_sha256(result) != identity:
+            raise StageABError("stage result changed after production")
+        for receipt in context.result_files:
+            ab._verify_receipt(receipt, "completed stage artifact")
+            context.verify()
+        _verify_stage_closure(context)
+        _verify_stage_sources(context)
+        context.verify()
+    except BaseException as exc:
+        _record_inherited_failure(context, exc)
+        raise
+    finally:
+        ab._ACTIVE_WORKER_BUDGET = previous
 
 
 def pair_order(pair_index: int) -> tuple[str, str]:
@@ -572,7 +807,10 @@ def _sampler_args(
     timeout: int,
     max_tree_rss_bytes: int,
     command: list[str],
+    context=None,
 ):
+    if context is not None:
+        timeout = context.timeout(timeout)
     return sampler._parser().parse_args(
         [
             "--result",
@@ -594,6 +832,7 @@ def _sampler_args(
             "--max-tree-rss-bytes",
             str(max_tree_rss_bytes),
             "--no-performance-lock",
+            *(["--preserve-worker-budget"] if context is not None else []),
             "--",
             *command,
         ]
@@ -627,6 +866,7 @@ def _run_stage1(
     stage1,
     sampler,
 ) -> dict[str, Any]:
+    context = _verify_inherited(args)
     output = arm_root / "stage1"
     command = [
         sys.executable,
@@ -666,8 +906,10 @@ def _run_stage1(
             timeout=args.stage1_timeout + args.smoke_timeout * 3 + 30,
             max_tree_rss_bytes=args.max_tree_rss_bytes,
             command=command,
+            context=context,
         )
     )
+    _verify_inherited(args)
     if process.get("status") != "COMPLETE" or process.get("returncode") != 0:
         raise StageABError(arm + " Stage1 did not complete")
     result = _read_json(output / "stage1-result.json")
@@ -701,12 +943,14 @@ def _run_stage1(
         )
     return {
         "compile_measurement": compile_measurement,
+        "host_runtime_sha256": receipt.get("host_python_runtime_sha256"),
         "source_sha256": receipt["bootstrap_source_sha256"],
         "runtime_sha256": receipt["runtime_archive_sha256"],
         "result_path": str(output / "stage1-result.json"),
         "receipt_path": str(output / "build-receipt.json"),
         "result": result,
         "process": process,
+        "process_result_path": str(arm_root / "stage1-process.result.json"),
         "pycache_files": pycache_files,
         "normalized_environment": normalized_environment,
         "normalized_environment_sha256": _canonical_sha256(normalized_environment),
@@ -734,11 +978,19 @@ def _run_stage2(
     ab,
     sampler,
 ) -> dict[str, Any]:
+    context = _verify_inherited(args)
     output = arm_root / "stage2"
     output.mkdir()
     compiler = output / "pcc1"
     shutil.copy2(stage1_record["compiler"], compiler)
     compiler.chmod(0o755)
+    native_input = None
+    if context is not None:
+        native_input = ab._path_receipt(compiler)
+        if native_input["sha256"] != stage1_record["result"]["compiler_sha256"]:
+            raise StageABError("Stage2 launch compiler differs from Stage1 output")
+        context.result_files.append(native_input)
+        context.verify()
     source_root = Path(stage1_record["source_snapshot"])
     receipt = _read_json(Path(stage1_record["receipt_path"]))
     environment = {str(key): str(value) for key, value in receipt["environment"].items()}
@@ -780,15 +1032,19 @@ def _run_stage2(
                 timeout=args.stage2_timeout,
                 max_tree_rss_bytes=args.max_tree_rss_bytes,
                 command=command,
+                context=context,
             )
         )
     finally:
         os.environ.clear()
         os.environ.update(original_environment)
+    _verify_inherited(args)
     if process.get("status") != "COMPLETE" or process.get("returncode") != 0:
         raise StageABError(
             arm + " Stage2 did not complete: " + _process_failure_summary(process)
         )
+    if native_input is not None:
+        ab._verify_receipt(native_input, "Stage2 actual launch compiler")
     result = _read_json(profile / "stage2.result.json")
     _stage_metrics({"result": result, "process": process}, "stage2")
     pcc2 = output / "pcc2"
@@ -832,6 +1088,7 @@ def _run_stage2(
             raise StageABError("Stage2 compile-window target differs from requested compile")
     return {
         "compile_measurement": compile_measurement,
+        "host_runtime_sha256": receipt.get("host_python_runtime_sha256"),
         "source_sha256": receipt["bootstrap_source_sha256"],
         "runtime_sha256": receipt["runtime_archive_sha256"],
         "result_path": str(profile / "stage2.result.json"),
@@ -839,6 +1096,8 @@ def _run_stage2(
         "metric_scopes": STAGE2_METRIC_SCOPES,
         "comparison_contract": COMPARISON_CONTRACT,
         "process": process,
+        "process_result_path": str(arm_root / "stage2-process.result.json"),
+        "native_input_compiler": native_input,
         "compiler": str(pcc2),
         "compiler_sha256": ab.sha256_path(pcc2),
         "linkage": linkage,
@@ -851,8 +1110,54 @@ def _run_stage2(
 
 
 def run(args: argparse.Namespace) -> dict[str, Any]:
+    """Standalone observation route; not inherited campaign qualification."""
+    if hasattr(args, "_inherited_stage_context"):
+        raise StageABError("use run_guarded for inherited stage execution")
+    return _run(args, ab=_load_module(COMPILE_AB_TOOL, "pcc_stage_ab_compile"))
+
+
+def _run(args: argparse.Namespace, *, ab) -> dict[str, Any]:
     _validate_resource_limits(args)
-    ab = _load_module(COMPILE_AB_TOOL, "pcc_stage_ab_compile")
+    context = _verify_inherited(args)
+    output = Path(args.output_dir).expanduser().absolute()
+    if output.exists():
+        raise StageABError("refusing existing output directory: " + str(output))
+    output.mkdir(parents=True)
+    manifest_path = output / "manifest.json"
+    if context is not None:
+        context.manifest_path = manifest_path
+    manifest = {"schema": "pcc.bootstrap-stage-ab.v1", "status": "PREPARING",
+                "execution_scope": "inherited_campaign" if context else "standalone",
+                "pairs": []}
+    _persist(manifest_path, manifest)
+    try:
+        return _run_prepared(args, ab=ab, context=context, output=output,
+                             manifest_path=manifest_path)
+    except BaseException as exc:
+        # Preparation can fail before the fuller manifest exists. Preserve any
+        # already-checkpointed pairs instead of overwriting child evidence.
+        # Receipt reads, writes and diagnostics are all best effort: none may
+        # replace the original preparation/stage failure or interruption.
+        try:
+            if manifest_path.is_file():
+                manifest = _read_json(manifest_path)
+            manifest.update(status="INTERRUPTED" if isinstance(exc, (KeyboardInterrupt, SystemExit))
+                            else "FAILED", failure={"exception_type": type(exc).__name__,
+                                                   "message": str(exc)})
+            manifest.pop("summary", None)
+            manifest.pop("completed_at_utc", None)
+            _persist(manifest_path, manifest)
+        except Exception as receipt_error:
+            try:
+                print("stage A/B warning: could not persist failure receipt: "
+                      + str(receipt_error), file=sys.stderr)
+            except Exception:
+                pass
+        raise
+
+
+def _run_prepared(args, *, ab, context, output, manifest_path):
+    _verify_inherited(args)
     stage1 = _load_module(STAGE1_TOOL, "pcc_stage_ab_stage1")
     sampler = _load_module(PROCESS_SAMPLER, "pcc_stage_ab_sampler")
     baseline_source = Path(args.baseline_source).expanduser().resolve(strict=True)
@@ -874,14 +1179,13 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         "baseline": stage1.source_manifest(baseline_source, ab),
         "candidate": stage1.source_manifest(candidate_source, ab),
     }
-    output = Path(args.output_dir).expanduser().absolute()
-    if output.exists():
-        raise StageABError("refusing existing output directory: " + str(output))
-    output.mkdir(parents=True)
-    manifest_path = output / "manifest.json"
+    _verify_inherited(args)
     manifest: dict[str, Any] = {
         "schema": "pcc.bootstrap-stage-ab.v1",
         "status": "RUNNING",
+        "execution_scope": "inherited_campaign" if context else "standalone",
+        "inherited_worker_budget": context.budget.receipt if context else None,
+        "producer_tools": context.tools if context else None,
         "started_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
         "comparison_contract": COMPARISON_CONTRACT,
         "metric_scopes": {
@@ -906,13 +1210,21 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     _persist(manifest_path, manifest)
     source_by_arm = {"baseline": baseline_source, "candidate": candidate_source}
     starting_runtime_hash = manifest["runtime_archive_sha256"]
+    if context is not None:
+        context.source_manifest = stage1.source_manifest
+        context.require_immutable_source = stage1._require_immutable_source
+        context.sources = [(source_by_arm[arm], source_manifests[arm], "original")
+                           for arm in source_by_arm]
+        context.result_files = [ab._path_receipt(runtime_archive)]
+        context.builds = []
     try:
-        with ab._performance_lock():
+        with nullcontext() if context else ab._performance_lock():
+            _verify_inherited(args)
             first_pair_index = args.first_pair_index
             for pair_index in range(first_pair_index, first_pair_index + args.pairs):
                 pair_root = output / ("pair-" + str(pair_index))
                 pair_root.mkdir()
-                pair: dict[str, Any] = {"index": pair_index, "order": pair_order(pair_index)}
+                pair: dict[str, Any] = {"index": pair_index, "order": list(pair_order(pair_index))}
                 for arm in pair["order"]:
                     pair[arm] = {
                         "stage_status": {
@@ -935,6 +1247,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         "[stage-ab] pair=" + str(pair_index) + " arm=" + arm + " stage1 begin",
                         flush=True,
                     )
+                    _verify_inherited(args)
                     stage1_record = _run_stage1(
                         arm=arm,
                         source_root=source_by_arm[arm],
@@ -945,6 +1258,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                         stage1=stage1,
                         sampler=sampler,
                     )
+                    _verify_inherited(args)
+                    if context is not None:
+                        context.current_arm = arm
+                        _seal_stage_record(context, stage1_record,
+                                           source_manifest=source_manifests[arm])
                     # Retain the admitted Stage1 even if Stage2 never returns.
                     arm_record["stage1"] = stage1_record
                     arm_record["stage_status"]["stage1"] = "COMPLETE"
@@ -965,8 +1283,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             ab=ab,
                             sampler=sampler,
                         )
+                        if context is not None:
+                            _seal_stage_record(context, arm_record["stage2"])
                         arm_record["stage_status"]["stage2"] = "COMPLETE"
                         _persist(manifest_path, manifest)
+                    _verify_inherited(args)
                     assert_stage_envelope_parity(arm_record, arm=arm)
                     manifest["active_pair"] = pair
                     _persist(manifest_path, manifest)
@@ -978,6 +1299,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     != pair["candidate"]["stage1"]["normalized_environment_sha256"]
                 ):
                     raise StageABError("paired Stage1 environments differ after normalization")
+            _verify_inherited(args)
             if ab.sha256_path(runtime_archive) != starting_runtime_hash:
                 raise StageABError("runtime archive changed during stage A/B")
             ending_sources = {
@@ -986,10 +1308,22 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             }
             if ending_sources != source_manifests:
                 raise StageABError("source snapshot changed during stage A/B")
+        _verify_inherited(args)
         manifest["summary"] = summarize_pairs(manifest["pairs"])
+        _verify_inherited(args)
+        if context is not None:
+            for receipt in context.result_files:
+                ab._verify_receipt(receipt, "completed stage artifact")
+                context.verify()
+            _verify_stage_closure(context)
+            _verify_stage_sources(context)
         manifest["status"] = "COMPLETE"
         manifest["completed_at_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
         _persist(manifest_path, manifest)
+        if context is not None:
+            manifest_path.chmod(0o444)
+            context.result_files.append(ab._path_receipt(manifest_path))
+        _verify_inherited(args)
     except BaseException as exc:
         # Preserve the original failure, including interruption. A process kill
         # cannot run this handler; its last durable checkpoint stays RUNNING.
