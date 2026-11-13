@@ -11,6 +11,7 @@ import ast
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
@@ -38,6 +39,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         _write_native_find_and_str_len_suite,
     )
     from tests.python.test_str_len_protocol import EXPECTED, PROGRAM
+    from tests.python.test_exact_int_container_bitsets import PROGRAM as BITSETS_PROGRAM
 
     state = {}
     invocations = []
@@ -76,6 +78,8 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         assert tuple(nodes) == (
             "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native_five_gc[pcc0]",
             "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native_five_gc[pcc1]",
+            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native_five_gc[pcc0]",
+            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native_five_gc[pcc1]",
         )
         assert integration is True and timeout == 300
         assert env["PCC_RUNTIME_ARCHIVE"] == str(state["archive"])
@@ -89,17 +93,26 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             raise RuntimeError("stub pytest failure")
         if fault == "pytest_interrupt":
             raise KeyboardInterrupt("stub interruption")
-        for mode in ("pcc0", "pcc1"):
-            directory = Path(out) / name / mode
+        for case, mode in ((case, mode) for case in ("find", "container_bitsets")
+                           for mode in ("pcc0", "pcc1")):
+            case_fault = fault if case == state["fault_case"] else "none"
+            directory = Path(out) / name / case / mode
             directory.mkdir(parents=True)
-            source, expected, module_hashes = _write_native_find_and_str_len_suite(directory)
-            assert expected == FIND_AND_STR_LEN_NATIVE_OUTPUT
-            assert source.read_text(encoding="utf-8") == FIND_AND_STR_LEN_NATIVE_SOURCE
-            assert tuple(module_hashes) == tuple(FIND_AND_STR_LEN_NATIVE_MODULES)
-            for member_name, program in FIND_AND_STR_LEN_NATIVE_MODULES.items():
-                member = directory / member_name
-                assert member.read_bytes() == program.encode("utf-8")
-                assert module_hashes[member_name] == sha(member)
+            program = FIND_AND_STR_LEN_NATIVE_SOURCE if case == "find" else BITSETS_PROGRAM
+            if case == "find":
+                source, expected, module_hashes = _write_native_find_and_str_len_suite(directory)
+                assert expected == FIND_AND_STR_LEN_NATIVE_OUTPUT
+                assert source.read_text(encoding="utf-8") == FIND_AND_STR_LEN_NATIVE_SOURCE
+                assert tuple(module_hashes) == tuple(FIND_AND_STR_LEN_NATIVE_MODULES)
+                for member_name, member_program in FIND_AND_STR_LEN_NATIVE_MODULES.items():
+                    member = directory / member_name
+                    assert member.read_bytes() == member_program.encode("utf-8")
+                    assert module_hashes[member_name] == sha(member)
+            else:
+                source = directory / "program.py"
+                source.write_text(program, encoding="utf-8")
+                expected = "CONTAINER_BITSETS_OK\n"
+                module_hashes = {}
             binary = directory / "program.out"
             # Exercise the actual producer, not a handwritten success schema.
             # Only the compiler/process boundaries are inert; the emitted-image
@@ -112,13 +125,13 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                     "runtime_archive": str(state["archive"]),
                 }
                 payload = static_elf()
-                if mode == "pcc1" and fault == "host_output":
+                if mode == "pcc1" and case_fault == "host_output":
                     payload = b"#!/usr/bin/python\n"
-                if mode == "pcc1" and fault == "python_linkage":
+                if mode == "pcc1" and case_fault == "python_linkage":
                     payload = macho(("/Library/Frameworks/Python.framework/Python",))
                 Path(output_path).write_bytes(payload)
 
-            if mode == "pcc1" and fault == "routed_producer":
+            if mode == "pcc1" and case_fault == "routed_producer":
                 compile_fixture.__module__ = "tests.pcc1_route"
 
             def execute_fixture(directory, label, command, environment):
@@ -128,79 +141,91 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             with monkeypatch.context() as process_patch:
                 process_patch.setattr(producer, "_record_execution", execute_fixture)
                 producer.assert_owned_program(
-                    FIND_AND_STR_LEN_NATIVE_SOURCE, expected, directory,
+                    program, expected, directory,
                     compile_fixture, mode, state["archive"],
                     types.SimpleNamespace(readouterr=lambda: types.SimpleNamespace(out="", err="")),
                 )
             record = json.loads((directory / "ownership-regression.json").read_text())
             if mode == "pcc1":
-                if fault == "missing_receipt":
+                if case_fault == "missing_receipt":
                     (directory / "ownership-regression.json").unlink()
                     continue
-                if fault == "duplicate_mode":
+                if case_fault == "duplicate_mode":
                     record["compiler_fixture_parameter"] = "pcc0"
-                elif fault == "routed_mode":
-                    record["compiler_mode"] = "pcc1-routed"
-                elif fault == "not_pass":
-                    record["status"] = "RUNNING"
-                elif fault == "wrong_backend":
-                    record["backend"] = "llvm"
-                elif fault == "linkage_hash":
-                    record["linkage"]["binary_sha256"] = "0" * 64
-                elif fault == "libpython_missing":
-                    del record["libpython"]
-                elif fault == "linkage_missing":
-                    del record["linkage"]
-                elif fault == "libpython":
-                    record["libpython"] = "on"
-                elif fault == "source_hash":
-                    record["source_sha256"] = "0" * 64
-                elif fault == "source_bytes":
-                    source.write_text(FIND_AND_STR_LEN_NATIVE_SOURCE + "print('extra')\n")
+                elif case_fault == "unknown_mode":
+                    record["compiler_fixture_parameter"] = "unknown"
+                elif case_fault == "wrong_case":
+                    _write_native_find_and_str_len_suite(directory)
                     record["source_sha256"] = sha(source)
-                elif fault == "len_entry_missing":
+                    record["reference"]["stdout"] = FIND_AND_STR_LEN_NATIVE_OUTPUT
+                    for row in record["executions"]:
+                        row["stdout"] = FIND_AND_STR_LEN_NATIVE_OUTPUT
+                elif case_fault == "routed_mode":
+                    record["compiler_mode"] = "pcc1-routed"
+                elif case_fault == "not_pass":
+                    record["status"] = "RUNNING"
+                elif case_fault == "wrong_backend":
+                    record["backend"] = "llvm"
+                elif case_fault == "linkage_hash":
+                    record["linkage"]["binary_sha256"] = "0" * 64
+                elif case_fault == "libpython_missing":
+                    del record["libpython"]
+                elif case_fault == "linkage_missing":
+                    del record["linkage"]
+                elif case_fault == "libpython":
+                    record["libpython"] = "on"
+                elif case_fault == "source_hash":
+                    record["source_sha256"] = "0" * 64
+                elif case_fault == "source_bytes":
+                    source.write_text(program + "print('extra')\n")
+                    record["source_sha256"] = sha(source)
+                elif case_fault == "source_newlines":
+                    newline = b"\n" if os.linesep == "\r\n" else b"\r\n"
+                    source.write_bytes(program.encode("utf-8").replace(b"\n", newline))
+                    record["source_sha256"] = sha(source)
+                elif case_fault == "len_entry_missing":
                     source.write_text(NATIVE_SOURCE)
                     record["source_sha256"] = sha(source)
-                elif fault == "runtime_path":
+                elif case_fault == "runtime_path":
                     record["runtime_archive"] += ".other"
-                elif fault == "runtime_hash":
+                elif case_fault == "runtime_hash":
                     record["runtime_sha256"] = "0" * 64
-                elif fault == "binary_hash":
+                elif case_fault == "binary_hash":
                     record["binary_sha256"] = "0" * 64
-                elif fault == "reference_output":
+                elif case_fault == "reference_output":
                     record["reference"]["stdout"] = "BOUND_FIND_OK\n"
-                elif fault == "len_reference_output":
+                elif case_fault == "len_reference_output":
                     record["reference"]["stdout"] = NATIVE_OUTPUT
-                elif fault == "gc_missing":
+                elif case_fault == "gc_missing":
                     record["executions"].pop()
-                elif fault == "gc_duplicate":
+                elif case_fault == "gc_duplicate":
                     record["executions"][-1]["gc_backend"] = 3
-                elif fault == "native_command":
+                elif case_fault == "native_command":
                     record["executions"][0]["command"] = ["HOST-STUB", str(source)]
-                elif fault == "native_output":
+                elif case_fault == "native_output":
                     record["executions"][0]["stdout"] = "BOUND_FIND_OK\n"
-                elif fault == "len_native_output":
+                elif case_fault == "len_native_output":
                     record["executions"][0]["stdout"] = NATIVE_OUTPUT
-                elif fault == "native_returncode":
+                elif case_fault == "native_returncode":
                     record["executions"][0]["returncode"] = 1
-                elif fault == "module_bytes":
+                elif case_fault == "module_bytes":
                     member = directory / next(iter(NATIVE_MODULES))
                     member.write_text("# replaced case\n")
                     module_hashes[member.name] = sha(member)
                     save(directory / "native-module-manifest.json", module_hashes)
-                elif fault == "module_hash":
+                elif case_fault == "module_hash":
                     module_hashes[next(iter(module_hashes))] = "0" * 64
                     save(directory / "native-module-manifest.json", module_hashes)
-                elif fault == "module_inventory":
+                elif case_fault == "module_inventory":
                     module_hashes["unrequested_case.py"] = "0" * 64
                     save(directory / "native-module-manifest.json", module_hashes)
-                elif fault == "len_module_missing":
+                elif case_fault == "len_module_missing":
                     (directory / "str_len_protocol.py").unlink()
                     del module_hashes["str_len_protocol.py"]
                     save(directory / "native-module-manifest.json", module_hashes)
-                elif fault in ("len_module_bytes", "len_module_newlines"):
+                elif case_fault in ("len_module_bytes", "len_module_newlines"):
                     member = directory / "str_len_protocol.py"
-                    if fault == "len_module_bytes":
+                    if case_fault == "len_module_bytes":
                         member.write_text("print('STR_LEN_OK')\n")
                     else:
                         member.write_bytes(PROGRAM.replace("\n", "\r\n").encode("utf-8"))
@@ -215,6 +240,8 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             state["archive"].write_bytes(b"changed runtime")
         elif fault == "test_input_after":
             (state["root"] / "pyproject.toml").write_text("changed input")
+        elif fault == "bitsets_test_input_after":
+            (state["root"] / "tests/python/test_exact_int_container_bitsets.py").write_text("changed bitsets input")
         elif fault == "len_test_input_after":
             (state["root"] / "tests/python/test_str_len_protocol.py").write_text("changed length input")
         state["after"] = True
@@ -243,7 +270,9 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
     assert FIND_AND_STR_LEN_NATIVE_SOURCE == NATIVE_SOURCE + "import str_len_protocol\n"
     assert EXPECTED == "STR_LEN_OK\n"
     assert FIND_AND_STR_LEN_NATIVE_OUTPUT == "BOUND_FIND_OK\n" * 6 + EXPECTED
-    assert len(gate.NODES) == 2
+    assert len(gate.NODES) == 4
+    assert gate.PROGRAM_CASES == ("find", "container_bitsets")
+    assert gate.BITSETS_TEST in gate.TEST_INPUTS
     assert "tests/python/test_str_len_protocol.py" in gate.TEST_INPUTS
     assert "tests/python/owned_regression_support.py" in gate.TEST_INPUTS
     assert "tests/python/process_timeout.py" in gate.TEST_INPUTS
@@ -251,7 +280,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
     # A full integration selection must not collect the old six-module and
     # standalone length wrappers in addition to the shared seven-module pair.
     native_nodes = []
-    for test_file in (gate.TEST, "tests/python/test_str_len_protocol.py"):
+    for test_file in (gate.TEST, "tests/python/test_str_len_protocol.py", gate.BITSETS_TEST):
         tree = ast.parse((ROOT / test_file).read_text(encoding="utf-8"))
         for function in ast.walk(tree):
             if not isinstance(function, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -262,7 +291,10 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             has_compiler = any(arg.arg == "python_program_compiler" for arg in function.args.args)
             if "pytest.mark.integration" not in marks and not has_compiler:
                 continue
-            assert function.name == "test_bound_find_and_str_len_owned_native_five_gc"
+            expected_function = ("test_container_bitsets_owned_native_five_gc"
+                                 if test_file == gate.BITSETS_TEST
+                                 else "test_bound_find_and_str_len_owned_native_five_gc")
+            assert function.name == expected_function
             assert "pytest.mark.integration" in marks and has_compiler
             parameters = [
                 mark for mark in function.decorator_list
@@ -281,6 +313,11 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                 for mode in ast.literal_eval(parameter.args[1])
             )
     assert tuple(native_nodes) == gate.NODES
+    bitsets_tree = ast.parse((ROOT / gate.BITSETS_TEST).read_text(encoding="utf-8"))
+    ir_tests = [node for node in bitsets_tree.body if isinstance(node, ast.FunctionDef)
+                and node.name == "test_container_bitsets_scaffold_ir_keeps_object_operands"]
+    assert len(ir_tests) == 1 and not ir_tests[0].decorator_list
+    assert not any("scaffold_ir" in node for node in gate.NODES)
     monkeypatch.setenv("GITHUB_SHA", "verified-source")
 
     preflight_faults = (
@@ -302,8 +339,20 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         "len_native_output", "len_module_missing", "len_module_bytes",
         "len_module_newlines", "len_test_input_after",
     )
-    for fault in ("none",) + preflight_faults + receipt_faults:
-        directory = tmp_path / fault
+    bitset_faults = (
+        "missing_receipt", "duplicate_mode", "unknown_mode", "wrong_case",
+        "routed_mode", "routed_producer", "not_pass", "wrong_backend",
+        "host_output", "python_linkage", "linkage_hash", "linkage_missing",
+        "libpython", "libpython_missing", "source_hash", "source_bytes", "source_newlines",
+        "runtime_path", "runtime_hash", "binary_hash", "reference_output",
+        "gc_missing", "gc_duplicate", "native_command", "native_output",
+        "native_returncode",
+    )
+    scenarios = [(fault, "find") for fault in ("none",) + preflight_faults + receipt_faults]
+    scenarios += [(fault, "container_bitsets") for fault in bitset_faults]
+    scenarios.append(("bitsets_test_input_after", "container_bitsets"))
+    for fault, fault_case in scenarios:
+        directory = tmp_path / (fault_case + "_" + fault)
         directory.mkdir()
         source_root = directory / "input"
         source_root.mkdir()
@@ -316,7 +365,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         archive.write_bytes(b"INERT RUNTIME ARCHIVE")
         state.clear()
         state.update(
-            fault=fault, root=source_root, compiler=compiler, archive=archive,
+            fault=fault, fault_case=fault_case, root=source_root, compiler=compiler, archive=archive,
             source={"clean_commit": True, "commit": "verified-source"}, after=False,
         )
         stage = {
@@ -353,12 +402,19 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         if fault == "none":
             result = gate.run(out)
             assert result["status"] == "PASS"
-            assert len(result["programs"]) == 2
+            assert len(result["programs"]) == 4
+            assert {(row["program_case"], row["mode"]) for row in result["programs"]} == {
+                (case, mode) for case in gate.PROGRAM_CASES for mode in gate.MODES
+            }
             assert all(len(record["executions"]) == 5 for record in result["programs"])
             assert all(
                 record["cases"] == [*gate.CASES, "str_len_protocol"]
                 and set(record["module_sha256"]) == set(FIND_AND_STR_LEN_NATIVE_MODULES)
-                for record in result["programs"]
+                for record in result["programs"] if record["program_case"] == "find"
+            )
+            assert all(
+                row["cases"] == ["container_bitsets"] and row["module_sha256"] == {}
+                for row in result["programs"] if row["program_case"] == "container_bitsets"
             )
             assert result["qualifies_fixed_point"] is False
             assert result["observed_collector_witness"] is False
@@ -371,7 +427,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         if fault != "none":
             assert record["error"], fault
         if fault in ("host_output", "python_linkage"):
-            failed = json.loads((out / gate.NAME / "pcc1" / "ownership-regression.json").read_text())
+            failed = json.loads((out / gate.NAME / fault_case / "pcc1" / "ownership-regression.json").read_text())
             assert failed["status"] == "LINKAGE_FAILED"
             assert failed["executions"] == []
             assert "libpython" not in failed and "linkage" not in failed
