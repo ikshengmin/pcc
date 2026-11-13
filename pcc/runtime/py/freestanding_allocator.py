@@ -2621,9 +2621,9 @@ def _object_magazine_class(usable: i64) -> i64:
 
 @c_abi_export("pcc_allocator_object_magazine_limit")
 def _object_magazine_limit(usable: i64) -> i64:
-    limit: i64 = 4096 // usable
-    if limit > 32:
-        limit = 32
+    limit: i64 = 32768 // usable
+    if limit > 256:
+        limit = 256
     if limit < 1:
         limit = 1
     return limit
