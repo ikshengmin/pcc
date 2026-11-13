@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import itertools
+import hashlib
 from functools import partial
 import os
 import subprocess
@@ -35,6 +36,22 @@ LOG_ENV = "PCC_TEST_COMPILER_LOG"
 STRICT_ENV = "PCC_TEST_COMPILER_STRICT"
 _CALL_IDS = itertools.count()
 _HOST_C_ARTIFACT = None
+
+
+def _file_identity(path):
+    """Optional evidence must not intercept an expressible negative compile."""
+    try:
+        path = os.path.abspath(os.fspath(path))
+        with open(path, "rb") as stream:
+            value = hashlib.file_digest(stream, "sha256").hexdigest()
+    except (OSError, TypeError, ValueError):
+        value = None
+    return {"path": str(path), "sha256": value}
+
+
+def _compile_inputs(compiler, runtime, source, objects):
+    return {"compiler": _file_identity(compiler), "runtime": _file_identity(runtime),
+            "source": _file_identity(source), "objects": [_file_identity(path) for path in objects]}
 
 
 def _record(route: str, kind: str, detail: str, **identity) -> None:
@@ -363,6 +380,12 @@ def install() -> None:
         identity = {"compiler": compiler, "runtime_archive": env.get("PCC_RUNTIME_ARCHIVE"),
                     "target_triple": target_triple,
                     "invocation": str(os.getpid()) + ":" + str(next(_CALL_IDS))}
+        # The pressure owner opts in for its one program. Ordinary suite
+        # compiles retain their original cost and negative-call behavior.
+        evidence = bool(os.environ.get("PCC_TEST_COMPILER_HASH_INPUTS"))
+        if evidence:
+            identity.update(inputs=_compile_inputs(compiler, env.get("PCC_RUNTIME_ARCHIVE"), src_path, native_objects),
+                            output_path=os.path.abspath(os.fspath(out_path)))
         _record("native", "compile_python", "", event="attempt", **identity)
         try:
             completed = subprocess.run(
@@ -375,9 +398,11 @@ def install() -> None:
             _record("native", "compile_python", type(error).__name__,
                     event="complete", outcome="invocation_error", **identity)
             raise
+        completion = ({"inputs_after": _compile_inputs(compiler, env.get("PCC_RUNTIME_ARCHIVE"), src_path, native_objects),
+                       "output": _file_identity(out_path)} if evidence else {})
         _record("native", "compile_python", "", event="complete",
                 outcome="passed" if completed.returncode == 0 else "failed",
-                returncode=completed.returncode, **identity)
+                returncode=completed.returncode, **identity, **completion)
         if verbose:
             sys.stderr.write(completed.stderr)
         if completed.returncode != 0:

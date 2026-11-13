@@ -9,6 +9,13 @@ BOOTSTRAP_NODES = tuple(
 )
 PARTITIONS = ("all", "bootstrap", "remainder")
 INTEGRATION_SECONDS = 1800
+PRESSURE_MODULE = "tests/python/test_gc_pressure_native.py"
+PRESSURE_NODES = tuple(
+    PRESSURE_MODULE + "::test_pressure_executes_at_legal_gates_on_every_collector"
+    + f"[{backend}-{tracing}]"
+    for backend, tracing in ((0, 0), (1, 0), (2, 0), (3, 0), (4, 0), (4, 1))
+)
+RUNTIME_PHASES = ("all", "ordinary", "pressure")
 
 
 def require(condition, message):
@@ -40,6 +47,62 @@ def partition_inventory(expected, selected, partition):
     require(not set(remaining) & set(transferred) and set(remaining) | set(transferred) == set(expected),
             "integration ownership is not a disjoint complete partition")
     return remaining, kept, transferred
+
+
+def runtime_phase_inventory(expected, selected, phase):
+    """Move only the six original pressure nodes to their own runtime owner."""
+    require(phase in RUNTIME_PHASES, "unknown runtime phase")
+    require(len(expected) == len(set(expected)) and len(selected) == len(set(selected)),
+            "duplicate node in runtime inventory")
+    if phase == "all":
+        return list(expected), list(selected), []
+    owners = set(PRESSURE_NODES)
+    owned = [node for node in expected if canonical_node(node) in owners]
+    require(len(owned) == 6 and {canonical_node(node) for node in owned} == owners,
+            "the original six pressure nodes must all be present exactly once")
+    if phase == "pressure":
+        require(len(expected) == 6, "unexpected node in pressure owner collection")
+        return list(expected), list(selected), []
+    return ([node for node in expected if canonical_node(node) not in owners],
+            [node for node in selected if canonical_node(node) not in owners], owned)
+
+
+def combine_runtime_inventory(ordinary, pressure):
+    """Union actual inventories only after both strict phase summaries pass."""
+    require(ordinary.get("runtime_phase") == "ordinary"
+            and pressure.get("runtime_phase") == "pressure", "invalid runtime ownership pair")
+    require(ordinary["partition"] == "remainder"
+            and pressure.get("partition", "all") == "all", "invalid runtime owner partitions")
+    owned, rest = set(pressure["selected"]), set(ordinary["selected"])
+    canonical_owned = {canonical_node(node) for node in owned}
+    canonical_rest = {canonical_node(node) for node in rest}
+    require(owned == {node + "@gc_pressure_native" for node in PRESSURE_NODES},
+            "pressure inventory is not the exact six nodes")
+    # Repository gates run before loadgroup. An ordinary-phase gated pressure
+    # node may never acquire @gc_pressure_native, whereas its executing owner
+    # does. Only that scheduler suffix is normalized; parameters remain exact.
+    allowed = set(PRESSURE_NODES) | {node + "@gc_pressure_native" for node in PRESSURE_NODES}
+    require(all(node in allowed for node in ordinary["pressure_transferred"])
+            and all(node in allowed for node in ordinary["original_expected"]
+                    if canonical_node(node) in canonical_owned),
+            "unknown pressure scheduler group in transferred or original inventory")
+    require(canonical_owned == {canonical_node(node) for node in ordinary["pressure_transferred"]}
+            and len(ordinary["pressure_transferred"]) == 6 and not canonical_owned & canonical_rest,
+            "runtime owners overlap or transferred nodes differ")
+    expected, _, transferred = partition_inventory(
+        ordinary["original_expected"], [], "remainder")
+    ordinary_expected = [node for node in expected if canonical_node(node) not in canonical_owned]
+    require(rest == set(ordinary_expected) and ordinary["expected"] == ordinary_expected,
+            "ordinary runtime owner node or scheduler group differs")
+    canonical_expected = {canonical_node(node) for node in expected}
+    require(len(canonical_expected) == len(expected) and len(canonical_rest) == len(rest)
+            and canonical_owned | canonical_rest == canonical_expected,
+            "runtime owners do not cover the complete remainder")
+    return {"partition": "remainder", "marker": "integration", "expected": expected,
+            "selected": list(expected),
+            "original_expected": ordinary["original_expected"], "transferred": transferred,
+            "runtime_phase_nodes": {"pressure": pressure["selected"], "ordinary": ordinary["selected"]},
+            "gated_out": [], "unexpected": []}
 
 
 def remaining_seconds(owner, *, source, producer, platform, manifest_sha256, guard):

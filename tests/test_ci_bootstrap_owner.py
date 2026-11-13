@@ -118,7 +118,10 @@ def test_owner_and_remainder_preserve_original_watchdog_caps(tmp_path, platform)
     assert remainder[remainder.index("--timeout") + 1] == "123"
     assert owner[owner.index("--") + 1:] == gate.marker_command(tmp_path, "integration", "bootstrap")
     assert owner[-5:] == list(partition.BOOTSTRAP_NODES)
-    assert remainder[-1] == "tests"
+    assert remainder[remainder.index("--") + 1:] == gate.execution_command(tmp_path, "integration", "remainder")
+    assert remainder[-2:] == ["--runtime-phases", str(tmp_path)]
+    ordinary = gate.marker_command(tmp_path / "ordinary", "integration", "remainder", "ordinary")
+    assert ordinary[-1] == "tests" and "-x" in ordinary
     for cmd in (owner, remainder):
         assert "-n" not in cmd and "--collect-only" not in cmd and "--no-performance-lock" in cmd
         if platform == "macos-arm64":

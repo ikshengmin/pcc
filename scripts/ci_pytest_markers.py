@@ -2,7 +2,8 @@
 
 Both marker groups run on all four native CI platforms in the package workflow.
 This is an execution entry, not evidence that the whole suite already passes.
-Nothing here builds a compiler or runtime.
+The remainder owns one explicit pressure runtime build inside its existing
+guard. The ordinary Stage1 bundle is never rebuilt or relabeled as pressure.
 """
 
 from __future__ import annotations
@@ -27,11 +28,13 @@ from scripts.ci_stage1_bundle import (
 
 from scripts.ci_bootstrap_partition import (
     BOOTSTRAP_NODES, PARTITIONS, partition_inventory, remaining_seconds, verify_union,
+    PRESSURE_MODULE, RUNTIME_PHASES, runtime_phase_inventory, combine_runtime_inventory,
 )
 
 TIMEOUTS = {"not integration": 2400, "integration": 1800}
 FROZEN_SOURCE = "pcc/ir/optimization/integer_fold_contract.py"
 FROZEN_SHA256 = "8591c99dbd7eb97ae73b6151ecc1bab7def1d995a64c0b983e2200ba52df302a"
+RUNTIME_PROOF_PREFIX = "PCC_RUNTIME_PHASE_PROOF_SHA256="
 
 
 def require(condition, message):
@@ -49,14 +52,27 @@ def save(path, value):
     path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
 
 
-def marker_command(directory, marker, partition="all"):
+def marker_command(directory, marker, partition="all", runtime_phase="all"):
     require(marker in TIMEOUTS, "unsupported marker expression")
     require(partition in PARTITIONS and (partition == "all" or marker == "integration"), "invalid marker partition")
+    require(runtime_phase in RUNTIME_PHASES
+            and (runtime_phase == "all" or marker == "integration"), "invalid runtime phase")
     paths = list(BOOTSTRAP_NODES) if partition == "bootstrap" else ["tests"]
+    if runtime_phase == "pressure":
+        require(partition == "all", "pressure phase must not collect bootstrap owners")
+        paths = [PRESSURE_MODULE]
     return [sys.executable, "-m", "pytest", "-x", "-vv", "--tb=short",
             "-p", "scripts.pytest_live_report", "--pcc-live-report", str(directory / "live.jsonl"),
             "-p", "scripts.ci_pytest_markers", "--junitxml", str(directory / "junit.xml"),
             "--basetemp", str(directory / "tmp"), "-m", marker, *paths]
+
+
+def execution_command(directory, marker, partition="all"):
+    if partition == "remainder":
+        require(marker == "integration", "runtime phases require integration")
+        return [sys.executable, str(ROOT / "scripts/ci_pytest_markers.py"),
+                "--runtime-phases", str(directory)]
+    return marker_command(directory, marker, partition)
 
 
 def watchdog_command(directory, marker, platform_id=None, *, partition="all", timeout=None):
@@ -73,14 +89,14 @@ def watchdog_command(directory, marker, platform_id=None, *, partition="all", ti
             "--result", str(directory / "result.json"), "--samples", str(directory / "samples.tsv"),
             "--stdout", str(directory / "target.stdout"), "--stderr", str(directory / "target.stderr"),
             "--cwd", str(ROOT), "--timeout", str(timeout), *options, "--no-performance-lock",
-            "--", *marker_command(directory, marker, partition)]
+            "--", *execution_command(directory, marker, partition)]
 
 
 def run_guarded(directory, marker, env, platform_id, *, partition="all", timeout=None):
     """Use the existing native Windows Job Object or POSIX tree watchdog."""
     timeout = TIMEOUTS[marker] if timeout is None else timeout
     require(0 < timeout <= TIMEOUTS[marker], "marker budget exceeds original envelope")
-    command = marker_command(directory, marker, partition)
+    command = execution_command(directory, marker, partition)
     if platform_id == "windows-x86_64":
         from scripts.platform_process_watchdog import run
         record = {"guard": "platform_process_watchdog.run", "status": "RUNNING",
@@ -164,13 +180,17 @@ def pytest_configure(config):
         return
     import pytest
     partition = os.environ.get("PCC_MARKER_PARTITION", "all")
+    phase = os.environ.get("PCC_MARKER_RUNTIME_PHASE", "all")
     require(partition in PARTITIONS and (partition == "all" or config.getoption("markexpr") == "integration"),
             "invalid marker partition")
+    require(phase in RUNTIME_PHASES and (phase == "all" or config.getoption("markexpr") == "integration"),
+            "invalid runtime phase")
     if not hasattr(config, "workerinput"):
         save(Path(directory) / "configuration.json", {
             "marker": config.getoption("markexpr"), "workers": config.getoption("numprocesses"),
             "dist": config.getoption("dist"),
             **({"partition": partition} if partition != "all" else {}),
+            **({"runtime_phase": phase} if phase != "all" else {}),
         })
 
     class Inventory:
@@ -186,7 +206,8 @@ def pytest_configure(config):
             expected = [item.nodeid for item in expected_items]
             original_expected = list(expected)
             expected, selected, transferred = partition_inventory(expected, [item.nodeid for item in items], partition)
-            if partition == "remainder":
+            expected, selected, pressure_transferred = runtime_phase_inventory(expected, selected, phase)
+            if partition == "remainder" or phase == "ordinary":
                 selected_set = set(selected)
                 moved = [item for item in items if item.nodeid not in selected_set]
                 config.hook.pytest_deselected(items=moved)
@@ -198,26 +219,33 @@ def pytest_configure(config):
                 "unexpected": sorted(set(selected) - set(expected)),
                 **({"partition": partition, "original_expected": original_expected, "transferred": transferred}
                    if partition != "all" else {}),
+                **({"runtime_phase": phase, "original_expected": original_expected,
+                    "pressure_transferred": pressure_transferred} if phase != "all" else {}),
             })
             return result
 
     config.pluginmanager.register(Inventory(), "pcc-complete-marker-inventory")
 
 
-def summarize(directory, marker, partition="all"):
+def summarize(directory, marker, partition="all", runtime_phase="all"):
     inventories = [json.loads(path.read_text()) for path in sorted(directory.glob("inventory-gw*.json"))]
     require(len(inventories) == 6, "all six worker inventories are required")
     first = inventories[0]
     require(all(row == first for row in inventories), "worker selection differs")
-    if partition != "all":
-        require(first.get("partition") == partition, "inventory partition differs")
+    if partition != "all" or runtime_phase != "all":
+        require(first.get("partition", "all") == partition, "inventory partition differs")
+        require(first.get("runtime_phase", "all") == runtime_phase, "inventory runtime phase differs")
         expected, selected, transferred = partition_inventory(
-            first["original_expected"], first["selected"] + first["transferred"], partition)
+            first["original_expected"], first["selected"] + first.get("transferred", [])
+            + first.get("pressure_transferred", []), partition)
+        expected, selected, pressure_transferred = runtime_phase_inventory(expected, selected, runtime_phase)
         require(expected == first["expected"] and selected == first["selected"]
-                and transferred == first["transferred"], "partition inventory changed")
+                and transferred == first.get("transferred", [])
+                and pressure_transferred == first.get("pressure_transferred", []), "partition inventory changed")
     configuration = json.loads((directory / "configuration.json").read_text())
     require(configuration == {"marker": marker, "workers": 6, "dist": "loadgroup",
-                              **({"partition": partition} if partition != "all" else {})}
+                              **({"partition": partition} if partition != "all" else {}),
+                              **({"runtime_phase": runtime_phase} if runtime_phase != "all" else {})}
             and first["marker"] == marker and not first["unexpected"], "marker/default scheduling changed")
     events = [json.loads(line) for line in (directory / "live.jsonl").read_text().splitlines()]
     start = next(row for row in events if row["event"] == "start")
@@ -248,6 +276,300 @@ def summarize(directory, marker, partition="all"):
                       if partition == "bootstrap" else "integration remainder component; combined coverage needs the owner union proof")}
 
 
+def pressure_build_environment(env):
+    """Only the explicit owned build may provision; test routing stays native."""
+    value = dict(env)
+    for name in ("PCC_RUNTIME_ARCHIVE", "PCC_THREADED_RUNTIME_ARCHIVE",
+                 "PCC_TEST_COMPILER", "PCC_PLATFORM_TEST_COMPILER", "PCC_CURRENT_PCC1",
+                 "PCC_REQUIRE_CURRENT_PCC1", "PCC_TEST_COMPILER_ROUTED",
+                 "PCC_TEST_COMPILER_LOG", "PCC_TEST_COMPILER_STRICT", "PCC_TEST_COMPILER_HASH_INPUTS"):
+        value.pop(name, None)
+    value.update(PCC_TEST_NO_NATIVE_PROVISIONING="0", PCC_NO_AUTO_PCC1="1",
+                 PCC_RUNTIME_GC_STRESS_EVERY="3")
+    # Worker widths, tree budget and deadline are inherited without alteration.
+    return value
+
+
+def verify_pressure_routing(path, compiler, runtime):
+    """Require the fixture's one real native compile, not merely an attempt."""
+    from tests.python.test_gc_pressure_native import PROGRAM
+
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    require(len(rows) == 2, "pressure compiler routing must contain one attempt and completion")
+    attempt, complete = rows
+    require(attempt.get("event") == "attempt" and complete.get("event") == "complete"
+            and attempt.get("invocation") and attempt["invocation"] == complete.get("invocation")
+            and complete.get("outcome") == "passed" and complete.get("returncode") == 0,
+            "pressure native compile did not complete successfully")
+    require(all(row.get("route") == "native" and row.get("kind") == "compile_python"
+                and row.get("compiler") == str(compiler)
+                and row.get("runtime_archive") == str(runtime)
+                and row.get("test", "").startswith(PRESSURE_MODULE + "::") for row in rows),
+            "pressure compiler/runtime/execution owner differs")
+    inputs = attempt["inputs"]
+    require(inputs == complete["inputs"] == complete["inputs_after"],
+            "pressure compile inputs changed")
+    require(inputs["compiler"] == {"path": str(compiler.resolve(strict=True)), "sha256": digest(compiler)}
+            and inputs["runtime"] == {"path": str(runtime.resolve(strict=True)), "sha256": digest(runtime)},
+            "pressure compiler or archive bytes differ")
+    root = (path.parent / "tmp").resolve(strict=True)
+    output = complete["output"]
+    require(attempt["output_path"] == complete["output_path"] == output["path"],
+            "pressure output identity differs")
+    require(len(inputs["objects"]) == 1, "pressure guard object is missing or duplicated")
+    records = [inputs["source"], inputs["objects"][0], output]
+    paths = [Path(row["path"]).resolve(strict=True) for row in records]
+    require(all(item.is_relative_to(root) for item in paths)
+            and paths[0].parent == paths[1].parent == paths[2].parent
+            and [item.name for item in paths] == ["pressure.py", "guards.o", "pressure"],
+            "pressure source/object/output escapes its fixture directory")
+    require(all(row["sha256"] == digest(item) for row, item in zip(records, paths)),
+            "pressure source/object/output bytes changed")
+    require(paths[0].read_text() == PROGRAM, "pressure program differs from the original fixture")
+    return {"status": "PASS", "log_sha256": digest(path), "native_compiles": 1}
+
+
+def execute_pressure_phase(directory):
+    """Called only as a child of the original integration process-tree guard."""
+    from scripts.bootstrap_platform import source_identity
+    from scripts.file_lock import exclusive_file_lock
+    from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+    manifest_path = Path(os.environ["PCC_CI_STAGE1_MANIFEST"])
+    manifest = json.loads(manifest_path.read_text())
+    source = source_identity()
+    runtime = directory / "runtime/libpy_runtime_pcc_py.a"
+    compiler = ROOT / manifest["paths"]["compiler"]
+    receipt = {"status": "RUNNING", "source": source, "producer": manifest["producer"],
+               "platform": manifest["platform"], "manifest_sha256": digest(manifest_path),
+               "runtime_build_owner": "host CPython pcc0, owned frontend/emitter/archive builder",
+               "guard_helper_owner": "host CPython pcc0 C frontend and owned object emitter",
+               "program_compile_owner": "admitted native pcc1, strict route",
+               "program_execution_owner": "emitted native program, six original collector cases",
+               "claim": "pressure runtime execution only; not Stage2/3 or fixed-point acceptance",
+               "interval": 3, "build": "UNRUN", "tests": "UNRUN"}
+    save(directory / "receipt.json", receipt)
+    try:
+        require(source == manifest["source"] and manifest["producer"] == workflow_lease()
+                and manifest["platform"] == host_platform(), "pressure lease/source/platform differs")
+        require(receipt["manifest_sha256"] == os.environ["PCC_CI_STAGE1_MANIFEST_SHA256"],
+                "pressure admission manifest changed")
+        require(os.environ["PCC_TEST_COMPILER"] == str(compiler)
+                and os.environ["PCC_RUNTIME_ARCHIVE"] == str(runtime)
+                and os.environ["PCC_THREADED_RUNTIME_ARCHIVE"] == str(runtime)
+                and os.environ["PCC_RUNTIME_GC_STRESS_EVERY"] == "3"
+                and os.environ["PCC_GC_PRESSURE_NATIVE"] == "1"
+                and os.environ["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1",
+                "pressure test environment differs")
+        require(not runtime.parent.exists(), "refuse an existing pressure archive directory")
+        # This owner runs before any ordinary test. The pressure fixture has no
+        # performance lock of its own; the builder retains its runtime lock.
+        # Lock admission, build, pytest and cleanup share the one outer deadline.
+        with exclusive_file_lock(ROOT / "build/.pcc-performance.lock", blocking=False):
+            command = [sys.executable, "-m", "pcc.frontends.python.owned_runtime_build",
+                       "--runtime-dir", str(ROOT / "pcc/runtime"), "--target", manifest["target"],
+                       "--output", str(runtime)]
+            save(directory / "command.json", {"build": command,
+                 "tests": marker_command(directory, "integration", runtime_phase="pressure"),
+                 "budget": "inside the original integration guard; no fresh allowance"})
+            receipt["build"] = "RUNNING"
+            save(directory / "receipt.json", receipt)
+            subprocess.run(command, cwd=ROOT, env=pressure_build_environment(os.environ), check=True)
+            archive, provenance = _verified_test_runtime_archive(runtime, threads=True)
+            require(archive == runtime.resolve(), "pressure archive path differs")
+            files = {str(path): digest(path) for path in (
+                runtime, Path(str(runtime) + ".provenance.json"), Path(str(runtime) + ".capi_syms"))}
+            receipt.update(build="PASS", archive_files=files, provenance=provenance, tests="RUNNING")
+            save(directory / "receipt.json", receipt)
+            subprocess.run(marker_command(directory, "integration", runtime_phase="pressure"),
+                           cwd=ROOT, env=dict(os.environ), check=True)
+            summary = summarize(directory, "integration", runtime_phase="pressure")
+            require(summary["status"] == "PASS" and summary["selected_count"] == 6,
+                    "pressure cases missing, gated, skipped or xfailed")
+            routing = verify_pressure_routing(directory / "pcc1-routing.jsonl", compiler, runtime)
+            _verified_test_runtime_archive(runtime, threads=True)
+            require(all(digest(path) == value for path, value in files.items()),
+                    "pressure archive bytes changed during tests")
+            require(source_identity() == source and digest(manifest_path) == receipt["manifest_sha256"]
+                    and all(digest(ROOT / name) == row["sha256"] for name, row in manifest["files"].items()),
+                    "source or admitted ordinary Stage1 artifacts changed during pressure tests")
+            receipt.update(status="PASS", tests="PASS", summary=summary, routing=routing)
+    except BaseException as error:
+        for phase in ("build", "tests"):
+            if receipt[phase] == "RUNNING":
+                receipt[phase] = "FAIL"
+        receipt.update(status="FAIL", error=type(error).__name__ + ": " + str(error))
+        raise
+    finally:
+        save(directory / "receipt.json", receipt)
+
+
+def summarize_runtime_phases(directory):
+    from scripts.bootstrap_platform import source_identity
+    from tests.runtime_fixture_provenance import _verified_test_runtime_archive
+
+    pressure = summarize(directory / "pressure", "integration", runtime_phase="pressure")
+    ordinary = summarize(directory / "ordinary", "integration", "remainder", "ordinary")
+    require(pressure["status"] == ordinary["status"] == "PASS", "runtime phases have gaps")
+    receipt = json.loads((directory / "pressure/receipt.json").read_text())
+    manifest = json.loads(Path(os.environ["PCC_CI_STAGE1_MANIFEST"]).read_text())
+    runtime = directory / "pressure/runtime/libpy_runtime_pcc_py.a"
+    compiler = ROOT / manifest["paths"]["compiler"]
+    require(receipt["status"] == receipt["build"] == receipt["tests"] == "PASS"
+            and receipt["summary"] == pressure, "pressure prerequisite receipt did not pass")
+    require(receipt["manifest_sha256"] == os.environ["PCC_CI_STAGE1_MANIFEST_SHA256"]
+            and receipt["producer"] == workflow_lease() == manifest["producer"]
+            and receipt["source"] == source_identity() == manifest["source"]
+            and receipt["platform"] == host_platform() == manifest["platform"],
+            "pressure receipt belongs to another input/run")
+    paths = (runtime, Path(str(runtime) + ".provenance.json"), Path(str(runtime) + ".capi_syms"))
+    require(receipt["archive_files"] == {str(path): digest(path) for path in paths},
+            "pressure archive evidence changed")
+    previous = os.environ.get("PCC_RUNTIME_GC_STRESS_EVERY")
+    try:
+        os.environ["PCC_RUNTIME_GC_STRESS_EVERY"] = "3"
+        archive, provenance = _verified_test_runtime_archive(runtime, threads=True)
+    finally:
+        if previous is None:
+            os.environ.pop("PCC_RUNTIME_GC_STRESS_EVERY", None)
+        else:
+            os.environ["PCC_RUNTIME_GC_STRESS_EVERY"] = previous
+    require(archive == runtime.resolve(strict=True) and receipt["provenance"] == provenance
+            and provenance == json.loads(paths[1].read_text())
+            and receipt["provenance"]["target_triple"] == manifest["target"]
+            and receipt["interval"] == 3
+            and receipt["routing"] == verify_pressure_routing(
+                directory / "pressure/pcc1-routing.jsonl", compiler, runtime),
+            "pressure provenance or native routing evidence changed")
+    combined = combine_runtime_inventory(
+        json.loads((directory / "ordinary/inventory-gw0.json").read_text()),
+        json.loads((directory / "pressure/inventory-gw0.json").read_text()))
+    save(directory / "inventory-combined.json", combined)
+    return {"status": "PASS", "marker": "integration", "runtime_phases": {
+                "pressure": pressure, "ordinary": ordinary},
+            "marker_count": len(combined["expected"]), "selected_count": len(combined["selected"]),
+            "gated_out": [], "skipped_or_xfailed": [],
+            "claim": "integration remainder union; bootstrap owner proof still required"}
+
+
+def runtime_report_path(directory, name):
+    path = directory / name
+    require(path.is_file() and not path.is_symlink() and not path.parent.is_symlink()
+            and path.resolve(strict=True).is_relative_to(directory.resolve(strict=True)),
+            "runtime proof path escapes its report directory")
+    return path
+
+
+def runtime_proof_files(directory):
+    """Retained report bytes only, never runtime/program payloads or extraction."""
+    names = ["pressure/receipt.json", "pressure/command.json", "pressure/pcc1-routing.jsonl",
+             "inventory-combined.json"]
+    for phase in ("pressure", "ordinary"):
+        names.extend(phase + "/" + name for name in ("configuration.json", "live.jsonl"))
+        names.extend(phase + f"/inventory-gw{worker}.json" for worker in range(6))
+    return {name: digest(runtime_report_path(directory, name)) for name in names}
+
+
+def require_runtime_stdout_proof(path, expected):
+    """The single final marker is small; never materialize the build/test log."""
+    count, last = 0, ""
+    with path.open(encoding="utf-8") as stream:
+        for line in stream:
+            if line.startswith(RUNTIME_PROOF_PREFIX):
+                count += 1
+            last = line
+    require(count == 1 and last == RUNTIME_PROOF_PREFIX + expected + "\n",
+            "runtime proof differs from the completed guarded output")
+
+
+def summarize_completed_runtime_phases(directory, *, source, producer, platform, manifest_sha256):
+    """Read the completed guarded proof without repeating deep artifact admission.
+
+    The controller's final stdout line binds its receipt to the guarded command.
+    The receipt binds the deep pressure result and all raw phase reports. The
+    parent recomputes their strict summaries/union, not the archive extraction.
+    """
+    guard = json.loads(runtime_report_path(directory, "result.json").read_text())
+    require(guard.get("status") == "COMPLETE" and guard.get("returncode") == 0,
+            "runtime proof has no successful outer guard")
+    raw = runtime_report_path(directory, "receipt.json").read_bytes()
+    proof_sha256 = hashlib.sha256(raw).hexdigest()
+    require_runtime_stdout_proof(runtime_report_path(directory, "target.stdout"), proof_sha256)
+    receipt = json.loads(raw)
+    require(receipt.get("status") == receipt.get("pressure") == receipt.get("ordinary") == "PASS",
+            "runtime proof contains incomplete phases")
+    require(receipt["proof_files"] == runtime_proof_files(directory), "runtime proof report bytes changed")
+    pressure_receipt = json.loads((directory / "pressure/receipt.json").read_text())
+    require(pressure_receipt["source"] == source and pressure_receipt["producer"] == producer
+            and pressure_receipt["platform"] == platform
+            and pressure_receipt["manifest_sha256"] == manifest_sha256
+            and pressure_receipt["status"] == pressure_receipt["build"] == pressure_receipt["tests"] == "PASS"
+            and pressure_receipt["interval"] == 3
+            and pressure_receipt["routing"]["log_sha256"] == receipt["proof_files"]["pressure/pcc1-routing.jsonl"],
+            "guarded pressure identity or completion differs")
+    pressure = summarize(directory / "pressure", "integration", runtime_phase="pressure")
+    ordinary = summarize(directory / "ordinary", "integration", "remainder", "ordinary")
+    require(pressure["status"] == ordinary["status"] == "PASS"
+            and receipt["runtime_phases"] == {"pressure": pressure, "ordinary": ordinary},
+            "runtime proof phase reports differ")
+    combined = combine_runtime_inventory(
+        json.loads((directory / "ordinary/inventory-gw0.json").read_text()),
+        json.loads((directory / "pressure/inventory-gw0.json").read_text()))
+    require(combined == json.loads((directory / "inventory-combined.json").read_text())
+            and receipt["marker_count"] == receipt["selected_count"] == len(combined["selected"]),
+            "runtime proof inventory union differs")
+    return {"status": "PASS", "marker": "integration", "runtime_phases": receipt["runtime_phases"],
+            "marker_count": len(combined["expected"]), "selected_count": len(combined["selected"]),
+            "gated_out": [], "skipped_or_xfailed": [], "guarded_runtime_proof_sha256": proof_sha256,
+            "claim": "integration remainder union; bootstrap owner proof still required"}
+
+
+def execute_runtime_phases(directory):
+    """Pressure first; unrelated ordinary gates cannot prevent its attempt."""
+    ordinary_env = dict(os.environ)
+    admitted_stage1(ROOT, ordinary_env["PCC_CI_STAGE1_MANIFEST"], ordinary_env["PCC_RUNTIME_ARCHIVE"])
+    require(ordinary_env.get("PCC_MARKER_PARTITION") == "remainder"
+            and not ordinary_env.get("PCC_GC_PRESSURE_NATIVE")
+            and ordinary_env.get("PCC_RUNTIME_GC_STRESS_EVERY", "0") in ("", "0"),
+            "ordinary remainder must keep its original runtime configuration")
+    receipt = {"status": "RUNNING", "pressure": "UNRUN", "ordinary": "UNRUN"}
+    save(directory / "receipt.json", receipt)
+    try:
+        pressure_dir, ordinary_dir = directory / "pressure", directory / "ordinary"
+        pressure_dir.mkdir()
+        ordinary_dir.mkdir()
+        runtime = pressure_dir / "runtime/libpy_runtime_pcc_py.a"
+        pressure_env = dict(ordinary_env, PCC_RUNTIME_ARCHIVE=str(runtime),
+                            PCC_THREADED_RUNTIME_ARCHIVE=str(runtime), PCC_RUNTIME_GC_STRESS_EVERY="3",
+                            PCC_GC_PRESSURE_NATIVE="1", PCC_MARKER_PARTITION="all",
+                            PCC_MARKER_RUNTIME_PHASE="pressure", PCC_MARKER_REPORT_DIR=str(pressure_dir),
+                            PCC_TEST_COMPILER_HASH_INPUTS="1",
+                            PCC_TEST_COMPILER_LOG=str(pressure_dir / "pcc1-routing.jsonl"))
+        receipt["pressure"] = "RUNNING"
+        save(directory / "receipt.json", receipt)
+        subprocess.run([sys.executable, str(ROOT / "scripts/ci_pytest_markers.py"),
+                        "--pressure-phase", str(pressure_dir)], cwd=ROOT, env=pressure_env, check=True)
+        receipt.update(pressure="PASS", ordinary="RUNNING")
+        save(directory / "receipt.json", receipt)
+        ordinary_env.update(PCC_MARKER_RUNTIME_PHASE="ordinary", PCC_MARKER_REPORT_DIR=str(ordinary_dir),
+                            PCC_TEST_COMPILER_LOG=str(ordinary_dir / "pcc1-routing.jsonl"))
+        subprocess.run(marker_command(ordinary_dir, "integration", "remainder", "ordinary"),
+                       cwd=ROOT, env=ordinary_env, check=True)
+        receipt.update(summarize_runtime_phases(directory), ordinary="PASS")
+        receipt["proof_files"] = runtime_proof_files(directory)
+    except BaseException as error:
+        for phase in ("pressure", "ordinary"):
+            if receipt[phase] == "RUNNING":
+                receipt[phase] = "FAIL"
+        receipt.update(status="FAIL", error=type(error).__name__ + ": " + str(error))
+        raise
+    finally:
+        save(directory / "receipt.json", receipt)
+    # Only a fully completed, deeply validated controller reaches this line.
+    # The existing guard captures it after all phase children have returned.
+    print(RUNTIME_PROOF_PREFIX + digest(directory / "receipt.json"), flush=True)
+
+
 def run(args):
     from scripts.ci_worker_size_prior_gate import environment
     from scripts.bootstrap_platform import source_identity, build_configuration
@@ -268,6 +590,11 @@ def run(args):
     try:
         require(not os.environ.get("PCC_PLATFORM_TEST_COMPILER"),
                 "refuse inherited platform compiler override")
+        require(not os.environ.get("PCC_GC_PRESSURE_NATIVE")
+                and os.environ.get("PCC_RUNTIME_GC_STRESS_EVERY", "0") in ("", "0")
+                and not os.environ.get("PCC_MARKER_RUNTIME_PHASE")
+                and not os.environ.get("PCC_TEST_COMPILER_HASH_INPUTS"),
+                "refuse inherited pressure configuration for the ordinary Stage1 runtime")
         require(args.platform == host_platform(), "runner platform differs from matrix")
         source = source_identity()
         admit = admit_in_place if partition == "bootstrap" else import_bundle
@@ -319,7 +646,7 @@ def run(args):
         save(out / "receipt.json", receipt)
         directory = out / "pytest"
         directory.mkdir()
-        save(directory / "command.json", {"argv": marker_command(directory, args.marker, partition),
+        save(directory / "command.json", {"argv": execution_command(directory, args.marker, partition),
                                           "timeout": timeout, "outer_performance_lock": False})
         started = time.monotonic()
         try:
@@ -328,7 +655,10 @@ def run(args):
             receipt["guard_elapsed_s"] = time.monotonic() - started
             if (directory / "result.json").is_file():
                 receipt["guard_result_sha256"] = digest(directory / "result.json")
-        receipt.update(summarize(directory, args.marker, partition))
+        receipt.update(summarize_completed_runtime_phases(
+                           directory, source=source, producer=manifest["producer"], platform=args.platform,
+                           manifest_sha256=receipt["manifest_sha256"]) if partition == "remainder"
+                       else summarize(directory, args.marker, partition))
         require(receipt["status"] == "PASS", "strict selection has missing, gated, skipped or xfailed cases")
         if partition == "remainder":
             # Recompute strict summaries from immutable same-run artifacts; do
@@ -336,7 +666,7 @@ def run(args):
             require(summarize(args.owner_report / "pytest", "integration", "bootstrap")["status"] == "PASS"
                     and owner["status"] == "PASS", "bootstrap owner did not pass")
             owner_inventory = json.loads((args.owner_report / "pytest/inventory-gw0.json").read_text())
-            remainder_inventory = json.loads((directory / "inventory-gw0.json").read_text())
+            remainder_inventory = json.loads((directory / "inventory-combined.json").read_text())
             verify_union(owner_inventory, remainder_inventory)
             receipt.update(combined_integration_status="PASS",
                            original_integration_count=len(remainder_inventory["original_expected"]))
@@ -354,6 +684,15 @@ def run(args):
 
 
 def main(argv=None):
+    argv = list(sys.argv[1:] if argv is None else argv)
+    if argv and argv[0] in ("--runtime-phases", "--pressure-phase"):
+        require(len(argv) == 2, "internal runtime owner requires exactly one report directory")
+        directory = Path(argv[1]).resolve(strict=True)
+        if argv[0] == "--runtime-phases":
+            execute_runtime_phases(directory)
+        else:
+            execute_pressure_phase(directory)
+        return
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--marker", choices=tuple(TIMEOUTS), required=True)
     parser.add_argument("--bundle", type=Path, required=True)

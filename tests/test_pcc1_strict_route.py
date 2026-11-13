@@ -72,6 +72,53 @@ def _rows(state):
     return [json.loads(line) for line in state.log.read_text().splitlines()]
 
 
+@pytest.mark.parametrize("change_input", [False, True])
+def test_opt_in_native_compile_evidence_binds_before_after_inputs_and_output(bound_route, monkeypatch, change_input):
+    """Inert process seam proves evidence capture, never native execution."""
+    s = bound_route
+    source, helper, output = (s.compiler.parent / name for name in ("pressure.py", "guards.o", "pressure"))
+    source.write_text("print(1)\n")
+    helper.write_bytes(b"inert object input")
+    monkeypatch.setenv("PCC_TEST_COMPILER_HASH_INPUTS", "1")
+    def run(argv, **options):
+        s.native.append((argv, options))
+        assert options["timeout"] == 900
+        if change_input:
+            source.write_text("print(2)\n")
+        output.write_bytes(b"inert output from process seam")
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+    monkeypatch.setattr(route.subprocess, "run", run)
+    s.single(str(source), str(output), runtime_archive=str(s.runtime), object_inputs=(str(helper),))
+    attempt, complete = _rows(s)
+    assert attempt["inputs"] == complete["inputs"]
+    assert (complete["inputs"] == complete["inputs_after"]) is (not change_input)
+    assert complete["inputs_after"] == route._compile_inputs(s.compiler, s.runtime, source, [helper])
+    assert attempt["output_path"] == complete["output_path"] == str(output)
+    assert complete["output"] == route._file_identity(output)
+    assert len(s.native) == 1 and not s.host
+
+
+def test_opt_in_identity_keeps_missing_source_negative_on_native_route(bound_route, monkeypatch):
+    s = bound_route
+    monkeypatch.setenv("PCC_TEST_COMPILER_HASH_INPUTS", "1")
+    s.response = SimpleNamespace(returncode=2, stdout="", stderr="native missing input diagnostic")
+    with pytest.raises(pipeline.PyPipelineError, match="native missing input diagnostic"):
+        s.single(str(s.compiler.parent / "missing.py"), str(s.compiler.parent / "out"))
+    attempt, complete = _rows(s)
+    assert attempt["inputs"]["source"]["sha256"] is None
+    assert complete["output"]["sha256"] is None and complete["outcome"] == "failed"
+    assert len(s.native) == 1 and not s.host
+
+
+def test_ordinary_compile_does_not_add_input_hash_work(bound_route, monkeypatch):
+    monkeypatch.delenv("PCC_TEST_COMPILER_HASH_INPUTS", raising=False)
+    def forbidden(*args):
+        raise AssertionError("ordinary compile must retain its original cost")
+    monkeypatch.setattr(route, "_compile_inputs", forbidden)
+    bound_route.single("ordinary.py", "ordinary.out")
+    assert all("inputs" not in row for row in _rows(bound_route))
+
+
 @pytest.mark.parametrize("target", TARGETS)
 @pytest.mark.parametrize("emit_ir", (False, True))
 def test_single_native_argv_preserves_target_output_and_identity(bound_route, target, emit_ir):
