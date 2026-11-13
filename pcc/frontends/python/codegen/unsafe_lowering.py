@@ -22,6 +22,8 @@ _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _DOUBLE = ir.DoubleType()
 _CSTR = _I8.as_pointer()
+# The cache line a mutable global table starts on (_align_global_table).
+_GLOBAL_TABLE_LINE = 128
 
 
 UNSAFE_INTRINSICS = frozenset(
@@ -917,6 +919,21 @@ class UnsafeIntrinsicMixin:
         gv.initializer = initializer
         return gv
 
+    def _align_global_table(self, gv: ir.GlobalVariable, size: int) -> None:
+        """Start a mutable global table of a cache line or more on a line.
+
+        Striped locks and sharded counters index such a table in 128-byte
+        strides, one stride per thread or address class. At an unaligned
+        start every stride straddles two lines, so one stride's later words
+        share a line with the next stride's first ones, and which words share
+        depends on where the linker happened to place the table: an
+        unrelated change moved pcc_gc_metric_shards from line offset 16 to
+        120 and four-worker allocation slowed by 15%. 128 bytes is the line
+        of Apple's cores and two lines of x86-64.
+        """
+        if size >= _GLOBAL_TABLE_LINE:
+            gv.align = max(gv.align or 0, _GLOBAL_TABLE_LINE)
+
     def _get_or_declare_global_for_initializer(
         self,
         name: str,
@@ -1039,7 +1056,7 @@ class UnsafeIntrinsicMixin:
             init = ir.Constant(
                 arr_ty, [ir.Constant(_CSTR, None) for _ in range(n_items)]
             )
-            self._define_global(name, arr_ty, init)
+            self._align_global_table(self._define_global(name, arr_ty, init), n_items * 8)
             return True
         if intrinsic == "define_global_i32_array":
             if expr.kwargs or len(expr.args) < 1:
@@ -1050,7 +1067,7 @@ class UnsafeIntrinsicMixin:
             values = [self._unsafe_const_i64_arg(arg) for arg in expr.args[1:]]
             arr_ty = ir.ArrayType(_I32, len(values))
             init = ir.Constant(arr_ty, [ir.Constant(_I32, v) for v in values])
-            self._define_global(name, arr_ty, init)
+            self._align_global_table(self._define_global(name, arr_ty, init), len(values) * 4)
             return True
         if intrinsic == "define_global_i64_array":
             if expr.kwargs or len(expr.args) < 1:
@@ -1061,7 +1078,7 @@ class UnsafeIntrinsicMixin:
             values = [self._unsafe_const_i64_arg(arg) for arg in expr.args[1:]]
             arr_ty = ir.ArrayType(_I64, len(values))
             init = ir.Constant(arr_ty, [ir.Constant(_I64, v) for v in values])
-            self._define_global(name, arr_ty, init)
+            self._align_global_table(self._define_global(name, arr_ty, init), len(values) * 8)
             return True
         if intrinsic == "define_global_struct_words":
             # Raw-layout struct global with mixed i64/ptr fields.  The

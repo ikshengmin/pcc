@@ -125,3 +125,65 @@ def test_linked_groups_share_a_line_with_nothing_else(
             and name not in members and name != "_" + prefix + "_after"
         ]
         assert neighbours == [], prefix
+
+
+TABLE_MODULE = '''
+__pcc_runtime_port__ = True
+
+from pcc.unsafe import define_global_i32_array, define_global_i64_array, define_global_null_ptr_array
+
+define_global_i64_array("table_i64_short", {short_i64})
+define_global_i64_array("table_i64_line", {line_i64})
+define_global_i32_array("table_i32_short", {short_i32})
+define_global_i32_array("table_i32_line", {line_i32})
+define_global_null_ptr_array("table_ptr_short", 15)
+define_global_null_ptr_array("table_ptr_line", 1024)
+'''
+
+
+def test_tables_of_a_line_or_more_start_on_a_line(tmp_path):
+    # Striped locks and sharded counters index their table in 128-byte
+    # strides. At an unaligned start one stride's later words share a line
+    # with the next stride's first ones, whichever offset the linker chose.
+    import subprocess
+    import sys
+
+    source = tmp_path / "tables.py"
+    source.write_text(TABLE_MODULE.format(
+        short_i64=", ".join(["0"] * 15), line_i64=", ".join(["0"] * 16),
+        short_i32=", ".join(["0"] * 31), line_i32=", ".join(["0"] * 32),
+    ), encoding="utf-8")
+    out = tmp_path / "tables.ll"
+    ran = subprocess.run(
+        [sys.executable, "-m", "pcc", "--python-library", "--target=arm64-apple-darwin",
+         f"--emit-llvm={out}", str(source)],
+        cwd=ROOT, capture_output=True, text=True, timeout=300,
+    )
+    assert ran.returncode == 0, ran.stderr
+    lines = {
+        line.split(" = ", 1)[0][1:]: line
+        for line in out.read_text(encoding="utf-8").splitlines()
+        if line.startswith("@table_")
+    }
+    for name in ("table_i64_line", "table_i32_line", "table_ptr_line"):
+        assert lines[name].endswith(", align 128"), name
+    for name in ("table_i64_short", "table_i32_short", "table_ptr_short"):
+        assert ", align 128" not in lines[name], name
+
+
+def test_linked_strided_tables_start_on_a_line(tmp_path, threaded_pcc_runtime_archive):
+    binary = tmp_path / "strided_tables"
+    compile_owned_c_with_runtime(
+        ROOT / "tests/fixtures/native/allocator_lock_contention.c", binary,
+        runtime_archive=Path(threaded_pcc_runtime_archive),
+    )
+    addresses = {
+        row["name"]: row["n_value"]
+        for row in parse_object(binary.read_bytes()).symbols()
+        if (row["n_type"] & 0xE0) == 0 and (row["n_type"] & 0x0E) == 0x0E
+    }
+    for name in ("_pcc_gc_metric_shards", "_pcc_container_lock_stripes"):
+        assert addresses[name] % CACHE_LINE == 0, (name, addresses[name] % CACHE_LINE)
+    for _, prefix, _ in GROUPS:
+        for side in ("_before", "_after"):
+            assert addresses["_" + prefix + side] % CACHE_LINE == 0, prefix + side

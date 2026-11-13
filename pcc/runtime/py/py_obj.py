@@ -2352,7 +2352,13 @@ def _py_refcount_prepared_reset(prepared, o) -> None:
 
 def _debug_refuses_unmanaged(o, prepared) -> int:
     """PCC_DEBUG_RUNTIME: a value without managed provenance is refused
-    before its header is read; finish reports it after the caller's lock."""
+    before its header is read; finish reports it after the caller's lock.
+
+    Every refcount prepare passes here: once the cache is known to be off
+    (the first allocation fills it) the answer is one load, not a call.
+    """
+    if load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0:
+        return 0
     if _pcc_debug_runtime_enabled() == 0 or _ptr_can_have_header(o):
         return 0
     store_i64(prepared, 8, -1)
