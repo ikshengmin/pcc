@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import ast
 import copy
+import hashlib
 import json
+import os
 from pathlib import Path
 import struct
 import subprocess
@@ -486,7 +488,360 @@ def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch,
         compiler, request, archive, tmp_path, capfd, method,
     )
     assert calls == [((probe._program(method), "DICT_METHOD_OWNERS_OK\n", tmp_path,
-                      compiler, "pcc0", archive, capfd), {"provenance_probe": "2"})]
+                      compiler, "pcc0", archive, capfd),
+                     {"provenance_probe": "2", "emitted_ir_check": probe._select_dict_program_ir, "retain_dump_evidence": True})]
+
+
+def _program_ir(marker="OBJECT_TYPE_IDENTITY_OK"):
+    # The owned serializer uses \\HH for every byte, including terminal NUL.
+    raw = marker.encode() + b"\0"
+    escaped = "".join("\\" + format(byte, "02X") for byte in raw)
+    return ('@map = internal constant i32 1\n'
+            '@message = internal constant [' + str(len(raw)) + ' x i8] c"' + escaped + '"\n'
+            'define ptr @user_case_main() {\nentry:\n'
+            '  ret ptr @message\n}\n')
+
+
+@pytest.mark.parametrize("mutation, status", [
+    ("missing", "MISSING"), ("comment", "MISSING"), ("declaration", "MISSING"),
+    ("foreign-use", "MISSING"), ("comment-use", "MISSING"),
+    ("ambiguous", "AMBIGUOUS"), ("array-length", "INVALID"), ("prefix-use", "MISSING"),
+])
+def test_program_ir_selection_requires_a_unique_local_definition(mutation, status):
+    module = _program_ir()
+    if mutation == "missing":
+        modules = [_program_ir("unrelated")]
+    elif mutation == "comment":
+        modules = ["\n".join("; " + line for line in module.splitlines())]
+    elif mutation == "declaration":
+        modules = [module.split("define", 1)[0] + "declare ptr @user_case_main()\n"]
+    elif mutation == "foreign-use":
+        modules = [module.split("define", 1)[0], "define" + module.split("define", 1)[1]]
+    elif mutation == "comment-use":
+        modules = [module.replace("  ret ptr @message", "  ; ret ptr @message\n  ret ptr null")]
+    elif mutation == "prefix-use":
+        modules = [module.replace("ret ptr @message", "ret ptr @message-other")]
+    elif mutation == "array-length":
+        modules = [module.replace("[24 x i8]", "[25 x i8]")]
+    else:
+        modules = [module, module]
+    with pytest.raises(AssertionError, match=status):
+        support.select_program_ir(modules, "OBJECT_TYPE_IDENTITY_OK")
+
+
+def _ir_evidence_inputs(directory):
+    source, binary, archive = (directory / name for name in ("program.py", "program.out", "runtime.a"))
+    source.write_bytes(b"unchanged source\n")
+    binary.write_bytes(b"host-only image; never executed")
+    archive.write_bytes(b"host-only archive; never linked")
+    dump = directory / "executable-ir"
+    dump.mkdir()
+    (dump / "self_backend_input_0.ll").write_bytes(_program_ir("unrelated").encode())
+    (dump / "self_backend_input_1.ll").write_bytes(_program_ir().replace("\n", "\r\n").encode())
+    receipt = {
+        "run_id": RUN_ID, "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0",
+        "backend": "self", "source_sha256": gate.sha(source), "binary_path": str(binary),
+        "runtime_archive": str(archive), "runtime_sha256": gate.sha(archive),
+    }
+    return dump, receipt, source, binary, archive
+
+
+def _select_program_ir(modules):
+    return support.select_program_ir(modules, "OBJECT_TYPE_IDENTITY_OK")
+
+
+def test_input_ir_json_keeps_raw_hashes_scope_and_source_runtime_binary_identity(tmp_path):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    path = tmp_path / "executable-ir-dump.json"
+    evidence = json.loads(path.read_text())
+    assert evidence["status"] == "DUMP_FILES_RETAINED" and evidence["compiler_completed"] is True
+    assert evidence["run_id"] == RUN_ID
+    assert evidence["producer_completeness"] == evidence["all_modules_captured"] == "UNPROVEN"
+    assert evidence["qualification"] == "NOT_ASSESSED"
+    assert evidence["source_sha256"] == gate.sha(source)
+    assert evidence["runtime_sha256"] == gate.sha(archive)
+    assert evidence["binary_sha256"] == gate.sha(binary)
+    assert evidence["observed_dump_sha256"] == receipt["observed_ir_dump_sha256"]
+    assert len(evidence["modules"]) == 1  # Both modules have @map and @message.
+    module = evidence["modules"][0]
+    raw = (dump / "self_backend_input_1.ll").read_bytes()
+    assert module == {"name": "self_backend_input_1.ll", "text": raw.decode(),
+                      "bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+    assert receipt["executable_ir_dump_evidence"]["sha256"] == gate.sha(path)
+    assert len(path.read_bytes()) <= support._IR_JSON_LIMIT
+    assert {p.suffix for p in dump.iterdir()} == {".ll"}
+
+
+@pytest.mark.parametrize("mutation, status", [
+    ("module-limit", "OVERSIZE"), ("total-limit", "OVERSIZE"), ("json-limit", "OVERSIZE"),
+    ("source", "IDENTITY_CHANGED"), ("runtime", "IDENTITY_CHANGED"),
+    ("missing", "MISSING"), ("ambiguous", "AMBIGUOUS"),
+])
+def test_input_ir_failure_is_bounded_and_never_truncates_a_module(tmp_path, monkeypatch, mutation, status):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    if mutation == "module-limit":
+        monkeypatch.setattr(support, "_IR_MODULE_LIMIT", 1)
+    elif mutation == "total-limit":
+        monkeypatch.setattr(support, "_IR_TOTAL_LIMIT", 1)
+    elif mutation == "json-limit":
+        # Metadata fits; escaped retained text does not. Check output bytes,
+        # not a character count or only the source module's byte count.
+        monkeypatch.setattr(support, "_IR_JSON_LIMIT", 4096)
+        with (dump / "self_backend_input_1.ll").open("ab") as stream:
+            stream.write(b"; " + b"\\" * 4096 + b"\n")
+    elif mutation == "source":
+        source.write_bytes(b"changed source")
+    elif mutation == "runtime":
+        archive.write_bytes(b"changed archive")
+    elif mutation == "missing":
+        (dump / "self_backend_input_1.ll").write_text(_program_ir("unrelated"))
+    else:
+        (dump / "self_backend_input_0.ll").write_text(_program_ir())
+    with pytest.raises(AssertionError, match=status):
+        support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    path = tmp_path / "executable-ir-dump.json"
+    evidence = json.loads(path.read_text())
+    assert evidence["status"] == status and evidence["modules"] == []
+    assert evidence["source_sha256"] == receipt["source_sha256"]
+    assert evidence["runtime_sha256"] == receipt["runtime_sha256"]
+    assert len(path.read_bytes()) <= support._IR_JSON_LIMIT
+
+
+@pytest.mark.parametrize("failure", ("compile-before-dump", "compile-after-dump", "diagnostic-write", "native", None))
+def test_input_ir_uses_one_compile_and_survives_original_failure(tmp_path, monkeypatch, failure):
+    archive = tmp_path / "runtime.a"
+    archive.write_bytes(b"host-only archive")
+    compiles, executions = [], []
+    original_error = ValueError("original compiler failure")
+
+    def compiler(source, binary, **options):
+        compiles.append(options)
+        dump = Path(os.environ["PCC_DEBUG_SELF_IR_DUMP_DIR"])
+        assert list(dump.iterdir()) == []
+        assert options == {"backend": "self", "ir_scaffold_mode": "on", "runtime_archive": str(archive)}
+        if failure != "compile-before-dump":
+            (dump / "self_backend_input_0.ll").write_text(_program_ir())
+        if failure in ("compile-before-dump", "compile-after-dump", "diagnostic-write"):
+            raise original_error
+        Path(binary).write_bytes(_elf_image_fixture())
+
+    def execute(command, *, env, timeout):
+        backend = env.get("PCC_GC_BACKEND")
+        executions.append(backend)
+        assert timeout == 10
+        return subprocess.CompletedProcess(command, 1 if failure == "native" and backend == "1" else 0,
+                                           stdout="ok\n", stderr="")
+
+    monkeypatch.setattr(support, "run_process_group_timeout", execute)
+    if failure == "diagnostic-write":
+        write_bytes = Path.write_bytes
+
+        def write(path, payload):
+            if path.name == "executable-ir-dump.json":
+                raise OSError("diagnostic write failed")
+            return write_bytes(path, payload)
+
+        monkeypatch.setattr(Path, "write_bytes", write)
+    before = os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR")
+    capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
+    args = ("unchanged original program\n", "ok\n", tmp_path, compiler, "pcc0", archive, capfd)
+    if failure in ("compile-before-dump", "compile-after-dump", "diagnostic-write"):
+        with pytest.raises(ValueError) as caught:
+            support.assert_owned_program(*args, emitted_ir_check=_select_program_ir, retain_dump_evidence=True)
+        assert caught.value is original_error
+    elif failure == "native":
+        with pytest.raises(AssertionError):
+            support.assert_owned_program(*args, emitted_ir_check=_select_program_ir, retain_dump_evidence=True)
+    else:
+        support.assert_owned_program(*args, emitted_ir_check=_select_program_ir, retain_dump_evidence=True)
+    assert len(compiles) == 1
+    assert os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR") == before
+    record = json.loads((tmp_path / "ownership-regression.json").read_text())
+    if failure == "diagnostic-write":
+        assert record["error"] == "ValueError: original compiler failure"
+        assert record["ir_capture_error"] == "OSError: diagnostic write failed"
+        assert record["status"] == "COMPILE_FAILED" and executions == [None]
+        assert not (tmp_path / "executable-ir-dump.json").exists()
+        return
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert record["gc_backends"] == list(range(5))
+    assert record["source_sha256"] == gate.sha(tmp_path / "program.py")
+    assert record["runtime_sha256"] == gate.sha(archive)
+    if failure in ("compile-before-dump", "compile-after-dump"):
+        assert record["error"] == "ValueError: original compiler failure"
+        assert evidence["compile_error"] == record["error"]
+        assert evidence["compiler_completed"] is False and "binary_sha256" not in evidence
+        assert evidence["status"] == ("MISSING" if failure == "compile-before-dump" else "INCOMPLETE_COMPILE")
+        assert executions == [None]
+    else:
+        assert evidence["status"] == "DUMP_FILES_RETAINED"
+        assert record["status"] == ("NATIVE_EXECUTION_FAILED" if failure else "PASS")
+        assert executions == ([None, "0", "1"] if failure else [None, "0", "1", "2", "3", "4"])
+
+
+@pytest.mark.parametrize("limit", ("module", "total"))
+def test_dump_limits_reject_before_readers_and_checker(tmp_path, monkeypatch, limit):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("oversize input reached a reader or checker")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(support, "_IR_MODULE_LIMIT" if limit == "module" else "_IR_TOTAL_LIMIT", 1)
+        patch.setattr(support, "_read_bounded_dump", forbidden)
+        patch.setattr(Path, "read_bytes", forbidden)
+        patch.setattr(Path, "read_text", forbidden)
+        with pytest.raises(AssertionError, match="OVERSIZE"):
+            support._record_observed_ir_dump(dump, forbidden, receipt, source, binary, archive, completed=True)
+    assert json.loads((tmp_path / "executable-ir-dump.json").read_text())["status"] == "OVERSIZE"
+
+
+def test_dump_inventory_stops_before_unbounded_enumeration(tmp_path, monkeypatch):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    seen, closed = [], []
+
+    class Entries:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            closed.append(True)
+
+        def __iter__(self):
+            for index in range(130):
+                seen.append(index)
+                yield SimpleNamespace(path=str(dump / ("self_backend_input_" + str(index) + ".ll")))
+
+    def scandir(path):
+        assert path == dump
+        return Entries()
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("eager directory enumeration")
+
+    monkeypatch.setattr(support.os, "scandir", scandir)
+    monkeypatch.setattr(support.os, "listdir", forbidden)
+    monkeypatch.setattr(Path, "iterdir", forbidden)
+    with pytest.raises(AssertionError, match="OVERSIZE"):
+        support._record_observed_ir_dump(dump, _select_program_ir,
+                                         receipt, source, binary, archive, completed=True)
+    assert len(seen) == 129 and closed == [True]
+
+
+@pytest.mark.parametrize("mutation", ("utf8", "filename", "directory", "function", "header", "constant"))
+def test_dump_rejects_malformed_or_obviously_truncated_files(tmp_path, mutation):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    selected = dump / "self_backend_input_1.ll"
+    if mutation == "utf8":
+        selected.write_bytes(b"\xff")
+    elif mutation == "filename":
+        selected.rename(dump / "self_backend_input_2.ll")
+    elif mutation == "directory":
+        selected.unlink()
+        selected.mkdir()
+    elif mutation == "function":
+        selected.write_text(_program_ir().removesuffix("}\n"))
+    elif mutation == "header":
+        selected.write_text(_program_ir() + "define void @tail(\n")
+    else:
+        selected.write_text(_program_ir() + '@tail = internal constant [4 x i8] c"\\41\n')
+    with pytest.raises(AssertionError, match="MALFORMED|MISSING"):
+        support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert evidence["status"] in ("MALFORMED", "MISSING") and evidence["modules"] == []
+
+
+@pytest.mark.parametrize("difference", (-1, 0, 1))
+def test_dump_chunk_boundary_requires_exact_inventoried_eof(tmp_path, difference):
+    path = tmp_path / "dump.ll"
+    payload = b"x" * 65536 + b"y"
+    path.write_bytes(payload)
+    if difference:
+        with pytest.raises(AssertionError, match="IDENTITY_CHANGED"):
+            support._read_bounded_dump(path, len(payload) + difference)
+    else:
+        assert support._read_bounded_dump(path, len(payload)) == (payload, hashlib.sha256(payload).hexdigest())
+
+
+@pytest.mark.parametrize("grow", (False, True))
+def test_dump_length_change_after_inventory_retains_no_module(tmp_path, monkeypatch, grow):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    read = support._read_bounded_dump
+
+    def change_then_read(path, size):
+        raw = path.read_bytes()
+        path.write_bytes(raw + b"x" if grow else raw[:-1])
+        return read(path, size)
+
+    monkeypatch.setattr(support, "_read_bounded_dump", change_then_read)
+    with pytest.raises(AssertionError, match="IDENTITY_CHANGED"):
+        support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert evidence["status"] == "IDENTITY_CHANGED" and evidence["modules"] == []
+
+
+@pytest.mark.parametrize("selection", (None, (), (True,), (2,), (0, 1)))
+def test_retained_dump_requires_one_valid_selected_index(tmp_path, selection):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    with pytest.raises(AssertionError, match="MALFORMED"):
+        support._record_observed_ir_dump(dump, lambda modules: selection, receipt, source,
+                                         binary, archive, completed=True)
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert evidence["status"] == "MALFORMED" and evidence["modules"] == []
+
+
+def test_completed_compiler_without_binary_cannot_bind_dump_evidence(tmp_path):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    binary.unlink()
+    with pytest.raises(AssertionError, match="MISSING"):
+        support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert evidence["status"] == "MISSING" and evidence["modules"] == []
+    assert "binary_sha256" not in evidence
+
+
+def test_closed_dump_with_metadata_still_cannot_prove_producer_completeness(tmp_path):
+    dump, receipt, source, binary, archive = _ir_evidence_inputs(tmp_path)
+    (dump / "self_backend_input_1.ll").write_text(_program_ir() + "!0 = !{i32 1}\n")
+    support._record_observed_ir_dump(dump, _select_program_ir, receipt, source, binary, archive, completed=True)
+    evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
+    assert evidence["status"] == "DUMP_FILES_RETAINED"
+    assert evidence["producer_completeness"] == evidence["all_modules_captured"] == "UNPROVEN"
+    assert evidence["qualification"] == "NOT_ASSESSED"
+
+
+@pytest.mark.parametrize("stale", ("directory", "binary"))
+def test_dump_capture_refuses_stale_inputs_before_compiler(tmp_path, monkeypatch, stale):
+    archive = tmp_path / "runtime.a"
+    archive.write_bytes(b"host-only archive")
+    if stale == "directory":
+        (tmp_path / "executable-ir").mkdir()
+    else:
+        (tmp_path / "program.out").write_bytes(b"old image")
+    monkeypatch.setattr(support, "run_process_group_timeout", lambda command, **options:
+                        subprocess.CompletedProcess(command, 0, stdout="ok\n", stderr=""))
+    calls = []
+    capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
+    with pytest.raises((AssertionError, FileExistsError)):
+        support.assert_owned_program("original\n", "ok\n", tmp_path,
+                                     lambda *args, **kwargs: calls.append(args), "pcc0", archive, capfd,
+                                     emitted_ir_check=_select_program_ir, retain_dump_evidence=True)
+    assert calls == [] and not (tmp_path / "executable-ir-dump.json").exists()
+
+
+def test_object_regression_selects_its_original_program_ir(tmp_path, monkeypatch):
+    from tests.python import test_object_type_identity as probe
+
+    calls = []
+    monkeypatch.setattr(probe, "assert_owned_program", lambda *args, **kwargs: calls.append((args, kwargs)))
+    (tmp_path / "compiler-wrapper.stderr").write_text("")
+    compiler, archive, capfd = object(), object(), object()
+    request = SimpleNamespace(node=SimpleNamespace(callspec=SimpleNamespace(params={"python_program_compiler": "pcc0"})))
+    probe.test_object_identity_native_five_gc(compiler, request, archive, tmp_path, capfd)
+    assert calls == [((probe.PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n", tmp_path,
+                      compiler, "pcc0", archive, capfd),
+                     {"provenance_probe": "2", "emitted_ir_check": probe._select_identity_program_ir, "retain_dump_evidence": True})]
 
 
 def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypatch):

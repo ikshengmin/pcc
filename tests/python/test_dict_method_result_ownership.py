@@ -22,6 +22,7 @@ from tests.python.owned_regression_support import (
     assert_owned_program,
     assert_reference_program,
     explicit_owned_runtime,
+    select_program_ir,
 )
 from tests.python.test_lambda_constructor_roots import immediate_store
 from tests.python.test_shared_call_binding import _emit, _function
@@ -363,6 +364,10 @@ def test_dict_method_result_program_reference_and_emission(method, tmp_path):
     assert "strict.nolib.stub" not in text
 
 
+def _select_dict_program_ir(modules):
+    return select_program_ir(modules, "DICT_METHOD_OWNERS_OK")
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("method", ("copy", "pop"))
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
@@ -374,4 +379,5 @@ def test_dict_method_result_owners_native_five_gc(
         _program(method), 'DICT_METHOD_OWNERS_OK\n', tmp_path,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
         provenance_probe='2',
+        emitted_ir_check=_select_dict_program_ir, retain_dump_evidence=True,
     )

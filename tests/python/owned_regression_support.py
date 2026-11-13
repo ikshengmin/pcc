@@ -12,12 +12,198 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import sys
 import time
 
 import pytest
 
 from tests.python.process_timeout import run_process_group_timeout
+
+
+_IR_MODULE_LIMIT = 2 * 1024 * 1024
+_IR_TOTAL_LIMIT = 2 * 1024 * 1024
+_IR_JSON_LIMIT = 2 * 1024 * 1024
+
+
+def select_program_ir(modules, marker):
+    """Select an observed program dump by its unique string, never order.
+
+    Return the module index for retain_dump_evidence=True. Existing check-only
+    callbacks, including their None return, keep their original path unchanged.
+    Module scopes stay separate.
+    A dump can be a legal prefix: producer completeness remains unproven.
+    """
+    selected = []
+    for index, module in enumerate(modules):
+        # pcc.ir.ir.Constant._format_i8_array escapes every byte as \\HH;
+        # GlobalVariable.render emits the standalone constant below.
+        constants = re.findall(
+            r'^(@[^\s=]+) = [^;\n]*\bconstant \[([0-9]+) x i8\] '
+            r'c"((?:\\[0-9a-fA-F]{2})*)"(?:, align [0-9]+)?\s*$',
+            module, re.MULTILINE,
+        )
+        functions = re.findall(r"^define [^\n]+\{\n(.*?)^\}", module,
+                               re.MULTILINE | re.DOTALL)
+        for symbol, count, payload in constants:
+            literal = bytes.fromhex(payload.replace("\\", ""))
+            if literal not in (marker.encode("utf-8"), marker.encode("utf-8") + b"\0"):
+                continue
+            assert len(literal) == int(count), "INVALID: marker array length differs"
+            # A comment, declaration, or another module's identically named
+            # internal global cannot supply the program's function use.
+            use = re.compile(re.escape(symbol) + r"(?![-A-Za-z0-9_.$])")
+            assert any(use.search(line.split(";", 1)[0]) for body in functions
+                       for line in body.splitlines()), "MISSING: marker has no local function use"
+            _assert_observed_module_closed(module)
+            selected.append(index)
+            break
+    assert selected, "MISSING: program IR marker"
+    assert len(selected) == 1, "AMBIGUOUS: program IR marker"
+    return tuple(selected)
+
+
+def _assert_observed_module_closed(module):
+    """Reject obvious truncation, not certify the producer's complete module."""
+    opened = False
+    for line in module.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith(";"):
+            continue
+        if stripped.startswith("define "):
+            assert not opened and stripped.endswith("{"), "MALFORMED: incomplete function header"
+            opened = True
+        elif stripped == "}":
+            assert opened, "MALFORMED: unmatched function end"
+            opened = False
+        if stripped.startswith("@"):
+            assert not stripped.endswith("="), "MALFORMED: incomplete global"
+            if ' c"' in stripped:
+                assert re.search(r' c"(?:\\[0-9a-fA-F]{2}|[^"\\])*"', stripped), (
+                    "MALFORMED: incomplete string constant"
+                )
+    assert not opened, "MALFORMED: unterminated function"
+
+
+def _stream_sha256(path):
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        while chunk := stream.read(65536):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _read_bounded_dump(path, expected_size):
+    parts, digest, size = [], hashlib.sha256(), 0
+    with path.open("rb") as stream:
+        while chunk := stream.read(65536):
+            size += len(chunk)
+            assert size <= expected_size, "IDENTITY_CHANGED: dump grew after inventory"
+            parts.append(chunk)
+            digest.update(chunk)
+    assert size == expected_size, "IDENTITY_CHANGED: dump shrank after inventory"
+    return b"".join(parts), digest.hexdigest()
+
+
+def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, completed):
+    """Retain bounded bytes observed in this invocation's fresh dump directory.
+
+    The existing producer swallows write errors and has no completion receipt.
+    Even a syntactically closed file can omit a valid tail of the real input.
+    This diagnostic must never qualify producer completeness or execution.
+    """
+    evidence = {
+        "schema": "pcc.observed-executable-ir-dump.v1",
+        "status": "UNAVAILABLE",
+        "compiler_completed": completed,
+        "producer_completeness": "UNPROVEN",
+        "all_modules_captured": "UNPROVEN",
+        "qualification": "NOT_ASSESSED",
+        "run_id": receipt["run_id"],
+        "compiler_fixture_parameter": receipt["compiler_fixture_parameter"],
+        "compiler_mode": receipt["compiler_mode"],
+        "backend": receipt["backend"],
+        "source_sha256": receipt["source_sha256"],
+        "runtime_archive": receipt["runtime_archive"],
+        "runtime_sha256": receipt["runtime_sha256"],
+        "binary_path": receipt["binary_path"],
+        "scope": "observed dump file bytes from this compiler invocation; not complete input or final frame/root proof",
+        "limits_bytes": {"module": _IR_MODULE_LIMIT, "total_observed_ir": _IR_TOTAL_LIMIT,
+                         "json_with_metadata": _IR_JSON_LIMIT},
+        "modules": [],
+    }
+    if not completed:
+        evidence["compile_error"] = receipt.get("error", "")[:400]
+    try:
+        emitted = []
+        with os.scandir(dump) as entries:
+            for entry in entries:
+                assert len(emitted) < 128, "OVERSIZE: observed IR module inventory"
+                emitted.append(Path(entry.path))
+        emitted.sort()
+        assert emitted, "MISSING: executable compiler produced no self-backend IR receipt"
+        assert all(path.is_file() and not path.is_symlink() for path in emitted), "MALFORMED: dump file kind"
+        assert {path.name for path in emitted} == {
+            "self_backend_input_" + str(index) + ".ll" for index in range(len(emitted))
+        }, "MALFORMED: missing or unexpected dump module name"
+        sizes = [path.stat().st_size for path in emitted]
+        # Bound all input before reading any module or calling the selector,
+        # including modules that will not be retained. No runtime IR spill.
+        assert all(size <= _IR_MODULE_LIMIT for size in sizes), "OVERSIZE: observed IR module bytes"
+        assert sum(sizes) <= _IR_TOTAL_LIMIT, "OVERSIZE: total observed IR bytes"
+        raw_modules, inventory = [], {}
+        for path, size in zip(emitted, sizes):
+            raw, digest = _read_bounded_dump(path, size)
+            raw_modules.append(raw)
+            inventory[path.name] = digest
+        receipt["observed_ir_dump_sha256"] = inventory
+        evidence["observed_dump_sha256"] = inventory
+        observed = {"source_sha256": _stream_sha256(source),
+                    "runtime_sha256": _stream_sha256(archive)}
+        evidence["observed_identity"] = observed
+        assert all(observed[key] == receipt[key] for key in observed), (
+            "IDENTITY_CHANGED: source or runtime changed during compilation"
+        )
+        if completed:
+            assert binary.is_file(), "MISSING: compiler did not emit an executable"
+            evidence["binary_sha256"] = _stream_sha256(binary)
+        try:
+            # Exactly the universal-newline normalization used by the existing
+            # check-only hook. Retention below uses raw CRLF-preserving text.
+            modules = [raw.decode("utf-8").replace("\r\n", "\n").replace("\r", "\n")
+                       for raw in raw_modules]
+        except UnicodeDecodeError as failure:
+            raise AssertionError("MALFORMED: dump is not UTF-8") from failure
+        selected = check(modules)
+        assert isinstance(selected, tuple) and len(selected) == 1, "MALFORMED: select one program dump"
+        index = selected[0]
+        assert type(index) is int and 0 <= index < len(emitted), "MALFORMED: dump index"
+        path, raw = emitted[index], raw_modules[index]
+        evidence["modules"] = [{
+            "name": path.name, "sha256": inventory[path.name],
+            "bytes": len(raw), "text": raw.decode("utf-8"),
+        }]
+        evidence["status"] = "DUMP_FILES_RETAINED" if completed else "INCOMPLETE_COMPILE"
+        assert len(json.dumps(evidence).encode("utf-8")) + 1 <= _IR_JSON_LIMIT, (
+            "OVERSIZE: JSON bytes including metadata and escaping"
+        )
+    except Exception as failure:
+        reason = str(failure).split(":", 1)[0]
+        evidence["status"] = reason if reason in (
+            "MISSING", "AMBIGUOUS", "OVERSIZE", "IDENTITY_CHANGED", "MALFORMED",
+        ) else "UNAVAILABLE"
+        evidence["modules"] = []
+        evidence["error"] = type(failure).__name__ + ": " + str(failure)[:400]
+        raise
+    finally:
+        path = source.parent / "executable-ir-dump.json"
+        payload = (json.dumps(evidence) + "\n").encode("utf-8")
+        assert len(payload) <= _IR_JSON_LIMIT, "OVERSIZE: evidence metadata bytes"
+        path.write_bytes(payload)
+        receipt["executable_ir_dump_evidence"] = {
+            "path": path.name, "sha256": hashlib.sha256(payload).hexdigest(),
+            "status": evidence["status"],
+        }
 
 
 @pytest.fixture
@@ -102,7 +288,9 @@ def assert_owned_program(
     backends=tuple(range(5)),
     reference_arguments=(),
     emitted_ir_check=None,
+    retain_dump_evidence=False,
 ):
+    assert not retain_dump_evidence or emitted_ir_check is not None
     backends = tuple(backends)
     assert backends and len(backends) == len(set(backends))
     assert all(type(backend) is int and 0 <= backend < 5 for backend in backends)
@@ -130,32 +318,53 @@ def assert_owned_program(
     }
     receipt_path = directory / "ownership-regression.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    dump, ir_attempted, compiler_started = None, False, False
     try:
         # Capture the IR consumed by this executable emission, not a second
         # host/native --emit-llvm invocation with merely matching source.
         with pytest.MonkeyPatch.context() as patch:
             if emitted_ir_check is not None:
-                dump = directory / "executable-ir"
-                dump.mkdir()  # Fresh and empty: stale output is never evidence.
+                if retain_dump_evidence:
+                    assert not binary.exists(), "Refuse stale executable IR/binary evidence"
+                fresh_dump = directory / "executable-ir"
+                fresh_dump.mkdir()  # Fresh and empty: stale output is never evidence.
+                dump = fresh_dump
                 patch.setenv("PCC_DEBUG_SELF_IR_DUMP_DIR", str(dump))
+            compiler_started = True
             compiler(
                 str(source), str(binary), backend="self", ir_scaffold_mode="on",
                 runtime_archive=str(archive),
             )
         if emitted_ir_check is not None:
-            emitted = sorted(dump.glob("self_backend_input_*.ll"))
-            assert emitted, "Executable compiler produced no self-backend IR receipt"
-            # Preserve module scope: internal map names may legally repeat.
-            emitted_ir_check([path.read_text() for path in emitted])
-            receipt["executable_input_ir"] = {
-                path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                for path in emitted
-            }
-            assert hashlib.sha256(source.read_bytes()).hexdigest() == receipt["source_sha256"]
-            assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["runtime_sha256"]
+            ir_attempted = True
+            if retain_dump_evidence:
+                _record_observed_ir_dump(dump, emitted_ir_check, receipt, source, binary,
+                                         archive, completed=True)
+                receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+            else:
+                # Keep the existing two-root mandatory check-only contract.
+                emitted = sorted(dump.glob("self_backend_input_*.ll"))
+                assert emitted, "Executable compiler produced no self-backend IR receipt"
+                emitted_ir_check([path.read_text() for path in emitted])
+                receipt["executable_input_ir"] = {
+                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
+                    for path in emitted
+                }
+                assert hashlib.sha256(source.read_bytes()).hexdigest() == receipt["source_sha256"]
+                assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["runtime_sha256"]
     except Exception as error:
         receipt["status"] = "COMPILE_FAILED"
         receipt["error"] = type(error).__name__ + ": " + str(error)
+        if retain_dump_evidence and compiler_started and dump is not None and not ir_attempted:
+            try:
+                _record_observed_ir_dump(dump, emitted_ir_check, receipt, source, binary,
+                                         archive, completed=False)
+            except Exception as diagnostic_error:
+                # Preserve the original compile exception, including when no
+                # dump exists or the evidence itself cannot be written.
+                receipt["ir_capture_error"] = (
+                    type(diagnostic_error).__name__ + ": " + str(diagnostic_error)[:400]
+                )
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         raise
     finally:

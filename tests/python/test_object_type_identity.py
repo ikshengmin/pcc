@@ -14,6 +14,7 @@ from tests.python.owned_regression_support import (
     assert_owned_program,
     assert_reference_program,
     explicit_owned_runtime,
+    select_program_ir,
 )
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
@@ -530,6 +531,10 @@ def test_object_identity_program_lowers_without_cpython_calls():
     assert not re.search(r"\bcall\b[^\n]*@py_cpy_", text)
 
 
+def _select_identity_program_ir(modules):
+    return select_program_ir(modules, "OBJECT_TYPE_IDENTITY_OK")
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
 def test_object_identity_native_five_gc(python_program_compiler, request,
@@ -537,5 +542,6 @@ def test_object_identity_native_five_gc(python_program_compiler, request,
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n", tmp_path,
                          python_program_compiler, mode, explicit_owned_runtime,
-                         capfd, provenance_probe="2")
+                         capfd, provenance_probe="2",
+                         emitted_ir_check=_select_identity_program_ir, retain_dump_evidence=True)
     assert (tmp_path / "compiler-wrapper.stderr").read_text() == ""
