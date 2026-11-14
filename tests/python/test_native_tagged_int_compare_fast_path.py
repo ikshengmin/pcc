@@ -60,6 +60,23 @@ def main():
     except TypeError as error:
         print("TypeError", error)
     print(equality(1, "x"), equality(3, 3.0), equality(2 ** 62, 2 ** 62))
+    for value in values + [None, "0", Ranked(0), Ranked(7)]:
+        print(literal_equality(value))
+    print(bad_bytes(b"ab\\tc"), bad_bytes(b"a\\x00b"), bad_bytes(b"\\x7f"), bad_bytes(b"\\xff\\x80"))
+
+
+def literal_equality(value):
+    return [value == 0, value != 0, 0 == value, value == 7, value != -1,
+            value == 2 ** 62 - 1, value == 2 ** 70, value == 1, value != True]
+
+
+def bad_bytes(data):
+    for value in data:
+        if value == 0 or value == 10 or value == 13 or value == 127:
+            return True
+        if value < 32 and value != 9:
+            return True
+    return False
 
 
 main()
@@ -84,6 +101,21 @@ def test_dynamic_compare_tests_tags_before_the_runtime_call(tmp_path: Path) -> N
     body = text[start:text.index("\n}\n", start)]
     fast = body.index("int.cmp.fast")
     assert fast < body.index("call i64 (ptr, ptr) @py_obj_lt"), body
+
+
+def test_dynamic_equality_with_int_literal_tests_tags_before_the_runtime_call(tmp_path: Path) -> None:
+    from pcc.frontends.python.pipeline import compile_python
+
+    src = tmp_path / "eq_shape.py"
+    src.write_text("def zero(n):\n    return n == 0\n\n\ndef other(n):\n    return 13 != n\n",
+                   encoding="utf-8")
+    out = tmp_path / "eq_shape.ll"
+    compile_python(str(src), str(out), emit_llvm_only=True)
+    text = out.read_text(encoding="utf-8")
+    for name in ("zero", "other"):
+        start = text.index("@user_eq_shape_" + name + "(")
+        body = text[start:text.index("\n}\n", start)]
+        assert body.index("int.eq.fast") < body.index("@py_obj_eq_value"), body
 
 
 @pytest.mark.integration

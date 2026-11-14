@@ -798,6 +798,38 @@ class CompareMembershipLoweringMixin:
                         rhs,
                         rhs_ty,
                     )
+                    tagged_pair = None
+                    if isinstance(lhs_ty if rhs_dyn_obj else rhs_ty, IntType):
+                        # As in _emit_runtime_object_compare: two tagged
+                        # words are exact ints and are equal exactly when
+                        # their bits are; any other pair (bigint, bool,
+                        # float, user __eq__) takes the runtime call.
+                        lhs_bits = self.builder.ptrtoint(
+                            lhs_obj, _I64, name=self._fresh("obj.scalar.lbits"))
+                        rhs_bits = self.builder.ptrtoint(
+                            rhs_obj, _I64, name=self._fresh("obj.scalar.rbits"))
+                        both = self.builder.and_(
+                            lhs_bits, rhs_bits, name=self._fresh("obj.scalar.tags"))
+                        tagged = self.builder.icmp_unsigned(
+                            "!=",
+                            self.builder.and_(both, ir.Constant(_I64, 1)),
+                            ir.Constant(_I64, 0),
+                            name=self._fresh("obj.scalar.tagged"),
+                        )
+                        fast_block = self.current_function.append_basic_block(
+                            self._fresh("int.eq.fast"))
+                        slow_block = self.current_function.append_basic_block(
+                            self._fresh("int.eq.slow"))
+                        done_block = self.current_function.append_basic_block(
+                            self._fresh("int.eq.done"))
+                        self.builder.cbranch(tagged, fast_block, slow_block)
+                        self.builder.position_at_end(fast_block)
+                        fast_eq = self.builder.icmp_unsigned(
+                            "==", lhs_bits, rhs_bits, name=self._fresh("obj.scalar.fast"))
+                        fast_end = self.builder.block
+                        self.builder.branch(done_block)
+                        self.builder.position_at_end(slow_block)
+                        tagged_pair = (fast_eq, fast_end, done_block)
                     eq = self.builder.call(
                         self.runtime["py_obj_eq_value"],
                         [lhs_obj, rhs_obj],
@@ -809,6 +841,15 @@ class CompareMembershipLoweringMixin:
                         ir.Constant(_I32, 0),
                         name=self._fresh("obj.scalar.eq.i1"),
                     )
+                    if tagged_pair is not None:
+                        fast_eq, fast_end, done_block = tagged_pair
+                        slow_end = self.builder.block
+                        self.builder.branch(done_block)
+                        self.builder.position_at_end(done_block)
+                        joined = self.builder.phi(_I1, name=self._fresh("obj.scalar.eq.joined"))
+                        joined.add_incoming(fast_eq, fast_end)
+                        joined.add_incoming(eq_i1, slow_end)
+                        eq_i1 = joined
                     if expr.op == "!=":
                         return self.builder.not_(
                             eq_i1,
