@@ -29,6 +29,13 @@
       "nodeid": "tests/java/test_source_floating_darwin_abi.py::test_real_clang_caller_observes_tenth_java_float_on_darwin_arm64",
       "platforms": ["macos-arm64"],
       "tools": {"macos-arm64": ["clang"]}
+    },
+    {
+      "domain": "java",
+      "lane": "integration",
+      "nodeid": "tests/java/test_source_floating_darwin_abi.py::test_owned_caller_passes_tenth_float_to_clang_on_darwin_arm64",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["clang"]}
     }
   ]
 }

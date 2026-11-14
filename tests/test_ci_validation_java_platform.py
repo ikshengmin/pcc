@@ -1,6 +1,7 @@
 """Java Darwin ownership and audited caller bindings, without native execution."""
 from __future__ import annotations
 
+import copy
 import json
 from pathlib import Path
 import sys
@@ -14,6 +15,8 @@ from scripts import ci_validation_tools as tools
 ROOT = Path(__file__).resolve().parents[1]
 MODULE = "tests/java/test_source_floating_darwin_abi.py"
 DARWIN = MODULE + "::test_real_clang_caller_observes_tenth_java_float_on_darwin_arm64"
+DARWIN_CALLER = MODULE + "::test_owned_caller_passes_tenth_float_to_clang_on_darwin_arm64"
+DARWIN_NODES = (DARWIN, DARWIN_CALLER)
 
 
 def test_java_adds_exact_mac_integration_without_stage1_or_losing_linux_lanes():
@@ -28,29 +31,51 @@ def test_java_adds_exact_mac_integration_without_stage1_or_losing_linux_lanes():
     assert not plan.requires_native_inputs("java", "integration")
     manifest, _ = owners.read_manifest(ROOT)
     rules = [rule for rule in manifest["overrides"] if rule["domain"] == "java"]
-    assert rules == [{"domain": "java", "lane": "integration", "nodeid": DARWIN,
-                      "platforms": ["macos-arm64"], "tools": {"macos-arm64": ["clang"]}}]
+    assert rules == [{"domain": "java", "lane": "integration", "nodeid": node,
+                      "platforms": ["macos-arm64"], "tools": {"macos-arm64": ["clang"]}}
+                     for node in DARWIN_NODES]
+    assert owners.owner_modules(manifest, "java", "integration", "macos-arm64") == [MODULE]
 
 
 def test_java_partition_keeps_ordinary_cross_objects_and_other_integration_on_linux():
     manifest, _ = owners.read_manifest(ROOT)
     rows = []
     for name, lane in (("test_float_stack_original_has_owned_darwin_cross_object_only", "ordinary"), ("linux_integration", "integration"),
-                       (DARWIN.split("::")[1], "integration")):
+                       *((node.split("::")[1], "integration") for node in DARWIN_NODES)):
         node = MODULE + "::" + name
         rows.append({"file": MODULE, "function": name, "nodeid": node,
                      "canonical_nodeid": node, "lane": lane, "groups": [], "gates": [],
-                     "reference_activity": "external-reference", "selected_by_repository": node != DARWIN})
+                     "reference_activity": "external-reference", "selected_by_repository": node not in DARWIN_NODES})
+    frozen = copy.deepcopy(rows)
     ordinary = owners.partition(rows, manifest, "java", "ordinary", "linux-x86_64")
     assert ordinary["local_nodeids"] == [MODULE + "::test_float_stack_original_has_owned_darwin_cross_object_only"]
     assert ordinary["transfers"] == []
     integration = owners.partition(rows, manifest, "java", "integration", "linux-x86_64")
     assert integration["local_nodeids"] == [MODULE + "::linux_integration"]
-    assert integration["transfers"] == [{"domain": "java", "lane": "integration", "nodeid": DARWIN,
-                                        "platform": "macos-arm64", "tools": ["clang"]}]
-    assert owners.partition(rows, manifest, "java", "integration", "macos-arm64",
-                            complete=False)["local_nodeids"] == [DARWIN]
-    assert rows[-1]["selected_by_repository"] is False
+    assert integration["transfers"] == [{"domain": "java", "lane": "integration", "nodeid": node,
+                                        "platform": "macos-arm64", "tools": ["clang"]}
+                                       for node in sorted(DARWIN_NODES)]
+    mac_rows = copy.deepcopy(rows)
+    for row in mac_rows:
+        row["selected_by_repository"] = True
+    mac = owners.partition(mac_rows, manifest, "java", "integration", "macos-arm64", complete=False)
+    assert mac["local_nodeids"] == sorted(DARWIN_NODES)
+    assert mac["transfers"] == [{"domain": "java", "lane": "integration",
+                                 "nodeid": MODULE + "::linux_integration",
+                                 "platform": "linux-x86_64", "tools": []}]
+    assert rows == frozen  # Ownership does not turn Linux's missing native gate into a pass.
+    assert all(not row["selected_by_repository"] for row in rows if row["nodeid"] in DARWIN_NODES)
+
+    # Reproduce the missing-owner defect: the original reverse node otherwise
+    # defaults to Linux and is transferred away from its eligible Mac consumer.
+    missing = copy.deepcopy(manifest)
+    missing["overrides"] = [rule for rule in missing["overrides"] if rule["nodeid"] != DARWIN_CALLER]
+    assert DARWIN_CALLER in owners.partition(rows, missing, "java", "integration",
+                                            "linux-x86_64")["local_nodeids"]
+    wrong_mac = owners.partition(mac_rows, missing, "java", "integration", "macos-arm64", complete=False)
+    assert DARWIN_CALLER not in wrong_mac["local_nodeids"]
+    assert {"domain": "java", "lane": "integration", "nodeid": DARWIN_CALLER,
+            "platform": "linux-x86_64", "tools": []} in wrong_mac["transfers"]
 
 
 def test_java_clang_overrides_inherited_tool_with_audited_invocation():
