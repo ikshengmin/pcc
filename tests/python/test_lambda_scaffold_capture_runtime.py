@@ -70,7 +70,52 @@ def cells():
         del value
     return callback, clear
 
+def take_constant(*, value, later=None, **extras):
+    gc.collect()
+    return value
+
+def none_payload_type(events):
+    events.append("type")
+    gc.collect()
+    return WORD
+
+def fail_after_none(events):
+    events.append("later")
+    gc.collect()
+    raise ValueError("after none constant")
+
+def none_payload_callbacks(events):
+    # The constructor is an actual keyword-call operand, not merely a local
+    # assignment. Its slot stays owned across the callee's collection.
+    read = lambda: take_constant(value=ir.Constant(none_payload_type(events), None))
+    fail = lambda: take_constant(
+        value=ir.Constant(none_payload_type(events), None),
+        later=fail_after_none(events))
+    return read, fail
+
+def check_none_payload():
+    events = []
+    read, fail = none_payload_callbacks(events)
+    first = read()
+    second = read()
+    assert first is not second
+    assert first.value is None and second.value is None
+    assert str(first) == "zeroinitializer" and str(first.type) == "i64"
+    assert events == ["type", "type"]
+    try:
+        fail()
+    except ValueError as error:
+        assert str(error) == "after none constant"
+    else:
+        raise AssertionError("lost later None-constant exception")
+    assert events == ["type", "type", "type", "later"]
+    gc.collect()
+    assert str(first) == "zeroinitializer"
+    assert read().value is None
+    assert events == ["type", "type", "type", "later", "type"]
+
 def main():
+    check_none_payload()
     events = []
     forward = Forward(events)
     load, captures, frame = forward.callbacks(Frame(0, 1))

@@ -20,19 +20,59 @@ from pcc.frontends.python.type_infer import infer_module
 ])
 @pytest.mark.parametrize("contextual", [False, True])
 def test_scaffold_object_result_is_published_at_return(tmp_path, monkeypatch, expression, suffix, contextual):
+    _assert_scaffold_object_result_is_published_at_return(
+        tmp_path, monkeypatch, expression, suffix, contextual,
+    )
+    if suffix == "scaffold_IntType":
+        # Preserve the existing collection inventory while covering a real
+        # None-payload constructor as both direct and container slot operands.
+        for none_expression in (
+            "ir.Constant(ir.IntType(64), None)",
+            "[ir.Constant(ir.IntType(64), None)]",
+        ):
+            _assert_scaffold_object_result_is_published_at_return(
+                tmp_path, monkeypatch, none_expression,
+                "scaffold_Constant_none", contextual,
+            )
+        _assert_scaffold_object_result_is_published_at_return(
+            tmp_path, monkeypatch, "ir.Constant(ir.IntType(64), None)",
+            "scaffold_Constant_none", contextual, caller_sink=False,
+        )
+
+
+def _assert_scaffold_object_result_is_published_at_return(
+    tmp_path, monkeypatch, expression, suffix, contextual, caller_sink=True,
+):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     provider = Path(__file__).resolve().parents[2] / "pcc/ir/ir.py"
     source = tmp_path / "probe.py"
+    returned_expression = "take(value=" + expression + ")" if caller_sink else expression
     source.write_text("from pcc.ir.compat import ir\n"
                       "def take(*, value, **extras):\n    return value\n"
                       "def probe(operand):\n    builder = ir.IRBuilder()\n"
-                      "    return take(value=" + expression + ")\n")
+                      "    return " + returned_expression + "\n")
     paths = [str(provider), str(source)] if contextual else [str(source)]
     names = ["pcc.ir.ir", "probe"] if contextual else ["probe"]
     modules, exports, derived = build_closed_world_context(paths, names)
     typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
+    if suffix == "scaffold_Constant_none" and not contextual:
+        from pcc.frontends.python.py_ast import (
+            DynType,
+            FuncDef,
+            ListExpr,
+            Return,
+        )
+
+        probe = next(node for node in typed.body if isinstance(node, FuncDef) and node.name == "probe")
+        returned = next(node for node in probe.body if isinstance(node, Return))
+        constant = returned.value.kwargs[0][1] if caller_sink else returned.value
+        if isinstance(constant, ListExpr):
+            constant = constant.elems[0]
+        # No fabricated ownership/type flags: real inference leaves this
+        # no-provider call Dyn, so only its actual producer can own the result.
+        assert isinstance(constant.ty, DynType)
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
     codegen._native_module_exports = exports if contextual else None
     codegen._strict_no_libpython = True
@@ -86,20 +126,34 @@ def test_void_ir_operations_keep_provider_value_result(tmp_path, monkeypatch, ex
 
 @pytest.mark.parametrize("manual", [False, True])
 def test_scaffold_rejects_provider_raw_or_manual_pointer_result(tmp_path, monkeypatch, manual):
+    for symbol, expression in (
+        ("scaffold_IntType", "ir.IntType(64)"),
+        ("scaffold_Constant_none", "ir.Constant(operand, None)"),
+    ):
+        _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
+            tmp_path, monkeypatch, manual, symbol, expression,
+        )
+
+
+def _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
+    tmp_path, monkeypatch, manual, symbol, expression,
+):
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     provider = tmp_path / "provider.py"
+    parameter = "width: int" if symbol == "scaffold_IntType" else "ty"
+    raw_value = "width" if symbol == "scaffold_IntType" else "0"
     provider.write_text("from pcc.extern import c_ptr\nfrom pcc.unsafe import int_to_ptr\n"
                         + ("__pcc_runtime_port__ = True\n" if manual else "")
-                        + "def scaffold_IntType(width: int)" + ("" if manual else " -> c_ptr")
-                        + ":\n    return int_to_ptr(width)\n")
+                        + "def " + symbol + "(" + parameter + ")" + ("" if manual else " -> c_ptr")
+                        + ":\n    return int_to_ptr(" + raw_value + ")\n")
     entry = tmp_path / "probe.py"
     entry.write_text("from pcc.ir.compat import ir\n"
                     "def take(*, value, **extras):\n    return value\n"
-                    "def probe():\n    return take(value=ir.IntType(64))\n")
+                    "def probe(operand):\n    return take(value=" + expression + ")\n")
     modules, exports, derived = build_closed_world_context(
         [str(provider), str(entry)], ["pcc.ir.ir", "probe"])
-    info = exports["pcc.ir.ir"]["scaffold_IntType"]
+    info = exports["pcc.ir.ir"][symbol]
     assert info["return_ty"] == (("dyn",) if manual else ("raw_pointer",))
     assert info["manual_pointer_abi"] is manual
     typed = infer_module(modules[1], external_exports=exports, derived_class_map=derived)
@@ -110,7 +164,7 @@ def test_scaffold_rejects_provider_raw_or_manual_pointer_result(tmp_path, monkey
     with pytest.raises(L1CodegenError, match="scaffold call has no managed result contract"):
         codegen.generate(typed)
     text = str(codegen.module)
-    assert not re.search(r"\bcall [^\n]*@user_pcc_ir_ir_scaffold_IntType\(", text)
+    assert not re.search(r"\bcall [^\n]*@user_pcc_ir_ir_" + symbol + r"\(", text)
 
 
 def test_unknown_pointer_declaration_does_not_imply_owned_result():

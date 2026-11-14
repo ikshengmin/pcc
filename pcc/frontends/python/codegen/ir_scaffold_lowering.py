@@ -1956,18 +1956,18 @@ class IrScaffoldLoweringMixin:
                 (1,),
                 call_expr=expr, owned_result=True,
             )
-        ty = self._scaffold_to_handle(expr.args[0])
         if isinstance(value_expr, NoneLit):
-            fn = self._declare_external_function(
+            # None is the Constant's payload, not the helper's result. The
+            # provider constructs a NEW Constant object, just like the i64
+            # helper, and must publish it before error checks or arg cleanup.
+            return _scaffold_emit_declared_call(
+                self,
                 f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Constant_none",
                 _CSTR,
-                [_CSTR],
+                expr.args[:1],
+                call_expr=expr, owned_result=True,
             )
-            return self.builder.call(
-                fn,
-                [ty],
-                name=self._fresh("scaffold.Constant"),
-            )
+        ty = self._scaffold_to_handle(expr.args[0])
         if isinstance(value_expr, FloatLit):
             value = self._emit_expr(value_expr)
             fn = self._declare_external_function(
