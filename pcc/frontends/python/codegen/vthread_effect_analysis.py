@@ -1770,6 +1770,12 @@ def annotate_closed_world_vthread_effect_summaries(
                 )
                 index += 2
 
+            # Needed keys and edge IDs now have their node/arena owners.
+            # Drop only these local aliases, without mutating the wire lists,
+            # before reading the next payload or entering the fixed point.
+            edges = None
+            summary = None
+
         changed = True
         while changed:
             changed = False
