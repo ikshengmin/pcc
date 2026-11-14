@@ -2182,15 +2182,25 @@ def _threading_analysis_context(
             scope_nodes,
         )
         local_hints_by_id[id(fd)] = local_hints
-        class_hints = field_hints_by_class.setdefault(class_name, {})
-        conflicts = field_conflicts_by_class.setdefault(class_name, set())
+        # The helper returns fresh, independent locals/fields dictionaries.
+        # Give the first fields dictionary to its class instead of copying
+        # it; later methods still use the same sticky-conflict merge below.
+        class_hints = field_hints_by_class.setdefault(class_name, fields)
+        if class_hints is fields:
+            continue
+        conflicts = field_conflicts_by_class.get(class_name)
         for name, kind in fields.items():
-            if name in conflicts:
+            if conflicts is not None and name in conflicts:
                 continue
             prior = class_hints.get(name)
             if prior is None or prior == kind:
                 class_hints[name] = kind
             else:
+                # No conflict set is needed until this class first loses a
+                # field hint.  Keep that one set for every later method.
+                if conflicts is None:
+                    conflicts = set()
+                    field_conflicts_by_class[class_name] = conflicts
                 class_hints.pop(name, None)
                 conflicts.add(name)
 

@@ -599,6 +599,20 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 break
             if active:
                 time.sleep(0.01)
+    except WorkerMemoryError as error:
+        # Preserve bounded primary evidence before cleanup can replace it.
+        # Do not inspect launch data or change the error/cleanup precedence.
+        try:
+            message = str(error)
+            sys.stderr.write(
+                "pcc frontend primary resource error before cleanup: WorkerMemoryError="
+                + repr(message[:2048])
+                + (" [truncated]" if len(message) > 2048 else "") + "\n"
+            )
+            sys.stderr.flush()
+        except Exception:
+            pass  # Best-effort evidence must not replace the primary error.
+        raise
     finally:
         for _index, pid, _reservation, _exclusive, _peak in active:
             _stop_resource_worker(pid)

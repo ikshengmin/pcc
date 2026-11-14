@@ -318,7 +318,13 @@ class _NativeAArch64Emission:
                 for part in line.splitlines():
                     directive = part.split(None, 1)[0] if part.strip() else ""
                     if directive and directive not in allowed:
-                        raise BackendUnavailable("instruction or unsupported directive in metadata adapter")
+                        # Clip before repr: initializers may be large and
+                        # rejected text must not inject control characters.
+                        raise BackendUnavailable(
+                            "instruction or unsupported directive in metadata adapter: "
+                            f"token_prefix={directive[:64]!r}, "
+                            f"line_prefix={part[:160]!r}"
+                        )
                     if directive == ".section":
                         section_name = "".join(part.split()[1:])
                         if section_name.startswith("__TEXT,__text"):

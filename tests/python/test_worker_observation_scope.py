@@ -13,7 +13,9 @@ def fake_pool(monkeypatch, tmp_path):
     monkeypatch.setattr(pool, "_RESOURCE_OBSERVATIONS", history)
     monkeypatch.setattr(pool, "_RESOURCE_OBSERVATION_OWNERS", {})
     monkeypatch.setattr(pool, "_command_spec", lambda command: ([command], []))
-    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 0)
+    # Model a measured 1 MiB owner; zero means RSS is unavailable.
+    owner_rss_bytes = 1024**2
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: owner_rss_bytes)
     monkeypatch.setattr(plan, "read_tree_state", lambda *args, **kwargs: None)
     monkeypatch.setenv(plan.TREE_STATE_ENV, "")
     monkeypatch.setattr(pool, "_resource_event", lambda *args: None)
@@ -44,6 +46,23 @@ def fake_pool(monkeypatch, tmp_path):
         return task
 
     return history, run, make_task
+
+
+@pytest.mark.parametrize("owner_rss", [0, -1], ids=["zero", "negative"])
+def test_scope_rejects_nonpositive_owner_rss_before_launch(fake_pool, monkeypatch, owner_rss):
+    global_history, run, _make_task = fake_pool
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: owner_rss)
+
+    def unexpected_start(*args):
+        pytest.fail("worker launched without measured owner RSS")
+
+    monkeypatch.setattr(pool, "_start_resource_worker", unexpected_start)
+    with pool.ResourceObservationScope("owner") as scope:
+        with pytest.raises(plan.WorkerMemoryError, match="positive tree budget and measured owner RSS"):
+            run("owner", "class")
+        assert scope.history == []
+        assert global_history == []
+    assert pool._RESOURCE_OBSERVATION_OWNERS == {}
 
 
 def test_split_pools_keep_calibration_until_scope_exits(fake_pool):
