@@ -1205,9 +1205,14 @@ def _vthread_summary_append_unique(values: list[str], value: str) -> None:
         values.append(value)
 
 
-def _vthread_summary_add_edge(summary: dict, caller: str, callee: str) -> None:
+def _vthread_summary_add_edge(
+    summary: dict,
+    caller: str,
+    callee: str,
+    caller_edges_start: int = 0,
+) -> None:
     edges = summary["edges"]
-    index = 0
+    index = caller_edges_start
     while index + 1 < len(edges):
         if edges[index] == caller and edges[index + 1] == callee:
             return
@@ -1293,6 +1298,7 @@ def _add_local_callable_effect(
         attribute_calls=attribute_calls,
     )
     summary_caller = ""
+    summary_edges_start = 0
     if effect_summary is not None and native_exports is not None:
         if current_class is None:
             summary_caller = _vthread_effect_function_key(
@@ -1308,6 +1314,10 @@ def _add_local_callable_effect(
                 native_exports,
             )
         _vthread_summary_reset_caller(effect_summary, summary_caller)
+        # Reset removed every previous edge for this canonical caller.  Its
+        # new edges are appended contiguously until this callable is done,
+        # so duplicate checks need not rescan unrelated callers' prefixes.
+        summary_edges_start = len(effect_summary["edges"])
         _vthread_summary_append_unique(effect_summary["publish"], summary_caller)
         for callee in callees:
             _vthread_summary_add_edge(
@@ -1318,6 +1328,7 @@ def _add_local_callable_effect(
                     callee,
                     native_exports,
                 ),
+                summary_edges_start,
             )
         for method_key in method_callees:
             class_name, method_name = method_key.split(".", 1)
@@ -1330,6 +1341,7 @@ def _add_local_callable_effect(
                     method_name,
                     native_exports,
                 ),
+                summary_edges_start,
             )
     if direct_effect:
         effects.add(node_key)
@@ -1358,6 +1370,7 @@ def _add_local_callable_effect(
                     str(target[3].get("name", "")),
                     native_exports,
                 ),
+                summary_edges_start,
             )
         if bool(target[3].get("may_park", False)):
             effects.add(node_key)
@@ -1372,6 +1385,7 @@ def _add_local_callable_effect(
                     target[1],
                     native_exports,
                 ),
+                summary_edges_start,
             )
         if _export_target_is_may_park(native_exports, target):
             effects.add(node_key)
