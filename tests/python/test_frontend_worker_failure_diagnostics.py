@@ -11,6 +11,8 @@ import pytest
 
 from pcc.frontends.python import pipeline_frontend_parallel as parallel
 from pcc.frontends.python import pipeline_frontend_workers as workers
+from pcc.frontends.python import worker_process_pool as pool
+from pcc.frontends.python import worker_resource_plan as policy
 
 
 # CPython's Unicode whitespace set, including the controls the wire rejects.
@@ -480,3 +482,223 @@ def test_in_process_failure_reports_its_result_and_restores_environment(
     assert len(case.calls) == 1
     assert os.environ["PCC_DIRECT_INDEXED_NATIVE_OBJECT"] == "1"
     assert os.environ["PCC_PY_FRONTEND_JOBS"] == "2"
+
+
+def _primary_resource_error_case(tmp_path, monkeypatch, primary, *, cleanup_at=None,
+                                 diagnostic_failure="", diagnostic_error=None):
+    """Use the real cleanup owner with fake children, signals and clocks only."""
+    events = []
+    output = []
+    launched = []
+    reports = []
+    cleanup_error = subprocess.TimeoutExpired("fixture cleanup", 2)
+    if diagnostic_error is None:
+        diagnostic_error = OSError("diagnostic stream unavailable")
+
+    class Stream:
+        def write(self, text):
+            events.append(("write",))
+            if diagnostic_failure == "write":
+                raise diagnostic_error
+            output.append(text)
+
+        def flush(self):
+            events.append(("flush",))
+            if diagnostic_failure == "flush":
+                raise diagnostic_error
+
+    class Process:
+        returncode = None
+
+        def __init__(self, pid):
+            self.pid = pid
+
+        def wait(self, timeout):
+            events.append(("wait", self.pid, timeout))
+            if self.pid == cleanup_at:
+                raise cleanup_error
+            self.returncode = 0
+            return 0
+
+    def start(specs, index):
+        pid = 1001 + index
+        launched.append(pid)
+        pool._HOST_WORKERS[pid] = Process(pid)
+        return pid
+
+    def poll(pid):
+        if primary is not None:
+            return pool._WORKER_RUNNING
+        pool._HOST_WORKERS[pid].returncode = 0
+        return 0
+
+    def owner_rss():
+        if primary is not None and len(launched) == 3:
+            raise primary
+        return 1024 ** 2
+
+    def read_report(path, pid, token):
+        reports.append((path, token))
+        return ("complete", 1024 ** 2, 1024 ** 2)
+
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
+    monkeypatch.setattr(pool, "sys", SimpleNamespace(
+        implementation=SimpleNamespace(name="cpython"), platform="linux", stderr=Stream(),
+    ))
+    monkeypatch.setattr(pool, "_HOST_WORKERS", {})
+    monkeypatch.setattr(pool, "_start_resource_worker", start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", poll)
+    monkeypatch.setattr(pool.os, "killpg",
+                        lambda pid, number: events.append(("signal", pid, number)), raising=False)
+    monkeypatch.setattr(pool.time, "sleep", lambda _seconds: None)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", owner_rss)
+    monkeypatch.setattr(policy, "resource_task_order", lambda *args, **kwargs: ([0, 1, 2], []))
+    monkeypatch.setattr(policy, "choose_task", lambda ready, *args, **kwargs: (ready[0], 1024 ** 2, False))
+    monkeypatch.setattr(policy, "read_tree_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy, "read_worker_resource", read_report)
+    commands = ["PRIVATE_VALUE=do-not-log /never-executed --secret-argument"] * 3
+    tasks = [dict(report_path=str(tmp_path / ("private-report-" + str(index))),
+                  estimate_bytes=1024 ** 2, inputs=[1], **{"class": "host:test"})
+             for index in range(3)]
+
+    def run():
+        return pool.run_resource_worker_processes(
+            commands, tasks, 3, 1024 ** 3, observations=[],
+        )
+
+    return SimpleNamespace(run=run, events=events, output=output, launched=launched,
+                           reports=reports, cleanup_error=cleanup_error)
+
+
+def _expected_resource_cleanup(cleanup_at=None):
+    events = []
+    for pid in (1001, 1002, 1003):
+        events.extend((("signal", pid, 9), ("wait", pid, 2)))
+        if pid == cleanup_at:
+            break
+        events.append(("wait", pid, 2))  # Existing retirement also waits.
+    return events
+
+
+def test_real_singleton_refusal_evidence_survives_cleanup_timeout(tmp_path, monkeypatch):
+    case = _primary_resource_error_case(
+        tmp_path, monkeypatch, policy.WorkerMemoryError("not reached"), cleanup_at=1001,
+    )
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: 1024 ** 2)
+    monkeypatch.setattr(
+        policy, "read_tree_state",
+        lambda _path, _budget, owner, active, *_args, **_kwargs:
+        (0, {owner: 1024 ** 2, **{pid: 1024 ** 3 for pid in active}}),
+    )
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        case.run()
+    assert caught.value is case.cleanup_error
+    primary = caught.value.__context__
+    assert isinstance(primary, policy.WorkerMemoryError)
+    assert "live worker current subtree exceeds safe worker space: task=0" in str(primary)
+    assert "current_worker_subtree_rss_bytes=1073741824" in str(primary)
+    assert "full-task peak is unknown; tree cap is unchanged" in str(primary)
+    assert case.output == [
+        "pcc frontend primary resource error before cleanup: WorkerMemoryError="
+        + repr(str(primary)) + "\n"
+    ]
+    assert case.launched == [1001]
+    assert case.events == [("write",), ("flush",)] + _expected_resource_cleanup(1001)
+
+
+@pytest.mark.parametrize("cleanup_at", [None, 1001, 1002, 1003])
+def test_primary_resource_evidence_preserves_error_and_cleanup_order(
+    tmp_path, monkeypatch, cleanup_at,
+):
+    primary = policy.WorkerMemoryError("live worker current subtree exceeds safe worker space: task=2")
+    case = _primary_resource_error_case(tmp_path, monkeypatch, primary, cleanup_at=cleanup_at)
+    expected = primary if cleanup_at is None else case.cleanup_error
+    with pytest.raises(type(expected)) as caught:
+        case.run()
+    assert caught.value is expected
+    if cleanup_at is not None:
+        assert caught.value.__context__ is primary
+    assert case.launched == [1001, 1002, 1003]
+    assert case.events == [("write",), ("flush",)] + _expected_resource_cleanup(cleanup_at)
+    assert case.output == [
+        "pcc frontend primary resource error before cleanup: WorkerMemoryError="
+        + repr(str(primary)) + "\n"
+    ]
+    # A bare re-raise must not add a handler re-raise frame to the primary.
+    frames = []
+    traceback = primary.__traceback__
+    while traceback is not None:
+        frames.append(traceback.tb_frame.f_code.co_name)
+        traceback = traceback.tb_next
+    assert frames.count("run_resource_worker_processes") == 1
+    assert frames[-1] == "owner_rss"
+    text = "".join(case.output)
+    for value in ("do-not-log", "secret-argument", "private-report-", *[
+        token for _path, token in case.reports
+    ]):
+        assert value not in text
+
+
+@pytest.mark.parametrize("cleanup_at", [None, 1002])
+@pytest.mark.parametrize("failure", ["format", "write", "flush"])
+def test_primary_resource_diagnostic_failure_cannot_replace_original_outcome(
+    tmp_path, monkeypatch, cleanup_at, failure,
+):
+    class UnformattableError(policy.WorkerMemoryError):
+        def __str__(self):
+            raise ValueError("diagnostic formatting failed")
+
+    primary = UnformattableError() if failure == "format" else policy.WorkerMemoryError("primary")
+    case = _primary_resource_error_case(
+        tmp_path, monkeypatch, primary, cleanup_at=cleanup_at, diagnostic_failure=failure,
+    )
+    expected = primary if cleanup_at is None else case.cleanup_error
+    with pytest.raises(type(expected)) as caught:
+        case.run()
+    assert caught.value is expected
+    if cleanup_at is not None:
+        assert caught.value.__context__ is primary
+    diagnostic_events = {"format": [], "write": [("write",)], "flush": [("write",), ("flush",)]}
+    assert case.events == diagnostic_events[failure] + _expected_resource_cleanup(cleanup_at)
+
+
+@pytest.mark.parametrize("message", ["ordinary", "\n\r\t\x00\x1b\x85\u2028\u2029", "\U0001f600" * 4096, "\U0010ffff" * 4096])
+def test_primary_resource_diagnostic_is_one_bounded_escaped_line(tmp_path, monkeypatch, message):
+    primary = policy.WorkerMemoryError(message)
+    case = _primary_resource_error_case(tmp_path, monkeypatch, primary)
+    with pytest.raises(policy.WorkerMemoryError) as caught:
+        case.run()
+    assert caught.value is primary
+    expected = ("pcc frontend primary resource error before cleanup: WorkerMemoryError="
+                + repr(message[:2048]) + (" [truncated]" if len(message) > 2048 else "") + "\n")
+    assert case.output == [expected]
+    assert len(expected.splitlines()) == 1
+    # repr of one codepoint needs at most ten UTF-8 bytes (a U escape).
+    assert len(expected.encode("utf-8")) <= 70 + 2 + 2048 * 10 + len(" [truncated]\n")
+
+
+@pytest.mark.parametrize("primary", [None, RuntimeError("other failure")])
+def test_no_primary_resource_error_adds_no_diagnostic_calls(tmp_path, monkeypatch, primary):
+    case = _primary_resource_error_case(tmp_path, monkeypatch, primary)
+    if primary is None:
+        assert case.run() is None
+        assert case.events == [("wait", pid, 2) for pid in (1001, 1002, 1003)]
+    else:
+        with pytest.raises(RuntimeError) as caught:
+            case.run()
+        assert caught.value is primary
+        assert case.events == _expected_resource_cleanup()
+    assert case.output == []
+
+
+@pytest.mark.parametrize("control", [KeyboardInterrupt(), SystemExit(7)])
+def test_primary_resource_diagnostic_does_not_swallow_control_flow(tmp_path, monkeypatch, control):
+    primary = policy.WorkerMemoryError("primary")
+    case = _primary_resource_error_case(
+        tmp_path, monkeypatch, primary, diagnostic_failure="write", diagnostic_error=control,
+    )
+    with pytest.raises(type(control)) as caught:
+        case.run()
+    assert caught.value is control
+    assert case.events == [("write",)] + _expected_resource_cleanup()
