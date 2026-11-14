@@ -1442,8 +1442,16 @@ def _compute_local_vthread_effects(
     effect_summary: Optional[dict] = None,
     summary_module_name: str = "",
     local_context=None,
-) -> tuple[set[int], set[str], set[int], set[str]]:
-    """Compute one fixed point spanning functions and proven local methods."""
+    summary_only: bool = False,
+) -> Optional[tuple[set[int], set[str], set[int], set[str]]]:
+    """Collect callable effects, then normally solve the local fixed point.
+
+    Summary workers only need the seeds, edges and publish keys collected in
+    ``effect_summary``.  Their parent solves the cross-module fixed point, so
+    ``summary_only`` returns None without deriving unused local result sets.
+    All ordinary callers, including those collecting a summary as a side
+    output, retain the complete local function/method result.
+    """
     if local_context is None:
         local_context = _local_vthread_context(module)
     (
@@ -1513,6 +1521,9 @@ def _compute_local_vthread_effects(
             summary_module_name,
         )
 
+    if summary_only:
+        return None
+
     changed = True
     while changed:
         changed = False
@@ -1568,6 +1579,7 @@ def build_closed_world_vthread_effect_summary(
         native_exports,
         effect_summary=summary,
         summary_module_name=module_name,
+        summary_only=True,
     )
     return summary
 
