@@ -35,7 +35,9 @@ def test_only_private_unrebound_parameters_lend_owning_roots(monkeypatch, body, 
     _emit("import pcc.virtual_thread as vt\n"
           "def worker(receiver, other):\n    vt.yield_now()\n" + body
           + "    return slot_operand_probe(receiver.value)\n")
-    assert observed and any(observed) == reused, observed
+    # Cell lowering can bypass Name receiver handling altogether. The
+    # positive case must use the shortcut; excluded cases must never use it.
+    assert any(observed) == reused, observed
 
 
 PROGRAM = '''import gc
