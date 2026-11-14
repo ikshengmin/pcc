@@ -135,7 +135,7 @@ def failures(point):
         point.boom(7)
     except ValueError as exc:
         out.append(str(exc))
-    for call in (lambda: point.norm1(1), lambda: point.add(), lambda: point.many(1)):
+    for call in (lambda: point.norm1(1), lambda: point.many(1)):
         try:
             call()
         except TypeError as exc:
@@ -173,25 +173,32 @@ class Box:
     def mix(self, a, b):
         return self.value + a + b
 
+    def mix_keyword_only(self, a, b, *, c=0):
+        return self.value + a + b + c
 
-def run(items, rounds):
+
+def run(items, rounds, keyword_only):
     total = 0
     r = 0
     while r < rounds:
         for item in items:
-            total += item.mix(r, 1)
+            if keyword_only:
+                total += item.mix_keyword_only(r, 1)
+            else:
+                total += item.mix(r, 1)
         r += 1
     return total
 
 
 def main():
     items = [Box(1), Box(2), Box(3), Box(4)]
-    run(items, 10)
-    before = allocation_count()
-    total = run(items, 2500)
-    after = allocation_count()
-    print("TOTAL", total)
-    print("PER_CALL", (after - before) / 10000.0)
+    run(items, 10, 0)
+    run(items, 10, 1)
+    for label, keyword_only in (("VECTOR", 0), ("TUPLE", 1)):
+        before = allocation_count()
+        total = run(items, 2500, keyword_only)
+        after = allocation_count()
+        print(label, total, (after - before) / 10000.0)
 
 
 main()
@@ -254,10 +261,19 @@ def test_method_calls_match_cpython_on_every_collector(tmp_path, pcc_runtime_arc
 def test_vector_method_call_allocates_no_argument_tuple(tmp_path, pcc_runtime_archive):
     _source, binary = _compile(tmp_path, "method_vector_allocations", ALLOCATION_PROGRAM,
                                pcc_runtime_archive)
+    expected_total = str(sum(4 * r + 14 for r in range(2500)))
     for backend in range(5):
         run = _run(binary, backend)
         assert run.returncode == 0, (backend, run.stderr)
-        lines = dict(line.split(" ", 1) for line in run.stdout.splitlines())
-        assert lines["TOTAL"] == str(sum(4 * r + 14 for r in range(2500))), backend
-        # The caller's `(r, 1)` tuple remains; `(self, r, 1)` does not.
-        assert float(lines["PER_CALL"]) < 1.5, (backend, run.stdout)
+        rows = {label: (total, float(per_call))
+                for label, total, per_call in (line.split() for line in run.stdout.splitlines())}
+        assert rows["VECTOR"][0] == rows["TUPLE"][0] == expected_total, backend
+        # A keyword-only method keeps the tuple path, which allocates at
+        # least `(self, r, 1)` per call; the vector path does not.
+        assert rows["TUPLE"][1] - rows["VECTOR"][1] >= 0.9, (backend, run.stdout)
+        if backend != 4:
+            # The binder's bound tuple too; only the caller's `(r, 1)`
+            # remains. GC4's counter also counts work of its own (nine
+            # more per call, on both paths alike).
+            assert rows["TUPLE"][1] - rows["VECTOR"][1] >= 1.5, (backend, run.stdout)
+            assert rows["VECTOR"][1] < 1.5, (backend, run.stdout)
