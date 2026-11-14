@@ -113,6 +113,13 @@ def assert_compiler_two_root_error_edge(modules):
     Here the actual selected compiler must emit physical one-slot roots and
     the exact pending-error route to their cleanup and reverse retirement.
     """
+    if modules and any(isinstance(module, bytes) for module in modules):
+        assert all(isinstance(module, bytes) for module in modules), "mixed executable IR representations"
+        from tests.python.two_root_indexed_lifecycle_support import (
+            assert_indexed_compiler_two_root_error_edge,
+        )
+
+        return assert_indexed_compiler_two_root_error_edge(modules)
     from tests.python.test_owned_cleanup_helper_ir import verify_stackmaps
 
     functions = []

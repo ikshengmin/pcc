@@ -2110,6 +2110,11 @@ def _link_with_self_backend_direct_artifacts(
             extra_link_inputs=extra_link_inputs,
         )
         return
+    input_receipt_link = None
+    if str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip():
+        from pcc.backend.indexed_input_receipts import prepare_link
+
+        input_receipt_link = prepare_link(artifacts)
     with tempfile.TemporaryDirectory(prefix="pcc_py_direct_artifacts_") as tmp:
         tmp_out_path = str(out_path) + ".tmp"
         input_manifest = os.path.join(tmp, "internal-inputs.txt")
@@ -2175,6 +2180,10 @@ def _link_with_self_backend_direct_artifacts(
         )
         if coordinator_timing is not None:
             coordinator_timing.complete("executable_publish", publish_started)
+        if input_receipt_link is not None:
+            from pcc.backend.indexed_input_receipts import finish_link
+
+            finish_link(input_receipt_link, artifacts, out_path)
 
 
 def _link_with_self_backend_native_objects(

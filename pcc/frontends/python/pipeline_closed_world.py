@@ -295,6 +295,42 @@ def _flatten_closed_world_class_export_fields(native_exports) -> None:
                 resolve(info)
 
 
+def _record_closed_world_reexport_change(
+    changes, exports, name, was_present, previous,
+) -> None:
+    """Remember a slot's first value without copying metadata or whole tables."""
+    marker = id(exports)
+    row = changes.get(marker)
+    if row is None:
+        previous_values = {}
+        changes[marker] = (exports, previous_values)
+    else:
+        previous_values = row[1]
+    if name not in previous_values:
+        previous_values[name] = (was_present, previous)
+
+
+def _closed_world_reexport_round_changed(changes) -> bool:
+    """Compare complete rounds, not transient writes to the same binding.
+
+    The export tables are internal plain dictionaries with string keys. A
+    module can re-export one name repeatedly, or two module names can alias
+    the same table. Keep the original writes and order, but compare each
+    physical slot only with its first value in this round. Missing and None
+    differ because star imports can publish a None-valued binding.
+
+    This detects a stable round boundary, not longer oscillating cycles.
+    The sparse log retains overwritten metadata until the round completes.
+    """
+    for _marker, row in changes.items():
+        exports, previous_values = row
+        for name, previous in previous_values.items():
+            was_present, value = previous
+            if not was_present or exports.get(name) is not value:
+                return True
+    return False
+
+
 def _merge_closed_world_reexports(
     parsed_modules, module_names, src_paths, native_exports
 ):
@@ -318,7 +354,7 @@ def _merge_closed_world_reexports(
 
     changed = True
     while changed:
-        changed = False
+        round_changes = {}
         for mod_name in module_names:
             ast_mod = module_to_ast.get(mod_name)
             src_path = module_to_src.get(mod_name, "")
@@ -346,19 +382,26 @@ def _merge_closed_world_reexports(
                         ):
                             if export_name in exports:
                                 continue
+                            _record_closed_world_reexport_change(
+                                round_changes, exports, export_name, False, None,
+                            )
                             exports[export_name] = info
-                            changed = True
                         continue
                     local_name = as_name or attr_name
                     src_exports = native_exports.get(src_mod)
                     if src_exports and attr_name in src_exports:
-                        if exports.get(local_name) is not src_exports[attr_name]:
+                        previous = exports.get(local_name)
+                        if previous is not src_exports[attr_name]:
+                            _record_closed_world_reexport_change(
+                                round_changes, exports, local_name,
+                                local_name in exports, previous,
+                            )
                             exports[local_name] = src_exports[attr_name]
-                            changed = True
                         continue
                     full_submodule = f"{src_mod}.{attr_name}"
                     if full_submodule in module_set:
                         continue
+        changed = _closed_world_reexport_round_changed(round_changes)
 
 
 def _closed_world_reexport_edges(
@@ -491,7 +534,7 @@ def _closed_world_module_dependencies_with_nodes(
 def _merge_closed_world_reexport_edges(module_names, native_exports, edges):
     changed = True
     while changed:
-        changed = False
+        round_changes = {}
         for mod_name in module_names:
             exports = native_exports.setdefault(mod_name, {})
             for edge in edges:
@@ -507,15 +550,20 @@ def _merge_closed_world_reexport_edges(module_names, native_exports, edges):
                     ):
                         if export_name in exports:
                             continue
+                        _record_closed_world_reexport_change(
+                            round_changes, exports, export_name, False, None,
+                        )
                         exports[export_name] = info
-                        changed = True
                     continue
-                if (
-                    attr_name in src_exports
-                    and exports.get(local_name) is not src_exports[attr_name]
-                ):
-                    exports[local_name] = src_exports[attr_name]
-                    changed = True
+                if attr_name in src_exports:
+                    previous = exports.get(local_name)
+                    if previous is not src_exports[attr_name]:
+                        _record_closed_world_reexport_change(
+                            round_changes, exports, local_name,
+                            local_name in exports, previous,
+                        )
+                        exports[local_name] = src_exports[attr_name]
+        changed = _closed_world_reexport_round_changed(round_changes)
 
 
 def _repair_closed_world_default_global_owners(native_exports) -> None:
