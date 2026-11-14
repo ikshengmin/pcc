@@ -37,6 +37,10 @@ from .arm64_encode import (
     STRUCTURED_FIXUP_BRANCH19,
     STRUCTURED_FIXUP_BRANCH26,
     STRUCTURED_FIXUP_CALL,
+    STRUCTURED_RELOCATION_PAGE21,
+    STRUCTURED_RELOCATION_PAGEOFF12,
+    STRUCTURED_RELOCATION_GOT_LOAD_PAGE21,
+    STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12,
     _validate_text_fixup_word,
     append_emitted_instruction_record,
     intern_emitted_symbol,
@@ -507,9 +511,22 @@ class _NativeAArch64Emission:
                         raise BackendUnavailable("emission fragment word is outside uint32")
                     if kind < 0:
                         _validate_text_fixup_word(record.first, kind)
-                    validate_emitted_label_name(fragments.symbol_names[symbol_id])
+                    symbol = fragments.symbol_names[symbol_id]
+                    if kind in (
+                        STRUCTURED_RELOCATION_PAGE21, STRUCTURED_RELOCATION_PAGEOFF12,
+                        STRUCTURED_RELOCATION_GOT_LOAD_PAGE21,
+                        STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12,
+                    ) and symbol.startswith("."):
+                        # Page-address relocations can reference the dotted
+                        # data symbols already admitted by extend_metadata.
+                        # Validate only their tail; retain the full symbol for
+                        # Mach-O/ELF relocation ownership. Code labels and
+                        # call/branch fixups keep their existing grammar.
+                        validate_emitted_label_name(symbol[1:])
+                    else:
+                        validate_emitted_label_name(symbol)
                     symbol_id = intern_emitted_symbol(
-                        fragments.symbol_names[symbol_id], self.symbol_ids, self.symbol_names,
+                        symbol, self.symbol_ids, self.symbol_names,
                     )
                 # The builder validates unpatched fixup words and resolves all
                 # branch displacements only after the rewritten final layout.
