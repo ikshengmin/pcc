@@ -884,7 +884,31 @@ class TypeAbiLoweringMixin:
                 raise L1CodegenError("managed valueclass conversion requires its producer-owned payload slot")
             return value
         if source_root is None:
-            raise L1CodegenError("boxed valueclass projection requires an authoritative object root before evaluation")
+            # Preserve the fail-closed ownership boundary. Report only compiler
+            # context, never evaluate or format the unrooted object itself.
+            message = "boxed valueclass projection requires an authoritative object root before evaluation"
+            try:
+                function = getattr(self, "current_function", None)
+                block = getattr(getattr(self, "builder", None), "_block", None)
+                function_name = getattr(function, "name", None)
+                block_name = getattr(block, "name", None)
+                target_name = getattr(ty, "name", None)
+                if type(function_name) is not str:
+                    function_name = "<unknown>"
+                if type(block_name) is not str:
+                    block_name = "<unknown>"
+                if type(target_name) is not str:
+                    target_name = "<unknown>"
+                message += (
+                    "; function=" + repr(function_name[:160])
+                    + "; block=" + repr(block_name[:160])
+                    + "; target=" + repr(target_name[:160])
+                )
+            except Exception:
+                # Missing or malformed diagnostic context cannot replace the
+                # original ownership failure.
+                pass
+            raise L1CodegenError(message)
         return self._emit_valueclass_payload_from_root(source_root, ty)
 
     def _is_scalar(self, ty: Type) -> bool:

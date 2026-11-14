@@ -907,7 +907,7 @@ def _class_method_tables(
 def _receiver_class_name(
     receiver,
     current_class: Optional[str],
-    local_classes: set[str],
+    local_classes: set[str] | dict[str, dict[str, FuncDef]],
     local_hints: Optional[dict[str, str]] = None,
 ) -> Optional[str]:
     if isinstance(receiver, Name):
@@ -934,7 +934,9 @@ def _receiver_class_name(
     return None
 
 
-def _annotation_local_class_name(annotation, local_classes: set[str]) -> str:
+def _annotation_local_class_name(
+    annotation, local_classes: set[str] | dict[str, dict[str, FuncDef]],
+) -> str:
     if isinstance(annotation, ClassType):
         candidate = annotation.name
         if candidate in local_classes:
@@ -948,7 +950,7 @@ def _annotation_local_class_name(annotation, local_classes: set[str]) -> str:
 
 def _function_local_class_hints(
     fd: Optional[FuncDef],
-    local_classes: set[str],
+    local_classes: set[str] | dict[str, dict[str, FuncDef]],
     scope_nodes: Optional[list[object]] = None,
 ) -> dict[str, str]:
     hints: dict[str, str] = {}
@@ -1143,9 +1145,12 @@ def _local_method_call_keys(
     *,
     attribute_calls: Optional[list[Call]] = None,
     local_hints: Optional[dict[str, str]] = None,
+    borrow_methods: bool = False,
 ) -> list[str]:
     keys: list[str] = []
-    local_classes = set(methods)
+    # Opt in only for plain tables built by this analysis and left unchanged
+    # during the scan. Other callers keep their class-name snapshot.
+    local_classes = methods if borrow_methods else set(methods)
     if local_hints is None:
         local_hints = _function_local_class_hints(fd, local_classes)
     calls = attribute_calls
@@ -1272,6 +1277,7 @@ def _add_local_callable_effect(
     summary_module_name: str = "",
     fresh_summary: bool = False,
     summary_only: bool = False,
+    borrow_methods: bool = False,
 ) -> None:
     """Add one function/method node without a self-host closure."""
     scope_nodes, binding_state, attribute_calls, local_class_hints = (
@@ -1301,6 +1307,7 @@ def _add_local_callable_effect(
         bases,
         attribute_calls=attribute_calls,
         local_hints=local_class_hints,
+        borrow_methods=borrow_methods,
     )
     if not summary_only:
         for method_key in method_callees:
@@ -1436,7 +1443,6 @@ def _local_vthread_context(module: Module):
     functions = _module_function_defs(module)
     methods, bases = _class_method_tables(module)
     method_defs = _class_method_defs(module)
-    local_classes = set(methods)
     callable_context = {}
     for fd in functions:
         nodes = _function_scope_nodes(fd)
@@ -1449,7 +1455,7 @@ def _local_vthread_context(module: Module):
                 nodes,
             ),
             _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, local_classes, nodes),
+            _function_local_class_hints(fd, methods, nodes),
         )
     for _class_name, fd in method_defs:
         nodes = _function_scope_nodes(fd)
@@ -1462,7 +1468,7 @@ def _local_vthread_context(module: Module):
                 nodes,
             ),
             _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, local_classes, nodes),
+            _function_local_class_hints(fd, methods, nodes),
         )
     threading_context = _threading_analysis_context(
         module,
@@ -1505,6 +1511,8 @@ def _compute_local_vthread_effects(
     ``fresh_summary`` is reserved for the builder's exclusively owned, empty
     summary.  Supplied summaries retain their original reset/alias behavior.
     """
+    # Supplied contexts keep their original per-callable snapshot behavior.
+    borrow_methods = local_context is None
     if local_context is None:
         local_context = _local_vthread_context(module)
     (
@@ -1552,6 +1560,7 @@ def _compute_local_vthread_effects(
             summary_module_name,
             fresh_summary,
             summary_only,
+            borrow_methods,
         )
     for class_name, fd in method_defs:
         _add_local_callable_effect(
@@ -1576,6 +1585,7 @@ def _compute_local_vthread_effects(
             summary_module_name,
             fresh_summary,
             summary_only,
+            borrow_methods,
         )
 
     if summary_only:
@@ -2449,7 +2459,6 @@ def classify_vthread_park_boundaries(
         )
     method_defs = _class_method_defs(module)
     methods, bases = _class_method_tables(module)
-    local_classes = set(methods)
     callable_context = {}
     proof_cache = {}
     for fd in top_functions:
@@ -2463,7 +2472,7 @@ def classify_vthread_park_boundaries(
                 nodes,
             ),
             _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, local_classes, nodes),
+            _function_local_class_hints(fd, methods, nodes),
         )
     for _class_name, fd in method_defs:
         nodes = _function_scope_nodes(fd)
@@ -2476,7 +2485,7 @@ def classify_vthread_park_boundaries(
                 nodes,
             ),
             _function_attr_calls(fd, nodes),
-            _function_local_class_hints(fd, local_classes, nodes),
+            _function_local_class_hints(fd, methods, nodes),
         )
     effect_method_names = _collect_all_method_effect_names(
         module,
@@ -2597,6 +2606,7 @@ def classify_vthread_park_boundaries(
                 bases,
                 attribute_calls=callable_context[id(fd)][2],
                 local_hints=callable_context[id(fd)][3],
+                borrow_methods=True,
             ):
                 if callee_key in rejected_method_keys:
                     rejected_method_keys.add(key)
@@ -2641,6 +2651,7 @@ def classify_vthread_park_boundaries(
                 bases,
                 attribute_calls=callable_context[id(caller_fd)][2],
                 local_hints=callable_context[id(caller_fd)][3],
+                borrow_methods=True,
             ):
                 if callee_key in rejected_method_keys:
                     rejected[caller] = (
