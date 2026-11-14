@@ -6,6 +6,7 @@ the complete runtime's actual root scan, finalizers, weakrefs and reclamation.
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 import pytest
 
@@ -17,6 +18,46 @@ SOURCE = Path(__file__).resolve().parents[2] / (
     "pcc/runtime/py/freestanding_gc_tracing_sweep_collector.py"
 )
 WHITE, GRAY, BLACK, FINALIZED, CANDIDATE = 8, 16, 32, 4, 1024
+
+
+def test_native_cycle_failure_snapshots_preserve_predicates_and_first_line():
+    fixture = (SOURCE.parents[3] / "tests/fixtures/native/gc_tracing_pending_verdict.c").read_text()
+    run = fixture.split("static int run_mode(void) {", 1)[1].split("static void report_cycle_failure", 1)[0]
+    callbacks = re.findall(r"if \(callback_error != 0\) \{.*?\n    \}", run, re.S)
+    assert len(callbacks) == 2
+    for check, block in enumerate(callbacks, 1):
+        assert " ".join(block.split()) == (
+            f"if (callback_error != 0) {{ failure_check = {check}; return 142; }}"
+        )
+    predicate = "finalizers != 1 || weak_callbacks != 1 || collected != 1 || known_first != 0"
+    cycle = re.findall(r"if \(" + re.escape(predicate) + r"\) \{.*?\n        \}", run, re.S)
+    assert len(cycle) == 1
+    assert " ".join(cycle[0].split()) == (
+        f"if ({predicate}) {{ failure_check = 3; failure_collected = collected; "
+        "failure_known_first = known_first; return 146; }"
+    )
+    assert run.index("int known_second =") < run.index(callbacks[0])
+    assert run.index(callbacks[1]) > run.index("return 156;")
+    report = fixture.split("static void report_cycle_failure(int status) {", 1)[1].split("int main(", 1)[0]
+    # No new getters, roots, locks, traversal or writes in reporting. The
+    # compiler-backed negative controls check exact formatting and silence.
+    expressions = re.sub(r'"(?:\\.|[^"\\])*"|/\*.*?\*/', "", report, flags=re.S)
+    assert set(re.findall(r"\b([A-Za-z_]\w*)\s*\(", expressions)) == {"if", "printf"}
+    assert not any(token in expressions for token in ("watched", "roots", "->", "++", "--"))
+    assert not re.search(r"(?<![=!<>])=(?!=)", expressions)
+    for expected in ("expected_callback_error=0", "expected_finalizers=1",
+                     "expected_weak_callbacks=1", "expected_collected=1",
+                     "expected_known_first=0", "final_callback_error=%d"):
+        assert expected in report
+    main = fixture.split("int main(", 1)[1]
+    failure = re.findall(r"if \(status != 0\) \{.*?\n    \}", main, re.S)
+    assert len(failure) == 1
+    assert " ".join(failure[0].split()) == (
+        'if (status != 0) { printf("sweep-verdict:blocked status=%d phase=%d mode=%d\\n", '
+        'status, phase, mode); report_cycle_failure(status); }'
+    )
+    # The callback full-heap count discrepancy remains an unchanged failure.
+    assert "finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1" in run
 
 
 class _SweepBoundary:
@@ -353,7 +394,8 @@ def test_native_pending_verdict_distinguishes_callback_and_plain_weakrefs():
             f"return {status};"
         ) in partial
     assert "if (next != 1 || known_after != 0 || finalizers != 2 || weak_callbacks != 2) return 155;" in partial
-    assert partial.index("if (callback_error != 0) return 142;") > partial.index("return 156;")
+    repeat_check = "if (callback_error != 0) { failure_check = 2; return 142; }"
+    assert partial.index(repeat_check) > partial.index("return 156;")
     assert "finalizer_calls[index] != expected_calls" in partial
     assert "weak_callback_calls[index] != expected_calls" in partial
     native = (SOURCE.parents[3] / "tests/python/test_gc_tracing_sweep_verdict_native.py").read_text()

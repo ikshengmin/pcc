@@ -50,6 +50,10 @@ static int gc_callbacks;
 static int callback_error;
 static int finalizer_calls[2];
 static int weak_callback_calls[2];
+/* Failure-only snapshots contain scalars, never target addresses or roots. */
+static int failure_check;
+static int64_t failure_collected;
+static int failure_known_first;
 
 static PyObject *weak_callback(PyObject *captures, PyObject *args) {
     (void)captures;
@@ -314,7 +318,10 @@ static int run_mode(void) {
     /* Address-index snapshots precede any allocation after reclamation. */
     int known_first = (int)pcc_gc_object_is_known_no_lock(watched[0]);
     int known_second = count == 2 ? (int)pcc_gc_object_is_known_no_lock(watched[1]) : 0;
-    if (callback_error != 0) return 142;
+    if (callback_error != 0) {
+        failure_check = 1;
+        return 142;
+    }
     if (mode == 1 || mode == 5 || mode == 6) {
         if (finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1) {
             report_live_verdict_failure(143, 0, 0, collected, known_first, known_second);
@@ -323,7 +330,12 @@ static int run_mode(void) {
         if (!inspect_live(0, 1)) return 144;
         if (mode == 5 && gc_callbacks != 2) return 145;
     } else if (mode == 2) {
-        if (finalizers != 1 || weak_callbacks != 1 || collected != 1 || known_first != 0) return 146;
+        if (finalizers != 1 || weak_callbacks != 1 || collected != 1 || known_first != 0) {
+            failure_check = 3;
+            failure_collected = collected;
+            failure_known_first = known_first;
+            return 146;
+        }
         if (!weak_matches(0, 0) || !plain_matches(0, 0)) return 147;
         pcc_gc_begin_explicit_tracing_collect();
         if (pcc_gc_collect_tracing() != 0) return 148;
@@ -356,7 +368,10 @@ static int run_mode(void) {
     }
     /* Totals alone could hide a duplicate call paired with a missed object.
      * Recheck errors after the repeated collections in modes 2 and 7 too. */
-    if (callback_error != 0) return 142;
+    if (callback_error != 0) {
+        failure_check = 2;
+        return 142;
+    }
     int expected_calls = mode == 2 || mode == 3 || mode == 4 || mode == 7;
     int index;
     for (index = 0; index < count; index++) {
@@ -368,6 +383,29 @@ static int run_mode(void) {
     return 0;
 }
 
+static void report_cycle_failure(int status) {
+    /* main has already printed the original blocked line. callback_error is
+     * the final stored value: later callback checks may have overwritten it.
+     * check 1/2 identify first/repeated callback checks; 3 is the dead cycle.
+     */
+    if (status == 142) {
+        printf("sweep-verdict:detail status=142 check=%d phase=%d mode=%d "
+               "final_callback_error=%d expected_callback_error=0 finalizers=%d weak_callbacks=%d "
+               "finalizer_first=%d finalizer_second=%d weak_first=%d weak_second=%d\n",
+               failure_check, phase, mode, callback_error, finalizers, weak_callbacks,
+               finalizer_calls[0], finalizer_calls[1],
+               weak_callback_calls[0], weak_callback_calls[1]);
+    } else if (status == 146) {
+        printf("sweep-verdict:detail status=146 check=%d phase=%d mode=%d "
+               "finalizers=%d expected_finalizers=1 weak_callbacks=%d expected_weak_callbacks=1 "
+               "collected=%lld expected_collected=1 known_first=%d expected_known_first=0 "
+               "final_callback_error=%d finalizer_first=%d weak_first=%d\n",
+               failure_check, phase, mode, finalizers, weak_callbacks,
+               (long long)failure_collected, failure_known_first, callback_error,
+               finalizer_calls[0], weak_callback_calls[0]);
+    }
+}
+
 int main(int argc, char **argv) {
     if (argc != 2 || argv[1][0] < '1' || argv[1][0] > '7' || argv[1][1] != 0) return 100;
     mode = argv[1][0] - '0';
@@ -375,7 +413,10 @@ int main(int argc, char **argv) {
     if (status == 0) status = build_graph();
     if (status == 0) status = inject_candidates(mode == 4 || mode == 7 ? 2 : 1);
     if (status == 0) status = run_mode();
-    if (status != 0) printf("sweep-verdict:blocked status=%d phase=%d mode=%d\n", status, phase, mode);
+    if (status != 0) {
+        printf("sweep-verdict:blocked status=%d phase=%d mode=%d\n", status, phase, mode);
+        report_cycle_failure(status);
+    }
     if (held_world != 0) {
         if (pcc_resume_world() != 0 && status == 0) status = 157;
         pcc_gc_cms_stop_worker();

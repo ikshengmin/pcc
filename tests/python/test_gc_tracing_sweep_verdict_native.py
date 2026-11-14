@@ -9,6 +9,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 
 import pytest
 
@@ -91,3 +92,82 @@ def test_pending_verdict_native(_verdict_binary, backend, mode, name, counts):
         f"sweep-verdict:ok backend={backend} mode={mode} finalizers={finalizers} "
         f"weak_callbacks={weak_callbacks} gc_callbacks={gc_callbacks}\n"
     ), receipt
+
+
+@pytest.mark.integration
+def test_cycle_failure_diagnostic_branches_compile_and_keep_blocked_first(tmp_path):
+    # Compile the actual C failure/snapshot/report branches. This scalar-only
+    # probe is separate from the unchanged graph modes above and cannot prove
+    # the cause of a GC failure or identify the five collected objects.
+    source = HARNESS.read_text()
+    run = source.split("static int run_mode(void) {", 1)[1].split("static void report_cycle_failure", 1)[0]
+    callbacks = re.findall(r"if \(callback_error != 0\) \{.*?\n    \}", run, re.S)
+    cycle = re.findall(
+        r"if \(finalizers != 1 \|\| weak_callbacks != 1 \|\| collected != 1 \|\| known_first != 0\)"
+        r" \{.*?\n        \}", run, re.S,
+    )
+    reporting = "static void report_cycle_failure" + source.split(
+        "static void report_cycle_failure", 1)[1].split("int main(", 1)[0]
+    emit = re.findall(r"if \(status != 0\) \{.*?\n    \}", source.split("int main(", 1)[1], re.S)
+    assert len(callbacks) == 2 and len(cycle) == len(emit) == 1
+    harness = tmp_path / "cycle_diagnostics.c"
+    binary = tmp_path / "cycle_diagnostics.out"
+    declarations = (
+        "#include <stdio.h>\n"
+        "static int phase = 4, mode = 7, callback_error, finalizers = 2, weak_callbacks = 1;\n"
+        "static int finalizer_calls[2] = {1, 1}, weak_callback_calls[2] = {1, 0};\n"
+        "static long long collected = 1, failure_collected;\n"
+        "static int known_first, failure_check, failure_known_first;\n"
+    )
+    branches = "\n".join(
+        f"static int branch_{index}(void) {{\n{block}\nreturn 0;\n}}"
+        for index, block in enumerate((*callbacks, *cycle))
+    )
+    main = """
+int main(int argc, char **argv) {
+    if (argc != 3) return 100;
+    int status;
+    int fault = argv[2][0] - '0';
+    callback_error = fault != 0 ? 9 : 0;
+    if (argv[1][0] == '0') status = branch_0();
+    else if (argv[1][0] == '1') status = branch_1();
+    else {
+        mode = 2;
+        callback_error = 0;
+        finalizers = fault == 1 ? 0 : 1;
+        weak_callbacks = fault == 2 ? 0 : 1;
+        collected = fault == 3 ? 0 : 1;
+        known_first = fault == 4 ? 1 : 0;
+        weak_callback_calls[0] = 1;
+        status = branch_2();
+    }
+""" + emit[0] + "\nreturn status;\n}\n"
+    harness.write_text(declarations + branches + reporting + main)
+    link_c_harness(harness, binary)
+    for index in range(3):
+        for fault in range(5 if index == 2 else 2):
+            result = run_process_group_timeout([str(binary), str(index), str(fault)], timeout=15)
+            status = (146 if index == 2 else 142) if fault else 0
+            assert result.stderr == ""
+            assert result.returncode == status
+            if not fault:
+                assert result.stdout == ""
+                continue
+            mode = 2 if index == 2 else 7
+            first = f"sweep-verdict:blocked status={status} phase=4 mode={mode}\n"
+            if index < 2:
+                detail = (
+                    f"sweep-verdict:detail status=142 check={index + 1} phase=4 mode=7 "
+                    "final_callback_error=9 expected_callback_error=0 finalizers=2 weak_callbacks=1 "
+                    "finalizer_first=1 finalizer_second=1 weak_first=1 weak_second=0\n"
+                )
+            else:
+                detail = (
+                    "sweep-verdict:detail status=146 check=3 phase=4 mode=2 "
+                    f"finalizers={int(fault != 1)} expected_finalizers=1 "
+                    f"weak_callbacks={int(fault != 2)} expected_weak_callbacks=1 "
+                    f"collected={int(fault != 3)} expected_collected=1 "
+                    f"known_first={int(fault == 4)} expected_known_first=0 "
+                    "final_callback_error=0 finalizer_first=1 weak_first=1\n"
+                )
+            assert result.stdout == first + detail
