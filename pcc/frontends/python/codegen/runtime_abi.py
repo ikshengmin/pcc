@@ -974,12 +974,12 @@ def _runtime_signatures_part_20():
     "py_func_new_static_def": (
         _I64, [_PTR, _CSTR, _CSTR, _CSTR, _CSTR, _PYOBJ, _I64, _PTR, _PTR], False,
     ),
-    "py_func_set_vector_entry": (_VOID, [_PYOBJ, _PTR], False),
     }
 
 
 def _runtime_signatures_part_21():
     return {
+    "py_func_set_vector_entry": (_VOID, [_PYOBJ, _PTR], False),
     "py_builtin_function_value": (_PYOBJ, [_PTR, _CSTR], False),
     "py_builtin_abs_entry": (_PYOBJ, [_PYOBJ, _PYOBJ], False),
     "py_func_new_bound": (_PYOBJ, [_PTR, _PYOBJ, _CSTR, _PYOBJ], False),

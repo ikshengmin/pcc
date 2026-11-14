@@ -87,7 +87,10 @@ INVALID = (
     ('package main\ntype pair struct{ x, r uint64 }\nfunc main() { a := [2]pair{{1, 2}: {3, 4}}; _ = a }\n',
      '3:28: Go: missing type in composite literal', '3:28: missing type in composite literal'),
     ('package main\nfunc main() { a := [2]int{{1}, {2}}; _ = a }\n',
-     '2:27: Go: composite literal requires an array or struct type', '2:27: invalid composite literal type int'),
+     '2:27: Go: composite literal requires an array or struct type',
+     # go1.23.6 and the CI go1.27.3 reject the same source at 2:27.
+     ('2:27: invalid composite literal type int',
+      '2:27: invalid composite literal element type int')),
     ('package main\nfunc main() { x := {1}; _ = x }\n',
      "2:20: Go: unsupported expression token '{'", '2:20: syntax error: unexpected {'),
 )
@@ -100,6 +103,19 @@ def test_invalid_elisions_are_source_errors(source, message, reference):
     assert not isinstance(caught.value, UnsupportedGo)
 
 
+def _assert_reference_rejection(returncode, stderr, reference):
+    if isinstance(reference, tuple):
+        # Keep the source filename, position, type and entire wording exact.
+        # Only the relative filename separator may vary across platforms.
+        expected_lines = tuple(prefix + message
+                               for prefix in ('invalid.go:', './invalid.go:', '.\\invalid.go:')
+                               for message in reference)
+        matched = any(line in expected_lines for line in stderr.splitlines())
+    else:
+        matched = reference in stderr
+    assert returncode == 1 and matched, stderr
+
+
 @pytest.mark.xdist_group(name='go-darwin-native')
 @pytest.mark.pcc_gate(unavailable=REFERENCE_UNAVAILABLE)
 def test_reference_rejects_the_same_sources_at_the_same_positions(tmp_path):
@@ -107,7 +123,7 @@ def test_reference_rejects_the_same_sources_at_the_same_positions(tmp_path):
         directory = tmp_path / str(index)
         directory.mkdir()
         returncode, stderr = reference_rejection((('invalid.go', source),), directory)
-        assert returncode == 1 and reference in stderr, stderr
+        _assert_reference_rejection(returncode, stderr, reference)
 
 
 @pytest.mark.parametrize('source,code', (

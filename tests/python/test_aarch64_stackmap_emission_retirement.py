@@ -54,6 +54,13 @@ class _Timing:
     def add(self, phase, started):
         self.events.append(("add", phase, started))
 
+    def begin_backend_finalize(self, phase):
+        self.events.append(("begin_backend_finalize", phase))
+        return len(self.events)
+
+    def complete_backend_finalize(self, phase, started):
+        self.events.append(("complete_backend_finalize", phase, started))
+
 
 def _prepare(source):
     return emitter.prepare_parsed_module_for_target(

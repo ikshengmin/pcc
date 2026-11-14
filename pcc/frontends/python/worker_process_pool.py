@@ -349,7 +349,11 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 if tasks[index].get("handoff_request", ""):
                     from pcc.frontends.python.pipeline_indexed_handoff import retire_handoff_task
 
-                    retire_handoff_task(tasks[index], attempt_tokens[pid])
+                    retired_sidecar = retire_handoff_task(tasks[index], attempt_tokens[pid])
+                    if str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip():
+                        from pcc.backend.indexed_input_receipts import retire_sidecar_request
+
+                        retire_sidecar_request(retired_sidecar)
                 observations.append(completed_task_observation(tasks[index], observed_peak))
                 completed_tokens[index] = attempt_tokens[pid]
                 if tasks[index].get("retry_calibration", False):

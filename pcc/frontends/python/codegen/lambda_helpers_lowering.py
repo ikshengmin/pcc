@@ -10,10 +10,33 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BoolType, Call, DictType, DynType, FloatType, IntType, Lambda, ListType, Name, NoneType, SourceSpan, StrType, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BoolType,
+    Call,
+    DictType,
+    DynType,
+    FloatType,
+    FuncDef,
+    IntType,
+    Lambda,
+    ListType,
+    Name,
+    NoneType,
+    SourceSpan,
+    StrType,
+    TupleExpr,
+    TupleType,
+    Type,
+)
 from pcc.frontends.python.codegen.layer1_support import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, CELL_READ, CELL_UNBOUND
+from pcc.frontends.python.codegen.hoist_boxing import (
+    CELL_CAPTURE,
+    CELL_READ,
+    CELL_UNBOUND,
+    function_local_bindings,
+)
 
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
@@ -207,6 +230,10 @@ class LambdaHelperLoweringMixin:
 
         lexical_shadow_names = set(getattr(self, "_lambda_lexical_shadow_names", set()))
         cur_fd = getattr(self, "current_func_def", None)
+        if isinstance(cur_fd, FuncDef):
+            # Source locals shadow providers throughout their lexical scope,
+            # including before assignment and for metadata-only imports.
+            lexical_shadow_names.update(function_local_bindings(cur_fd))
         if cur_fd is not None:
             for p in getattr(cur_fd, "params", ()) or ():
                 pname = getattr(p, "name", "")
@@ -302,6 +329,23 @@ class LambdaHelperLoweringMixin:
                 for body_expr in body_exprs:
                     collect(body_expr, comp_bound, acc)
                 return
+            if isinstance(e, Attr):
+                # An owned provider attribute can be emitted without loading
+                # its compile-time namespace. Ask that expression's owner,
+                # rather than whitelisting imported names as runtime globals.
+                # Lexical receivers (including nested lambda parameters) must
+                # remain ordinary reads even when they share provider spelling.
+                receiver = e.obj
+                while isinstance(receiver, Attr):
+                    receiver = receiver.obj
+                if (
+                    isinstance(receiver, Name)
+                    and receiver.ident not in bound
+                    and receiver.ident not in self.env
+                    and receiver.ident not in lexical_shadow_names
+                    and self._ir_scaffold_owns_symbol_value(e)
+                ):
+                    return
             if isinstance(e, Name):
                 if e.ident in bound:
                     return
@@ -380,13 +424,17 @@ class LambdaHelperLoweringMixin:
             return output
         return None
 
-    def _maybe_emit_native_lambda_func(self, expr: Lambda) -> Optional[ir.Value]:
+    def _maybe_emit_native_lambda_func(
+        self, expr: Lambda, rejection: Optional[list] = None,
+    ) -> Optional[ir.Value]:
         """Lower a small no-closure lambda to a pcc-native function object."""
         arity = len(expr.params)
         if arity > 3:
+            _record_native_lambda_rejection(rejection, "arity")
             return None
         param_names = [p.name for p in expr.params]
         if any(name == "" for name in param_names):
+            _record_native_lambda_rejection(rejection, "parameter-name")
             return None
         free_vars = self._lambda_free_vars(expr, param_names)
         # Recheck module-resolvable names at the native-lambda boundary.  The
@@ -415,6 +463,7 @@ class LambdaHelperLoweringMixin:
         )
         for fv in free_vars:
             if fv not in self.env and fv not in module_names:
+                _record_native_lambda_rejection(rejection, "free-variable")
                 return None
         free_var_names = tuple(sorted(fv for fv in free_vars if fv in self.env))
         default_params = tuple(
@@ -594,6 +643,7 @@ class LambdaHelperLoweringMixin:
                 self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
                 self._lambda_adapter_root_scope = saved_adapter_scope
                 _restore_ownership_state(self, saved_ownership_state)
+                _record_native_lambda_rejection(rejection, "slot-body")
                 return None
 
         else:
@@ -728,6 +778,7 @@ class LambdaHelperLoweringMixin:
                 self._try_err_block = saved_try_err_block
                 self._cpy_operand_cleanup_block = saved_cpy_operand_cleanup_block
                 _restore_ownership_state(self, saved_ownership_state)
+                _record_native_lambda_rejection(rejection, "legacy-body")
                 return None
 
         self.builder = saved_builder
@@ -1315,6 +1366,18 @@ class LambdaHelperLoweringMixin:
             name=self._fresh(f"cpy.{sym_base}"),
         )
         return self._mark_owned_cpy_value(result)
+
+
+def _record_native_lambda_rejection(rejection: Optional[list], code: str) -> None:
+    # The public dispatcher owns this one-entry receipt. Nested lambdas get
+    # their own list; no codegen state or exception payload is retained here.
+    # In particular, recording a rejected body happens AFTER its existing
+    # restoration. It does not roll back the partially emitted adapter IR.
+    try:
+        if rejection is not None and not rejection:
+            rejection.append(code)
+    except Exception:
+        pass
 
 
 _PER_FUNCTION_OWNERSHIP_DICTS = (

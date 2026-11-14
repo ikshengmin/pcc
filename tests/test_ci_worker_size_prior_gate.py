@@ -60,7 +60,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -102,7 +102,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_aarch64_stackmap_emission_retirement.py",
         "tests/python/test_aarch64_stackmap_plan_ownership.py",
     )
-    assert gate.HOST_FILES[72:] == (
+    assert gate.HOST_FILES[72:85] == (
         'tests/python/test_worker_estimate_ratio_fold.py',
         'tests/python/test_root_leave_identity_ledger.py',
         'tests/python/test_float_callback_movement_protocol.py',
@@ -117,7 +117,10 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_str_len_protocol.py',
         'tests/python/test_worker_observation_scope.py',
     )
-    assert gate.HOST_COUNTS[72:] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 11)
+    assert gate.HOST_COUNTS[72:85] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
+    assert gate.HOST_FILES[85:] == ("tests/python/test_lambda_rejection_diagnostics.py",
+                                     "tests/python/test_lambda_scaffold_capture_owner.py")
+    assert gate.HOST_COUNTS[85:] == (33, 27)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -127,41 +130,108 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 85
-    assert sum(gate.HOST_COUNTS) == 3795 and sum(gate.HOST_COUNTS[:72]) == 3437
-    assert sum(gate.HOST_COUNTS[:70]) == 3379
-    assert sum(gate.HOST_COUNTS[:65]) == 3169
-    assert sum(gate.HOST_COUNTS[:63]) == 3131
-    assert sum(gate.HOST_COUNTS[:62]) == 3122
-    assert sum(gate.HOST_COUNTS[:61]) == 2890
-    assert sum(gate.HOST_COUNTS[:60]) == 2737
-    assert sum(gate.HOST_COUNTS[:59]) == 2726
-    assert sum(gate.HOST_COUNTS[:58]) == 2609
-    assert sum(gate.HOST_COUNTS[:57]) == 2601
-    assert sum(gate.HOST_COUNTS[:53]) == 2488
-    assert sum(gate.HOST_COUNTS[:52]) == 2463
-    assert sum(gate.HOST_COUNTS[:51]) == 2432
-    assert sum(gate.HOST_COUNTS[:50]) == 2390 and sum(gate.HOST_COUNTS[:49]) == 2344
-    assert sum(gate.HOST_COUNTS[:48]) == 2303
-    assert sum(gate.HOST_COUNTS[:47]) == 2260
-    assert sum(gate.HOST_COUNTS[:43]) == 2168
-    assert sum(gate.HOST_COUNTS[:42]) == 2052
-    assert sum(gate.HOST_COUNTS[:40]) == 2043
-    assert sum(gate.HOST_COUNTS[:38]) == 2033
-    assert sum(gate.HOST_COUNTS[:36]) == 2024
-    assert sum(gate.HOST_COUNTS[:34]) == 2006
-    assert sum(gate.HOST_COUNTS[:32]) == 1971
-    assert sum(gate.HOST_COUNTS[:30]) == 1811
-    assert sum(gate.HOST_COUNTS[:28]) == 1715
-    assert sum(gate.HOST_COUNTS[:27]) == 1660
-    assert sum(gate.HOST_COUNTS[:25]) == 1520
-    assert sum(gate.HOST_COUNTS[:23]) == 1365
-    assert sum(gate.HOST_COUNTS[:22]) == 1349
-    assert sum(gate.HOST_COUNTS[:21]) == 1294
-    assert sum(gate.HOST_COUNTS[:20]) == 1205
-    assert sum(gate.HOST_COUNTS[:18]) == 1168
-    assert sum(gate.HOST_COUNTS[:17]) == 1101 and sum(gate.HOST_COUNTS[:16]) == 1040
-    assert sum(gate.HOST_COUNTS[:14]) == 1031
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
+    assert sum(gate.HOST_COUNTS) == 3871 and sum(gate.HOST_COUNTS[:85]) == 3811
+    assert sum(gate.HOST_COUNTS[:72]) == 3451
+    assert sum(gate.HOST_COUNTS[:70]) == 3393
+    assert sum(gate.HOST_COUNTS[:65]) == 3183
+    assert sum(gate.HOST_COUNTS[:63]) == 3145
+    assert sum(gate.HOST_COUNTS[:62]) == 3136
+    assert sum(gate.HOST_COUNTS[:61]) == 2904
+    assert sum(gate.HOST_COUNTS[:60]) == 2751
+    assert sum(gate.HOST_COUNTS[:59]) == 2740
+    assert sum(gate.HOST_COUNTS[:58]) == 2623
+    assert sum(gate.HOST_COUNTS[:57]) == 2615
+    assert sum(gate.HOST_COUNTS[:53]) == 2502
+    assert sum(gate.HOST_COUNTS[:52]) == 2477
+    assert sum(gate.HOST_COUNTS[:51]) == 2446
+    assert sum(gate.HOST_COUNTS[:50]) == 2404 and sum(gate.HOST_COUNTS[:49]) == 2358
+    assert sum(gate.HOST_COUNTS[:48]) == 2317
+    assert sum(gate.HOST_COUNTS[:47]) == 2274
+    assert sum(gate.HOST_COUNTS[:43]) == 2182
+    assert sum(gate.HOST_COUNTS[:42]) == 2066
+    assert sum(gate.HOST_COUNTS[:40]) == 2057
+    assert sum(gate.HOST_COUNTS[:38]) == 2047
+    assert sum(gate.HOST_COUNTS[:36]) == 2038
+    assert sum(gate.HOST_COUNTS[:34]) == 2020
+    assert sum(gate.HOST_COUNTS[:32]) == 1985
+    assert sum(gate.HOST_COUNTS[:30]) == 1825
+    assert sum(gate.HOST_COUNTS[:28]) == 1729
+    assert sum(gate.HOST_COUNTS[:27]) == 1674
+    assert sum(gate.HOST_COUNTS[:25]) == 1534
+    assert sum(gate.HOST_COUNTS[:23]) == 1379
+    assert sum(gate.HOST_COUNTS[:22]) == 1363
+    assert sum(gate.HOST_COUNTS[:21]) == 1308
+    assert sum(gate.HOST_COUNTS[:20]) == 1219
+    assert sum(gate.HOST_COUNTS[:18]) == 1182
+    assert sum(gate.HOST_COUNTS[:17]) == 1115 and sum(gate.HOST_COUNTS[:16]) == 1054
+    assert sum(gate.HOST_COUNTS[:14]) == 1045
+    # Exercise the complete fixed inventory through its real consumer. These
+    # are synthetic all-passed report controls, not collection/run evidence.
+    inventory_nodes = [path + "::test_inventory[" + str(index) + "]"
+                       for path, count in zip(gate.HOST_FILES, gate.HOST_COUNTS)
+                       for index in range(count)]
+
+    def inventory_reports(selected):
+        value = reports(tmp_path, selected)
+        value[0].update(collection_witness=True, workers=6, dist="loadgroup",
+                        markexpr="not integration", platform="linux", machine="x86_64",
+                        keyword="", ignore=[], ignore_glob=[], deselect=[], lf=False,
+                        stepwise=False, stepwise_skip=False, pyargs=False,
+                        noconftest=False, confcutdir="")
+        witness = {
+            "version": 1, "platform": "linux", "machine": "x86_64",
+            "marker": "not integration", "keyword": "", "selected": selected,
+            "rows": [{"canonical_nodeid": node, "nodeid": node, "integration": False,
+                      "selected": True, "gates": []} for node in selected],
+        }
+        value[-1:-1] = [{"event": "collection_witness", "worker": "gw" + str(index),
+                        "witness": copy.deepcopy(witness)} for index in range(6)]
+        return value
+
+    put(tmp_path, inventory_reports(inventory_nodes))
+    assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
+                              collection_witness=True) == inventory_nodes
+    assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
+        "universe_count": 3871, "selected_passed_count": 3871,
+        "platform_unrun": [], "worker_witnesses": 6,
+    }
+    # A complete report cannot pass stale counts or omit the new module. Dropping
+    # the added nodes from every witness/report still fails the fixed receipt.
+    for index, old_count in ((12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
+        old_counts = list(gate.HOST_COUNTS)
+        old_counts[index] = old_count
+        put(tmp_path, inventory_reports(inventory_nodes))
+        with pytest.raises(AssertionError):
+            gate.verify_pytest(tmp_path, gate.HOST_FILES, old_counts,
+                               collection_witness=True)
+        omitted = {gate.HOST_FILES[index] + "::test_inventory[" + str(case) + "]"
+                   for case in range(old_count, gate.HOST_COUNTS[index])}
+        incomplete = [node for node in inventory_nodes if node not in omitted]
+        put(tmp_path, inventory_reports(incomplete))
+        with pytest.raises(AssertionError):
+            gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
+                               collection_witness=True)
+    # Retain uniqueness, exact total and per-file counts, including equal-total
+    # drift that moves one node from the timing file to the observation file.
+    moved = list(inventory_nodes)
+    moved[moved.index(gate.HOST_FILES[12] + "::test_inventory[446]")] = (
+        gate.HOST_FILES[84] + "::test_inventory[13]")
+    lambda_moved = list(inventory_nodes)
+    lambda_moved[lambda_moved.index(gate.HOST_FILES[85] + "::test_inventory[32]")] = (
+        gate.HOST_FILES[84] + "::test_inventory[13]")
+    capture_moved = list(inventory_nodes)
+    capture_moved[capture_moved.index(gate.HOST_FILES[86] + "::test_inventory[26]")] = (
+        gate.HOST_FILES[84] + "::test_inventory[13]")
+    for invalid in (inventory_nodes + [inventory_nodes[-1]],
+                    inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[12]"],
+                    inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[13]"],
+                    moved, lambda_moved, capture_moved):
+        put(tmp_path, inventory_reports(invalid))
+        with pytest.raises(AssertionError):
+            gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
+                               collection_witness=True)
+
     # Counting never evaluates data expressions, imports fixtures, or calls
     # their functions. Expansion/dynamic sequences need an actual inventory.
     value_tree = ast.parse("[-(1 << 63), (1 << 63) - 1, must_not_execute()]", mode="eval").body
@@ -175,7 +245,9 @@ def test_default_command_retains_project_xdist(tmp_path):
                                      (gate.IR_BUILDER_CALL9_TEST, 9),
                                      (gate.HOST_FILES[73], 36),
                                      (gate.HOST_FILES[75], 41),
-                                     (gate.HOST_FILES[84], 11)):
+                                     (gate.HOST_FILES[84], 13),
+                                     (gate.HOST_FILES[85], 33),
+                                     (gate.HOST_FILES[86], 27)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
@@ -308,10 +380,24 @@ def test_default_command_retains_project_xdist(tmp_path):
         "reason": "shared, legacy or unclassified: full qualification",
     }]
     assert helper_plan["matrix_native_stage1"]["include"] == list(ci_validation_plan.NATIVE_PLATFORMS)
-    for path in (*gate.HOST_FILES[72:], *gate.HOST_CONTRACT_DATA_INPUTS):
+    for path in (*gate.HOST_FILES[72:85], *gate.HOST_CONTRACT_DATA_INPUTS):
         assert path in input_names
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
+    # The appended host-only module is covered by the same broad event paths.
+    # No workflow edit or successful Stage1 bundle is needed by default-xdist.
+    lambda_test = gate.HOST_FILES[85]
+    assert input_names.count(lambda_test) == 1
+    for event in event_filters:
+        patterns = re.findall(r'^      - "([^"]+)"', event, re.MULTILINE)
+        assert "**" in patterns and "tests/**" in patterns
+        assert any(fnmatchcase(lambda_test, pattern) for pattern in patterns)
+        assert not any(pattern.startswith("!") and fnmatchcase(lambda_test, pattern[1:])
+                       for pattern in patterns)
+    lambda_plan = ci_validation_plan.select([("A", lambda_test)])
+    assert lambda_plan["legacy"] is True
+    assert set(lambda_plan["domains"]) == {*ci_validation_plan.LANGUAGES, "shared", "ci-contracts"}
+    assert lambda_plan["matrix_native_stage1"]["include"] == list(ci_validation_plan.NATIVE_PLATFORMS)
 
     # The default host phase executes these cases, not their native gates.
     for path, expected_count in zip(
@@ -1422,6 +1508,49 @@ def workflow_job(text, name):
     return match.group(1)
 
 
+def workflow_path_selected(path, patterns):
+    """The workflow's literal/*/** subset of ordered GitHub path filters."""
+    selected = False
+    for pattern in patterns:
+        excluded = pattern.startswith("!")
+        pattern = pattern[1:] if excluded else pattern
+        # Fail closed when the workflow adds syntax this contract cannot model.
+        assert pattern and not any(char in pattern for char in "![]?+\\"), pattern
+        parts = re.split(r"(\*\*/|\*\*|\*)", pattern)
+        expression = "".join({"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}.get(
+            part, re.escape(part),
+        ) for part in parts)
+        if re.fullmatch(expression, path):
+            selected = not excluded
+    return selected
+
+
+def assert_workflow_paths_cover(text, paths):
+    """Bind every input to both real event routes, not duplicate YAML text."""
+    triggers = re.findall(r"(?ms)^on:\n(.*?)(?=^[^ #\n]|\Z)", text)
+    assert len(triggers) == 1
+    for event in ("push", "pull_request"):
+        header = triggers[0]
+        assert len(re.findall(r"(?m)^  " + event + r":$", header)) == 1, event
+        body = workflow_job(header, event)
+        # Preserve master pushes and unrestricted PR branches. Path coverage
+        # cannot compensate for a disabled event or an added branch/type gate,
+        # including a quoted YAML key. Every noncomment body line is consumed.
+        prefix = ("    branches: [master]\n" if event == "push" else "") + "    paths:\n"
+        assert body.startswith(prefix), event
+        entries = body[len(prefix):]
+        patterns = []
+        for line in entries.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            match = re.fullmatch(r'      - "([^"\\]+)"(?:\s+#.*)?', line)
+            assert match is not None, (event, line)
+            patterns.append(match.group(1))
+        assert patterns and any(not pattern.startswith("!") for pattern in patterns), event
+        for path in paths:
+            assert workflow_path_selected(path, patterns), (event, path)
+
+
 def workflow_native_platforms(body, *, legacy):
     assert 'matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native_stage1) }}' in body
     path = 'pcc/runtime/py/owner.py' if legacy else 'pcc/frontends/cpp/parser.py'
@@ -1535,6 +1664,39 @@ def test_x86_jump_threading_uses_existing_three_platform_host_gate():
 
 
 def test_workflow_starts_stage1_without_independent_validation_dependencies():
+    # Keep these controls in the existing host node, without inflating or
+    # shrinking its fixed inventory. A future input need not be listed literally.
+    control = "tests/python/test_future_contract.py"
+
+    def workflow(push, pull_request):
+        return ("on:\n  push:\n    branches: [master]\n    paths:\n"
+                + "".join('      - "' + pattern + '"\n' for pattern in push)
+                + "  pull_request:\n    paths:\n"
+                + "".join('      - "' + pattern + '"\n' for pattern in pull_request))
+
+    for patterns in ([control], ["**"], ["tests/**"], ["**/test_*.py"],
+                     ["tests/**", "!tests/python/**", control]):
+        assert_workflow_paths_cover(workflow(patterns, patterns), [control])
+    assert workflow_path_selected("test_root.py", ["**/test_*.py"])
+    assert workflow_path_selected("tests/test_direct.py", ["tests/*.py"])
+    for patterns in ([], ["pcc/**"], ["tests/*.py"], ["Tests/**"],
+                     ["**", "!tests/**"], [control, "!" + control]):
+        for push, pull_request in ((patterns, ["**"]), (["**"], patterns)):
+            with pytest.raises(AssertionError):
+                assert_workflow_paths_cover(workflow(push, pull_request), [control])
+    complete = workflow(["**"], ["**"])
+    for broken in (complete.replace("  push:", "  ignored_push:"),
+                   complete.replace("  pull_request:", "  ignored_pull_request:"),
+                   complete.replace("branches: [master]", "branches: [other]"),
+                   complete.replace("  pull_request:\n", "  pull_request:\n    branches: [other]\n"),
+                   complete.replace("  pull_request:\n", '  pull_request:\n    "branches": [other]\n'),
+                   complete.replace("  pull_request:\n", '  pull_request:\n    "types": [closed]\n'),
+                   complete.replace("    paths:\n", "    paths-ignore:\n", 1),
+                   complete.replace('      - "**"', '      - "[t]ests/**"', 1),
+                   "on:\n  workflow_dispatch:\njobs:\n" + complete.split("on:\n", 1)[1]):
+        with pytest.raises(AssertionError):
+            assert_workflow_paths_cover(broken, [control])
+
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     consumer = "tests/python/test_x86_64_windows_packed_stackmaps.py"
     helper = "tests/python/test_direct_indexed_worker_validation.py"
@@ -1594,10 +1756,11 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert '@pytest.mark.pcc_gate(probe=lambda: sys.platform == "win32")' in budget_test
     assert "test_real_windows_direct_root_guard_admits_and_wrapper_does_not" in budget_test
     assert "No compiler, runtime build or native pcc" in budget_test
-    for path in (*gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
-                 "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
-                 "tests/python/test_worker_resource_publication.py"):
-        assert text.count('      - "' + path + '"') == 2, path
+    assert_workflow_paths_cover(text, (
+        *gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
+        "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
+        "tests/python/test_worker_resource_publication.py",
+    ))
     other = workflow_job(text, "other-platform-native-wheel")
     mac = workflow_job(text, "pcc1-package-parity")
     preflight = workflow_job(text, "worker-prior-preflight")
@@ -2064,7 +2227,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 11) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

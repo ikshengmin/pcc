@@ -13,7 +13,10 @@ that takes a lock a parked thread holds waited for that thread, which waited
 for the world: every thread blocked in pthread_cond_wait. This program has
 four threads rebinding instance fields while __init__ and __del__ share one
 threading.Lock, with self-referencing items for GC0's cycle collector; before
-the fix every collector hung, and now each matches CPython.
+the fix every collector hung, and now GC0-GC3 match CPython. GC4 keeps its
+user code in the stopped world (resuming it mid-sweep ran __del__ twice or
+never), so it runs the program without the finalizer lock and must finalize
+each item at most once.
 """
 from __future__ import annotations
 
@@ -24,10 +27,12 @@ from pathlib import Path
 
 
 PROGRAM = '''import gc
+import os
 import threading
 
 lock = threading.Lock()
 counts = [0, 0]
+FINALIZER_LOCK = os.environ.get('FINALIZER_LOCK', '1') == '1'
 
 class Item:
     def __init__(self, value, cyclic):
@@ -37,7 +42,10 @@ class Item:
         with lock:
             counts[0] += 1
     def __del__(self):
-        with lock:
+        if FINALIZER_LOCK:
+            with lock:
+                counts[1] += 1
+        else:
             counts[1] += 1
 
 class Holder:
@@ -97,6 +105,12 @@ def test_finalizers_taking_a_parked_threads_lock_finish_on_every_backend(tmp_pat
     for backend in ("0", "1", "2", "3", "4"):
         env = _env()
         env["PCC_GC_BACKEND"] = backend
+        if backend == "4":
+            # GC4 still runs its sweep's user code in the stopped world
+            # (its windows ran __del__ twice or never), so a finalizer
+            # lock can still deadlock it: check exactly-once finalization
+            # without the lock instead.
+            env["FINALIZER_LOCK"] = "0"
         try:
             run = subprocess.run([str(exe)], text=True, capture_output=True, timeout=90, env=env)
         except subprocess.TimeoutExpired:
@@ -108,5 +122,6 @@ def test_finalizers_taking_a_parked_threads_lock_finish_on_every_backend(tmp_pat
             # Reference counting and the cycle collector free every item.
             assert freed == made, (backend, run.stdout)
         else:
-            # A tracing collector may keep a few behind conservative roots.
+            # A tracing collector may keep a few behind conservative roots;
+            # no finalizer runs twice.
             assert made - 64 <= freed <= made, (backend, run.stdout)

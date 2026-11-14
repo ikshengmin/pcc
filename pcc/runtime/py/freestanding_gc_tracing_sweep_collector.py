@@ -524,6 +524,15 @@ def _user_code_window_open(window) -> None:
     ``window`` (16 bytes) records what _user_code_window_close restores.
     """
     store_i64(window, 8, load_i32(global_addr("pcc_gc_explicit_collect_active"), 0))
+    store_i64(window, 0, 0)
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        # GC4 runs its sweep's user code in the stopped world, as before the
+        # windows existed: resuming its world mid-sweep ran some objects'
+        # __del__ twice and others' never (measured on the four-thread field
+        # program; GC1-GC3 stay exact). The cause is not established. A GC4
+        # finalizer can therefore still wait for a lock a parked thread
+        # holds; deferred finalization is the planned fix.
+        return
     store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 1)
     store_i64(window, 0, pcc_thread_world_release_held())
 
@@ -532,8 +541,7 @@ def _user_code_window_open(window) -> None:
 def _user_code_window_close(window) -> None:
     """Stop the world again to the depth _user_code_window_open released."""
     pcc_thread_world_reacquire_held(load_i64(window, 0))
-    if load_i64(window, 8) == 0:
-        store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 0)
+    store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, load_i64(window, 8))
 
 
 @c_abi_export("pcc_gc_tracing_finalizer_targets_append")

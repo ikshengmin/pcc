@@ -33,9 +33,14 @@ from .arm64_encode import (
     EMITTED_INSTRUCTION_MOVE,
     EMITTED_INSTRUCTION_SCALAR,
     EMITTED_INSTRUCTION_UNSCALED,
+    EncodeError,
     STRUCTURED_FIXUP_BRANCH19,
     STRUCTURED_FIXUP_BRANCH26,
     STRUCTURED_FIXUP_CALL,
+    STRUCTURED_RELOCATION_PAGE21,
+    STRUCTURED_RELOCATION_PAGEOFF12,
+    STRUCTURED_RELOCATION_GOT_LOAD_PAGE21,
+    STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12,
     _validate_text_fixup_word,
     append_emitted_instruction_record,
     intern_emitted_symbol,
@@ -317,7 +322,22 @@ class _NativeAArch64Emission:
                 # adapter line but retain that single event position.
                 for part in line.splitlines():
                     directive = part.split(None, 1)[0] if part.strip() else ""
-                    if directive and directive not in allowed:
+                    unsupported_metadata = bool(directive) and directive not in allowed
+                    if part.startswith(".") and part.endswith(":"):
+                        # ELF data symbols keep their leading dot. Validate
+                        # the ordinary symbol tail, then retain this metadata
+                        # event for the existing section driver's label path.
+                        # Do not widen the typed code-label/operand grammar.
+                        unsupported_metadata = True
+                        try:
+                            validate_emitted_label_name(part[1:-1])
+                        except EncodeError:
+                            pass
+                        else:
+                            unsupported_metadata = False
+                    # Raise outside the validator's except suite: retaining
+                    # its unbounded label error as __context__ would leak it.
+                    if unsupported_metadata:
                         # Clip before repr: initializers may be large and
                         # rejected text must not inject control characters.
                         raise BackendUnavailable(
@@ -491,9 +511,22 @@ class _NativeAArch64Emission:
                         raise BackendUnavailable("emission fragment word is outside uint32")
                     if kind < 0:
                         _validate_text_fixup_word(record.first, kind)
-                    validate_emitted_label_name(fragments.symbol_names[symbol_id])
+                    symbol = fragments.symbol_names[symbol_id]
+                    if kind in (
+                        STRUCTURED_RELOCATION_PAGE21, STRUCTURED_RELOCATION_PAGEOFF12,
+                        STRUCTURED_RELOCATION_GOT_LOAD_PAGE21,
+                        STRUCTURED_RELOCATION_GOT_LOAD_PAGEOFF12,
+                    ) and symbol.startswith("."):
+                        # Page-address relocations can reference the dotted
+                        # data symbols already admitted by extend_metadata.
+                        # Validate only their tail; retain the full symbol for
+                        # Mach-O/ELF relocation ownership. Code labels and
+                        # call/branch fixups keep their existing grammar.
+                        validate_emitted_label_name(symbol[1:])
+                    else:
+                        validate_emitted_label_name(symbol)
                     symbol_id = intern_emitted_symbol(
-                        fragments.symbol_names[symbol_id], self.symbol_ids, self.symbol_names,
+                        symbol, self.symbol_ids, self.symbol_names,
                     )
                 # The builder validates unpatched fixup words and resolves all
                 # branch displacements only after the rewritten final layout.
@@ -1093,6 +1126,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
         phase_start = phase_timing.start()
+        if native_sink is not None:
+            finalize_phase_start = phase_timing.begin_backend_finalize("prepare")
     # All function bodies and native captures have finished. Retire only the
     # private plans' emission storage before final layout/metadata allocate.
     # Keep the eager planning and callback order: callbacks or repeated names
@@ -1120,8 +1155,14 @@ def _emit_prepared_aarch64_darwin_lines_active(
                     if exceptional_block:
                         metadata_labels.add(_block_label(func.name, exceptional_block))
             native_sink.finish_optimized_instructions(metadata_labels, cold_fallthrough_edges)
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("prepare", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("layout")
         native_sink.builder.finalize_text_layout()
         target_offsets = native_sink.builder.text_label_offsets()
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("layout", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("stackmaps")
         if functions:
             if emit_stack_map_tables:
                 ordered_native_plans = tuple(stack_map_plans[func.name] for func in functions)
@@ -1138,12 +1179,23 @@ def _emit_prepared_aarch64_darwin_lines_active(
             if close_native_tables:
                 for func in functions:
                     get_indexed_function_kernel(func).close_native_tables()
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("stackmaps", finalize_phase_start)
         if not is_aarch64_linux_triple(triple):
+            if phase_timing is not None:
+                finalize_phase_start = phase_timing.begin_backend_finalize("unwind")
             native_sink.extend(_append_compact_unwind(
                 [], functions, _MODULE_SYMBOLS, target_offsets,
                 native_sink.builder.text_size(),
             ))
+            if phase_timing is not None:
+                phase_timing.complete_backend_finalize("unwind", finalize_phase_start)
+        if phase_timing is not None:
+            finalize_phase_start = phase_timing.begin_backend_finalize("dwarf")
         structured_sections.extend(build_dwarf_sections(debug_plans, target_offsets))
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("dwarf", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("sections")
         native_sink.append(".subsections_via_symbols")
         sections, undefined = native_sink.builder.finish(structured_sections)
         structured_sections.clear()
@@ -1157,6 +1209,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
             native_sink.fragment_record_count,
         ])
         if phase_timing is not None:
+            phase_timing.complete_backend_finalize("sections", finalize_phase_start)
             phase_timing.add(7, phase_start)
         return []
     if optimize:

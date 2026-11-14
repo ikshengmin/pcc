@@ -200,7 +200,8 @@ class HandoffContractTests(unittest.TestCase):
         self.assertEqual(seal["frontend_token"], _FRONTEND_TOKEN)
         handoff.validate_handoff_module(str(self.request), self.direct)
         self.publish_result()
-        handoff.retire_handoff_task(self.task, _BACKEND_TOKEN)
+        retired_path = handoff.retire_handoff_task(self.task, _BACKEND_TOKEN)
+        self.assertEqual(retired_path, str(self.sidecar))
         self.assertFalse(self.sidecar.exists())
         self.assertFalse(self.seal.exists())
         self.assertTrue(self.request.exists())
@@ -258,7 +259,8 @@ class HandoffContractTests(unittest.TestCase):
         os.environ[handoff.RESOURCE_TOKEN_ENV] = "f" * 64
         handoff.validate_handoff_input(str(self.request), str(self.sidecar), str(self.output), "PCO")
         self.publish_result()
-        handoff.retire_handoff_task(self.task, "f" * 64)
+        retired_path = handoff.retire_handoff_task(self.task, "f" * 64)
+        self.assertEqual(retired_path, str(self.sidecar))
 
     def test_reset_revalidates_inputs_before_removing_any_output(self):
         self.prepare()
@@ -534,7 +536,8 @@ class HandoffContractTests(unittest.TestCase):
         self.prepare()
         handoff.validate_handoff_input(str(self.request), str(self.sidecar), str(self.output), "PCO")
         self.publish_result()
-        handoff.retire_handoff_task(self.task, _BACKEND_TOKEN)
+        retired_path = handoff.retire_handoff_task(self.task, _BACKEND_TOKEN)
+        self.assertEqual(retired_path, str(self.sidecar))
         self.assertTrue(self.output.exists())
         self.assertTrue(self.receipt.exists())
         self.assertFalse(self.sidecar.exists())

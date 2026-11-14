@@ -271,6 +271,197 @@ def test_metadata_adapter_cannot_admit_instruction_or_code_section_events():
         producer.end_direct_instruction_capture()
 
 
+@pytest.mark.parametrize("symbol", [
+    ".modvar.pcc_frontends_c_parse_c_parsetab.GRAMMAR_SHA256",
+    ".local$other", "ordinary_data",
+])
+@pytest.mark.parametrize("got", [False, True])
+@pytest.mark.parametrize("defined", [False, True])
+def test_page_address_replay_preserves_data_symbol_names_and_relocations(
+    monkeypatch, symbol, got, defined,
+):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend import self_backend_aarch64_darwin as backend
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.arm64_asm_driver import assemble_lines
+    from pcc.backend.arm64_elf_driver import from_sections
+    from pcc.backend.self_backend_aarch64_fragments import EMISSION_DIRECTIVE_TEXT_SECTION
+
+    metadata = ([
+        ".section __DATA,__data", ".p2align 3", ".globl " + symbol,
+        symbol + ":", "  .quad 7",
+    ] if defined else [])
+    address = producer.emitted_global_address_lines("x9", symbol, got)
+    expected = assemble_lines(metadata + [
+        ".section __TEXT,__text,regular,pure_instructions", "entry:",
+    ] + address + ["  ret"])
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("typed address replay parsed instruction text")
+
+    monkeypatch.setattr(encoder, "_encode_one", forbidden)
+    monkeypatch.setattr(encoder, "assemble_text_lines", forbidden)
+    monkeypatch.setattr(backend, "append_emitted_instruction_record", forbidden)
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = backend._NativeAArch64Emission(optimize=True)
+        sink.extend_metadata(metadata)
+        sink.append_code_directive(EMISSION_DIRECTIVE_TEXT_SECTION)
+        sink.append_label("entry")
+        sink.extend(producer.emitted_global_address_lines("x9", symbol, got))
+        sink.append(producer.emitted_fixed_instruction_line("ret"))
+        sink.release_captured_function()
+        sink.finish_optimized_instructions(set(), [])
+        actual = sink.builder.finish()
+        assert actual == expected
+        sections, undefined = actual
+        text = next(section for section in sections if section.sectname == "__text")
+        # x9 ADRP plus ADD or GOT load, followed by RET. No symbol rewriting.
+        words = [int.from_bytes(text.data[index:index + 4], "little")
+                 for index in range(0, len(text.data), 4)]
+        assert words == [0x90000009, 0xF9400129 if got else 0x91000129, 0xD65F03C0]
+        assert [relocation.symbol for relocation in text.relocations] == [symbol, symbol]
+        assert [relocation.offset for relocation in text.relocations] == [0, 4]
+        assert [relocation.pcrel for relocation in text.relocations] == [True, False]
+        elf = from_sections(sections, undefined)
+        elf_text = next(section for section in elf.sections if section.name == ".text")
+        assert [relocation.type for relocation in elf_text.relocations] == (
+            [311, 312] if got else [275, 277]
+        )
+        assert [elf.symbols[relocation.symbol_index].name for relocation in elf_text.relocations] == [symbol, symbol]
+        matching = [item for item in elf.symbols if item.name == symbol]
+        assert len(matching) == 1
+        assert (matching[0].section_index != 0) == defined
+        assert sink.fallback_lines == []
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("target", ["aarch64-unknown-linux-gnu", "arm64-apple-macosx11.0.0"])
+@pytest.mark.parametrize("defined", [False, True])
+def test_indexed_native_sections_reference_the_observed_module_global(
+    monkeypatch, target, defined,
+):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend import self_backend_aarch64_darwin as backend
+    from pcc.backend.arm64_asm_driver import assemble_lines
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+
+    name = ".modvar.pcc_frontends_c_parse_c_parsetab.GRAMMAR_SHA256"
+    definition = "global i64 7" if defined else "external global i64"
+    ir_text = (
+        f'target triple = "{target}"\n'
+        f"@{name} = {definition}\n"
+        "define i64 @read_value() {\nentry:\n"
+        f"  %value = load i64, ptr @{name}\n"
+        "  ret i64 %value\n}\n"
+    )
+    expected = assemble_lines(backend.emit_aarch64_darwin_asm(ir_text, optimize=True).splitlines())
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("indexed native emission used an instruction text adapter")
+
+    monkeypatch.setattr(encoder, "_encode_one", forbidden)
+    monkeypatch.setattr(encoder, "assemble_text_lines", forbidden)
+    monkeypatch.setattr(backend, "append_emitted_instruction_record", forbidden)
+    transport = backend.emit_aarch64_darwin_indexed_transport(
+        parse_self_backend_module(ir_text), optimize=True, structured_instructions=True,
+    )
+    assert transport.native_finalized
+    assert transport.fallback_instruction_count == 0
+    assert transport.fallback_instruction_lines == ()
+    actual = transport.assemble_sections()
+    assert actual == expected
+    emitted_name = name if "linux" in target else "_" + name
+    references = [relocation.symbol for section in actual[0]
+                  for relocation in section.relocations]
+    assert references.count(emitted_name) == 2
+
+
+@pytest.mark.parametrize("kind", [2, 3, 4, 5])
+@pytest.mark.parametrize("symbol", [
+    "", ".", "..", "..valid", ".9digit", ".$leading", ".bad name",
+    ".bad;ret", ".bad@PAGE", ".bad+8", ".bad:", ".bad\nret",
+    ".bad\x00", ".bad\t", ".bad\u00e9",
+])
+def test_page_address_replay_still_rejects_invalid_symbols(kind, symbol):
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    word = {2: 0x90000009, 3: 0x91000129, 4: 0x90000009, 5: 0xF9400129}[kind]
+    producer.begin_direct_instruction_capture()
+    sink = None
+    try:
+        sink = _NativeAArch64Emission()
+        sink.builder.begin_text_section()
+        fragment = sink.fragments.new_fragment()
+        sid = encoder.intern_emitted_symbol(symbol, sink.fragments.symbol_ids, sink.fragments.symbol_names)
+        sink.fragments._append_record(fragment, CompilerInt4(word, encoder.EMITTED_INSTRUCTION_SCALAR, kind, sid))
+        with pytest.raises(EncodeError, match="invalid emitted label"):
+            sink.publish_fragment(fragment)
+        assert sink.symbol_names == [] and sink.symbol_ids == {}
+        assert sink.structured_count == 0 and sink.fragment_record_count == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize(("kind", "word", "family", "symbol_id"), [
+    (-1, 0x94000000, 3, 0), (-26, 0x14000000, 4, 0),
+    (-19, 0x54000000, 4, 0), (1, 0x94000000, 4, 0),
+    (99, 0x90000009, 4, 0), (2, -1, 4, 0), (3, 1 << 32, 4, 0),
+    (4, 0x90000009, 4, 1), (5, 0xF9400129, 2, 0),
+    (-26, 0xD65F03C0, 4, 0), (-1, 0xD65F03C0, 3, 0),
+])
+def test_page_symbol_admission_preserves_fixup_kind_family_word_and_id_guards(
+    kind, word, family, symbol_id,
+):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import arm64_encode as encoder
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    producer.begin_direct_instruction_capture()
+    sink = None
+    try:
+        sink = _NativeAArch64Emission()
+        sink.builder.begin_text_section()
+        fragment = sink.fragments.new_fragment()
+        encoder.intern_emitted_symbol(".valid", sink.fragments.symbol_ids, sink.fragments.symbol_names)
+        sink.fragments._append_record(fragment, CompilerInt4(word, family, kind, symbol_id))
+        with pytest.raises((BackendUnavailable, EncodeError)):
+            sink.publish_fragment(fragment)
+        assert sink.symbol_names == [] and sink.symbol_ids == {}
+        assert sink.structured_count == 0 and sink.fragment_record_count == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("operation", ["label", "call", "branch"])
+def test_page_symbol_admission_keeps_typed_code_label_producers_strict(operation):
+    owner = AArch64EmissionFragments()
+    try:
+        fragment = owner.new_fragment()
+        with pytest.raises(EncodeError, match="invalid emitted label"):
+            if operation == "label":
+                owner.append_label(fragment, ".valid")
+            elif operation == "call":
+                owner.append_call(fragment, ".valid")
+            else:
+                owner.append_branch(fragment, "b", ".valid")
+        assert len(owner.records) == 0
+        assert owner.symbol_names == [] and owner.symbol_ids == {}
+    finally:
+        owner.close()
+
+
 @pytest.mark.parametrize(
     ("entry", "token", "rejected_part"),
     [
@@ -346,6 +537,242 @@ def test_metadata_rejection_bounds_and_escapes_untrusted_prefixes(character):
         assert len(sink.fragments.records) == 4
         assert sink.direct_index == 0
         assert len(sink.direct_records) == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("label", [
+    ".modvar.pcc_frontends_c_parse_c_parsetab.GRAMMAR_SHA256",
+    ".modvar.program.events", ".modvar.program.Root", ".class.program.Base",
+    ".modvar._weakrefset.GenericAlias", ".local$other", ".quad", "_ordinary",
+])
+def test_metadata_label_names_keep_event_positions_and_final_data(label):
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.arm64_asm_driver import assemble_lines
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+    from pcc.backend.self_backend_aarch64_fragments import (
+        EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE,
+        EMISSION_RECORD_LABEL,
+    )
+
+    lines = [".section __DATA,__data", ".p2align 3", label + ":", "  .quad 7"]
+    # The existing owned line driver already recognizes these symbol names.
+    expected = assemble_lines(lines)
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        sink.extend_metadata(lines)
+        if label.startswith("."):
+            # Data-label text remains opaque metadata, never a code label.
+            assert sink.fragments.symbol_names == []
+            assert sink.metadata_lines == lines
+            label_event = (EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, 2, -1)
+            data_index = 3
+        else:
+            assert sink.fragments.symbol_names == [label]
+            assert sink.metadata_lines == [lines[0], lines[1], lines[3]]
+            label_event = (0, EMISSION_RECORD_LABEL, 0, -1)
+            data_index = 2
+        assert len(sink.fragments.records) == 16
+        events = [sink.fragments.records.get4_unchecked(index) for index in range(4)]
+        assert [(event.first, event.second, event.third, event.fourth) for event in events] == [
+            (EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, 0, -1),
+            (EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, 1, -1),
+            label_event,
+            (EMISSION_DIRECTIVE_METADATA, EMISSION_RECORD_DIRECTIVE, data_index, -1),
+        ]
+        assert sink.direct_index == 0 and len(sink.direct_records) == 0
+        sink.finish_optimized_instructions(set(), [])
+        actual = sink.builder.finish()
+        assert actual == expected
+        sections, undefined = actual
+        assert undefined == [] and len(sections) == 1
+        assert sections[0].data == (7).to_bytes(8, "little")
+        assert [(symbol.name, symbol.offset) for symbol in sections[0].symbols] == [(label, 0)]
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("entry", [
+    ".unknown 7", ".inst 0xd65f03c0", ".word 0xd65f03c0", "  ret",
+    ":", ".:", "..:", "...:", ".9digit:", ".$leading:",
+    ".modvar.valid extra:", ".modvar.valid;ret:", ".modvar.valid\nret:",
+    ".modvar.valid\x00:", ".modvar.valid\t:", ".modvar.\u00e9:",
+    "  .modvar.indented:", ".modvar.valid:\n  ret",
+    ".section __TEXT,__text,regular,pure_instructions",
+    ".section\t__TEXT,\t__text,regular,pure_instructions",
+])
+def test_metadata_dot_label_admission_does_not_admit_directives_or_invalid_names(entry):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        sink.extend_metadata([".section __DATA,__data", ".valid:"])
+        with pytest.raises((BackendUnavailable, EncodeError)):
+            sink.extend_metadata([entry])
+        # A failed candidate must not acquire a symbol, metadata or event ID.
+        assert sink.fragments.symbol_names == []
+        assert sink.metadata_lines == [".section __DATA,__data", ".valid:"]
+        assert len(sink.fragments.records) == 8
+        assert sink.direct_index == 0 and len(sink.direct_records) == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+def test_dot_labels_cannot_reopen_a_closed_metadata_prefix():
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+    from pcc.backend.self_backend_aarch64_fragments import EMISSION_DIRECTIVE_TEXT_SECTION
+
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        sink.append_code_directive(EMISSION_DIRECTIVE_TEXT_SECTION)
+        with pytest.raises(BackendUnavailable, match="code event stream"):
+            sink.extend_metadata([".modvar.program.events:"])
+        assert len(sink.fragments.records) == 4
+        assert sink.fragments.symbol_names == [] and sink.metadata_lines == []
+        # The ordinary code event adapter remains fail-closed for text labels.
+        with pytest.raises(BackendUnavailable, match="typed producer provenance"):
+            sink._capture_line(".modvar.program.events:")
+        assert len(sink.fragments.records) == 4
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+def test_dot_metadata_names_do_not_widen_the_typed_label_grammar():
+    from pcc.backend.arm64_encode import validate_emitted_label_name
+
+    # The metadata adapter removes its one explicit leading dot only while
+    # validating the tail. Every existing direct-label caller stays strict.
+    for name in (".modvar.program.events", ".class.program.Base", ".quad", ".", ".."):
+        with pytest.raises(EncodeError, match="invalid emitted label"):
+            validate_emitted_label_name(name)
+
+
+@pytest.mark.parametrize("bad_character", ["\x00", " ", ";", "\x1b", "\U0010ffff"])
+@pytest.mark.parametrize("invalid_at_start", [False, True])
+def test_invalid_long_dot_metadata_labels_keep_bounded_errors_without_context(
+    bad_character, invalid_at_start,
+):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    tail = "x" * 10000 + "DO_NOT_RETAIN_THE_TAIL"
+    part = "." + (bad_character + tail if invalid_at_start else tail + bad_character) + ":"
+    token = part.split(None, 1)[0]
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        with pytest.raises(BackendUnavailable) as caught:
+            sink.extend_metadata(["", "  .long 1\n" + part])
+        error = caught.value
+        assert type(error) is BackendUnavailable
+        assert str(error) == (
+            "instruction or unsupported directive in metadata adapter: "
+            f"token_prefix={token[:64]!r}, line_prefix={part[:160]!r}"
+        )
+        # `raise ... from None` merely hides context; it does not remove it.
+        # A caller serializing exception chains must not recover the raw name.
+        assert error.__context__ is None
+        assert error.__cause__ is None
+        assert "DO_NOT_RETAIN_THE_TAIL" not in str(error)
+        assert len(str(error).encode("utf-8")) < 2500
+        assert "\n" not in str(error) and "\r" not in str(error)
+        assert "\x00" not in str(error) and "\x1b" not in str(error)
+        assert sink.metadata_lines == [] and sink.fragments.symbol_names == []
+        assert len(sink.fragments.records) == 4
+        assert sink.direct_index == 0 and len(sink.direct_records) == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("error_type", [RuntimeError, KeyboardInterrupt])
+def test_metadata_label_validation_does_not_swallow_other_failures(monkeypatch, error_type):
+    from pcc.backend import self_backend_aarch64_darwin as emitter
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+
+    original = error_type("original validator failure")
+
+    def fail_validation(name):
+        raise original
+
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = emitter._NativeAArch64Emission(optimize=True)
+        monkeypatch.setattr(emitter, "validate_emitted_label_name", fail_validation)
+        with pytest.raises(error_type) as caught:
+            sink.extend_metadata([".valid:"])
+        assert caught.value is original
+        assert sink.metadata_lines == [] and sink.fragments.symbol_names == []
+        assert len(sink.fragments.records) == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+def test_dot_metadata_labels_preserve_sections_offsets_visibility_and_relocations():
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.arm64_asm_driver import assemble_lines
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    lines = [
+        ".section __DATA,__data", ".p2align 3", "  .byte 1", "  .space 7",
+        ".globl .root", ".root:", "  .quad .target+8",
+        ".section __DATA,__const", ".p2align 3", "  .quad 9",
+        ".private_extern .target", ".target:", "  .quad 17",
+        ".section __DATA,__data", ".tail:", "  .quad .external",
+    ]
+    expected = assemble_lines(lines)
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        sink.extend_metadata(lines)
+        assert sink.metadata_lines == lines and sink.fragments.symbol_names == []
+        assert len(sink.fragments.records) == len(lines) * 4
+        sink.finish_optimized_instructions(set(), [])
+        sections, undefined = sink.builder.finish()
+        assert (sections, undefined) == expected
+        assert [(section.segname, section.sectname) for section in sections] == [
+            ("__DATA", "__data"), ("__DATA", "__const"),
+        ]
+        data, const = sections
+        assert data.data == b"\x01" + b"\0" * 7 + (8).to_bytes(8, "little") + b"\0" * 8
+        assert const.data == (9).to_bytes(8, "little") + (17).to_bytes(8, "little")
+        assert [(symbol.name, symbol.offset, symbol.external, symbol.private_external)
+                for symbol in data.symbols] == [
+            (".root", 8, True, False), (".tail", 16, False, False),
+        ]
+        assert [(symbol.name, symbol.offset, symbol.external, symbol.private_external)
+                for symbol in const.symbols] == [(".target", 8, True, True)]
+        assert [(relocation.offset, relocation.symbol, relocation.pcrel, relocation.length)
+                for relocation in data.relocations] == [
+            (8, ".target", False, 3), (16, ".external", False, 3),
+        ]
+        assert undefined == [".external"]
+        assert sink.direct_index == 0 and len(sink.direct_records) == 0
     finally:
         if sink is not None:
             sink.close()

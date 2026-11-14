@@ -586,3 +586,287 @@ def test_two_root_legacy_dispatch_accepts_only_absent_or_empty_tag(tmp_path, mon
     monkeypatch.setattr(legacy, "assert_compiler_two_root_error_edge", calls.append)
     gate.verify_two_root_ir(tmp_path, record, label)
     assert calls == [[text]]
+
+
+
+def _first_failure_inputs(tmp_path):
+    """Failure-shell fixture with no compiler, codec or native execution."""
+    dump = tmp_path / "executable-ir"
+    dump.mkdir()
+    source, binary, archive = (tmp_path / name for name in ("program.py", "program.out", "runtime.a"))
+    source.write_bytes(b"source")
+    archive.write_bytes(b"runtime")
+    record = {"run_id": "failure-control", "indexed_input_invocation": TOKEN,
+              "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0", "backend": "self",
+              "source_sha256": _sha(b"source"), "binary_path": str(binary),
+              "runtime_archive": str(archive), "runtime_sha256": _sha(b"runtime")}
+    _write_json(dump / "invocation.json", {
+        "schema": "pcc.indexed-input-invocation.v1", "invocation": TOKEN, "count": 1,
+        "modules": [{"index": 0, "module": "program", "source_sha256": record["source_sha256"]}],
+    })
+    failure = {"schema": "pcc.indexed-input-first-recorded-failure.v1", "invocation": TOKEN,
+               "index": 0, "stage": "codec-preflight", "exception_class": "value_error",
+               "reason": "unknown", "remaining_bytes": 13, "observed_bytes": 14,
+               "copied_bytes": -1, "inventory_count": -1, "overflow": False}
+    _write_json(dump / "indexed-capture-failed", failure)
+    _write_json(dump / "module_0.claim.json", {
+        "schema": "pcc.indexed-input-claim.v1", "invocation": TOKEN,
+        "index": 0, "module": "program", "attempt": _sha((TOKEN + ":0").encode())[:32],
+    })
+    return (dump, record, source, binary, archive), failure
+
+
+def _failure_shell(args, *, completed=False):
+    def forbidden(modules):
+        pytest.fail("poisoned dump reached semantic callback")
+    with pytest.raises(AssertionError) as caught:
+        support._record_observed_ir_dump(args[0], forbidden, *args[1:], completed=completed)
+    evidence = json.loads((args[2].parent / "executable-ir-dump.json").read_text())
+    assert evidence["status"] != "INDEXED_INPUTS_RETAINED"
+    assert evidence["modules"] == [] and "retention" not in evidence
+    assert evidence["error"] == "AssertionError: " + str(caught.value)
+    return evidence, caught.value
+
+
+@pytest.mark.parametrize("completed", (False, True))
+def test_first_failure_is_optional_in_real_failure_shell(tmp_path, completed):
+    args, failure = _first_failure_inputs(tmp_path)
+    evidence, original = _failure_shell(args, completed=completed)
+    assert evidence["first_recorded_failure"] == failure
+    (args[0] / "indexed-capture-failed").write_bytes(b"legacy failure\n")
+    absent, legacy_error = _failure_shell(args, completed=completed)
+    assert "first_recorded_failure" not in absent
+    assert str(legacy_error) == str(original)
+    assert absent["status"] == evidence["status"]
+
+
+@pytest.mark.parametrize("key,value", (
+    ("schema", "other"), ("invocation", ""), ("invocation", "f" * 32),
+    ("index", True), ("index", -2), ("index", 31), ("index", 1), ("index", -1),
+    ("stage", "untrusted-stage"), ("stage", []), ("exception_class", "MySecretError"),
+    ("reason", "secret-message"), ("overflow", 1), ("overflow", None),
+    ("remaining_bytes", True), ("observed_bytes", -2), ("copied_bytes", 2**63),
+    ("inventory_count", 1.0), ("inventory_count", "1"), ("extra", "secret"),
+))
+def test_first_failure_rejects_untrusted_fields_at_shell(tmp_path, key, value):
+    args, failure = _first_failure_inputs(tmp_path)
+    failure[key] = value
+    _write_json(args[0] / "indexed-capture-failed", failure)
+    evidence, _ = _failure_shell(args)
+    assert "first_recorded_failure" not in evidence
+
+
+@pytest.mark.parametrize("mutation", ("missing-key", "legacy", "truncated", "oversize", "duplicate", "list", "utf8", "missing", "directory", "symlink"))
+def test_first_failure_rejects_invalid_marker_files(tmp_path, mutation):
+    args, failure = _first_failure_inputs(tmp_path)
+    path = args[0] / "indexed-capture-failed"
+    if mutation == "missing-key":
+        failure.pop("copied_bytes")
+        _write_json(path, failure)
+    elif mutation in ("missing", "directory", "symlink"):
+        path.unlink()
+        if mutation == "directory":
+            path.mkdir()
+        elif mutation == "symlink":
+            target = tmp_path / "real-marker"
+            _write_json(target, failure)
+            try:
+                path.symlink_to(target)
+            except (OSError, NotImplementedError):
+                pytest.skip("symlinks unavailable")
+    else:
+        raw = json.dumps(failure).encode()
+        path.write_bytes({"legacy": b"indexed capture failed\n", "truncated": raw[:-1],
+                          "oversize": raw + b" " * 1025, "duplicate": raw.replace(b'{', b'{"index":0,', 1),
+                          "list": b"[]", "utf8": b"\xff"}[mutation])
+    evidence, _ = _failure_shell(args)
+    assert "first_recorded_failure" not in evidence
+
+
+@pytest.mark.parametrize("mutation", ("request-missing", "request-empty", "request-malformed", "request-source", "manifest-token", "manifest-count", "row-index", "row-source", "manifest-missing", "claim-token", "claim-index", "claim-module", "claim-attempt", "claim-missing"))
+def test_first_failure_requires_independent_coordinator_identity(tmp_path, mutation):
+    args, failure = _first_failure_inputs(tmp_path)
+    dump, record = args[:2]
+    if mutation.startswith("request-"):
+        if mutation == "request-source":
+            record["source_sha256"] = "f" * 64
+        elif mutation == "request-missing":
+            record.pop("indexed_input_invocation")
+        else:
+            record["indexed_input_invocation"] = "" if mutation == "request-empty" else "X" * 32
+    elif mutation == "claim-missing":
+        (dump / "module_0.claim.json").unlink()
+    elif mutation.startswith("claim-"):
+        claim = {"schema": "pcc.indexed-input-claim.v1", "invocation": TOKEN,
+                 "index": 0, "module": "program", "attempt": _sha((TOKEN + ":0").encode())[:32]}
+        key = {"claim-token": "invocation", "claim-index": "index", "claim-module": "module", "claim-attempt": "attempt"}[mutation]
+        claim[key] = 1 if key == "index" else "wrong"
+        _write_json(dump / "module_0.claim.json", claim)
+    else:
+        path = dump / "invocation.json"
+        value = json.loads(path.read_text())
+        if mutation == "manifest-missing":
+            path.unlink()
+        else:
+            if mutation == "manifest-token":
+                value["invocation"] = "f" * 32
+            elif mutation == "manifest-count":
+                value["count"] = True
+            elif mutation == "row-index":
+                value["modules"][0]["index"] = True
+            else:
+                value["modules"][0]["source_sha256"] = "f" * 64
+            _write_json(path, value)
+    evidence, _ = _failure_shell(args)
+    assert "first_recorded_failure" not in evidence
+
+
+@pytest.mark.parametrize("manifest", (True, False))
+@pytest.mark.parametrize("stage", ("invocation", "capture-target", "capture-lock", "claim"))
+def test_first_failure_unknown_index_only_at_global_stage(tmp_path, manifest, stage):
+    args, failure = _first_failure_inputs(tmp_path)
+    failure.update(index=-1, stage=stage)
+    if not manifest:
+        (args[0] / "invocation.json").unlink()
+    _write_json(args[0] / "indexed-capture-failed", failure)
+    evidence, _ = _failure_shell(args)
+    assert evidence["first_recorded_failure"] == failure
+
+
+def test_first_failure_diagnostic_error_cannot_replace_original_assertion(tmp_path, monkeypatch):
+    args, _ = _first_failure_inputs(tmp_path)
+    original = AssertionError("MALFORMED: original independent rejection")
+    def reject(*args, **kwargs):
+        raise original
+    def diagnostic_error(*args, **kwargs):
+        raise OSError("diagnostic failed")
+    monkeypatch.setattr(indexed, "read_indexed_inputs", reject)
+    monkeypatch.setattr(indexed, "read_first_recorded_failure", diagnostic_error)
+    evidence, caught = _failure_shell(args, completed=True)
+    assert caught is original and "first_recorded_failure" not in evidence
+
+
+def test_first_failure_exact_final_budget_omits_only_optional_record(tmp_path, monkeypatch):
+    args, failure = _first_failure_inputs(tmp_path)
+    marker = args[0] / "indexed-capture-failed"
+    marker.write_bytes(b"legacy")
+    baseline, _ = _failure_shell(args)
+    baseline_size = len(json.dumps(baseline).encode()) + 1
+    # Keep the real 2 MiB limit; use an existing shell metadata field to fill it.
+    args[1]["run_id"] += "x" * (support._IR_JSON_LIMIT - baseline_size)
+    full, _ = _failure_shell(args)
+    assert (tmp_path / "executable-ir-dump.json").stat().st_size == support._IR_JSON_LIMIT
+    _write_json(marker, failure)
+    omitted, _ = _failure_shell(args)
+    assert omitted == full and "first_recorded_failure" not in omitted
+    assert (tmp_path / "executable-ir-dump.json").stat().st_size == support._IR_JSON_LIMIT
+
+
+def test_first_failure_marker_read_is_bounded_and_regular(tmp_path, monkeypatch):
+    args, failure = _first_failure_inputs(tmp_path)
+    original = indexed.os.fdopen
+    reads = []
+    class ObservedStream:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            return self.stream.__exit__(*args)
+        def fileno(self):
+            return self.stream.fileno()
+        def read(self, size):
+            reads.append(size)
+            return self.stream.read(size)
+    monkeypatch.setattr(indexed.os, "fdopen", lambda *a, **kw: ObservedStream(original(*a, **kw)))
+    assert indexed.read_first_recorded_failure(*args[:2]) == failure
+    manifest_bytes = (args[0] / "invocation.json").stat().st_size
+    assert reads == [1025, indexed.LIMIT + 1, indexed.LIMIT - manifest_bytes + 1]
+
+
+@pytest.mark.parametrize("size,accepted", ((1024, True), (1025, False)))
+def test_first_failure_marker_exact_byte_limit(tmp_path, size, accepted):
+    args, failure = _first_failure_inputs(tmp_path)
+    raw = json.dumps(failure).encode()
+    (args[0] / "indexed-capture-failed").write_bytes(raw + b" " * (size - len(raw)))
+    evidence, _ = _failure_shell(args)
+    assert ("first_recorded_failure" in evidence) is accepted
+
+
+@pytest.mark.parametrize("name", ("invocation.json", "module_0.claim.json"))
+@pytest.mark.parametrize("mutation", ("malformed", "oversize", "directory", "symlink"))
+def test_first_failure_rejects_invalid_identity_files(tmp_path, name, mutation):
+    args, _ = _first_failure_inputs(tmp_path)
+    path = args[0] / name
+    path.unlink(missing_ok=True)
+    if mutation == "directory":
+        path.mkdir()
+    elif mutation == "symlink":
+        target = tmp_path / "identity-target"
+        target.write_text("{}")
+        try:
+            path.symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("symlinks unavailable")
+    elif mutation == "oversize":
+        with path.open("wb") as stream:
+            stream.truncate(indexed.LIMIT + 1)
+    else:
+        path.write_bytes(b"{")
+    evidence, _ = _failure_shell(args)
+    assert "first_recorded_failure" not in evidence
+
+
+def test_first_failure_accepts_valid_claim_and_counter_bounds(tmp_path):
+    args, failure = _first_failure_inputs(tmp_path)
+    failure.update(remaining_bytes=0, observed_bytes=2**63 - 1, copied_bytes=-1,
+                   inventory_count=128, overflow=True)
+    _write_json(args[0] / "indexed-capture-failed", failure)
+    _write_json(args[0] / "module_0.claim.json", {
+        "schema": "pcc.indexed-input-claim.v1", "invocation": TOKEN,
+        "index": 0, "module": "program", "attempt": _sha((TOKEN + ":0").encode())[:32],
+    })
+    evidence, _ = _failure_shell(args)
+    assert evidence["first_recorded_failure"] == failure
+
+
+@pytest.mark.parametrize("excess", (0, 1))
+def test_first_failure_identity_metadata_has_one_aggregate_budget(tmp_path, monkeypatch, excess):
+    args, failure = _first_failure_inputs(tmp_path)
+    manifest = args[0] / "invocation.json"
+    claim = args[0] / "module_0.claim.json"
+    manifest_size = indexed.LIMIT // 2
+    raw = manifest.read_bytes()
+    manifest.write_bytes(raw + b" " * (manifest_size - len(raw)))
+    raw = claim.read_bytes()
+    claim.write_bytes(raw + b" " * (indexed.LIMIT - manifest_size + excess - len(raw)))
+    opened = []
+    original = indexed.os.open
+    def observed(path, flags, *args, **kwargs):
+        opened.append(Path(path).name)
+        return original(path, flags, *args, **kwargs)
+    monkeypatch.setattr(indexed.os, "open", observed)
+    result = indexed.read_first_recorded_failure(*args[:2])
+    assert result == (None if excess else failure)
+    assert opened == ["indexed-capture-failed", "invocation.json"] + (
+        [] if excess else ["module_0.claim.json"]
+    )
+
+
+def test_first_failure_serialization_error_omits_optional_record(tmp_path, monkeypatch):
+    args, _ = _first_failure_inputs(tmp_path)
+    original = AssertionError("MALFORMED: independent original error")
+    def reject(*args, **kwargs):
+        raise original
+    dumps = support.json.dumps
+    attempts = []
+    def reject_optional(value, *args, **kwargs):
+        if isinstance(value, dict) and "first_recorded_failure" in value:
+            attempts.append(True)
+            raise ValueError("optional serialization failed")
+        return dumps(value, *args, **kwargs)
+    monkeypatch.setattr(indexed, "read_indexed_inputs", reject)
+    monkeypatch.setattr(support.json, "dumps", reject_optional)
+    evidence, caught = _failure_shell(args, completed=True)
+    assert caught is original and attempts == [True]
+    assert "first_recorded_failure" not in evidence

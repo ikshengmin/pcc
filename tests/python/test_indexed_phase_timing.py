@@ -1409,3 +1409,106 @@ def test_linux_link_bridge_only_forwards_optional_timer_to_elf(monkeypatch, targ
         if enabled:
             expected["coordinator_timing"] = timer
     assert calls == [("pe" if target == TARGETS[3] else "elf", expected)]
+
+
+def test_backend_finalize_receipts_keep_all_sixteen_aggregates(monkeypatch):
+    phases = ("prepare", "layout", "stackmaps", "unwind", "dwarf", "sections")
+    assert timing_module._BACKEND_FINALIZE_PHASES == phases
+    sink = RecordingSink()
+    ticks = iter(range(100, 112))
+    monkeypatch.setattr(timing_module.sys, "stderr", sink)
+    monkeypatch.setattr(timing_module.time, "perf_counter_ns", lambda: next(ticks))
+    timer = ModulePhaseTiming("pkg.module\n/secret path:=" + "z" * 200)
+    before = list(range(16))
+    timer.totals_ns[:] = before
+    for phase in phases:
+        timer.complete_backend_finalize(phase, timer.begin_backend_finalize(phase))
+    assert timer.totals_ns == before
+    assert set(vars(timer)) == {
+        "module_name", "target", "route", "totals_ns", "failed", "reported",
+    }
+    assert len(sink.lines) == sink.flushes == 12
+    assert all(line.count("\n") == 1 and len(line) < 340 for line in sink.lines)
+    rows = _events(sink)
+    assert [(row["phase"], row["event"]) for row in rows] == [
+        (phase, event) for phase in phases for event in ("begin", "complete")
+    ]
+    assert all(row["scope"] == row["parent"] == "backend_finalize" for row in rows)
+    assert all(row["module"] == "pkg.module__secret_path__" + "z" * (160 - 25)
+               and row["clock_ok"] == "1" for row in rows)
+    assert all("duration_ns" not in row for row in rows[::2])
+    assert [row["duration_ns"] for row in rows[1::2]] == ["1"] * 6
+    stream = io.StringIO()
+    timer.report(stream, True)
+    assert stream.getvalue().count("_ns=") == 16
+    for index, name in enumerate(timing_module._PHASE_NAMES):
+        assert name + "=" + str(index) in stream.getvalue().split()
+
+
+@pytest.mark.parametrize("failure", ("start", "end", "zero", "backwards"))
+@pytest.mark.parametrize("error_type", (RuntimeError, DiagnosticAbort))
+def test_backend_finalize_clock_failure_disables_later_reads(monkeypatch, failure, error_type):
+    reads = []
+    sink = RecordingSink()
+
+    def clock():
+        reads.append(None)
+        if failure == "start" or (failure == "end" and len(reads) == 2):
+            raise error_type("clock unavailable")
+        if failure == "zero":
+            return 0
+        return 100 if len(reads) == 1 else 99
+
+    monkeypatch.setattr(timing_module.time, "perf_counter_ns", clock)
+    monkeypatch.setattr(timing_module.sys, "stderr", sink)
+    timer = ModulePhaseTiming("sample")
+    timer.complete_backend_finalize("prepare", timer.begin_backend_finalize("prepare"))
+    assert timer.failed
+    before = len(reads)
+    timer.complete_backend_finalize("layout", timer.begin_backend_finalize("layout"))
+    assert len(reads) == before
+    assert timer.totals_ns == [0] * 16 and sink.flushes == 4
+    assert all(row["clock_ok"] == "0" and "duration_ns" not in row
+               for row in _events(sink)[1:])
+
+
+@pytest.mark.parametrize("failure", ("write", "flush"))
+@pytest.mark.parametrize("error_type", (OSError, DiagnosticAbort))
+def test_backend_finalize_sink_failure_cannot_replace_active_error(monkeypatch, failure, error_type):
+    ticks = iter((10, 14))
+    sink = RecordingSink(failure, error_type("diagnostic failure"))
+    monkeypatch.setattr(timing_module.time, "perf_counter_ns", lambda: next(ticks))
+    monkeypatch.setattr(timing_module.sys, "stderr", sink)
+    timer = ModulePhaseTiming("sample")
+    original = DiagnosticAbort("compiler failure")
+    with pytest.raises(DiagnosticAbort) as caught:
+        try:
+            raise original
+        finally:
+            timer.complete_backend_finalize("layout", timer.begin_backend_finalize("layout"))
+    assert caught.value is original and not timer.failed
+    assert timer.totals_ns == [0] * 16 and len(sink.lines) == 2
+    assert sink.flushes == (0 if failure == "write" else 2)
+
+
+def test_backend_finalize_unknown_labels_and_missing_start_do_not_read_clock(monkeypatch):
+    reads = []
+    sink = RecordingSink()
+
+    def forbidden():
+        reads.append(None)
+        raise AssertionError("unstarted boundary read a clock")
+
+    monkeypatch.setattr(timing_module.time, "perf_counter_ns", forbidden)
+    monkeypatch.setattr(timing_module.sys, "stderr", sink)
+    timer = ModulePhaseTiming("sample")
+    for phase in ("", "backend_finalize", "unknown/path\nlabel", "prepare_ns"):
+        assert timer.begin_backend_finalize(phase) == 0
+        timer.complete_backend_finalize(phase, 10)
+    assert sink.lines == [] and reads == [] and not timer.failed
+    timer.complete_backend_finalize("prepare", 0)
+    assert reads == [] and not timer.failed
+    assert _events(sink) == [{
+        "scope": "backend_finalize", "phase": "prepare", "parent": "backend_finalize",
+        "event": "complete", "clock_ok": "0", "module": "sample",
+    }]

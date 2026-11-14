@@ -337,18 +337,27 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_str_method_slot_models.py',
               'tests/test_ci_native_find_protocol.py',
               'tests/python/test_str_len_protocol.py',
-              'tests/python/test_worker_observation_scope.py')
-# Expected default-marker inventory: 85 modules, 3795 ordinary raw nodes.
-# Observation-scope increment is source-counted; CI must verify collection.
+              'tests/python/test_worker_observation_scope.py',
+              'tests/python/test_lambda_rejection_diagnostics.py',
+              'tests/python/test_lambda_scaffold_capture_owner.py')
+# Expected default-marker inventory: 87 modules, 3871 ordinary raw nodes.
+# CI at d956440d reported the prior 3844-node universe on all six workers of all
+# four platforms, including all 33 Lambda diagnostic cases. Linux x86_64
+# selected 3844; the other platforms selected 3843 because the existing
+# text-index owned-linker case is Linux x86_64-only. Its declarative platform
+# gate is accounted for as UNRUN, not subtracted from the fixed universe.
+# Those runs stopped at a workflow contract failure; collection is not a pass.
+# The 27 added provider-capture cases are source-counted; execution is UNRUN.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
-    106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 433, 17,
+    106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17,
     4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55,
     84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
     43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41,
-    35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 11,
+    35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
+    33, 27,
 )
 PHASES = ("preflight", "stage1", "pcc1")
 

@@ -51,8 +51,14 @@ _PHASE_NAMES = (
 )
 
 
+# Receipt-only children: keep the sixteen aggregate indices and report schema.
+_BACKEND_FINALIZE_PHASES = (
+    "prepare", "layout", "stackmaps", "unwind", "dwarf", "sections",
+)
+
+
 class ModulePhaseTiming:
-    """Sixteen scalar aggregates and three coarse assembly boundary pairs."""
+    """Sixteen scalar aggregates and bounded assembly/finalization receipts."""
 
     def __init__(self, module_name: str):
         self.module_name = module_name
@@ -113,6 +119,43 @@ class ModulePhaseTiming:
                 "assembly", _PHASE_NAMES[phase][:-3], "object_assemble",
                 "complete", not self.failed and started_ns > 0,
                 self.totals_ns[phase] - before,
+                _bounded_module_name(self.module_name),
+            )
+        except BaseException:
+            pass
+
+    def begin_backend_finalize(self, phase: str) -> int:
+        # Fixed coarse boundaries only, never per function or instruction.
+        try:
+            if phase not in _BACKEND_FINALIZE_PHASES:
+                return 0
+            started_ns = self.start()
+            _write_event(
+                "backend_finalize", phase, "backend_finalize",
+                "begin", not self.failed, 0,
+                _bounded_module_name(self.module_name),
+            )
+            return started_ns
+        except BaseException:
+            return 0
+
+    def complete_backend_finalize(self, phase: str, started_ns: int) -> None:
+        # Children overlap aggregate 7 and include diagnostic overhead. They
+        # are wall-clock receipts, not additional totals or pure helper CPU.
+        try:
+            if phase not in _BACKEND_FINALIZE_PHASES:
+                return
+            elapsed_ns = 0
+            if not self.failed and started_ns > 0:
+                try:
+                    elapsed_ns = time.perf_counter_ns() - started_ns
+                    if elapsed_ns < 0:
+                        self.failed = True
+                except BaseException:
+                    self.failed = True
+            _write_event(
+                "backend_finalize", phase, "backend_finalize",
+                "complete", not self.failed and started_ns > 0, elapsed_ns,
                 _bounded_module_name(self.module_name),
             )
         except BaseException:

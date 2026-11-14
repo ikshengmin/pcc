@@ -328,6 +328,7 @@ class _Pass:
 def _run(fragments, semantics, span, mode):
     p = _Pass(fragments, semantics, span)
     try:
+        changed = False
         index = 0
         function_end = 0
         in_function = False
@@ -459,12 +460,20 @@ def _run(fragments, semantics, span, mode):
                         replacement = d
                         consumed = 4
             if consumed:
+                changed = True
                 if replacement >= 0:
                     p.output.append(replacement)
                 index += consumed
             else:
                 p.output.append(a)
                 index += 1
+        if not changed and fragments.spans.length(span) == len(p.ids):
+            # No rewrite selected: keep a distinct mutable root, but snapshot
+            # the immutable input tree instead of copying every record ID.
+            # A corrupted root count still takes the old rebuilding path.
+            result = fragments.new_fragment()
+            fragments.extend_fragment(result, span)
+            return result
         return p.finish()
     finally:
         p.close()

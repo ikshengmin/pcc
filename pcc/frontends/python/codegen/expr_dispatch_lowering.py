@@ -293,6 +293,49 @@ def _expr_is_lambda(expr: Expr, kind: str) -> bool:
     )
 
 
+def _lambda_rejection_detail(expr: Expr, rejection: list) -> str:
+    # Only source-owned finite codes reach the diagnostic. Do not stringify
+    # the caught body exception, capture values, AST nodes or arbitrary spans.
+    code = rejection[0] if rejection else "unknown"
+    if type(code) is not str:
+        return ""
+    stage = "unknown"
+    reason = "unknown"
+    exception = "unknown"
+    adapter_ir = "unknown"
+    if code in ("arity", "parameter-name", "free-variable"):
+        stage = "preflight"
+        reason = code
+        exception = "none"
+        adapter_ir = "none"
+    elif code in ("slot-body", "legacy-body"):
+        stage = code
+        reason = "unknown-body-rejection"
+        exception = "NotImplementedError"
+        adapter_ir = "partial"
+    location = "unknown"
+    span = getattr(expr, "span", None)
+    if span is not None:
+        file = getattr(span, "file", None)
+        line = getattr(span, "line", None)
+        col = getattr(span, "col", None)
+        if (type(file) is str and type(line) is int
+                and type(col) is int and 0 <= line <= 2147483647
+                and 0 <= col <= 2147483647):
+            # Bound both work and output; keep the filename for long paths,
+            # and prevent a source path from injecting another log record.
+            tail = file[-240:]
+            clean = "..." if len(file) > 240 else ""
+            for char in tail:
+                clean += char if " " <= char <= "~" else "?"
+            location = f"{clean}:{line}:{col}"
+    return (
+        f" [lambda source={location} native-stage={stage}"
+        f" native-reason={reason} native-exception={exception}"
+        f" native-ir={adapter_ir} fallbacks=exhausted]"
+    )
+
+
 class ExprDispatchLoweringMixin:
     def _emit_dynamic_binary_dunder_call(
         self,
@@ -793,18 +836,19 @@ class ExprDispatchLoweringMixin:
         # top-level code -- and module-level code is outside the strict
         # no-libpython stub projection, so it failed the whole compile.
         if _expr_is_lambda(expr, expr_kind):
+            native_rejection: list = []
             prefer_native = bool(
                 getattr(self, "_prefer_native_callable_values", False)
             )
             if prefer_native:
-                native = self._maybe_emit_native_lambda_func(expr)
+                native = self._maybe_emit_native_lambda_func(expr, native_rejection)
                 if native is not None:
                     return native
             simple = self._maybe_emit_simple_lambda(expr)
             if simple is not None:
                 return simple
             if not prefer_native:
-                native = self._maybe_emit_native_lambda_func(expr)
+                native = self._maybe_emit_native_lambda_func(expr, native_rejection)
                 if native is not None:
                     return native
             # Fall back to the general lambda-wrap path: hoist the
@@ -814,6 +858,14 @@ class ExprDispatchLoweringMixin:
             wrapped = self._maybe_emit_lambda_wrap(expr)
             if wrapped is not None:
                 return wrapped
+            message = f"Layer 1 does not handle expression {type(expr).__name__}"
+            try:
+                message += _lambda_rejection_detail(expr, native_rejection)
+            except Exception:
+                # Diagnostics must not replace the original failure class or
+                # prevent a supported alternative from returning above.
+                pass
+            raise NotImplementedError(message)
         raise NotImplementedError(
             f"Layer 1 does not handle expression {type(expr).__name__}"
         )

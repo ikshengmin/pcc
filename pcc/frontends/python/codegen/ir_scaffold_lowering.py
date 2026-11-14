@@ -1060,6 +1060,25 @@ class IrScaffoldLoweringMixin:
             return attr.name
         return None
 
+    def _ir_scaffold_owns_symbol_value(self, attr: Attr) -> bool:
+        """Whether this attribute resolves without loading its namespace.
+
+        Keep this non-emitting query shared with symbol-value emission. A
+        closure may reference an owned provider symbol without capturing the
+        compile-time namespace marker, but an unknown member or ordinary
+        receiver must still follow normal name/attribute resolution.
+        """
+        if not self._ir_scaffold_enabled() or not _is_scaffold_attr(attr):
+            return False
+        if not self._scaffold_receiver_admitted(attr.obj, attr.name):
+            return False
+        if self._ir_module_symbol_target(attr) is not None:
+            return True
+        if not (_is_scaffold_name(attr.obj) and attr.obj.ident == "ir"):
+            return False
+        info = (self._native_module_exports or {}).get("pcc.ir.ir", {}).get(attr.name)
+        return isinstance(info, dict)
+
     def _maybe_emit_ir_scaffold_symbol_value(self, attr: Attr):
         """Lower a bare ``ir.SYMBOL`` -- an ``ir.X`` that is *not* being called.
 
@@ -1077,30 +1096,12 @@ class IrScaffoldLoweringMixin:
         object ``from pcc.ir.ir import X`` would have bound, so a later
         call through the alias runs the real class.
         """
-        if not self._ir_scaffold_enabled():
-            # OFF mode leaves ``ir`` a real imported module object; normal
-            # attribute lowering is correct there.
-            return None
-        if not self._scaffold_receiver_admitted(attr.obj, attr.name):
+        if not self._ir_scaffold_owns_symbol_value(attr):
             return None
         symbol = self._ir_module_symbol_target(attr)
         if symbol is None:
-            # Any other provider export (``isinstance(t, ir.Type)``,
-            # ``ir.PhiInstr``, the ``ir.Undefined`` singleton in the C
-            # codegen) loads through the provider's export table; a plain
-            # name lookup of the elided ``ir`` binding is a NameError.
-            if not (
-                _is_scaffold_attr(attr)
-                and _is_scaffold_name(attr.obj)
-                and attr.obj.ident == "ir"
-            ):
-                return None
             provider = "pcc.ir.ir"
-            info = (self._native_module_exports or {}).get(provider, {}).get(
-                attr.name
-            )
-            if not isinstance(info, dict):
-                return None
+            info = self._native_module_exports[provider][attr.name]
             return self._emit_native_module_export_value(provider, attr.name, info)
         g_name = ".class.pcc_ir_ir." + symbol
         existing = self.module.globals.get(g_name)

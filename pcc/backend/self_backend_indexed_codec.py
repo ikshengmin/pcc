@@ -322,12 +322,13 @@ def _write_host_arena(stream, arena: CompilerIntArena) -> None:
         stream.write(b"".join(chunks))
 
 
-def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
+def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=None) -> None:
     """Reject oversized diagnostics before constructing wire lists or buffers.
 
     This is a conservative upper bound, deliberately not a fit guarantee. Raw
     arenas are counted without reading them. Cold cells are traversed without
-    copying, charging their worst-case JSON representation and container syntax.
+    copying. Strings charge their exact ensure_ascii JSON representation;
+    scalar/container overhead remains conservative, not an exact wire size.
     The ordinary sidecar path does not enter this diagnostic walk.
     """
     budget = [0]
@@ -335,14 +336,35 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
     def charge(count):
         budget[0] += count
         if budget[0] > max_bytes:
+            if diagnostic is not None:
+                diagnostic["observed_bytes"] = budget[0]
             raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
 
     def cold(value):
         charge(32)
         if isinstance(value, str):
-            # ensure_ascii JSON has at most twelve bytes per Unicode scalar;
-            # charge before json.dumps or UTF-8 can materialize the string.
-            charge(len(value) * 12)
+            # Reserve minimum bytes before the added escape inspection.
+            # Each such scan is bounded by the remaining capture budget,
+            # without materializing JSON or an encoded copy.
+            charge(len(value) + 2)
+            if value.isascii() and value.isprintable():
+                # Ordinary names/IR text need only two allocation-free counts.
+                charge(value.count('"') + value.count("\\"))
+            else:
+                for character in value:
+                    point = ord(character)
+                    if (
+                        point == 34 or point == 92 or point == 8
+                        or point == 12 or point == 10 or point == 13
+                        or point == 9
+                    ):
+                        charge(1)
+                    elif point < 0x20 or 0x7F <= point <= 0xFFFF:
+                        # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
+                        charge(5)
+                    elif point > 0xFFFF:
+                        # A supplementary scalar is a JSON surrogate pair.
+                        charge(11)
         elif isinstance(value, TypeDesc):
             cold(value.kind)
             cold(value.width)
@@ -404,12 +426,17 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
 
 
 def encode_indexed_module_file(
-    path: str, module: ParsedModule, *, max_bytes: int = 0,
+    path: str, module: ParsedModule, *, max_bytes: int = 0, diagnostic=None,
 ) -> None:
     """Write one direct module with raw scalar arenas and a JSON cold header."""
 
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-preflight"
+        diagnostic["remaining_bytes"] = max_bytes
     if max_bytes:
-        _bounded_capture_budget(module, max_bytes)
+        _bounded_capture_budget(module, max_bytes, diagnostic)
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-shape"
     functions: list[dict] = []
     raw_arenas: list[CompilerIntArena] = []
     total_scalars = 0
@@ -461,12 +488,21 @@ def encode_indexed_module_file(
         # instead of silently strengthening an ODR definition. v3 may also
         # carry source_debug; ordinary v1/v2 bytes remain unchanged.
         header["schema"] = _ODR_SCHEMA
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-header"
     header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
+    if diagnostic is not None:
+        diagnostic["observed_bytes"] = len(header_bytes)
     if len(header_bytes) > _MAX_HEADER_BYTES:
         raise BackendUnavailable("indexed module header exceeds the size limit")
     wire_size = len(_MAGIC) + len(str(len(header_bytes))) + 1 + len(header_bytes) + total_scalars * 8
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-wire-size"
+        diagnostic["observed_bytes"] = wire_size
     if max_bytes and wire_size > max_bytes:
         raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-write"
     with open(path, "wb") as stream:
         stream.write(_MAGIC)
         # Decimal digits plus newline have identical UTF-8 and ASCII bytes;

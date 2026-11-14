@@ -29,24 +29,139 @@ _DIRECTORY_PATH_SCALAR_LIMIT = 8191
 _DIRECTORY_PATH_SCRATCH_BYTES = 32765
 
 
-def _poison():
-    # A later successful retry must not turn a failed diagnostic attempt into
-    # apparently complete evidence. This extra entry is intentionally invalid.
+# Fixed fields only. The first successful exclusive publisher wins, which is
+# not necessarily the first exception in wall-clock order across processes.
+_FAILURE_SCHEMA = "pcc.indexed-input-first-recorded-failure.v1"
+_FAILURE_LIMIT = 1024
+_FAILURE_STAGES = (
+    "invocation", "manifest", "worker-context", "sidecar-publish",
+    "sidecar-context", "sidecar-retire", "invalidate", "capture-identity",
+    "capture-target", "capture-lock", "claim", "remaining-input-budget",
+    "snapshot-destination", "codec-preflight", "codec-shape", "codec-header",
+    "codec-wire-size", "codec-write", "snapshot-hash", "snapshot-publish",
+    "snapshot-header-read", "output-identity", "output-lock",
+    "remaining-output-budget", "output-stat", "output-destination",
+    "output-copy-open", "output-copy", "output-rehash", "output-publish",
+    "emission-json", "link-invocation", "module-count", "emission-json-read",
+    "claim-read", "input-identity", "input-size", "input-hash", "retained-hash",
+    "inventory", "link-recheck", "binary-hash", "link-json", "unlock",
+)
+_FAILURE_REASONS = {
+    "indexed module function has no published indexed kernel": "missing_kernel",
+    "indexed module requires complete value scalar columns": "incomplete_value_columns",
+    "indexed module requires complete definition positions": "incomplete_definition_positions",
+    "indexed module sidecar must be written before stack preparation": "prepared_slots",
+    "indexed module sidecar contains prepared value state": "prepared_values",
+    "unsupported diagnostic cold payload": "unsupported_cold",
+    "bounded indexed debug capture is not supported": "unsupported_debug_capture",
+    "indexed module mixes arena storage projections": "mixed_arena_storage",
+    "indexed module header exceeds the size limit": "header_limit",
+    "indexed receipt aggregate bytes exceed limit": "aggregate_limit",
+    "indexed receipt output exceeds limit or has wrong kind": "output_limit_or_kind",
+    "indexed receipt diagnostic lock is busy": "lock_busy",
+    "short indexed receipt output write": "short_output_write",
+    "short indexed receipt metadata write": "short_metadata_write",
+    "indexed receipt output grew": "output_grew",
+    "indexed receipt output changed": "output_changed",
+    "indexed receipt snapshot destination already exists": "destination_exists",
+    "indexed receipt output destination already exists": "destination_exists",
+    "indexed receipt metadata destination already exists": "destination_exists",
+    "indexed receipt link inventory is partial or mixed": "inventory_mismatch",
+}
+
+
+def _failure_state(stage):
+    return {"invocation": "", "index": -1, "stage": stage,
+            "remaining_bytes": -1, "observed_bytes": -1,
+            "copied_bytes": -1, "inventory_count": -1}
+
+
+def _failure_index(state, value):
+    if type(value) is int and 0 <= value <= 30:
+        state["index"] = value
+
+
+def _failure_payload(state, error):
+    # Never format exceptions: their text/args may contain paths or secrets,
+    # and user exception __str__/__repr__ must not run in this handler.
+    if not isinstance(state, dict) or state.get("stage") not in _FAILURE_STAGES:
+        raise ValueError("invalid indexed failure stage")
+    token = state.get("invocation")
+    if type(token) is not str or (token and not _token(token)):
+        raise ValueError("invalid indexed failure token")
+    index = state.get("index")
+    if type(index) is not int or not -1 <= index <= 30:
+        raise ValueError("invalid indexed failure index")
+    exception_class = "other_exception"
+    if isinstance(error, FileExistsError):
+        exception_class = "file_exists"
+    elif isinstance(error, UnicodeError):
+        exception_class = "unicode_error"
+    elif isinstance(error, ValueError):
+        exception_class = "value_error"
+    elif isinstance(error, KeyError):
+        exception_class = "key_error"
+    elif isinstance(error, TypeError):
+        exception_class = "type_error"
+    elif isinstance(error, OSError):
+        exception_class = "os_error"
+    elif isinstance(error, MemoryError):
+        exception_class = "memory_error"
+    reason = "unknown"
+    if isinstance(error, Exception) and len(error.args) == 1:
+        message = error.args[0]
+        if type(message) is str and len(message) <= 128:
+            reason = _FAILURE_REASONS.get(message, "unknown")
+            if message == "indexed module diagnostic exceeds the size limit":
+                if state["stage"] == "codec-preflight":
+                    reason = "conservative_limit"
+                elif state["stage"] == "codec-wire-size":
+                    reason = "wire_limit"
+    value = {"schema": _FAILURE_SCHEMA, "invocation": token, "index": index,
+             "stage": state["stage"], "exception_class": exception_class,
+             "reason": reason, "overflow": False}
+    for key in ("remaining_bytes", "observed_bytes", "copied_bytes", "inventory_count"):
+        count = state.get(key)
+        if type(count) is not int or count < -1:
+            raise ValueError("invalid indexed failure counter")
+        if count > 9223372036854775807:
+            count = -1
+            value["overflow"] = True
+        value[key] = count
+    raw = (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
+    if len(raw) > _FAILURE_LIMIT:
+        raise ValueError("indexed failure exceeds limit")
+    return raw
+
+
+def _poison(state=None, error=None):
+    # Reporting failure must never prevent the original exclusive poison
+    # attempt. Existing/truncated/legacy/symlink markers are never repaired.
+    raw = b"incomplete indexed capture\n"
+    try:
+        raw = _failure_payload(state, error)
+    except Exception:
+        pass
     try:
         directory = str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip()
         if directory:
             with open(os.path.join(directory, "indexed-capture-failed"), "xb") as stream:
-                stream.write(b"incomplete indexed capture\n")
+                stream.write(raw)
     except Exception:
         pass
 
 
-def _unlock(path):
+def _unlock(path, state=None):
     if path:
         try:
             os.unlink(path)
-        except Exception:
-            _poison()
+        except Exception as error:
+            try:
+                if state is not None:
+                    state["stage"] = "unlock"
+            except Exception:
+                pass
+            _poison(state, error)
 
 
 def _token(value):
@@ -219,8 +334,11 @@ def _invocation(directory, token):
 
 def begin_invocation(src_paths, module_names):
     """Bind coordinator-global indices, not worker-local enumeration."""
+    state = None
     try:
+        state = _failure_state("invocation")
         directory, token = _directory()
+        state["invocation"] = token
         if (len(src_paths) != len(module_names) or not module_names
                 or len(set(module_names)) != len(module_names)
                 or 4 * len(module_names) + 2 > INVENTORY_LIMIT):
@@ -235,8 +353,8 @@ def begin_invocation(src_paths, module_names):
                  "modules": rows, "count": len(rows)}
         _write_json(os.path.join(directory, "invocation.json"), value)
         return value
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
         return None
 
 
@@ -244,8 +362,11 @@ def attach_manifest(manifest_path, invocation, assigned_indices):
     """Companion lives with its owner's temporary worker manifest."""
     if invocation is None:
         return
+    state = None
     try:
+        state = _failure_state("manifest")
         directory, token = _directory()
+        state["invocation"] = token
         if invocation["invocation"] != token:
             raise ValueError("indexed receipt invocation changed")
         manifest_sha256, _size = _hash(manifest_path, LIMIT)
@@ -258,13 +379,16 @@ def attach_manifest(manifest_path, invocation, assigned_indices):
             "schema": "pcc.indexed-input-worker.v1", "invocation": token,
             "directory": directory, "manifest_sha256": manifest_sha256, "modules": rows,
         }, dump_inventory=False)
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
 
 
 def worker_context(manifest_path, index, module_name, source_path):
+    state = None
     try:
+        state = _failure_state("worker-context")
         directory, token = _directory()
+        state["invocation"] = token
         context = _read_json(manifest_path + ".receipt.json")
         digest, _size = _hash(manifest_path, LIMIT)
         if (context.get("schema") != "pcc.indexed-input-worker.v1"
@@ -282,8 +406,8 @@ def worker_context(manifest_path, index, module_name, source_path):
         if any(row[key] != expected[key] for key in ("index", "module", "source_sha256")):
             raise ValueError("indexed receipt coordinator identity differs")
         return {**row, "invocation": token, "directory": directory}
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
         return None
 
 
@@ -291,7 +415,11 @@ def publish_sidecar_request(sidecar_path, context, passes):
     """Only context is handed off here; this is NOT an emission receipt."""
     if context is None:
         return
+    state = None
     try:
+        state = _failure_state("sidecar-publish")
+        if _token(context.get("invocation")):
+            state["invocation"] = context["invocation"]
         if os.path.getsize(sidecar_path) > LIMIT:
             raise ValueError("indexed receipt sidecar exceeds limit")
         digest, size = _hash(sidecar_path, LIMIT)
@@ -304,14 +432,17 @@ def publish_sidecar_request(sidecar_path, context, passes):
             "schema": "pcc.indexed-input-sidecar-owner.v1",
             "invocation": context["invocation"], "companion_sha256": companion_digest,
         }, dump_inventory=False)
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
 
 
 def sidecar_context(sidecar_path):
+    state = None
     try:
+        state = _failure_state("sidecar-context")
         request = _read_json(sidecar_path + ".receipt.json")
         directory, token = _directory()
+        state["invocation"] = token
         owner = _read_json(sidecar_path + ".receipt.owner")
         companion_digest, _size = _hash(sidecar_path + ".receipt.json", LIMIT)
         if (owner.get("schema") != "pcc.indexed-input-sidecar-owner.v1"
@@ -330,8 +461,8 @@ def sidecar_context(sidecar_path):
         if any(context[key] != expected[key] for key in ("index", "module", "source_sha256")):
             raise ValueError("indexed receipt sidecar coordinator differs")
         return context, request["passes"]
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
         return None, []
 
 
@@ -363,34 +494,50 @@ def begin_capture(module, context, passes):
     if context is None:
         return None
     lock = ""
+    state = None
     try:
+        state = _failure_state("capture-identity")
         directory, token = _directory()
+        state["invocation"] = token
         if context["directory"] != directory or context["invocation"] != token:
             raise ValueError("indexed receipt capture identity differs")
+        state["stage"] = "capture-target"
         if module.triple == "unknown-unknown-unknown":
             raise ValueError("indexed receipt target is not concrete")
         index = context["index"]
+        state["stage"] = "capture-lock"
         lock = _lock(directory)
+        state["stage"] = "claim"
         _write_json(os.path.join(directory, "module_" + str(index) + ".claim.json"), {
             "schema": "pcc.indexed-input-claim.v1", "invocation": token,
             "index": index, "module": context["module"], "attempt": context["attempt"],
         })
+        # A failed/colliding claim has not assigned this capture a module.
+        # Consumers bind any known index back to that exclusive claim.
+        _failure_index(state, index)
+        state["stage"] = "remaining-input-budget"
         remaining = _remaining(directory, "self_backend_input_", ".pidx")
+        state["remaining_bytes"] = remaining
         from .self_backend_indexed_codec import encode_indexed_module_file
 
         name = "self_backend_input_" + str(index) + ".pidx"
         path = os.path.join(directory, name)
         temporary = path + ".partial"
+        state["stage"] = "snapshot-destination"
         if (os.path.exists(path) or os.path.islink(path)
                 or os.path.exists(temporary) or os.path.islink(temporary)):
             raise ValueError("indexed receipt snapshot destination already exists")
         # The capture lock and exclusive claim own this fixed temporary.
         # max_bytes checks raw arena/cold budgets before their materialization.
-        encode_indexed_module_file(temporary, module, max_bytes=remaining)
+        encode_indexed_module_file(temporary, module, max_bytes=remaining, diagnostic=state)
+        state["stage"] = "snapshot-hash"
         digest, size = _hash(temporary, remaining)
+        state["observed_bytes"] = size
         if size > remaining or os.path.exists(path) or os.path.islink(path):
             raise ValueError("indexed receipt input size or destination differs")
+        state["stage"] = "snapshot-publish"
         os.replace(temporary, path)
+        state["stage"] = "snapshot-header-read"
         with open(path, "rb") as stream:
             stream.readline(32)
             header_size = int(stream.readline(32))
@@ -401,11 +548,11 @@ def begin_capture(module, context, passes):
                 "index": index, "module": context["module"], "attempt": context["attempt"],
                 "target": module.triple, "passes": list(passes), "representation": representation,
                 "input": {"name": name, "bytes": size, "sha256": digest}}
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
         return None
     finally:
-        _unlock(lock)
+        _unlock(lock, state)
 
 
 def finish_capture(capture, output_path, kind):
@@ -413,39 +560,57 @@ def finish_capture(capture, output_path, kind):
     if capture is None:
         return
     lock = ""
+    state = None
     try:
+        state = _failure_state("output-identity")
         directory, token = _directory()
+        state["invocation"] = token
         if capture["invocation"] != token or kind not in ("PCO", "ASM"):
             raise ValueError("indexed receipt output identity differs")
+        _failure_index(state, capture.get("index"))
+        state["stage"] = "output-lock"
         lock = _lock(directory)
+        state["stage"] = "remaining-output-budget"
         remaining = _remaining(directory, "self_backend_output_", ".pco")
         remaining -= sum(os.path.getsize(os.path.join(directory, name))
                          for name in _entries(directory)
                          if name.startswith("self_backend_output_")
                          and (name.endswith(".s") or name.endswith(".s.partial")))
+        # Negative capacity is not an unsigned byte count. Keep it explicitly
+        # unknown in the optional record; the original size check still fails.
+        state["remaining_bytes"] = remaining if remaining >= 0 else -1
+        state["stage"] = "output-stat"
         size = os.path.getsize(output_path)
+        state["observed_bytes"] = size
         if size > remaining or os.path.islink(output_path):
             raise ValueError("indexed receipt output exceeds limit or has wrong kind")
         name = "self_backend_output_" + str(capture["index"]) + (".pco" if kind == "PCO" else ".s")
         destination = os.path.join(directory, name)
         temporary = destination + ".partial"
+        state["stage"] = "output-destination"
         if os.path.exists(destination) or os.path.islink(destination):
             raise ValueError("indexed receipt output destination already exists")
         digest = hashlib.sha256()
         copied = 0
+        state["copied_bytes"] = copied
+        state["stage"] = "output-copy-open"
         with open(output_path, "rb") as reader, open(temporary, "xb") as writer:
+            state["stage"] = "output-copy"
             while True:
                 chunk = reader.read(min(65536, size - copied + 1))
                 if not chunk:
                     break
                 copied += len(chunk)
+                state["copied_bytes"] = copied
                 if copied > size:
                     raise ValueError("indexed receipt output grew")
                 digest.update(chunk)
                 if writer.write(chunk) != len(chunk):
                     raise ValueError("short indexed receipt output write")
+        state["stage"] = "output-rehash"
         if copied != size or _hash(output_path, LIMIT) != (digest.hexdigest(), size):
             raise ValueError("indexed receipt output changed")
+        state["stage"] = "output-publish"
         # The capture lock serializes every retained-output publisher.
         if os.path.exists(destination) or os.path.islink(destination):
             raise ValueError("indexed receipt output destination already exists")
@@ -453,77 +618,113 @@ def finish_capture(capture, output_path, kind):
         capture = dict(capture)
         capture["output"] = {"name": name, "kind": kind, "sha256": digest.hexdigest(), "bytes": size}
         capture["status"] = "EMITTED"
+        state["stage"] = "emission-json"
         _write_json(os.path.join(directory, "self_backend_input_" + str(capture["index"]) + ".json"), capture)
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
     finally:
-        _unlock(lock)
+        _unlock(lock, state)
 
 
 def prepare_link(artifacts):
     """Match the actual ordered linker arguments before invoking the linker."""
+    state = None
     try:
+        state = _failure_state("link-invocation")
         directory, token = _directory()
+        state["invocation"] = token
         invocation = _invocation(directory, token)
+        state["stage"] = "module-count"
         if len(artifacts) != invocation["count"]:
             raise ValueError("indexed receipt link module count differs")
         rows = []
         for index, (module, kind, path) in enumerate(artifacts):
+            state["index"] = -1
+            state["observed_bytes"] = -1
+            _failure_index(state, index)
+            state["stage"] = "emission-json-read"
             expected = invocation["modules"][index]
             receipt = _read_json(os.path.join(directory, "self_backend_input_" + str(index) + ".json"))
+            state["stage"] = "claim-read"
             claim = _read_json(os.path.join(directory, "module_" + str(index) + ".claim.json"))
+            state["stage"] = "input-identity"
             if (expected["module"] != module or receipt["module"] != module
                     or receipt["invocation"] != token or receipt["index"] != index
                     or receipt["status"] != "EMITTED" or receipt["output"]["kind"] != kind
                     or any(claim[key] != receipt[key] for key in ("invocation", "index", "module", "attempt"))):
                 raise ValueError("indexed receipt link input identity differs")
+            state["stage"] = "input-size"
             retained_path = os.path.join(directory, receipt["output"]["name"])
             if (receipt["output"]["bytes"] > LIMIT
                     or os.path.getsize(path) != receipt["output"]["bytes"]
                     or os.path.getsize(retained_path) != receipt["output"]["bytes"]):
                 raise ValueError("indexed receipt linker input size changed")
+            state["stage"] = "input-hash"
             digest, size = _hash(path, LIMIT)
+            state["observed_bytes"] = size
             if (digest, size) != (receipt["output"]["sha256"], receipt["output"]["bytes"]):
                 raise ValueError("indexed receipt linker input changed")
+            state["stage"] = "retained-hash"
             if _hash(os.path.join(directory, receipt["output"]["name"]), LIMIT) != (digest, size):
                 raise ValueError("indexed receipt retained output differs")
             rows.append({"index": index, "module": module, "attempt": receipt["attempt"],
                          "input_sha256": receipt["input"]["sha256"], "output_sha256": digest,
                          "output_name": receipt["output"]["name"], "kind": kind})
-        if len(_entries(directory)) != 4 * len(rows) + 1:
+        state["index"] = -1
+        state["observed_bytes"] = -1
+        state["stage"] = "inventory"
+        inventory_count = len(_entries(directory))
+        state["inventory_count"] = inventory_count
+        if inventory_count != 4 * len(rows) + 1:
             raise ValueError("indexed receipt link inventory is partial or mixed")
         return {"schema": "pcc.indexed-input-link.v1", "invocation": token, "modules": rows}
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
         return None
 
 
 def finish_link(link, artifacts, binary):
     if link is None:
         return
+    state = None
     try:
+        state = _failure_state("link-recheck")
         directory, token = _directory()
+        state["invocation"] = token
         # Recheck inputs after linking, not merely an earlier snapshot.
         if prepare_link(artifacts) != link or link["invocation"] != token:
             raise ValueError("indexed receipt linker inputs changed")
+        state["stage"] = "binary-hash"
         digest, size = _hash(binary)
+        state["observed_bytes"] = size
         completed = dict(link)
         completed["binary_sha256"] = digest
         completed["binary_bytes"] = size
+        state["stage"] = "link-json"
         _write_json(os.path.join(directory, "link.json"), completed)
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
 
 
 def invalidate_capture():
     """Persist a failed identity attempt so retry cannot erase the failure."""
-    _poison()
+    state = None
+    try:
+        state = _failure_state("invalidate")
+        _directory_path, token = _directory()
+        state["invocation"] = token
+    except Exception:
+        pass
+    _poison(state)
 
 
 def retire_sidecar_request(sidecar_path):
     """Remove only a companion acquired by this successful invocation."""
+    state = None
     try:
+        state = _failure_state("sidecar-retire")
         directory, token = _directory()
+        state["invocation"] = token
         if os.path.exists(os.path.join(directory, "indexed-capture-failed")):
             return
         path = sidecar_path + ".receipt.json"
@@ -543,5 +744,5 @@ def retire_sidecar_request(sidecar_path):
             raise ValueError("indexed receipt sidecar retirement owner differs")
         os.unlink(path)
         os.unlink(owner_path)
-    except Exception:
-        _poison()
+    except Exception as error:
+        _poison(state, error)
