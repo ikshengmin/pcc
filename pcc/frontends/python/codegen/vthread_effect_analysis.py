@@ -1257,6 +1257,7 @@ def _add_local_callable_effect(
     effect_summary: Optional[dict] = None,
     summary_module_name: str = "",
     fresh_summary: bool = False,
+    summary_only: bool = False,
 ) -> None:
     """Add one function/method node without a self-host closure."""
     scope_nodes, binding_state, attribute_calls, local_class_hints = (
@@ -1274,10 +1275,11 @@ def _add_local_callable_effect(
         binding_state=binding_state,
     )
     edges: list[str] = []
-    for callee in callees:
-        edge = "function:" + callee
-        if edge not in edges:
-            edges.append(edge)
+    if not summary_only:
+        for callee in callees:
+            edge = "function:" + callee
+            if edge not in edges:
+                edges.append(edge)
     method_callees = _local_method_call_keys(
         fd,
         current_class,
@@ -1286,11 +1288,12 @@ def _add_local_callable_effect(
         attribute_calls=attribute_calls,
         local_hints=local_class_hints,
     )
-    for method_key in method_callees:
-        edge = "method:" + method_key
-        if edge not in edges:
-            edges.append(edge)
-    graph[node_key] = edges
+    if not summary_only:
+        for method_key in method_callees:
+            edge = "method:" + method_key
+            if edge not in edges:
+                edges.append(edge)
+        graph[node_key] = edges
     direct_effect = direct or _function_has_threading_suspension(
         fd,
         module,
@@ -1357,7 +1360,8 @@ def _add_local_callable_effect(
                 summary_edges_start,
             )
     if direct_effect:
-        effects.add(node_key)
+        if not summary_only:
+            effects.add(node_key)
         if effect_summary is not None and summary_caller:
             _vthread_summary_append_unique(
                 effect_summary["seeds"],
@@ -1386,7 +1390,8 @@ def _add_local_callable_effect(
                 summary_edges_start,
             )
         if bool(target[3].get("may_park", False)):
-            effects.add(node_key)
+            if not summary_only:
+                effects.add(node_key)
             return
     for target in siblings:
         if effect_summary is not None and summary_caller:
@@ -1401,7 +1406,8 @@ def _add_local_callable_effect(
                 summary_edges_start,
             )
         if _export_target_is_may_park(native_exports, target):
-            effects.add(node_key)
+            if not summary_only:
+                effects.add(node_key)
             return
 
 
@@ -1476,7 +1482,9 @@ def _compute_local_vthread_effects(
 
     Summary workers only need the seeds, edges and publish keys collected in
     ``effect_summary``.  Their parent solves the cross-module fixed point, so
-    ``summary_only`` returns None without deriving unused local result sets.
+    ``summary_only`` does not populate the unused local graph/effect set and
+    returns None without deriving unused local result sets.  All callable
+    analyses and their summary-producing early returns are still performed.
     All ordinary callers, including those collecting a summary as a side
     output, retain the complete local function/method result.
 
@@ -1529,6 +1537,7 @@ def _compute_local_vthread_effects(
             effect_summary,
             summary_module_name,
             fresh_summary,
+            summary_only,
         )
     for class_name, fd in method_defs:
         _add_local_callable_effect(
@@ -1552,6 +1561,7 @@ def _compute_local_vthread_effects(
             effect_summary,
             summary_module_name,
             fresh_summary,
+            summary_only,
         )
 
     if summary_only:

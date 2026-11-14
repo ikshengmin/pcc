@@ -201,9 +201,9 @@ def test_summary_collects_all_callables_without_local_propagation(
         "function:entry", "function:leaf", "method:Worker.step",
     ]
     assert all(effects is captured[0][1] for _key, effects in captured)
-    # The former builder propagated entry and Worker.step before discarding
-    # its local result.  Neither belongs in this collection-only effect set.
-    assert captured[0][1] == {"function:leaf"}
+    # The builder has no consumer for local effects, even direct seeds.
+    # The independent summary seed is still collected below.
+    assert captured[0][1] == set()
     assert summary["seeds"] == ["f:mixed:leaf"]
     assert summary["edges"] == [
         "f:mixed:entry", "m:mixed:Worker:step",
