@@ -185,6 +185,9 @@ pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_kwargs = extern("py_func_call_kwargs", (c_ptr, c_ptr, c_ptr), c_ptr)
+py_func_try_vector_call_method = extern(
+    "py_func_try_vector_call_method", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr
+)
 py_call_validate_kwargs = extern("py_call_validate_kwargs", (c_ptr,), c_int64)
 py_dict_subclass_getattr = extern("py_dict_subclass_getattr", (c_ptr, c_ptr), c_ptr)
 py_func_call_bound_forward = extern("py_func_call_bound_forward", (c_ptr, c_ptr), c_ptr)
@@ -6784,6 +6787,10 @@ def py_obj_call_method(method, self_obj, args):
     """Call what `py_obj_load_method` returned, with positional `args`."""
     if ptr_is_null(self_obj) != 0:
         return py_obj_call(method, args, null())
+    handled = stack_alloc(8)
+    vector_result = py_func_try_vector_call_method(method, self_obj, args, handled)
+    if load_i64(handled, 0) != 0:
+        return vector_result
     n: int = 0
     if ptr_is_null(args) == 0:
         n = py_tuple_len(args)

@@ -974,6 +974,7 @@ def _runtime_signatures_part_20():
     "py_func_new_static_def": (
         _I64, [_PTR, _CSTR, _CSTR, _CSTR, _CSTR, _PYOBJ, _I64, _PTR, _PTR], False,
     ),
+    "py_func_set_vector_entry": (_VOID, [_PYOBJ, _PTR], False),
     }
 
 

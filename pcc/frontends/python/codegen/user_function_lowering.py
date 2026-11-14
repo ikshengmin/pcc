@@ -90,6 +90,27 @@ _PCC_FUNC_KIND = {
     "**kwargs": 4,
 }
 
+# Vector-call root frame, the layout `_VECTOR_FRAME_*` names in
+# pcc/runtime/py/py_func.py: the inner captures tuple, then the positional
+# arguments.
+NATIVE_VECTOR_CAPTURES_SLOT = 0
+NATIVE_VECTOR_ARGS_SLOT = 1
+NATIVE_VECTOR_MAX_ARGS = 8
+
+
+def native_vector_arity(original_args) -> Optional[int]:
+    """Arity of a vector entry for these formals, or None when there is none.
+
+    Only plain positional formals qualify: at exact arity the signature
+    binder returns the positional tuple unchanged, so the vector entry sees
+    exactly what the tuple adapter would.
+    """
+    if len(original_args) > NATIVE_VECTOR_MAX_ARGS:
+        return None
+    if any(arg.kind not in ("pos", "pos_only") for arg in original_args):
+        return None
+    return len(original_args)
+
 
 def _func_codegen_log(parent, enabled: bool, func_name: str, label: str) -> None:
     if not enabled:
@@ -2310,6 +2331,100 @@ class UserFunctionLoweringMixin:
                 self._try_err_block = saved_try_err_block
             return adapter_ir
 
+        if native_vector_arity(original_args) is not None:
+            self.__dict__.setdefault("_native_vector_specs", {})[adapter_name] = (
+                full_fn, original_args, free_names, return_ty, adapter_fd,
+            )
+        try:
+            self._emit_native_adapter_forward(
+                full_fn, original_args, free_names, return_ty, adapter_fd,
+                lambda i, label: self.builder.call(
+                    self.runtime["py_tuple_get_known"],
+                    [adapter_ir.args[1], ir.Constant(_I64, i)],
+                    name=label,
+                ),
+                lambda: adapter_ir.args[0],
+            )
+        finally:
+            self.builder = saved_builder
+            self.current_function = saved_current_function
+            self._current_entry_block = saved_entry_block
+            self._try_err_block = saved_try_err_block
+        return adapter_ir
+
+    def _native_vector_descriptor(self, adapter) -> Optional[ir.GlobalVariable]:
+        """The `{vector entry, arity}` descriptor of a generic adapter.
+
+        The vector entry takes one registered root frame: slot 0 is the
+        callable's inner captures tuple, slots 1..arity the positional
+        arguments, all borrowed from the caller. It retains each argument
+        exactly like the tuple adapter's `py_tuple_get_known`, then forwards
+        through the same body. Only adapters whose formals are plain
+        positional parameters have one; the runtime calls it only at that
+        exact arity, where signature binding is the identity.
+        """
+        name = getattr(adapter, "name", None)
+        descriptors = self.__dict__.setdefault("_native_vector_descriptors", {})
+        if name in descriptors:
+            return descriptors[name]
+        spec = self.__dict__.get("_native_vector_specs", {}).get(name)
+        if spec is None:
+            return None
+        full_fn, original_args, free_names, return_ty, adapter_fd = spec
+        vector_ir = ir.Function(
+            self.module, ir.FunctionType(_CSTR, [_CSTR]), name=name + "_vector",
+        )
+        entry = vector_ir.append_basic_block(name="entry")
+        saved_builder = self.builder
+        saved_current_function = self.current_function
+        saved_entry_block = getattr(self, "_current_entry_block", None)
+        saved_try_err_block = self._try_err_block
+        self.builder = ir.IRBuilder(entry)
+        self.current_function = vector_ir
+        self._current_entry_block = entry
+        self._try_err_block = None
+        try:
+            frame = self.builder.bitcast(vector_ir.args[0], _CSTR.as_pointer(), name="vector.frame")
+
+            def load_slot(index: int, label: str) -> ir.Value:
+                # The caller's frame stays registered for the whole call, so
+                # each read observes any relocation since the previous one.
+                slot = self.builder.gep(frame, [ir.Constant(_I64, index)], name=label + ".slot")
+                return self.builder.load(slot, name=label)
+
+            def load_arg(index: int, label: str) -> ir.Value:
+                return self._gc_retain(load_slot(NATIVE_VECTOR_ARGS_SLOT + index, label), name=label + ".owned")
+
+            self._emit_native_adapter_forward(
+                full_fn, original_args, free_names, return_ty, adapter_fd,
+                load_arg,
+                lambda: load_slot(NATIVE_VECTOR_CAPTURES_SLOT, "vector.captures"),
+            )
+        finally:
+            self.builder = saved_builder
+            self.current_function = saved_current_function
+            self._current_entry_block = saved_entry_block
+            self._try_err_block = saved_try_err_block
+        descriptor_ty = ir.LiteralStructType([_CSTR, _I64])
+        descriptor = ir.GlobalVariable(self.module, descriptor_ty, name=name + ".vector.desc")
+        descriptor.linkage = "internal"
+        descriptor.global_constant = True
+        descriptor.initializer = ir.Constant(
+            descriptor_ty,
+            [vector_ir.bitcast(_CSTR), ir.Constant(_I64, len(original_args))],
+        )
+        descriptors[name] = descriptor
+        return descriptor
+
+    def _emit_native_adapter_forward(
+        self, full_fn, original_args, free_names, return_ty, adapter_fd,
+        load_arg, load_captures,
+    ) -> None:
+        """Unpack, marshal and forward an adapter's inputs; box the result.
+
+        ``load_arg(i, label)`` returns an owned reference to positional
+        argument ``i``; ``load_captures()`` the inner captures tuple.
+        """
         forwarded: list[ir.Value] = []
         owned_inputs: list[ir.Value] = []
         full_fn_arg_types = tuple(getattr(full_fn.function_type, "args", ()))
@@ -2324,11 +2439,7 @@ class UserFunctionLoweringMixin:
             if param_ir_ty is None and native_index < len(full_fn_arg_types):
                 param_ir_ty = full_fn_arg_types[native_index]
             if ast_arg.kind == "*args":
-                arg_obj = self.builder.call(
-                    self.runtime["py_tuple_get_known"],
-                    [adapter_ir.args[1], ir.Constant(_I64, i)],
-                    name=f"arg.varargs.{i}",
-                )
+                arg_obj = load_arg(i, f"arg.varargs.{i}")
                 owned_inputs.append(arg_obj)
                 if isinstance(param_ir_ty, ir.PointerType):
                     forwarded.append(arg_obj)
@@ -2344,11 +2455,7 @@ class UserFunctionLoweringMixin:
                         )
                     )
                 continue
-            arg_obj = self.builder.call(
-                self.runtime["py_tuple_get_known"],
-                [adapter_ir.args[1], ir.Constant(_I64, i)],
-                name=f"arg.{i}",
-            )
+            arg_obj = load_arg(i, f"arg.{i}")
             owned_inputs.append(arg_obj)
             target_ty = ast_arg.annotation or DynType(name="dyn")
             if isinstance(param_ir_ty, ir.PointerType):
@@ -2375,7 +2482,7 @@ class UserFunctionLoweringMixin:
         for i, _fv in enumerate(free_names):
             cap_obj = self.builder.call(
                 self.runtime["py_tuple_get"],
-                [adapter_ir.args[0], ir.Constant(_I64, i)],
+                [load_captures(), ir.Constant(_I64, i)],
                 name=f"cap.{i}",
             )
             owned_inputs.append(cap_obj)
@@ -2432,12 +2539,6 @@ class UserFunctionLoweringMixin:
                         return_ty or DynType(name="dyn"),
                     )
                 self.builder.ret(boxed)
-
-        self.builder = saved_builder
-        self.current_function = saved_current_function
-        self._current_entry_block = saved_entry_block
-        self._try_err_block = saved_try_err_block
-        return adapter_ir
 
     def _emit_async_native_func_value_adapter(
         self,
@@ -3106,6 +3207,20 @@ class UserFunctionLoweringMixin:
         self._emit_post_call_err_check(span)
 
 
+    def _attach_native_vector_entry(self, adapter, output) -> None:
+        """Record the new callable's vector descriptor, when it has one.
+
+        Both construction paths store captures as (inner, signature), the
+        shape the runtime's vector call reads.
+        """
+        descriptor = self._native_vector_descriptor(adapter)
+        if descriptor is None:
+            return
+        self.builder.call(
+            self.runtime["py_func_set_vector_entry"],
+            [self.builder.load(output), self.builder.bitcast(descriptor, _CSTR)],
+        )
+
     def _emit_rooted_native_callable(
         self, adapter, original_args, capture_exprs, display_name_ptr,
         qualname, fd, label, cache_gv=None, enclosing_capture_names=(),
@@ -3160,6 +3275,7 @@ class UserFunctionLoweringMixin:
                 self._slot_call_check_status(status, "callable construction", fd.span)
                 self._emit_post_call_err_check(fd.span)
                 self._guard_cpy_value_not_null(self.builder.load(output))
+                self._attach_native_vector_entry(adapter, output)
                 return self._take_slot_call_root(output)
             finally:
                 self._try_err_block = previous
@@ -3216,6 +3332,7 @@ class UserFunctionLoweringMixin:
             self._slot_call_check_status(status, "callable construction", fd.span)
             self._emit_post_call_err_check(fd.span)
             self._guard_cpy_value_not_null(self.builder.load(output))
+            self._attach_native_vector_entry(adapter, output)
             self._release_slot_call_roots(tuple(roots[1:]))
             output_cleanup = self._slot_call_cleanup_block((output,), target)
             self._try_err_block = output_cleanup

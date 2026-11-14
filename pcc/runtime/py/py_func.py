@@ -2,7 +2,8 @@
 
 Function object layout (unchanged):
     offset  0   PyObjectHeader (compiler entry roles use header flag bits)
-    offset 16   C-API-compatible function prefix, through offset 48
+    offset 16   C-API-compatible function prefix, through offset 48; its
+                vectorcall word (48) holds the vector-call descriptor
     offset 56   PyNativeFuncEntry
     offset 64   captures tuple
     offset 72   borrowed const char* name, nullable
@@ -15,6 +16,7 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
+    PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PYTUPLEOBJECT_LEN_OFFSET,
@@ -34,6 +36,7 @@ from pcc.unsafe import (
     atomic_cas_i64,
     atomic_load_i64,
     atomic_rmw_i32,
+    call_ptr1,
     call_ptr2,
     define_global_i32,
     define_global_i64,
@@ -494,6 +497,19 @@ def py_func_new_static_def(
 define_thread_local_i32("pcc_native_callable_sync_context", 1)
 define_thread_local_i32("pcc_native_callable_forward_context", 1)
 define_global_i32("pcc_native_callable_result_frame_map", 11)
+
+# Vector calls. A compiled function's descriptor ``{entry(frame), arity}``
+# sits in the C-API prefix's vectorcall word. The entry's root frame holds
+# the inner captures tuple, then the positional arguments; codegen names the
+# same layout NATIVE_VECTOR_* in codegen/user_function_lowering.py.
+_FUNC_VECTOR_DESCRIPTOR_OFFSET = 48
+_VECTOR_DESCRIPTOR_ENTRY_OFFSET = 0
+_VECTOR_DESCRIPTOR_ARITY_OFFSET = 8
+_VECTOR_FRAME_CAPTURES_SLOT = 0
+_VECTOR_FRAME_ARGS_SLOT = 1
+_VECTOR_FRAME_MAX_ARGS = 8
+_VECTOR_FRAME_BYTES = 72
+define_global_i32("pcc_vector_call_frame_map", 9)
 define_global_ptr_null("pcc_builtin_function_cache")
 define_global_i64("pcc_builtin_function_cache_mutex_bits", 0)
 define_global_i32("pcc_builtin_function_cache_registered", 0)
@@ -2151,6 +2167,102 @@ def py_func_slot_has_native_entry(slot, entry) -> int:
     if not ptr_is_null(load_ptr(fn, 80)):
         return 0
     return 1
+
+
+@c_abi_export("py_func_set_vector_entry")
+def py_func_set_vector_entry(fn, descriptor) -> None:
+    """Record a compiled function's static vector-call descriptor.
+
+    The descriptor is ``{entry(frame), arity}``; it lives in the C-API
+    prefix's vectorcall word, which no collector traces and no other owner
+    reads. Copies and runtime-built functions keep NULL and the tuple path.
+    """
+    if ptr_is_null(fn) != 0 or is_tagged_int(fn) != 0:
+        return
+    if load_i32(fn, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return
+    store_ptr(fn, _FUNC_VECTOR_DESCRIPTOR_OFFSET, descriptor)
+
+
+@c_abi_export("py_func_try_vector_call_method")
+def py_func_try_vector_call_method(method, self_obj, args, handled_out):
+    """Call ``method(self_obj, *args)`` through its vector entry, if it has one.
+
+    Stores 1 in ``handled_out`` and returns the call's result when it ran;
+    stores 0 and returns NULL, with nothing observable done, otherwise. It
+    runs only for a plain function (no transparent, auto-park or
+    continuation-factory role, no bound receiver) whose descriptor arity is
+    exactly ``1 + len(args)``: there the signature binder would return the
+    positional tuple unchanged, so the entry receives the same arguments
+    without the ``(self,) + args`` tuple and the generic call protocol.
+    """
+    store_i64(handled_out, 0, 0)
+    if ptr_is_null(method) != 0 or is_tagged_int(method) != 0:
+        return null()
+    if load_i32(method, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
+        return null()
+    roles: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET)
+    if (roles & (PY_FLAG_FUNC_TRANSPARENT_CALL | PY_FLAG_FUNC_AUTO_PARK
+                 | PY_FLAG_FUNC_CONTINUATION_FACTORY)) != 0:
+        return null()
+    descriptor = load_ptr(method, _FUNC_VECTOR_DESCRIPTOR_OFFSET)
+    if ptr_is_null(descriptor) != 0:
+        return null()
+    if ptr_is_null(load_ptr(method, 80)) == 0:
+        return null()
+    n: int = 0
+    if ptr_is_null(args) == 0:
+        if _is_tuple(args) == 0:
+            return null()
+        n = load_i64(args, PYTUPLEOBJECT_LEN_OFFSET)
+    if n + 1 > _VECTOR_FRAME_MAX_ARGS:
+        return null()
+    if load_i64(descriptor, _VECTOR_DESCRIPTOR_ARITY_OFFSET) != n + 1:
+        return null()
+    captures = pcc_gc_load_ptr(method, ptr_add(method, 64))
+    if _is_tuple(captures) == 0 or load_i64(captures, PYTUPLEOBJECT_LEN_OFFSET) != 2:
+        return null()
+    store_i64(handled_out, 0, 1)
+    entry_name = load_ptr(method, 72)
+    frame = stack_alloc(_VECTOR_FRAME_BYTES)
+    memset(frame, 0, _VECTOR_FRAME_BYTES)
+    # Register the empty frame first: a helper's entry poll during the
+    # copies below then sees every copied word as a root.
+    pcc_gc_frame_enter(global_addr("pcc_vector_call_frame_map"), frame)
+    store_ptr(frame, _VECTOR_FRAME_CAPTURES_SLOT * C_POINTER_SIZE,
+              _tuple_borrow_known(captures, 0))
+    store_ptr(frame, _VECTOR_FRAME_ARGS_SLOT * C_POINTER_SIZE, self_obj)
+    if n > 0:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 1) * C_POINTER_SIZE, _tuple_borrow_known(args, 0))
+    if n > 1:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 2) * C_POINTER_SIZE, _tuple_borrow_known(args, 1))
+    if n > 2:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 3) * C_POINTER_SIZE, _tuple_borrow_known(args, 2))
+    if n > 3:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 4) * C_POINTER_SIZE, _tuple_borrow_known(args, 3))
+    if n > 4:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 5) * C_POINTER_SIZE, _tuple_borrow_known(args, 4))
+    if n > 5:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 6) * C_POINTER_SIZE, _tuple_borrow_known(args, 5))
+    if n > 6:
+        store_ptr(frame, (_VECTOR_FRAME_ARGS_SLOT + 7) * C_POINTER_SIZE, _tuple_borrow_known(args, 6))
+    # The same dynamic-call context py_func_call_kwargs gives a plain body.
+    context: int = load_i32(global_addr("pcc_native_callable_sync_context"), 0)
+    previous_forward: int = load_i32(global_addr("pcc_native_callable_forward_context"), 0)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, 1)
+    store_i32(global_addr("pcc_native_callable_forward_context"), 0, 1)
+    result = call_ptr1(load_ptr(descriptor, _VECTOR_DESCRIPTOR_ENTRY_OFFSET), frame)
+    store_i32(global_addr("pcc_native_callable_forward_context"), 0, previous_forward)
+    store_i32(global_addr("pcc_native_callable_sync_context"), 0, context)
+    pcc_gc_frame_leave(frame)
+    if ptr_is_null(result) != 0:
+        if ptr_is_null(entry_name) != 0:
+            entry_name = cstr("<compiled native function>")
+        _func_runtime_error_if_unset(
+            entry_name,
+            cstr("compiled native function returned NULL without exception")
+        )
+    return result
 
 
 def _builtin_function_cache_mutex():

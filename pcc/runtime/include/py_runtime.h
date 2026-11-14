@@ -1627,6 +1627,10 @@ int64_t py_func_new_static_def(
     const char *module_name, const char *qualname, PyObject *doc,
     int64_t role, PyObject **cache, PyObject **output_slot
 );
+/* Record a compiled function's static vector-call descriptor
+ * `{PyObject *(*entry)(PyObject **frame), int64_t arity}`. The frame is a
+ * registered root array: inner captures, then `arity` positional arguments. */
+void py_func_set_vector_entry(PyObject *fn, const void *descriptor);
 /* Canonical builtin function values return one owner; the cache is a traced
  * global root shared by all compiled modules. */
 PyObject *py_builtin_function_value(void *entry, const char *name);
