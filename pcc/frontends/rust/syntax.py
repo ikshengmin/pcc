@@ -1955,11 +1955,14 @@ class Parser:
             patterns, arms = [], []
             while not self.accept("}"):
                 patterns.append(self.pattern())
-                if self.token.text == "if":
-                    raise self.token.error("match guards require additional effect and binding analysis, which is not implemented")
+                # Rust Reference match-expr.html#match-guards: `pattern if
+                # guard => arm`. The guarded arm wraps (guard, arm) so that
+                # traversals see the guard where it is evaluated.
+                guard_token = self.token
+                guard = self.expression() if self.accept("if") else None
                 self.expect("=>")
                 arm = self.expression(complete_block=True)
-                arms.append(arm)
+                arms.append(arm if guard is None else Expr("match_guard", guard_token, children=[guard, arm]))
                 if self.accept("}"):
                     break
                 if not self.accept(",") and arm.kind not in {"if", "if_let", "block", "while", "while_let", "for", "for_range", "for_range_inclusive", "loop", "unsafe", "match"}:

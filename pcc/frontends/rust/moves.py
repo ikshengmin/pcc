@@ -219,9 +219,25 @@ class MoveChecker:
             if after is None:
                 return None
             exits = []
+            current = after
             for pattern, arm in zip(expr.value, children[1:]):
-                self.pattern_access(pattern, after, place)
-                branch = clone(after)
+                self.pattern_access(pattern, current, place)
+                selected = current
+                if arm.kind == "match_guard":
+                    # The guard runs before the scrutinee moves into by-value
+                    # bindings (it sees them by reference); a false guard
+                    # continues with the next arm carrying the guard's effects.
+                    guard, arm = arm.children
+                    inspected = clone(current)
+                    for binding in pattern_bindings(pattern):
+                        inspected[binding.serial] = set()
+                    selected = self.expression(guard, inspected)
+                    if selected is None:
+                        continue
+                    for binding in pattern_bindings(pattern):
+                        selected.pop(binding.serial, None)
+                    current = join([current, selected])
+                branch = clone(selected)
                 self.pattern_access(pattern, branch, place, bind=True)
                 result = self.expression(arm, branch)
                 if result is not None:

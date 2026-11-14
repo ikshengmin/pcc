@@ -272,5 +272,8 @@ def validate_match(checker, expr):
                 return False
         return True
 
-    if not covered([(pattern,) for pattern in expr.value], (expr.children[0].ty,)):
+    # A guarded arm may fall through, so it covers nothing
+    # (match-expr.html#match-guards; rustc's usefulness check agrees).
+    rows = [(pattern,) for pattern, arm in zip(expr.value, expr.children[1:]) if arm.kind != "match_guard"]
+    if not covered(rows, (expr.children[0].ty,)):
         raise expr.token.error("non-exhaustive match patterns")

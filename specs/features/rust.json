@@ -2515,6 +2515,20 @@
       "status": "missing"
     },
     {
+      "id": "rust.expressions.match-guards",
+      "title": "Match guards",
+      "chapter_ids": [
+        "rust.ref.6.12"
+      ],
+      "scope": "Qualification missing, not implementation missing: `pattern if guard => arm` (and `matches!(v, p if g)`) checks the guard as bool with the arm's bindings in scope, lowers it as a branch after the pattern test and binding stores so that a false guard continues with the next arm, gives a guarded arm no coverage (E0004), and moves the scrutinee into by-value bindings only once the guard holds, carrying guard effects into later arms. Guard borrow rules (E0507, E0506, E0594) are the actual rustc check's, so without one a guard is an explicit boundary. Replaces the former message-only boundary rust.capability.18728c522946. A checked program runs on the local Mac from PCC's own compiler, arm64 assembler and Mach-O linker and prints the same u64 as a local rustc 1.92.0 build; the Linux run is unrun. fallible-streaming-iterator's parser frontier moves from lib.rs:841:21 to 893:7 (`#[cfg(test)]`) under the actual aarch64-apple-darwin check. No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_match_guards.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.attributes.builtin-derives",
       "title": "Built-in derives: Copy, Clone, PartialEq and declared Eq/PartialOrd/Ord/Hash/Debug/Default",
       "chapter_ids": [
@@ -2551,7 +2565,7 @@
       "chapter_ids": [
         "rust.ref.3"
       ],
-      "scope": "Qualification missing, not implementation missing: `matches!(value, pattern $(,)?)` with any delimiter is expanded at parse time into core's definition, `match value { pattern => true, _ => false }`, so typing, exhaustiveness, place inspection without moves and lowering are the match machinery's (or-patterns, payload and tuple patterns included). Guards need match guards and stay an explicit gap; lang-item context inspection, where the crate defines core itself, has no core macros or built-in derives. The matches fixture prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc 1.92.0 build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
+      "scope": "Qualification missing, not implementation missing: `matches!(value, pattern $(,)?)` with any delimiter is expanded at parse time into core's definition, `match value { pattern => true, _ => false }`, so typing, exhaustiveness, place inspection without moves and lowering are the match machinery's (or-patterns, payload and tuple patterns included). A guard becomes the arm's match guard (rust.expressions.match-guards); lang-item context inspection, where the crate defines core itself, has no core macros or built-in derives. The matches fixture prints the same result from PCC's own compiler, arm64 assembler and Mach-O linker and from a local rustc 1.92.0 build (local Mac evidence; the x86-64 Linux run is unrun in this change). No schema2 evidence row is migrated.",
       "tests": [
         "tests/rust/test_rust_matches_macro.py",
         "tests/rust/test_rust_matches_macro.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link@rust-native-reference"
@@ -4018,18 +4032,6 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.18728c522946",
-      "title": "match guards require additional effect and binding analysis, which is not implemented",
-      "chapter_ids": [
-        "rust.ref.6.12"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
       "id": "rust.capability.1ecc344c3e40",
       "title": "break values and loop labels are not implemented",
       "chapter_ids": [
@@ -4892,15 +4894,6 @@
       {
         "message": "range iterators are not implemented",
         "feature_id": "rust.capability.ed147b2399ee",
-        "source": {
-          "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"
-        },
-        "reason": "Current source-bound message-only boundary; no stable diagnostic code is claimed."
-      },
-      {
-        "message": "match guards require additional effect and binding analysis, which is not implemented",
-        "feature_id": "rust.capability.18728c522946",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
           "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"

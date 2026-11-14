@@ -4,8 +4,9 @@ https://doc.rust-lang.org/core/macro.matches.html
 `matches!(value, pattern $(if guard)? $(,)?)` is
 `match value { pattern => true, _ => false }`. PCC expands exactly that match
 at parse time, so typing, exhaustiveness, moves and lowering are the match
-machinery's. Guards need match guards and stay an explicit gap; a crate that
-defines core itself (lang-item context inspection) has no `matches!`.
+machinery's; a guard becomes the arm's match guard (tests/rust/
+test_rust_match_guards.py). A crate that defines core itself (lang-item
+context inspection) has no `matches!`.
 """
 import shutil
 from pathlib import Path
@@ -47,7 +48,7 @@ def test_matches_forms_compile(source):
 
 
 @pytest.mark.parametrize('source,message', [
-    ('pub fn f(x: u64) -> bool { matches!(x, 0 if x > 1) }', 'matches! guards require match guards'),
+    # The guard row moved to tests/rust/test_rust_match_guards.py.
     ('pub fn f(x: u64) -> bool { matches!(x) }', "expected ','"),
     ('pub fn f(x: u64) -> bool { matches!() }', 'requires a value and a pattern'),
     ('pub fn f(x: u64) -> bool { matches!(x, 0, 1) }', "expected '\\)'"),

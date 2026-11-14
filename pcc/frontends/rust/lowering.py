@@ -850,6 +850,15 @@ class Lowerer:
             self.builder.cbranch(self.pattern_test(pattern, value), selected, following)
             self.builder.position_at_end(selected)
             self.bind_pattern(pattern, value)
+            if arm.kind == "match_guard":
+                # Bindings hold copies of the unchanged scrutinee value, so a
+                # false guard leaves it intact for the following arms.
+                guard, arm = arm.children
+                condition = self.expression(guard)
+                if not self.builder.block.is_terminated:
+                    body = self.function.append_basic_block("match.guarded")
+                    self.builder.cbranch(condition, body, following)
+                    self.builder.position_at_end(body)
             result = self.expression(arm)
             if not self.builder.block.is_terminated:
                 incoming.append((result, self.builder.block))

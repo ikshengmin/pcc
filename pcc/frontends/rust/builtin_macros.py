@@ -111,7 +111,7 @@ def expand_expression_macro(parser, token):
 
 
 def expand_matches(parser, token):
-    """`matches!(value, pattern)` -> `match value { pattern => true, _ => false }`."""
+    """`matches!(value, pattern $(if guard)?)` -> `match value { pattern $(if guard)? => true, _ => false }`."""
     from .syntax import Expr, Pattern
     parser.expect('!')
     opener = parser.take()
@@ -123,11 +123,14 @@ def expand_matches(parser, token):
     scrutinee = parser.expression()
     parser.expect(',')
     pattern = parser.pattern()
-    if parser.token.text == 'if':
-        raise parser.token.error('matches! guards require match guards, which are not implemented')
+    guard_token = parser.token
+    guard = parser.expression() if parser.accept('if') else None
     parser.accept(',')
     parser.expect(closer)
     expansion = MacroExpansion(token, 'matches', (), None)
     parser.macro_expansions.append(expansion)
+    selected = Expr('bool', token, True)
+    if guard is not None:
+        selected = Expr('match_guard', guard_token, children=[guard, selected])
     return Expr('match', token, [pattern, Pattern('wildcard', token)],
-                [scrutinee, Expr('bool', token, True), Expr('bool', token, False)])
+                [scrutinee, selected, Expr('bool', token, False)])

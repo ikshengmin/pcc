@@ -48,7 +48,7 @@ def compile_source(source, **options):
     ("enum E{A} enum F{A} fn f(x:E){match x{F::A=>()}}", "type mismatch"),
     ("fn f(x:(bool,bool)){match x{(true,)=>(),_=>()}}", "tuple pattern shape"),
     ("fn f(x:bool)->i32{match x{true=>1,false=>false}}", "type mismatch"),
-    ("fn f(x:bool){match x{true if true=>(),_=>()}}", "match guards"),
+    # The guard row moved to tests/rust/test_rust_match_guards.py.
     ("fn f(x:i32){match x{1+2=>(),_=>()}}", "expected '=>'"),
     ("fn f(x:i32){match x{0..=2=>(),_=>()}}", "expected '=>'"),
     ("fn f(x:bool){match x{true=>1 false=>2}}", "expected ','"),

@@ -256,13 +256,16 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
     # `convert`, then 373:28, the outlives bound `T: 'a` of `struct Convert`;
     # then 427:23, the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`
     # (tests/rust/test_rust_tuple_structs.py), then 836:13, the tuple pattern
-    # `let (lower, upper) = ...` (tests/rust/test_rust_let_patterns.py); now
-    # the match guard `Some(x) if x < self.n => ...`.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: 841:21: match guards require additional effect and binding analysis, which is not implemented$"):
+    # `let (lower, upper) = ...` (tests/rust/test_rust_let_patterns.py), then
+    # 841:21, the match guard `Some(x) if x < self.n => ...`
+    # (tests/rust/test_rust_match_guards.py); now `#[cfg(test)] mod test`.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: 893:7: cfg predicate requires an unimplemented built-in/target or custom configuration context$"):
         parser.parse()
     # The trait impls before it, including both for Convert and Empty, were retained.
-    assert [str(item.owner) for item in parser.implementations if item.trait][:5] == [
+    owners = [str(item.owner) for item in parser.implementations if item.trait]
+    assert owners[:5] == [
         "&'a mut I", "Convert<'a, I, T>", "Convert<'a, I, T>", 'Empty<T, E>', 'Empty<T, E>']
+    assert owners[-2:] == ['Take<I>', 'TakeWhile<I, F>']
     convert = parser.records[0]
     assert [record.token.text for record in parser.records if record.tuple_fields] == ['Empty']
     assert [(name.text, [item.text for item in lifetimes]) for name, lifetimes in convert.outlives_bounds] == [

@@ -1132,7 +1132,19 @@ class Checker:
             for pattern, arm in zip(expr.value, children[1:]):
                 self.scopes.append({})
                 check_pattern(self, pattern, scrutinee_ty, allow_inferred=kind == "match")
-                ty = unify(ty, self.expression(arm), arm.token)
+                if arm.kind == "match_guard":
+                    # The guard sees the arm's bindings and must be bool.
+                    # Its borrow rules (bindings by shared reference, no
+                    # moves out of them, no mutation of the scrutinee:
+                    # E0507/E0510) are admitted only by the actual rustc check.
+                    if not self.externally_checked:
+                        raise arm.token.error("match guard ownership/borrowing admission requires an actual external rustc check")
+                    guard, body = arm.children
+                    unify("bool", self.expression(guard), guard.token)
+                    arm.ty = self.expression(body)
+                    ty = unify(ty, arm.ty, body.token)
+                else:
+                    ty = unify(ty, self.expression(arm), arm.token)
                 self.scopes.pop()
         elif kind == "for":
             if not self.externally_checked:
