@@ -158,6 +158,9 @@ static int fail_relocation_state(
     int64_t pending_before = pcc_gc_alloc_stage_pending();
     int64_t selected = pcc_gc_relocation_set_contains(source);
     int64_t selection_size = pcc_gc_relocation_set_size();
+    /* Public scalar totals for this selection epoch, not object identities. */
+    int64_t candidate_count = pcc_gc_backend4_evacuation_candidate_score();
+    int64_t candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes();
     /* Stable lookup does not drain a staged allocation on an index miss.
      * The enclosing graph lock owns the node lifetime through these reads. */
     void *node = pcc_gc_object_index_find_stable(source);
@@ -175,12 +178,14 @@ static int fail_relocation_state(
         stderr,
         "relocation_context=post-failure-stable-index code=%d "
         "pending_before=%lld selected=%lld selection_size=%lld "
+        "candidate_count=%lld candidate_bytes=%lld "
         "published_node=%d node_freeing=%lld published_node_size=%lld "
         "forwarding_record=%p source_is_forwarding_target=%lld "
         "src_flags=0x%x header_pinned=%d src_tag=%d "
         "requested_size=%lld pending_after=%lld\n",
         code, (long long)pending_before, (long long)selected,
-        (long long)selection_size, published, (long long)freeing,
+        (long long)selection_size, (long long)candidate_count,
+        (long long)candidate_bytes, published, (long long)freeing,
         (long long)published_size, forwarding_record,
         (long long)is_forwarding_target, (unsigned)source_flags,
         (source_flags & PY_FLAG_GC_PINNED) != 0, source_tag,

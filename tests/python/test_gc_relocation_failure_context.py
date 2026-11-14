@@ -185,6 +185,84 @@ def _assert_lifetime_protocol(source):
         assert _c_tokens(body) == _c_tokens(expected), name
 
 
+# Fixed bindings/control flow: dead, conditional or unlocked reads must not
+# satisfy the diagnostic contract merely because the call names are present.
+_EXPECTED_STABLE_SNAPSHOT = r"""
+    /* Keep the original failure line before any diagnostic graph-lock entry.
+     * These are post-failure observations, NOT the first rejected copy phase.
+     * Even acquiring the graph lock can service a pending stop. */
+    int result = fail_state(code, what, source, copy);
+    pcc_py_gc_minor_graph_lock();
+    int64_t pending_before = pcc_gc_alloc_stage_pending();
+    int64_t selected = pcc_gc_relocation_set_contains(source);
+    int64_t selection_size = pcc_gc_relocation_set_size();
+    /* Public scalar totals for this selection epoch, not object identities. */
+    int64_t candidate_count = pcc_gc_backend4_evacuation_candidate_score();
+    int64_t candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes();
+    /* Stable lookup does not drain a staged allocation on an index miss.
+     * The enclosing graph lock owns the node lifetime through these reads. */
+    void *node = pcc_gc_object_index_find_stable(source);
+    int published = node != 0;
+    int64_t freeing = node ? pcc_gc_object_node_freeing(node) : -1;
+    /* Raw node size, even if freeing; not the object-known-size predicate. */
+    int64_t published_size = node ? pcc_gc_object_node_size(node) : 0;
+    void *forwarding_record = pcc_gc_forwarding_find(source);
+    int64_t is_forwarding_target = pcc_gc_forwarding_target_exists(source);
+    int32_t source_flags = flags_of(source);
+    int32_t source_tag = py_header(source)->type_tag;
+    int64_t pending_after = pcc_gc_alloc_stage_pending();
+    pcc_py_gc_minor_graph_unlock();
+    fprintf(
+        stderr,
+        "relocation_context=post-failure-stable-index code=%d "
+        "pending_before=%lld selected=%lld selection_size=%lld "
+        "candidate_count=%lld candidate_bytes=%lld "
+        "published_node=%d node_freeing=%lld published_node_size=%lld "
+        "forwarding_record=%p source_is_forwarding_target=%lld "
+        "src_flags=0x%x header_pinned=%d src_tag=%d "
+        "requested_size=%lld pending_after=%lld\n",
+        code, (long long)pending_before, (long long)selected,
+        (long long)selection_size, (long long)candidate_count,
+        (long long)candidate_bytes, published, (long long)freeing,
+        (long long)published_size, forwarding_record,
+        (long long)is_forwarding_target, (unsigned)source_flags,
+        (source_flags & PY_FLAG_GC_PINNED) != 0, source_tag,
+        (long long)requested_size, (long long)pending_after
+    );
+
+"""
+
+
+def _assert_candidate_snapshot(source):
+    first = _probe_body("fail_relocation_state", source).split(
+        "    /* This secondary predicate", 1
+    )[0]
+    assert _c_tokens(first) == _c_tokens(_EXPECTED_STABLE_SNAPSHOT)
+
+
+_CANDIDATE_GETTERS = (
+    ("pcc_gc_backend4_evacuation_candidate_score", "pcc_gc_backend4_evacuation_candidates"),
+    ("pcc_gc_backend4_evacuation_candidate_bytes", "pcc_gc_backend4_evacuation_candidate_bytes_count"),
+)
+
+
+def _assert_candidate_getters(runtime, public):
+    tree = ast.parse(runtime)
+    for symbol, counter in _CANDIDATE_GETTERS:
+        functions = [node for node in tree.body
+                     if isinstance(node, ast.FunctionDef) and node.name == symbol]
+        expected = ast.parse(
+            f'@c_abi_export("{symbol}")\n'
+            f'def {symbol}() -> int:\n'
+            f'    return load_i32(global_addr("{counter}"), 0)\n'
+        ).body[0]
+        assert len(functions) == 1
+        # Exact exported scalar load: no allocation, traversal, stop service,
+        # staging drain, selection retry or nested graph-lock acquisition.
+        assert ast.dump(functions[0]) == ast.dump(expected)
+        assert f"int64_t {symbol}(void);" in " ".join(public.split())
+
+
 def _diagnostic():
     return _probe_body("fail_relocation_state")
 
@@ -279,12 +357,15 @@ def test_original_movement_verdict_lifetime_and_exactly_once_checks_remain():
 
 
 def test_initial_snapshot_is_locked_stable_and_printed_before_mutating_observation():
+    _assert_candidate_snapshot(probe.PROBE_SOURCE)
     body = _diagnostic()
     first, secondary = body.split("    /* This secondary predicate", 1)
     calls = re.findall(r"\b([a-z_]\w*)\s*\(", re.sub(r"/\*.*?\*/", "", first, flags=re.S))
     assert calls == [
         "fail_state", "pcc_py_gc_minor_graph_lock", "pcc_gc_alloc_stage_pending",
         "pcc_gc_relocation_set_contains", "pcc_gc_relocation_set_size",
+        "pcc_gc_backend4_evacuation_candidate_score",
+        "pcc_gc_backend4_evacuation_candidate_bytes",
         "pcc_gc_object_index_find_stable", "pcc_gc_object_node_freeing",
         "pcc_gc_object_node_size", "pcc_gc_forwarding_find",
         "pcc_gc_forwarding_target_exists", "flags_of", "py_header",
@@ -309,6 +390,43 @@ def test_initial_snapshot_is_locked_stable_and_printed_before_mutating_observati
     ) < secondary.index("fprintf(")
     assert "post-failure-secondary-may-drain" in secondary
     assert secondary.rstrip().endswith("return result;")
+
+    # Extend the existing node rather than changing the fixed test inventory.
+    mutations = (
+        ("int64_t candidate_count = pcc_gc_backend4_evacuation_candidate_score();",
+         "int64_t candidate_count = 1;"),
+        ("int64_t candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes();",
+         "int64_t candidate_bytes = 32;"),
+        ("candidate_count = pcc_gc_backend4_evacuation_candidate_score()",
+         "candidate_count = pcc_gc_backend4_evacuation_candidate_bytes()"),
+        ("candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes()",
+         "candidate_bytes = pcc_gc_backend4_evacuation_candidate_score()"),
+        ("    int64_t candidate_count = pcc_gc_backend4_evacuation_candidate_score();",
+         "    if (0) { int64_t candidate_count = pcc_gc_backend4_evacuation_candidate_score(); }"),
+        ("    int64_t candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes();",
+         "    if (0) { int64_t candidate_bytes = pcc_gc_backend4_evacuation_candidate_bytes(); }"),
+        ("    pcc_py_gc_minor_graph_lock();", "    return result;\n    pcc_py_gc_minor_graph_lock();"),
+        ("int result = fail_state(code, what, source, copy);", "int result = code;"),
+        ("candidate_count=%lld candidate_bytes=%lld", "candidate_count=%d candidate_bytes=%d"),
+        ("(long long)candidate_count,", "(long long)selection_size,"),
+        ("(long long)candidate_bytes,", "(long long)published_size,"),
+        ("(long long)candidate_bytes,", "(long long)pcc_gc_backend4_evacuation_candidate_bytes(),"),
+    )
+    for original, replacement in mutations:
+        assert original in probe.PROBE_SOURCE
+        changed = probe.PROBE_SOURCE.replace(original, replacement, 1)
+        with pytest.raises(AssertionError):
+            _assert_candidate_snapshot(changed)
+    for symbol, variable in ((_CANDIDATE_GETTERS[0][0], "candidate_count"),
+                             (_CANDIDATE_GETTERS[1][0], "candidate_bytes")):
+        declaration = f"    int64_t {variable} = {symbol}();\n"
+        assert probe.PROBE_SOURCE.count(declaration) == 1
+        changed = probe.PROBE_SOURCE.replace(declaration, "", 1).replace(
+            "    pcc_py_gc_minor_graph_unlock();\n",
+            "    pcc_py_gc_minor_graph_unlock();\n" + declaration, 1,
+        )
+        with pytest.raises(AssertionError):
+            _assert_candidate_snapshot(changed)
 
 
 @pytest.mark.parametrize(("module", "symbol", "arguments", "returns"), [
@@ -353,6 +471,25 @@ def test_snapshot_calls_use_existing_production_c_abi(module, symbol, arguments,
     }
     assert declarations[symbol] in " ".join((probe.PROBE_SOURCE + internal + public).split())
 
+    if symbol == "pcc_gc_relocation_set_size":
+        runtime = (RUNTIME / "py_gc_backend.py").read_text()
+        assert '#include "../include/py_runtime.h"' in internal
+        _assert_candidate_getters(runtime, public)
+        for getter, counter in _CANDIDATE_GETTERS:
+            exported = f'@c_abi_export("{getter}")'
+            loaded = f'return load_i32(global_addr("{counter}"), 0)'
+            assert runtime.count(exported) == runtime.count(loaded) == 1
+            for original, replacement in (
+                (exported, ""),
+                (loaded, loaded.replace(counter, "pcc_gc_backend4_copied_objects")),
+                (loaded, 'pcc_gc_select_relocation_set(1)\n    ' + loaded),
+                (loaded, 'pcc_gc_alloc(32)\n    ' + loaded),
+            ):
+                with pytest.raises(AssertionError):
+                    _assert_candidate_getters(runtime.replace(original, replacement, 1), public)
+            with pytest.raises(AssertionError):
+                _assert_candidate_getters(runtime, public.replace(getter + "(void)", getter + "(int32_t)", 1))
+
 
 @pytest.mark.parametrize("target", ["x86_64-unknown-linux-gnu", "aarch64-unknown-linux-gnu"])
 def test_complete_probe_lowers_with_owned_headers_without_linking(tmp_path, monkeypatch, target):
@@ -381,10 +518,14 @@ def test_complete_probe_lowers_with_owned_headers_without_linking(tmp_path, monk
     for symbol in ("fail_relocation_state", "pcc_gc_alloc_stage_pending",
                    "pcc_gc_object_index_find_stable", "pcc_gc_object_is_address_pinned"):
         assert symbol in ir
+    for symbol, _ in _CANDIDATE_GETTERS:
+        # Require actual lowered calls, not just declarations or strings.
+        assert re.search(r'\bcall\s+i64\s+@' + re.escape(symbol) + r'\(\)', ir)
     literals = [decode_llvm_c_string(token) for token in re.findall(r'c"[^"\n]*"', ir)]
     assert (
         b"relocation_context=post-failure-stable-index code=%d "
         b"pending_before=%lld selected=%lld selection_size=%lld "
+        b"candidate_count=%lld candidate_bytes=%lld "
         b"published_node=%d node_freeing=%lld published_node_size=%lld "
         b"forwarding_record=%p source_is_forwarding_target=%lld "
         b"src_flags=0x%x header_pinned=%d src_tag=%d "
@@ -417,7 +558,8 @@ def test_failure_receipt_preserves_code_stderr_source_and_native_marker(tmp_path
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     stderr = (f"code={code} what=synthetic-failure src_flags=0x40400\n"
-              f"relocation_context=post-failure-stable-index code={code} pending_before=1\n"
+              f"relocation_context=post-failure-stable-index code={code} pending_before=1 "
+              f"candidate_count=1 candidate_bytes=32\n"
               f"relocation_context=post-failure-secondary-may-drain code={code} pending_after=0\n")
     observed = []
 
