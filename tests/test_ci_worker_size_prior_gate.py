@@ -1503,6 +1503,49 @@ def workflow_job(text, name):
     return match.group(1)
 
 
+def workflow_path_selected(path, patterns):
+    """The workflow's literal/*/** subset of ordered GitHub path filters."""
+    selected = False
+    for pattern in patterns:
+        excluded = pattern.startswith("!")
+        pattern = pattern[1:] if excluded else pattern
+        # Fail closed when the workflow adds syntax this contract cannot model.
+        assert pattern and not any(char in pattern for char in "![]?+\\"), pattern
+        parts = re.split(r"(\*\*/|\*\*|\*)", pattern)
+        expression = "".join({"**/": "(?:.*/)?", "**": ".*", "*": "[^/]*"}.get(
+            part, re.escape(part),
+        ) for part in parts)
+        if re.fullmatch(expression, path):
+            selected = not excluded
+    return selected
+
+
+def assert_workflow_paths_cover(text, paths):
+    """Bind every input to both real event routes, not duplicate YAML text."""
+    triggers = re.findall(r"(?ms)^on:\n(.*?)(?=^[^ #\n]|\Z)", text)
+    assert len(triggers) == 1
+    for event in ("push", "pull_request"):
+        header = triggers[0]
+        assert len(re.findall(r"(?m)^  " + event + r":$", header)) == 1, event
+        body = workflow_job(header, event)
+        # Preserve master pushes and unrestricted PR branches. Path coverage
+        # cannot compensate for a disabled event or an added branch/type gate,
+        # including a quoted YAML key. Every noncomment body line is consumed.
+        prefix = ("    branches: [master]\n" if event == "push" else "") + "    paths:\n"
+        assert body.startswith(prefix), event
+        entries = body[len(prefix):]
+        patterns = []
+        for line in entries.splitlines():
+            if not line.strip() or line.lstrip().startswith("#"):
+                continue
+            match = re.fullmatch(r'      - "([^"\\]+)"(?:\s+#.*)?', line)
+            assert match is not None, (event, line)
+            patterns.append(match.group(1))
+        assert patterns and any(not pattern.startswith("!") for pattern in patterns), event
+        for path in paths:
+            assert workflow_path_selected(path, patterns), (event, path)
+
+
 def workflow_native_platforms(body, *, legacy):
     assert 'matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native_stage1) }}' in body
     path = 'pcc/runtime/py/owner.py' if legacy else 'pcc/frontends/cpp/parser.py'
@@ -1616,6 +1659,39 @@ def test_x86_jump_threading_uses_existing_three_platform_host_gate():
 
 
 def test_workflow_starts_stage1_without_independent_validation_dependencies():
+    # Keep these controls in the existing host node, without inflating or
+    # shrinking its fixed inventory. A future input need not be listed literally.
+    control = "tests/python/test_future_contract.py"
+
+    def workflow(push, pull_request):
+        return ("on:\n  push:\n    branches: [master]\n    paths:\n"
+                + "".join('      - "' + pattern + '"\n' for pattern in push)
+                + "  pull_request:\n    paths:\n"
+                + "".join('      - "' + pattern + '"\n' for pattern in pull_request))
+
+    for patterns in ([control], ["**"], ["tests/**"], ["**/test_*.py"],
+                     ["tests/**", "!tests/python/**", control]):
+        assert_workflow_paths_cover(workflow(patterns, patterns), [control])
+    assert workflow_path_selected("test_root.py", ["**/test_*.py"])
+    assert workflow_path_selected("tests/test_direct.py", ["tests/*.py"])
+    for patterns in ([], ["pcc/**"], ["tests/*.py"], ["Tests/**"],
+                     ["**", "!tests/**"], [control, "!" + control]):
+        for push, pull_request in ((patterns, ["**"]), (["**"], patterns)):
+            with pytest.raises(AssertionError):
+                assert_workflow_paths_cover(workflow(push, pull_request), [control])
+    complete = workflow(["**"], ["**"])
+    for broken in (complete.replace("  push:", "  ignored_push:"),
+                   complete.replace("  pull_request:", "  ignored_pull_request:"),
+                   complete.replace("branches: [master]", "branches: [other]"),
+                   complete.replace("  pull_request:\n", "  pull_request:\n    branches: [other]\n"),
+                   complete.replace("  pull_request:\n", '  pull_request:\n    "branches": [other]\n'),
+                   complete.replace("  pull_request:\n", '  pull_request:\n    "types": [closed]\n'),
+                   complete.replace("    paths:\n", "    paths-ignore:\n", 1),
+                   complete.replace('      - "**"', '      - "[t]ests/**"', 1),
+                   "on:\n  workflow_dispatch:\njobs:\n" + complete.split("on:\n", 1)[1]):
+        with pytest.raises(AssertionError):
+            assert_workflow_paths_cover(broken, [control])
+
     text = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     consumer = "tests/python/test_x86_64_windows_packed_stackmaps.py"
     helper = "tests/python/test_direct_indexed_worker_validation.py"
@@ -1675,10 +1751,11 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
     assert '@pytest.mark.pcc_gate(probe=lambda: sys.platform == "win32")' in budget_test
     assert "test_real_windows_direct_root_guard_admits_and_wrapper_does_not" in budget_test
     assert "No compiler, runtime build or native pcc" in budget_test
-    for path in (*gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
-                 "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
-                 "tests/python/test_worker_resource_publication.py"):
-        assert text.count('      - "' + path + '"') == 2, path
+    assert_workflow_paths_cover(text, (
+        *gate.HOST_FILES, "tests/fixtures/native/worker_size_priors.py",
+        "scripts/ci_worker_size_prior_gate.py", "conftest.py", "uv.lock", ".python-version",
+        "tests/python/test_worker_resource_publication.py",
+    ))
     other = workflow_job(text, "other-platform-native-wheel")
     mac = workflow_job(text, "pcc1-package-parity")
     preflight = workflow_job(text, "worker-prior-preflight")

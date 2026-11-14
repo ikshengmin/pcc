@@ -340,9 +340,12 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py')
 # Expected default-marker inventory: 86 modules, 3844 ordinary raw nodes.
-# CI at ad90b246 collected 3797 unique nodes, including 13 observation-scope
-# cases. The later 14 finalization-timing and 33 Lambda diagnostic cases are
-# source-counted, not yet collection-verified. Keep this inventory fail-closed.
+# CI at d956440d reported this complete universe on all six workers of all
+# four platforms, including all 33 Lambda diagnostic cases. Linux x86_64
+# selected 3844; the other platforms selected 3843 because the existing
+# text-index owned-linker case is Linux x86_64-only. Its declarative platform
+# gate is accounted for as UNRUN, not subtracted from the fixed universe.
+# Those runs stopped at a workflow contract failure; collection is not a pass.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
