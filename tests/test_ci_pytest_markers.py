@@ -18,9 +18,16 @@ import pytest
 from scripts import ci_pytest_markers as gate
 
 
+def _workflow_job(workflow, name):
+    bodies = re.findall(r'(?ms)^  ' + re.escape(name)
+                        + r':\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)', workflow)
+    assert len(bodies) == 1, name
+    return bodies[0]
+
+
 def _frozen_baseline_checkout_contract():
     workflow = (gate.ROOT / '.github/workflows/pcc1-package-parity.yml').read_text()
-    job = workflow.split('\n  pytest-markers:\n', 1)[1]
+    job = _workflow_job(workflow, 'pytest-markers')
     frozen = job.split('      # Immutable comparison source, never an executable baseline compiler.\n', 1)[1]
     guard, following = frozen.split('      - uses: actions/checkout@v5\n', 1)
     assert guard.startswith('      - name: Refuse inherited Git runtime configuration before frozen checkout\n')
@@ -196,9 +203,24 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     workflow = (gate.ROOT / '.github/workflows/pcc1-package-parity.yml').read_text()
     assert not (gate.ROOT / '.github/workflows/pytest-markers.yml').exists()
     assert 'workflow_run:' not in workflow and 'pull_request_target:' not in workflow
-    job = workflow.split('\n  pytest-markers:\n', 1)[1]
-    assert 'needs: [ci-plan, other-platform-native-wheel, pcc1-package-parity]' in job
-    assert "if: ${{ !cancelled() && needs.ci-plan.result == 'success' }}" in job
+    marker_fields = {
+        'needs': '[ci-plan, other-platform-native-wheel, pcc1-package-parity]',
+        'if': "${{ !cancelled() && needs.ci-plan.result == 'success' }}",
+    }
+
+    def marker_job(text):
+        body = _workflow_job(text, 'pytest-markers')
+        for field, value in marker_fields.items():
+            assert re.findall(r'^    ' + field + r': (.+)$', body, re.M) == [value]
+        return body
+
+    job = marker_job(workflow)
+    for field, value in marker_fields.items():
+        line = '    ' + field + ': ' + value + '\n'
+        misplaced = workflow.replace(line, '', 1).replace(
+            '\n  pcc-compile-ab:\n', '\n  pcc-compile-ab:\n' + line, 1)
+        with pytest.raises(AssertionError):
+            marker_job(misplaced)
     assert 'run-id:' not in job and 'github-token:' not in job  # current run only
     assert 'ref: ${{ github.sha }}' in job and 'persist-credentials: false' in job
     guard, checkout_env, baseline_checkout = _frozen_baseline_checkout_contract()
@@ -247,12 +269,58 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
         'macos-pcc0-indexed-split', 'worker-prior-preflight',
         'windows-rss-publication', 'other-platform-native-wheel', 'pcc1-package-parity',
     }
-    job_ids = set(re.findall(r'^  ([a-z][a-z0-9-]*):$', workflow.split('jobs:\n', 1)[1], re.M))
-    assert job_ids == expected_jobs | {
+    original_jobs = expected_jobs | {
         'ci-plan', 'pytest-markers', 'validation-plan', 'source-validation',
         'shared-source-validation', 'numpy-source-frontier', 'orjson-source-frontier', 'cpp17',
         'source-platform-validation', 'source-platform-coverage',
     }
+
+    def assert_job_inventory(text):
+        job_ids = re.findall(r'^  ([a-z][a-z0-9-]*):$', text.split('jobs:\n', 1)[1], re.M)
+        ab_jobs = {'pcc-ab-qualification', 'pcc-compile-ab'}
+        assert len(job_ids) == len(set(job_ids))
+        assert set(job_ids) == original_jobs | ab_jobs
+        dispatch = _workflow_job(text.split('\nconcurrency:\n', 1)[0], 'workflow_dispatch')
+        options = re.findall(r'(?ms)^      performance_ab:\n(.*?)(?=^      [A-Za-z0-9_-]+:|\Z)', dispatch)
+        assert len(options) == 1
+        for field, value in (('type', 'boolean'), ('default', 'false')):
+            assert re.findall(r'^        ' + field + r': (.+)$', options[0], re.M) == [value]
+        predicates = {
+            'pcc-ab-qualification': "${{ always() && !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab }}",
+            'pcc-compile-ab': "${{ !cancelled() && github.event_name == 'workflow_dispatch' && inputs.performance_ab && needs.pcc-ab-qualification.result == 'success' }}",
+        }
+        for name, predicate in predicates.items():
+            body = _workflow_job(text, name)
+            needs = re.findall(r'^    needs: \[([^\]\n]*)\]$', body, re.M)
+            assert len(needs) == 1
+            dependencies = needs[0].split(', ')
+            required = original_jobs | ({'pcc-ab-qualification'} if name == 'pcc-compile-ab' else set())
+            assert len(dependencies) == len(set(dependencies))
+            assert set(dependencies) == required
+            assert re.findall(r'^    if: (.+)$', body, re.M) == [predicate]
+
+    assert_job_inventory(workflow)
+    option = workflow.split('      performance_ab:\n', 1)[1].split('      ab_baseline_sha:\n', 1)[0]
+    for before, after in (('type: boolean', 'type: string'), ('default: false', 'default: true')):
+        assert before in option
+        with pytest.raises(AssertionError):
+            assert_job_inventory(workflow.replace(option, option.replace(before, after), 1))
+    for name in ('pcc-ab-qualification', 'pcc-compile-ab'):
+        body = _workflow_job(workflow, name)
+        for before, after in (
+            ('needs: [validation-plan, ', 'needs: ['),
+            ("github.event_name == 'workflow_dispatch'", "github.event_name == 'push'"),
+            (' && inputs.performance_ab', ''),
+            ('!cancelled() && ', ''),
+        ):
+            assert before in body
+            with pytest.raises(AssertionError):
+                assert_job_inventory(workflow.replace(body, body.replace(before, after, 1), 1))
+    body = _workflow_job(workflow, 'pcc-compile-ab')
+    condition = " && needs.pcc-ab-qualification.result == 'success'"
+    assert condition in body
+    with pytest.raises(AssertionError):
+        assert_job_inventory(workflow.replace(body, body.replace(condition, '', 1), 1))
     predicate = "    if: ${{ needs.validation-plan.outputs.legacy == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration') }}"
     for name in expected_jobs:
         # Job-level if is independent of ci-plan status and precedes all steps.

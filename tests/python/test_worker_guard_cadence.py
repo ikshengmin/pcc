@@ -4,6 +4,7 @@ import ast
 import os
 from pathlib import Path
 import re
+import shlex
 from types import SimpleNamespace
 
 import pytest
@@ -26,20 +27,70 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def test_macos_compiler_guards_keep_the_bootstrap_publication_cadence():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
-    commands = re.findall(
-        r"scripts/run_process_tree_sample.py \\\n(.*?)(?=\n\n)", workflow, re.S,
-    )
-    periods = {}
-    for command in commands:
-        output = re.search(r"--result (\S+)", command).group(1)
-        periods[output] = float(re.search(r"--interval (\S+)", command).group(1))
-    assert periods == {
-        "build/macos-regressions/work/supervisor/result.json": 0.25,
-        "build/macos-float-doc/work/supervisor/result.json": 0.25,
-        "build/macos-indexed-split/work/supervisor/result.json": 0.25,
-        # This separate host-only contract run does not use worker admission.
-        "build/macos-indexed-split/work/handoff-xdist-supervisor/result.json": 1.0,
+    expected = {
+        "macos-pcc0-regressions": [("macos-regressions", "supervisor", "1200", "0.25", [])],
+        "macos-pcc0-float-doc-regressions": [
+            ("macos-float-doc", "supervisor", "1200", "0.25", ["--profile", "float-doc"]),
+        ],
+        "macos-pcc0-indexed-split": [
+            # The separate host-only run does not use worker admission.
+            ("macos-indexed-split", "handoff-xdist-supervisor", "300", "1", ["--handoff-xdist"]),
+            ("macos-indexed-split", "supervisor", "1200", "0.25", ["--profile", "indexed-split"]),
+        ],
     }
+
+    def assert_commands(text):
+        for job, rows in expected.items():
+            bodies = re.findall(r"(?ms)^  " + re.escape(job)
+                                + r":\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", text)
+            assert len(bodies) == 1, job
+            # Bound each shell command by its continuation lines, not a blank
+            # line or a later job. Unrelated C++ guards have separate contracts.
+            commands = re.findall(
+                r"(?m)^          (?:env -u LC_ALL )?uv run python "
+                r"scripts/run_process_tree_sample\.py \\\n"
+                r"((?:            [^\n]*\\\n)*            [^\n]*)",
+                bodies[0],
+            )
+            assert bodies[0].count("scripts/run_process_tree_sample.py") == len(commands) == len(rows)
+            for command, (directory, supervisor, timeout, interval, tail) in zip(commands, rows):
+                out = "build/" + directory
+                prefix = out + "/work/" + supervisor
+                # Exact argv rejects missing/duplicate options and child-side
+                # --interval lookalikes while retaining every original guard.
+                assert shlex.split(command.replace("\\\n", " ")) == [
+                    "--result", prefix + "/result.json",
+                    "--samples", prefix + "/samples.tsv",
+                    "--stdout", prefix + "/target.stdout",
+                    "--stderr", prefix + "/target.stderr",
+                    "--timeout", timeout, "--interval", interval, "--progress-interval", "30",
+                    "--auto-tree-rss-ceiling-bytes", "4294967296",
+                    "--min-tree-rss-bytes", "2147483648",
+                    "--darwin-preflight-reserve-bytes", "536870912",
+                    "--", "uv", "run", "python", "scripts/ci_macos_regression_gate.py",
+                    "--out-dir", out, *tail,
+                ]
+
+    assert_commands(workflow)
+    # Keep rejection controls in this existing node: the host inventory is exact.
+    regression_blocks = re.findall(
+        r"(?ms)^  macos-pcc0-regressions:\n.*?(?=^  [A-Za-z0-9_-]+:|\Z)", workflow,
+    )
+    assert len(regression_blocks) == 1
+    regression_block = regression_blocks[0]
+    for before, after in (
+        ("--interval 0.25", "--interval 1"),
+        ("--interval 0.25", ""),
+        ("--interval 0.25", "--interval 0.25 --interval 1"),
+        ("--timeout 1200", "--timeout 1201"),
+        ("--auto-tree-rss-ceiling-bytes 4294967296", "--auto-tree-rss-ceiling-bytes 4294967297"),
+        ("--out-dir build/macos-regressions", "--out-dir build/macos-regressions --interval 0.25"),
+        ("  macos-pcc0-regressions:\n", "  misplaced-macos-pcc0-regressions:\n"),
+    ):
+        assert before in regression_block
+        mutated_block = regression_block.replace(before, after, 1)
+        with pytest.raises(AssertionError):
+            assert_commands(workflow.replace(regression_block, mutated_block, 1))
 
 
 @pytest.mark.parametrize("interval,frozen,fails,recovery", [
