@@ -1591,6 +1591,22 @@ def _compute_local_vthread_effects(
     if summary_only:
         return None
 
+    if borrow_methods:
+        # Fresh analysis tables are no longer read by the fixed point or
+        # result extraction. Drop both their aggregate and component aliases;
+        # keep the definitions and imported functions needed by the result.
+        # Supplied contexts retain their original lifetime and remain reusable.
+        local_context = None
+        module_aliases = None
+        value_aliases = None
+        methods = None
+        bases = None
+        callable_context = None
+        threading_context = None
+        proof_cache = None
+        function_names = None
+        imported_modules = None
+
     changed = True
     while changed:
         changed = False
