@@ -260,6 +260,18 @@ def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, c
         evidence["producer_completeness"] = "UNPROVEN"
         evidence["all_modules_captured"] = "UNPROVEN"
         evidence["error"] = type(failure).__name__ + ": " + str(failure)[:400]
+        # Optional diagnosis is never evidence of success and cannot replace
+        # the original failure, even if reading or serialization itself fails.
+        try:
+            from tests.python.indexed_receipt_support import read_first_recorded_failure
+
+            first = read_first_recorded_failure(dump, receipt)
+            if first is not None:
+                candidate = {**evidence, "first_recorded_failure": first}
+                if len(json.dumps(candidate).encode("utf-8")) + 1 <= _IR_JSON_LIMIT:
+                    evidence = candidate
+        except Exception:
+            evidence.pop("first_recorded_failure", None)
         raise
     finally:
         path = source.parent / "executable-ir-dump.json"

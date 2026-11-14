@@ -13,6 +13,7 @@ import json
 import os
 from pathlib import Path
 import re
+import stat
 import tempfile
 
 
@@ -31,6 +32,133 @@ def unique_json(raw):
         return json.loads(raw.decode("utf-8"), object_pairs_hook=pairs)
     except (ValueError, UnicodeError) as failure:
         raise AssertionError("MALFORMED: indexed receipt JSON") from failure
+
+
+
+# Independent diagnostic allowlists. Never import producer validation here.
+_FIRST_FAILURE_STAGES = frozenset("""
+invocation manifest worker-context sidecar-publish sidecar-context sidecar-retire
+invalidate capture-identity capture-target capture-lock claim remaining-input-budget
+snapshot-destination codec-preflight codec-shape codec-header codec-wire-size
+codec-write snapshot-hash snapshot-publish snapshot-header-read output-identity
+output-lock remaining-output-budget output-stat output-destination output-copy-open
+output-copy output-rehash output-publish emission-json link-invocation module-count
+emission-json-read claim-read input-identity input-size input-hash retained-hash
+inventory link-recheck binary-hash link-json unlock
+""".split())
+_FIRST_FAILURE_GLOBAL_STAGES = frozenset("""
+invocation manifest worker-context sidecar-publish sidecar-context sidecar-retire
+invalidate capture-identity capture-target capture-lock claim output-identity
+link-invocation module-count inventory
+link-recheck binary-hash link-json unlock
+""".split())
+_FIRST_FAILURE_CLASSES = frozenset("""
+value_error key_error type_error os_error file_exists memory_error unicode_error
+other_exception
+""".split())
+_FIRST_FAILURE_REASONS = frozenset("""
+unknown missing_kernel incomplete_value_columns incomplete_definition_positions
+prepared_slots prepared_values unsupported_cold unsupported_debug_capture
+mixed_arena_storage header_limit aggregate_limit output_limit_or_kind lock_busy
+short_output_write short_metadata_write output_grew output_changed destination_exists
+inventory_mismatch conservative_limit wire_limit
+""".split())
+_FIRST_FAILURE_COUNTERS = (
+    "remaining_bytes", "observed_bytes", "copied_bytes", "inventory_count",
+)
+_FIRST_FAILURE_KEYS = frozenset((
+    "schema", "invocation", "index", "stage", "exception_class", "reason",
+    "overflow", *_FIRST_FAILURE_COUNTERS,
+))
+
+
+def _read_failure_document(path, limit):
+    """One bounded read, with file kind and replacement checks on both handles."""
+    before = path.lstat()
+    assert stat.S_ISREG(before.st_mode) and 0 <= before.st_size <= limit
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags |= getattr(os, "O_NONBLOCK", 0)
+    descriptor = os.open(path, flags)
+    try:
+        opened = os.fstat(descriptor)
+        assert stat.S_ISREG(opened.st_mode)
+        assert (opened.st_dev, opened.st_ino, opened.st_size) == (
+            before.st_dev, before.st_ino, before.st_size,
+        )
+        with os.fdopen(descriptor, "rb", buffering=0) as stream:
+            descriptor = None
+            raw = stream.read(limit + 1)
+            after = os.fstat(stream.fileno())
+        final = path.lstat()
+        assert stat.S_ISREG(final.st_mode) and len(raw) == before.st_size
+        assert len(raw) <= limit
+        assert (after.st_dev, after.st_ino, after.st_size) == (
+            final.st_dev, final.st_ino, final.st_size,
+        ) == (before.st_dev, before.st_ino, before.st_size)
+        return unique_json(raw), len(raw)
+    finally:
+        if descriptor is not None:
+            os.close(descriptor)
+
+
+def read_first_recorded_failure(dump, record):
+    """Best-effort attribution only; this never accepts a poisoned inventory."""
+    try:
+        token = record.get("indexed_input_invocation")
+        assert _hex(token, 32)
+        failure, _ = _read_failure_document(dump / "indexed-capture-failed", 1024)
+        assert isinstance(failure, dict) and set(failure) == _FIRST_FAILURE_KEYS
+        assert failure["schema"] == "pcc.indexed-input-first-recorded-failure.v1"
+        assert failure["invocation"] == token
+        index = failure["index"]
+        assert type(index) is int and -1 <= index <= 30
+        assert failure["stage"] in _FIRST_FAILURE_STAGES
+        assert index != -1 or failure["stage"] in _FIRST_FAILURE_GLOBAL_STAGES
+        assert failure["exception_class"] in _FIRST_FAILURE_CLASSES
+        assert failure["reason"] in _FIRST_FAILURE_REASONS
+        assert type(failure["overflow"]) is bool
+        assert all(type(failure[key]) is int and -1 <= failure[key] <= 2**63 - 1
+                   for key in _FIRST_FAILURE_COUNTERS)
+        manifest_path = dump / "invocation.json"
+        try:
+            manifest_path.lstat()
+        except FileNotFoundError:
+            assert index == -1
+            return failure
+        invocation, metadata_bytes = _read_failure_document(manifest_path, LIMIT)
+        assert isinstance(invocation, dict)
+        assert invocation.get("schema") == "pcc.indexed-input-invocation.v1"
+        assert invocation.get("invocation") == token
+        rows = invocation.get("modules")
+        assert isinstance(rows, list) and 0 < len(rows) <= 31
+        assert type(invocation.get("count")) is int and invocation["count"] == len(rows)
+        names = set()
+        for expected, row in enumerate(rows):
+            assert isinstance(row, dict)
+            assert type(row.get("index")) is int and row["index"] == expected
+            name = row.get("module")
+            assert isinstance(name, str) and name and name not in names
+            names.add(name)
+            assert _hex(row.get("source_sha256"))
+        assert _hex(record.get("source_sha256"))
+        assert record["source_sha256"] in [row["source_sha256"] for row in rows]
+        if index != -1:
+            assert index < len(rows)
+            claim_path = dump / f"module_{index}.claim.json"
+            # A known index is attributed only after the producer acquired
+            # its claim. Both identity documents share the existing JSON cap.
+            claim, claim_bytes = _read_failure_document(claim_path, LIMIT - metadata_bytes)
+            assert metadata_bytes + claim_bytes <= LIMIT
+            assert isinstance(claim, dict)
+            assert claim.get("schema") == "pcc.indexed-input-claim.v1"
+            assert claim.get("invocation") == token
+            assert type(claim.get("index")) is int and claim["index"] == index
+            assert claim.get("module") == rows[index]["module"]
+            attempt = hashlib.sha256((token + ":" + str(index)).encode()).hexdigest()[:32]
+            assert claim.get("attempt") == attempt
+        return failure
+    except Exception:
+        return None
 
 
 def inventory_dump(dump):

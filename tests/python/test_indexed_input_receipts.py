@@ -538,3 +538,386 @@ def test_native_scanner_closes_after_name_allocation_failure(monkeypatch):
     with pytest.raises(MemoryError, match="original allocation failure"):
         receipts._native_entries("directory")
     assert len(closed) == 1
+
+
+
+def _first_failure(dump, stage, index=0):
+    raw = (dump / "indexed-capture-failed").read_bytes()
+    assert len(raw) <= 1024
+    value = json.loads(raw)
+    assert value["schema"] == "pcc.indexed-input-first-recorded-failure.v1"
+    assert (value["invocation"], value["index"], value["stage"]) == ("a" * 32, index, stage)
+    assert b"private-source" not in raw
+    return value
+
+
+def _raise_diagnostic(*args, **kwargs):
+    raise OSError("private-source-path-and-secret:" + "x" * 8192)
+
+
+@pytest.mark.parametrize("stage", (
+    "capture-identity", "capture-target", "capture-lock", "claim",
+    "remaining-input-budget", "snapshot-destination", "codec-preflight",
+    "codec-shape", "codec-header", "codec-wire-size", "codec-write",
+    "snapshot-hash", "snapshot-publish", "snapshot-header-read", "unlock",
+))
+def test_capture_first_failure_reports_real_operation(tmp_path, monkeypatch, stage):
+    from pcc.backend import self_backend_indexed_codec as codec
+    dump, _sources, _names, contexts = setup(tmp_path, monkeypatch)
+    context, parsed = dict(contexts[0]), module()
+    if stage == "capture-identity":
+        context["invocation"] = "b" * 32
+    elif stage == "capture-target":
+        parsed = module(target="unknown-unknown-unknown")
+    elif stage in ("capture-lock", "claim", "remaining-input-budget", "snapshot-hash"):
+        name = {"capture-lock": "_lock", "claim": "_write_json",
+                "remaining-input-budget": "_remaining", "snapshot-hash": "_hash"}[stage]
+        monkeypatch.setattr(receipts, name, _raise_diagnostic)
+    elif stage == "snapshot-destination":
+        (dump / "self_backend_input_0.pidx.partial").write_bytes(b"first owner")
+    elif stage in ("codec-preflight", "codec-wire-size"):
+        monkeypatch.setattr(receipts, "_remaining", lambda *args: 16)
+        if stage == "codec-wire-size":
+            monkeypatch.setattr(codec, "_bounded_capture_budget", lambda *args: None)
+    elif stage == "codec-shape":
+        monkeypatch.setattr(codec, "_function_to_wire", _raise_diagnostic)
+    elif stage == "codec-header":
+        original = json.dumps
+        def dumps(value, *args, **kwargs):
+            if isinstance(value, dict) and value.get("schema", "").startswith("pcc.self-backend.indexed-module."):
+                _raise_diagnostic()
+            return original(value, *args, **kwargs)
+        monkeypatch.setattr(codec.json, "dumps", dumps)
+    elif stage == "codec-write":
+        monkeypatch.setattr(codec, "open", _raise_diagnostic, raising=False)
+    elif stage == "snapshot-publish":
+        original = receipts.os.replace
+        def replace(source, destination):
+            if str(destination).endswith(".pidx"):
+                _raise_diagnostic()
+            return original(source, destination)
+        monkeypatch.setattr(receipts.os, "replace", replace)
+    elif stage == "snapshot-header-read":
+        def open_(path, mode="r", *args, **kwargs):
+            if str(path).endswith(".pidx") and mode == "rb":
+                _raise_diagnostic()
+            return builtins.open(path, mode, *args, **kwargs)
+        monkeypatch.setattr(receipts, "open", open_, raising=False)
+    elif stage == "unlock":
+        monkeypatch.setattr(receipts.os, "unlink", _raise_diagnostic)
+    capture = receipts.begin_capture(parsed, context, [])
+    assert (capture is not None) == (stage == "unlock")
+    index = -1 if stage in ("capture-identity", "capture-target", "capture-lock", "claim") else 0
+    value = _first_failure(dump, stage, index)
+    if stage in ("codec-preflight", "codec-wire-size"):
+        assert value["remaining_bytes"] == 16 and value["observed_bytes"] > 16
+        assert value["reason"] == ("conservative_limit" if stage == "codec-preflight" else "wire_limit")
+    first = (dump / "indexed-capture-failed").read_bytes()
+    assert receipts.prepare_link([]) is None
+    assert (dump / "indexed-capture-failed").read_bytes() == first
+    assert not (dump / "self_backend_input_0.json").exists()
+
+
+@pytest.mark.parametrize("stage", (
+    "output-identity", "output-lock", "remaining-output-budget", "output-stat",
+    "output-destination", "output-copy-open", "output-copy", "output-rehash",
+    "output-publish", "emission-json",
+))
+def test_output_first_failure_reports_real_operation(tmp_path, monkeypatch, stage):
+    dump, _sources, _names, contexts = setup(tmp_path, monkeypatch)
+    capture = receipts.begin_capture(module(), contexts[0], [])
+    assert capture is not None
+    output = tmp_path / "object.pco"
+    output.write_bytes(b"retained-output")
+    kind = "PCO"
+    if stage == "output-identity":
+        kind = "INVALID"
+    elif stage in ("output-lock", "remaining-output-budget", "output-rehash", "emission-json"):
+        name = {"output-lock": "_lock", "remaining-output-budget": "_remaining",
+                "output-rehash": "_hash", "emission-json": "_write_json"}[stage]
+        monkeypatch.setattr(receipts, name, _raise_diagnostic)
+    elif stage == "output-stat":
+        original = receipts.os.path.getsize
+        def getsize(path):
+            if path == str(output):
+                _raise_diagnostic()
+            return original(path)
+        monkeypatch.setattr(receipts.os.path, "getsize", getsize)
+    elif stage == "output-destination":
+        (dump / "self_backend_output_0.pco").write_bytes(b"prior-owner")
+    elif stage in ("output-copy-open", "output-copy"):
+        class Writer:
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                return False
+            def write(self, data):
+                _raise_diagnostic()
+        def open_(path, mode="r", *args, **kwargs):
+            if str(path).endswith(".pco.partial"):
+                if stage == "output-copy-open":
+                    _raise_diagnostic()
+                return Writer()
+            return builtins.open(path, mode, *args, **kwargs)
+        monkeypatch.setattr(receipts, "open", open_, raising=False)
+    elif stage == "output-publish":
+        monkeypatch.setattr(receipts.os, "replace", _raise_diagnostic)
+    assert receipts.finish_capture(capture, str(output), kind) is None
+    value = _first_failure(dump, stage, -1 if stage == "output-identity" else 0)
+    if stage in ("output-copy-open", "output-copy", "output-rehash", "output-publish", "emission-json"):
+        assert value["observed_bytes"] == len(b"retained-output")
+        assert value["copied_bytes"] == (0 if stage == "output-copy-open" else len(b"retained-output"))
+    assert not (dump / "self_backend_input_0.json").exists()
+
+
+@pytest.mark.parametrize("stage", (
+    "link-invocation", "module-count", "emission-json-read", "claim-read",
+    "input-identity", "input-size", "input-hash", "retained-hash", "inventory",
+    "link-recheck", "binary-hash", "link-json",
+))
+def test_link_first_failure_reports_real_operation(tmp_path, monkeypatch, stage):
+    dump, _sources, names, contexts = setup(tmp_path, monkeypatch)
+    capture = receipts.begin_capture(module(), contexts[0], [])
+    output = tmp_path / "object.pco"
+    output.write_bytes(b"retained-output")
+    receipts.finish_capture(capture, str(output), "PCO")
+    artifacts = [(names[0], "PCO", str(output))]
+    link = receipts.prepare_link(artifacts)
+    assert link is not None
+    binary = tmp_path / "binary"
+    binary.write_bytes(b"binary")
+    if stage == "link-invocation":
+        monkeypatch.setattr(receipts, "_invocation", _raise_diagnostic)
+    elif stage == "module-count":
+        artifacts = []
+    elif stage in ("emission-json-read", "claim-read"):
+        original = receipts._read_json
+        def read_json(path):
+            suffix = "self_backend_input_0.json" if stage == "emission-json-read" else "module_0.claim.json"
+            if str(path).endswith(suffix):
+                _raise_diagnostic()
+            return original(path)
+        monkeypatch.setattr(receipts, "_read_json", read_json)
+    elif stage == "input-identity":
+        artifacts = [("wrong-module", "PCO", str(output))]
+    elif stage == "input-size":
+        output.write_bytes(b"changed")
+    elif stage in ("input-hash", "retained-hash", "binary-hash"):
+        original = receipts._hash
+        target = str(output) if stage == "input-hash" else (
+            str(binary) if stage == "binary-hash" else str(dump / "self_backend_output_0.pco"))
+        def hash_(path, *args):
+            if path == target:
+                _raise_diagnostic()
+            return original(path, *args)
+        monkeypatch.setattr(receipts, "_hash", hash_)
+    elif stage == "inventory":
+        (dump / "unknown-entry").write_bytes(b"")
+    elif stage == "link-recheck":
+        monkeypatch.setattr(receipts, "prepare_link", lambda *args: None)
+    elif stage == "link-json":
+        monkeypatch.setattr(receipts, "_write_json", _raise_diagnostic)
+    if stage in ("link-recheck", "binary-hash", "link-json"):
+        assert receipts.finish_link(link, artifacts, str(binary)) is None
+    else:
+        assert receipts.prepare_link(artifacts) is None
+    index = -1 if stage in ("link-invocation", "module-count", "inventory", "link-recheck", "binary-hash", "link-json") else 0
+    value = _first_failure(dump, stage, index)
+    if stage == "inventory":
+        assert value["inventory_count"] == 6 and value["reason"] == "inventory_mismatch"
+    assert not (dump / "link.json").exists()
+
+
+@pytest.mark.parametrize("exception,classification", (
+    (ValueError("secret"), "value_error"), (KeyError("secret"), "key_error"),
+    (TypeError("secret"), "type_error"), (OSError("secret"), "os_error"),
+    (FileExistsError("secret"), "file_exists"), (MemoryError("secret"), "memory_error"),
+    (UnicodeError("secret"), "unicode_error"), (RuntimeError("secret"), "other_exception"),
+))
+def test_first_failure_has_fixed_exception_class(exception, classification):
+    value = json.loads(receipts._failure_payload(receipts._failure_state("invocation"), exception))
+    assert value["exception_class"] == classification
+    assert value["reason"] == "unknown" and "secret" not in json.dumps(value)
+
+
+def test_first_failure_never_formats_private_exception_or_extra_state():
+    class PrivateError(Exception):
+        def __str__(self):
+            raise AssertionError("exception formatted")
+        def __repr__(self):
+            raise AssertionError("exception represented")
+    state = receipts._failure_state("invocation")
+    state["private"] = "private-source-and-secret" * 10000
+    state["observed_bytes"] = 1 << 10000
+    raw = receipts._failure_payload(state, PrivateError("secret" * 100000))
+    value = json.loads(raw)
+    assert len(raw) <= 1024 and b"private" not in raw and b"secret" not in raw
+    assert value["overflow"] is True and value["observed_bytes"] == -1
+
+
+@pytest.mark.parametrize("key,value", (
+    ("stage", "private-stage"), ("invocation", "private-token"), ("index", True),
+    ("index", 31), ("remaining_bytes", -2), ("observed_bytes", "private-number"),
+    ("copied_bytes", True),
+))
+def test_invalid_diagnostic_state_falls_back_to_original_poison(tmp_path, monkeypatch, key, value):
+    dump, _sources, _names, _contexts = setup(tmp_path, monkeypatch)
+    state = receipts._failure_state("invocation")
+    state[key] = value
+    receipts._poison(state, ValueError("private"))
+    assert (dump / "indexed-capture-failed").read_bytes() == b"incomplete indexed capture\n"
+
+
+@pytest.mark.parametrize("prior", (b"", b"{", b"incomplete indexed capture\n", b'{"unknown":1}'))
+def test_first_failure_never_repairs_existing_marker(tmp_path, monkeypatch, prior):
+    dump, _sources, _names, _contexts = setup(tmp_path, monkeypatch)
+    marker = dump / "indexed-capture-failed"
+    marker.write_bytes(prior)
+    receipts._poison(receipts._failure_state("invocation"), ValueError("later"))
+    assert marker.read_bytes() == prior
+
+
+def test_first_failure_does_not_follow_marker_symlink(tmp_path, monkeypatch):
+    dump, _sources, _names, _contexts = setup(tmp_path, monkeypatch)
+    destination = tmp_path / "private"
+    destination.write_bytes(b"unchanged")
+    marker = dump / "indexed-capture-failed"
+    try:
+        marker.symlink_to(destination)
+    except OSError:
+        pytest.skip("host cannot create symlinks")
+    receipts._poison(receipts._failure_state("invocation"), ValueError("later"))
+    assert marker.is_symlink() and destination.read_bytes() == b"unchanged"
+
+
+def test_first_failure_is_exclusive_not_chronological(tmp_path, monkeypatch):
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+    dump, _sources, _names, _contexts = setup(tmp_path, monkeypatch)
+    barrier = Barrier(2)
+    states = [receipts._failure_state(stage) for stage in ("invocation", "manifest")]
+    earlier_error = ValueError("raised earlier is not publication ordering")
+    for state in states:
+        state["invocation"] = "a" * 32
+    def publish(state):
+        barrier.wait(timeout=5)
+        receipts._poison(state, ValueError("private"))
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = [pool.submit(publish, state) for state in states]
+        for future in futures:
+            future.result(timeout=5)
+    marker = dump / "indexed-capture-failed"
+    first = marker.read_bytes()
+    assert first in [receipts._failure_payload(state, ValueError("private")) for state in states]
+    receipts._poison(receipts._failure_state("invalidate"), earlier_error)
+    assert marker.read_bytes() == first
+
+
+@pytest.mark.parametrize("failure", ("allocation", "serialization", "short-write", "close"))
+def test_diagnostic_failure_keeps_original_poison_attempt(tmp_path, monkeypatch, failure):
+    dump, _sources, _names, contexts = setup(tmp_path, monkeypatch)
+    marker = dump / "indexed-capture-failed"
+    if failure == "allocation":
+        monkeypatch.setattr(receipts, "_failure_state", _raise_diagnostic)
+        assert receipts.begin_capture(module(), contexts[0], []) is None
+        assert marker.read_bytes() == b"incomplete indexed capture\n"
+        return
+    if failure == "serialization":
+        monkeypatch.setattr(receipts, "_failure_payload", _raise_diagnostic)
+        receipts._poison()
+        assert marker.read_bytes() == b"incomplete indexed capture\n"
+        return
+    calls = []
+    class Stream:
+        def __init__(self, stream):
+            self.stream = stream
+        def __enter__(self):
+            return self
+        def __exit__(self, *args):
+            self.stream.close()
+            if failure == "close":
+                _raise_diagnostic()
+        def write(self, raw):
+            return self.stream.write(raw[:3] if failure == "short-write" else raw)
+    def open_(path, mode="r", *args, **kwargs):
+        if Path(path) == marker:
+            calls.append(mode)
+            return Stream(builtins.open(path, mode, *args, **kwargs))
+        return builtins.open(path, mode, *args, **kwargs)
+    monkeypatch.setattr(receipts, "open", open_, raising=False)
+    receipts._poison(receipts._failure_state("invocation"), ValueError("private"))
+    first = marker.read_bytes()
+    assert first and (len(first) == 3 if failure == "short-write" else len(first) <= 1024)
+    receipts._poison(receipts._failure_state("manifest"), ValueError("later"))
+    assert calls == ["xb", "xb"] and marker.read_bytes() == first
+
+
+def test_first_capture_failure_survives_unlock_failure(tmp_path, monkeypatch):
+    dump, _sources, _names, contexts = setup(tmp_path, monkeypatch)
+    monkeypatch.setattr(receipts, "_remaining", _raise_diagnostic)
+    monkeypatch.setattr(receipts.os, "unlink", _raise_diagnostic)
+    assert receipts.begin_capture(module(), contexts[0], []) is None
+    _first_failure(dump, "remaining-input-budget")
+
+
+def test_negative_output_capacity_keeps_budget_failure_diagnosis(tmp_path, monkeypatch):
+    dump, _sources, _names, contexts = setup(tmp_path, monkeypatch)
+    capture = receipts.begin_capture(module(), contexts[0], [])
+    with (dump / "self_backend_output_1.s.partial").open("wb") as stream:
+        stream.truncate(receipts.LIMIT + 2)
+    output = tmp_path / "object.pco"
+    output.write_bytes(b"output")
+    receipts.finish_capture(capture, str(output), "PCO")
+    value = _first_failure(dump, "output-stat")
+    assert value["remaining_bytes"] == -1
+    assert value["observed_bytes"] == 6 and value["reason"] == "output_limit_or_kind"
+    assert not (dump / "self_backend_input_0.json").exists()
+
+
+def test_link_module_failure_never_uses_previous_module_byte_count(tmp_path, monkeypatch):
+    dump, _sources, names, contexts = setup(tmp_path, monkeypatch, count=2)
+    outputs = []
+    for index in range(2):
+        capture = receipts.begin_capture(module(index), contexts[index], [])
+        output = tmp_path / ("object" + str(index))
+        output.write_bytes(b"first-output-size" if index == 0 else b"second")
+        receipts.finish_capture(capture, str(output), "PCO")
+        outputs.append((names[index], "PCO", str(output)))
+    original = receipts._read_json
+    def read_json(path):
+        if str(path).endswith("self_backend_input_1.json"):
+            _raise_diagnostic()
+        return original(path)
+    monkeypatch.setattr(receipts, "_read_json", read_json)
+    assert receipts.prepare_link(outputs) is None
+    assert _first_failure(dump, "emission-json-read", 1)["observed_bytes"] == -1
+
+
+@pytest.mark.parametrize("message,reason", tuple(receipts._FAILURE_REASONS.items()))
+def test_first_failure_maps_only_fixed_internal_reason(message, reason):
+    raw = receipts._failure_payload(receipts._failure_state("codec-shape"), ValueError(message))
+    assert json.loads(raw)["reason"] == reason
+
+
+@pytest.mark.parametrize("entry,stage", (
+    ("begin_invocation", "invocation"), ("attach_manifest", "manifest"),
+    ("worker_context", "worker-context"), ("publish_sidecar_request", "sidecar-publish"),
+    ("sidecar_context", "sidecar-context"), ("retire_sidecar_request", "sidecar-retire"),
+))
+def test_public_receipt_failure_keeps_entry_stage(tmp_path, monkeypatch, entry, stage):
+    dump, sources, names, contexts = setup(tmp_path, monkeypatch)
+    calls = {
+        "begin_invocation": lambda: receipts.begin_invocation(sources, names),
+        "attach_manifest": lambda: receipts.attach_manifest(str(tmp_path / "missing"), {"invocation": "a" * 32}, [0]),
+        "worker_context": lambda: receipts.worker_context(str(tmp_path / "missing"), 0, names[0], sources[0]),
+        "publish_sidecar_request": lambda: receipts.publish_sidecar_request(str(tmp_path / "missing"), contexts[0], []),
+        "sidecar_context": lambda: receipts.sidecar_context(str(tmp_path / "missing")),
+        "retire_sidecar_request": lambda: receipts.retire_sidecar_request(str(tmp_path / "missing")),
+    }
+    if entry == "retire_sidecar_request":
+        monkeypatch.setattr(receipts.os.path, "isfile", lambda path: True)
+    calls[entry]()
+    value = json.loads((dump / "indexed-capture-failed").read_bytes())
+    assert value["stage"] == stage and value["index"] == -1
+    # sidecar_context reads its request before validating the invocation.
+    assert value["invocation"] == ("" if entry == "sidecar_context" else "a" * 32)

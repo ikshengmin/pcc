@@ -322,7 +322,7 @@ def _write_host_arena(stream, arena: CompilerIntArena) -> None:
         stream.write(b"".join(chunks))
 
 
-def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
+def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=None) -> None:
     """Reject oversized diagnostics before constructing wire lists or buffers.
 
     This is a conservative upper bound, deliberately not a fit guarantee. Raw
@@ -335,6 +335,8 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
     def charge(count):
         budget[0] += count
         if budget[0] > max_bytes:
+            if diagnostic is not None:
+                diagnostic["observed_bytes"] = budget[0]
             raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
 
     def cold(value):
@@ -404,12 +406,17 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
 
 
 def encode_indexed_module_file(
-    path: str, module: ParsedModule, *, max_bytes: int = 0,
+    path: str, module: ParsedModule, *, max_bytes: int = 0, diagnostic=None,
 ) -> None:
     """Write one direct module with raw scalar arenas and a JSON cold header."""
 
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-preflight"
+        diagnostic["remaining_bytes"] = max_bytes
     if max_bytes:
-        _bounded_capture_budget(module, max_bytes)
+        _bounded_capture_budget(module, max_bytes, diagnostic)
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-shape"
     functions: list[dict] = []
     raw_arenas: list[CompilerIntArena] = []
     total_scalars = 0
@@ -461,12 +468,21 @@ def encode_indexed_module_file(
         # instead of silently strengthening an ODR definition. v3 may also
         # carry source_debug; ordinary v1/v2 bytes remain unchanged.
         header["schema"] = _ODR_SCHEMA
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-header"
     header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
+    if diagnostic is not None:
+        diagnostic["observed_bytes"] = len(header_bytes)
     if len(header_bytes) > _MAX_HEADER_BYTES:
         raise BackendUnavailable("indexed module header exceeds the size limit")
     wire_size = len(_MAGIC) + len(str(len(header_bytes))) + 1 + len(header_bytes) + total_scalars * 8
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-wire-size"
+        diagnostic["observed_bytes"] = wire_size
     if max_bytes and wire_size > max_bytes:
         raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
+    if diagnostic is not None:
+        diagnostic["stage"] = "codec-write"
     with open(path, "wb") as stream:
         stream.write(_MAGIC)
         # Decimal digits plus newline have identical UTF-8 and ASCII bytes;

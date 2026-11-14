@@ -3,6 +3,7 @@
 Synthetic object/final payloads exercise protocol binding only. Real emitter
 identity and semantics remain the direct-worker and native ownership gates.
 """
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -10,6 +11,7 @@ from pathlib import Path
 import pytest
 
 from tests.python.owned_regression_support import explicit_owned_runtime
+from tests.python.indexed_receipt_support import read_first_recorded_failure
 from tests.python.process_timeout import run_process_group_timeout
 
 
@@ -62,6 +64,24 @@ def main():
     target = "x86_64-pc-windows-msvc" if sys.platform == "win32" else "x86_64-unknown-linux-gnu"
     literal = GlobalDef("receipt.literal", TypeDesc("int", 32), "1", True, True)
     parsed = ParsedModule(target, (literal,), (), None)
+    if sys.argv[2] == "budget":
+        # A real conservative codec rejection after the exclusive claim. The
+        # original 2 MiB bound is unchanged; there is no emitted object/link.
+        with open(os.path.join(dump, "self_backend_input_1.pidx.partial"), "xb") as stream:
+            assert stream.write(b"x" * (receipts.LIMIT - 16)) == receipts.LIMIT - 16
+        assert receipts.begin_capture(parsed, context, []) is None
+        marker = os.path.join(dump, "indexed-capture-failed")
+        assert os.path.getsize(marker) <= 1024
+        failure = receipts._read_json(marker)
+        assert failure["stage"] == "codec-preflight"
+        assert failure["reason"] == "conservative_limit"
+        assert failure["index"] == 0 and failure["remaining_bytes"] == 16
+        assert failure["observed_bytes"] == 4096
+        assert not os.path.exists(os.path.join(dump, "self_backend_input_0.json"))
+        assert receipts.prepare_link([("probe", "PCO", "missing-output")]) is None
+        assert receipts._read_json(marker) == failure
+        print("INDEXED_NATIVE_FAILURE_OK")
+        return
     capture = receipts.begin_capture(parsed, context, [])
     assert capture is not None
     decoded = decode_indexed_module_file(os.path.join(dump, capture["input"]["name"]), max_bytes=receipts.LIMIT)
@@ -83,7 +103,15 @@ def main():
     # Exclusive metadata collisions must preserve the first bytes and poison.
     assert receipts.begin_capture(parsed, context, []) is None
     assert os.path.isfile(os.path.join(dump, "indexed-capture-failed"))
+    marker = os.path.join(dump, "indexed-capture-failed")
+    assert os.path.getsize(marker) <= 1024
+    first = receipts._read_json(marker)
+    assert first["stage"] == "claim" and first["index"] == -1
+    assert first["exception_class"] == "value_error"
+    assert first["reason"] == "destination_exists"
+    assert first["invocation"] == context["invocation"]
     assert receipts.prepare_link(artifacts) is None
+    assert receipts._read_json(marker) == first
     print("INDEXED_NATIVE_PROTOCOL_OK")
 
 main()
@@ -120,6 +148,22 @@ def test_indexed_receipts_execute_owned_protocol_five_gc(
         assert (result.returncode, result.stdout, result.stderr) == (0, "INDEXED_NATIVE_PROTOCOL_OK\n", "")
         receipt = json.loads((dump / "link.json").read_text())
         assert receipt["binary_bytes"] == len(b"synthetic linked image")
+        record = {"indexed_input_invocation": str(backend) * 32,
+                  "source_sha256": hashlib.sha256((root / "source.py").read_bytes()).hexdigest()}
+        assert read_first_recorded_failure(dump, record)["stage"] == "claim"
+        failure_root = root / "failure"
+        failure_root.mkdir()
+        failure_dump = failure_root / "dump"
+        failure_dump.mkdir()
+        (failure_root / "source.py").write_bytes((root / "source.py").read_bytes())
+        (failure_root / "worker.manifest").write_text("native failed capture assignment\n")
+        failure_environment = dict(environment, PCC_DEBUG_SELF_IR_DUMP_DIR=str(failure_dump))
+        result = run_process_group_timeout([str(binary), str(failure_root), "budget"],
+                                          env=failure_environment, timeout=10)
+        assert (result.returncode, result.stdout, result.stderr) == (0, "INDEXED_NATIVE_FAILURE_OK\n", "")
+        failure = read_first_recorded_failure(failure_dump, record)
+        assert failure["stage"] == "codec-preflight" and failure["index"] == 0
+        assert failure["remaining_bytes"] == 16 and failure["observed_bytes"] == 4096
         bounded = root / "oversize"
         bounded.mkdir()
         for index in range(129):
