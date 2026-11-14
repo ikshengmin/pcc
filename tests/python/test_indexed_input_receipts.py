@@ -166,12 +166,17 @@ def test_source_and_manifest_drift_fail_closed(tmp_path, monkeypatch):
     assert (dump / "indexed-capture-failed").exists()
 
 
-def _worker(tmp_path, monkeypatch, target, passes, *, dump_enabled=True, sidecar=False):
+def _worker(
+    tmp_path, monkeypatch, target, passes, *, dump_enabled=True, sidecar=False,
+    source_text=None,
+):
     from pcc.frontends.python import pipeline
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
     source = tmp_path / "probe.py"
-    source.write_text("def choose(flag):\n    if flag:\n        value = 40\n    else:\n        value = 41\n    return value + 1\nprint(choose(True))\n")
+    if source_text is None:
+        source_text = "def choose(flag):\n    if flag:\n        value = 40\n    else:\n        value = 41\n    return value + 1\nprint(choose(True))\n"
+    source.write_text(source_text)
     generate = L1CodeGen._generate_initial_module
 
     def generate_target(self):
@@ -921,3 +926,207 @@ def test_public_receipt_failure_keeps_entry_stage(tmp_path, monkeypatch, entry, 
     assert value["stage"] == stage and value["index"] == -1
     # sidecar_context reads its request before validating the invocation.
     assert value["invocation"] == ("" if entry == "sidecar_context" else "a" * 32)
+
+
+_CAPTURE_STRING_CASES = (
+    "",
+    "plain ASCII",
+    '"quoted"\\path',
+    "\b\f\n\r\t",
+    "".join(chr(point) for point in range(0x20)),
+    "\x7f",
+    "\x80",
+    "\u00e9",
+    "\u2028\u2029",
+    "\uffff",
+    "\U00010000",
+    "\U0010ffff",
+    "\ud800",
+    "\udfff",
+    "\ud800\udc00",
+    "prefix\0\"\\\u00e9\U0001f600suffix",
+)
+
+
+@pytest.mark.parametrize("text", _CAPTURE_STRING_CASES)
+def test_capture_string_budget_matches_default_json_bytes(text):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    # Only the string component is exact. Retain the module and cold-cell
+    # conservative charges rather than presenting the sum as a wire size.
+    parsed = ParsedModule(text, (), (), None)
+    expected = 4096 + 32 + len(json.dumps(text).encode("utf-8"))
+    codec._bounded_capture_budget(parsed, expected)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, expected - 1, state)
+    assert state == {"observed_bytes": expected}
+
+
+@pytest.mark.parametrize("character", ("x", "\U0001f600"))
+def test_capture_precharges_string_before_scan_or_wire(
+    tmp_path, monkeypatch, character,
+):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    parsed = ParsedModule(character * (receipts.LIMIT + 1), (), (), None)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("oversize string scanned or materialized")
+
+    monkeypatch.setattr(codec, "ord", forbidden, raising=False)
+    monkeypatch.setattr(codec, "_function_to_wire", forbidden)
+    monkeypatch.setattr(codec.json, "dumps", forbidden)
+    monkeypatch.setattr(codec, "open", forbidden, raising=False)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec.encode_indexed_module_file(
+            str(tmp_path / "oversize.pidx"), parsed,
+            max_bytes=receipts.LIMIT, diagnostic=state,
+        )
+    assert state["stage"] == "codec-preflight"
+    assert state["observed_bytes"] > state["remaining_bytes"] == receipts.LIMIT
+    assert not (tmp_path / "oversize.pidx").exists()
+
+
+def test_capture_unicode_scan_stops_at_remaining_budget(monkeypatch):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    text = "\u0800" * 2048
+    parsed = ParsedModule(text, (), (), None)
+    minimum = 4096 + 32 + len(text) + 2
+    inspected = []
+
+    def observed_ord(character):
+        inspected.append(character)
+        return ord(character)
+
+    monkeypatch.setattr(codec, "ord", observed_ord, raising=False)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, minimum + 5 * 7, state)
+    assert inspected == ["\u0800"] * 8
+    assert state["observed_bytes"] == minimum + 5 * 8
+
+
+def test_capture_printable_ascii_uses_no_per_character_dispatch(monkeypatch):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import ParsedModule
+
+    def forbidden(*args):
+        raise AssertionError("printable ASCII took the Unicode scalar loop")
+
+    monkeypatch.setattr(codec, "ord", forbidden, raising=False)
+    # Deterministic path/scaling control, not a wall-clock performance claim.
+    for count in (4096, 4 * 4096, 16 * 4096):
+        text = 'a"\\z' * count
+        parsed = ParsedModule(text, (), (), None)
+        expected = 4096 + 32 + len(json.dumps(text).encode("utf-8"))
+        codec._bounded_capture_budget(parsed, expected)
+        with pytest.raises(ValueError, match="diagnostic exceeds"):
+            codec._bounded_capture_budget(parsed, expected - 1)
+
+
+@pytest.mark.parametrize("offset", (-1, 0, 1))
+def test_capture_final_wire_limit_remains_exact_before_open(
+    tmp_path, monkeypatch, offset,
+):
+    from pcc.backend import self_backend_indexed_codec as codec
+
+    parsed = module()
+    reference = tmp_path / "unbounded.pidx"
+    codec.encode_indexed_module_file(str(reference), parsed)
+    expected = reference.read_bytes()
+    # Isolate the independent final guard. Production still performs the
+    # preflight and may reject a conservative estimate before this point.
+    monkeypatch.setattr(codec, "_bounded_capture_budget", lambda *args: None)
+    path = tmp_path / "bounded.pidx"
+    state = {}
+    if offset < 0:
+        with pytest.raises(ValueError, match="diagnostic exceeds"):
+            codec.encode_indexed_module_file(
+                str(path), parsed, max_bytes=len(expected) + offset,
+                diagnostic=state,
+            )
+        assert not path.exists()
+        assert state["stage"] == "codec-wire-size"
+    else:
+        codec.encode_indexed_module_file(
+            str(path), parsed, max_bytes=len(expected) + offset,
+            diagnostic=state,
+        )
+        assert path.read_bytes() == expected
+    assert state["observed_bytes"] == len(expected)
+
+
+def test_real_worker_large_ascii_capture_preserves_same_invocation_identity(
+    tmp_path, monkeypatch,
+):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend import target_objects
+
+    payload = "x" * (receipts.LIMIT // 12 + 1)
+    source_text = 'def payload():\n    return "' + payload + '"\nprint(len(payload()))\n'
+    pipeline, manifest, result, dump = _worker(
+        tmp_path, monkeypatch, TARGET, "off", source_text=source_text,
+    )
+    original_capture = receipts.begin_capture
+    original_emit = target_objects.emit_x86_64_streamed_module
+    seen = []
+    expected = tmp_path / "same-compile-reference.pidx"
+
+    def capture(parsed, context, pass_names):
+        # A real frontend literal, not injected diagnostic IR. This one field
+        # alone exceeded the old 12-bytes-per-character preflight charge.
+        assert any(len(item.initializer) * 12 > receipts.LIMIT
+                   for item in parsed.globals_)
+        codec.encode_indexed_module_file(str(expected), parsed)
+        captured = original_capture(parsed, context, pass_names)
+        assert captured is not None
+        seen.append((parsed, dict(context), captured, tuple(parsed.globals_)))
+        return captured
+
+    def emit(parsed, **kwargs):
+        assert len(seen) == 1 and parsed is seen[0][0]
+        return original_emit(parsed, **kwargs)
+
+    monkeypatch.setattr(receipts, "begin_capture", capture)
+    monkeypatch.setattr(target_objects, "emit_x86_64_streamed_module", emit)
+    assert pipeline.run_python_multi_codegen_worker(str(manifest)) == 0, result.read_text()
+    assert len(seen) == 1
+    context, captured = seen[0][1:3]
+    receipt = json.loads((dump / "self_backend_input_0.json").read_text())
+    claim = json.loads((dump / "module_0.claim.json").read_text())
+    invocation = json.loads((dump / "invocation.json").read_text())
+    assert invocation["invocation"] == receipt["invocation"] == "c" * 32
+    assert invocation["modules"][0]["source_sha256"] == hashlib.sha256(
+        (tmp_path / "probe.py").read_bytes()
+    ).hexdigest()
+    for key in ("invocation", "index", "module", "attempt"):
+        assert receipt[key] == claim[key] == context[key] == captured[key]
+    assert (receipt["index"], receipt["module"], receipt["passes"]) == (0, "probe", [])
+    actual = (dump / receipt["input"]["name"]).read_bytes()
+    assert actual == expected.read_bytes()
+    assert receipt["input"]["bytes"] == len(actual) <= receipts.LIMIT
+    assert receipt["input"]["sha256"] == hashlib.sha256(actual).hexdigest()
+    restored = decode_indexed_module_file(
+        str(dump / receipt["input"]["name"]), max_bytes=receipts.LIMIT,
+    )
+    assert restored.globals_ == seen[0][3]
+    output = tmp_path / "module_0.direct.pco"
+    assert (dump / receipt["output"]["name"]).read_bytes() == output.read_bytes()
+    assert receipt["output"]["sha256"] == hashlib.sha256(output.read_bytes()).hexdigest()
+    assert not (dump / "indexed-capture-failed").exists()
+    artifacts = [("probe", "PCO", str(output))]
+    assert receipts.prepare_link(artifacts) is not None
+    # Success must not make a later wrong-attempt claim admissible.
+    claim["attempt"] = "f" * 32
+    (dump / "module_0.claim.json").write_text(json.dumps(claim))
+    assert receipts.prepare_link(artifacts) is None
+    failure = json.loads((dump / "indexed-capture-failed").read_text())
+    assert failure["stage"] == "input-identity"
+    assert failure["invocation"] == receipt["invocation"]
+    assert not (dump / "link.json").exists()

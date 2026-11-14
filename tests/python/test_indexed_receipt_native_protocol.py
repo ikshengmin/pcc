@@ -19,7 +19,10 @@ PROBE = '''import os
 import sys
 from pcc.backend import indexed_input_receipts as receipts
 from pcc.backend.self_backend_ir import GlobalDef, ParsedModule, TypeDesc
-from pcc.backend.self_backend_indexed_codec import decode_indexed_module_file
+from pcc.backend.self_backend_indexed_codec import (
+    _bounded_capture_budget,
+    decode_indexed_module_file,
+)
 
 
 def main():
@@ -35,6 +38,31 @@ def main():
         assert refused
         print("INDEXED_INVENTORY_BOUND_OK")
         return
+    if sys.argv[2] == "protocol":
+        # Execute the changed scalar accounting under the owned runtime,
+        # including lone surrogates and the supplementary-plane JSON pair.
+        ascii_count = receipts.LIMIT // 12 + 1
+        strings = [("", 2), ("plain ASCII", 13), (chr(34) + chr(92), 6),
+                   ("x" * ascii_count, ascii_count + 2)]
+        # Fixed byte widths are an independent ensure_ascii oracle, not a
+        # second call through the same compiled JSON implementation.
+        for point, width in ((0, 8), (8, 4), (9, 4), (10, 4), (12, 4),
+                             (13, 4), (31, 8), (127, 8), (128, 8), (233, 8),
+                             (0xD800, 8), (0xDFFF, 8), (0xFFFF, 8),
+                             (0x10000, 14), (0x10FFFF, 14)):
+            strings.append((chr(point), width))
+        for text, width in strings:
+            only_string = ParsedModule(text, (), (), None)
+            bound = 4096 + 32 + width
+            assert bound <= receipts.LIMIT
+            _bounded_capture_budget(only_string, bound)
+            refused = False
+            try:
+                _bounded_capture_budget(only_string, bound - 1)
+            except ValueError as error:
+                assert "diagnostic exceeds" in str(error)
+                refused = True
+            assert refused
     dump = os.path.join(root, "dump")
     source = os.path.join(root, "source.py")
     manifest = os.path.join(root, "worker.manifest")

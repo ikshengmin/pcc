@@ -327,7 +327,8 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
 
     This is a conservative upper bound, deliberately not a fit guarantee. Raw
     arenas are counted without reading them. Cold cells are traversed without
-    copying, charging their worst-case JSON representation and container syntax.
+    copying. Strings charge their exact ensure_ascii JSON representation;
+    scalar/container overhead remains conservative, not an exact wire size.
     The ordinary sidecar path does not enter this diagnostic walk.
     """
     budget = [0]
@@ -342,9 +343,28 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
     def cold(value):
         charge(32)
         if isinstance(value, str):
-            # ensure_ascii JSON has at most twelve bytes per Unicode scalar;
-            # charge before json.dumps or UTF-8 can materialize the string.
-            charge(len(value) * 12)
+            # Reserve minimum bytes before the added escape inspection.
+            # Each such scan is bounded by the remaining capture budget,
+            # without materializing JSON or an encoded copy.
+            charge(len(value) + 2)
+            if value.isascii() and value.isprintable():
+                # Ordinary names/IR text need only two allocation-free counts.
+                charge(value.count('"') + value.count("\\"))
+            else:
+                for character in value:
+                    point = ord(character)
+                    if (
+                        point == 34 or point == 92 or point == 8
+                        or point == 12 or point == 10 or point == 13
+                        or point == 9
+                    ):
+                        charge(1)
+                    elif point < 0x20 or 0x7F <= point <= 0xFFFF:
+                        # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
+                        charge(5)
+                    elif point > 0xFFFF:
+                        # A supplementary scalar is a JSON surrogate pair.
+                        charge(11)
         elif isinstance(value, TypeDesc):
             cold(value.kind)
             cold(value.width)
