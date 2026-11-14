@@ -1173,6 +1173,8 @@ _BUILTIN_VALUE_RECEIVER_TYPES = (
 
 
 _VTHREAD_EFFECT_SUMMARY_SCHEMA = "pcc.vthread.effect-summary.v1"
+_VTHREAD_EFFECT_PARKS = 1
+_VTHREAD_EFFECT_PUBLISH = 2
 
 
 def _vthread_effect_function_key(
@@ -1706,9 +1708,14 @@ def annotate_closed_world_vthread_effect_summaries(
     summary_paths: list[str],
     native_exports: dict,
 ) -> tuple[int, int, int]:
-    """Merge module wires and solve their dense-ID fixed point in the parent."""
+    """Merge module wires and solve their dense-ID fixed point in the parent.
+
+    Each existing effect slot also records whether its key must be published.
+    Keep that flag separate from the parking bit: a published quiet node must
+    not seed propagation, and an unpublished parking node must not rewrite an
+    export.  This needs no second dictionary owning the same canonical keys.
+    """
     node_ids: dict[str, int] = {}
-    publish_keys: dict[str, bool] = {}
     effects = CompilerIntArena()
     edge_pairs = CompilerIntArena()
     try:
@@ -1722,7 +1729,7 @@ def annotate_closed_world_vthread_effect_summaries(
                             module_name, export_name, native_exports
                         )
                         node_id = _vthread_effect_node_id(node_ids, effects, key)
-                        effects.set_unchecked(node_id, 1)
+                        effects.set_unchecked(node_id, _VTHREAD_EFFECT_PARKS)
                     continue
                 if info.get("kind") != "class":
                     continue
@@ -1738,16 +1745,20 @@ def annotate_closed_world_vthread_effect_summaries(
                         native_exports,
                     )
                     node_id = _vthread_effect_node_id(node_ids, effects, key)
-                    effects.set_unchecked(node_id, 1)
+                    effects.set_unchecked(node_id, _VTHREAD_EFFECT_PARKS)
 
         for path in summary_paths:
             summary = read_closed_world_vthread_effect_summary(path)
             for key in summary["seeds"]:
                 node_id = _vthread_effect_node_id(node_ids, effects, key)
-                effects.set_unchecked(node_id, 1)
+                effects.set_unchecked(
+                    node_id, effects.get_unchecked(node_id) | _VTHREAD_EFFECT_PARKS
+                )
             for key in summary["publish"]:
-                publish_keys[key] = True
-                _vthread_effect_node_id(node_ids, effects, key)
+                node_id = _vthread_effect_node_id(node_ids, effects, key)
+                effects.set_unchecked(
+                    node_id, effects.get_unchecked(node_id) | _VTHREAD_EFFECT_PUBLISH
+                )
             edges = summary["edges"]
             index = 0
             while index < len(edges):
@@ -1766,11 +1777,13 @@ def annotate_closed_world_vthread_effect_summaries(
             while index < len(edge_pairs):
                 caller = edge_pairs.get_unchecked(index)
                 callee = edge_pairs.get_unchecked(index + 1)
-                if effects.get_unchecked(callee) and not effects.get_unchecked(
-                    caller
-                ):
-                    effects.set_unchecked(caller, 1)
-                    changed = True
+                if effects.get_unchecked(callee) & _VTHREAD_EFFECT_PARKS:
+                    caller_state = effects.get_unchecked(caller)
+                    if not (caller_state & _VTHREAD_EFFECT_PARKS):
+                        effects.set_unchecked(
+                            caller, caller_state | _VTHREAD_EFFECT_PARKS
+                        )
+                        changed = True
                 index += 2
 
         for module_name, exports in native_exports.items():
@@ -1781,10 +1794,11 @@ def annotate_closed_world_vthread_effect_summaries(
                     key = _vthread_effect_function_key(
                         module_name, export_name, native_exports
                     )
-                    if publish_keys.get(key, False):
-                        info["may_park"] = bool(
-                            effects.get_unchecked(node_ids[key])
-                        )
+                    node_id = node_ids.get(key, -1)
+                    if node_id >= 0:
+                        state = effects.get_unchecked(node_id)
+                        if state & _VTHREAD_EFFECT_PUBLISH:
+                            info["may_park"] = bool(state & _VTHREAD_EFFECT_PARKS)
                     continue
                 if info.get("kind") != "class":
                     continue
@@ -1797,10 +1811,13 @@ def annotate_closed_world_vthread_effect_summaries(
                         str(method_info.get("name", "")),
                         native_exports,
                     )
-                    if publish_keys.get(key, False):
-                        method_info["may_park"] = bool(
-                            effects.get_unchecked(node_ids[key])
-                        )
+                    node_id = node_ids.get(key, -1)
+                    if node_id >= 0:
+                        state = effects.get_unchecked(node_id)
+                        if state & _VTHREAD_EFFECT_PUBLISH:
+                            method_info["may_park"] = bool(
+                                state & _VTHREAD_EFFECT_PARKS
+                            )
         return len(summary_paths), len(effects), len(edge_pairs) // 2
     finally:
         effects.close()
