@@ -1162,9 +1162,11 @@ def _closed_world_derived_class_map(native_exports):
             if not isinstance(info, dict) or info.get("kind") != "class":
                 continue
             for base_name in info.get("base_names", ()):
-                base_to_derived.setdefault(base_name, []).append(
-                    (derived_mod, class_name)
-                )
+                derived_list = base_to_derived.setdefault(base_name, [])
+                # Two occurrences already make the base ambiguous, including
+                # repeated occurrences of the same derived class.
+                if len(derived_list) < 2:
+                    derived_list.append((derived_mod, class_name))
     derived_class_map = {}
     for base_name, derived_list in base_to_derived.items():
         if len(derived_list) == 1:
