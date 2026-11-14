@@ -556,6 +556,13 @@ def test_cpython_parameter_never_enters_native_slot_copy():
 
 
 def test_stale_owned_result_fails_closed():
+    # Keep the existing CI inventory node while extending its fail-closed
+    # coverage to missing owners and bounded diagnostic rendering.
+    _check_slot_call_rejection_identifies_source_without_accepting_borrowed_result()
+    _check_slot_call_rejection_bounds_source_and_never_formats_arbitrary_values()
+    for line, col in ((-1, 0), (0, -1), (True, 0), (0, True),
+                      (2147483648, 0), (0, 2147483648)):
+        _check_slot_call_rejection_rejects_invalid_source_coordinates(line, col)
     with pytest.raises(L1CodegenError, match="lacks an immediate owned-result handoff"):
         _emit("""def probe():
     return slot_stale_probe()
@@ -1128,3 +1135,58 @@ def test_literal_bool_integer_leaves_preserve_kernel_preconditions():
         # Direct bool inversion still requires the qualified 3.15 warning.
         with pytest.raises(L1CodegenError, match="proven literal-derived integer tree"):
             _emit("def probe():\n    return slot_operand_probe(" + expression + ")\n")
+
+
+
+# Diagnostic-only: unknown ownership still fails at the real operand boundary.
+def _check_slot_call_rejection_identifies_source_without_accepting_borrowed_result():
+    from pcc.frontends.python.py_ast import Call
+
+    class BorrowedResultCodegen(SlotProbeCodegen):
+        def _emit_call_arg_object(self, expr):
+            if (isinstance(expr, Call) and isinstance(expr.func, Name)
+                    and expr.func.ident == "unowned_result"):
+                return self.builder.load(self.env["value"][0])
+            return super()._emit_call_arg_object(expr)
+
+    source = "def probe(value):\n    return slot_operand_probe(unowned_result())\n"
+    module = type_infer.infer_module(parse_and_lift(source, "unowned_slot.py", "unowned_slot"))
+    operand = module.body[0].body[0].value.args[0]
+    codegen = BorrowedResultCodegen(module, ir_scaffold_mode="on")
+    codegen._strict_no_libpython = True
+    with pytest.raises(L1CodegenError) as caught:
+        codegen.generate(module)
+    message = str(caught.value)
+    assert "slot-call operand has no authoritative source or owned result: Call" in message
+    assert f"source={operand.span.file}:{operand.span.line}:{operand.span.col}" in message
+    assert "callee=name source-owner=none result-sink=unpublished" in message
+    assert "owned=0 scalar=0 permanent=0 pointer=1 cpython=0" in message
+    assert "unowned_result" not in message
+    assert not codegen._slot_call_result_sinks
+
+
+def _check_slot_call_rejection_rejects_invalid_source_coordinates(line, col):
+    from types import SimpleNamespace
+    from pcc.frontends.python.codegen.call_object_lowering import _slot_call_rejection_detail
+
+    expr = SimpleNamespace(span=SimpleNamespace(file="source.py", line=line, col=col))
+    assert "source=unknown" in _slot_call_rejection_detail(expr, False, True)
+
+
+def _check_slot_call_rejection_bounds_source_and_never_formats_arbitrary_values():
+    from types import SimpleNamespace
+    from pcc.frontends.python.codegen.call_object_lowering import _slot_call_rejection_detail
+
+    class Unformattable:
+        def __str__(self):
+            raise AssertionError("diagnostic formatted an arbitrary object")
+
+    invalid = SimpleNamespace(span=SimpleNamespace(file=Unformattable(), line=1, col=2))
+    assert "source=unknown" in _slot_call_rejection_detail(invalid, False, False)
+    path = "x" * 1000 + "\n\r\tsecret.py"
+    expr = SimpleNamespace(span=SimpleNamespace(file=path, line=1, col=2))
+    detail = _slot_call_rejection_detail(expr, True, False)
+    assert "source=..." in detail and "???secret.py:1:2" in detail
+    assert "\n" not in detail and "\r" not in detail and "\t" not in detail
+    assert len(detail) < 450
+    assert "callee=not-call" in detail

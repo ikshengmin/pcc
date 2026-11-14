@@ -70,6 +70,34 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
+def _slot_call_rejection_detail(expr, pointer: bool, cpython: bool) -> str:
+    """Bounded source coordinates and finite state, never operand values."""
+    location = "unknown"
+    span = getattr(expr, "span", None)
+    if span is not None:
+        file = getattr(span, "file", None)
+        line = getattr(span, "line", None)
+        col = getattr(span, "col", None)
+        if (type(file) is str and type(line) is int and type(col) is int
+                and 0 <= line <= 2147483647 and 0 <= col <= 2147483647):
+            tail = file[-240:]
+            clean = "..." if len(file) > 240 else ""
+            for char in tail:
+                clean += char if " " <= char <= "~" else "?"
+            location = f"{clean}:{line}:{col}"
+    callee = "not-call"
+    if isinstance(expr, Call):
+        callee = "name" if isinstance(expr.func, Name) else (
+            "attribute" if isinstance(expr.func, Attr) else "other"
+        )
+    return (
+        f" [slot source={location} callee={callee} source-owner=none"
+        " result-sink=unpublished owned=0 scalar=0 permanent=0"
+        + (" pointer=1" if pointer else " pointer=0")
+        + (" cpython=1]" if cpython else " cpython=0]")
+    )
+
+
 def literal_integer_runtime_operand(host, expression, label):
     """Normalize arithmetic bool leaves without materializing a temporary root."""
     if (isinstance(expression, (IntLit, BoolLit))
@@ -1063,6 +1091,10 @@ class CallObjectLoweringMixin:
                     raise L1CodegenError(
                         "slot-call operand has no authoritative source or owned result: "
                         + type(expr).__name__
+                        + _slot_call_rejection_detail(
+                            expr, isinstance(value.type, ir.PointerType),
+                            value in self._cpy_values,
+                        )
                     )
                 self._publish_slot_call_owned(slot, value, label=type(expr).__name__)
         finally:
