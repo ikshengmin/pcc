@@ -59,6 +59,7 @@ CASES = [
     ('function-values', original('func f(g func()int)int{return 1}')),
     ('defer', original('func f(){}', 'defer f()')),
     ('defer', original(body='defer println(1)')),
+    ('owned-runtime-surface', 'package main;\nimport "runtime"\nfunc main(){_ = runtime.GOOS}\n'),
     ('dynamic-string-conversion', original('func f(x int)string{return string(x)}')),
     ('dynamic-string-concatenation', original('func f(a,b string)string{return a+b}')),
     ('division-panic', original('func f(a,b int)int{return a/b}')),
