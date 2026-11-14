@@ -253,6 +253,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                   if not entry.startswith(RESOURCE_REPORT_ENV + "=")]
         vector.append(RESOURCE_REPORT_ENV + "=" + report)
         specs.append((argv, vector))
+    # The inventory owns these until verified completion or a bounded retry.
+    argv, vector = [], []
     tree_path = str(os.environ.get(TREE_STATE_ENV, "") or "")
     recovery_allowance = STATE_MAX_AGE_SECONDS
     guard_deadline = -1.0
@@ -356,6 +358,10 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 slot = tasks[index].get("handoff_slot", -1)
                 if slot >= 0 and slot != index:
                     handoff_slots.remove(slot)
+                # Dependencies retain the completed token, not the launch
+                # payload. Failed or cancelled attempts keep their spec.
+                specs[index] = ([], [])
+                del attempt_tokens[pid]
             active = survivors
             if not pending and not active:
                 break
@@ -570,6 +576,8 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                     vector.append(ENV_SEAL + "=" + tasks[index]["handoff_seal_sha256"])
                 specs[index] = (argv, vector)
                 pid = _start_resource_worker(specs, index)
+                # Spawn has consumed its borrowed arguments synchronously.
+                argv, vector = [], []
                 if pid <= 0:
                     raise subprocess.CalledProcessError(127, commands[index])
                 if tasks[index].get("handoff_slot", -1) == index:

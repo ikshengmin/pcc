@@ -9,6 +9,7 @@ import shlex
 import subprocess
 import sys
 import time
+import weakref
 
 import pytest
 
@@ -36,6 +37,184 @@ def task(report, *, estimate=0, inputs=(1,), execution_class="host:test"):
 
 def command(code):
     return shlex.join([sys.executable, "-B", "-c", code])
+
+
+def _spec_lifetime_fixture(tmp_path, monkeypatch, count=2):
+    """Observe real payload lifetime without retaining spawn's borrowed values."""
+    class TrackedArgv(list):
+        pass
+
+    class TrackedEnvironmentEntry(str):
+        pass
+
+    state = {"refs": [], "specs": None, "starts": [], "retired": [], "stopped": []}
+    commands = ["worker-" + str(index) for index in range(count)]
+    tasks = [task(tmp_path / ("rss-" + str(index)), estimate=16 * MIB)
+             for index in range(count)]
+
+    def command_spec(command):
+        argv = TrackedArgv([command])
+        entry = TrackedEnvironmentEntry("PCC_SPEC_LIFETIME=" + command)
+        state["refs"].append((weakref.ref(argv), weakref.ref(entry)))
+        return argv, [entry]
+
+    def start(specs, index):
+        state["specs"] = specs
+        assert specs[index][0] == [commands[index]]
+        token_prefix = policy.RESOURCE_TOKEN_ENV + "="
+        tokens = [entry[len(token_prefix):] for entry in specs[index][1]
+                  if entry.startswith(token_prefix)]
+        assert len(tokens) == 1
+        pid = 100 + len(state["starts"])
+        state["starts"].append((index, pid, tokens[0]))
+        return pid
+
+    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    monkeypatch.setattr(pool, "_command_spec", command_spec)
+    monkeypatch.setattr(pool, "_start_resource_worker", start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: 0)
+    monkeypatch.setattr(pool, "_retire_resource_worker", state["retired"].append)
+    monkeypatch.setattr(pool, "_stop_resource_worker", state["stopped"].append)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: MIB)
+    monkeypatch.setattr(policy, "read_tree_state", lambda *args, **kwargs: None)
+    monkeypatch.setattr(policy, "read_worker_resource",
+                        lambda path, pid, token: ("complete", MIB, MIB))
+    return state, commands, tasks
+
+
+@pytest.mark.parametrize("order", ((0, 1), (1, 0)))
+def test_completed_worker_releases_spec_before_next_admission(tmp_path, monkeypatch, order):
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch)
+    original_commands = list(commands)
+    original_tasks = [dict(item, inputs=list(item["inputs"])) for item in tasks]
+    monkeypatch.setattr(policy, "resource_task_order", lambda *args, **kwargs: (list(order), []))
+    boundaries = []
+
+    def coordinator_rss():
+        if state["retired"]:
+            # Check before another launch can overwrite argv/vector locals.
+            retired = order[0]
+            assert state["specs"][retired] == ([], [])
+            assert all(ref() is None for ref in state["refs"][retired])
+            pending = order[1]
+            assert all(ref() is not None for ref in state["refs"][pending])
+            boundaries.append(retired)
+        return MIB
+
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", coordinator_rss)
+    observations = []
+    pool.run_resource_worker_processes(commands, tasks, 1, 512 * MIB, observations=observations)
+    assert boundaries == [order[0]]
+    assert [item[0] for item in state["starts"]] == list(order)
+    assert state["specs"] == [([], []), ([], [])]
+    assert all(ref() is None for refs in state["refs"] for ref in refs)
+    assert commands == original_commands and tasks == original_tasks
+    assert len(observations) == 2
+    assert state["stopped"] == []
+
+
+@pytest.mark.parametrize("failure", ("spawn", "exit", "missing", "live", "handoff", "observation"))
+def test_unverified_worker_keeps_spec(tmp_path, monkeypatch, failure):
+    from pcc.frontends.python import pipeline_indexed_handoff as handoff
+
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch, count=1)
+
+    def fail(*args):
+        raise RuntimeError("completion failed")
+
+    error = RuntimeError
+    message = "completion failed"
+    if failure == "spawn":
+        start = pool._start_resource_worker
+
+        def failed_start(specs, index):
+            start(specs, index)
+            return -1
+
+        monkeypatch.setattr(pool, "_start_resource_worker", failed_start)
+        error, message = subprocess.CalledProcessError, "127"
+    elif failure == "exit":
+        monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: 7)
+        error, message = subprocess.CalledProcessError, "7"
+    elif failure in ("missing", "live"):
+        report = None if failure == "missing" else ("allocated", MIB, MIB)
+        monkeypatch.setattr(policy, "read_worker_resource", lambda *args: report)
+        error, message = policy.WorkerMemoryError, "did not publish final peak RSS"
+    elif failure == "handoff":
+        tasks[0].update(handoff_request="request", input_ready=True, handoff_seal_sha256="seal")
+        monkeypatch.setattr(handoff, "reset_handoff_output", lambda item: None)
+        monkeypatch.setattr(handoff, "retire_handoff_task", fail)
+    else:
+        monkeypatch.setattr(policy, "completed_task_observation", fail)
+
+    with pytest.raises(error, match=message):
+        pool.run_resource_worker_processes(commands, tasks, 1, 512 * MIB, observations=[])
+    assert state["specs"][0][0] == commands
+    assert all(ref() is not None for ref in state["refs"][0])
+
+
+def test_retired_spec_preserves_completed_handoff_token(tmp_path, monkeypatch):
+    from pcc.frontends.python import pipeline_indexed_handoff as handoff
+
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch)
+    tasks[0]["handoff_slot"] = 0
+    tasks[1].update(depends_on=0, handoff_slot=0, handoff_request="request")
+    prepared = []
+    retired = []
+
+    def prepare(item, token):
+        assert state["specs"][0] == ([], [])
+        assert all(ref() is None for ref in state["refs"][0])
+        assert token == state["starts"][0][2]
+        prepared.append(token)
+        item.update(input_ready=True, handoff_seal_sha256="seal")
+
+    monkeypatch.setattr(handoff, "prepare_handoff_task", prepare)
+    monkeypatch.setattr(handoff, "reset_handoff_output", lambda item: None)
+    monkeypatch.setattr(handoff, "retire_handoff_task", lambda item, token: retired.append(token))
+    pool.run_resource_worker_processes(commands, tasks, 1, 512 * MIB, observations=[])
+    assert prepared == [state["starts"][0][2]]
+    assert retired == [state["starts"][1][2]]
+    assert all(ref() is None for refs in state["refs"] for ref in refs)
+
+
+def test_cancelled_worker_keeps_spec_until_verified_retry(tmp_path, monkeypatch):
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch)
+    start = pool._start_resource_worker
+    polls = []
+
+    def retry_start(specs, index):
+        if len(state["starts"]) == 2:
+            assert index == 1 and state["stopped"] == [101]
+            assert specs[0] == ([], [])
+            assert all(ref() is None for ref in state["refs"][0])
+            assert all(ref() is not None for ref in state["refs"][1])
+        return start(specs, index)
+
+    def poll(pid):
+        polls.append(pid)
+        assert len(polls) <= 12
+        assert len(state["starts"]) <= 3
+        if state["stopped"] or pid == 102:
+            return 0
+        return pool._WORKER_RUNNING
+
+    def report(path, pid, token):
+        assert token == next(item[2] for item in state["starts"] if item[1] == pid)
+        peak = 200 * MIB if len(state["starts"]) >= 2 and pid != 102 else MIB
+        phase = "complete" if state["stopped"] or pid == 102 else "allocated"
+        return phase, peak, peak
+
+    monkeypatch.setattr(pool, "_start_resource_worker", retry_start)
+    monkeypatch.setattr(pool, "_poll_resource_worker", poll)
+    monkeypatch.setattr(policy, "read_worker_resource", report)
+    pool.run_resource_worker_processes(commands, tasks, 2, 512 * MIB, observations=[])
+    assert [item[0] for item in state["starts"]] == [0, 1, 1]
+    assert state["starts"][1][2] != state["starts"][2][2]
+    assert state["stopped"] == [101]
+    assert tasks[1]["retry_calibration"] is False
+    assert state["specs"] == [([], []), ([], [])]
+    assert all(ref() is None for refs in state["refs"] for ref in refs)
 
 
 def child_code(marker, allocated=4 * MIB, delay=0.05, *, write_pid=False):
