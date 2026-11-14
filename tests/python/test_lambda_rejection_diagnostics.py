@@ -322,6 +322,11 @@ def test_actual_native_preflight_rejects_without_mutating_host(names, free, code
     assert dict(host.module.globals) == globals_before
 
 
+def _assert_native_adapter_is_partial(adapter):
+    assert adapter.blocks
+    assert not adapter.blocks[0].is_terminated
+
+
 @pytest.mark.parametrize("legacy", [False, True])
 def test_actual_native_body_rejection_preserves_existing_restoration(legacy):
     host = NativeHost(legacy=legacy)
@@ -343,8 +348,48 @@ def test_actual_native_body_rejection_preserves_existing_restoration(legacy):
     # The diagnostic labels partial IR; it never turns this into a success.
     assert host._native_lambda_func_counter == 1
     adapter = host.module.globals["user_rejection__native_lambda_0"]
-    assert adapter.blocks and adapter.blocks[0].terminator is None
+    _assert_native_adapter_is_partial(adapter)
     assert "native-ir=partial" in dispatch._lambda_rejection_detail(lambda_expr(), rejection)
+
+    # Exercise the same predicate against actual owned blocks. Every public
+    # terminal emitter must make it reject a completed control, without adding
+    # collected nodes or changing the abandoned adapter above.
+    controls = ir.Module(name="terminal_controls")
+    i64 = ir.IntType(64)
+    for terminal in (
+        "ret", "ret_void", "branch", "cbranch", "unreachable", "switch",
+        "invoke", "invoke_void",
+    ):
+        result_type = i64 if terminal == "ret" else ir.VoidType()
+        control = ir.Function(controls, ir.FunctionType(result_type, []), name=terminal)
+        entry = control.append_basic_block("entry")
+        normal = control.append_basic_block("normal")
+        alternate = control.append_basic_block("alternate")
+        builder = ir.IRBuilder(entry)
+        _assert_native_adapter_is_partial(control)
+        builder.alloca(i64, name="nonterminal")
+        _assert_native_adapter_is_partial(control)
+        if terminal == "ret":
+            builder.ret(ir.Constant(i64, 0))
+        elif terminal == "ret_void":
+            builder.ret_void()
+        elif terminal == "branch":
+            builder.branch(normal)
+        elif terminal == "cbranch":
+            builder.cbranch(ir.Constant(ir.IntType(1), 1), normal, alternate)
+        elif terminal == "unreachable":
+            builder.unreachable()
+        elif terminal == "switch":
+            builder.switch(ir.Constant(i64, 0), normal)
+        else:
+            return_type = i64 if terminal == "invoke" else ir.VoidType()
+            callee = ir.Function(
+                controls, ir.FunctionType(return_type, []), name=terminal + "_callee",
+            )
+            builder.invoke(callee, [], normal, alternate)
+        assert entry.is_terminated
+        with pytest.raises(AssertionError):
+            _assert_native_adapter_is_partial(control)
 
 
 def test_optional_or_broken_receipt_does_not_change_native_rejection():
