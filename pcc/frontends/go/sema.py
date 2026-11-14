@@ -6,6 +6,7 @@ concurrency and recoverable-panic operations are explicit capability gaps.
 """
 
 from dataclasses import dataclass
+from fractions import Fraction
 import re
 import unicodedata
 
@@ -29,7 +30,8 @@ from pcc.frontends.go.records import (
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, SliceType, TYPE_NAMES, TYPES,
     result_types, integer_bits, integer_bounds, integer_signed, is_integer, is_string,
-    is_error_interface, is_untyped_integer, same_underlying_ignoring_tags,
+    is_error_interface, is_float, is_numeric, is_untyped_integer, round_float,
+    same_underlying_ignoring_tags,
 )
 
 
@@ -87,6 +89,64 @@ def integer_literal(expr):
     raise GoDiagnostic(expr.token, "invalid or unsupported integer literal " + repr(text))
 
 
+DECIMAL = r"[0-9](?:_?[0-9])*"
+HEXADECIMAL = r"[0-9a-fA-F](?:_?[0-9a-fA-F])*"
+DECIMAL_FLOAT = re.compile(
+    rf"(?P<whole>{DECIMAL})\.(?P<fraction>{DECIMAL})?(?:[eE](?P<exponent>[+-]?{DECIMAL}))?"
+    rf"|(?P<whole2>{DECIMAL})[eE](?P<exponent2>[+-]?{DECIMAL})"
+    rf"|\.(?P<fraction3>{DECIMAL})(?:[eE](?P<exponent3>[+-]?{DECIMAL}))?")
+HEX_FLOAT = re.compile(
+    rf"0[xX](?:_?(?P<whole>{HEXADECIMAL})\.(?P<fraction>{HEXADECIMAL})?|_?(?P<whole2>{HEXADECIMAL})"
+    rf"|\.(?P<fraction3>{HEXADECIMAL}))[pP](?P<exponent>[+-]?{DECIMAL})")
+# Exponents beyond this bound exceed the exact-constant budget below anyway.
+MAX_FLOAT_EXPONENT = 4 * MAX_CONSTANT_BITS
+
+
+def check_constant_precision(value, token):
+    """Untyped float constants are exact rationals within the integer budget."""
+    if isinstance(value, Fraction) and max(abs(value.numerator).bit_length(),
+                                            value.denominator.bit_length()) > MAX_CONSTANT_BITS:
+        raise UnsupportedGo(token, 'go.unsupported.limit-constant-precision',
+                            "constant exceeds implementation precision limit (4096 bits)")
+
+
+def float_literal(expr):
+    """https://go.dev/ref/spec#Floating-point_literals, as an exact rational."""
+    text = str(expr.value)
+    match = DECIMAL_FLOAT.fullmatch(text)
+    base, scale = 10, 10
+    if match is None:
+        match, base, scale = HEX_FLOAT.fullmatch(text), 16, 2
+    if match is None:
+        raise GoDiagnostic(expr.token, "invalid floating-point literal " + repr(text))
+    groups = match.groupdict()
+    whole = groups.get("whole") or groups.get("whole2") or ""
+    fraction = groups.get("fraction") or groups.get("fraction3") or ""
+    exponent = groups.get("exponent") or groups.get("exponent2") or groups.get("exponent3") or "0"
+    whole, fraction = whole.replace("_", ""), fraction.replace("_", "")
+    exponent = int(exponent.replace("_", ""))
+    if abs(exponent) > MAX_FLOAT_EXPONENT or len(whole) + len(fraction) > MAX_CONSTANT_BITS:
+        raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision',
+                            "constant exceeds implementation precision limit (4096 bits)")
+    mantissa = int(whole + fraction or "0", base)
+    # A hexadecimal fraction digit is four binary places.
+    places = len(fraction) * (4 if base == 16 else 1)
+    value = Fraction(mantissa) * Fraction(scale) ** (exponent - places)
+    check_constant_precision(value, expr.token)
+    return value
+
+
+def integral_constant(expr):
+    """An untyped float constant with an integer value used where Go wants an
+    integer constant (index, shift operand) becomes that untyped integer."""
+    if expr.type == "untyped float" and expr.constant is not None and expr.constant.denominator == 1:
+        expr.type, expr.constant = "untyped int", int(expr.constant)
+
+
+def constant_kind(dtype):
+    return ("untyped int", "untyped rune", "untyped float").index(dtype)
+
+
 def is_boolean(dtype):
     return underlying(dtype) in ("bool", "untyped bool")
 
@@ -106,7 +166,7 @@ def checked_array_type(token, count, element):
             raise UnsupportedGo(token, 'go.unsupported.array-element-types',
                                 "nested arrays and string-element arrays are not implemented")
         if (not isinstance(underlying(element), StructType) and
-                not is_integer(element) and not is_boolean(element)):
+                not is_numeric(element) and not is_boolean(element)):
             raise UnsupportedGo(token, 'go.unsupported.array-element-types',
                                 "arrays require scalar or admitted value-record elements")
     if count > 4096:
@@ -157,7 +217,7 @@ def require_bounded_value_layout(dtype, token):
 
 
 def default_type(dtype):
-    return {"untyped int": "int", "untyped rune": "int32",
+    return {"untyped int": "int", "untyped rune": "int32", "untyped float": "float64",
             "untyped bool": "bool", "untyped string": "string"}.get(dtype, dtype)
 
 
@@ -181,6 +241,16 @@ def has_evaluated_call(expr):
 
 def check_representable(expr):
     if expr.constant is None:
+        return
+    if is_float(expr.type):
+        # Typed float constants are rounded to their type; untyped ones stay exact.
+        value = Fraction(expr.constant)
+        check_constant_precision(value, expr.token)
+        if expr.type != "untyped float":
+            value = round_float(value, expr.type)
+            if value is None:
+                raise GoDiagnostic(expr.token, f"constant overflows {expr.type}")
+        expr.constant = value
         return
     if is_integer(expr.type):
         if abs(expr.constant).bit_length() > MAX_CONSTANT_BITS:
@@ -226,6 +296,22 @@ def coerce(expr, dtype):
         expr.type = dtype
         return
     if expr.type == dtype:
+        check_representable(expr)
+        return
+    if expr.type == "untyped float" and is_integer(dtype) and expr.constant is not None:
+        if expr.constant.denominator != 1:
+            raise GoDiagnostic(expr.token, f"constant {float(expr.constant)!r} truncated to integer {dtype}")
+        expr.type, expr.constant = dtype, int(expr.constant)
+        check_representable(expr)
+        return
+    if (is_untyped_integer(expr.type) or expr.type == "untyped float") and is_float(dtype):
+        if expr.constant is None and expr.kind == "binary" and expr.value in ("<<", ">>"):
+            raise GoDiagnostic(expr.args[0].token, f"shifted operand has type {dtype} and must be integer")
+        expr.type = dtype
+        if expr.constant is None and expr.kind in ("unary", "binary") and expr.value not in ("<<", ">>"):
+            for argument in expr.args:
+                if argument.type in ("untyped int", "untyped rune", "untyped float"):
+                    coerce(argument, dtype)
         check_representable(expr)
         return
     if ((is_untyped_integer(expr.type) and is_integer(dtype)) or
@@ -778,6 +864,7 @@ class Analyzer:
 
     def array_index_constant(self, expr, label):
         self.expression(expr)
+        integral_constant(expr)
         if not is_integer(expr.type) or expr.constant is None:
             raise GoDiagnostic(expr.token, label + " must be an integer constant")
         if not 0 <= expr.constant <= (1 << 63) - 1:
@@ -1163,7 +1250,7 @@ class Analyzer:
                                     "interface switches require dynamic-value comparison support")
             # The equality checker owns assignability, pointer identity and
             # aggregate value comparison. Lowering captures the selector once.
-            if not (is_integer(selector.type) or is_boolean(selector.type) or is_string(selector.type)
+            if not (is_numeric(selector.type) or is_boolean(selector.type) or is_string(selector.type)
                     or isinstance(underlying(selector.type), (PointerType, ArrayType, StructType))
                     or isinstance(selector.type, TypeParameter) and comparable(selector.type)):
                 raise GoDiagnostic(selector.token, "switch requires a comparable type")
@@ -1179,7 +1266,7 @@ class Analyzer:
                 comparisons = []
                 for expr in clause.exprs:
                     self.expression(expr)
-                    if expr.type in ("untyped int", "untyped rune", "untyped bool", "untyped string"):
+                    if expr.type in ("untyped int", "untyped rune", "untyped float", "untyped bool", "untyped string"):
                         coerce(expr, selector.type)
                     comparison = Expr("binary", expr.token, "==", [selector, expr])
                     self.expression(comparison)
@@ -1431,6 +1518,7 @@ class Analyzer:
             base, index = expr.args
             self.expression(base)
             self.expression(index)
+            integral_constant(index)
             if is_string(base.type):
                 if not is_integer(index.type):
                     raise GoDiagnostic(index.token, "string index must be an integer")
@@ -1480,6 +1568,9 @@ class Analyzer:
             return
         if kind == "integer":
             expr.type, expr.constant = "untyped int", integer_literal(expr)
+            return
+        if kind == "float":
+            expr.type, expr.constant = "untyped float", float_literal(expr)
             return
         if kind == "rune":
             from pcc.frontends.go.runes import literal_value
@@ -1690,6 +1781,9 @@ class Analyzer:
                         raise GoDiagnostic(argument.token, "cannot print untyped nil")
                     if getattr(argument, 'runtime_error', None) is not None:
                         continue
+                    if is_float(argument.type):
+                        raise UnsupportedGo(argument.token, 'go.unsupported.floating-types',
+                                            "printing floating values requires runtime floating-point formatting")
                     if not (is_integer(argument.type) or is_boolean(argument.type) or is_string(argument.type)):
                         raise UnsupportedGo(argument.token, 'go.unsupported.builtin-io',
                                             "non-scalar or nil builtin payload requires shared interface/runtime support")
@@ -1733,6 +1827,10 @@ class Analyzer:
             if expr.value == "!":
                 if not is_boolean(arg.type):
                     raise GoDiagnostic(expr.token, "logical not requires bool")
+            elif expr.value in ("+", "-") and is_float(arg.type):
+                pass
+            elif is_float(arg.type):
+                raise GoDiagnostic(arg.token, f"operator {expr.value} not defined on {arg.type}")
             elif not is_integer(arg.type):
                 raise GoDiagnostic(expr.token, "integer unary operation requires integer")
             if arg.constant is not None:
@@ -1801,6 +1899,9 @@ class Analyzer:
         if not arguments:
             raise GoDiagnostic(expr.token, expr.value + " requires at least one argument")
         for argument in arguments:
+            if is_float(argument.type):
+                raise UnsupportedGo(argument.token, 'go.unsupported.floating-types',
+                                    expr.value + " of floating values requires NaN and signed-zero ordering")
             if not (is_integer(argument.type) or is_string(argument.type)):
                 raise GoDiagnostic(argument.token, expr.value + " requires ordered integer or string arguments")
         first = arguments[0]
@@ -1867,13 +1968,19 @@ class Analyzer:
             expr.type, expr.constant = target, chr(codepoint).encode("utf-8")
             return
         if not (same_underlying_ignoring_tags(target, arg.type) or
-                is_integer(target) and is_integer(arg.type) or
+                is_numeric(target) and is_numeric(arg.type) or
                 is_boolean(target) and is_boolean(arg.type) or
                 is_string(target) and is_string(arg.type)):
             raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
         if arg.constant is None and is_untyped_integer(arg.type):
             coerce(arg, target)
-        expr.type, expr.constant = target, arg.constant
+        constant = arg.constant
+        if constant is not None and is_float(arg.type) and is_integer(target):
+            # A constant conversion never truncates (https://go.dev/ref/spec#Conversions).
+            if constant.denominator != 1:
+                raise GoDiagnostic(arg.token, f"cannot convert constant {float(constant)!r} to {target} (truncated)")
+            constant = int(constant)
+        expr.type, expr.constant = target, constant
         check_representable(expr)
 
     def direct_function(self, expression):
@@ -1996,6 +2103,11 @@ class Analyzer:
                                  "<=": a <= b, ">": a > b, ">=": a >= b}[op]
             return
         if op in ("<<", ">>"):
+            integral_constant(left)
+            integral_constant(right)
+            for operand in (left, right):
+                if is_float(operand.type):
+                    raise GoDiagnostic(operand.token, f"shift operand has type {operand.type} and must be integer")
             if not is_integer(left.type) or not is_integer(right.type):
                 raise GoDiagnostic(expr.token, "shifts require integer operands")
             if right.constant is None:
@@ -2007,15 +2119,17 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "shift count overflows uint64")
             expr.type = left.type
         else:
-            untyped = ("untyped int", "untyped rune", "untyped bool")
+            numeric = ("untyped int", "untyped rune", "untyped float")
+            untyped = numeric + ("untyped bool",)
             if left.type in untyped and right.type not in untyped:
                 coerce(left, right.type)
             elif right.type in untyped and left.type not in untyped:
                 coerce(right, left.type)
-            elif is_untyped_integer(left.type) and is_untyped_integer(right.type):
-                # Rune is the later constant kind. Shifts deliberately use
-                # only their left operand's kind and do not take this path.
-                common = "untyped rune" if "untyped rune" in (left.type, right.type) else "untyped int"
+            elif left.type in numeric and right.type in numeric:
+                # Rune follows int and float follows both (constant kinds).
+                # Shifts deliberately use only their left operand's kind and
+                # do not take this path.
+                common = max(left.type, right.type, key=constant_kind)
                 coerce(left, common)
                 coerce(right, common)
             if left.type != right.type:
@@ -2030,17 +2144,21 @@ class Analyzer:
                 if not is_boolean(left.type):
                     raise GoDiagnostic(expr.token, "logical operators require bool")
             elif op in ("==", "!="):
-                if not is_integer(left.type) and not is_boolean(left.type):
+                if not is_numeric(left.type) and not is_boolean(left.type):
                     raise GoDiagnostic(expr.token, "unsupported comparison operands")
                 expr.type = "untyped bool"
             elif op in ("<", "<=", ">", ">="):
-                if not is_integer(left.type):
-                    raise GoDiagnostic(expr.token, "ordered comparison requires integer operands")
+                if not is_numeric(left.type):
+                    raise GoDiagnostic(expr.token, "ordered comparison requires integer or floating operands")
                 expr.type = "untyped bool"
-            elif not is_integer(left.type):
+            elif is_float(left.type) and op not in ("+", "-", "*", "/"):
+                raise GoDiagnostic(left.token, f"operator {op} not defined on {left.type}")
+            elif not is_numeric(left.type):
                 raise GoDiagnostic(expr.token, "arithmetic and bitwise operators require integers")
         if op in ("/", "%"):
-            if right.constant == 0:
+            # A constant zero divisor is an error unless a floating dividend
+            # is evaluated at run time (IEEE 754 division).
+            if right.constant == 0 and (left.constant is not None or is_integer(left.type)):
                 raise GoDiagnostic(expr.token, "division by zero")
             # A dynamic divisor is checked at run time: zero panics with
             # runtime.divideError (lowering), never a hardware trap.
@@ -2050,6 +2168,8 @@ class Analyzer:
                 if a != 0:
                     raise UnsupportedGo(expr.token, 'go.unsupported.limit-constant-precision', "constant exceeds implementation precision limit (4096 bits)")
                 expr.constant = 0
+            elif op == "/" and is_float(left.type):
+                expr.constant = Fraction(a) / Fraction(b)
             elif op in ("/", "%"):
                 quotient = abs(a) // abs(b)
                 if (a < 0) != (b < 0):

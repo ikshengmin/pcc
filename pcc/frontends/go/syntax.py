@@ -43,6 +43,40 @@ def _digit(char):
     return unicodedata.category(char) == "Nd"
 
 
+def _number(source, pos):
+    """One numeric literal's extent and kind (https://go.dev/ref/spec#Floating-point_literals).
+
+    The token runs as Go's scanner reads it: a hexadecimal mantissa takes a
+    `p` exponent, a decimal one an `e` exponent, and a trailing `i` makes it
+    imaginary. Following letters and digits stay in the token, so a
+    malformed literal is diagnosed as one literal, not split.
+    """
+    end, hexadecimal = pos, source.startswith(("0x", "0X"), pos)
+    digits = "0123456789abcdefABCDEF_" if hexadecimal else "0123456789_"
+    if hexadecimal or source.startswith(("0b", "0B", "0o", "0O"), pos):
+        end += 2
+    floating = False
+    while end < len(source) and source[end] in digits:
+        end += 1
+    if end < len(source) and source[end] == ".":
+        floating, end = True, end + 1
+        while end < len(source) and source[end] in digits:
+            end += 1
+    exponent = "pP" if hexadecimal else "eE"
+    if end < len(source) and source[end] in exponent:
+        floating, end = True, end + 1
+        if end < len(source) and source[end] in "+-":
+            end += 1
+        while end < len(source) and source[end] in "0123456789_":
+            end += 1
+    kind = "float" if floating else "integer"
+    if end < len(source) and source[end] == "i":
+        kind, end = "imaginary", end + 1
+    while end < len(source) and (source[end].isalnum() or source[end] == "_"):
+        end += 1
+    return source[pos:end], kind
+
+
 def scan(source, filename="<go>", directives=None):
     """Tokenize one file; recognized //go:linkname directives go to directives."""
     tokens = []
@@ -52,7 +86,7 @@ def scan(source, filename="<go>", directives=None):
     def emit(kind, text, at_line, at_column):
         nonlocal pending
         tokens.append(Token(kind, text, filename, at_line, at_column))
-        pending = kind in ("name", "integer", "string", "rune") or text in (
+        pending = kind in ("name", "integer", "float", "imaginary", "string", "rune") or text in (
             "break", "continue", "fallthrough", "return", "++", "--", ")", "]", "}"
         )
 
@@ -134,12 +168,9 @@ def scan(source, filename="<go>", directives=None):
             emit(text if text in KEYWORDS else "name", text, at_line, at_column)
             advance(text)
             continue
-        if "0" <= char <= "9":
-            end = pos + 1
-            while end < len(source) and (source[end].isalnum() or source[end] in "_."):
-                end += 1
-            text = source[pos:end]
-            emit("integer", text, at_line, at_column)
+        if "0" <= char <= "9" or char == "." and "0" <= source[pos + 1:pos + 2] <= "9":
+            text, kind = _number(source, pos)
+            emit(kind, text, at_line, at_column)
             advance(text)
             continue
         if char in "\"'`":
@@ -525,7 +556,6 @@ class GoParser:
         if token.text in TYPE_NAMES:
             return TYPE_NAMES[token.text]
         capability = ({"error": "interface-types", "any": "interface-types",
-                       "float32": "floating-types", "float64": "floating-types",
                        "complex64": "complex-types", "complex128": "complex-types"}).get(token.text)
         if capability is not None:
             self.unsupported(token, "go.unsupported." + capability,
@@ -1136,6 +1166,11 @@ class GoParser:
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
         elif self.accept("integer"):
             left = Expr("integer", token, token.text)
+        elif self.accept("float"):
+            left = Expr("float", token, token.text)
+        elif self.at("imaginary"):
+            self.unsupported(token, "go.unsupported.complex-types",
+                             "imaginary literals require complex numeric support")
         elif self.accept("rune"):
             left = Expr("rune", token, token.text)
         elif self.accept("string"):

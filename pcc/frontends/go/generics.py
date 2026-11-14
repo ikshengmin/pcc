@@ -13,7 +13,7 @@ from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
 from pcc.frontends.go.records import DefinedType, InterfaceType, StructType, is_named, same_underlying, underlying
 from pcc.frontends.go.interface_methods import interface_type
 from pcc.frontends.go.types import (
-    ArrayType, PointerType, Results, SliceType, TYPE_NAMES, is_integer, is_string,
+    ArrayType, PointerType, Results, SliceType, TYPE_NAMES, is_float, is_integer, is_string,
 )
 
 MAX_FUNCTION_INSTANCES = 128
@@ -127,7 +127,8 @@ def comparable(dtype):
         # Interface comparison is legal, but dynamic values may panic.
         # Instantiation/value admission retains its separate capability gate.
         return True
-    return isinstance(dtype, PointerType) or is_integer(dtype) or is_string(dtype) or dtype == 'bool'
+    return (isinstance(dtype, PointerType) or is_integer(dtype) or is_float(dtype)
+            or is_string(dtype) or dtype == 'bool')
 
 
 class GenericSession:

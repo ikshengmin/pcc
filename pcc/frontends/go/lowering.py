@@ -13,7 +13,7 @@ from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, result_types, integer_bits, integer_signed, is_string,
-    is_error_interface,
+    is_error_interface, is_float, float_bits,
 )
 
 
@@ -53,7 +53,16 @@ def ir_type(dtype):
         return ir.VoidType()
     if dtype in ("bool", "untyped bool"):
         return ir.IntType(1)
+    if is_float(dtype):
+        return ir.FloatType() if float_bits(dtype) == 32 else ir.DoubleType()
     return ir.IntType(integer_bits(dtype))
+
+
+def scalar_constant(dtype, value):
+    """Typed constants are already rounded to their format (sema)."""
+    if is_float(dtype):
+        return ir.Constant(ir_type(dtype), float(value))
+    return ir.Constant(ir_type(dtype), int(value))
 
 
 class Lowerer:
@@ -107,7 +116,9 @@ class Lowerer:
 
     def zero(self, dtype):
         null_zero = is_error_interface(dtype) or isinstance(underlying(dtype), (ArrayType, StructType, PointerType))
-        return self.string_constant(b"") if is_string(dtype) else ir.Constant(ir_type(dtype), None if null_zero else 0)
+        if is_string(dtype):
+            return self.string_constant(b"")
+        return ir.Constant(ir_type(dtype), None) if null_zero else scalar_constant(dtype, 0)
 
     def static_initializer(self, dtype, value):
         if value is None:
@@ -120,7 +131,7 @@ class Lowerer:
         if isinstance(base, StructType):
             return ir.Constant(ir_type(dtype), [self.static_initializer(field.type, item)
                                                 for field, item in zip(base.fields, value)])
-        return ir.Constant(ir_type(dtype), int(value))
+        return scalar_constant(dtype, value)
 
     def lower(self):
         for declaration in self.program.variables:
@@ -476,7 +487,7 @@ class Lowerer:
                 self.builder.store(value, element)
             return self.builder.load(storage)
         if expr.constant is not None:
-            return self.string_value(expr.constant) if is_string(expr.type) else ir.Constant(ir_type(expr.type), int(expr.constant))
+            return self.string_value(expr.constant) if is_string(expr.type) else scalar_constant(expr.type, expr.constant)
         if expr.kind == "string_compare":
             return self.string_compare(expr)
         if expr.kind == "minmax":
@@ -528,6 +539,8 @@ class Lowerer:
                 target = ir_type(expr.type)
                 if value.type == target:
                     return value
+                if is_float(expr.type) or is_float(expr.args[0].type):
+                    return self.numeric_conversion(value, expr.args[0].type, expr.type)
                 if value.type.width > target.width:
                     return self.builder.trunc(value, target)
                 if value.type.width < target.width:
@@ -540,7 +553,7 @@ class Lowerer:
             if expr.value == "+":
                 return value
             if expr.value == "-":
-                return self.builder.neg(value)
+                return self.builder.fneg(value) if is_float(expr.type) else self.builder.neg(value)
             return self.builder.not_(value)
         if expr.kind == "binary":
             op = expr.value
@@ -550,6 +563,15 @@ class Lowerer:
             if op in ("<<", ">>"):
                 return self.shift(expr, left)
             right = self.expression(expr.args[1])
+            if is_float(expr.args[0].type):
+                # IEEE 754: every ordered comparison with NaN is false and
+                # NaN != NaN (https://go.dev/ref/spec#Comparison_operators).
+                if op == "!=":
+                    return self.builder.fcmp_unordered("!=", left, right)
+                if op in ("==", "<", "<=", ">", ">="):
+                    return self.builder.fcmp_ordered(op, left, right)
+                return {"+": self.builder.fadd, "-": self.builder.fsub,
+                        "*": self.builder.fmul, "/": self.builder.fdiv}[op](left, right)
             if op in ("==", "!=", "<", "<=", ">", ">="):
                 dtype = underlying(expr.args[0].type)
                 compare = (self.builder.icmp_unsigned if isinstance(dtype, PointerType) else
@@ -581,6 +603,20 @@ class Lowerer:
             value = methods[op](left, right)
             return self.builder.trunc(value, ir_type(expr.type)) if narrow else value
         raise AssertionError("unlowered typed expression: " + expr.kind)
+
+    def numeric_conversion(self, value, source, target):
+        """Integer/floating conversions (https://go.dev/ref/spec#Conversions).
+
+        Float-to-integer conversion truncates toward zero; Go leaves an
+        out-of-range result implementation-defined, never a panic.
+        """
+        destination = ir_type(target)
+        if is_float(source) and is_float(target):
+            widen = float_bits(target) > float_bits(source)
+            return (self.builder.fpext if widen else self.builder.fptrunc)(value, destination)
+        if is_float(target):
+            return (self.builder.sitofp if integer_signed(source) else self.builder.uitofp)(value, destination)
+        return (self.builder.fptosi if integer_signed(target) else self.builder.fptoui)(value, destination)
 
     def minmax(self, expr):
         # Evaluate every argument exactly once before comparison/selection.
@@ -697,6 +733,8 @@ class Lowerer:
             components = [field.type for field in dtype.fields]
         elif is_string(dtype):
             return self.string_compare_values("==", self.builder.load(left), self.builder.load(right))
+        elif is_float(dtype):
+            return self.builder.fcmp_ordered("==", self.builder.load(left), self.builder.load(right))
         else:
             return self.builder.icmp_unsigned("==", self.builder.load(left), self.builder.load(right))
         if not components:

@@ -1144,7 +1144,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:2d8c73649887501d5bf5fed6dc825f9533ae4d9bfe30c4297f6441113ac3a7bb",
+        "source_revision": "sha256:0d3438e79b2b299a3e721b3924e2ec9bc75cbaa30b1f2fd54803bfb31e83130e",
         "sources": [
           {
             "path": "pcc/frontends/go/builtin_io.py",
@@ -1152,7 +1152,7 @@
           },
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "a9feb1b5fff27bedc68e1ce8bfcf0dda5ac7f0835b073934508fb6167399d4d9"
+            "sha256": "ef5058773d708298e0b2d6d4ab1514e755470661c45473936b442925c379c618"
           },
           {
             "path": "pcc/frontends/go/runtime_provider.py",
@@ -1160,7 +1160,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "e6c5302cb1a0d6e8cbb5b9c3c3146c89c6ab85f87f43f9f5b33b13d9065cbee8"
+            "sha256": "3ce4987a4d0ba6aebfb0ba5b6792dd45c664e5cdf36be9b022ccd6ce9c0e5d04"
           }
         ]
       }
@@ -1232,16 +1232,56 @@
       "evidence": []
     },
     {
-      "id": "go.capability.floating-types",
-      "title": "Floating types",
+      "id": "go.types.floating",
+      "title": "Floating-point types float32 and float64",
       "chapter_ids": [
         "numeric"
       ],
-      "scope": "Explicitly rejected capability: floating types. No broader implementation or runtime support is claimed.",
+      "scope": "Decimal and hexadecimal floating literals scan as one token and are exact untyped float constants (rationals within the 4096-bit constant budget); untyped int/rune constants join the float kind. Typed float constants round half-to-even to binary32/binary64 (subnormals included); overflow is an error and a constant conversion to an integer type never truncates. float32/float64 values support + - * /, IEEE comparisons (NaN unordered, -0 == +0), unary + and -, integer/float and float/float conversions (truncating toward zero), switch, arrays and struct fields with IEEE aggregate equality, parameters, results and package variables. A floating dividend divided by constant zero is IEEE division; % and bitwise operators, float shift operands and float-typed shifts are errors at gc's positions. Printing floats, min/max of floats and floating type arguments stay go.unsupported.floating-types; imaginary literals are go.unsupported.complex-types. An original program runs natively on the local Mac with PCC's own compiler, assembler and Mach-O linker and matches go1.23.6; the x86-64 Linux executable is built byte-stably, its execution unrun. The pinned testing closure moves from allocs.go:20:44 to benchmark.go:53:32 (a slice expression). Source revision is sha256 of the sorted compact JSON source list.",
+      "tests": [
+        "tests/go/test_floating_types.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:266be42c5d65e66a69d1bc6e601ad90389c056ea20fe2ffd3e1b82bfbcb7ac9e",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "ffa447a248055eab93738d2ed5421f554cfd8d9a199a92c6f24ea8538bc8e0f0"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "ef5058773d708298e0b2d6d4ab1514e755470661c45473936b442925c379c618"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "3ce4987a4d0ba6aebfb0ba5b6792dd45c664e5cdf36be9b022ccd6ce9c0e5d04"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "737074e64feedd50a6c5ca3b0cd644240b16b6921909c75d002e02ec48855b2c"
+          },
+          {
+            "path": "pcc/frontends/go/types.py",
+            "sha256": "0a5965fdc9376c9ccf00da59391f9d2839bb1cca8068e16e83f7ed165c9648cd"
+          }
+        ]
+      }
+    },
+    {
+      "id": "go.capability.floating-types",
+      "title": "Floating types: remaining capability boundary",
+      "chapter_ids": [
+        "numeric"
+      ],
+      "scope": "Explicitly rejected capability: printing floating values (runtime floating-point formatting), min/max of floating values (NaN and signed-zero ordering) and floating type arguments. float32/float64 themselves are go.types.floating.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
-        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound"
+        "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
+        "tests/go/test_floating_types.py::test_remaining_floating_domains_stay_explicit"
       ],
       "diagnostics": [
         "go.unsupported.floating-types"
@@ -3278,15 +3318,15 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:9dde5b2bc01471b0e3af8b3140562996ba46c831222b0b4256596ad07b84e430",
+        "source_revision": "sha256:66a8b9667dcb2b192a37978b27ea22c046e996521f8f9fd4a9a152779217875b",
         "sources": [
           {
             "path": "pcc/frontends/go/lowering.py",
-            "sha256": "a9feb1b5fff27bedc68e1ce8bfcf0dda5ac7f0835b073934508fb6167399d4d9"
+            "sha256": "ef5058773d708298e0b2d6d4ab1514e755470661c45473936b442925c379c618"
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "e6c5302cb1a0d6e8cbb5b9c3c3146c89c6ab85f87f43f9f5b33b13d9065cbee8"
+            "sha256": "3ce4987a4d0ba6aebfb0ba5b6792dd45c664e5cdf36be9b022ccd6ce9c0e5d04"
           }
         ]
       }

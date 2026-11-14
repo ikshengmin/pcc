@@ -13,7 +13,7 @@ import shutil
 
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go_packages
+from pcc.frontends.go import GoDiagnostic, compile_go_packages
 from scripts import ci_go_math_bits_project as project
 from scripts.go_std_closure import FIXTURE, LOCK, load_std_closure
 from scripts.pin_go_std_closure import evaluate, name_ok, selected
@@ -77,9 +77,10 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # Formerly bits_test.go:10:2, `import "testing"` without its sources. The
-    # original testing package now parses until AllocsPerRun's float64 result.
-    with pytest.raises(UnsupportedGo, match=r"^allocs.go:20:44: Go: unsupported type 'float64'") as caught:
+    # Formerly bits_test.go:10:2, `import "testing"` without its sources, then
+    # allocs.go:20:44, AllocsPerRun's float64 result (tests/go/test_floating_types.py).
+    # The original testing package now parses until benchmark.go's slice
+    # expression `s[:len(s)-1]`, which the parser does not read yet.
+    with pytest.raises(GoDiagnostic, match=r"^benchmark.go:53:32: Go: unsupported expression token ':'$"):
         compile_go_packages(packages, target_triple='x86_64-unknown-linux-gnu')
-    assert caught.value.code == 'go.unsupported.floating-types'
-    assert std['testing'][0][0] == 'allocs.go'
+    assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']

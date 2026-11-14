@@ -49,7 +49,8 @@ CASES = [
     ('blank-method-declarations', original('type T int;func(t T)_(){}')),
     ('blank-struct-fields', original('type T struct{_ int}')),
     ('interface-types', original('func f(x any){}')),
-    ('floating-types', original('func f(x float64){}')),
+    # `func f(x float64){}` moved to tests/go/test_floating_types.py.
+    ('floating-types', original(body='println(1.5)')),
     ('complex-types', original('func f(x complex128){}')),
     ('array-element-types', original('var x [1]string')),
     ('array-element-types', original('var x [1][1]int')),

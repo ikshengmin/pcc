@@ -112,7 +112,11 @@ INTEGER_TYPES = {
     "uint8": (8, False), "uint16": (16, False), "uint32": (32, False), "uint64": (64, False),
     "int": (64, True), "uint": (64, False), "uintptr": (64, False),
 }
+# IEEE 754 binary32/binary64: (significand bits incl. the implicit one,
+# minimum normal exponent, maximum exponent), https://go.dev/ref/spec#Numeric_types
+FLOAT_TYPES = {"float32": (24, -126, 127), "float64": (53, -1022, 1023)}
 TYPE_NAMES = {name: name for name in INTEGER_TYPES}
+TYPE_NAMES.update({name: name for name in FLOAT_TYPES})
 TYPE_NAMES.update({"bool": "bool", "byte": "uint8", "rune": "int32", "string": "string"})
 TYPE_NAMES["error"] = ERROR_TYPE
 TYPE_NAMES["any"] = ANY_TYPE
@@ -147,6 +151,50 @@ def integer_bounds(dtype):
 def is_integer(dtype):
     dtype = underlying(dtype)
     return isinstance(dtype, str) and (is_untyped_integer(dtype) or dtype in INTEGER_TYPES)
+
+
+def is_float(dtype):
+    dtype = underlying(dtype)
+    return isinstance(dtype, str) and (dtype == "untyped float" or dtype in FLOAT_TYPES)
+
+
+def float_bits(dtype):
+    dtype = underlying(dtype)
+    return 64 if dtype == "untyped float" else 32 if dtype == "float32" else 64
+
+
+def is_numeric(dtype):
+    return is_integer(dtype) or is_float(dtype)
+
+
+def round_float(value, dtype):
+    """Round an exact constant to dtype's IEEE format, half to even.
+
+    Returns the rounded exact value, or None when it overflows the format
+    (https://go.dev/ref/spec#Representability). Subnormals keep the minimum
+    exponent; a Go constant has no negative zero.
+    """
+    from fractions import Fraction
+    precision, minimum, maximum = FLOAT_TYPES[underlying(dtype)]
+    if value == 0:
+        return Fraction(0)
+    negative = value < 0
+    numerator, denominator = abs(value.numerator), value.denominator
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if numerator * (1 << max(0, -exponent)) < denominator * (1 << max(0, exponent)):
+        exponent -= 1
+    shift = max(exponent, minimum) - (precision - 1)
+    if shift >= 0:
+        denominator <<= shift
+    else:
+        numerator <<= -shift
+    quotient, remainder = divmod(numerator, denominator)
+    if 2 * remainder > denominator or 2 * remainder == denominator and quotient & 1:
+        quotient += 1
+    if quotient.bit_length() + shift > maximum + 1:
+        return None
+    result = Fraction(quotient) * (Fraction(2) ** shift)
+    return -result if negative else result
 
 
 def supported_target(triple):

@@ -57,7 +57,8 @@ def test_go_integer_radix_and_separator_semantics(literal, value):
     assert program.functions[0].body[0].exprs[0].constant == value
 
 
-@pytest.mark.parametrize("literal", ["09", "0x", "0b2", "1__0", "0_x1", "42_", "1e4", "1.5"])
+# "1e4" and "1.5" moved to tests/go/test_floating_types.py.
+@pytest.mark.parametrize("literal", ["09", "0x", "0b2", "1__0", "0_x1", "42_"])
 def test_invalid_or_unimplemented_literals_are_not_silently_reinterpreted(literal):
     with pytest.raises(GoDiagnostic, match="literal"):
         compile_go(source("_ = " + literal))
