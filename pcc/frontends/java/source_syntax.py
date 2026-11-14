@@ -137,6 +137,10 @@ class SourceClass:
     member_classes: tuple = ()
     enclosing_name: str | None = None
     canonical_name: str | None = None
+    # Class model only, JLS 8.1.4/8.1.5: the unresolved `extends` ClassType
+    # (None for the implicit Object) and `implements` InterfaceTypes.
+    superclass: object = None
+    interfaces: tuple = ()
 
     @property
     def package(self):
@@ -374,6 +378,27 @@ class SourceParser:
             dtype = ArrayType(dtype)
         return dtype
 
+    def class_supertypes(self):
+        """JLS 8.1.2/8.1.4/8.1.5 class header: `extends` one ClassType and
+        `implements` InterfaceTypes, retained unresolved for the class model."""
+        if self.peek().text == "<":
+            self.peek().error("generic class declarations require type-parameter scope and erasure",
+                              code="java.unsupported.class-supertypes-generics")
+        superclass, interfaces = None, []
+        if self.accept("extends"):
+            superclass = self.supertype("class")
+        if self.accept("implements"):
+            interfaces.append(self.supertype("interface"))
+            while self.accept(","):
+                interfaces.append(self.supertype("interface"))
+        return superclass, tuple(interfaces)
+
+    def supertype(self, kind):
+        token = self.take()
+        if token.text in KEYWORDS or not re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text):
+            token.error(kind + " type expected, found " + token.text)
+        return self.declaration_type(token)
+
     def declaration_type(self, token):
         """Retain named reference declarations only in the nonlowering model."""
         if token.text in DECLARED | {"void"}:
@@ -603,8 +628,12 @@ class SourceParser:
                               static_imports=static_imports,
                               enclosing_name=enclosing.name if enclosing is not None else None,
                               canonical_name=canonical)
+        if self.class_model:
+            program.superclass, program.interfaces = self.class_supertypes()
         if self.peek().text in {"extends", "implements", "<", "permits"}:
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime", code="java.unsupported.class-supertypes-generics")
+        if self.class_model and self.peek().text != "{":
+            self.peek().error("'{' expected")
         if self.peek().text != "{":
             self.peek().error("inheritance, generics and interfaces require the shared Java runtime")
         self.expect("{")

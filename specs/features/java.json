@@ -1615,7 +1615,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:863ab842e4a2e80a19417c9e770b7182358b7c7ea831d198d940c994344ac6e8",
+        "source_revision": "sha256:4ed0b3c43c84d3c1646cb26fb9f91dc6332dd0156edba02206b628a83d4b0a93",
         "sources": [
           {
             "path": "pcc/frontends/java/artifact.py",
@@ -1635,7 +1635,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "0810f104d5dcd0cfde8323cd9ec0c129d27b00b0a2ddcd9da810ecd38d266ebc"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       }
@@ -2014,6 +2014,51 @@
           "gc": "not_applicable",
           "required_tests": [
             "tests/java/test_source_lambda_and_chained_calls.py"
+          ],
+          "evidence": [],
+          "reason": "The source-model tests passed as local Mac pcc0 evidence only. No JDK reference was run and the linux-x86_64 lane is UNRUN; managed native execution remains explicitly unavailable."
+        }
+      ]
+    },
+    {
+      "id": "java.class-supertype-clauses-model",
+      "title": "Class superclass and superinterface clauses (class source model)",
+      "chapter_ids": [
+        "JLS-8"
+      ],
+      "scope": "JLS 8.1.2, 8.1.4 and 8.1.5. In the class model `extends ClassType` and `implements InterfaceType, ...` (type arguments retained) parse and resolve in the supplied closed world; `extends Object` and `extends java.lang.Object` name the implicit superclass. A cyclic superclass chain, a final or String superclass, type arguments on Object, a class named by `implements`, a primitive supertype and a malformed header are errors. An unsupplied supertype reports java.unsupported.source-dependency, a supplied superclass (inherited members, constructor chaining, dispatch) and generic class declarations report java.unsupported.class-supertypes-generics; the native domain keeps its earlier boundary. OpenJDK jdk8u512-ga's BigInteger header now parses, so Commons Numbers Primes with the pinned JDK sources stops at BigInteger.java:134:11 (final instance fields). Not project qualification.",
+      "tests": [
+        "tests/java/test_source_class_supertypes.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:a5b35d04927a88f2e17597b7aa8d5937748b20587f9f8a1ac2e998619a858e43",
+        "sources": [
+          {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
+          },
+          {
+            "path": "pcc/frontends/java/source_syntax.py",
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "class-supertype-clauses-local-mac-unrun",
+          "kind": "full-feature",
+          "scope": "Source-model header parsing, supertype resolution, ordinary errors and retained boundaries; not inheritance, PCC managed native execution or project acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:a5b35d04927a88f2e17597b7aa8d5937748b20587f9f8a1ac2e998619a858e43",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/java/test_source_class_supertypes.py"
           ],
           "evidence": [],
           "reason": "The source-model tests passed as local Mac pcc0 evidence only. No JDK reference was run and the linux-x86_64 lane is UNRUN; managed native execution remains explicitly unavailable."
@@ -2487,11 +2532,12 @@
         "JLS-8",
         "JLS-18"
       ],
-      "scope": "JLS 8.1.2,8.1.4-5. No inheritance, generic instantiation, interface implementation or Object override conformance. Generic method and constructor declaration prefixes are also explicitly gated before result-type classification, as are array type arguments, type annotations and member types of parameterized types; plain declaration type arguments are retained by java.parameterized-type-arguments-model.",
+      "scope": "JLS 8.1.2,8.1.4-5. No inheritance, generic instantiation, interface implementation or Object override conformance. Generic method and constructor declaration prefixes are also explicitly gated before result-type classification, as are array type arguments, type annotations and member types of parameterized types; plain declaration type arguments are retained by java.parameterized-type-arguments-model. Superclass/superinterface clauses parse and resolve in the class model (java.class-supertype-clauses-model); a supplied superclass and generic class declarations remain this boundary.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_class_model.py::test_unimplemented_class_semantics_remain_explicit",
-        "tests/java/test_source_diagnostics.py"
+        "tests/java/test_source_diagnostics.py",
+        "tests/java/test_source_class_supertypes.py"
       ],
       "diagnostics": [
         "java.unsupported.class-supertypes-generics",
@@ -3209,7 +3255,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3223,11 +3269,11 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3277,7 +3323,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3299,7 +3345,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3313,7 +3359,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3349,7 +3395,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3363,7 +3409,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -3380,8 +3426,12 @@
         },
         "source_sites": [
           {
+            "path": "pcc/frontends/java/source_class_model.py",
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
+          },
+          {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3431,7 +3481,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3445,7 +3495,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3467,7 +3517,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3541,7 +3591,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3569,7 +3619,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3583,7 +3633,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_project.py",
@@ -3591,7 +3641,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3605,7 +3655,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3627,7 +3677,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3641,7 +3691,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3669,7 +3719,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3687,7 +3737,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           }
         ]
       },
@@ -3705,7 +3755,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_sema.py",
@@ -3713,7 +3763,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3727,7 +3777,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_project.py",
@@ -3745,7 +3795,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3763,7 +3813,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           }
         ]
       },
@@ -3795,7 +3845,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3809,7 +3859,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_project.py",
@@ -3817,7 +3867,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3831,7 +3881,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3845,7 +3895,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3889,7 +3939,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3907,7 +3957,7 @@
           },
           {
             "path": "pcc/frontends/java/source_class_model.py",
-            "sha256": "7dc5b25ca16373a3f2b4c93bac990ab9ee3908e23f41012892e4fe241ea0c8f9"
+            "sha256": "de0a876490fbdd044eaed8771cd4c81073729f123c56ec06b2f53fd6d5f096be"
           },
           {
             "path": "pcc/frontends/java/source_construction_model.py",
@@ -3923,7 +3973,7 @@
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3937,7 +3987,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3965,7 +4015,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           },
           {
             "path": "pcc/frontends/java/source_throw_model.py",
@@ -3983,7 +4033,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       },
@@ -3997,7 +4047,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "793b88cf930442feef33542e624777ff0efe918a5fa28121fae46143d9834e3d"
+            "sha256": "6fb18abb26d2cf187202a6b6df8ae1190e3252687c4cf445c6bd7a6db668ec9a"
           }
         ]
       }

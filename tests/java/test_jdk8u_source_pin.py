@@ -41,9 +41,11 @@ def test_primes_with_the_pinned_jdk_sources_stop_inside_the_jdk_code():
     _, jdk = load_jdk_sources()
     sources = dict(original_sources(files, PRODUCTION))
     sources.update(jdk)
-    # Formerly the missing-source boundary for java.util.List; the class model
-    # now reads the original JDK units and stops at BigInteger's supertypes.
+    # Formerly the missing-source boundary for java.util.List, then
+    # BigInteger's supertypes at 125:25 (tests/java/test_source_class_supertypes.py);
+    # the class model now parses that header and stops at the final instance
+    # field `final int signum;`.
     with pytest.raises(UnsupportedJava) as caught:
         analyze_class_sources(sources)
-    assert caught.value.code == 'java.unsupported.class-supertypes-generics'
-    assert str(caught.value).startswith('jdk/src/share/classes/java/math/BigInteger.java:125:25:')
+    assert caught.value.code == 'java.unsupported.final-instance-fields'
+    assert str(caught.value).startswith('jdk/src/share/classes/java/math/BigInteger.java:134:11:')

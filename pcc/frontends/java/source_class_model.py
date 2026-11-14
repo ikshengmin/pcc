@@ -527,7 +527,67 @@ class ClassModelProject(SourceProject):
                                  code="java.unsupported.source-dependency")
         return super().resolve_qualified_owner(analyzer, node)
 
+    def implicit_object(self, caller, dtype):
+        """`Object` or `java.lang.Object` naming the bootstrap root, not a supplied class."""
+        names = tuple(token.text for token in dtype.tokens)
+        if names == ("java", "lang", "Object"):
+            return "java/lang/Object" not in self.canonical_classes
+        return names == ("Object",) and self.visible_simple_type(caller, "Object") is None
+
+    def bootstrap_string(self, caller, dtype):
+        return (tuple(token.text for token in dtype.tokens) == ("String",)
+                and self.visible_simple_type(caller, "String") is None)
+
+    def supplied_superclass(self, program):
+        """The supplied class a superclass clause names, or None; never a gap."""
+        dtype = program.superclass
+        if dtype is None or len(dtype.tokens) != 1 or self.implicit_object(program, dtype):
+            return None
+        target = self.visible_simple_type(program, dtype.tokens[0].text)
+        return None if target is None or isinstance(target, BootstrapStringType) else target
+
+    def resolve_supertypes(self, program):
+        """JLS 8.1.4/8.1.5 for the supplied closed world.
+
+        `extends Object` is the implicit superclass. Errors (cycles, final or
+        String superclasses, a class named by `implements`) precede the
+        remaining domains: unsupplied supertypes are source dependencies and
+        a supplied superclass needs inherited members, constructor chaining
+        and dispatch, which this model does not have.
+        """
+        dtype = program.superclass
+        if dtype is not None:
+            token = dtype.tokens[0]
+            if self.implicit_object(program, dtype):
+                if dtype.arguments:
+                    token.error("type Object does not take type arguments")
+            else:
+                seen, current = [program], self.supplied_superclass(program)
+                while current is not None:
+                    nested = any(owner is program for owner in self.lexical_classes(current))
+                    if nested or any(current is item for item in seen):
+                        cycle = program if nested else current
+                        token.error("cyclic inheritance involving " + cycle.source_name.replace("/", "."))
+                    seen.append(current)
+                    current = self.supplied_superclass(current)
+                if self.bootstrap_string(program, dtype):
+                    token.error("cannot inherit from final String")
+                target = self.resolve_named_type(program, dtype)
+                if isinstance(target, ClassType):
+                    superclass = self.classes[target.class_name]
+                    if "final" in superclass.modifiers:
+                        token.error("cannot inherit from final " + superclass.source_name.replace("/", "."))
+                    token.error("inheritance from a supplied class requires inherited members, constructor "
+                                "chaining and dispatch", code="java.unsupported.class-supertypes-generics")
+        for dtype in program.interfaces:
+            token = dtype.tokens[0]
+            # Every supplied type here is a class declaration.
+            if (self.bootstrap_string(program, dtype) or self.implicit_object(program, dtype)
+                    or isinstance(self.resolve_named_type(program, dtype), ClassType)):
+                token.error("interface expected here")
+
     def resolve_declaration_types(self, program):
+        self.resolve_supertypes(program)
         for field in program.fields:
             field.dtype = self.resolve_named_type(program, field.dtype)
         for method in (*program.methods, *program.constructors):
