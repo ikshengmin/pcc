@@ -10,7 +10,8 @@
 
 enum { WHITE = 8, PINNED = 64, CANDIDATE = 1024, FRESH = 16384, DEAD = 524288 };
 enum { KEEPER = 0, CLASS = 1, CALLBACK = 2, WEAK_FIRST = 3, WEAK_SECOND = 4,
-       TEMP_FIRST = 5, TEMP_SECOND = 6, INTERIOR = 7, GC_CALLBACK = 8, ROOT_COUNT = 9 };
+       TEMP_FIRST = 5, TEMP_SECOND = 6, INTERIOR = 7, GC_CALLBACK = 8,
+       PLAIN_FIRST = 9, PLAIN_SECOND = 10, ROOT_COUNT = 11 };
 
 extern int32_t pcc_gc_mark_active;
 extern int32_t pcc_gc_backend4_no_refcounts;
@@ -28,6 +29,7 @@ extern void pcc_gc_begin_explicit_tracing_collect(void);
 extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_gc_collect_tracing(void);
 extern int64_t pcc_gc_tracing_sweep_unreachable(int64_t);
+extern void pcc_gc_tracing_candidates_reset(void);
 extern void pcc_gc_cms_stop_worker(void);
 extern PyClassObject *py_class_new(const char *, PyClassObject **, int32_t,
                                   const char **, int32_t);
@@ -46,11 +48,26 @@ static int finalizers;
 static int weak_callbacks;
 static int gc_callbacks;
 static int callback_error;
+static int finalizer_calls[2];
+static int weak_callback_calls[2];
 
 static PyObject *weak_callback(PyObject *captures, PyObject *args) {
     (void)captures;
-    (void)args;
     weak_callbacks++;
+    /* The callback receives the weakref, not its target. Do not create a
+     * conservative target alias while checking the early callback order. */
+    PyObject *ref = py_tuple_get(args, 0);
+    int index = ref == roots[WEAK_FIRST] ? 0 :
+                (ref == roots[WEAK_SECOND] ? 1 : -1);
+    if (ref == 0 || index < 0) callback_error = 4;
+    else if (++weak_callback_calls[index] != 1) callback_error = 5;
+    if (finalizers != 0) callback_error = 6;
+    if (ref != 0) {
+        PyObject *target = py_weakref_call(ref);
+        if (target != py_None) callback_error = 7;
+        if (target != 0) py_decref(target);
+        py_decref(ref);
+    }
     return py_int_from_i64(0);
 }
 
@@ -63,7 +80,13 @@ static PyObject *start_callback(PyObject *captures, PyObject *args) {
 }
 
 static PyObject *token_del(PyObject *self) {
-    if (self != watched[0] && self != watched[1]) callback_error = 1;
+    int index = self == watched[0] ? 0 : (self == watched[1] ? 1 : -1);
+    if (index < 0) callback_error = 1;
+    else if (++finalizer_calls[index] != 1) callback_error = 8;
+    if (mode == 2 || mode == 3 || mode == 4 || mode == 7) {
+        int count = mode == 4 || mode == 7 ? 2 : 1;
+        if (weak_callbacks != count) callback_error = 9;
+    }
     finalizers++;
     /* Every callback sees the cycle intact, including the later finalizer in
      * a batch where an earlier callback has already resurrected the graph. */
@@ -134,6 +157,7 @@ static int build_graph(void) {
         PyObject *peer = mode == 4 ? roots[TEMP_FIRST + 1 - index] : self;
         py_instance_set_field(self, 0, peer);
         if (!install_root(WEAK_FIRST + index, py_weakref_new(self, roots[CALLBACK]))) return 126;
+        if (!install_root(PLAIN_FIRST + index, py_weakref_new(self, 0))) return 129;
     }
     if (mode == 1) {
         py_list_append(roots[INTERIOR], roots[TEMP_FIRST]);
@@ -211,9 +235,11 @@ static int inject_candidates(int count) {
         PyObjectHeader *header = (PyObjectHeader *)watched[index];
         header->flags = (header->flags & ~FRESH) | CANDIDATE;
     }
-    /* These synthetic candidates are not a new completed mark. Invalidate
-     * the last mark's empty-candidate cache and same-world proof, without
-     * fabricating a finish commit or weakening the sweep-owed assertion. */
+    /* These synthetic candidates are not a new completed mark. The owner's
+     * reset invalidates the last finish's candidate list without releasing
+     * its buffer. Also invalidate the empty-candidate cache and same-world
+     * proof, without fabricating a finish commit or weakening sweep-owed. */
+    pcc_gc_tracing_candidates_reset();
     pcc_gc_tracing_no_candidate_commit = -1;
     pcc_gc_tracing_finish_stop_epoch = -1;
     pcc_py_gc_minor_graph_unlock();
@@ -227,29 +253,38 @@ static int weak_matches(int index, int live) {
     return same;
 }
 
-static int inspect_live(int index) {
+static int plain_matches(int index, int live) {
+    PyObject *target = py_weakref_call(roots[PLAIN_FIRST + index]);
+    int same = target == (live ? watched[index] : py_None);
+    if (target != 0) py_decref(target);
+    return same;
+}
+
+static int inspect_live(int index, int callback_live) {
     PyObject *obj = watched[index];
     if (pcc_gc_object_is_known_no_lock(obj) != 1) return 0;
     if ((((PyObjectHeader *)obj)->flags & CANDIDATE) != 0) return 0;
     PyObject *peer = py_instance_get_field(obj, 0);
     int same = peer == watched[mode == 4 ? 1 - index : index];
     if (peer != 0) py_decref(peer);
-    return same && weak_matches(index, 1);
+    return same && weak_matches(index, callback_live) && plain_matches(index, 1);
 }
 
 static void report_live_verdict_failure(int status, int expected_finalizers,
+                                       int expected_weak_callbacks,
                                        int64_t collected, int known_first,
                                        int known_second) {
     /* Failure-only scalar diagnostics: watched addresses may be reclaimed.
      * The native receipt separately records the requested gc_backend. */
     printf("sweep-verdict:detail status=%d phase=%d mode=%d effective_backend=%lld "
            "finalizers=%d expected_finalizers=%d "
-           "weak_callbacks=%d expected_weak_callbacks=0 "
+           "weak_callbacks=%d expected_weak_callbacks=%d "
            "collected=%lld expected_collected=0 "
            "known_first=%d expected_known_first=1 "
            "known_second=%d gc_callbacks=%d callback_error=%d\n",
            status, phase, mode, (long long)pcc_gc_backend(),
-           finalizers, expected_finalizers, weak_callbacks, (long long)collected,
+           finalizers, expected_finalizers, weak_callbacks, expected_weak_callbacks,
+           (long long)collected,
            known_first, known_second, gc_callbacks, callback_error);
 }
 
@@ -282,35 +317,51 @@ static int run_mode(void) {
     if (callback_error != 0) return 142;
     if (mode == 1 || mode == 5 || mode == 6) {
         if (finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1) {
-            report_live_verdict_failure(143, 0, collected, known_first, known_second);
+            report_live_verdict_failure(143, 0, 0, collected, known_first, known_second);
             return 143;
         }
-        if (!inspect_live(0)) return 144;
+        if (!inspect_live(0, 1)) return 144;
         if (mode == 5 && gc_callbacks != 2) return 145;
     } else if (mode == 2) {
         if (finalizers != 1 || weak_callbacks != 1 || collected != 1 || known_first != 0) return 146;
-        if (!weak_matches(0, 0)) return 147;
+        if (!weak_matches(0, 0) || !plain_matches(0, 0)) return 147;
         pcc_gc_begin_explicit_tracing_collect();
         if (pcc_gc_collect_tracing() != 0) return 148;
         pcc_gc_end_explicit_tracing_collect();
         if (finalizers != 1 || weak_callbacks != 1) return 149;
     } else if (mode == 3 || mode == 4) {
-        if (finalizers != count || weak_callbacks != 0 || collected != 0 || known_first != 1) {
-            report_live_verdict_failure(150, count, collected, known_first, known_second);
+        /* CPython 3.15 test_finalization.py: test_simple_resurrect and
+         * check_resurrecting_chain. Callback refs die before finalizers;
+         * plain refs survive when the intact graph is resurrected. */
+        if (finalizers != count || weak_callbacks != count || collected != 0 || known_first != 1) {
+            report_live_verdict_failure(150, count, count, collected, known_first, known_second);
             return 150;
         }
-        if (!inspect_live(0)) return 151;
-        if (count == 2 && (known_second != 1 || !inspect_live(1))) return 152;
+        if (!inspect_live(0, 0)) return 151;
+        if (count == 2 && (known_second != 1 || !inspect_live(1, 0))) return 152;
     } else if (mode == 7) {
-        if (finalizers != 2 || weak_callbacks != 1 || collected != 1 || known_first + known_second != 1) return 153;
-        if (!weak_matches(0, known_first) || !weak_matches(1, known_second)) return 154;
+        /* Both weakref batches precede budgeted clearing/reclamation. Even
+         * the one not yet freed is dead, so neither kind of ref retains it. */
+        if (finalizers != 2 || weak_callbacks != 2 || collected != 1 || known_first + known_second != 1) return 153;
+        if (!weak_matches(0, 0) || !weak_matches(1, 0)
+            || !plain_matches(0, 0) || !plain_matches(1, 0)) return 154;
         pcc_gc_begin_explicit_tracing_collect();
         int64_t next = pcc_gc_tracing_sweep_unreachable(1);
         pcc_gc_end_explicit_tracing_collect();
         int known_after = (int)pcc_gc_object_is_known_no_lock(watched[0])
                           + (int)pcc_gc_object_is_known_no_lock(watched[1]);
         if (next != 1 || known_after != 0 || finalizers != 2 || weak_callbacks != 2) return 155;
-        if (!weak_matches(0, 0) || !weak_matches(1, 0)) return 156;
+        if (!weak_matches(0, 0) || !weak_matches(1, 0)
+            || !plain_matches(0, 0) || !plain_matches(1, 0)) return 156;
+    }
+    /* Totals alone could hide a duplicate call paired with a missed object.
+     * Recheck errors after the repeated collections in modes 2 and 7 too. */
+    if (callback_error != 0) return 142;
+    int expected_calls = mode == 2 || mode == 3 || mode == 4 || mode == 7;
+    int index;
+    for (index = 0; index < count; index++) {
+        if (finalizer_calls[index] != expected_calls
+            || weak_callback_calls[index] != expected_calls) return 160;
     }
     printf("sweep-verdict:ok backend=%d mode=%d finalizers=%d weak_callbacks=%d gc_callbacks=%d\n",
            pcc_gc_backend(), mode, finalizers, weak_callbacks, gc_callbacks);
