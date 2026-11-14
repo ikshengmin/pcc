@@ -134,7 +134,10 @@ def restore_frame_operand_modes(host, previous):
 
 
 def stable_parameter_operand_source(host, expr):
-    """Reuse only the authoritative, unchanged borrowed parameter owner."""
+    """Reuse an authoritative parameter without consuming its owner."""
+    resumed = stable_resume_parameter_source(host, expr)
+    if resumed is not None:
+        return resumed
     if (isinstance(expr, Name)
             and expr.ident in getattr(host, "_current_param_names", ())
             and not getattr(host, "_generator_ctx_stack", ())
@@ -148,6 +151,57 @@ def stable_parameter_operand_source(host, expr):
             host._slot_call_borrowed_operands[id(source[0])] = source[0]
             return source[0]
     return None
+
+
+def stable_resume_parameter_source(host, expr):
+    """Lend an owning resume parameter only to a non-consuming receiver lookup.
+
+    The activation keeps this private slot alive. It is not a borrowed ABI
+    argument: leases and relocation must retain the slot's owning mode.
+    """
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    if (not isinstance(expr, Name) or not contexts
+            or contexts[-1].get("resume_function") is not host.current_function
+            or getattr(host, "_runtime_port_module", False)
+            or getattr(host, "_freestanding_module", False)
+            or getattr(host, "_module_has_c_abi_export", False)):
+        return None
+    definition = host.current_func_def
+    if definition is None:
+        return None
+    context = contexts[-1]
+    if "receiver_parameter_names" not in context:
+        context["receiver_parameter_names"] = {arg.name for arg in definition.params}
+        context["receiver_parameter_stability"] = {}
+    if expr.ident not in context["receiver_parameter_names"]:
+        return None
+    stability = context["receiver_parameter_stability"]
+    if expr.ident not in stability:
+        from pcc.frontends.python.codegen.cpy_call_lowering import _name_is_stored_in
+
+        boxed = getattr(host, "_closure_boxed_params", {}).get(definition.name, ())
+        stability[expr.ident] = (
+            expr.ident not in boxed and not _name_is_stored_in(definition.body, expr.ident)
+        )
+    if not stability[expr.ident] or host._expr_returns_unsafe_raw_pointer(expr):
+        return None
+    source = host._slot_call_name_source(expr)
+    frame = context["frame_slots"].get(expr.ident)
+    if source is None or source[1] or frame is None or frame[1] is not source[0]:
+        return None
+    context.setdefault("nonconsuming_parameter_roots", {})[id(source[0])] = source[0]
+    return source[0]
+
+
+def owning_resume_input(host, slot):
+    contexts = getattr(host, "_generator_ctx_stack", ())
+    return bool(contexts and contexts[-1].get("resume_function") is host.current_function
+                and contexts[-1].get("nonconsuming_parameter_roots", {}).get(id(slot)) is slot)
+
+
+def nonconsuming_slot_input(host, slot):
+    return (getattr(host, "_slot_call_borrowed_operands", {}).get(id(slot)) is slot
+            or owning_resume_input(host, slot))
 
 
 # A direct user call passes object arguments as raw pointers. The callee
@@ -473,9 +527,8 @@ class CallObjectLoweringMixin:
                 sinks[index] = (entry[0], entry[1], True)
 
     def _release_slot_call_roots(self, roots) -> None:
-        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         for slot in reversed(roots):
-            if self._value_is_never_gc_object(slot) or borrowed.get(id(slot)) is slot:
+            if self._value_is_never_gc_object(slot) or nonconsuming_slot_input(self, slot):
                 continue
             _slot, flag, lifo = self._slot_call_root_record(slot)
             if flag is not None:
@@ -490,10 +543,9 @@ class CallObjectLoweringMixin:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
-        borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         roots = tuple(slot for slot in roots
                       if not self._value_is_never_gc_object(slot)
-                      and borrowed.get(id(slot)) is not slot)
+                      and not nonconsuming_slot_input(self, slot))
         if not roots and not leases:
             return target
         # Share only this function's identical cleanup program. Keep all
@@ -2537,7 +2589,7 @@ class CallObjectLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block((output,), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             # Attribute lookup does not replace its receiver source slot.
-            # Reuse the unchanged-parameter protocol; cells/rebindings/generators still copy.
+            # Reuse an authoritative parameter; cells and rebindings still copy.
             # The counted address lease and the live lookup are unchanged.
             receiver = self._emit_slot_call_operand(
                 expr.obj, label + ".receiver", borrow_stable=True,
@@ -2576,7 +2628,9 @@ class CallObjectLoweringMixin:
         try:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
-            receiver = self._emit_slot_call_operand(expr.obj, label + ".receiver")
+            receiver = self._emit_slot_call_operand(
+                expr.obj, label + ".receiver", borrow_stable=True,
+            )
             roots.append(receiver)
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
@@ -2598,13 +2652,14 @@ class CallObjectLoweringMixin:
             self.builder.cbranch(has_self, bound, ready)
             self.builder.position_at_end(bound)
             borrowed = getattr(self, "_slot_call_borrowed_operands", {}).get(id(receiver)) is receiver
-            if self._slot_call_root_is_registered(receiver) and not borrowed:
+            shared_owner = owning_resume_input(self, receiver)
+            if self._slot_call_root_is_registered(receiver) and not borrowed and not shared_owner:
                 moved = self._emit_root_slot_move(bound_self, receiver, label=label + ".move.self")
                 self._slot_call_check_status(moved, "method receiver transfer", expr.span)
             elif self._value_is_never_gc_object(receiver):
                 self._publish_slot_call_owned(bound_self, receiver, label="permanent method receiver")
             else:
-                self._slot_call_copy_source(bound_self, receiver, borrowed=True, span=expr.span)
+                self._slot_call_copy_source(bound_self, receiver, borrowed=not shared_owner, span=expr.span)
             self._slot_call_note_published(bound_self)
             self.builder.branch(ready)
             self.builder.position_at_end(ready)

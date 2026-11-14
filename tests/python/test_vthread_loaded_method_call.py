@@ -140,11 +140,14 @@ def worker(receiver):
     assert "@py_obj_getattr(" not in body[1]
     assert body[1].index("@py_obj_load_method(") < body[1].index("@user_loaded_argument(")
     before_argument = body[1][:body[1].index("@user_loaded_argument(")]
-    # Both plain-method and descriptor paths converge on this root clear;
-    # only the separately rooted bound receiver may survive into arguments.
-    ready = re.search(r"(?ms)^vthread.call.target.ready[^\n]*:\n(.*?)(?=^\w[^\n]*:|\Z)", before_argument)
-    assert ready is not None
-    assert re.search(r"@pcc_gc_store_root\(ptr %vthread.call.target.receiver[^,]+, ptr null\)", ready[1])
+    # The parameter remains owned by the activation. The callable's bound
+    # receiver gets an independent owner before later arguments can run.
+    from tests.python.root_copy_ir import root_copy_calls
+
+    copies = root_copy_calls(before_argument, borrowed=False)
+    assert any("vthread.call.target.self" in copy.destination
+               and "receiver" in copy.source for copy in copies)
+    assert "vthread.call.target.receiver.operand" not in before_argument
 
 
 @pytest.fixture(scope="module")
