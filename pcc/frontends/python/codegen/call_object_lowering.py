@@ -171,7 +171,7 @@ def stable_resume_parameter_source(host, expr):
         return None
     context = contexts[-1]
     if "receiver_parameter_names" not in context:
-        context["receiver_parameter_names"] = {arg.name for arg in definition.params}
+        context["receiver_parameter_names"] = {arg.name for arg in definition.args if arg.name}
         context["receiver_parameter_stability"] = {}
     if expr.ident not in context["receiver_parameter_names"]:
         return None
