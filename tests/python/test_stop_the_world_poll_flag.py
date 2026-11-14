@@ -85,3 +85,30 @@ def test_owner_polls_fast_while_the_world_stays_stopped(tmp_path: Path, backend:
                          text=True, timeout=60)
     assert run.returncode == 0, f"GC{backend}: {run.returncode} {run.stderr[-2000:]}"
     assert run.stdout == "poll-flag-ok\n"
+
+
+# A worker whose loop only allocates and releases: it has no explicit poll,
+# so a stop reaches it through the allocation path. pcc_gc_alloc skips its
+# explicit pcc_thread_safepoint call only for an idle registered GC0 thread;
+# the allocator's own entry poll must still park it.
+ALLOCATING_PROBE = PROBE.replace(
+    "        atomic_fetch_add(&progress, 1);\n        pcc_thread_safepoint();\n",
+    "        atomic_fetch_add(&progress, 1);\n"
+    "        PyObject *list = py_list_new(0);\n"
+    "        if (!list) abort();\n"
+    "        py_decref(list);\n",
+).replace("#include <unistd.h>\n", "#include <stdlib.h>\n#include <unistd.h>\n")
+
+
+@pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
+def test_allocating_worker_parks_for_every_stop(tmp_path: Path, backend: int):
+    assert ALLOCATING_PROBE != PROBE and "pcc_thread_safepoint();\n    }" not in ALLOCATING_PROBE
+    executable = _compile_runtime_probe(
+        tmp_path, kind="pcc_python", threaded=True,
+        stem="stop_the_world_allocating_worker", source_text=ALLOCATING_PROBE,
+    )
+    env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
+    run = subprocess.run([str(executable)], env=env, capture_output=True,
+                         text=True, timeout=60)
+    assert run.returncode == 0, f"GC{backend}: {run.returncode} {run.stderr[-2000:]}"
+    assert run.stdout == "poll-flag-ok\n"
