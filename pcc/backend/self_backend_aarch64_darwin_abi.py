@@ -291,14 +291,17 @@ def reg_name_indexed(
 
 
 def stack_arg_storage_size_indexed(
-    kernel: IndexedFunctionKernel, type_id: int
+    kernel: IndexedFunctionKernel, type_id: int, linux: bool = False,
 ) -> int:
     if aggregate_passed_indirect_indexed(kernel, type_id):
         return 8
     kind_id = kernel.type_kind_id(type_id)
     if kind_id == TYPE_KIND_ARRAY or kind_id == TYPE_KIND_STRUCT:
+        if not linux and _indexed_hfa_code(kernel, type_id):
+            return kernel.type_slot_size(type_id)
         return _align_to(kernel.type_slot_size(type_id), 8)
-    return max(8, kernel.type_slot_size(type_id))
+    size = kernel.type_slot_size(type_id)
+    return max(8, size) if linux else size
 
 
 def variadic_stack_arg_storage_size_indexed(
@@ -310,12 +313,17 @@ def variadic_stack_arg_storage_size_indexed(
     return max(8, kernel.type_slot_size(type_id))
 
 
-def stack_arg_storage_size(arg_type: TypeDesc) -> int:
+def stack_arg_storage_size(arg_type: TypeDesc, linux: bool = False) -> int:
+    # Apple fixed scalars/HFAs occupy their natural size. Ordinary composite
+    # arguments still use rounded GPR chunks; indirect arguments are pointers.
+    # https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms
     if aggregate_passed_indirect(arg_type):
         return 8
     if arg_type.is_array or arg_type.is_struct:
+        if not linux and aggregate_hfa_members(arg_type):
+            return arg_type.slot_size
         return _align_to(arg_type.slot_size, 8)
-    return max(8, arg_type.slot_size)
+    return max(8, arg_type.slot_size) if linux else arg_type.slot_size
 
 
 def variadic_stack_arg_storage_size(arg_type: TypeDesc) -> int:
@@ -324,16 +332,27 @@ def variadic_stack_arg_storage_size(arg_type: TypeDesc) -> int:
     return max(8, arg_type.slot_size)
 
 
-def stack_arg_alignment(arg_type: TypeDesc) -> int:
+def stack_arg_alignment(arg_type: TypeDesc, linux: bool = False) -> int:
     # An indirect aggregate has already become a pointer at AAPCS64 stage B.
-    return 8 if aggregate_passed_indirect(arg_type) else max(8, min(16, arg_type.align))
+    if aggregate_passed_indirect(arg_type):
+        return 8
+    alignment = min(16, arg_type.align)
+    if linux or ((arg_type.is_array or arg_type.is_struct) and not aggregate_hfa_members(arg_type)):
+        return max(8, alignment)
+    return alignment
 
 
-def stack_arg_alignment_indexed(kernel: IndexedFunctionKernel, type_id: int) -> int:
+def stack_arg_alignment_indexed(
+    kernel: IndexedFunctionKernel, type_id: int, linux: bool = False,
+) -> int:
     if aggregate_passed_indirect_indexed(kernel, type_id):
         return 8
     span: CompilerInt4 = kernel.type_span(type_id)
-    return max(8, min(16, span.fourth))
+    alignment = min(16, span.fourth)
+    kind_id = kernel.type_kind_id(type_id)
+    if linux or ((kind_id == TYPE_KIND_ARRAY or kind_id == TYPE_KIND_STRUCT) and not _indexed_hfa_code(kernel, type_id)):
+        return max(8, alignment)
+    return alignment
 
 
 def assign_abi_arg_layout(
@@ -392,7 +411,7 @@ def assign_abi_arg_layout(
     next_stack = 16
     for arg_type, offset in zip(arg_types, offsets):
         if offset is not None:
-            next_stack = offset + stack_arg_storage_size(arg_type)
+            next_stack = offset + stack_arg_storage_size(arg_type, linux=linux)
     return assignments, offsets, gpr_index, fpr_index, next_stack
 
 
@@ -412,8 +431,7 @@ def stack_arg_offsets(
         if arg_type.is_void or assigned_regs:
             offsets.append(None)
             continue
-        if linux:
-            next_offset = _align_to(next_offset, stack_arg_alignment(arg_type))
+        next_offset = _align_to(next_offset, stack_arg_alignment(arg_type, linux=linux))
         offsets.append(next_offset)
-        next_offset += stack_arg_storage_size(arg_type)
+        next_offset += stack_arg_storage_size(arg_type, linux=linux)
     return offsets

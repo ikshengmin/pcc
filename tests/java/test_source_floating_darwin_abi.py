@@ -194,3 +194,84 @@ def test_real_clang_caller_observes_tenth_java_float_on_darwin_arm64(tmp_path, m
     }, indent=2))
     assert reference == (0, EXPECTED_BYTES, b""), "independent clang ABI control failed"
     assert actual == reference, "PCC Java callee disagrees with the real external Apple ARM64 caller"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(unavailable=NATIVE_REASON)
+def test_owned_caller_passes_tenth_float_to_clang_on_darwin_arm64(tmp_path, monkeypatch):
+    """Reverse the shared ABI boundary: owned IR caller, real external callee.
+
+    This is a backend interoperability control, not additional Java acceptance.
+    The original Java source and external-caller regression above stay unchanged.
+    """
+    from pcc.backend.native_object import NativeObject
+    from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+
+    assert sys.platform == "darwin" and platform.machine().lower() == "arm64"
+    clang = Path(CLANG).resolve(strict=True)
+    values = ("0.25", "1.25", "2.25", "3.25", "4.25", "5.25", "6.25", "7.25",
+              "13.0", "42.0", "-91.0", "17.0")
+    signature = ", ".join(["float"] * 12)
+    source = ('target triple = "arm64-apple-darwin"\n'
+              + 'declare float @external_float(' + signature + ')\n'
+              + 'define float @bridge() {\nentry:\n  %result = call float @external_float('
+              + ", ".join("float " + value for value in values)
+              + ')\n  ret float %result\n}\n')
+    driver = '''#include <stdio.h>
+#include <string.h>
+extern float bridge(void);
+int main(void) {
+    float result = bridge();
+    unsigned char raw[sizeof(result)];
+    memcpy(raw, &result, sizeof(raw));
+    if (fwrite(raw, 1, sizeof(raw), stdout) != sizeof(raw)) return 111;
+    return fflush(stdout) == 0 ? 0 : 112;
+}
+'''
+    control = ('extern float external_float(' + signature + ');\n'
+               + 'float bridge(void) { return external_float('
+               + ", ".join(value + "f" for value in values) + '); }\n')
+    inputs = {"caller.ll": source, "driver.c": driver, "control.c": control,
+              "callee.c": C_REFERENCE_PROVIDER}
+    for name, content in inputs.items():
+        (tmp_path / name).write_text(content, encoding="utf-8")
+    identities = {name: digest(tmp_path / name) for name in inputs}
+    clang_identity = digest(clang)
+    with monkeypatch.context() as owned:
+        forbid_bytecode_or_external_owner(owned)
+        transport = emit_aarch64_darwin_indexed_transport(
+            parse_self_backend_module(source), optimize=False, structured_instructions=True,
+        )
+        assert transport.native_finalized and transport.fallback_instruction_count == 0
+        sections, undefined = transport.assemble_sections()
+        data = NativeObject.from_sections(sections, undefined=undefined).to_macho()
+    (tmp_path / "owned.o").write_bytes(data)
+    options = ("-arch", "arm64", "-std=c11", "-O0", "-fno-lto", "-fno-fast-math",
+               "-DJAVA_ENTRY=external_float")
+    for name in ("driver", "callee", "control"):
+        compiled = record_process((str(clang), *options, "-c", str(tmp_path / (name + ".c")),
+                                   "-o", str(tmp_path / (name + ".o"))), tmp_path, name + "-compile", 20)
+        assert compiled[0] == 0, compiled
+    artifacts = {name: digest(tmp_path / name) for name in ("driver.o", "callee.o", "control.o", "owned.o")}
+    results = {}
+    for name, caller in (("native", "owned.o"), ("reference", "control.o")):
+        executable = tmp_path / name
+        linked = record_process((str(clang), "-arch", "arm64", "-fno-lto",
+                                 str(tmp_path / "driver.o"), str(tmp_path / "callee.o"),
+                                 str(tmp_path / caller), "-o", str(executable)), tmp_path, name + "-link", 20)
+        assert linked[0] == 0, linked
+        results[name] = record_process((str(executable),), tmp_path, name + "-run", 5)
+    assert digest(clang) == clang_identity
+    assert identities == {name: digest(tmp_path / name) for name in inputs}
+    assert artifacts == {name: digest(tmp_path / name) for name in artifacts}
+    (tmp_path / "caller-comparison.json").write_text(json.dumps({
+        "target": TARGET, "owner": "host-pcc0/shared-owned-indexed-backend",
+        "external_owner": "clang-callee-link-and-control", "native_compiler_qualified": False,
+        "clang_sha256": clang_identity, "source_sha256": identities, "artifact_sha256": artifacts,
+        "expected_stdout_hex": EXPECTED_BYTES.hex(),
+        "results": {name: {"exit_code": result[0], "stdout_hex": result[1].hex(),
+                           "stderr_hex": result[2].hex()} for name, result in results.items()},
+    }, indent=2))
+    assert results["reference"] == (0, EXPECTED_BYTES, b""), "independent clang ABI control failed"
+    assert results["native"] == results["reference"], "owned caller disagrees with the external Apple ARM64 callee"
