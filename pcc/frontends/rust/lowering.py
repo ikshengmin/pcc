@@ -213,9 +213,10 @@ class Lowerer:
             self.temps[("range_end", id(expr))] = self.builder.alloca(bound, name="range.end")
             if expr.kind == "for_range_inclusive":
                 self.temps[("range_exhausted", id(expr))] = self.builder.alloca(ir.IntType(1), name="range.exhausted")
-        if expr.kind in {"match", "while_let"}:
+        if expr.kind in {"match", "while_let", "pattern_let"}:
             from .patterns import pattern_bindings
-            patterns = expr.value if expr.kind == "match" else (expr.value,)
+            patterns = (expr.value if expr.kind == "match" else (expr.value[0],) if expr.kind == "pattern_let"
+                        else (expr.value,))
             for pattern in patterns:
                 for binding in pattern_bindings(pattern):
                     self.allocate(binding)
@@ -378,6 +379,11 @@ class Lowerer:
             value = self.expression(children[0])
             if not self.builder.block.is_terminated and expr.binding.ty != "()":
                 self.builder.store(value, self.slots[expr.binding.serial])
+            return None
+        if kind == "pattern_let":
+            value = self.expression(children[0])
+            if not self.builder.block.is_terminated:
+                self.bind_pattern(expr.value[0], value)
             return None
         if kind == "call":
             args = []

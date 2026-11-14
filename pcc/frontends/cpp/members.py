@@ -65,10 +65,6 @@ def declare_member_function(definition, symbol, const=False, outside=False, stat
             return previous
     if outside:
         raise CppDiagnostic("cpp.no-matching-member", "definition does not match a declared member function", symbol.coord)
-    if group is not None and any(getattr(previous, "method_static", False) != static
-                                 for previous in group.overloads):
-        raise CppDiagnostic("cpp.unsupported.mixed-static-overloads",
-                            "mixed static/non-static overload sets require implicit-object ranking", symbol.coord)
     symbol.class_owner = definition.dtype
     symbol.method_const = const
     symbol.method_static = static
@@ -99,6 +95,7 @@ def select_member_overload(parser, group, object_expression, arguments, coord):
     for method in group.overloads:
         candidate = Symbol(method.name, "function", method.coord, dtype=method.dtype,
                            parameters=(object_pointer_type(method),) + method.parameters)
+        candidate.neutral_object = getattr(method, "method_static", False)
         candidate.variadic = method.variadic
         candidate.member_origin = method
         candidate.default_arguments = (None,) + tuple(getattr(method, "default_arguments", (None,) * len(method.parameters)))
@@ -109,8 +106,73 @@ def select_member_overload(parser, group, object_expression, arguments, coord):
                                 [arg.lvalue or arg.assignment_result for arg in actuals]).member_origin
 
 
+def is_mixed_group(group):
+    """Static and non-static overloads of one name ([over.match.funcs]/4)."""
+    return len({bool(getattr(method, "method_static", False)) for method in group.overloads}) == 2
+
+
+def require_nontemplate_mixed_call(parser, group, coord):
+    if is_mixed_group(group) and (getattr(parser, 'class_template_method', None) is not None
+                                  or getattr(parser, 'class_template_instance', None) is not None
+                                  or parser.template_function is not None or parser.instantiating_template):
+        raise CppDiagnostic("cpp.unsupported.mixed-static-overloads",
+                            "mixed static/non-static overload sets in templates require dependent implicit-object ranking",
+                            coord)
+
+
+def call_named_member(parser, group, arguments, coord, virtual_dispatch=True):
+    """`f(args)` / `C::f(args)` naming a member function without an object.
+
+    [over.call.func]/3: the implied object is (*this) when a member function
+    of C (or a class derived from it) is being defined, else a contrived
+    object of type C; selecting a non-static member without (*this) is
+    ill-formed."""
+    if is_static_group(group):
+        return call_static_member(parser, group, arguments, coord)
+    if not is_mixed_group(group):
+        return call_member(parser, group, parser._implicit_object(group.class_owner, coord), arguments, coord,
+                           virtual_dispatch=virtual_dispatch)
+    require_nontemplate_mixed_call(parser, group, coord)
+    try:
+        object_expression = parser._implicit_object(group.class_owner, coord)
+    except CppDiagnostic as error:
+        if error.code != "cpp.nonstatic-member-without-object":
+            raise
+        object_expression = None
+    from pcc.frontends.cpp.parser import Expression
+    contrived = object_expression or Expression(None, PointerType(group.class_owner))
+    selected = select_member_overload(parser, group, contrived,
+                                      [parser._decay_array(arg) for arg in arguments], coord)
+    if getattr(selected, "method_static", False):
+        return call_static_member(parser, single_overload(group, selected, coord), arguments, coord)
+    if object_expression is None:
+        raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
+    return call_member(parser, single_overload(group, selected, coord), object_expression, arguments, coord,
+                       virtual_dispatch=virtual_dispatch)
+
+
+def single_overload(group, selected, coord):
+    """The already-selected candidate as its own set, so the shared call
+    lowering re-selects exactly it."""
+    selected_group = Symbol(group.name, "function", coord)
+    selected_group.class_owner = group.class_owner
+    selected_group.access = group.access
+    selected_group.overloads = [selected]
+    return selected_group
+
+
 def call_member(parser, group, object_expression, arguments, coord, address_available=True,
                 virtual_dispatch=True):
+    require_nontemplate_mixed_call(parser, group, coord)
+    if is_mixed_group(group):
+        # x.f(args) / p->f(args): rank with the real object; a selected static
+        # member evaluates and discards the object expression ([expr.ref]).
+        selected = select_member_overload(parser, group, object_expression,
+                                          [parser._decay_array(arg) for arg in arguments], coord)
+        if getattr(selected, "method_static", False):
+            return call_static_member(parser, single_overload(group, selected, coord), arguments, coord,
+                                      object_expression.node)
+        group = single_overload(group, selected, coord)
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_call
         return pattern_call(parser, group, object_expression, arguments, coord, False, address_available)
@@ -167,6 +229,7 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     # [class.static.mfct]: no this parameter. [expr.ref]/[expr.call]: an
     # object-qualified postfix expression is still evaluated before arguments.
     from pcc.frontends.cpp.parser import Expression
+    require_nontemplate_mixed_call(parser, group, coord)
 
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_call

@@ -2501,6 +2501,20 @@
       "status": "missing"
     },
     {
+      "id": "rust.statements.let-tuple-patterns",
+      "title": "Tuple patterns in let statements",
+      "chapter_ids": [
+        "rust.ref.8.1"
+      ],
+      "scope": "Qualification missing, not implementation missing: `let (a, (b, mut c)): T = init;` binds through an irrefutable pattern of tuple, identifier and wildcard sub-patterns, checked like a match arm (shape, duplicate bindings) with its bindings in the enclosing block scope (shadowing allowed), moved from the initializer and stored by the match-arm binding lowering. `let mut (..)` is a syntax error; other pattern forms (which may be refutable) and let-else stay explicit gaps. A program runs on the local Mac from PCC's own compiler, arm64 assembler and Mach-O linker and prints the same u64 as a local rustc 1.92.0 build; the Linux run is unrun. fallible-streaming-iterator's parser frontier moves from lib.rs:836:13 to 841:21 (a match guard). No schema2 evidence row is migrated.",
+      "tests": [
+        "tests/rust/test_rust_let_patterns.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.attributes.builtin-derives",
       "title": "Built-in derives: Copy, Clone, PartialEq and declared Eq/PartialOrd/Ord/Hash/Debug/Default",
       "chapter_ids": [

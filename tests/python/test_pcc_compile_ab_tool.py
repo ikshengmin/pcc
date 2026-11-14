@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 import time
 
@@ -330,6 +331,22 @@ def test_time_parser_uses_labels_not_line_positions():
             "1 maximum resident set size\n1 instructions retired\n"
             "1 cycles elapsed\n1 peak memory footprint\n"
         )
+
+
+@pytest.mark.parametrize("metric,label", [
+    ("instructions", "instructions retired"),
+    ("cycles", "cycles elapsed"),
+    ("peak_footprint_bytes", "peak memory footprint"),
+])
+def test_time_parser_rejects_unavailable_counters(metric, label):
+    tool = _load_tool()
+    complete = (
+        "real 1.0\nuser 0.8\nsys 0.1\n"
+        "100 maximum resident set size\n100 instructions retired\n"
+        "100 cycles elapsed\n100 peak memory footprint\n"
+    )
+    with pytest.raises(tool.CompileABError, match=f"expected one {metric}, found 0"):
+        tool.parse_time_output(complete.replace(f"100 {label}\n", ""))
 
 
 def test_measurement_environment_drops_ambient_pcc_state(monkeypatch, tmp_path):
@@ -1475,6 +1492,55 @@ def test_runtime_bundle_can_verify_against_an_isolated_source_root(
     assert Path(bundle["archive"]).read_bytes() == b"frozen runtime"
 
 
+def _write_protocol_timer(tmp_path):
+    """Keep real child execution, but supply explicitly synthetic test metrics.
+
+    These manifest tests already use fake compilers and runtime receipts. A
+    hosted Darwin VM need not expose hardware counters to test that protocol.
+    Production timing and its fail-closed parser are not replaced there.
+    """
+    timer = tmp_path / "fixture-time"
+    timer.write_text(
+        "#!/usr/bin/env python3\n"
+        "import subprocess\n"
+        "import sys\n"
+        "from pathlib import Path\n"
+        "assert sys.argv[1:3] == ['-lp', '-o']\n"
+        "result = subprocess.run(sys.argv[4:], check=False)\n"
+        "Path(sys.argv[3]).write_text(\n"
+        "    'real 1.0\\nuser 0.8\\nsys 0.1\\n'\n"
+        "    '100 maximum resident set size\\n100 instructions retired\\n'\n"
+        "    '100 cycles elapsed\\n100 peak memory footprint\\n',\n"
+        "    encoding='utf-8',\n"
+        ")\n"
+        "raise SystemExit(result.returncode)\n",
+        encoding="utf-8",
+    )
+    timer.chmod(0o755)
+    return timer
+
+
+@pytest.mark.parametrize("returncode", [0, 7])
+def test_protocol_timer_preserves_real_child_output_and_status(tmp_path, returncode):
+    timer = _write_protocol_timer(tmp_path)
+    metrics = tmp_path / "fixture.time"
+    result = subprocess.run(
+        [sys.executable, str(timer), "-lp", "-o", str(metrics),
+         sys.executable, "-c",
+         "import sys; print('child stdout'); print('child stderr', file=sys.stderr); "
+         f"raise SystemExit({returncode})"],
+        text=True, capture_output=True, timeout=10,
+    )
+    assert result.returncode == returncode
+    assert result.stdout == "child stdout\n"
+    assert result.stderr == "child stderr\n"
+    assert _load_tool().parse_time_output(metrics.read_text(encoding="utf-8")) == {
+        "wall_s": 1.0, "user_s": 0.8, "system_s": 0.1, "cpu_s": 0.9,
+        "max_rss_bytes": 100, "instructions": 100, "cycles": 100,
+        "peak_footprint_bytes": 100,
+    }
+
+
 def test_runner_writes_complete_manifest_for_four_matched_pairs(tmp_path, monkeypatch):
     _assert_runner_manifest_for_source(tmp_path, monkeypatch, "pcc/ir/ir.py")
 
@@ -1491,10 +1557,7 @@ def _assert_runner_manifest_for_source(
 ):
     tool = _load_tool()
     real_linkage = tool._linkage
-    if unchanged_control:
-        fake_time = tmp_path / "fake-time"
-        fake_time.write_text("protocol fixture", encoding="utf-8")
-        monkeypatch.setattr(tool, "TIME_BINARY", fake_time)
+    monkeypatch.setattr(tool, "TIME_BINARY", _write_protocol_timer(tmp_path))
     monkeypatch.setattr(tool, "REPO_ROOT", tmp_path)
     monkeypatch.setattr(
         tool,

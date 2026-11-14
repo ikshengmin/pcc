@@ -92,8 +92,7 @@ INVALID_STATIC_CASES = (
 
 DEFERRED_STATIC_CASES = (
     # Original static data member row moved verbatim to test_cpp_static_data_members.
-    ('struct S{static int f(int);int f(long);};', 'cpp.unsupported.mixed-static-overloads'),
-    ('struct S{int f(int);static int f(long);};', 'cpp.unsupported.mixed-static-overloads'),
+    # The two mixed static/non-static rows moved to test_cpp_mixed_static_overloads.
     ('struct S{static int f();};template<class T>int run(T n){return S::f();}', 'cpp.unsupported.member-templates'),
 )
 

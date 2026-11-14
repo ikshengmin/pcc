@@ -2831,11 +2831,9 @@ class CppParser:
                         break
                     self._expect(",")
             if getattr(symbol, "class_owner", None) is not None:
-                from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
-                if is_static_group(symbol):
-                    return call_static_member(self, symbol, arguments, token.coord)
-                return call_member(self, symbol, self._implicit_object(symbol.class_owner, token.coord), arguments, token.coord,
-                                   virtual_dispatch=not name.global_scope and len(name.parts) == 1)
+                from pcc.frontends.cpp.members import call_named_member
+                return call_named_member(self, symbol, arguments, token.coord,
+                                         virtual_dispatch=not name.global_scope and len(name.parts) == 1)
             unqualified_call = not name.global_scope and len(name.parts) == 1
             if unqualified_call:
                 if (getattr(self, 'class_template_method', None) is not None

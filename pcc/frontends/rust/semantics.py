@@ -239,6 +239,37 @@ class Checker:
             raise token.error("struct literal syntax for tuple or unit variants is not implemented")
         return owner, enum, variant
 
+    def pattern_let(self, expr, init):
+        """`let PATTERN (: T)? = init;` for tuple, binding and wildcard patterns.
+
+        These are irrefutable for every type they check against. The bindings
+        go into the enclosing block scope (and may shadow earlier locals), but
+        a name may occur once in the pattern (E0416)."""
+        from .patterns import check_pattern
+        pattern, annotation = expr.value
+        pending = [pattern]
+        while pending:
+            item = pending.pop()
+            if item.kind not in {"tuple", "binding", "wildcard", "unit"}:
+                raise item.token.error("let patterns other than tuple, binding and wildcard patterns require "
+                                       "irrefutability checking, which is not implemented")
+            pending.extend(item.children)
+        init_ty = self.expression(init)
+        if init_ty == NEVER:
+            raise expr.token.error("diverging let initializers are not implemented")
+        if annotation is not None:
+            annotation = self.generics.normalize(annotation, expr.token, placeholder_context="local")
+            self.valid_type(annotation, expr.token)
+            unify(annotation, init_ty, expr.token)
+            from .call_inference import partial
+            init_ty = partial(annotation)
+        self.scopes.append({})
+        try:
+            check_pattern(self, pattern, init_ty)
+        finally:
+            bound = self.scopes.pop()
+        self.scopes[-1].update(bound)
+
     def tuple_struct_construction(self, expr, callee, record, path, children):
         """`S(a, b)` / `S::<T>(a)`: the tuple struct's constructor, checked and
         lowered as the struct expression `S { 0: a, 1: b }` it is equivalent to
@@ -697,6 +728,9 @@ class Checker:
             expr.value = enum.discriminants[variant]
             expr.binding = variant
             ty = enum_name
+        elif kind == "pattern_let":
+            ty = "()"
+            self.pattern_let(expr, children[0])
         elif kind in {"unit", "let", "wildcard_let", "discard", "statement"}:
             ty = "()"
             if kind in {"let", "wildcard_let"}:
@@ -1213,6 +1247,9 @@ class Checker:
             expr.binding.ty = resolve(expr.binding.ty)
             if expr.kind == "let":
                 self.standard_markers.require_sized(expr.binding.ty, expr.token)
+        if expr.kind == "pattern_let":
+            from .patterns import validate_pattern
+            validate_pattern(self, expr.value[0])
         kind, op = expr.kind, expr.value
         if kind == "call":
             # Bodyless required signatures may mention unsized Self or an

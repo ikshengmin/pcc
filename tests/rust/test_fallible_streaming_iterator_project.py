@@ -255,8 +255,10 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
     # Formerly 367:16, the bound Iterator<Item = Result<&'a T, E>> of
     # `convert`, then 373:28, the outlives bound `T: 'a` of `struct Convert`;
     # then 427:23, the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`
-    # (tests/rust/test_rust_tuple_structs.py); now line 836.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: 836:13: expected an identifier$"):
+    # (tests/rust/test_rust_tuple_structs.py), then 836:13, the tuple pattern
+    # `let (lower, upper) = ...` (tests/rust/test_rust_let_patterns.py); now
+    # the match guard `Some(x) if x < self.n => ...`.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: 841:21: match guards require additional effect and binding analysis, which is not implemented$"):
         parser.parse()
     # The trait impls before it, including both for Convert and Empty, were retained.
     assert [str(item.owner) for item in parser.implementations if item.trait][:5] == [
