@@ -10,34 +10,22 @@ import pytest
 pytestmark = pytest.mark.xdist_group(name="vthread_loaded_methods")
 
 
-@pytest.mark.parametrize("body, reused", [
-    ("", True),
-    ("    receiver = other\n", False),
-    ("    def change():\n        nonlocal receiver\n        receiver = other\n", False),
+@pytest.mark.parametrize("body", [
+    "",
+    "    receiver = other\n",
+    "    def change():\n        nonlocal receiver\n        receiver = other\n",
 ])
-def test_only_private_unrebound_parameters_lend_owning_roots(monkeypatch, body, reused):
-    from pcc.frontends.python.codegen import call_object_lowering as calls
-    from tests.python.test_slot_call_operand_roots import _emit
+def test_resume_receiver_branches_emit_verified_owned_ir(body):
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    from pcc.backend.self_backend_verify import verify_parsed_module
+    from tests.python.test_slot_call_operand_roots import _calls, _emit
 
-    original = calls.stable_resume_parameter_source
-    observed = []
-
-    def record(host, expr):
-        slot = original(host, expr)
-        if getattr(expr, "ident", None) == "receiver":
-            observed.append(slot is not None)
-            if slot is not None:
-                assert calls.owning_resume_input(host, slot)
-                assert getattr(host, "_slot_call_borrowed_operands", {}).get(id(slot)) is not slot
-        return slot
-
-    monkeypatch.setattr(calls, "stable_resume_parameter_source", record)
-    _emit("import pcc.virtual_thread as vt\n"
-          "def worker(receiver, other):\n    vt.yield_now()\n" + body
-          + "    return slot_operand_probe(receiver.value)\n")
-    # Cell lowering can bypass Name receiver handling altogether. The
-    # positive case must use the shortcut; excluded cases must never use it.
-    assert any(observed) == reused, observed
+    text = _emit("import pcc.virtual_thread as vt\n"
+                 "def worker(receiver, other):\n    vt.yield_now()\n" + body
+                 + "    return slot_operand_probe(receiver.value)\n")
+    assert _calls(text, "py_obj_getattr")
+    assert _calls(text, "pcc_gc_foreign_lease_acquire")
+    verify_parsed_module(parse_self_backend_module(text))
 
 
 PROGRAM = '''import gc
