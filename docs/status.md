@@ -7,6 +7,29 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Five collectors: finalizers with the world running; identities open (local Mac, 2026-11-15)
+
+Source `4de52048c`. Collectors ran `__del__` and weak callbacks inside the
+stopped world, so a finalizer waiting for a lock a parked thread held hung
+every thread; `4de52048c` runs that user code with the world resumed, as
+CPython's free-threaded collector does.
+`tests/python/test_gc_finalizers_run_with_world_running.py` reproduces it
+(four threads rebinding fields, `__init__`/`__del__` sharing a lock):
+before the change all five collectors hung; after it GC1-GC4 match CPython
+(local Mac). GC0's half of the change was committed before its native run
+finished; run that test's GC0 node first.
+
+The current collector architecture, the approved per-collector design, the
+remaining steps in order (GC3 generations, GC4 phase 2, GC1 incremental, GC2
+pacer), the open defects and the measuring procedure are in
+`docs/architecture/04-runtime-and-gc.md` ("Garbage collection: current
+architecture"). GC1, GC2 and GC3 are still one collector; none of the
+per-collector steps is started.
+
+```bash
+PCC_NO_AUTO_PCC1=1 uv run --no-sync pytest -x -v -n0 tests/python/test_gc_finalizers_run_with_world_running.py
+```
+
 ## Source-platform CI coverage (execution pending)
 
 The Stage1 strict receipt reader now admits its producer's known memory-budget

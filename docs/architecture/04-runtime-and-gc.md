@@ -1,6 +1,6 @@
 # 04 · Runtime Object Model & GC
 
-The runtime is what pcc-compiled Python links against. It lives twice: a C implementation under `pcc/runtime/src/*.c`, and a **pcc-Python mirror** under `pcc/runtime/py/*.py` that pcc compiles itself (this is what makes the runtime part of the self-host story). The two must stay in sync.
+The runtime is what pcc-compiled Python links against. It is written in pcc-Python under `pcc/runtime/py/*.py` and compiled by pcc itself into `libpy_runtime_pcc_py.a` (this is what makes the runtime part of the self-host story). The C implementation was removed; `pcc/runtime/src/` keeps only a few headers, and `py_libpython.c` remains as the cpython-compat bridge. Modules named `freestanding_*` (collectors, allocator, threads) use no Python object model of their own and export every function through `@c_abi_export`. The object-header and class-layout notes below still cite the historical C headers.
 
 ## Object header (every heap object)
 
@@ -54,74 +54,215 @@ sequenceDiagram
 - `py_raise()` `py_exc_tls.c:114` (normalizes, sets `__context__` chaining, stores in TLS); `py_err_occurred()` `:152`; `py_current_exception()` `:157`; `py_clear_exception()` `:162`.
 - `PyExceptionObject` carries `exc_class`, `message`, `cause`, `context`, growable `traceback` (`py_internal.h:720`). Builtin exception tags at `py_runtime.h:51` (`VALUEERROR=2, TYPEERROR=3, KEYERROR=4, …`).
 
-## Refcount + GC barriers
+## Garbage collection: current architecture
 
-Slots that hold object pointers must be read/written through barriers, not raw `obj->slot = x`. This is what lets moving/generational backends relocate safely.
+Verified against source at `4de52048c` (2026-11-15). Function and file names
+are the authority; re-check them before relying on a line here.
 
-- `pcc_gc_load_ptr(owner, slot)` (`py_runtime.h:107`) — read barrier (returns relocated ptr for #3/#4).
-- `pcc_gc_store_ptr(owner, slot, value)` (`:108`) — write barrier (cross-generation / cross-thread notify).
-- `pcc_gc_store_root(slot, value)` (`:109`) — store to a global/static root.
-- Refcount kinds (`py_runtime.h:395`): `NONATOMIC` (default), `ATOMIC`, `BIASED`, `DEFERRED`. Atomic only under `PCC_WITH_THREADS=1`.
+### Selection
 
-## The five GC backends
+`PCC_GC_BACKEND=0..4` is read once and fixed for the process
+(`pcc_gc_fix_backend`, `pcc/runtime/py/py_gc_backend.py`); nothing switches
+`pcc_gc_backend_selected` afterwards. Every backend other than 0 sets
+`pcc_gc_backend4_no_refcounts=1`, so GC1-GC4 run one shared count-free
+protocol and differ only where a section below says so. Each collector's
+reference implementation is kept under `docs/refs_docs/`
+(`cpython_gc.c`, `lua_lgc.c`, `lua_manual_5.4.html`, `go_mgc.go.html`,
+`go_gc_guide.html`, `openjdk_jep439_zgc.html`, and `gc-research/`).
 
-Selected at runtime by `PCC_GC_BACKEND` (0..4, read in `py_gc_backend.c:447`; default 0 hardcoded `:21`). Each slot mirrors a **real reference implementation** kept in-tree under `docs/refs_docs/gc-research/<lang>/` — the port is meant to be read alongside the upstream, not re-derived.
+### Barriers and stores
 
-```mermaid
-flowchart LR
-    ENV["PCC_GC_BACKEND=0..4"] --> SEL["pcc_gc_selected_backend"]
-    SEL --> B0["#0 refcount + STW cycle<br/>CPython · DEFAULT"]
-    SEL --> B1["#1 incremental tricolor<br/>Lua 5.4"]
-    SEL --> B2["#2 concurrent mark-sweep<br/>Go"]
-    SEL --> B3["#3 generational<br/>OCaml"]
-    SEL --> B4["#4 colored relocating<br/>ZGC"]
-    B1 -.needs.-> WB["write barriers"]
-    B2 -.needs.-> WB
-    B3 -.needs.-> WB
-    B4 -.needs.-> RB["read + write barriers"]
+- `pcc_gc_load_ptr(owner, slot)` reads a slot (GC4 resolves forwarded
+  objects through `pcc_gc_note_relocation_read`).
+- `pcc_gc_store_ptr` / `pcc_gc_store_field_ptr` (instance fields) write a
+  slot: GC0 counts the new and old values; GC1-GC4 shade for the marker. GC0
+  stores take inline atomic owner fast paths (`_gc0_owner_fast_path` in
+  `py_obj.py`); fields and containers take their own container lock when
+  `pcc_gc_list_container_mode` is set, the graph lock otherwise.
+- `pcc_gc_store_root` writes a root slot (frame, global, temporary root).
+
+### GC0: reference counting and a cycle collector (CPython)
+
+- Atomic reference counts (`pcc_gc_refcount_atomic`, set for backend 0
+  without the provenance probe). A count reaching zero runs `__del__` and
+  frees at once, on the releasing thread.
+- Cycle collector `_collect` in `freestanding_gc_backend0_collector.py`:
+  stop the world, take the default table lock, compute each tracked node's
+  count minus its internal edges, mark from the positive ones and the
+  runtime roots; the rest is the unreachable batch. Each batch member is
+  held (one reference, `_COLLECTOR_HELD`, discounted by both recomputes);
+  weak links are cleared and callbacks queued
+  (`py_weakref_queue_gc0_candidates`); if any callback or finalizer must run
+  (`py_user_del_pending`), the table lock and the world are released while
+  they run, then the world stops again and reachability is recomputed
+  (resurrection). Refs without callbacks are cleared late
+  (`py_weakref_clear_gc0_candidates`), referents are cleared, members are
+  freed, and survivors drop their hold after the world resumes.
+  `py_gc_collecting` keeps other GC0 collections out meanwhile.
+
+### GC1-GC4: the shared count-free protocol
+
+1. **Allocation.** Object cells come from 64 KiB allocator object slabs
+   with size classes and per-thread magazines (`freestanding_allocator.py`).
+   A slab with registered cells has a record array (a cell's GC node is its
+   slab record) and a GC page with two mark bitmaps, one bit per cell,
+   alternating per mark (`freestanding_gc_page_marks.py`). Registration is
+   staged in per-thread rings outside the graph lock
+   (`freestanding_gc_alloc_stage.py`). Raw, large and static objects have no
+   page and keep their colour in the object header.
+2. **Marking.** A background collector thread
+   (`pcc_gc_maybe_start_cms_worker`, started for every backend 1-4) drains
+   the gray worklist (`freestanding_gc_gray_worklist.py`,
+   `docs/gc-gray-worklist.md`). Mutators shade through barriers and assist
+   when their allocation debt outruns the marker; pacing is Lua-style
+   `pause` / `stepmul` over the last mark's live bytes
+   (`freestanding_gc_incremental_concurrent_scheduler.py`).
+3. **Roots.** Precise stack maps of compiled frames
+   (`freestanding_gc_mapped_roots.py`), registered frames and root slots
+   (`freestanding_gc_frame_registry.py`, `freestanding_gc_root_registry.py`),
+   conservative words of every thread's stack snapshot
+   (`freestanding_gc_conservative_roots.py`; snapshots in
+   `freestanding_thread_kernel_pthread.py::_thread_snapshot_roots`), and
+   runtime globals.
+4. **Finish** (`pcc_gc_finish_tracing_cycle`,
+   `freestanding_gc_common_mark_cycle.py`, stopped world): final remark;
+   every unmarked object gets the sweep-candidate flag (`1024`), and on
+   GC1-GC3 the finish seals a candidate list
+   (`pcc_gc_tracing_candidates_reset/note/seal/retire`) that the sweep visits
+   instead of every object.
+5. **Sweep** (`pcc_gc_tracing_sweep_unreachable`,
+   `freestanding_gc_tracing_sweep_collector.py`, called by
+   `pcc_gc_collect_tracing` in a stopped world):
+   - recheck reachability when the finish happened in an earlier stop;
+   - clear weak links to candidates and queue their callbacks
+     (`py_weakref_queue_tracing_candidates`); run the callbacks with the
+     world resumed, stop again, recheck;
+   - select PASS0 targets, the candidates whose finalizer runs user code
+     (`py_user_del_pending`: `__del__`, a suspended generator's close), and
+     run them with the world resumed;
+   - stop again: recheck (resurrection), clear refs without callbacks late
+     (CPython 3.15 order: callback refs die before finalizers, plain refs
+     survive them), PASS1 clears referents (count-free: nothing released),
+     PASS2 frees. Plain dead objects may be left to the collector thread
+     (`pcc_gc_concurrent_sweep_slice`; `docs/gc-deferred-free.md`,
+     `docs/gc-scalar-sweep-retirement.md`).
+   While the world runs user code, `pcc_gc_explicit_collect_active` stays
+   set: `gc.collect()`, automatic collections and GC4 steps stand aside, and
+   the scheduler begins no mark unless its caller holds the stopped world.
+6. **Stopping the world.** `pcc_stop_the_world` / `pcc_resume_world` nest
+   by depth; each outermost stop takes a new epoch
+   (`pcc_thread_world_stop_epoch_held`). Compiled code polls
+   `pcc_thread_stop_requested` and `pcc_gc_gray_worklist_flush_requested`
+   with a plain (monotonic) load; the slow path acquires. Threads blocked in
+   the kernel publish a stack snapshot and count as parked.
+   `pcc_thread_world_release_held` / `pcc_thread_world_reacquire_held`
+   resume a held world at every depth and restore it, for user code.
+7. **GC4 relocation.** In a stopped world GC4 selects object slabs by live
+   density (`freestanding_gc_relocation_selector.py`, page live bytes),
+   copies their cells into fresh slabs (`freestanding_gc_relocation_copy.py`,
+   `freestanding_gc_relocation_drain.py`), records forwarding
+   (`freestanding_gc_forwarding_identity.py`) and rewrites every reference
+   before the world resumes (`pcc_gc_relocation_settle_stopped`).
+
+### The five collectors today, against the approved design
+
+The design approved on 2026-11-12 gives each collector one capability over
+the shared protocol. Only the shared layer and GC4's first evacuation phase
+exist:
+
+| Collector | Approved reference design | Today |
+|---|---|---|
+| GC0 | CPython refcount + cycle collector | as designed |
+| GC1 | Lua 5.4 incremental (manual 2.5.1): mutator-paced steps, **no** collector thread | shared protocol, with the background marker thread |
+| GC2 | Go: background mark workers, mutator assists, heap-goal pacer | shared protocol; no pacer or assists of its own |
+| GC3 | Lua 5.4 generational (manual 2.5.2; `lua_lgc.c` ages `G_NEW` -> `G_SURVIVAL` -> `G_OLD1` -> `G_OLD`, `G_TOUCHED1/2`): non-moving, minor collections, occasional major | shared protocol; no young generation (`pcc_gc_backend3_young_link_head` has no caller; `36d5c85bc` removed the unreachable young machinery) |
+| GC4 | Generational ZGC (JEP 439): GC3's generations, young slab evacuation, dense slabs aged in place, old relocation by density | shared protocol + stopped-world slab evacuation (`f4ce17764`, `6bda7e915`); `PAGE_GENERATION` exists but nothing sets it |
+
+### Remaining work, in order
+
+Each step is test-first, runs native programs against CPython on all five
+collectors, measures with a five-pair `pcc_perf.py` A/B against an
+unchanged control, and is its own commit. Four workers must never be slower
+than one, for every collector.
+
+1. **GC3 generations.** Mark new cells young (page bit or header age bits);
+   a minor collection marks from the roots and the touched old objects only,
+   sweeps young cells, and ages survivors (`G_SURVIVAL`, `G_OLD1`, `G_OLD`).
+   A barrier on old-to-young stores marks the old object touched (Lua's back
+   barrier). A major collection runs when old growth exceeds the
+   `genmajormul` share. Acceptance: young objects die in minor collections
+   without a full mark (count the objects a minor visits), all five-GC
+   finalizer/weakref suites unchanged.
+2. **GC4 phase 2.** Set `PAGE_GENERATION` (slabs age by survived
+   collections); evacuate young slabs in each minor; age dense slabs in
+   place; relocate old slabs by density in majors; record old-to-young
+   stores (store buffer) for the minor's roots.
+3. **GC1 incremental.** Start no collector thread for backend 1; drive the
+   mark from allocation debt in bounded mutator steps (pause / stepmul) and
+   finish and sweep on the stopping mutator. Acceptance: no collector thread
+   exists under GC1.
+4. **GC2 pacer.** Give GC2 its own heap-goal pacer (next goal = live x
+   (1 + GOGC/100)), background workers sized as a fraction of the cores, and
+   assists proportional to allocation against the goal.
+
+### Known open defects (2026-11-14/15)
+
+- The stopped world's owner snapshots its own stack from its current frame,
+  so the collector's own frames (sweep, recheck, mark) are scanned
+  conservatively; a stale candidate address there keeps the candidate
+  alive (`tests/python/test_gc_tracing_sweep_verdict_native.py`
+  `partial-budget-finalizer-once`, rc 142; layout dependent since
+  `cfa9366c2`). Fix: capture the registers at the collection's entry and
+  scan the owner from there (as Boehm GC does); cutting the stack without
+  the registers loses callee-saved pointers.
+- `gc.collect()` on GC1-GC4 counts non-cyclic garbage
+  (`gc-start-callback`, rc 143: 5 instead of CPython's 0).
+- GC1-GC4 do not finalize at once what CPython's reference counting frees
+  at once: `test_vthread_callback_exception_disposal`,
+  `test_exact_int_attr_receiver_release` (GC1 `392 9`),
+  `test_slot_call_min_max_producers` five-GC case.
+- `test_gc4_field_direct_store::test_field_direct_store_keeps_scalar_ir_and_opaque_plan`
+  expects the StorePlan commit inlined into `pcc_gc_store_field_ptr`.
+
+### Measuring
+
+All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is
+the manual); arms, caches and the ledger live under `PCC_PERF_HOME`, outside
+the repository. Measure only with no build or test running, on an idle
+machine.
+
+```bash
+export PCC_PERF_HOME=<outside the repo>
+uv run --no-sync python scripts/pcc_perf.py arm A            # seal HEAD, build, check every primitive on 5 GCs
+uv run --no-sync python scripts/pcc_perf.py arm B --with <changed path>   # HEAD + working-tree files
+uv run --no-sync python scripts/pcc_perf.py prim B --against A --pairs 5  # per-primitive change; * = all pairs agree, |d| >= 3%
+uv run --no-sync python scripts/pcc_perf.py ab A B --pairs 5             # request A/B with an unchanged control collector
+uv run --no-sync python scripts/pcc_perf.py table A                      # every collector, 1 and 4 workers, vs GC0 and asyncio
 ```
 
-| # | Algorithm | Reference | Status |
-|---|---|---|---|
-| **0** | refcount + stop-the-world cycle | CPython | **production / default**; broadest coverage; rollback reference |
-| 1 | incremental tricolor mark-sweep | Lua 5.4 | selectable & gated |
-| 2 | concurrent mark-sweep | Go | selectable & gated (threaded subset) |
-| 3 | generational young/old | OCaml | selectable & production-facing on focused gates |
-| 4 | colored relocating (GenZGC-style) | ZGC | selectable; forwarding/read barriers, relocation |
-
-Backend #0 is the reference: a new backend must never regress it. Cycle collection (`py_obj_gc.c::py_gc_collect`) runs on `gc.collect()`; thresholds exist for `gc.get/set_threshold` API compatibility but are **not yet wired to auto-trigger** allocation-debt collection.
-
-Implementation: `py_obj.c:256` dispatches stores on `pcc_gc_backend()`; backend #1–#4 logic in `py_gc_backend.c`; telemetry in `py_gc_telemetry.c`.
-
-## Threading
-
-Built with `PCC_WITH_THREADS=1`, refcounts use `__atomic_*` (`ldaddal` on aarch64) instead of a GIL, so compiled Python runs on multiple cores. Lock/Event/Condition/Thread back onto `pthread_*` (`py_threading.c`). A behavior-oriented-concurrency helper (`pcc/stdlib/boc.py`) provides cowns + canonical lock ordering (deadlock-free by construction).
-
-## C ⇄ pcc-Python mirror & the runtime archives
-
-```mermaid
-flowchart TD
-    SRC["src/*.c (C impl)"] -->|cc| LIBC["libpy_runtime.a"]
-    SRC -->|pcc compiles C| LIBPCC["libpy_runtime_pcc.a"]
-    PY["py/*.py (pcc-Python mirror)<br/>@c_abi_export"] -->|pcc → IR → obj| LIBPY["libpy_runtime_pcc_py.a<br/>(+ C-only OBJ_PY_CC_HELPERS)"]
-    LIBPY -->|drop py_capi_shim.o, add py_libpython.o| LIBLP["libpy_runtime_pcc_py_libpython.a<br/>(cpython-compat)"]
-```
-
-- The Makefile's `PY_MODULES` list (`Makefile:61`) names the modules now authored in pcc-Python (`py_obj`, `py_dict`, `py_list`, `py_str`, `py_class`, `py_obj_gc`, `py_gc_backend`, exceptions, ints, …); the rest stay C-only helpers (`OBJ_PY_CC_HELPERS`).
-- The **default** no-libpython build links the pcc-Python ports (`libpy_runtime_pcc_py.a`). A runtime fix in a C source that has a `py/` mirror only takes effect once the mirror is updated too.
-- The `_libpython` variant drops `py_capi_shim.o` (so real libpython's C-API wins) and adds `py_libpython.o` — this is the `cpython-compat` path used to import real CPython C-extensions.
+`arms/<name>/native_stats prim <op> 200 2000 4` with
+`PCC_GC_BACKEND=<n>` prints the collector telemetry (stopped-world count
+and time, sweep pass nodes and time, recheck calls). Before attributing a
+change, confirm it changes the measured code (diff the emitted IR or the
+archive's `__text`). HTTP throughput uses the gateway's own client:
+`../pcc-gateway/benchmark_native.py 100 0 100 --summary`, one binary, the
+collector chosen by `PCC_GC_BACKEND`; CPython asyncio on the same workload
+is the target (about 87,000-90,000 requests/s on the reference Mac).
 
 ## Key files
 
 | Path | Role |
 |---|---|
-| `pcc/runtime/include/py_runtime.h` | public header: object header, type tags, GC ABI, refcount/GC kinds |
-| `pcc/runtime/src/py_internal.h` | internal layouts (`PyClassObject`, `PyExceptionObject`, flag macros) |
-| `pcc/runtime/src/py_obj.c` | refcount, store-barrier dispatch, dealloc trigger |
-| `pcc/runtime/src/py_obj_gc.c` | refcount + cycle collector (backend #0) |
-| `pcc/runtime/src/py_gc_backend.c` | backend selector + backends #1–#4 |
-| `pcc/runtime/src/py_exc_tls.c` | `py_raise` / `py_err_occurred` / TLS |
-| `pcc/runtime/src/py_class.c` | class object, C3 MRO, method/field lookup |
-| `pcc/runtime/py/*.py` | pcc-Python mirror (must match the C layouts) |
-| `pcc/runtime/Makefile` | builds the 4–5 archive variants |
-| `docs/refs_docs/gc-research/<lang>/` | upstream reference impls for each GC backend |
+| `pcc/runtime/py/py_gc_backend.py` | collector selection and configuration |
+| `pcc/runtime/py/py_obj.py` | store barriers, GC0 owner fast paths, `gc.collect()` entry |
+| `pcc/runtime/py/freestanding_gc_backend0_collector.py` | GC0 cycle collector |
+| `pcc/runtime/py/freestanding_gc_incremental_concurrent_scheduler.py` | GC1-GC4 mark steps, pacing, assists, collector thread work |
+| `pcc/runtime/py/freestanding_gc_common_mark_cycle.py` | mark cycle begin/finish, candidate flags and list |
+| `pcc/runtime/py/freestanding_gc_tracing_sweep_collector.py` | GC1-GC4 sweep, finalizer windows |
+| `pcc/runtime/py/freestanding_gc_public_collection.py` | `pcc_gc_collect_tracing`, collector thread lifecycle |
+| `pcc/runtime/py/freestanding_allocator.py`, `freestanding_gc_page_marks.py` | slabs, records, GC pages and mark bitmaps |
+| `pcc/runtime/py/freestanding_gc_relocation_*.py` | GC4 evacuation |
+| `pcc/runtime/py/freestanding_thread_kernel_pthread.py` | stop-the-world, safepoints, stack snapshots |
+| `pcc/runtime/py/py_weakref.py`, `py_dunder.py`, `py_gen.py` | weak refs, finalizer dispatch |
+| `scripts/pcc_perf.py` | runtime and collector measurement |
+| `docs/refs_docs/` | reference collectors |
