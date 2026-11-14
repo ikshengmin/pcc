@@ -3844,6 +3844,13 @@ else:
     assert contract[key] == "semantic_record"
     frame_key = "self_backend_aarch64_frame.py:PhysicalFrameLayout"
     assert contract[frame_key] == "phase_shell"
+    typed_classifications = {
+        "self_backend_aarch64_semantics.py:AArch64InstructionSemantics": "native_arena",
+        "self_backend_aarch64_typed_pass_context.py:TypedPassContext": "phase_shell",
+        "self_backend_aarch64_typed_peepholes.py:_Pass": "phase_shell",
+    }
+    for class_key, classification in typed_classifications.items():
+        assert contract[class_key] == classification
     projection_contract = ast.literal_eval(one(
         node.value for node in inventory_tree.body
         if isinstance(node, ast.AnnAssign)
@@ -3883,7 +3890,7 @@ class _ClassificationProof:
     report = namespace["data_plane_class_contract_report"](ROOT / "pcc/backend")
     assert report["unclassified"] == report["stale_classifications"] == report["invalid_classifications"] == []
     assert report["discovered_class_count"] == report["classified_class_count"]
-    for missing_key in (key, frame_key):
+    for missing_key in (key, frame_key, *typed_classifications):
         missing = dict(contract)
         del missing[missing_key]
         namespace["DATA_PLANE_CLASS_CONTRACT"] = missing

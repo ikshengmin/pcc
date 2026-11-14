@@ -7,6 +7,7 @@ import pytest
 from pcc.backend import BackendUnavailable
 from pcc.backend import self_backend_aarch64_darwin_calls as calls
 from pcc.backend import self_backend_aarch64_darwin_mem as memory
+from pcc.backend.arm64_encode import EMITTED_INSTRUCTION_SCALAR
 from pcc.backend.self_backend_aarch64_darwin_abi import aggregate_returned_indirect
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_prepare import prepare_module_for_target
@@ -210,6 +211,58 @@ def _stack_layout_source(target, types, fixed_count=None):
             + '  ret void\n}\n')
 
 
+def _stack_address_offsets(output, *, capture):
+    if not capture:
+        return [int(line.split("#")[1]) for line in output
+                if line.startswith("  add x14, sp, #")]
+    # Direct mode returns placeholders in the line stream. Inspect its packed
+    # instruction records instead: ADD X14, SP, #imm12 has imm12 in bits 21:10.
+    # Retain the opcode, width, shift and register fields when selecting words.
+    _lines, records, _symbols = output
+    assert len(records) % 4 == 0
+    offsets = []
+    for index in range(0, len(records), 4):
+        word, family, fixup, symbol = records[index:index + 4]
+        if word & 0xFFC003FF == 0x910003EE:
+            assert (family, fixup, symbol) == (EMITTED_INSTRUCTION_SCALAR, 0, -1)
+            offsets.append((word >> 10) & 0xFFF)
+    return offsets
+
+
+def test_stack_address_offsets_read_words_not_placeholder_text():
+    # Fixed ISA words keep the probe independent of the producer being checked.
+    words = [
+        0x910013EE,  # add x14, sp, #4
+        0x910023EE,  # add x14, sp, #8
+        0x910033EE,  # add x14, sp, #12
+        0xD10023EE,  # sub x14, sp, #8
+        0x110023EE,  # add w14, wsp, #8
+        0x914023EE,  # add x14, sp, #8, lsl #12
+        0x910023ED,  # add x13, sp, #8
+        0x910023CE,  # add x14, x30, #8
+    ]
+    records = [field for word in words
+               for field in (word, EMITTED_INSTRUCTION_SCALAR, 0, -1)]
+    lines = [memory.DIRECT_INSTRUCTION_PLACEHOLDER] * len(words)
+    actual = (lines, records, [])
+    assert _stack_address_offsets(actual, capture=True) == [4, 8, 12]
+    # A changed word must change the observed layout even though all text is
+    # unchanged. The fixed-layout test below would reject this scalar sequence.
+    records[0] = 0x910023EE
+    assert _stack_address_offsets(actual, capture=True) == [8, 8, 12]
+
+
+@pytest.mark.parametrize("metadata", [
+    (0, 0, -1),
+    (EMITTED_INSTRUCTION_SCALAR, 1, -1),
+    (EMITTED_INSTRUCTION_SCALAR, 0, 0),
+])
+def test_stack_address_offsets_reject_non_scalar_or_relocated_records(metadata):
+    actual = ([memory.DIRECT_INSTRUCTION_PLACEHOLDER], [0x910013EE, *metadata], [])
+    with pytest.raises(AssertionError):
+        _stack_address_offsets(actual, capture=True)
+
+
 @pytest.mark.parametrize("target", (_TARGETS[0], _TARGETS[2]))
 @pytest.mark.parametrize("capture", (False, True), ids=("assembly", "records"))
 @pytest.mark.parametrize("types,offsets", [
@@ -225,13 +278,11 @@ def test_fixed_stack_layout_matches_both_emitters(target, capture, types, offset
     source = _stack_layout_source(target, types)
     actual = _emit(source, indexed=True, capture=capture)
     assert actual == _emit(source, indexed=False, capture=capture)
-    lines = actual[0] if capture else actual
+    actual_offsets = _stack_address_offsets(actual, capture=capture)
     expected = offsets[0 if target == _TARGETS[0] else 1]
     for offset in expected[1:]:
-        assert "  add x14, sp, #" + str(offset) in lines
+        assert offset in actual_offsets
     if all(not ty.startswith(("{", "[")) for ty in types):
-        actual_offsets = [int(line.split("#")[1]) for line in lines
-                          if line.startswith("  add x14, sp, #")]
         assert actual_offsets == expected[1:]
 
 

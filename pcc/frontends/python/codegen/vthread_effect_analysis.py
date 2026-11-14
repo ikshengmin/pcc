@@ -393,25 +393,35 @@ def _lexical_binding_kinds(
         _record_binding_kind(bindings, arg.name, _BINDING_DYNAMIC)
 
     for node in nodes:
-        target_names: set[str] = set()
+        # Most lexical nodes cannot bind a target.  Allocate this private
+        # scratch set only in a binding branch, without sharing it between
+        # nodes or changing the order in which real targets are recorded.
+        target_names: Optional[set[str]] = None
         if isinstance(node, Assign):
+            target_names = set()
             for target in node.targets:
                 _collect_binding_target_names(target, target_names)
         elif isinstance(node, AugAssign):
+            target_names = set()
             _collect_binding_target_names(node.target, target_names)
         elif isinstance(node, For):
+            target_names = set()
             _collect_binding_target_names(node.target, target_names)
         elif isinstance(node, With):
+            target_names = set()
             for _context, target in node.items:
                 if target is not None:
                     _collect_binding_target_names(target, target_names)
         elif isinstance(node, ExceptHandler):
+            target_names = set()
             if node.name:
                 target_names.add(node.name)
         elif isinstance(node, Delete):
+            target_names = set()
             for target in node.targets:
                 _collect_binding_target_names(target, target_names)
         elif isinstance(node, (FuncDef, ClassDef)):
+            target_names = set()
             target_names.add(node.name)
         elif (
             isinstance(node, Call)
@@ -419,9 +429,11 @@ def _lexical_binding_kinds(
             and node.func.ident in ("_walrus", "__walrus__")
             and len(node.args) == 2
         ):
+            target_names = set()
             _collect_binding_target_names(node.args[0], target_names)
-        for name in target_names:
-            _record_binding_kind(bindings, name, _BINDING_DYNAMIC)
+        if target_names is not None:
+            for name in target_names:
+                _record_binding_kind(bindings, name, _BINDING_DYNAMIC)
 
         if isinstance(node, Import):
             for module_name, as_name in node.names:
@@ -1173,6 +1185,8 @@ _BUILTIN_VALUE_RECEIVER_TYPES = (
 
 
 _VTHREAD_EFFECT_SUMMARY_SCHEMA = "pcc.vthread.effect-summary.v1"
+_VTHREAD_EFFECT_PARKS = 1
+_VTHREAD_EFFECT_PUBLISH = 2
 
 
 def _vthread_effect_function_key(
@@ -1205,9 +1219,14 @@ def _vthread_summary_append_unique(values: list[str], value: str) -> None:
         values.append(value)
 
 
-def _vthread_summary_add_edge(summary: dict, caller: str, callee: str) -> None:
+def _vthread_summary_add_edge(
+    summary: dict,
+    caller: str,
+    callee: str,
+    caller_edges_start: int = 0,
+) -> None:
     edges = summary["edges"]
-    index = 0
+    index = caller_edges_start
     while index + 1 < len(edges):
         if edges[index] == caller and edges[index + 1] == callee:
             return
@@ -1251,6 +1270,8 @@ def _add_local_callable_effect(
     proof_cache,
     effect_summary: Optional[dict] = None,
     summary_module_name: str = "",
+    fresh_summary: bool = False,
+    summary_only: bool = False,
 ) -> None:
     """Add one function/method node without a self-host closure."""
     scope_nodes, binding_state, attribute_calls, local_class_hints = (
@@ -1268,10 +1289,11 @@ def _add_local_callable_effect(
         binding_state=binding_state,
     )
     edges: list[str] = []
-    for callee in callees:
-        edge = "function:" + callee
-        if edge not in edges:
-            edges.append(edge)
+    if not summary_only:
+        for callee in callees:
+            edge = "function:" + callee
+            if edge not in edges:
+                edges.append(edge)
     method_callees = _local_method_call_keys(
         fd,
         current_class,
@@ -1280,11 +1302,12 @@ def _add_local_callable_effect(
         attribute_calls=attribute_calls,
         local_hints=local_class_hints,
     )
-    for method_key in method_callees:
-        edge = "method:" + method_key
-        if edge not in edges:
-            edges.append(edge)
-    graph[node_key] = edges
+    if not summary_only:
+        for method_key in method_callees:
+            edge = "method:" + method_key
+            if edge not in edges:
+                edges.append(edge)
+        graph[node_key] = edges
     direct_effect = direct or _function_has_threading_suspension(
         fd,
         module,
@@ -1293,6 +1316,7 @@ def _add_local_callable_effect(
         attribute_calls=attribute_calls,
     )
     summary_caller = ""
+    summary_edges_start = 0
     if effect_summary is not None and native_exports is not None:
         if current_class is None:
             summary_caller = _vthread_effect_function_key(
@@ -1307,8 +1331,24 @@ def _add_local_callable_effect(
                 fd.name,
                 native_exports,
             )
-        _vthread_summary_reset_caller(effect_summary, summary_caller)
-        _vthread_summary_append_unique(effect_summary["publish"], summary_caller)
+        # Only the builder opts in with a new, exclusively owned summary.
+        # An unpublished caller then has no seeds or outgoing edges to reset.
+        # Canonical aliases and redefinitions are already published and still
+        # take the complete last-binding reset path.
+        fresh_caller = (
+            fresh_summary and summary_caller not in effect_summary["publish"]
+        )
+        if not fresh_caller:
+            _vthread_summary_reset_caller(effect_summary, summary_caller)
+        # No previous edge remains for this canonical caller.  Its
+        # new edges are appended contiguously until this callable is done,
+        # so duplicate checks need not rescan unrelated callers' prefixes.
+        summary_edges_start = len(effect_summary["edges"])
+        if fresh_summary:
+            if fresh_caller:
+                effect_summary["publish"].append(summary_caller)
+        else:
+            _vthread_summary_append_unique(effect_summary["publish"], summary_caller)
         for callee in callees:
             _vthread_summary_add_edge(
                 effect_summary,
@@ -1318,6 +1358,7 @@ def _add_local_callable_effect(
                     callee,
                     native_exports,
                 ),
+                summary_edges_start,
             )
         for method_key in method_callees:
             class_name, method_name = method_key.split(".", 1)
@@ -1330,9 +1371,11 @@ def _add_local_callable_effect(
                     method_name,
                     native_exports,
                 ),
+                summary_edges_start,
             )
     if direct_effect:
-        effects.add(node_key)
+        if not summary_only:
+            effects.add(node_key)
         if effect_summary is not None and summary_caller:
             _vthread_summary_append_unique(
                 effect_summary["seeds"],
@@ -1358,9 +1401,11 @@ def _add_local_callable_effect(
                     str(target[3].get("name", "")),
                     native_exports,
                 ),
+                summary_edges_start,
             )
         if bool(target[3].get("may_park", False)):
-            effects.add(node_key)
+            if not summary_only:
+                effects.add(node_key)
             return
     for target in siblings:
         if effect_summary is not None and summary_caller:
@@ -1372,9 +1417,11 @@ def _add_local_callable_effect(
                     target[1],
                     native_exports,
                 ),
+                summary_edges_start,
             )
         if _export_target_is_may_park(native_exports, target):
-            effects.add(node_key)
+            if not summary_only:
+                effects.add(node_key)
             return
 
 
@@ -1442,8 +1489,22 @@ def _compute_local_vthread_effects(
     effect_summary: Optional[dict] = None,
     summary_module_name: str = "",
     local_context=None,
-) -> tuple[set[int], set[str], set[int], set[str]]:
-    """Compute one fixed point spanning functions and proven local methods."""
+    summary_only: bool = False,
+    fresh_summary: bool = False,
+) -> Optional[tuple[set[int], set[str], set[int], set[str]]]:
+    """Collect callable effects, then normally solve the local fixed point.
+
+    Summary workers only need the seeds, edges and publish keys collected in
+    ``effect_summary``.  Their parent solves the cross-module fixed point, so
+    ``summary_only`` does not populate the unused local graph/effect set and
+    returns None without deriving unused local result sets.  All callable
+    analyses and their summary-producing early returns are still performed.
+    All ordinary callers, including those collecting a summary as a side
+    output, retain the complete local function/method result.
+
+    ``fresh_summary`` is reserved for the builder's exclusively owned, empty
+    summary.  Supplied summaries retain their original reset/alias behavior.
+    """
     if local_context is None:
         local_context = _local_vthread_context(module)
     (
@@ -1489,6 +1550,8 @@ def _compute_local_vthread_effects(
             proof_cache,
             effect_summary,
             summary_module_name,
+            fresh_summary,
+            summary_only,
         )
     for class_name, fd in method_defs:
         _add_local_callable_effect(
@@ -1511,7 +1574,12 @@ def _compute_local_vthread_effects(
             proof_cache,
             effect_summary,
             summary_module_name,
+            fresh_summary,
+            summary_only,
         )
+
+    if summary_only:
+        return None
 
     changed = True
     while changed:
@@ -1568,6 +1636,8 @@ def build_closed_world_vthread_effect_summary(
         native_exports,
         effect_summary=summary,
         summary_module_name=module_name,
+        summary_only=True,
+        fresh_summary=True,
     )
     return summary
 
@@ -1650,9 +1720,14 @@ def annotate_closed_world_vthread_effect_summaries(
     summary_paths: list[str],
     native_exports: dict,
 ) -> tuple[int, int, int]:
-    """Merge module wires and solve their dense-ID fixed point in the parent."""
+    """Merge module wires and solve their dense-ID fixed point in the parent.
+
+    Each existing effect slot also records whether its key must be published.
+    Keep that flag separate from the parking bit: a published quiet node must
+    not seed propagation, and an unpublished parking node must not rewrite an
+    export.  This needs no second dictionary owning the same canonical keys.
+    """
     node_ids: dict[str, int] = {}
-    publish_keys: dict[str, bool] = {}
     effects = CompilerIntArena()
     edge_pairs = CompilerIntArena()
     try:
@@ -1666,7 +1741,7 @@ def annotate_closed_world_vthread_effect_summaries(
                             module_name, export_name, native_exports
                         )
                         node_id = _vthread_effect_node_id(node_ids, effects, key)
-                        effects.set_unchecked(node_id, 1)
+                        effects.set_unchecked(node_id, _VTHREAD_EFFECT_PARKS)
                     continue
                 if info.get("kind") != "class":
                     continue
@@ -1682,16 +1757,20 @@ def annotate_closed_world_vthread_effect_summaries(
                         native_exports,
                     )
                     node_id = _vthread_effect_node_id(node_ids, effects, key)
-                    effects.set_unchecked(node_id, 1)
+                    effects.set_unchecked(node_id, _VTHREAD_EFFECT_PARKS)
 
         for path in summary_paths:
             summary = read_closed_world_vthread_effect_summary(path)
             for key in summary["seeds"]:
                 node_id = _vthread_effect_node_id(node_ids, effects, key)
-                effects.set_unchecked(node_id, 1)
+                effects.set_unchecked(
+                    node_id, effects.get_unchecked(node_id) | _VTHREAD_EFFECT_PARKS
+                )
             for key in summary["publish"]:
-                publish_keys[key] = True
-                _vthread_effect_node_id(node_ids, effects, key)
+                node_id = _vthread_effect_node_id(node_ids, effects, key)
+                effects.set_unchecked(
+                    node_id, effects.get_unchecked(node_id) | _VTHREAD_EFFECT_PUBLISH
+                )
             edges = summary["edges"]
             index = 0
             while index < len(edges):
@@ -1703,19 +1782,45 @@ def annotate_closed_world_vthread_effect_summaries(
                 )
                 index += 2
 
+            # Needed keys and edge IDs now have their node/arena owners.
+            # Drop only these local aliases, without mutating the wire lists,
+            # before reading the next payload or entering the fixed point.
+            edges = None
+            summary = None
+
+        # Once a pass makes progress, retire visited edges whose callee parks:
+        # their callers are now permanently parked too. Keep the unchanged
+        # prefix and other edges in stable order, so a no-progress pass never
+        # needs compaction writes. The original arena length still reports
+        # input edges; no second buffer or heap adjacency index is needed.
+        active_edge_words = len(edge_pairs)
         changed = True
         while changed:
             changed = False
             index = 0
-            while index < len(edge_pairs):
+            remaining_edge_words = 0
+            while index < active_edge_words:
                 caller = edge_pairs.get_unchecked(index)
                 callee = edge_pairs.get_unchecked(index + 1)
-                if effects.get_unchecked(callee) and not effects.get_unchecked(
-                    caller
-                ):
-                    effects.set_unchecked(caller, 1)
-                    changed = True
+                if effects.get_unchecked(callee) & _VTHREAD_EFFECT_PARKS:
+                    caller_state = effects.get_unchecked(caller)
+                    if not (caller_state & _VTHREAD_EFFECT_PARKS):
+                        effects.set_unchecked(
+                            caller, caller_state | _VTHREAD_EFFECT_PARKS
+                        )
+                        changed = True
+                    if not changed:
+                        remaining_edge_words += 2
+                else:
+                    # The write cursor never passes the read cursor, and
+                    # both source words have already been read. Moving a
+                    # retained pair cannot overwrite an unread edge.
+                    if remaining_edge_words != index:
+                        edge_pairs.set_unchecked(remaining_edge_words, caller)
+                        edge_pairs.set_unchecked(remaining_edge_words + 1, callee)
+                    remaining_edge_words += 2
                 index += 2
+            active_edge_words = remaining_edge_words
 
         for module_name, exports in native_exports.items():
             for export_name, info in exports.items():
@@ -1725,10 +1830,11 @@ def annotate_closed_world_vthread_effect_summaries(
                     key = _vthread_effect_function_key(
                         module_name, export_name, native_exports
                     )
-                    if publish_keys.get(key, False):
-                        info["may_park"] = bool(
-                            effects.get_unchecked(node_ids[key])
-                        )
+                    node_id = node_ids.get(key, -1)
+                    if node_id >= 0:
+                        state = effects.get_unchecked(node_id)
+                        if state & _VTHREAD_EFFECT_PUBLISH:
+                            info["may_park"] = bool(state & _VTHREAD_EFFECT_PARKS)
                     continue
                 if info.get("kind") != "class":
                     continue
@@ -1741,10 +1847,13 @@ def annotate_closed_world_vthread_effect_summaries(
                         str(method_info.get("name", "")),
                         native_exports,
                     )
-                    if publish_keys.get(key, False):
-                        method_info["may_park"] = bool(
-                            effects.get_unchecked(node_ids[key])
-                        )
+                    node_id = node_ids.get(key, -1)
+                    if node_id >= 0:
+                        state = effects.get_unchecked(node_id)
+                        if state & _VTHREAD_EFFECT_PUBLISH:
+                            method_info["may_park"] = bool(
+                                state & _VTHREAD_EFFECT_PARKS
+                            )
         return len(summary_paths), len(effects), len(edge_pairs) // 2
     finally:
         effects.close()

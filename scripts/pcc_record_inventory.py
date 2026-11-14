@@ -96,6 +96,14 @@ DATA_PLANE_CLASS_CONTRACT = {
     "self_backend_aarch64_frame.py:PhysicalFrameLayout": "phase_shell",
     # One scope owner for raw records, span roots/cursor and traced symbols.
     "self_backend_aarch64_fragments.py:AArch64EmissionFragments": "native_arena",
+    # Scope-owned opcode/span headers and scalar operand tokens live in two
+    # packed arenas, aligned with the fragment owner's encoded-record IDs.
+    "self_backend_aarch64_semantics.py:AArch64InstructionSemantics": "native_arena",
+    # Pass-local adapters borrow fragments/provenance and retain span handles.
+    # _Pass owns two temporary packed ID columns, closed on every run exit;
+    # instruction/provenance records and returned spans stay fragment-owned.
+    "self_backend_aarch64_typed_pass_context.py:TypedPassContext": "phase_shell",
+    "self_backend_aarch64_typed_peepholes.py:_Pass": "phase_shell",
     "self_backend_module_symbols.py:PreparedModuleSymbols": "phase_shell",
     "self_backend_prepare.py:PreparedSelfBackendModule": "phase_shell",
     # Text legalization owners: one module scope for lines/type/helper tables
