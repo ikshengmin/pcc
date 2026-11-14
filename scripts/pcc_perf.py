@@ -223,7 +223,8 @@ def performance_lock():
     return exclusive_file_lock(str(lock), blocking=True)
 
 
-def build(name: str, timeout: int, max_tree_rss: int) -> int:
+def build(name: str, timeout: int, max_tree_rss: int,
+          preflight_reserve: int = 8589934592) -> int:
     """Build a sealed arm under the shared performance lock and RSS guard."""
     arm = arm_dir(name)
     programs = arm / "programs"
@@ -250,7 +251,7 @@ def build(name: str, timeout: int, max_tree_rss: int) -> int:
             "--stdout", str(arm / "build.stdout"), "--stderr", str(arm / "build.stderr"),
             "--cwd", str(arm / "source"), "--timeout", str(timeout),
             "--max-tree-rss-bytes", str(max_tree_rss),
-            "--darwin-preflight-reserve-bytes", "8589934592",
+            "--darwin-preflight-reserve-bytes", str(preflight_reserve),
             "--no-performance-lock", "--",
             "uv", "run", "--no-sync", "python", str(arm / "source/scripts/pcc_perf.py"),
             "_build", str(arm),
@@ -961,6 +962,11 @@ def main(argv: list[str] | None = None) -> int:
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
     # 8 GiB.
     arm.add_argument("--max-tree-rss", type=int, default=6442450944)
+    # Memory the host must keep reclaimable beside the capped tree before
+    # the build starts. 8 GiB suits a large Mac; a 16 GiB machine with a
+    # desktop session never has 14 GiB reclaimable, so it names a smaller
+    # reserve explicitly. The tree cap itself is still enforced.
+    arm.add_argument("--preflight-reserve", type=int, default=8589934592)
 
     child = commands.add_parser("_build")
     child.add_argument("arm", type=Path)
@@ -1029,11 +1035,17 @@ def main(argv: list[str] | None = None) -> int:
               f"{len(identity['overlaid'])} working-tree files", flush=True)
         for path in identity["left_out"]:
             print(f"  left out (uncommitted, not named by --with): {path}", flush=True)
-        code = build(args.name, args.timeout, args.max_tree_rss)
+        code = build(args.name, args.timeout, args.max_tree_rss, args.preflight_reserve)
         report = arm_dir(args.name) / "build.json"
         complete = report.is_file() and json.loads(report.read_text())["complete"]
         if code != 0 or not complete:
-            print((arm_dir(args.name) / "build.stderr").read_text()[-1500:])
+            stderr = arm_dir(args.name) / "build.stderr"
+            if stderr.is_file():
+                print(stderr.read_text()[-1500:])
+            else:
+                # The guard refused before starting the build (for example
+                # its memory preflight); it already printed why.
+                print(f"arm {args.name}: build did not start (guard exit {code})")
             return 1
         timing = json.loads(report.read_text())
         print(f"arm {args.name}: runtime {timing['runtime_seconds']:.0f} s, " + ", ".join(

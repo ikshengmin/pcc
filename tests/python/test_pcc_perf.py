@@ -344,3 +344,28 @@ def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monke
     assert b"another session" not in (arm / "worktree.diff").read_bytes()
     with pytest.raises(SystemExit):
         PERF.seal("probe", (), root=repository)
+
+
+def test_arm_passes_its_preflight_reserve_and_reports_a_refused_start(tmp_path, monkeypatch, capsys):
+    monkeypatch.setattr(PERF, "HOME", tmp_path / "home")
+    sealed = tmp_path / "home/arms/probe"
+    (sealed / "source/benchmarks/handler").mkdir(parents=True)
+    (sealed / "source.json").write_text(json.dumps(
+        {"revision": "0" * 40, "overlaid": [], "left_out": []}))
+    monkeypatch.setattr(PERF, "seal", lambda name, paths: sealed)
+    monkeypatch.setattr(PERF, "_gateway_package", lambda: tmp_path / "gateway")
+    (tmp_path / "gateway").mkdir()
+    monkeypatch.setattr(PERF, "performance_lock", lambda: __import__("contextlib").nullcontext())
+    seen = []
+    from scripts import run_process_tree_sample
+    monkeypatch.setattr(run_process_tree_sample, "main", lambda argv: seen.append(argv) or 2)
+    monkeypatch.setattr(PERF.os, "environ", dict(PERF.os.environ))
+    assert PERF.main(["arm", "probe", "--max-tree-rss", "4294967296",
+                      "--preflight-reserve", "536870912"]) == 1
+    argv = seen[0]
+    assert argv[argv.index("--max-tree-rss-bytes") + 1] == "4294967296"
+    assert argv[argv.index("--darwin-preflight-reserve-bytes") + 1] == "536870912"
+    assert "build did not start (guard exit 2)" in capsys.readouterr().out
+    seen.clear()
+    PERF.main(["arm", "probe"])
+    assert seen[0][seen[0].index("--darwin-preflight-reserve-bytes") + 1] == "8589934592"
