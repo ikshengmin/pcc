@@ -435,10 +435,16 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
             raise BackendUnavailable("bounded indexed debug capture is not supported")
         cold(module.type_context.named_type_bodies)
     for item in module.globals_:
-        charge(512)
+        # _global_to_wire has 18 bytes of nine-element array syntax. A
+        # nonempty enclosing globals array adds two bytes per record for
+        # its brackets/separators. Charge both flag values explicitly rather
+        # than reserving 512 bytes per global, retaining each cold allowance.
+        charge(20)
         cold(item.name)
         cold(item.type)
         cold(item.initializer)
+        cold(item.is_constant)
+        cold(item.is_internal)
         cold(item.tls_model)
         cold(item.alignment)
         cold(item.ir_prefix)

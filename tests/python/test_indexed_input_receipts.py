@@ -111,10 +111,11 @@ def _type_capture_fixture(value):
 
     # Specification: docs/project-intent.md, bounded owned transport must
     # preserve the ordinary serialized values and fail closed on overflow.
-    # Outside the type payload: module 4096, triple 34, global 512,
+    # Outside the type payload: module 4096, triple 34, global syntax 20,
+    # the two False flags 33 each,
     # name 35, type cold-cell allowance 32, initializer 35, TLS 34,
     # alignment 33, IR prefix 34 and empty trailing-attribute tuple 32.
-    return ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None), 4877
+    return ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None), 4451
 
 
 @pytest.mark.parametrize("number", (
@@ -1238,3 +1239,117 @@ def test_real_worker_large_ascii_capture_preserves_same_invocation_identity(
     assert failure["stage"] == "input-identity"
     assert failure["invocation"] == receipt["invocation"]
     assert not (dump / "link.json").exists()
+
+
+@pytest.mark.parametrize("is_constant", (False, True))
+@pytest.mark.parametrize("is_internal", (False, True))
+def test_capture_global_budget_counts_all_nine_fields(
+    is_constant, is_internal,
+):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import GlobalDef, ParsedModule, TypeDesc
+
+    value = GlobalDef("g", TypeDesc("int", 64), "0", is_constant, is_internal)
+    parsed = ParsedModule("", (value,), (), None)
+    row = codec._global_to_wire(value)
+    assert len(row) == 9
+    # Independent JSON punctuation check for the production record shape.
+    assert len(json.dumps(row)) == 18 + sum(len(json.dumps(field)) for field in row)
+    assert len(json.dumps([row])) == len(json.dumps(row)) + 2
+    assert len(json.dumps([row, row])) == 2 * len(json.dumps(row)) + 4
+    # The raw int64 TypeDesc JSON is 34 bytes. All cold-cell allowances
+    # remain; the two flag cells charge 33 for False and 34 for True.
+    expected = 4451 + 34 + int(is_constant) + int(is_internal)
+    codec._bounded_capture_budget(parsed, expected)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, expected - 1, state)
+    assert state == {"observed_bytes": expected}
+
+
+def _many_global_capture_module(count):
+    from pcc.backend.self_backend_ir import GlobalDef, ParsedModule, TypeDesc
+
+    scalar = TypeDesc("int", 64)
+    values = tuple(
+        GlobalDef("g" + str(index), scalar, "0", False, False)
+        for index in range(count)
+    )
+    return ParsedModule(TARGET, values, (), None)
+
+
+def test_capture_many_globals_preserves_wire_with_original_limit(tmp_path):
+    from pcc.backend import self_backend_indexed_codec as codec
+
+    parsed = _many_global_capture_module(4096)
+    # The former fixed global reservations alone consumed the entire bound,
+    # before module overhead, names, types, initializers or any other fields.
+    assert len(parsed.globals_) * 512 == receipts.LIMIT
+    reference = tmp_path / "globals-unbounded.pidx"
+    codec.encode_indexed_module_file(str(reference), parsed)
+    expected = reference.read_bytes()
+    bounded = tmp_path / "globals-bounded.pidx"
+    state = {}
+    codec.encode_indexed_module_file(
+        str(bounded), parsed, max_bytes=receipts.LIMIT, diagnostic=state,
+    )
+    assert bounded.read_bytes() == expected
+    assert state["observed_bytes"] == len(expected) <= receipts.LIMIT
+    restored = codec.decode_indexed_module_file(
+        str(bounded), max_bytes=receipts.LIMIT,
+    )
+    assert restored.triple == TARGET and restored.globals_ == parsed.globals_
+    assert not restored.functions
+
+
+def test_capture_many_globals_still_rejects_before_wire(tmp_path, monkeypatch):
+    from pcc.backend import self_backend_indexed_codec as codec
+
+    parsed = _many_global_capture_module(8192)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("oversize globals materialized")
+
+    monkeypatch.setattr(codec, "_global_to_wire", forbidden)
+    monkeypatch.setattr(codec.json, "dumps", forbidden)
+    monkeypatch.setattr(codec, "open", forbidden, raising=False)
+    state = {}
+    path = tmp_path / "globals-rejected.pidx"
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec.encode_indexed_module_file(
+            str(path), parsed, max_bytes=receipts.LIMIT, diagnostic=state,
+        )
+    assert state["stage"] == "codec-preflight"
+    assert state["observed_bytes"] > state["remaining_bytes"] == receipts.LIMIT
+    assert not path.exists()
+
+
+@pytest.mark.parametrize("field", ("is_constant", "is_internal"))
+def test_capture_global_flags_cannot_hide_oversize_values(
+    tmp_path, monkeypatch, field,
+):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import GlobalDef, ParsedModule, TypeDesc
+
+    # Malformed flag atoms must be charged as the original value, not
+    # coerced to a tiny truth value that could bypass the preflight.
+    flags = {"is_constant": False, "is_internal": False}
+    flags[field] = 1 << receipts.LIMIT
+    value = GlobalDef("g", TypeDesc("int", 64), "0", **flags)
+    parsed = ParsedModule(TARGET, (value,), (), None)
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("oversize flag materialized")
+
+    monkeypatch.setattr(codec, "_global_to_wire", forbidden)
+    monkeypatch.setattr(codec.json, "dumps", forbidden)
+    monkeypatch.setattr(codec, "open", forbidden, raising=False)
+    state = {}
+    path = tmp_path / "flag-rejected.pidx"
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec.encode_indexed_module_file(
+            str(path), parsed, max_bytes=receipts.LIMIT, diagnostic=state,
+        )
+    assert state["stage"] == "codec-preflight"
+    assert state["observed_bytes"] > receipts.LIMIT
+    assert not path.exists()

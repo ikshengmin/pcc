@@ -82,11 +82,29 @@ def main():
         type_cases.append((TypeDesc("array", width=1 << 64, count=1 << 64), 165))
         for value, width in type_cases:
             typed = ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None)
-            bound = 4877 + width
+            bound = 4451 + width
             _bounded_capture_budget(typed, bound)
             refused = False
             try:
                 _bounded_capture_budget(typed, bound - 1)
+            except ValueError as error:
+                assert "diagnostic exceeds" in str(error)
+                refused = True
+            assert refused
+        # Nine-field global syntax is 18 bytes, plus two for the outer list.
+        # Keep the conservative cold charge on each flag: False=33, True=34.
+        for is_constant, is_internal, width in (
+            (False, False, 4485), (False, True, 4486),
+            (True, False, 4486), (True, True, 4487),
+        ):
+            global_value = GlobalDef(
+                "g", TypeDesc("int", 64), "0", is_constant, is_internal,
+            )
+            global_module = ParsedModule("", (global_value,), (), None)
+            _bounded_capture_budget(global_module, width)
+            refused = False
+            try:
+                _bounded_capture_budget(global_module, width - 1)
             except ValueError as error:
                 assert "diagnostic exceeds" in str(error)
                 refused = True
