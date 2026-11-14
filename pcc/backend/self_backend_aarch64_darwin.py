@@ -1093,6 +1093,8 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 phase_timing.add(6, phase_start)
     if phase_timing is not None:
         phase_start = phase_timing.start()
+        if native_sink is not None:
+            finalize_phase_start = phase_timing.begin_backend_finalize("prepare")
     # All function bodies and native captures have finished. Retire only the
     # private plans' emission storage before final layout/metadata allocate.
     # Keep the eager planning and callback order: callbacks or repeated names
@@ -1120,8 +1122,14 @@ def _emit_prepared_aarch64_darwin_lines_active(
                     if exceptional_block:
                         metadata_labels.add(_block_label(func.name, exceptional_block))
             native_sink.finish_optimized_instructions(metadata_labels, cold_fallthrough_edges)
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("prepare", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("layout")
         native_sink.builder.finalize_text_layout()
         target_offsets = native_sink.builder.text_label_offsets()
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("layout", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("stackmaps")
         if functions:
             if emit_stack_map_tables:
                 ordered_native_plans = tuple(stack_map_plans[func.name] for func in functions)
@@ -1138,12 +1146,23 @@ def _emit_prepared_aarch64_darwin_lines_active(
             if close_native_tables:
                 for func in functions:
                     get_indexed_function_kernel(func).close_native_tables()
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("stackmaps", finalize_phase_start)
         if not is_aarch64_linux_triple(triple):
+            if phase_timing is not None:
+                finalize_phase_start = phase_timing.begin_backend_finalize("unwind")
             native_sink.extend(_append_compact_unwind(
                 [], functions, _MODULE_SYMBOLS, target_offsets,
                 native_sink.builder.text_size(),
             ))
+            if phase_timing is not None:
+                phase_timing.complete_backend_finalize("unwind", finalize_phase_start)
+        if phase_timing is not None:
+            finalize_phase_start = phase_timing.begin_backend_finalize("dwarf")
         structured_sections.extend(build_dwarf_sections(debug_plans, target_offsets))
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("dwarf", finalize_phase_start)
+            finalize_phase_start = phase_timing.begin_backend_finalize("sections")
         native_sink.append(".subsections_via_symbols")
         sections, undefined = native_sink.builder.finish(structured_sections)
         structured_sections.clear()
@@ -1157,6 +1176,7 @@ def _emit_prepared_aarch64_darwin_lines_active(
             native_sink.fragment_record_count,
         ])
         if phase_timing is not None:
+            phase_timing.complete_backend_finalize("sections", finalize_phase_start)
             phase_timing.add(7, phase_start)
         return []
     if optimize:
