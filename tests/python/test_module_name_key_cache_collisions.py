@@ -5,7 +5,11 @@ two pooled literals whose addresses shared a slot left the later one
 uncached, so every lookup of that name built, hashed and freed a key, and
 throughput followed the image layout (a runtime inlining change made one
 primitive allocate 1.5x as many objects). Names now probe a bounded run of
-slots. Strings 4096 bytes apart share a home slot by construction.
+slots. The home slot was the address's bits 3-14 alone, so names one page
+apart still shared one run; once it was full, a later layout change (the
+vector-call codegen) made the `scope` primitive rebuild keys on every call
+again. The home slot now folds higher address bits in; 24 names one page
+apart are all cached.
 """
 from __future__ import annotations
 
@@ -20,7 +24,9 @@ from pcc.unsafe import int_to_ptr, load_i64, load_i8, malloc, ptr_add, ptr_is_nu
 
 cached_name_key = extern("pcc_cached_name_key", (c_rawptr,), c_rawptr)
 
-NAMES = ["collide_alpha", "collide_beta", "collide_gamma"]
+# More names one page apart than one probe run held before the home slot
+# folded higher address bits in.
+NAMES = ["collide_" + str(index) for index in range(24)]
 
 
 def put(base, offset: int, text: str) -> None:

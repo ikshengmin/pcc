@@ -51,7 +51,7 @@ def _finder(threads, entries, namespaces):
                 and node.targets[0].id.startswith("_NAME_CACHE_")):
             assert isinstance(node.value, ast.Constant)
             consts[node.targets[0].id] = node.value.value
-    names = ("_module_find", "_threaded_name_entry")
+    names = ("_module_find", "_threaded_name_entry", "_name_cache_home")
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
     assert sorted(node.name for node in nodes) == sorted(names)
 
@@ -85,16 +85,21 @@ def _finder(threads, entries, namespaces):
         "ptr_to_int": ptr_to_int,
         "null": lambda: 0,
         "_threaded_name_key_match": lambda entry, text: ("key", text) if entries.get(text) == entry else 0,
+        # An entry's first word names the C string it was published for.
+        "load_ptr": lambda entry, offset: (
+            {value: key for key, value in entries.items()}.get(entry, 0) if offset == 0 else 0),
+        "ptr_eq": lambda left, right: left == right,
     })
-    # The table and every entry are handles; each text owns its own slot.
-    words.words[("pcc_threaded_name_key_cache_bits", 0)] = ptr_to_int("table")
-    for text, entry in entries.items():
-        slot = ((ptr_to_int(text) >> 3) & (consts["_NAME_CACHE_CAPACITY"] - 1)) * 8
-        words.words[("table", slot)] = ptr_to_int(entry)
     code = compile(ast.Module(nodes, type_ignores=[]), str(RUNTIME), "exec")
     for const in code.co_consts:
         if isinstance(const, types.CodeType):
             namespace[const.co_name] = types.FunctionType(const, namespace)
+    # The table and every entry are handles; each text owns its home slot.
+    words.words[("pcc_threaded_name_key_cache_bits", 0)] = ptr_to_int("table")
+    for text, entry in entries.items():
+        home = namespace["_name_cache_home"](text)
+        slot = (home & (consts["_NAME_CACHE_CAPACITY"] - 1)) * 8
+        words.words[("table", slot)] = ptr_to_int(entry)
     return namespace, calls, words
 
 
@@ -114,12 +119,10 @@ def test_a_missing_module_publishes_nothing():
     assert [call[0] for call in calls] == ["dict_get", "dict_get"]
 
 
-def test_without_an_entry_or_threads_the_dict_answers_each_time():
+def test_without_an_entry_the_dict_answers_each_time():
+    # The runtime is threaded only (f11a3513 removed the single-thread
+    # branch), so an entry is the only condition for publication.
     ns, calls, words = _finder(1, {}, {("key", "helper"): "attrs"})
-    assert ns["_module_find"]("helper") == "attrs"
-    assert ns["_module_find"]("helper") == "attrs"
-    assert [call[0] for call in calls] == ["dict_get", "decref", "dict_get", "decref"]
-    ns, calls, words = _finder(0, {"helper": "entry"}, {("key", "helper"): "attrs"})
     assert ns["_module_find"]("helper") == "attrs"
     assert ns["_module_find"]("helper") == "attrs"
     assert [call[0] for call in calls] == ["dict_get", "decref", "dict_get", "decref"]

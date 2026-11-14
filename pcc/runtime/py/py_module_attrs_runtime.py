@@ -89,15 +89,18 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 
 define_global_ptr_null("pcc_module_attrs_cache")
 # Name-key entries are immutable after publication, never evicted, and own
-# registered pinned keys. At most 512 names of at most 256 bytes are retained.
-# A name probes up to _NAME_CACHE_PROBES slots from its address hash: a
-# direct-mapped table made two pooled literals whose addresses shared a slot
-# rebuild, hash and free a key on every lookup, so throughput followed the
-# image layout. A full neighbourhood, changed C buffers and allocation
-# failures still use per-call keys.
+# registered pinned keys. At most 4096 names of at most 256 bytes are retained.
+# A name probes up to _NAME_CACHE_PROBES slots from its home slot
+# (_name_cache_home): a direct-mapped table made two pooled literals whose
+# addresses shared a slot rebuild, hash and free a key on every lookup, so
+# throughput followed the image layout. The home slot folds the address's
+# higher bits in: with the address alone, literals that agree modulo a page
+# shared one neighbourhood, and once eight of them filled it a layout change
+# again made one primitive rebuild keys on every call. A full neighbourhood,
+# changed C buffers and allocation failures still use per-call keys.
 define_global_i64("pcc_threaded_name_key_cache_bits", 0)
-_NAME_CACHE_CAPACITY = 512
-_NAME_CACHE_PROBES = 8
+_NAME_CACHE_CAPACITY = 4096
+_NAME_CACHE_PROBES = 16
 # Literal slot indices are initialized in the runtime image even for owned
 # C entrypoints, which do not execute this Python module's initializer.
 _NAME_CACHE_TEXT = 0
@@ -474,12 +477,21 @@ def _threaded_name_key_match(entry, text):
     return null()
 
 
+def _name_cache_home(text) -> int:
+    """The first slot a C string's address probes (masked by the caller).
+
+    Bits 3-14 of the address alone select a slot; folding in bits 15 and 27
+    upward separates literals whose addresses agree in those bits."""
+    address: int = ptr_to_int(text)
+    return (address >> 3) ^ (address >> 15) ^ (address >> 27)
+
+
 def _threaded_name_entry(text):
     """The published name-cache entry for this C string, or NULL."""
     bits: int = atomic_load_i64(global_addr("pcc_threaded_name_key_cache_bits"), 0, "acquire")
     if bits == 0:
         return null()
-    start: int = ptr_to_int(text) >> 3
+    start: int = _name_cache_home(text)
     probe: int = 0
     while probe < _NAME_CACHE_PROBES:
         offset: int = ((start + probe) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
@@ -512,7 +524,7 @@ def _threaded_cached_name_key(text):
         else:
             bits = ptr_to_int(candidate)
     table = int_to_ptr(bits)
-    start: int = ptr_to_int(text) >> 3
+    start: int = _name_cache_home(text)
     offset: int = 0
     probe: int = 0
     while probe < _NAME_CACHE_PROBES:
