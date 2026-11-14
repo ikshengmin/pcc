@@ -337,11 +337,12 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_str_method_slot_models.py',
               'tests/test_ci_native_find_protocol.py',
               'tests/python/test_str_len_protocol.py',
-              'tests/python/test_worker_observation_scope.py')
-# Expected default-marker inventory: 85 modules, 3811 ordinary raw nodes.
+              'tests/python/test_worker_observation_scope.py',
+              'tests/python/test_lambda_rejection_diagnostics.py')
+# Expected default-marker inventory: 86 modules, 3844 ordinary raw nodes.
 # CI at ad90b246 collected 3797 unique nodes, including 13 observation-scope
-# cases. The later 14 finalization-timing cases are source-counted, not yet
-# collection-verified. Keep this fixed inventory fail-closed on any drift.
+# cases. The later 14 finalization-timing and 33 Lambda diagnostic cases are
+# source-counted, not yet collection-verified. Keep this inventory fail-closed.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
@@ -351,6 +352,7 @@ HOST_COUNTS = (
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
     43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41,
     35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
+    33,
 )
 PHASES = ("preflight", "stage1", "pcc1")
 

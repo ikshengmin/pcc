@@ -102,7 +102,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         "tests/python/test_aarch64_stackmap_emission_retirement.py",
         "tests/python/test_aarch64_stackmap_plan_ownership.py",
     )
-    assert gate.HOST_FILES[72:] == (
+    assert gate.HOST_FILES[72:85] == (
         'tests/python/test_worker_estimate_ratio_fold.py',
         'tests/python/test_root_leave_identity_ledger.py',
         'tests/python/test_float_callback_movement_protocol.py',
@@ -117,7 +117,9 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_str_len_protocol.py',
         'tests/python/test_worker_observation_scope.py',
     )
-    assert gate.HOST_COUNTS[72:] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
+    assert gate.HOST_COUNTS[72:85] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
+    assert gate.HOST_FILES[85:] == ("tests/python/test_lambda_rejection_diagnostics.py",)
+    assert gate.HOST_COUNTS[85:] == (33,)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -127,8 +129,9 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 85
-    assert sum(gate.HOST_COUNTS) == 3811 and sum(gate.HOST_COUNTS[:72]) == 3451
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 86
+    assert sum(gate.HOST_COUNTS) == 3844 and sum(gate.HOST_COUNTS[:85]) == 3811
+    assert sum(gate.HOST_COUNTS[:72]) == 3451
     assert sum(gate.HOST_COUNTS[:70]) == 3393
     assert sum(gate.HOST_COUNTS[:65]) == 3183
     assert sum(gate.HOST_COUNTS[:63]) == 3145
@@ -189,12 +192,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3811, "selected_passed_count": 3811,
+        "universe_count": 3844, "selected_passed_count": 3844,
         "platform_unrun": [], "worker_witnesses": 6,
     }
-    # A complete new report cannot pass either old count. Conversely, dropping
+    # A complete report cannot pass stale counts or omit the new module. Dropping
     # the added nodes from every witness/report still fails the fixed receipt.
-    for index, old_count in ((12, 433), (84, 11)):
+    for index, old_count in ((12, 433), (84, 11), (85, 0), (85, 32)):
         old_counts = list(gate.HOST_COUNTS)
         old_counts[index] = old_count
         put(tmp_path, inventory_reports(inventory_nodes))
@@ -213,9 +216,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     moved = list(inventory_nodes)
     moved[moved.index(gate.HOST_FILES[12] + "::test_inventory[446]")] = (
         gate.HOST_FILES[84] + "::test_inventory[13]")
+    lambda_moved = list(inventory_nodes)
+    lambda_moved[lambda_moved.index(gate.HOST_FILES[85] + "::test_inventory[32]")] = (
+        gate.HOST_FILES[84] + "::test_inventory[13]")
     for invalid in (inventory_nodes + [inventory_nodes[-1]],
+                    inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[12]"],
                     inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[13]"],
-                    moved):
+                    moved, lambda_moved):
         put(tmp_path, inventory_reports(invalid))
         with pytest.raises(AssertionError):
             gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
@@ -234,7 +241,8 @@ def test_default_command_retains_project_xdist(tmp_path):
                                      (gate.IR_BUILDER_CALL9_TEST, 9),
                                      (gate.HOST_FILES[73], 36),
                                      (gate.HOST_FILES[75], 41),
-                                     (gate.HOST_FILES[84], 13)):
+                                     (gate.HOST_FILES[84], 13),
+                                     (gate.HOST_FILES[85], 33)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
@@ -367,10 +375,24 @@ def test_default_command_retains_project_xdist(tmp_path):
         "reason": "shared, legacy or unclassified: full qualification",
     }]
     assert helper_plan["matrix_native_stage1"]["include"] == list(ci_validation_plan.NATIVE_PLATFORMS)
-    for path in (*gate.HOST_FILES[72:], *gate.HOST_CONTRACT_DATA_INPUTS):
+    for path in (*gate.HOST_FILES[72:85], *gate.HOST_CONTRACT_DATA_INPUTS):
         assert path in input_names
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
+    # The appended host-only module is covered by the same broad event paths.
+    # No workflow edit or successful Stage1 bundle is needed by default-xdist.
+    lambda_test = gate.HOST_FILES[85]
+    assert input_names.count(lambda_test) == 1
+    for event in event_filters:
+        patterns = re.findall(r'^      - "([^"]+)"', event, re.MULTILINE)
+        assert "**" in patterns and "tests/**" in patterns
+        assert any(fnmatchcase(lambda_test, pattern) for pattern in patterns)
+        assert not any(pattern.startswith("!") and fnmatchcase(lambda_test, pattern[1:])
+                       for pattern in patterns)
+    lambda_plan = ci_validation_plan.select([("A", lambda_test)])
+    assert lambda_plan["legacy"] is True
+    assert set(lambda_plan["domains"]) == {*ci_validation_plan.LANGUAGES, "shared", "ci-contracts"}
+    assert lambda_plan["matrix_native_stage1"]["include"] == list(ci_validation_plan.NATIVE_PLATFORMS)
 
     # The default host phase executes these cases, not their native gates.
     for path, expected_count in zip(
@@ -2123,7 +2145,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
