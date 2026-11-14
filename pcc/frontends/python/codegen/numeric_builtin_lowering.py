@@ -1021,7 +1021,9 @@ class NumericBuiltinLoweringMixin:
             )
             self.builder.position_at_end(empty)
             self._emit_builtin_exception_and_branch(
-                "ValueError", name + "() arg is an empty sequence", expr.span,
+                # CPython's text, as py_obj_min_max raises for every other
+                # iterable: one empty min()/max() reads the same either route.
+                "ValueError", name + "() iterable argument is empty", expr.span,
             )
             self.builder.position_at_end(seed)
             first = self._emit_min_max_i64_item(

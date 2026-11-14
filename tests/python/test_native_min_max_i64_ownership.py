@@ -61,25 +61,25 @@ PROGRAM = FUNCTIONS + textwrap.dedent('''\
             try:
                 list_min([])
             except ValueError as error:
-                assert str(error) == 'min() arg is an empty sequence'
+                assert str(error) == 'min() iterable argument is empty'
             else:
                 raise AssertionError('empty list min')
             try:
                 list_max([])
             except ValueError as error:
-                assert str(error) == 'max() arg is an empty sequence'
+                assert str(error) == 'max() iterable argument is empty'
             else:
                 raise AssertionError('empty list max')
             try:
                 tuple_min(())
             except ValueError as error:
-                assert str(error) == 'min() arg is an empty sequence'
+                assert str(error) == 'min() iterable argument is empty'
             else:
                 raise AssertionError('empty tuple min')
             try:
                 tuple_max(())
             except ValueError as error:
-                assert str(error) == 'max() arg is an empty sequence'
+                assert str(error) == 'max() iterable argument is empty'
             else:
                 raise AssertionError('empty tuple max')
             gc.collect()
