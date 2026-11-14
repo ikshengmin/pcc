@@ -1,4 +1,4 @@
-"""The legacy JSON reader consumes only its private decoded containers."""
+"""Export wire readers consume only their private decoded containers."""
 
 import copy
 import json
@@ -181,7 +181,7 @@ def test_legacy_decoder_preserves_json_and_schema_errors(text):
         exports._decode_native_exports_wire(text, True)
 
 
-def test_indexed_reader_does_not_use_legacy_owned_decoder(tmp_path, monkeypatch):
+def test_indexed_reader_bypasses_legacy_whole_document_decoder(tmp_path, monkeypatch):
     path = tmp_path / "exports.wire"
     native = {"provider": {"function": {"args": ({"name": "value"},)}}}
     exports._write_native_exports_wire(
@@ -195,10 +195,15 @@ def test_indexed_reader_does_not_use_legacy_owned_decoder(tmp_path, monkeypatch)
         },
     )
 
-    def unexpected(_value):
-        pytest.fail("indexed input entered the legacy owned decoder")
+    original_loads = exports.json.loads
+    calls = []
 
-    monkeypatch.setattr(exports, "_native_export_from_owned_wire", unexpected)
+    def load_row(document):
+        assert not document.startswith(exports._NATIVE_EXPORT_INDEXED_SCHEMA)
+        calls.append(document)
+        return original_loads(document)
+
+    monkeypatch.setattr(exports.json, "loads", load_row)
     assert exports._read_native_exports_wire(str(path), True) == (
         native, {}, ("provider.function",)
     )
@@ -209,3 +214,4 @@ def test_indexed_reader_does_not_use_legacy_owned_decoder(tmp_path, monkeypatch)
     assert derived == {}
     assert preload == {"types": (), "base_keys": (), "drop_keys": (), "set_keys": ()}
     assert indexed is True
+    assert calls, "indexed rows were not decoded"

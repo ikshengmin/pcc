@@ -1411,8 +1411,8 @@ def _native_export_from_wire(value):
 def _native_export_from_owned_wire(value):
     """Consume a private JSON tree without rebuilding its dictionaries.
 
-    Only the plain ``json.loads`` boundary below supplies this tree: its
-    containers have no external aliases or user-defined callbacks. Shared
+    Only plain ``json.loads`` boundaries in the wire readers supply this tree.
+    Its containers have no external aliases or user-defined callbacks. Shared
     caller inputs must continue to use ``_native_export_from_wire``.
     """
 
@@ -1603,7 +1603,7 @@ def _indexed_native_export_rows(text: str):
 
 def _indexed_native_export_metadata(metadata, tag: str):
     try:
-        return _native_export_from_wire(json.loads(metadata[tag]))
+        return _native_export_from_owned_wire(json.loads(metadata[tag]))
     except Exception as exc:
         raise ValueError(
             "invalid indexed frontend native export metadata"
@@ -1670,7 +1670,7 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
                 "indexed frontend native exports reference missing module"
             )
         try:
-            module_exports = _native_export_from_wire(
+            module_exports = _native_export_from_owned_wire(
                 json.loads(payload)
             )
         except Exception as exc:
@@ -1730,7 +1730,7 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
         module_exports = decoded.get(module_name) if selected_module else None
         if module_exports is None and selected_module:
             try:
-                module_exports = _native_export_from_wire(
+                module_exports = _native_export_from_owned_wire(
                     json.loads(module_payloads[module_name])
                 )
             except Exception as exc:
@@ -1758,7 +1758,7 @@ def _read_indexed_native_exports_wire(text: str, root_module: str = ""):
     unique_class_preload = None
     if root_module:
         try:
-            root_delta = _native_export_from_wire(
+            root_delta = _native_export_from_owned_wire(
                 json.loads(preload_payloads[root_module])
             )
         except Exception as exc:
