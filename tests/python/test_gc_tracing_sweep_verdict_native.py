@@ -21,8 +21,8 @@ HARNESS = ROOT / "tests/fixtures/native/gc_tracing_pending_verdict.c"
 MODES = (
     (1, "live-transitive", (0, 0, 0)),
     (2, "dead-self-cycle", (1, 1, 0)),
-    (3, "self-resurrection", (1, 0, 0)),
-    (4, "resurrected-finalizer-batch", (2, 0, 0)),
+    (3, "self-resurrection", (1, 1, 0)),
+    (4, "resurrected-finalizer-batch", (2, 2, 0)),
     (5, "gc-start-callback", (0, 0, 2)),
     (6, "nonpositive-budget", (0, 0, 0)),
     (7, "partial-budget-finalizer-once", (2, 2, 0)),

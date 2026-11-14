@@ -240,15 +240,23 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     assert admission.index("graph_matches(count)") < admission.index("| CANDIDATE;")
     assert "header->refcount !=" not in admission
     assert "flags=0x%x refcount=%lld" in admission
-    # Keep compound-failure operands visible without changing the predicates
-    # or inspecting potentially reclaimed objects. This is source wiring,
-    # not execution coverage of the native diagnostic paths.
+    reset = admission.index("pcc_gc_tracing_candidates_reset();")
+    assert admission.rindex("pcc_py_gc_minor_graph_lock();", 0, reset) > admission.index(
+        "graph_matches(count)")
+    assert admission.index("| CANDIDATE;") < reset < admission.index(
+        "pcc_gc_tracing_no_candidate_commit = -1;") < admission.index(
+        "pcc_gc_tracing_finish_stop_epoch = -1;") < admission.index(
+        "pcc_py_gc_minor_graph_unlock();", reset)
+    assert "return pcc_gc_sweep_owed() == 1 && finalizers == 0 ? 0 : 132;" in admission
+    # Keep all compound-failure operands visible, including the distinct
+    # callback counts for live rescue and finalizer resurrection. This is
+    # source wiring, not execution coverage of the native diagnostic paths.
     diagnostic = fixture.split("static void report_live_verdict_failure(", 1)[1].split(
         "static int run_mode(void) {", 1)[0]
     for field in (
         "status=%d phase=%d mode=%d effective_backend=%lld",
         "finalizers=%d expected_finalizers=%d",
-        "weak_callbacks=%d expected_weak_callbacks=0",
+        "weak_callbacks=%d expected_weak_callbacks=%d",
         "collected=%lld expected_collected=0",
         "known_first=%d expected_known_first=1",
         "known_second=%d gc_callbacks=%d callback_error=%d",
@@ -256,7 +264,8 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
         assert field in diagnostic
     assert (
         "status, phase, mode, (long long)pcc_gc_backend(), "
-        "finalizers, expected_finalizers, weak_callbacks, (long long)collected, "
+        "finalizers, expected_finalizers, weak_callbacks, expected_weak_callbacks, "
+        "(long long)collected, "
         "known_first, known_second, gc_callbacks, callback_error);"
     ) in " ".join(diagnostic.split())
     assert "watched[" not in diagnostic
@@ -265,9 +274,10 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     run = fixture.split("static int run_mode(void) {", 1)[1].split("int main(", 1)[0]
     for status, expected in ((143, "0"), (150, "count")):
         assert (
-            f"if (finalizers != {expected} || weak_callbacks != 0 || collected != 0 "
+            f"if (finalizers != {expected} || weak_callbacks != {expected} || collected != 0 "
             "|| known_first != 1) { "
-            f"report_live_verdict_failure({status}, {expected}, collected, known_first, known_second); "
+            f"report_live_verdict_failure({status}, {expected}, {expected}, "
+            "collected, known_first, known_second); "
             f"return {status}; "
             "}"
         ) in " ".join(run.split())
@@ -285,6 +295,70 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     assert child[12] & (CANDIDATE | FINALIZED) == 0
     assert child["weakref_live"]
     assert child["edges"] == [child]
+
+
+def test_native_pending_verdict_distinguishes_callback_and_plain_weakrefs():
+    # CPython 3.15's self-cycle and chain resurrection controls explicitly
+    # require callback refs dead and plain refs alive after resurrection:
+    # https://github.com/python/cpython/blob/v3.15.0/Lib/test/test_finalization.py
+    fixture = (SOURCE.parents[3] / "tests/fixtures/native/gc_tracing_pending_verdict.c").read_text()
+    assert "PLAIN_FIRST = 9, PLAIN_SECOND = 10, ROOT_COUNT = 11" in fixture
+    assert "py_weakref_new(self, roots[CALLBACK])" in fixture
+    assert "py_weakref_new(self, 0)" in fixture
+    for kind in ("WEAK", "PLAIN"):
+        assert f"install_root({kind}_FIRST + index, py_weakref_new(" in fixture
+    plain = fixture.split("static int plain_matches(", 1)[1].split(
+        "static int inspect_live(", 1)[0]
+    assert "py_weakref_call(roots[PLAIN_FIRST + index])" in plain
+    assert "target == (live ? watched[index] : py_None)" in plain
+    assert "if (target != 0) py_decref(target);" in plain
+    live = fixture.split("static int inspect_live(", 1)[1].split(
+        "static void report_live_verdict_failure(", 1)[0]
+    assert "pcc_gc_object_is_known_no_lock(obj) != 1" in live
+    assert "->flags & CANDIDATE" in live
+    assert "peer == watched[mode == 4 ? 1 - index : index]" in live
+    assert "same && weak_matches(index, callback_live) && plain_matches(index, 1)" in live
+    callback = fixture.split("static PyObject *weak_callback(", 1)[1].split(
+        "static PyObject *start_callback(", 1)[0]
+    assert "PyObject *ref = py_tuple_get(args, 0);" in callback
+    assert "ref == roots[WEAK_FIRST]" in callback and "ref == roots[WEAK_SECOND]" in callback
+    assert "++weak_callback_calls[index] != 1" in callback
+    assert "if (finalizers != 0) callback_error = 6;" in callback
+    assert "if (target != py_None) callback_error = 7;" in callback
+    assert "if (target != 0) py_decref(target);" in callback
+    assert "py_decref(ref);" in callback
+    assert "watched[" not in callback
+    finalizer = fixture.split("static PyObject *token_del(", 1)[1].split(
+        "static int phase_clean(", 1)[0]
+    assert "++finalizer_calls[index] != 1" in finalizer
+    assert finalizer.index("if (weak_callbacks != count)") < finalizer.index("finalizers++;")
+    assert "if (pcc_gc_collect(0) != 0) callback_error = 3;" in finalizer
+    run = fixture.split("static int run_mode(void) {", 1)[1].split("int main(", 1)[0]
+    live_run = run.split("if (mode == 1 || mode == 5 || mode == 6) {", 1)[1].split(
+        "} else if (mode == 2) {", 1)[0]
+    assert "if (!inspect_live(0, 1)) return 144;" in live_run
+    resurrection = run.split("} else if (mode == 3 || mode == 4) {", 1)[1].split(
+        "} else if (mode == 7) {", 1)[0]
+    assert "if (!inspect_live(0, 0)) return 151;" in resurrection
+    assert "count == 2 && (known_second != 1 || !inspect_live(1, 0))" in resurrection
+    partial = " ".join(run.split("} else if (mode == 7) {", 1)[1].split())
+    assert (
+        "if (finalizers != 2 || weak_callbacks != 2 || collected != 1 "
+        "|| known_first + known_second != 1) return 153;"
+    ) in partial
+    for status in (154, 156):
+        assert (
+            "if (!weak_matches(0, 0) || !weak_matches(1, 0) "
+            "|| !plain_matches(0, 0) || !plain_matches(1, 0)) "
+            f"return {status};"
+        ) in partial
+    assert "if (next != 1 || known_after != 0 || finalizers != 2 || weak_callbacks != 2) return 155;" in partial
+    assert partial.index("if (callback_error != 0) return 142;") > partial.index("return 156;")
+    assert "finalizer_calls[index] != expected_calls" in partial
+    assert "weak_callback_calls[index] != expected_calls" in partial
+    native = (SOURCE.parents[3] / "tests/python/test_gc_tracing_sweep_verdict_native.py").read_text()
+    assert '(3, "self-resurrection", (1, 1, 0))' in native
+    assert '(4, "resurrected-finalizer-batch", (2, 2, 0))' in native
 
 
 def test_dead_cycle_finalizes_before_clear_and_reclaims_once():
@@ -654,3 +728,29 @@ def test_unsealed_or_stale_list_leaves_the_sweep_to_its_walk():
         boundary.seal(dead)
         assert boundary.sweep(9223372036854775807) == 1
         assert "live" in boundary.visited and "free:dead" in boundary.events
+
+
+@pytest.mark.parametrize("old_list_empty", (False, True))
+def test_synthetic_candidates_reset_old_list_without_releasing_its_storage(old_list_empty):
+    boundary = _listed_boundary()
+    live = boundary.object("live", candidate=False)
+    boundary.roots = [live]
+    boundary.seal(*(() if old_list_empty else (live,)))
+    # This new synthetic verdict was never in the old finish's list.
+    dead = boundary.object("injected")
+    dead["edges"] = [dead]
+    storage = boundary.listed_nodes
+    entries = dict(storage)
+    boundary.global_cells["pcc_gc_tracing_candidate_capacity"][0] = 8
+    namespace = boundary.sweep.__globals__
+    load_functions(SOURCE, {"pcc_gc_tracing_candidates_reset"}, namespace)
+    namespace["pcc_gc_tracing_candidates_reset"]()
+    assert boundary.global_cells["pcc_gc_tracing_candidate_count"][0] == 0
+    assert boundary.global_cells["pcc_gc_tracing_candidate_commit"][0] == -1
+    assert boundary.global_cells["pcc_gc_tracing_finish_commits"][0] == 1
+    assert boundary.global_cells["pcc_gc_tracing_candidate_capacity"][0] == 8
+    assert boundary.listed_nodes is storage and storage == entries
+    boundary.global_cells["pcc_gc_tracing_finish_stop_epoch"][0] = -1
+    assert boundary.sweep(1) == 1
+    assert "free:injected" in boundary.events and "free:live" not in boundary.events
+    assert sum(event == "del:injected" for event in boundary.events) == 1
