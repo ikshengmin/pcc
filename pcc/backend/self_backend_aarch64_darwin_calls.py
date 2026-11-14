@@ -12,11 +12,11 @@ from .self_backend_aarch64_darwin_abi import (
     aggregate_returned_indirect_indexed,
     aggregate_passed_indirect,
     aggregate_passed_indirect_indexed,
+    assign_abi_arg_layout,
     assign_abi_arg_regs,
     reg_name,
     stack_arg_alignment,
     stack_arg_alignment_indexed,
-    stack_arg_offsets,
     stack_arg_storage_size,
     stack_arg_storage_size_indexed,
     variadic_stack_arg_storage_size,
@@ -195,10 +195,9 @@ def emit_vararg_start(
         from .self_backend_aarch64_linux import emit_linux_vararg_start
         return emit_linux_vararg_start(func, ap_ptr, module_symbols)
     arg_types = [arg.type for arg in func.args]
-    assignments = assign_abi_arg_regs(arg_types)
-    stack_offsets = stack_arg_offsets(arg_types, assignments)
-    fixed_stack_offsets = [offset for offset in stack_offsets if offset is not None]
-    first_vararg_offset = 16 if not fixed_stack_offsets else fixed_stack_offsets[-1] + 8
+    # The fixed tail can be compact or wider than one slot. Unnamed Darwin
+    # arguments start at the next eight-byte boundary after the complete tail.
+    first_vararg_offset = _align_to(assign_abi_arg_layout(arg_types)[4], 8)
     lines = materialize_pointer(func, ap_ptr, 9, module_symbols)
     lines.append(
         emitted_addsub_immediate_line(
@@ -2166,8 +2165,9 @@ def emit_call_instruction_indexed(
             if not linux_known:
                 linux = is_aarch64_linux_triple(module_symbols.target_triple)
                 linux_known = True
-            if linux:
-                stack_offset = _align_to(stack_offset, stack_arg_alignment_indexed(kernel, arg_type_id))
+            stack_offset = _align_to(
+                stack_offset, stack_arg_alignment_indexed(kernel, arg_type_id, linux=linux)
+            )
             if arg_is_indirect:
                 ptr_offset = stack_offset
                 stack_offset += 8
@@ -2182,7 +2182,7 @@ def emit_call_instruction_indexed(
             else:
                 stack_arg_entries.append((stack_offset, arg_index))
                 stack_offset += (
-                    stack_arg_storage_size_indexed(kernel, arg_type_id)
+                    stack_arg_storage_size_indexed(kernel, arg_type_id, linux=linux)
                 )
             arg_index += 1
             continue
@@ -2232,6 +2232,7 @@ def emit_call_instruction_indexed(
 
     while arg_index < arg_count:
         raw: CompilerInt4 = kernel.call_arg(header.fourth + arg_index)
+        stack_offset = _align_to(stack_offset, 8)
         stack_arg_entries.append((stack_offset, arg_index))
         variadic_kind_id = kernel.type_kind_id(raw.first)
         stack_offset += (
@@ -2725,11 +2726,12 @@ def emit_call_instruction(
             )
         indirect_callee_value_id = indexed_use0
         indexed_use_index = 1
-    darwin_varargs = is_vararg_call and not is_aarch64_linux_triple(module_symbols.target_triple)
+    linux = is_aarch64_linux_triple(module_symbols.target_triple)
+    darwin_varargs = is_vararg_call and not linux
     fixed_args = args[:fixed_arg_count] if darwin_varargs else args
     vararg_args = args[fixed_arg_count:] if darwin_varargs else ()
     fixed_types = [arg_type for arg_type, _value in fixed_args]
-    arg_regs = assign_abi_arg_regs(fixed_types, linux=is_aarch64_linux_triple(module_symbols.target_triple))
+    arg_regs = assign_abi_arg_regs(fixed_types, linux=linux)
     stack_arg_entries: list[tuple[int, TypeDesc, str, int]] = []
     indirect_stack_ptr_entries: list[tuple[int, TypeDesc, str, int]] = []
     pending_indirect_stack_literals: list[tuple[int, TypeDesc, str]] = []
@@ -2755,11 +2757,10 @@ def emit_call_instruction(
                 )
             indexed_use_index += 1
         if not regs:
-            if is_aarch64_linux_triple(module_symbols.target_triple):
-                stack_offset = _align_to(stack_offset, stack_arg_alignment(arg_type))
+            stack_offset = _align_to(stack_offset, stack_arg_alignment(arg_type, linux=linux))
             if aggregate_passed_indirect(arg_type):
                 ptr_offset = stack_offset
-                stack_offset += stack_arg_storage_size(arg_type)
+                stack_offset += stack_arg_storage_size(arg_type, linux=linux)
                 if _can_spill_aggregate_constant(value):
                     pending_indirect_stack_literals.append(
                         (ptr_offset, arg_type, value)
@@ -2772,7 +2773,7 @@ def emit_call_instruction(
             stack_arg_entries.append(
                 (stack_offset, arg_type, value, arg_value_id)
             )
-            stack_offset += stack_arg_storage_size(arg_type)
+            stack_offset += stack_arg_storage_size(arg_type, linux=linux)
             continue
         if aggregate_passed_indirect(arg_type):
             if _can_spill_aggregate_constant(value):
@@ -2799,6 +2800,7 @@ def emit_call_instruction(
             )
         )
     for arg_type, value in vararg_args:
+        stack_offset = _align_to(stack_offset, 8)
         arg_value_id = -1
         if indexed_use_count >= 0 and is_local_value_ref(value):
             if indexed_use_index >= indexed_use_count:

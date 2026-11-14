@@ -166,12 +166,12 @@ def test_indexed_call_target_decision_is_not_retained_between_calls():
 def test_indexed_call_preserves_linux_stack_alignment():
     linux = _emit(_source(_TARGETS[0], "stack-align"), indexed=True)
     darwin = _emit(_source(_TARGETS[2], "stack-align"), indexed=True)
-    # After a single stack i64, the 16-byte-aligned aggregate starts at 16 on
-    # Linux, not at Darwin's compact offset 8; the final i64 follows it.
+    # Both platforms retain an aggregate's natural 16-byte stack alignment.
+    # Darwin's compact scalar slots do not waive alignment of the next value.
     assert "  sub sp, sp, #48" in linux
     assert "  add x14, sp, #32" in linux
-    assert "  sub sp, sp, #32" in darwin
-    assert "  add x14, sp, #24" in darwin
+    assert "  sub sp, sp, #48" in darwin
+    assert "  add x14, sp, #32" in darwin
 
 
 @pytest.mark.parametrize("target", (_TARGETS[0], _TARGETS[2]))
@@ -196,3 +196,52 @@ def test_call_target_reuse_matches_assembly_and_native_sections(target, shape):
     # Complete sections include instruction words, symbols, relocations and
     # stackmaps, not merely the human-readable call spelling.
     assert transport.assemble_sections() == assemble_file(assembly)
+
+
+def _stack_layout_source(target, types, fixed_count=None):
+    values = ["0.000000e+00" if ty in ("float", "double") else
+              "null" if ty == "ptr" else "zeroinitializer" if ty.startswith(("{", "[")) else "1"
+              for ty in types]
+    signature = ", ".join(types if fixed_count is None else types[:fixed_count] + ["..."])
+    actuals = ", ".join(ty + " " + value for ty, value in zip(types, values))
+    callee = "void @sink" if fixed_count is None else "void (" + signature + ") @sink"
+    return ('target triple = "' + target + '"\ndeclare void @sink(' + signature + ')\n'
+            + 'define void @caller() {\nentry:\n  call ' + callee + '(' + actuals + ')\n'
+            + '  ret void\n}\n')
+
+
+@pytest.mark.parametrize("target", (_TARGETS[0], _TARGETS[2]))
+@pytest.mark.parametrize("capture", (False, True), ids=("assembly", "records"))
+@pytest.mark.parametrize("types,offsets", [
+    (["float"] * 12, ([0, 8, 16, 24], [0, 4, 8, 12])),
+    (["i64"] * 8 + ["float"] * 8 + ["i8", "i16", "float", "double", "i32", "ptr"],
+     ([0, 8, 16, 24, 32, 40], [0, 2, 4, 8, 16, 24])),
+    (["float"] * 9 + ["{float, float, float}", "float"],
+     ([0, 8, 24], [0, 4, 16])),
+    (["i64"] * 8 + ["i8", "{i8, i8, i8}", "i32", "{i64, i64, i64}"],
+     ([0, 8, 16, 24], [0, 8, 16, 24])),
+])
+def test_fixed_stack_layout_matches_both_emitters(target, capture, types, offsets):
+    source = _stack_layout_source(target, types)
+    actual = _emit(source, indexed=True, capture=capture)
+    assert actual == _emit(source, indexed=False, capture=capture)
+    lines = actual[0] if capture else actual
+    expected = offsets[0 if target == _TARGETS[0] else 1]
+    for offset in expected[1:]:
+        assert "  add x14, sp, #" + str(offset) in lines
+    if all(not ty.startswith(("{", "[")) for ty in types):
+        actual_offsets = [int(line.split("#")[1]) for line in lines
+                          if line.startswith("  add x14, sp, #")]
+        assert actual_offsets == expected[1:]
+
+
+@pytest.mark.parametrize("fixed_count,vararg_offset", [(9, 8), (10, 8), (11, 16)])
+@pytest.mark.parametrize("indexed", (False, True))
+def test_darwin_call_aligns_varargs_after_compact_fixed_tail(fixed_count, vararg_offset, indexed):
+    # Named i32 values beyond x7 are packed; unnamed values keep 8-byte slots.
+    source = _stack_layout_source(_TARGETS[2], ["i32"] * fixed_count + ["i64", "i64"], fixed_count)
+    lines = _emit(source, indexed=indexed)
+    for offset in (vararg_offset, vararg_offset + 8):
+        assert "  add x14, sp, #" + str(offset) in lines
+    if fixed_count >= 10:
+        assert "  add x14, sp, #4" in lines
