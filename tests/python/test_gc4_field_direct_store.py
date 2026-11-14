@@ -12,10 +12,11 @@ from itertools import product
 
 import pytest
 
-from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
-
 from tests.python.test_gc4_public_direct_store import PublicStore
 from tests.python.test_gc4_count_free_store_plans import SOURCE, Store
+from tests.python.test_gc4_public_stop_poll import (
+    assert_finish_entry_request_poll,
+)
 
 
 OLD_FIELD_SOURCE = '''
@@ -319,20 +320,7 @@ def assert_field_unlock_reaches_finish_poll(text):
     field = functions['pcc_gc_store_field_ptr']
     finish_name = 'user_py_obj__pcc_gc_store_plan_finish'
     finish = functions[finish_name]
-    entry = finish.blocks[0]
-    entry_text = ''.join(inst.text for inst in entry.instructions)
-    flag = re.search(r'%([\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested '
-                     + SAFEPOINT_POLL_LOAD_ORDERING + r', align 4', entry_text)
-    assert flag
-    need = re.search(r'%([\w.$-]+) = icmp ne i32 %' + re.escape(flag[1]) + r', 0', entry_text)
-    assert need
-    assert entry.terminator.text.strip().startswith('br i1 %' + need[1] + ',')
-    assert not any(inst.opcode == 'store' for inst in entry.instructions)
-    labels = re.findall(r'label %([\w.$-]+)', entry.terminator.text)
-    assert len(labels) == 2
-    finish_blocks = {block.name: block for block in finish.blocks}
-    assert any('@pcc_thread_safepoint()' in inst.text
-               for inst in finish_blocks[labels[0]].instructions)
+    assert_finish_entry_request_poll(finish)
 
     def require_finish(fn, starts, callees):
         blocks = {block.name: block for block in fn.blocks}

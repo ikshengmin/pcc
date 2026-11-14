@@ -58,6 +58,48 @@ def test_public_keeps_finish_entry_and_committed_root_image(
     assert before.words == after.words
 
 
+def assert_finish_entry_request_poll(finish):
+    """Require the entry branch to service either request through a plain poll."""
+    entry = finish.blocks[0]
+    assert not any(inst.opcode == 'store' for inst in entry.instructions)
+    assert len(entry.instructions) >= 5
+    tail = [inst.text.strip() for inst in entry.instructions[-5:]]
+    loads = []
+    for index, symbol in enumerate((
+        'pcc_thread_stop_requested', 'pcc_gc_gray_worklist_flush_requested',
+    )):
+        load = re.fullmatch(
+            r'%([\w.$-]+) = load atomic i32, ptr @' + symbol + ' '
+            + re.escape(SAFEPOINT_POLL_LOAD_ORDERING) + r', align 4', tail[index],
+        )
+        assert load
+        loads.append(load[1])
+    pending = re.fullmatch(
+        r'%([\w.$-]+) = or i32 %' + re.escape(loads[0])
+        + r', %' + re.escape(loads[1]), tail[2],
+    )
+    assert pending
+    need = re.fullmatch(
+        r'%([\w.$-]+) = icmp ne i32 %' + re.escape(pending[1]) + r', 0', tail[3],
+    )
+    assert need
+    assert len(set(loads + [pending[1], need[1]])) == 4
+    branch = re.fullmatch(
+        r'br i1 %' + re.escape(need[1]) + r', label %([\w.$-]+), label %([\w.$-]+)',
+        entry.terminator.text.strip(),
+    )
+    assert branch and branch[1] != branch[2]
+    finish_blocks = {block.name: block for block in finish.blocks}
+    assert branch[1] in finish_blocks and branch[2] in finish_blocks
+    slow = finish_blocks[branch[1]]
+    assert len(slow.instructions) == 2
+    assert re.fullmatch(
+        r'call void (?:\(\) )?@pcc_thread_safepoint\(\)',
+        slow.instructions[0].text.strip(),
+    )
+    assert slow.terminator.text.strip() == 'br label %' + branch[2]
+
+
 def assert_public_unlock_reaches_finish_poll(text):
     """Validate the reachable entry poll, not an unused helper definition."""
     from pcc.ir.optimization.ir_mutator import MutableModule
@@ -65,20 +107,7 @@ def assert_public_unlock_reaches_finish_poll(text):
     functions = {fn.name: fn for fn in MutableModule.parse(text).functions}
     finish_name = 'user_py_obj__pcc_gc_store_plan_finish'
     finish = functions[finish_name]
-    entry = finish.blocks[0]
-    entry_text = ''.join(inst.text for inst in entry.instructions)
-    flag = re.search(r'%([\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested '
-                     + SAFEPOINT_POLL_LOAD_ORDERING + r', align 4', entry_text)
-    assert flag
-    need = re.search(r'%([\w.$-]+) = icmp ne i32 %' + re.escape(flag[1]) + r', 0', entry_text)
-    assert need
-    assert entry.terminator.text.strip().startswith('br i1 %' + need[1] + ',')
-    assert not any(inst.opcode == 'store' for inst in entry.instructions)
-    labels = re.findall(r'label %([\w.$-]+)', entry.terminator.text)
-    assert len(labels) == 2
-    finish_blocks = {block.name: block for block in finish.blocks}
-    assert any('@pcc_thread_safepoint()' in inst.text
-               for inst in finish_blocks[labels[0]].instructions)
+    assert_finish_entry_request_poll(finish)
 
     def require_finish(fn, starts, callees):
         blocks = {block.name: block for block in fn.blocks}
