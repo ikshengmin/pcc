@@ -21,68 +21,261 @@ ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
 
 
-def _diagnostic():
-    return probe.PROBE_SOURCE.split("static int fail_relocation_state(", 1)[1].split(
-        "\nint main(void)", 1
-    )[0]
+def _without_comments(source):
+    # Keep literal text and source offsets: a comment must not supply a fake
+    # definition or executable check to this source contract.
+    pattern = r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|/\*.*?\*/|//[^\n]*'
+    return re.sub(
+        pattern,
+        lambda match: re.sub(r"[^\n]", " ", match[0])
+        if match[0].startswith(("/*", "//")) else match[0],
+        source, flags=re.S,
+    )
 
 
-def test_diagnostics_are_only_on_original_selection_and_copy_failures():
-    main = probe.PROBE_SOURCE.split("int main(void)", 1)[1]
-    assert main.count("fail_relocation_state(") == 2
-    assert main.count("pcc_gc_select_relocation_set(") == 1
-    assert main.count("instance_payload_size(") == 1
-    assert main.count("pcc_gc_relocate_copy(") == 1
-    assert '''    if (pcc_gc_select_relocation_set(1) != 1)
-        /* Size was not requested on this path; -1 means not evaluated. */
-        return fail_relocation_state(13, "select", source, 0, -1);
+def _c_tokens(source):
+    return re.findall(
+        r'"(?:\\.|[^"\\])*"|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|[0-9]+|[^\s]',
+        _without_comments(source),
+    )
+
+
+def _probe_body(name, source=None, *, noinline=False):
+    if source is None:
+        source = probe.PROBE_SOURCE
+    # This fixture's definitions close at column zero. Bound every check to
+    # one definition, not the rest of the translation unit or a dead helper.
+    pattern = (
+        r"^(?P<attribute>__attribute__\(\(noinline\)\) )?"
+        r"(?:static )?(?:int|void) " + re.escape(name)
+        + r"\([^;]*?\) \{\n(?P<body>.*?)^\}"
+    )
+    matches = list(re.finditer(pattern, _without_comments(source), re.M | re.S))
+    assert len(matches) == 1, name
+    match = matches[0]
+    if noinline:
+        assert match["attribute"] is not None, name
+    return source[match.start("body"):match.end("body")]
+
+
+# Fixed expectations for the real protocol, including complete control flow.
+# These are not derived from PROBE_SOURCE at test time. Full token equality
+# rejects early returns, conditional bypasses, wrong bindings and reordered
+# calls even when all old assertion strings survive in unreachable code.
+_EXPECTED_PROTOCOL = {
+    'probe_scrub_stack': r"""
+    volatile unsigned char words[65536];
+    for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+""",
+    'build_probe': r"""
+    struct PyClassObject *value_class =
+        py_class_new("SweepVerdictValue", 0, 0, 0, 0);
+    if (value_class == 0) return 3;
+    pcc_gc_pin((PyObject *)value_class);
+    py_class_add_method(
+        value_class, "__del__", (PyObject *)(uintptr_t)probe_del
+    );
+    PyObject *source = py_instance_new(value_class);
+    if (source == 0) return 4;
+    pcc_gc_store_root(&root_slot, source);
+    py_decref(source);
+    root_handle = pcc_gc_scheduler_root_register_handle(&root_slot);
+    if (root_handle == 0) return 5;
+    py_header_flags_or(py_header(source), PY_FLAG_GC_SWEEP_CANDIDATE);
+    source_holder = source;
+    return 0;
+""",
+    'relocate_probe': r"""
+    pcc_gc_reset_relocation_set();
+    if (pcc_gc_select_relocation_set(1) != 1)
+        return fail_relocation_state(13, "select", source_holder, 0, -1);
+    PyObject *source = source_holder;
+    if (pcc_gc_relocation_set_contains(source) != 1)
+        return fail_relocation_state(13, "selected-other-object", source, 0, -1);
+    if ((flags_of(source) & PY_FLAG_GC_SWEEP_CANDIDATE) == 0)
+        return fail_state(29, "source-lost-injected-verdict", source, 0);
     int64_t requested_size = instance_payload_size(source);
     PyObject *copy = pcc_gc_relocate_copy(
         source, requested_size
-    );''' in main
+    );
+    if (copy != 0) {
+        py_decref(copy);
+    }
+    if (copy == 0 || copy == source)
+        return fail_relocation_state(14, "relocate", source, copy, requested_size);
+    watched_copy = copy;
+    if ((flags_of(copy) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0)
+        return fail_state(20, "destination-inherits-verdict", source, copy);
+    if (
+        backend == PCC_GC_KIND_COLORED_RELOCATING
+        && (flags_of(source) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0
+    ) {
+        return fail_state(21, "shell-keeps-verdict", source, copy);
+    }
+    return 0;
+""",
+    'verify_live_copy': r"""
+    PyObject *source = 0;
+    PyObject *copy = root_slot;
+    if (copy != watched_copy)
+        return fail_state(28, "owner-not-remapped-to-copy", source, copy);
+    (void)pcc_gc_collect(0);
+    if (del_other != 0)
+        return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);
+    if ((flags_of(copy) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0)
+        return fail_state(22, "collect-recut-live-copy", source, copy);
+    if (del_on_copy != 0)
+        return fail_state(23, "finalizer-ran-on-live-copy", source, copy);
+    if (pcc_gc_object_is_known_no_lock(copy) != 1)
+        return fail_state(24, "live-copy-unknown-after-collect", source, copy);
+    return 0;
+""",
+    'release_probe': r"""
+    pcc_gc_scheduler_root_unregister_handle(root_handle);
+    pcc_gc_store_root(&root_slot, 0);
+    root_slot = 0;
+""",
+    'main': r"""
+    const int32_t backend = @BACKEND@;
+    if (pcc_threads_enabled() != @EXPECTED_THREADS@) return 6;
+    if (pcc_refcount_strategy() != @EXPECTED_REFCOUNT_STRATEGY@) return 1;
+    if (pcc_gc_set_backend(backend) != 0) return 2;
+    int result = build_probe();
+    if (result != 0) return result;
+    probe_scrub_stack();
+    if (pcc_stop_the_world() != 0) return 90;
+    result = relocate_probe(backend);
+    source_holder = 0;
+    int resume_result = pcc_resume_world();
+    if (result != 0) return result;
+    if (resume_result != 0) return 91;
+    result = verify_live_copy();
+    if (result != 0) return result;
+    release_probe();
+    for (int i = 0; i < 16 && del_on_copy == 0; i++) {
+        probe_scrub_stack();
+        (void)pcc_gc_collect(0);
+    }
+    if (backend == PCC_GC_KIND_COLORED_RELOCATING) {
+        if (del_on_copy != 1)
+            return fail_state(25, "exactly-once-violated", 0, 0);
+    } else if (pcc_gc_object_is_known_no_lock(watched_copy) != 0) {
+        return fail_state(26, "dead-copy-still-known", 0, 0);
+    }
+    if (del_other != 0)
+        return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);
+    printf(
+        "ok backend=%d del_other=%ld\n",
+        backend,
+        (long)del_other
+    );
+    return 0;
+""",
+}
+
+
+def _assert_lifetime_protocol(source):
+    # The witness has only includes, never preprocessor rerouting of a
+    # checked helper or call. A same-named dead definition cannot hide that.
+    assert re.findall(r"(?m)^\s*#\s*(\w+)", _without_comments(source)) == [
+        "include", "include", "include",
+    ]
+    for name, expected in _EXPECTED_PROTOCOL.items():
+        body = _probe_body(name, source, noinline=name != "main")
+        assert _c_tokens(body) == _c_tokens(expected), name
+
+
+def _diagnostic():
+    return _probe_body("fail_relocation_state")
+
+
+def test_diagnostics_are_only_on_original_selection_and_copy_failures():
+    main = _probe_body("main")
+    relocation = _probe_body("relocate_probe", noinline=True)
+    # The two selection failures and one copy failure are distinct, live
+    # branches in relocate_probe. The complete call graph is checked below.
+    assert relocation.count("fail_relocation_state(") == 3
+    assert relocation.count("pcc_gc_select_relocation_set(") == 1
+    assert relocation.count("instance_payload_size(") == 1
+    assert relocation.count("pcc_gc_relocate_copy(") == 1
+    assert '''    if (pcc_gc_select_relocation_set(1) != 1)
+        /* Size was not requested on this path; -1 means not evaluated. */
+        return fail_relocation_state(13, "select", source_holder, 0, -1);
+    PyObject *source = source_holder;
+    if (pcc_gc_relocation_set_contains(source) != 1)
+        return fail_relocation_state(13, "selected-other-object", source, 0, -1);''' in relocation
+    assert '''    int64_t requested_size = instance_payload_size(source);
+    PyObject *copy = pcc_gc_relocate_copy(
+        source, requested_size
+    );''' in relocation
     assert '''    if (copy == 0 || copy == source)
         return fail_relocation_state(14, "relocate", source, copy, requested_size);
-    watched_copy = copy;''' in main
-    assert "pcc_gc_alloc_stage_pending" not in main
-    assert "pcc_gc_object_index_find" not in main
-    assert "pcc_py_gc_minor_graph_lock" not in main
-    assert "pcc_gc_object_is_address_pinned" not in main
+    watched_copy = copy;''' in relocation
+    for name in ("main", "build_probe", "relocate_probe", "verify_live_copy", "release_probe"):
+        body = _probe_body(name)
+        assert "pcc_gc_alloc_stage_pending" not in body
+        assert "pcc_gc_object_index_find" not in body
+        assert "pcc_py_gc_minor_graph_lock" not in body
+        assert "pcc_gc_object_is_address_pinned" not in body
+        if name != "relocate_probe":
+            assert "fail_relocation_state(" not in body
+            assert "pcc_gc_select_relocation_set(" not in body
+            assert "pcc_gc_relocate_copy(" not in body
+    assert "PyObject *" not in main
     assert "pcc_gc_relocation_set_add" not in probe.PROBE_SOURCE
     assert "pcc_gc_unpin" not in probe.PROBE_SOURCE
 
 
 def test_original_movement_verdict_lifetime_and_exactly_once_checks_remain():
-    main = probe.PROBE_SOURCE.split("int main(void)", 1)[1]
-    expected = [
-        "if (copy != 0)", "py_decref(copy);", "if (copy == 0 || copy == source)",
-        "watched_copy = copy;",
-        "if ((flags_of(copy) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0)",
-        'return fail_state(20, "destination-inherits-verdict", source, copy);',
-        "&& (flags_of(source) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0",
-        'return fail_state(21, "shell-keeps-verdict", source, copy);',
-        "(void)pcc_gc_collect(0);", "if (del_other != 0)",
-        'return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);',
-        "if ((flags_of(copy) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0)",
-        'return fail_state(22, "collect-recut-live-copy", source, copy);',
-        "if (del_on_copy != 0)",
-        'return fail_state(23, "finalizer-ran-on-live-copy", source, copy);',
-        "if (pcc_gc_object_is_known_no_lock(copy) != 1)",
-        'return fail_state(24, "live-copy-unknown-after-collect", source, copy);',
-        "pcc_gc_scheduler_root_unregister_handle(root_handle);",
-        "pcc_gc_store_root(&root_slot, 0);", "root_slot = 0;",
-        "for (int i = 0; i < 16 && del_on_copy == 0; i++)",
-        "if (backend == PCC_GC_KIND_COLORED_RELOCATING)",
-        "if (del_on_copy != 1)",
-        'return fail_state(25, "exactly-once-violated", source, copy);',
-        "else if (pcc_gc_object_is_known_no_lock(copy) != 0)",
-        'return fail_state(26, "dead-copy-still-known", source, copy);',
-        "if (del_other != 0)",
-        'return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);',
-        '"ok backend=%d del_other=%ld\\n"', "return 0;",
-    ]
-    cursor = 0
-    for fragment in expected:
-        cursor = main.index(fragment, cursor) + len(fragment)
+    _assert_lifetime_protocol(probe.PROBE_SOURCE)
+    # Keep mutations inside this existing node: the host node inventory is
+    # unchanged. Each still leaves the original helpers/checks in the source.
+    mutations = (
+        ("#include <stdio.h>", "#include <stdio.h>\n#define relocate_probe(backend) 0"),
+        ("words[i] = 0;", "words[i] = 1;"),
+        ("    result = relocate_probe(backend);", ""),
+        ("    result = relocate_probe(backend);", "    if (0) result = relocate_probe(backend);"),
+        ("    result = relocate_probe(backend);", "    return 0;\n    result = relocate_probe(backend);"),
+        ("result = relocate_probe(backend);", "result = relocate_probe(0);"),
+        ("result = verify_live_copy();", "result = build_probe();"),
+        ("    release_probe();", "    if (0) release_probe();"),
+        ("    if (result != 0) return result;", "    if (result != 0) return 0;"),
+        ("    if (resume_result != 0) return 91;", "    if (resume_result == 0) return 91;"),
+        ("    pcc_gc_reset_relocation_set();", "    return 0;\n    pcc_gc_reset_relocation_set();"),
+        ("PyObject *source = source_holder;", "PyObject *source = root_slot;"),
+        ("    PyObject *copy = root_slot;", "    PyObject *copy = watched_copy;"),
+        ("        py_decref(copy);", ""),
+        ('return fail_state(29, "source-lost-injected-verdict", source, 0);', "return 0;"),
+        ('return fail_state(20, "destination-inherits-verdict", source, copy);', "return 0;"),
+        ('return fail_state(21, "shell-keeps-verdict", source, copy);', "return 0;"),
+        ('return fail_state(28, "owner-not-remapped-to-copy", source, copy);', "return 0;"),
+        ('return fail_state(22, "collect-recut-live-copy", source, copy);', "return 0;"),
+        ('return fail_state(23, "finalizer-ran-on-live-copy", source, copy);', "return 0;"),
+        ('return fail_state(24, "live-copy-unknown-after-collect", source, copy);', "return 0;"),
+        ('return fail_state(25, "exactly-once-violated", 0, 0);', "return 0;"),
+        ('return fail_state(26, "dead-copy-still-known", 0, 0);', "return 0;"),
+        ('return fail_state(27, "finalizer-ran-on-forwarding-shell", 0, 0);', "return 0;"),
+        ("    pcc_gc_store_root(&root_slot, 0);", "    pcc_gc_store_root(&source_holder, 0);"),
+    )
+    for original, replacement in mutations:
+        assert original in probe.PROBE_SOURCE
+        changed = probe.PROBE_SOURCE.replace(original, replacement, 1)
+        with pytest.raises(AssertionError):
+            _assert_lifetime_protocol(changed)
+    for name in ("build_probe", "relocate_probe", "verify_live_copy", "release_probe", "probe_scrub_stack"):
+        declaration = re.search(
+            r"__attribute__\(\(noinline\)\) static (?:int|void) " + name,
+            probe.PROBE_SOURCE,
+        )[0]
+        changed = probe.PROBE_SOURCE.replace(declaration, declaration.split(" static ", 1)[1], 1)
+        with pytest.raises(AssertionError):
+            _assert_lifetime_protocol(changed)
+    # Explicitly reverse stop/relocation and verification/release ordering.
+    for first, second in (("if (pcc_stop_the_world() != 0) return 90;", "result = relocate_probe(backend);"),
+                          ("result = verify_live_copy();", "release_probe();")):
+        changed = probe.PROBE_SOURCE.replace(first, "@SWAP@", 1).replace(second, first, 1).replace("@SWAP@", second, 1)
+        with pytest.raises(AssertionError):
+            _assert_lifetime_protocol(changed)
 
 
 def test_initial_snapshot_is_locked_stable_and_printed_before_mutating_observation():
@@ -115,7 +308,7 @@ def test_initial_snapshot_is_locked_stable_and_printed_before_mutating_observati
         "pcc_py_gc_minor_graph_unlock()"
     ) < secondary.index("fprintf(")
     assert "post-failure-secondary-may-drain" in secondary
-    assert secondary.rstrip().endswith("return result;\n}")
+    assert secondary.rstrip().endswith("return result;")
 
 
 @pytest.mark.parametrize(("module", "symbol", "arguments", "returns"), [
