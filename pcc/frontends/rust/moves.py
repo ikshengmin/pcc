@@ -182,6 +182,14 @@ class MoveChecker:
             if result is not None:
                 result[expr.binding.serial] = set()
             return result
+        if kind == "pattern_let":
+            # The initializer value is moved into the pattern's bindings.
+            from .patterns import pattern_bindings
+            result = self.expression(children[0], state)
+            if result is not None:
+                for binding in pattern_bindings(expr.value[0]):
+                    result[binding.serial] = set()
+            return result
         if kind in {"discard", "statement", "cast", "unary", "unsafe"}:
             return self.expression(children[0], state)
         if kind == "assign" and children[0].kind == "static":

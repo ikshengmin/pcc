@@ -1808,6 +1808,20 @@ class Parser:
                 mutable = self.accept("mut")
                 if self.token.text == "[":
                     raise self.token.error("array destructuring patterns are not implemented")
+                if self.token.text == "(":
+                    # `let (a, mut b) = init;` (Rust Reference statements.html#let-statements):
+                    # an irrefutable pattern, checked and bound like a match arm.
+                    if mutable:
+                        raise self.token.error("`mut` must be attached to each individual binding")
+                    pattern = self.pattern(alternatives=False)
+                    annotation = self.type() if self.accept(":") else None
+                    self.expect("=")
+                    init = self.expression()
+                    if self.token.text == "else":
+                        raise self.token.error("let-else statements are not implemented")
+                    self.expect(";")
+                    statements.append(Expr("pattern_let", pattern.token, (pattern, annotation), [init]))
+                    continue
                 wildcard = self.token.text == "_"
                 name = self.take() if wildcard else self.name()
                 if wildcard and mutable:
