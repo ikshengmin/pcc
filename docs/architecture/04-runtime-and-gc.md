@@ -149,6 +149,15 @@ reference implementation is kept under `docs/refs_docs/`
    While the world runs user code, `pcc_gc_explicit_collect_active` stays
    set: `gc.collect()`, automatic collections and GC4 steps stand aside, and
    the scheduler begins no mark unless its caller holds the stopped world.
+   Exception: while GC4 relocation is unsettled (`pcc_gc_backend4_remap_owed`
+   or `pcc_gc_forwarding_population > 0`) the sweep keeps the world stopped
+   for its user code. Resuming would settle the relocation, and retirement
+   releases pages whose only cells are candidates still waiting for their
+   finalizers (observed: `__del__` run twice or never). Such a GC4 sweep can
+   still deadlock on a lock a parked thread holds; the planned fix is
+   deferred finalization (keep the targets and their referents alive,
+   finish the sweep and the relocation, run the finalizers after the world
+   resumes, reclaim them in the next collection).
 6. **Stopping the world.** `pcc_stop_the_world` / `pcc_resume_world` nest
    by depth; each outermost stop takes a new epoch
    (`pcc_thread_world_stop_epoch_held`). Compiled code polls

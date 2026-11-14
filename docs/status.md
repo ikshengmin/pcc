@@ -16,8 +16,13 @@ CPython's free-threaded collector does.
 `tests/python/test_gc_finalizers_run_with_world_running.py` reproduces it
 (four threads rebinding fields, `__init__`/`__del__` sharing a lock):
 before the change all five collectors hung; after it GC1-GC4 match CPython
-(local Mac). GC0's half of the change was committed before its native run
-finished; run that test's GC0 node first.
+(local Mac); a later local run of the same program at `4de52048c` also passes on
+GC0. The windows then broke GC4: a mid-sweep resume settled GC4's
+relocation and its retirement freed candidates still waiting for
+finalizers (`__del__` ran twice or never in about a third of the runs).
+The follow-up keeps the world stopped for a GC4 sweep while relocation is
+unsettled; such a sweep can still deadlock, and deferred finalization is
+the open fix (see the architecture page).
 
 The current collector architecture, the approved per-collector design, the
 remaining steps in order (GC3 generations, GC4 phase 2, GC1 incremental, GC2
