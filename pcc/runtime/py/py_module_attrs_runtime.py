@@ -90,9 +90,14 @@ pcc_mutex_unlock = extern("pcc_mutex_unlock", (c_ptr,), c_int64)
 define_global_ptr_null("pcc_module_attrs_cache")
 # Name-key entries are immutable after publication, never evicted, and own
 # registered pinned keys. At most 512 names of at most 256 bytes are retained.
-# Collisions, changed C buffers and allocation failures use per-call keys.
+# A name probes up to _NAME_CACHE_PROBES slots from its address hash: a
+# direct-mapped table made two pooled literals whose addresses shared a slot
+# rebuild, hash and free a key on every lookup, so throughput followed the
+# image layout. A full neighbourhood, changed C buffers and allocation
+# failures still use per-call keys.
 define_global_i64("pcc_threaded_name_key_cache_bits", 0)
 _NAME_CACHE_CAPACITY = 512
+_NAME_CACHE_PROBES = 8
 # Literal slot indices are initialized in the runtime image even for owned
 # C entrypoints, which do not execute this Python module's initializer.
 _NAME_CACHE_TEXT = 0
@@ -474,14 +479,22 @@ def _threaded_name_entry(text):
     bits: int = atomic_load_i64(global_addr("pcc_threaded_name_key_cache_bits"), 0, "acquire")
     if bits == 0:
         return null()
-    offset: int = ((ptr_to_int(text) >> 3) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
-    current: int = atomic_load_i64(int_to_ptr(bits), offset, "acquire")
-    if current == 0:
-        return null()
-    entry = int_to_ptr(current)
-    if ptr_is_null(_threaded_name_key_match(entry, text)):
-        return null()
-    return entry
+    start: int = ptr_to_int(text) >> 3
+    probe: int = 0
+    while probe < _NAME_CACHE_PROBES:
+        offset: int = ((start + probe) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
+        current: int = atomic_load_i64(int_to_ptr(bits), offset, "acquire")
+        if current == 0:
+            # Insertion fills the first empty slot of the run: none follows.
+            return null()
+        entry = int_to_ptr(current)
+        if ptr_eq(load_ptr(entry, _NAME_CACHE_TEXT * C_POINTER_SIZE), text):
+            # This address's entry: its name, or a changed buffer (NULL).
+            if ptr_is_null(_threaded_name_key_match(entry, text)):
+                return null()
+            return entry
+        probe = probe + 1
+    return null()
 
 
 def _threaded_cached_name_key(text):
@@ -499,10 +512,21 @@ def _threaded_cached_name_key(text):
         else:
             bits = ptr_to_int(candidate)
     table = int_to_ptr(bits)
-    offset: int = ((ptr_to_int(text) >> 3) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
-    current: int = atomic_load_i64(table, offset, "acquire")
-    if current != 0:
-        return _threaded_name_key_match(int_to_ptr(current), text)
+    start: int = ptr_to_int(text) >> 3
+    offset: int = 0
+    probe: int = 0
+    while probe < _NAME_CACHE_PROBES:
+        offset = ((start + probe) & (_NAME_CACHE_CAPACITY - 1)) * C_POINTER_SIZE
+        current: int = atomic_load_i64(table, offset, "acquire")
+        if current == 0:
+            break
+        if ptr_eq(load_ptr(int_to_ptr(current), _NAME_CACHE_TEXT * C_POINTER_SIZE), text):
+            # This address's entry: its key, or NULL for a changed buffer,
+            # which keeps using per-call keys instead of a second entry.
+            return _threaded_name_key_match(int_to_ptr(current), text)
+        probe = probe + 1
+    if probe == _NAME_CACHE_PROBES:
+        return null()
     length: int = strlen(text)
     if length > 256:
         return null()
@@ -548,8 +572,9 @@ def _cached_name_key(text):
     released one str per name, twice per module global read, which was most
     of py_module_attr_get in a pcc1 codegen worker. An entry is reused only
     when its address and its bytes both match, so a reused buffer address
-    cannot return another name. Entries are never evicted; collisions retain
-    the per-call allocation path.
+    cannot return another name. Entries are never evicted; an address whose
+    home slot is taken probes up to _NAME_CACHE_PROBES slots before it falls
+    back to the per-call allocation path.
     """
     return _threaded_cached_name_key(text)
 
@@ -558,8 +583,9 @@ def _cached_name_key(text):
 def pcc_cached_name_key(text):
     """A borrowed pinned str equal to C string ``text``, or NULL.
 
-    NULL means no cached key is available (collision, changed buffer, bounded
-    capacity or allocation failure); the caller builds its own key as before.
+    NULL means no cached key is available (a full probe run, changed buffer,
+    bounded capacity or allocation failure); the caller builds its own key as
+    before.
     """
     if ptr_is_null(text):
         return null()

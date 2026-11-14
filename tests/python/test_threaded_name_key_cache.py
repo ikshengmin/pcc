@@ -39,7 +39,10 @@ int main(int argc, char **argv) {
     PyObject *first = pcc_cached_name_key(names);
     if (!first || strcmp(py_str_utf8(first), "alpha") != 0) return 4;
     if (pcc_cached_name_key(names) != first) return 5;
-    if (pcc_cached_name_key(names + 4096) != NULL) return 6;
+    /* Same home slot as "alpha": the next free slot caches it. */
+    PyObject *collision = pcc_cached_name_key(names + 4096);
+    if (!collision || strcmp(py_str_utf8(collision), "collision") != 0) return 6;
+    if (pcc_cached_name_key(names + 4096) != collision) return 14;
     strcpy(names, "beta");
     if (pcc_cached_name_key(names) != NULL) return 7;
     if (strcmp(py_str_utf8(first), "alpha") != 0) return 8;
