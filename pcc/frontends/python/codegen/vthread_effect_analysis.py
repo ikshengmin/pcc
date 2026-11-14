@@ -393,25 +393,35 @@ def _lexical_binding_kinds(
         _record_binding_kind(bindings, arg.name, _BINDING_DYNAMIC)
 
     for node in nodes:
-        target_names: set[str] = set()
+        # Most lexical nodes cannot bind a target.  Allocate this private
+        # scratch set only in a binding branch, without sharing it between
+        # nodes or changing the order in which real targets are recorded.
+        target_names: Optional[set[str]] = None
         if isinstance(node, Assign):
+            target_names = set()
             for target in node.targets:
                 _collect_binding_target_names(target, target_names)
         elif isinstance(node, AugAssign):
+            target_names = set()
             _collect_binding_target_names(node.target, target_names)
         elif isinstance(node, For):
+            target_names = set()
             _collect_binding_target_names(node.target, target_names)
         elif isinstance(node, With):
+            target_names = set()
             for _context, target in node.items:
                 if target is not None:
                     _collect_binding_target_names(target, target_names)
         elif isinstance(node, ExceptHandler):
+            target_names = set()
             if node.name:
                 target_names.add(node.name)
         elif isinstance(node, Delete):
+            target_names = set()
             for target in node.targets:
                 _collect_binding_target_names(target, target_names)
         elif isinstance(node, (FuncDef, ClassDef)):
+            target_names = set()
             target_names.add(node.name)
         elif (
             isinstance(node, Call)
@@ -419,9 +429,11 @@ def _lexical_binding_kinds(
             and node.func.ident in ("_walrus", "__walrus__")
             and len(node.args) == 2
         ):
+            target_names = set()
             _collect_binding_target_names(node.args[0], target_names)
-        for name in target_names:
-            _record_binding_kind(bindings, name, _BINDING_DYNAMIC)
+        if target_names is not None:
+            for name in target_names:
+                _record_binding_kind(bindings, name, _BINDING_DYNAMIC)
 
         if isinstance(node, Import):
             for module_name, as_name in node.names:
