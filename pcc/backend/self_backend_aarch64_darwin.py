@@ -33,6 +33,7 @@ from .arm64_encode import (
     EMITTED_INSTRUCTION_MOVE,
     EMITTED_INSTRUCTION_SCALAR,
     EMITTED_INSTRUCTION_UNSCALED,
+    EncodeError,
     STRUCTURED_FIXUP_BRANCH19,
     STRUCTURED_FIXUP_BRANCH26,
     STRUCTURED_FIXUP_CALL,
@@ -317,7 +318,22 @@ class _NativeAArch64Emission:
                 # adapter line but retain that single event position.
                 for part in line.splitlines():
                     directive = part.split(None, 1)[0] if part.strip() else ""
-                    if directive and directive not in allowed:
+                    unsupported_metadata = bool(directive) and directive not in allowed
+                    if part.startswith(".") and part.endswith(":"):
+                        # ELF data symbols keep their leading dot. Validate
+                        # the ordinary symbol tail, then retain this metadata
+                        # event for the existing section driver's label path.
+                        # Do not widen the typed code-label/operand grammar.
+                        unsupported_metadata = True
+                        try:
+                            validate_emitted_label_name(part[1:-1])
+                        except EncodeError:
+                            pass
+                        else:
+                            unsupported_metadata = False
+                    # Raise outside the validator's except suite: retaining
+                    # its unbounded label error as __context__ would leak it.
+                    if unsupported_metadata:
                         # Clip before repr: initializers may be large and
                         # rejected text must not inject control characters.
                         raise BackendUnavailable(
