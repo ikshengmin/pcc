@@ -58,6 +58,47 @@ _VOID = ir.VoidType()
 _CSTR = ir.IntType(8).as_pointer()
 
 
+def _scaffold_call_with_result_owner(host, fn, args, name, call_expr):
+    """Publish a builder.call result without changing its legacy arguments.
+
+    call0..9 and call_dyn return a new Python Value, even when the represented
+    LLVM instruction is void. Preserve the actual declaration, raw operand
+    conversion and call instruction; only its proven object result transfers
+    to an existing consumer slot. This is not an argument-ABI bridge.
+    """
+    exports = (host._native_module_exports or {}).get("pcc.ir.ir", {})
+    exported_name = fn.name[len("user_pcc_ir_ir_"):]
+    info = exports.get(exported_name)
+    semantic_result = decode_type(info.get("return_ty")) if isinstance(info, dict) else None
+    pointer_result = isinstance(fn.function_type.return_type, ir.PointerType)
+    managed_result = (
+        pointer_result
+        and not getattr(host, "_freestanding_module", False)
+        and fn.name not in host._manual_pointer_abi_functions
+        and not (isinstance(info, dict) and bool(info.get("manual_pointer_abi", False)))
+        and not isinstance(semantic_result, RawPointerType)
+        and not (semantic_result is not None and host._is_valueclass_payload_type(semantic_result))
+    )
+    sink = host._slot_call_result_sink(call_expr)
+    if sink is not None and pointer_result and not managed_result:
+        raise L1CodegenError("scaffold call has no managed result contract: " + fn.name)
+    result = host.builder.call(fn, args, name=name)
+    if not managed_result:
+        return result
+    if sink is None:
+        # Record the producer's owner without emitting a root, conversion,
+        # pin, release or error check on the existing no-sink path.
+        host._note_owned_object_value(result)
+        return result
+    # The caller registered this slot and its error cleanup before evaluating
+    # any operand. Nothing may park between the producer and the first store.
+    host._publish_slot_call_owned(sink, result, label="IR builder.call result")
+    # A provider can return NULL with a pending native exception. Select the
+    # caller's exception-preserving cleanup before later moves or finalizers.
+    host._emit_post_call_err_check(call_expr.span)
+    return host.builder.load(sink, name=host._fresh("scaffold.current"))
+
+
 def _scaffold_emit_declared_call(
     host, symbol, ret_ty, arg_exprs, integer_positions=(), *,
     call_expr=None, owned_result=False,
@@ -1296,10 +1337,12 @@ class IrScaffoldLoweringMixin:
                 _CSTR,
                 param_tys,
             )
-            return self.builder.call(
+            return _scaffold_call_with_result_owner(
+                self,
                 fn,
                 [receiver, fn_handle] + arg_handles + [name_h],
-                name=self._fresh("scaffold.call"),
+                self._fresh("scaffold.call"),
+                expr,
             )
         # Non-literal args: dynamic-list extern. Args list still
         # gets constructed via py_cpy_* so this is a partial win,
@@ -1316,10 +1359,12 @@ class IrScaffoldLoweringMixin:
             _CSTR,
             [_CSTR, _CSTR, _CSTR, _CSTR],
         )
-        return self.builder.call(
+        return _scaffold_call_with_result_owner(
+            self,
             fn,
             [receiver, fn_handle, list_handle, name_h],
-            name=self._fresh("scaffold.call_dyn"),
+            self._fresh("scaffold.call_dyn"),
+            expr,
         )
 
     def _emit_scaffold_call4_i32(self, expr: Call) -> ir.Value:
