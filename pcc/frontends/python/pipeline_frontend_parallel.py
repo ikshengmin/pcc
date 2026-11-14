@@ -1185,6 +1185,13 @@ def compile_parallel_uncached(
         if host_indexed_split:
             ir_dir = os.path.abspath(ir_dir)
         os.makedirs(ir_dir, exist_ok=True)
+        input_receipt_invocation = None
+        if str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip() and str(
+            os.environ.get("PCC_DIRECT_INDEXED_KERNEL_EMIT", "") or ""
+        ).strip().lower() in ("1", "true", "yes", "on"):
+            from pcc.backend.indexed_input_receipts import begin_invocation
+
+            input_receipt_invocation = begin_invocation(src_paths, module_names)
         # The merged may_park fixed point is a semantic prerequisite for
         # parallel codegen, so every export worker must publish its lifted AST.
         # The same sidecars are then reused by codegen workers; no parent/host
@@ -1446,6 +1453,10 @@ def compile_parallel_uncached(
                 ),
                 closed_young_proof=closed_young_proof,
             )
+            if input_receipt_invocation is not None:
+                from pcc.backend.indexed_input_receipts import attach_manifest
+
+                attach_manifest(manifest_path, input_receipt_invocation, chunk)
             result_paths.append(result_path)
             manifest_paths.append(manifest_path)
             command_parts = [shell_quote_arg(part) for part in worker_prefix]
@@ -1522,6 +1533,10 @@ def compile_parallel_uncached(
                     ir_scaffold_mode=ir_scaffold_mode,
                     verbose=verbose,
                 )
+                if input_receipt_invocation is not None:
+                    from pcc.backend.indexed_input_receipts import attach_manifest
+
+                    attach_manifest(persistent_manifest, input_receipt_invocation, chunk)
                 persistent_manifest_paths.append(persistent_manifest)
             _write_deferred_codegen_plan(
                 os.path.abspath(deferred_codegen_plan),

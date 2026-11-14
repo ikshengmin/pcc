@@ -57,6 +57,10 @@ TEST_INPUTS = (
     *TWO_ROOT_CLEANUP_INPUTS,
     *WIN64_DIRECT_SCALAR_INPUTS,
     "tests/python/owned_regression_support.py",
+    "tests/python/indexed_receipt_support.py",
+    "tests/python/two_root_indexed_lifecycle_support.py",
+    "tests/python/test_two_root_indexed_lifecycle_support.py",
+    "tests/test_indexed_executable_receipts.py",
     "tests/python/process_timeout.py",
     "tests/python/conftest.py",
     "tests/conftest.py",
@@ -158,7 +162,89 @@ def verify_common_identity(record, source, binary, runtime, run_id, *, strict=Fa
     assert record["binary_sha256"] == sha(binary)
 
 
-def verify_two_root_ir(directory, record, label):
+def verify_indexed_ir(directory, record, label, target=None):
+    """Independently replay raw-file identity, retention and semantic admission."""
+    from tests.python.indexed_receipt_support import (
+        LIMIT,
+        has_indexed_marker_definition,
+        read_indexed_inputs,
+        select_indexed_program_ir,
+        unique_json,
+        validate_indexed_modules,
+    )
+    from tests.python.owned_regression_support import _read_bounded_dump
+
+    assert record.get("executable_input_representation") == "indexed-codec-v1", (
+        "missing indexed representation receipt"
+    )
+    assert record["source_sha256"] == sha(directory / "program.py"), "indexed source changed"
+    assert record["runtime_sha256"] == sha(Path(record["runtime_archive"])), "indexed runtime changed"
+    assert record["binary_sha256"] == sha(directory / "program.out"), "indexed binary changed"
+    captured = read_indexed_inputs(
+        directory / "executable-ir", record, directory / "program.out", _read_bounded_dump,
+        expected_target=target, expected_passes=(),
+        selected_required=not label.startswith("two-root-"),
+    )
+    inventory = captured["inventory"]
+    assert record["executable_input_ir"] == record["observed_ir_dump_sha256"] == inventory
+    metadata = record["executable_ir_dump_evidence"]
+    assert metadata["path"] == "executable-ir-dump.json"
+    path = directory / metadata["path"]
+    assert path.is_file() and not path.is_symlink()
+    size = path.stat().st_size
+    assert size <= LIMIT, "OVERSIZE: indexed evidence JSON"
+    raw, digest = _read_bounded_dump(path, size)
+    assert digest == metadata["sha256"], "indexed retention receipt differs"
+    evidence = unique_json(raw)
+    assert metadata["status"] == evidence["status"] == "INDEXED_INPUTS_RETAINED"
+    assert evidence["schema"] == "pcc.observed-executable-indexed-input.v1"
+    assert evidence["compiler_completed"] is True
+    assert evidence["representation"] == "indexed-codec"
+    assert evidence["producer_completeness"] == evidence["all_modules_captured"] == "LINK_BOUND"
+    assert evidence["qualification"] == "NOT_ASSESSED"
+    for key in ("run_id", "compiler_fixture_parameter", "compiler_mode", "backend",
+                "source_sha256", "runtime_archive", "runtime_sha256", "binary_path", "binary_sha256"):
+        assert evidence[key] == record[key], "indexed evidence identity differs: " + key
+    assert evidence["observed_identity"] == {key: record[key] for key in ("source_sha256", "runtime_sha256")}
+    assert evidence["observed_dump_sha256"] == inventory
+    assert evidence["retention"] == captured["retention"], "indexed raw artifact retention differs"
+    assert evidence["modules"] == [], "indexed inputs cannot masquerade as LLVM text"
+    assert evidence["limits_bytes"] == {
+        "module": LIMIT, "total_observed_ir": LIMIT, "json_with_metadata": LIMIT,
+        "output_module": LIMIT, "total_emitted_output": LIMIT,
+    }
+    modules = captured["raw_modules"]
+    validate_indexed_modules(modules)
+    markers = {
+        "object-identity": "OBJECT_TYPE_IDENTITY_OK",
+        "dict-copy-result": "DICT_METHOD_OWNERS_OK", "dict-pop-result": "DICT_METHOD_OWNERS_OK",
+        "two-root-cleanup": "TWO_ROOT_CLEANUP_EXCEPTION_OK",
+        "two-root-tracing": "TWO_ROOT_TRACING_CLEANUP_OK",
+    }
+    selected = select_indexed_program_ir(modules, markers[label])
+    index = selected[0]
+    assert captured["invocation"]["modules"][index]["source_sha256"] == record["source_sha256"]
+    if label.startswith("two-root-"):
+        from tests.python.two_root_indexed_lifecycle_support import (
+            assert_indexed_compiler_two_root_error_edge,
+        )
+
+        other = "two-root-tracing" if label == "two-root-cleanup" else "two-root-cleanup"
+        assert not has_indexed_marker_definition(modules, markers[other]), "wrong two-root executable IR source"
+        assert "selected_module_indices" not in evidence
+        assert_indexed_compiler_two_root_error_edge(modules)
+    else:
+        assert evidence["selected_module_indices"] == list(selected)
+    return evidence
+
+
+def verify_two_root_ir(directory, record, label, target=None):
+    if record.get("executable_input_representation") == "indexed-codec-v1":
+        verify_indexed_ir(directory, record, label, target)
+        return
+    assert record.get("executable_input_representation", "") == "", (
+        "unknown executable input representation"
+    )
     from tests.python.two_root_lifecycle_support import assert_compiler_two_root_error_edge
 
     dump = directory / "executable-ir"
@@ -251,7 +337,17 @@ def verify_program_receipts(directory, runtime, run_id):
             name = "gc0" if label == "two-root-cleanup" else "tracing"
             assert path.parent.name == name, "swapped two-root receipt directory"
             two_root_directories[label] = path.parent.parent
-            verify_two_root_ir(path.parent, record, label)
+            verify_two_root_ir(path.parent, record, label, runtime["target"])
+        elif record.get("executable_input_representation") == "indexed-codec-v1":
+            verify_indexed_ir(path.parent, record, label, runtime["target"])
+        else:
+            # Do not let a removed/unknown representation tag silently skip
+            # new indexed evidence while preserving genuine legacy receipts.
+            assert not record.get("executable_input_representation")
+            dump = path.parent / "executable-ir"
+            if dump.exists():
+                assert not any(item.suffix == ".pidx" or item.name in ("invocation.json", "link.json")
+                               for item in dump.iterdir()), "unadmitted indexed inputs"
         executions = verify_executions(record, binary, expected_backends(label), output, strict=split)
         results[label] = {"receipt": str(path), **record,
                           "image": verify_native_image(binary), "executions": executions}

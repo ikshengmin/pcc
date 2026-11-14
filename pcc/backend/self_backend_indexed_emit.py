@@ -68,12 +68,31 @@ def emit_indexed_module_file(
     if artifact_kind not in ("ASM", "PCO"):
         raise ValueError("indexed module artifact kind must be ASM or PCO")
     _debug_phase("decode-start")
+    input_receipt_context = None
+    input_receipt_passes = []
+    input_receipt_capture = None
+    if str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip():
+        from .indexed_input_receipts import sidecar_context
+
+        input_receipt_context, input_receipt_passes = sidecar_context(sidecar_path)
     module = decode_indexed_module_file(sidecar_path)
     if handoff_request:
         from pcc.frontends.python.pipeline_indexed_handoff import validate_handoff_module
 
         validate_handoff_module(handoff_request, module)
     _debug_phase("decode-complete")
+    if input_receipt_context is not None:
+        from .indexed_input_receipts import begin_capture
+
+        # This decoded object is the emitter input, not the earlier frontend
+        # object. The same sidecar identity is rechecked after decoding.
+        checked_context, checked_passes = sidecar_context(sidecar_path)
+        if checked_context == input_receipt_context and checked_passes == input_receipt_passes:
+            input_receipt_capture = begin_capture(module, input_receipt_context, input_receipt_passes)
+        else:
+            from .indexed_input_receipts import invalidate_capture
+
+            invalidate_capture()
     if is_aarch64_linux_triple(module.triple) or is_x86_64_linux_triple(module.triple) or is_x86_64_windows_triple(module.triple):
         stack_map_plans = []
         packed_stack_maps = artifact_kind == "PCO" and (
@@ -117,6 +136,10 @@ def emit_indexed_module_file(
             os.replace(temporary, output_path)
             if phase_timing is not None:
                 phase_timing.add(11, phase_started)
+            if input_receipt_capture is not None:
+                from .indexed_input_receipts import finish_capture
+
+                finish_capture(input_receipt_capture, output_path, artifact_kind)
             _debug_phase("publish-complete")
         finally:
             if os.path.exists(temporary):
@@ -148,6 +171,10 @@ def emit_indexed_module_file(
             os.replace(temporary, output_path)
             if phase_timing is not None:
                 phase_timing.add(11, phase_started)
+            if input_receipt_capture is not None:
+                from .indexed_input_receipts import finish_capture
+
+                finish_capture(input_receipt_capture, output_path, artifact_kind)
             _debug_phase("publish-complete")
         except Exception:
             try:
@@ -188,6 +215,10 @@ def emit_indexed_module_file(
         os.replace(temporary, output_path)
         if phase_timing is not None:
             phase_timing.add(11, phase_started)
+        if input_receipt_capture is not None:
+            from .indexed_input_receipts import finish_capture
+
+            finish_capture(input_receipt_capture, output_path, artifact_kind)
         _debug_phase("publish-complete")
     except Exception:
         try:

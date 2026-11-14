@@ -500,3 +500,7 @@ def retire_handoff_task(task, expected_backend_token):
     # input names are retired, and only after every check above has passed.
     os.unlink(request["sidecar_path"])
     os.unlink(request["seal_path"])
+    if str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip():
+        from pcc.backend.indexed_input_receipts import retire_sidecar_request
+
+        retire_sidecar_request(request["sidecar_path"])

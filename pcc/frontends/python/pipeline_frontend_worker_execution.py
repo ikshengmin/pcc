@@ -892,6 +892,14 @@ def run_codegen_worker(
                                 direct_module, host_target_triple(),
                             )
                         direct_target = direct_module.triple
+                        input_receipt_context = None
+                        input_receipt_capture = None
+                        if emit_direct and str(os.environ.get("PCC_DEBUG_SELF_IR_DUMP_DIR", "") or "").strip():
+                            from pcc.backend.indexed_input_receipts import worker_context
+
+                            input_receipt_context = worker_context(
+                                manifest_path, index, module_name, src_paths[index],
+                            )
                         if phase_timing is not None:
                             phase_timing.target = direct_target
                             phase_timing.route = "indexed-sidecar" if indexed_sidecar_output else "indexed-assembly"
@@ -968,6 +976,10 @@ def run_codegen_worker(
                                 publish_worker_resource("indexed-handoff:" + str(index))
                             else:
                                 encode_indexed_module_file(direct_path, direct_module)
+                            if input_receipt_context is not None:
+                                from pcc.backend.indexed_input_receipts import publish_sidecar_request
+
+                                publish_sidecar_request(direct_path, input_receipt_context, direct_passes)
                             direct_marker = "PIDX"
                         if (
                             release_direct_frontend
@@ -1010,6 +1022,12 @@ def run_codegen_worker(
                                 or is_x86_64_windows_triple(direct_target)
                             )
                         )
+                        if input_receipt_context is not None and not indexed_sidecar_output:
+                            from pcc.backend.indexed_input_receipts import begin_capture
+
+                            input_receipt_capture = begin_capture(
+                                direct_module, input_receipt_context, direct_passes,
+                            )
                         if direct_lines_output:
                             if phase_timing is not None:
                                 phase_timing.route = "indexed-native-sections"
@@ -1224,6 +1242,10 @@ def run_codegen_worker(
                                 ) as stream:
                                     stream.write(direct_asm)
                                 direct_marker = "ASM"
+                            if input_receipt_capture is not None and not indexed_sidecar_output:
+                                from pcc.backend.indexed_input_receipts import finish_capture
+
+                                finish_capture(input_receipt_capture, direct_path, direct_marker)
                     if validate_direct or emit_text_control:
                         text_emit_started = (
                             time.monotonic() if worker_timing else 0.0

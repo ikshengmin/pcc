@@ -15,6 +15,7 @@ from pathlib import Path
 import re
 import sys
 import time
+import uuid
 
 import pytest
 
@@ -34,6 +35,10 @@ def select_program_ir(modules, marker):
     Module scopes stay separate.
     A dump can be a legal prefix: producer completeness remains unproven.
     """
+    if modules and any(isinstance(module, bytes) for module in modules):
+        from tests.python.indexed_receipt_support import select_indexed_program_ir
+
+        return select_indexed_program_ir(modules, marker)
     selected = []
     for index, module in enumerate(modules):
         # pcc.ir.ir.Constant._format_i8_array escapes every byte as \\HH;
@@ -105,12 +110,13 @@ def _read_bounded_dump(path, expected_size):
     return b"".join(parts), digest.hexdigest()
 
 
-def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, completed):
+def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, completed,
+                             selected_required=True):
     """Retain bounded bytes observed in this invocation's fresh dump directory.
 
-    The existing producer swallows write errors and has no completion receipt.
-    Even a syntactically closed file can omit a valid tail of the real input.
-    This diagnostic must never qualify producer completeness or execution.
+    Legacy text dumps have no producer-completion receipt. Indexed input
+    receipts require independently rehashed invocation, emission and link data.
+    Neither representation qualifies native execution or the final root proof.
     """
     evidence = {
         "schema": "pcc.observed-executable-ir-dump.v1",
@@ -143,6 +149,59 @@ def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, c
         emitted.sort()
         assert emitted, "MISSING: executable compiler produced no self-backend IR receipt"
         assert all(path.is_file() and not path.is_symlink() for path in emitted), "MALFORMED: dump file kind"
+        if any(path.suffix == ".pidx" or path.name in ("invocation.json", "link.json")
+               for path in emitted):
+            from tests.python.indexed_receipt_support import (
+                indexed_evidence_shell,
+                read_indexed_inputs,
+                validate_indexed_modules,
+            )
+
+            evidence["schema"] = "pcc.observed-executable-indexed-input.v1"
+            evidence["representation"] = "indexed-codec"
+            assert completed, "MISSING: indexed compilation did not complete"
+            captured = read_indexed_inputs(
+                dump, receipt, binary, _read_bounded_dump,
+                module_limit=_IR_MODULE_LIMIT, total_limit=_IR_TOTAL_LIMIT,
+                json_limit=_IR_JSON_LIMIT, expected_passes=(),
+                selected_required=selected_required,
+            )
+            evidence = indexed_evidence_shell(
+                receipt, module_limit=_IR_MODULE_LIMIT, total_limit=_IR_TOTAL_LIMIT,
+                json_limit=_IR_JSON_LIMIT, selected_required=selected_required,
+            )
+            observed = {"source_sha256": _stream_sha256(source),
+                        "runtime_sha256": _stream_sha256(archive)}
+            evidence["observed_identity"] = observed
+            assert all(observed[key] == receipt[key] for key in observed), (
+                "IDENTITY_CHANGED: source or runtime changed during compilation"
+            )
+            evidence["binary_sha256"] = _stream_sha256(binary)
+            evidence["retention"] = captured["retention"]
+            evidence["observed_dump_sha256"] = captured["inventory"]
+            # The full wrapper was already budgeted before raw reads/base64.
+            # Keep an exact final check before the semantic callback as well.
+            assert len(json.dumps(evidence).encode("utf-8")) + 1 <= _IR_JSON_LIMIT, (
+                "OVERSIZE: JSON bytes including metadata and escaping"
+            )
+            validate_indexed_modules(captured["raw_modules"], _IR_MODULE_LIMIT)
+            selected = check(captured["raw_modules"])
+            if selected_required:
+                assert isinstance(selected, tuple) and len(selected) == 1, "MALFORMED: select one program dump"
+                index = selected[0]
+                assert type(index) is int and 0 <= index < len(captured["raw_modules"]), "MALFORMED: dump index"
+                assert captured["invocation"]["modules"][index]["source_sha256"] == receipt["source_sha256"], (
+                    "IDENTITY_CHANGED: selected program source"
+                )
+                evidence["selected_module_indices"] = [index]
+            evidence["observed_dump_sha256"] = captured["inventory"]
+            receipt["observed_ir_dump_sha256"] = captured["inventory"]
+            receipt["executable_input_ir"] = captured["inventory"]
+            receipt["executable_input_representation"] = "indexed-codec-v1"
+            evidence["producer_completeness"] = "LINK_BOUND"
+            evidence["all_modules_captured"] = "LINK_BOUND"
+            evidence["status"] = "INDEXED_INPUTS_RETAINED"
+            return
         assert {path.name for path in emitted} == {
             "self_backend_input_" + str(index) + ".ll" for index in range(len(emitted))
         }, "MALFORMED: missing or unexpected dump module name"
@@ -175,14 +234,17 @@ def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, c
         except UnicodeDecodeError as failure:
             raise AssertionError("MALFORMED: dump is not UTF-8") from failure
         selected = check(modules)
-        assert isinstance(selected, tuple) and len(selected) == 1, "MALFORMED: select one program dump"
-        index = selected[0]
-        assert type(index) is int and 0 <= index < len(emitted), "MALFORMED: dump index"
-        path, raw = emitted[index], raw_modules[index]
-        evidence["modules"] = [{
-            "name": path.name, "sha256": inventory[path.name],
-            "bytes": len(raw), "text": raw.decode("utf-8"),
-        }]
+        if selected_required:
+            assert isinstance(selected, tuple) and len(selected) == 1, "MALFORMED: select one program dump"
+            index = selected[0]
+            assert type(index) is int and 0 <= index < len(emitted), "MALFORMED: dump index"
+            path, raw = emitted[index], raw_modules[index]
+            evidence["modules"] = [{
+                "name": path.name, "sha256": inventory[path.name],
+                "bytes": len(raw), "text": raw.decode("utf-8"),
+            }]
+        else:
+            receipt["executable_input_ir"] = inventory
         evidence["status"] = "DUMP_FILES_RETAINED" if completed else "INCOMPLETE_COMPILE"
         assert len(json.dumps(evidence).encode("utf-8")) + 1 <= _IR_JSON_LIMIT, (
             "OVERSIZE: JSON bytes including metadata and escaping"
@@ -193,6 +255,10 @@ def _record_observed_ir_dump(dump, check, receipt, source, binary, archive, *, c
             "MISSING", "AMBIGUOUS", "OVERSIZE", "IDENTITY_CHANGED", "MALFORMED",
         ) else "UNAVAILABLE"
         evidence["modules"] = []
+        evidence.pop("retention", None)
+        evidence.pop("selected_module_indices", None)
+        evidence["producer_completeness"] = "UNPROVEN"
+        evidence["all_modules_captured"] = "UNPROVEN"
         evidence["error"] = type(failure).__name__ + ": " + str(failure)[:400]
         raise
     finally:
@@ -324,12 +390,14 @@ def assert_owned_program(
         # host/native --emit-llvm invocation with merely matching source.
         with pytest.MonkeyPatch.context() as patch:
             if emitted_ir_check is not None:
-                if retain_dump_evidence:
-                    assert not binary.exists(), "Refuse stale executable IR/binary evidence"
+                assert not binary.exists(), "Refuse stale executable IR/binary evidence"
                 fresh_dump = directory / "executable-ir"
                 fresh_dump.mkdir()  # Fresh and empty: stale output is never evidence.
                 dump = fresh_dump
                 patch.setenv("PCC_DEBUG_SELF_IR_DUMP_DIR", str(dump))
+                receipt["indexed_input_invocation"] = uuid.uuid4().hex
+                patch.setenv("PCC_DEBUG_SELF_IR_INVOCATION", receipt["indexed_input_invocation"])
+                receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
             compiler_started = True
             compiler(
                 str(source), str(binary), backend="self", ir_scaffold_mode="on",
@@ -337,28 +405,19 @@ def assert_owned_program(
             )
         if emitted_ir_check is not None:
             ir_attempted = True
-            if retain_dump_evidence:
-                _record_observed_ir_dump(dump, emitted_ir_check, receipt, source, binary,
-                                         archive, completed=True)
-                receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-            else:
-                # Keep the existing two-root mandatory check-only contract.
-                emitted = sorted(dump.glob("self_backend_input_*.ll"))
-                assert emitted, "Executable compiler produced no self-backend IR receipt"
-                emitted_ir_check([path.read_text() for path in emitted])
-                receipt["executable_input_ir"] = {
-                    path.name: hashlib.sha256(path.read_bytes()).hexdigest()
-                    for path in emitted
-                }
-                assert hashlib.sha256(source.read_bytes()).hexdigest() == receipt["source_sha256"]
-                assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["runtime_sha256"]
+            _record_observed_ir_dump(
+                dump, emitted_ir_check, receipt, source, binary, archive,
+                completed=True, selected_required=retain_dump_evidence,
+            )
+            receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     except Exception as error:
         receipt["status"] = "COMPILE_FAILED"
         receipt["error"] = type(error).__name__ + ": " + str(error)
-        if retain_dump_evidence and compiler_started and dump is not None and not ir_attempted:
+        if emitted_ir_check is not None and compiler_started and dump is not None and not ir_attempted:
             try:
                 _record_observed_ir_dump(dump, emitted_ir_check, receipt, source, binary,
-                                         archive, completed=False)
+                                         archive, completed=False,
+                                         selected_required=retain_dump_evidence)
             except Exception as diagnostic_error:
                 # Preserve the original compile exception, including when no
                 # dump exists or the evidence itself cannot be written.

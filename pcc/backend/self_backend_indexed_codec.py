@@ -322,9 +322,94 @@ def _write_host_arena(stream, arena: CompilerIntArena) -> None:
         stream.write(b"".join(chunks))
 
 
-def encode_indexed_module_file(path: str, module: ParsedModule) -> None:
+def _bounded_capture_budget(module: ParsedModule, max_bytes: int) -> None:
+    """Reject oversized diagnostics before constructing wire lists or buffers.
+
+    This is a conservative upper bound, deliberately not a fit guarantee. Raw
+    arenas are counted without reading them. Cold cells are traversed without
+    copying, charging their worst-case JSON representation and container syntax.
+    The ordinary sidecar path does not enter this diagnostic walk.
+    """
+    budget = [0]
+
+    def charge(count):
+        budget[0] += count
+        if budget[0] > max_bytes:
+            raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
+
+    def cold(value):
+        charge(32)
+        if isinstance(value, str):
+            # ensure_ascii JSON has at most twelve bytes per Unicode scalar;
+            # charge before json.dumps or UTF-8 can materialize the string.
+            charge(len(value) * 12)
+        elif isinstance(value, TypeDesc):
+            cold(value.kind)
+            cold(value.width)
+            cold(value.pointee)
+            cold(value.count)
+            cold(value.elem)
+            cold(value.name)
+            cold(value.fields)
+        elif isinstance(value, (tuple, list)):
+            for item in value:
+                cold(item)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                cold(key)
+                cold(item)
+        elif isinstance(value, int):
+            # Decimal is shorter than its bit count; no giant str(int) first.
+            charge(value.bit_length() + 1)
+        elif value is None or isinstance(value, (bool, float)):
+            charge(32)
+        else:
+            raise BackendUnavailable("unsupported diagnostic cold payload")
+
+    if max_bytes <= 0:
+        raise BackendUnavailable("indexed diagnostic byte bound must be positive")
+    charge(4096)
+    cold(module.triple)
+    if module.type_context is not None:
+        if module.type_context.debug_info is not None:
+            raise BackendUnavailable("bounded indexed debug capture is not supported")
+        cold(module.type_context.named_type_bodies)
+    for item in module.globals_:
+        charge(512)
+        cold(item.name)
+        cold(item.type)
+        cold(item.initializer)
+        cold(item.tls_model)
+        cold(item.alignment)
+        cold(item.ir_prefix)
+        cold(item.trailing_attributes)
+    for function in module.functions:
+        kernel = function.indexed_kernel
+        if not isinstance(kernel, IndexedFunctionKernel):
+            raise BackendUnavailable("indexed module function has no published indexed kernel")
+        charge(4096)
+        for _wire_name, arena in _kernel_arenas(kernel):
+            charge(len(arena) * 8)
+        cold(function.name)
+        cold(function.ret_type)
+        for arg in function.args:
+            cold(arg.name)
+            cold(arg.type)
+        cold(kernel.block_names)
+        cold(kernel.value_names)
+        cold(kernel.instruction_arithmetic_flag_values)
+        cold(kernel.cold_instruction_data)
+        cold(kernel.call_texts)
+        cold(kernel.types)
+
+
+def encode_indexed_module_file(
+    path: str, module: ParsedModule, *, max_bytes: int = 0,
+) -> None:
     """Write one direct module with raw scalar arenas and a JSON cold header."""
 
+    if max_bytes:
+        _bounded_capture_budget(module, max_bytes)
     functions: list[dict] = []
     raw_arenas: list[CompilerIntArena] = []
     total_scalars = 0
@@ -379,6 +464,9 @@ def encode_indexed_module_file(path: str, module: ParsedModule) -> None:
     header_bytes = json.dumps(header, sort_keys=True).encode("utf-8")
     if len(header_bytes) > _MAX_HEADER_BYTES:
         raise BackendUnavailable("indexed module header exceeds the size limit")
+    wire_size = len(_MAGIC) + len(str(len(header_bytes))) + 1 + len(header_bytes) + total_scalars * 8
+    if max_bytes and wire_size > max_bytes:
+        raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
     with open(path, "wb") as stream:
         stream.write(_MAGIC)
         # Decimal digits plus newline have identical UTF-8 and ASCII bytes;
@@ -568,18 +656,23 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
     return function, tuple(arena_inventory)
 
 
-def decode_indexed_module_file(path: str) -> ParsedModule:
+def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule:
     """Read and fully validate one v1 direct indexed module sidecar."""
 
+    initial_size = os.path.getsize(path)
+    if max_bytes and (max_bytes < 0 or initial_size > max_bytes):
+        raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
     with open(path, "rb") as stream:
-        if stream.readline() != _MAGIC:
+        if stream.readline(32) != _MAGIC:
             raise BackendUnavailable("invalid indexed module file magic")
-        size_line = stream.readline()
+        size_line = stream.readline(32)
         try:
             header_size = int(size_line.decode("utf-8"))
         except Exception as exc:
             raise BackendUnavailable("invalid indexed module header size") from exc
-        if header_size < 0 or header_size > _MAX_HEADER_BYTES:
+        if (header_size < 0 or header_size > _MAX_HEADER_BYTES
+                or header_size > initial_size
+                or (max_bytes and header_size > max_bytes)):
             raise BackendUnavailable("indexed module header exceeds the size limit")
         header_raw = stream.read(header_size)
         if len(header_raw) != header_size:
@@ -713,6 +806,10 @@ def decode_indexed_module_file(path: str) -> ParsedModule:
             definition_positions.close()
             used_value_ids.close()
             function_index += 1
+        if os.path.getsize(path) != expected_size or initial_size != expected_size:
+            raise BackendUnavailable("indexed module changed during read")
+        if not native and stream.read(1):
+            raise BackendUnavailable("indexed module has trailing bytes")
     bodies = header.get("named_type_bodies", {})
     if not isinstance(bodies, dict):
         raise BackendUnavailable("indexed module named type declarations are invalid")
