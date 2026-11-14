@@ -44,12 +44,16 @@ PROGRAM = FUNCTIONS + textwrap.dedent('''\
     def main():
         low = int('-9223372036854775808')
         high = int('9223372036854775807')
-        assert list_min([high, low, high]) == low
-        assert list_max([low, high, low]) == high
-        assert tuple_min((high, low)) == low
-        assert tuple_max((low, high)) == high
-        assert list_min([high]) == high
-        assert list_max([low]) == low
+        # pcc.i64 converts an ordinary int only explicitly: the fixed-width
+        # results compare with fixed-width expectations.
+        low_i64: i64 = i64(low)
+        high_i64: i64 = i64(high)
+        assert list_min([high, low, high]) == low_i64
+        assert list_max([low, high, low]) == high_i64
+        assert tuple_min((high, low)) == low_i64
+        assert tuple_max((low, high)) == high_i64
+        assert list_min([high]) == high_i64
+        assert list_max([low]) == low_i64
         assert singleton((7,)) == 14
         assert defaults([]) == (71, -71)
         assert defaults([3]) == (3, 3)
@@ -83,7 +87,7 @@ PROGRAM = FUNCTIONS + textwrap.dedent('''\
             else:
                 raise AssertionError('empty tuple max')
             gc.collect()
-            assert list_max([high]) == high
+            assert list_max([high]) == high_i64
         print('I64_MIN_MAX_OK')
     main()
 ''')
@@ -171,10 +175,12 @@ OWNER_PROGRAM = FUNCTIONS + textwrap.dedent('''\
         # A missing release in either the seed or loop retains their storage.
         high = int('9223372036854775807')
         low = int('-9223372036854775808')
-        assert list_min([high, low]) == low
-        assert list_max([low, high]) == high
-        assert tuple_min((high, low)) == low
-        assert tuple_max((low, high)) == high
+        low_i64: i64 = i64(low)
+        high_i64: i64 = i64(high)
+        assert list_min([high, low]) == low_i64
+        assert list_max([low, high]) == high_i64
+        assert tuple_min((high, low)) == low_i64
+        assert tuple_max((low, high)) == high_i64
         try:
             list_min([])
         except ValueError:
