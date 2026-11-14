@@ -269,3 +269,84 @@ def test_metadata_adapter_cannot_admit_instruction_or_code_section_events():
         if sink is not None:
             sink.close()
         producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize(
+    ("entry", "token", "rejected_part"),
+    [
+        ("  ret", "ret", "  ret"),
+        (".inst 0xd65f03c0", ".inst", ".inst 0xd65f03c0"),
+        (".word 0xd65f03c0", ".word", ".word 0xd65f03c0"),
+        (".unsupported 7", ".unsupported", ".unsupported 7"),
+        ("  .quad 1\n\n\tret", "ret", "\tret"),
+        ("\n  .long 1\r\n  .unknown\t7", ".unknown", "  .unknown\t7"),
+    ],
+)
+def test_metadata_rejection_reports_the_part_without_capturing_the_event(
+    entry, token, rejected_part,
+):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        section = ".section __DATA,__data"
+        with pytest.raises(BackendUnavailable) as caught:
+            sink.extend_metadata([section, "_data:", entry])
+        assert str(caught.value) == (
+            "instruction or unsupported directive in metadata adapter: "
+            f"token_prefix={token!r}, "
+            f"line_prefix={rejected_part!r}"
+        )
+        # Earlier entries remain, but no part of the rejected initializer
+        # acquires a metadata index or an event, including valid .quad/.long.
+        assert sink.metadata_lines == [section]
+        assert sink.fragments.symbol_names == ["_data"]
+        assert len(sink.fragments.records) == 8
+        assert sink.direct_index == 0
+        assert len(sink.direct_records) == 0
+        assert sink.metadata_prefix_open
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
+
+
+@pytest.mark.parametrize("character", ["x", "\x00", "\U0010ffff"])
+def test_metadata_rejection_bounds_and_escapes_untrusted_prefixes(character):
+    from pcc.backend import BackendUnavailable
+    from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend.self_backend_aarch64_darwin import _NativeAArch64Emission
+
+    producer.begin_direct_instruction_capture(capture_semantics=True)
+    sink = None
+    try:
+        sink = _NativeAArch64Emission(optimize=True)
+        # The same exception protocol carries this through the codegen worker.
+        # Neither a huge token nor terminal escapes may flood its retained log.
+        token = ".unknown\x1b[31m" + character * 400
+        part = "\t" + token + " DO_NOT_RETAIN_THE_TAIL"
+        with pytest.raises(BackendUnavailable) as caught:
+            sink.extend_metadata(["", "  .long 1\n" + part])
+        message = str(caught.value)
+        assert message == (
+            "instruction or unsupported directive in metadata adapter: "
+            f"token_prefix={token[:64]!r}, line_prefix={part[:160]!r}"
+        )
+        assert "\\x1b" in message and "\\t" in message
+        assert "\x1b" not in message and "\t" not in message
+        assert "\n" not in message and "\r" not in message and "\x00" not in message
+        assert "DO_NOT_RETAIN_THE_TAIL" not in message
+        assert len(message.encode("utf-8")) < 2500
+        assert sink.metadata_lines == []
+        # Only the preceding empty entry was captured.
+        assert len(sink.fragments.records) == 4
+        assert sink.direct_index == 0
+        assert len(sink.direct_records) == 0
+    finally:
+        if sink is not None:
+            sink.close()
+        producer.end_direct_instruction_capture()
