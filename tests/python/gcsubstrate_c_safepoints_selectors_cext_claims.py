@@ -40,7 +40,9 @@ def test_python_codegen_emits_thread_safepoint_at_loop_backedges_and_function_en
         "def _alloca_in_entry", 1
     )[0]
     assert "self.builder.load_atomic(" in core_poll
-    assert '"acquire"' in core_poll
+    # Both request loads use the one ordering the inliner's exact poll
+    # recognizer accepts. Only the slow path needs acquire (checked below).
+    assert core_poll.count("SAFEPOINT_POLL_LOAD_ORDERING,") == 2
     assert "\n            4,\n" in core_poll
     assert "self.builder.load(" not in core_poll
 
@@ -81,7 +83,13 @@ def test_python_codegen_emits_thread_safepoint_at_loop_backedges_and_function_en
         "def _low_builder_branch", 1
     )[0]
     assert "builder.load_atomic(" in low_poll
-    assert '"acquire"' in low_poll
+    assert low_poll.count("SAFEPOINT_POLL_LOAD_ORDERING,") == 2
+    # The fast path only selects pcc_thread_safepoint, which re-reads the
+    # stop request with acquire before deciding not to park.
+    kernel = THREAD_KERNEL_PTHREAD.read_text(encoding="utf-8")
+    slow = kernel.split("def pcc_thread_safepoint() -> None:", 1)[1].split("\n@c_abi_export", 1)[0]
+    assert ('atomic_load_i32(global_addr("pcc_thread_stop_requested"), 0, "acquire")'
+            in slow)
     assert "\n        4,\n" in low_poll
     assert "builder.load(" not in low_poll
 
@@ -128,7 +136,8 @@ def test_python_codegen_ir_contains_loop_and_entry_thread_safepoints(
     ]
     assert len(stop_loads) >= 4
     assert all("load atomic i32" in line for line in stop_loads)
-    assert all(" acquire, align 4" in line for line in stop_loads)
+    from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
+    assert all(" " + SAFEPOINT_POLL_LOAD_ORDERING + ", align 4" in line for line in stop_loads)
     assert not any(" load i32" in line for line in stop_loads)
     assert "while.latch" in ir_text
     assert "for.step" in ir_text

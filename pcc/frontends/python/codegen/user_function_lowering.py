@@ -7,6 +7,7 @@ import sys
 from typing import Optional
 
 from pcc.ir.compat import ir
+from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
 from pcc.frontends.python.symbol_names import identifier_symbol
 from pcc.frontends.python.codegen.runtime_call_effects import (
     NO_SAFEPOINT_RUNTIME_FUNCTIONS,
@@ -424,7 +425,7 @@ def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
     flag_gv = declare_runtime_global(llvm_module, "pcc_thread_stop_requested")
     flag = builder.load_atomic(
         flag_gv,
-        "acquire",
+        SAFEPOINT_POLL_LOAD_ORDERING,
         4,
         name="low.safepoint.flag",
     )
@@ -433,7 +434,7 @@ def _emit_thread_safepoint_poll_llvm(builder, llvm_module, fn, runtime) -> None:
     )
     flush = builder.load_atomic(
         flush_gv,
-        "acquire",
+        SAFEPOINT_POLL_LOAD_ORDERING,
         4,
         name="low.safepoint.flush",
     )

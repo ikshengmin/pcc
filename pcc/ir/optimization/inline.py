@@ -553,11 +553,21 @@ def _inline_multiblock_call_sites(ir_text: str, candidates: dict[str, dict]) -> 
     return module.serialize() if changed else ir_text
 
 
+# Ordering of the two request-flag loads in every emitted thread poll. The
+# fast path only decides whether to enter pcc_thread_safepoint; that slow path
+# re-reads the stop request with acquire (or takes the world lock) and
+# publishes gray batches with a release CAS. Reading 0 performs no action, so
+# it needs no acquire edge. On AArch64 a monotonic load is LDR; LDAR would wait
+# for every earlier STLR/CASL (refcount and unlock releases) on each poll.
+SAFEPOINT_POLL_LOAD_ORDERING = "monotonic"
+
 _POLL_FLAG_RE = re.compile(
-    r"^\s*%(?P<flag>[\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested acquire, align 4\s*$"
+    r"^\s*%(?P<flag>[\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested "
+    + SAFEPOINT_POLL_LOAD_ORDERING + r", align 4\s*$"
 )
 _POLL_FLUSH_RE = re.compile(
-    r"^\s*%(?P<flush>[\w.$-]+) = load atomic i32, ptr @pcc_gc_gray_worklist_flush_requested acquire, align 4\s*$"
+    r"^\s*%(?P<flush>[\w.$-]+) = load atomic i32, ptr @pcc_gc_gray_worklist_flush_requested "
+    + SAFEPOINT_POLL_LOAD_ORDERING + r", align 4\s*$"
 )
 _POLL_PENDING_RE = re.compile(
     r"^\s*%(?P<pending>[\w.$-]+) = or i32 %(?P<flag>[\w.$-]+), %(?P<flush>[\w.$-]+)\s*$"

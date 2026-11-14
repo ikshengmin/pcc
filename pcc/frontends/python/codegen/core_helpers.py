@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pcc.ir.compat import ir
+from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
 
 from pcc.frontends.python.codegen.runtime_abi import declare_runtime_global
 from pcc.frontends.python.codegen.runtime_call_effects import NO_SAFEPOINT_RUNTIME_FUNCTIONS
@@ -144,7 +145,7 @@ class CoreHelperMixin:
         flag_gv = declare_runtime_global(self.module, "pcc_thread_stop_requested")
         flag = self.builder.load_atomic(
             flag_gv,
-            "acquire",
+            SAFEPOINT_POLL_LOAD_ORDERING,
             4,
             name=self._fresh("thread.safepoint.flag"),
         )
@@ -153,7 +154,7 @@ class CoreHelperMixin:
         )
         flush = self.builder.load_atomic(
             flush_gv,
-            "acquire",
+            SAFEPOINT_POLL_LOAD_ORDERING,
             4,
             name=self._fresh("thread.safepoint.flush"),
         )

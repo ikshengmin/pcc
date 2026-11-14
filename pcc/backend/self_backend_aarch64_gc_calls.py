@@ -116,7 +116,9 @@ def gc_short_call_lines(func, callee, label_serial, ret_kind, arg_kinds, module_
     if load or frame:
         # These managed runtime entries poll before their bodies. A pending
         # stop must enter the original function, even on its otherwise empty path.
-        _flag(lines, "pcc_thread_stop_requested", module_symbols, acquire=True)
+        # Like the IR poll (SAFEPOINT_POLL_LOAD_ORDERING), this only selects
+        # that entry; the function's own poll path acquires the stop request.
+        _flag(lines, "pcc_thread_stop_requested", module_symbols)
         lines.append(emitted_branch_line('cbnz', slow, 'w17'))
     if load:
         lines.append(emitted_branch_line('cbz', empty, 'x1'))

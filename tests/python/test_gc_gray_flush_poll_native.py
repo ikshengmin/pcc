@@ -16,7 +16,7 @@ import pytest
 
 from pcc.frontends.python.pipeline import compile_python
 from pcc.ir.optimization.ir_mutator import MutableModule
-from pcc.ir.optimization.inline import _blocks_on_cycles
+from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING, _blocks_on_cycles
 from tests.python.process_timeout import run_process_group_timeout
 
 
@@ -196,8 +196,10 @@ def _assert_generated_loop(ir_text, *, polls):
     calls = [instruction.text for block in function.blocks if block.name in cyclic
              for instruction in block.instructions if instruction.opcode == "call"]
     if polls:
-        assert "@pcc_gc_gray_worklist_flush_requested acquire, align 4" in loop
-        assert "@pcc_thread_stop_requested acquire, align 4" in loop
+        assert ("@pcc_gc_gray_worklist_flush_requested " + SAFEPOINT_POLL_LOAD_ORDERING
+                + ", align 4") in loop
+        assert ("@pcc_thread_stop_requested " + SAFEPOINT_POLL_LOAD_ORDERING
+                + ", align 4") in loop
         assert " = or i32 " in loop
         assert calls and all("@pcc_thread_safepoint" in call for call in calls), calls
     else:

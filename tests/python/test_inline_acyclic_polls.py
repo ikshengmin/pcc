@@ -16,9 +16,10 @@ import pytest
 
 from pcc.backend.macho_exec import link_executable
 from pcc.backend.owned_object_emit import emit_owned_object
-from pcc.ir.optimization.inline import inline_module
+from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING, inline_module
 
-POLL = """  %{p}.flag = load atomic i32, ptr @pcc_thread_stop_requested acquire, align 4
+STOP_LOAD = "@pcc_thread_stop_requested " + SAFEPOINT_POLL_LOAD_ORDERING
+POLL = "  %{p}.flag = load atomic i32, ptr " + STOP_LOAD + """, align 4
   %{p}.need = icmp ne i32 %{p}.flag, 0
   br i1 %{p}.need, label %{p}.slow, label %{p}.cont
 {p}.slow:
@@ -96,14 +97,14 @@ def test_inlined_acyclic_poll_is_dropped_and_loop_poll_kept():
     text, changed = inline_module(MODULE, include_definitions=True)
     assert changed
     caller = _body(text, "caller")
-    assert caller.count("@pcc_thread_stop_requested acquire") == 2, caller
+    assert caller.count(STOP_LOAD) == 2, caller
     assert "%c.flag = load atomic" in caller
     assert "@helper(" not in caller
     # The one inlined poll left is inside the loop.
     loop_part = caller.split("\nloop:", 1)[1].split("\nexit:", 1)[0]
-    assert loop_part.count("@pcc_thread_stop_requested acquire") == 1, caller
+    assert loop_part.count(STOP_LOAD) == 1, caller
     # A function whose entry does not poll keeps the inlined poll.
-    assert _body(text, "no_entry_poll").count("@pcc_thread_stop_requested acquire") == 1
+    assert _body(text, "no_entry_poll").count(STOP_LOAD) == 1
 
 
 @pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",

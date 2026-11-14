@@ -15,13 +15,18 @@ from pcc.frontends.python.codegen.user_function_lowering import (
     _emit_thread_safepoint_poll_llvm,
 )
 from pcc.ir.compat import ir
-from pcc.ir.optimization.inline import _drop_acyclic_inlined_polls, inline_module
+from pcc.ir.optimization.inline import (
+    SAFEPOINT_POLL_LOAD_ORDERING,
+    _drop_acyclic_inlined_polls,
+    inline_module,
+)
 from tests.python.test_inline_acyclic_polls import MODULE, POLL, _body
 
 
 STOP = "pcc_thread_stop_requested"
 FLUSH = "pcc_gc_gray_worklist_flush_requested"
 PLAIN = "pcc_thread_safepoint"
+ORDER = " " + SAFEPOINT_POLL_LOAD_ORDERING
 GATE = "pcc_thread_safepoint_gate"
 
 
@@ -53,7 +58,7 @@ def _assert_combined_poll(text, callee):
     loads = []
     for name in (STOP, FLUSH):
         match = re.search(r"%([\w.$-]+) = load atomic i32, ptr @" + name
-                          + r" acquire, align 4", text)
+                          + ORDER + r", align 4", text)
         assert match, text
         loads.append(match[1])
     pending = re.search(r"%([\w.$-]+) = or i32 %" + re.escape(loads[0])
@@ -138,7 +143,7 @@ def test_low_ir_poll_does_not_append_branch_after_terminated_slow_path(monkeypat
 
 DUAL_POLL = POLL.replace(
     "  %{p}.need = icmp ne i32 %{p}.flag, 0",
-    "  %{p}.flush = load atomic i32, ptr @pcc_gc_gray_worklist_flush_requested acquire, align 4\n"
+    "  %{p}.flush = load atomic i32, ptr @pcc_gc_gray_worklist_flush_requested" + ORDER + ", align 4\n"
     "  %{p}.pending = or i32 %{p}.flag, %{p}.flush\n"
     "  %{p}.need = icmp ne i32 %{p}.pending, 0",
 )
@@ -155,26 +160,26 @@ def test_dual_request_inlining_keeps_loop_and_uncovered_entry_polls():
     caller = _body(text, "caller")
     assert "@helper(" not in caller
     for flag in (STOP, FLUSH):
-        assert caller.count("@" + flag + " acquire") == 2, caller
+        assert caller.count("@" + flag + ORDER) == 2, caller
         loop = caller.split("\nloop:", 1)[1].split("\nexit:", 1)[0]
-        assert loop.count("@" + flag + " acquire") == 1
-        assert _body(text, "no_entry_poll").count("@" + flag + " acquire") == 1
+        assert loop.count("@" + flag + ORDER) == 1
+        assert _body(text, "no_entry_poll").count("@" + flag + ORDER) == 1
 
 
 def test_legacy_caller_cannot_cover_an_inlined_publication_poll():
     module = DUAL_MODULE.replace(DUAL_POLL.format(p="c"), POLL.format(p="c"))
     text, _changed = inline_module(module, include_definitions=True)
     caller = _body(text, "caller")
-    assert caller.count("@" + STOP + " acquire") == 3
-    assert caller.count("@" + FLUSH + " acquire") == 2
+    assert caller.count("@" + STOP + ORDER) == 3
+    assert caller.count("@" + FLUSH + ORDER) == 2
 
 
 def test_dual_request_caller_can_cover_legacy_stop_only_callee():
     module = DUAL_MODULE.replace(DUAL_POLL.format(p="h"), POLL.format(p="h"))
     text, _changed = inline_module(module, include_definitions=True)
     caller = _body(text, "caller")
-    assert caller.count("@" + STOP + " acquire") == 2
-    assert caller.count("@" + FLUSH + " acquire") == 1
+    assert caller.count("@" + STOP + ORDER) == 2
+    assert caller.count("@" + FLUSH + ORDER) == 1
 
 
 def _coalescing_fixture(inner_poll):
@@ -187,7 +192,8 @@ def _coalescing_fixture(inner_poll):
 
 
 @pytest.mark.parametrize("before,after", [
-    ("flush_requested acquire", "flush_requested monotonic"),
+    # Both request loads must share the poll ordering.
+    ("flush_requested" + ORDER, "flush_requested acquire"),
     (" = or i32 ", " = and i32 "),
     ("icmp ne i32 %inner.pending", "icmp ne i32 %inner.flag"),
     ("%inner.flag, %inner.flush", "%inner.flag, %entry.flush"),
@@ -211,7 +217,7 @@ def test_coalescing_removes_all_five_dual_poll_instructions():
     assert "%inner.pending" not in text
     assert "%inner.need" not in text
     assert "inner.slow:" not in text
-    assert text.count("@" + FLUSH + " acquire") == 1
+    assert text.count("@" + FLUSH + ORDER) == 1
 
 
 @pytest.mark.parametrize("handler", [

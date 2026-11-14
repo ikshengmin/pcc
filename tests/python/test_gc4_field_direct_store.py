@@ -12,6 +12,8 @@ from itertools import product
 
 import pytest
 
+from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
+
 from tests.python.test_gc4_public_direct_store import PublicStore
 from tests.python.test_gc4_count_free_store_plans import SOURCE, Store
 
@@ -319,7 +321,8 @@ def assert_field_unlock_reaches_finish_poll(text):
     finish = functions[finish_name]
     entry = finish.blocks[0]
     entry_text = ''.join(inst.text for inst in entry.instructions)
-    flag = re.search(r'%([\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested acquire, align 4', entry_text)
+    flag = re.search(r'%([\w.$-]+) = load atomic i32, ptr @pcc_thread_stop_requested '
+                     + SAFEPOINT_POLL_LOAD_ORDERING + r', align 4', entry_text)
     assert flag
     need = re.search(r'%([\w.$-]+) = icmp ne i32 %' + re.escape(flag[1]) + r', 0', entry_text)
     assert need

@@ -58,7 +58,7 @@ def test_frame_short_path_loads_one_published_flag():
         assert "pcc_thread_stop_requested" in text, callee
         for flag in COMPONENT_FLAGS:
             assert flag not in text, (callee, flag)
-        # stop poll (address, ldar, cbnz), the published word (address, ldr,
+        # stop poll (address, ldr, cbnz), the published word (address, ldr,
         # cbz) and the branch over the cold call.
         fast = lines[:lines.index(next(line for line in lines if line.endswith(".slow:")))]
         assert len(fast) == 9, (callee, fast)
