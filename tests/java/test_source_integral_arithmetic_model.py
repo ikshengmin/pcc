@@ -634,10 +634,12 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
     # SmallPrimes.PRIMES and PRIMES_LAST are class-initialization steps, the
     # int[] type argument of Entry<Set<Integer>, int[]> parses, and the blank
     # static final (:90:45) and its static block now parse, and so does the
-    # block's `new HashSet<>()` (:109:54); the call on a call result
-    # `primeNumbers.stream().reduce(...)` is next.
-    assert class_error.value.code == "java.unsupported.object-expressions"
-    assert PRODUCTION[1] + ":116:51:" in str(class_error.value)
+    # block's `new HashSet<>()` (:109:54) and `primeNumbers.stream().reduce(1,
+    # (a, b) -> a * b)` (:116:51; test_source_lambda_and_chained_calls), so
+    # every production source parses. Analysis now stops at the imported JDK
+    # types, whose sources are not supplied.
+    assert class_error.value.code == "java.unsupported.source-dependency"
+    assert "requires supplied source for java.util.List" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
     # The String constant variable folds; the enhanced for and the nextPrime
@@ -671,16 +673,16 @@ def test_complete_smallprimes_original_still_stops_at_static_array_storage():
     # and the int[] type argument at :90:38 (test_source_generic_type_arguments)
     # now parse, then the blank static final at :90:45 and its static block
     # (test_source_static_initializers), then the diamond creation
-    # `new HashSet<>()` at :109:54 (test_source_generic_class_creation); the
-    # complete original stops at `primeNumbers.stream().reduce(...)`, :116:51.
+    # `new HashSet<>()` at :109:54 (test_source_generic_class_creation), then
+    # `primeNumbers.stream().reduce(1, (a, b) -> a * b)` at :116:51
+    # (test_source_lambda_and_chained_calls); the complete original now
+    # parses in the class model.
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     path = PRODUCTION[1]
     before = sources[path]
-    with pytest.raises(UnsupportedJava) as caught:
-        SourceParser(sources[path], path, class_model=True).parse()
-    assert caught.value.code == "java.unsupported.object-expressions"
-    assert path + ":116:51:" in str(caught.value)
+    program = SourceParser(sources[path], path, class_model=True).parse()
+    assert program.name.endswith("SmallPrimes") and len(program.static_initializers) == 1
     assert sources[path] == before and before.encode("utf-8") == files[path]
 
 

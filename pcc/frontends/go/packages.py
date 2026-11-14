@@ -4,6 +4,11 @@ The caller supplies selected, unmodified source files for each import path.
 Imports are file-scoped, checked for export visibility, and lowered together
 through the same public IR. Module download/build-tag selection and package
 initializers remain separate, unsupported driver/runtime boundaries.
+
+Runtime-coupled packages need owned implementations, never the host's
+(docs/multilanguage-roadmap.md). When the caller supplies no source for one,
+OWNED_PACKAGES holds the part that is implemented, as original PCC source;
+every other exported name of that package is go.unsupported.owned-runtime-surface.
 """
 
 from dataclasses import dataclass
@@ -14,6 +19,22 @@ from pcc.frontends.go.lowering import Lowerer
 from pcc.frontends.go.sema import Analyzer, PREDECLARED, validate_value_types
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
 from pcc.frontends.go.types import supported_target
+
+
+# Package runtime's Error interface (the contract of Go's runtime/error.go):
+# the type of run-time panic values such as integer division by zero.
+OWNED_RUNTIME = """// Owned by PCC: the implemented part of package runtime.
+package runtime
+
+// Error identifies a run time error.
+type Error interface {
+\terror
+\t// RuntimeError is a no-op function that distinguishes run time errors
+\t// from ordinary errors.
+\tRuntimeError()
+}
+"""
+OWNED_PACKAGES = {"runtime": (("runtime.go", OWNED_RUNTIME),)}
 
 
 @dataclass
@@ -56,9 +77,10 @@ def compile_packages(packages, *, main_package, target_triple):
             raise GoDiagnostic(import_token, "import cycle involving " + path)
         if path in analyzed:
             return analyzed[path]
-        if path not in packages:
+        owned = path not in packages and path in OWNED_PACKAGES
+        if path not in packages and not owned:
             raise GoDiagnostic(import_token, "import source unavailable: " + path + "; provide original package sources")
-        program = parse_package(packages[path], require_main=path == main_package)
+        program = parse_package(OWNED_PACKAGES[path] if owned else packages[path], require_main=path == main_package)
         if path != main_package and program.token.text == "main":
             raise GoDiagnostic(program.token, "cannot import a main package")
         active.add(path)
@@ -89,6 +111,10 @@ def compile_packages(packages, *, main_package, target_triple):
             file_imports[key] = ImportBinding(imported.token, alias, dependency)
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
                             package_path=None if path == main_package else path, generics=generics)
+        if owned:
+            analyzer.owned_surface = frozenset(
+                [dtype.token.text for dtype in program.types] + [function.token.text for function in program.functions]
+                + [item.token.text for item in program.constants + program.variables])
         analyzer.analyze()
         active.remove(path)
         analyzed[path] = analyzer

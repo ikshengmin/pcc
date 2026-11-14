@@ -12,9 +12,8 @@ verdict and position was compared with a local development go1.23.6.
 """
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go, compile_go_packages
+from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go
 from pcc.frontends.go.syntax import GoParser
-from scripts import ci_go_math_bits_project as project
 from tests.go.darwin_execution import REFERENCE_UNAVAILABLE, reference_rejection
 
 
@@ -73,16 +72,5 @@ def test_reference_accepts_and_rejects_the_same_sources(tmp_path):
         assert returncode != 0 and f'invalid.go:{position}: ' in stderr and message in stderr, stderr
 
 
-def test_math_bits_external_test_package_now_parses_and_stops_at_the_runtime_import():
-    _, files = project.load_inputs()
-    source = lambda names: [(name, files[project.PACKAGE_DIR + '/' + name].decode('utf-8')) for name in names]
-    packages = {
-        'main': [('m.go', 'package main;import _ "math/bits_test";func main(){}')],
-        project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
-        project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
-    }
-    # Formerly bits_test.go:458:23, :461:3, :716:10, :851:4 (`defer`) and
-    # :1038:26 (this assertion); the whole file now parses, so its import of
-    # the unprovided `runtime` package source is next.
-    with pytest.raises(GoDiagnostic, match=r'bits_test.go:9:2: Go: import source unavailable: runtime'):
-        compile_go_packages(packages, target_triple='x86_64-unknown-linux-gnu')
+# The math/bits frontier (formerly bits_test.go:9:2, the runtime import) moved
+# to tests/go/test_owned_runtime_package.py.

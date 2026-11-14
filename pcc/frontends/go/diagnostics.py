@@ -31,6 +31,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.linkname-directives': 'go.capability.linkname-directives',
     'go.unsupported.defer': 'go.capability.defer',
     'go.unsupported.function-values': 'go.capability.function-values',
+    'go.unsupported.owned-runtime-surface': 'go.capability.owned-runtime-surface',
     'go.unsupported.method-values': 'go.capability.method-values',
     'go.unsupported.negative-shift-panic': 'go.capability.negative-shift-panic',
     'go.unsupported.package-initialization': 'go.capability.package-initialization',

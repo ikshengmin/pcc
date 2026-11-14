@@ -533,6 +533,11 @@ class Analyzer:
             raise GoDiagnostic(token, "undefined imported package " + qualifier)
         if not token.text or unicodedata.category(token.text[0]) != "Lu":
             raise GoDiagnostic(token, "cannot access unexported package member " + token.text)
+        surface = getattr(binding.analyzer, "owned_surface", None)
+        if surface is not None and token.text not in surface:
+            raise UnsupportedGo(token, 'go.unsupported.owned-runtime-surface',
+                                "the owned " + binding.analyzer.program.token.text + " package does not implement "
+                                + token.text + " yet")
         binding.used = True
         return binding.analyzer
 

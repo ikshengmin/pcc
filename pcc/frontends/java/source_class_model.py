@@ -215,6 +215,16 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             node.dtype, materialization=node.string_constant is not None)
 
     def class_expression(self, node, assigned):
+        if node.kind == "lambda":
+            # JLS 15.27: typed only by a target functional interface; its value
+            # is a managed function object, neither of which exists here.
+            node.token.error("lambda expressions require functional-interface typing and managed function objects",
+                             code="java.unsupported.object-expressions")
+        if node.kind == "method_call":
+            # JLS 15.12 on a value's reference type: check the receiver first.
+            self.expression(node.children[0], assigned)
+            node.token.error("reference method invocation requires the next managed receiver domain",
+                             code="java.unsupported.object-expressions")
         if self.class_creation_expression(node, assigned):
             return
         if node.kind in {"name", "call"} and "." in str(node.value):

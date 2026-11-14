@@ -1032,7 +1032,54 @@ class SourceParser:
             self.peek().error("an inferred local declaration must have exactly one declarator")
         return Node("var", name, "var", [initializer], is_final=is_final, inference_token=token)
 
+    def lambda_start(self):
+        """JLS 15.27: `x ->` or a parenthesized parameter list followed by `->`."""
+        token = self.peek()
+        if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS:
+            return self.peek(1).text == "->"
+        if token.text != "(":
+            return False
+        depth, index = 0, 0
+        while index < 4096:
+            text = self.peek(index).text
+            if text == "<eof>":
+                return False
+            depth += (text == "(") - (text == ")")
+            if depth == 0:
+                return self.peek(index + 1).text == "->"
+            index += 1
+        return False
+
+    def lambda_expression(self):
+        """JLS 15.27 LambdaExpression, retained as syntax for the class model."""
+        start = self.peek()
+        parameters = []
+        if self.accept("("):
+            while not self.accept(")"):
+                self.accept("final")
+                if self.peek(1).text in {",", ")"}:
+                    parameters.append((self.identifier(), None))  # inferred
+                else:
+                    type_token = self.take()
+                    dtype = self.array_suffix(self.declaration_type(type_token))
+                    parameters.append((self.identifier(), dtype))
+                if len(parameters) > 255:
+                    start.error("lambda parameter count exceeds implementation limit (255)")
+                if not self.accept(","):
+                    self.expect(")")
+                    break
+            inferred = {dtype is None for _, dtype in parameters}
+            if len(inferred) > 1:
+                start.error("lambda parameters must be all inferred or all declared")
+        else:
+            parameters.append((self.identifier(), None))
+        arrow = self.expect("->")
+        body = self.block() if self.peek().text == "{" else self.expression()
+        return Node("lambda", arrow, tuple(parameters), [body])
+
     def expression(self, minimum=0, *, statement_target=False):
+        if self.class_model and self.lambda_start():
+            return self.lambda_expression()
         token = self.take()
         if token.text in ("++", "--"):
             node = Node("mutation", token, token.text, [self.expression(11)])
@@ -1174,6 +1221,12 @@ class SourceParser:
                 node = Node("array_access", postfix, children=[node, index])
             else:
                 member = self.identifier()
+                if self.peek().text == "(" and self.class_model:
+                    # JLS 15.12 Primary . Identifier ( args ): a method of the
+                    # value's (reference) type; the checker owns the boundary.
+                    self.take()
+                    node = Node("method_call", member, member.text, [node] + self.arguments())
+                    continue
                 if self.peek().text == "(":
                     member.error("reference method invocation requires the next managed receiver domain",
                                  code="java.unsupported.object-expressions")
