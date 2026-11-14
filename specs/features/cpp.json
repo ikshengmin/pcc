@@ -1268,7 +1268,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:fb092c7b6ec93db2efea8eaafef06045fa5b486ae7a7be65a5c3d112a14c4c5c",
+        "source_revision": "sha256:c9107bb61b53f6314662541ce9a87630e4fc16290713c0c8a435826392a0d309",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1300,7 +1300,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1308,7 +1308,7 @@
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
-            "sha256": "53a9a38e78d6ac8c42d99900536f50f2c5af1c3f19be0f614354e1a595a2b58d"
+            "sha256": "15fff23d5791ced5380057d60085ca35629e6cf5da390e0bf83784e5a2f52d86"
           },
           {
             "path": "pcc/frontends/cpp/size_queries.py",
@@ -1354,7 +1354,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:095c9051485bc3d077f5c8d8cce4cbd0e752703e4848265d199c0ee6e74bc0bf",
+        "source_revision": "sha256:5cb2c689e591a2cb4cb7ab41627efbc122236910353fc80c9e27fa362da14f5e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1386,7 +1386,7 @@
           },
           {
             "path": "pcc/frontends/cpp/members.py",
-            "sha256": "0eb58b4922301d09dcf9572533f63f825a75d06eeb364c051935f15f67c120a6"
+            "sha256": "f14fe150bbdfe5ab7bc622d9c3f74537b2e0ab0126cb465a46dfb08d51750446"
           },
           {
             "path": "pcc/frontends/cpp/size_queries.py",
@@ -1423,7 +1423,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7d374214add7f66f098e2f430dfcda425b9c676e2c03f694cf9d58e2b0a02f0e",
+        "source_revision": "sha256:0d6ab1c5b5c039c1c43b14b2deb1da940b0f9accdeea305f84b5ec439d707403",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -1439,7 +1439,7 @@
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
-            "sha256": "53a9a38e78d6ac8c42d99900536f50f2c5af1c3f19be0f614354e1a595a2b58d"
+            "sha256": "15fff23d5791ced5380057d60085ca35629e6cf5da390e0bf83784e5a2f52d86"
           }
         ]
       }
@@ -1508,7 +1508,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d3768406a4dfd2af61363cc7fed403d337a2cef5d2df75b41fdb8b89bd0548ed",
+        "source_revision": "sha256:fa6c1a35cd1746f926fe1580de26c755e762055ce87d51c1e439cbdf0dbbf730",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1524,7 +1524,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -2830,7 +2830,7 @@
         "class.access",
         "over"
       ],
-      "scope": "Non-inline static member functions; no implicit this; bounded overload/access/object-base sequencing. Not static data, inline ODR, mixed static/nonstatic ranking. Only host pcc0/self linux-x86_64 qualification; GC not applicable. Evidence below binds one representative original; tests list retains all actually passing nodes in these scoped test files, not independent feature-completeness claims. Native pcc1, full bootstrap, five-GC, unmodified TinyXML2, NumPy and full C++17 are not qualified.",
+      "scope": "Non-inline static member functions; no implicit this; bounded overload/access/object-base sequencing. Not static data, inline ODR, mixed static/nonstatic ranking. Only host pcc0/self linux-x86_64 qualification; GC not applicable. Evidence below binds one representative original; tests list retains all actually passing nodes in these scoped test files, not independent feature-completeness claims. Native pcc1, full bootstrap, five-GC, unmodified TinyXML2, NumPy and full C++17 are not qualified. Overload sets mixing static and non-static members now resolve by [over.match.funcs]/4 and [over.match.best]/1 (a static member's implicit object matches any object and never ranks); a selected static member discards an evaluated object, and selecting a non-static member without *this is an error. Four programs run natively on the Mac and match Apple clang, which also rejects the four invalid sources; class templates keep cpp.unsupported.mixed-static-overloads. TinyXML2's XMLElement::DeleteAttribute moves tinyxml2.cpp from tinyxml2.h:1695:17 to 1959:21.",
       "status": "supported",
       "tests": [
         "tests/cpp/test_cpp_static_member_execution.py::test_nonstatic_body_can_call_static_without_forwarding_this",
@@ -2897,7 +2897,8 @@
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[uninitialized-dot-no-value-read]",
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[void-call-pointer-output]",
         "tests/cpp/test_cpp_static_members.py::test_static_owned_object_is_deterministic[wide-result]",
-        "tests/cpp/test_cpp_static_members.py::test_tinyxml2_original_static_declaration_shapes_are_admitted"
+        "tests/cpp/test_cpp_static_members.py::test_tinyxml2_original_static_declaration_shapes_are_admitted",
+        "tests/cpp/test_cpp_mixed_static_overloads.py"
       ],
       "diagnostics": [
         "cpp.unsupported.mixed-static-overloads"
@@ -3971,7 +3972,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:19c20bb5ce5e908f803b6b27fc3c14f95d45553e6c0effebe9a3b4a68fabbdfe",
+        "source_revision": "sha256:4e3acd679bcdf7aa519382e38c144e631877d4a059226347a5e2d5e8c199ef02",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
@@ -3995,11 +3996,11 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
-            "sha256": "53a9a38e78d6ac8c42d99900536f50f2c5af1c3f19be0f614354e1a595a2b58d"
+            "sha256": "15fff23d5791ced5380057d60085ca35629e6cf5da390e0bf83784e5a2f52d86"
           }
         ]
       }
@@ -4027,7 +4028,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d072f44665ea85e40cedf3d140da47cbe22f91dab0aed82a523d72d9aa8587a8",
+        "source_revision": "sha256:cf686093d61d8b65f264825e3ab280e52316ef38e9a5ab710bf2b13ed1b6407d",
         "sources": [
           {
             "path": "pcc/frontends/c/evaluator/c_evaluator.py",
@@ -4047,7 +4048,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           }
         ]
       }
@@ -4069,11 +4070,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:6b99c06eaec8280e0d134ac392c4a8830014011bb7d34ca47970ae4ec267041f",
+        "source_revision": "sha256:e305178133089422958441b5ad5a18fb22d34c62cfeaa935adb49a7ba71087ac",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           },
           {
             "path": "pcc/frontends/cpp/static_casts.py",
@@ -4101,11 +4102,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:ad99ec42b23607329c5163d32e728f94892cfc25048af248c0e51f6c95115495",
+        "source_revision": "sha256:13fe30f839902d55861351b1dfbaf3c13a96668d2d444c46962ffe87743ab24e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
+            "sha256": "3149871c91816edcd39a764dd266a102f664bf995a51c488f395d19319aa8ef2"
           },
           {
             "path": "pcc/frontends/cpp/string_literals.py",

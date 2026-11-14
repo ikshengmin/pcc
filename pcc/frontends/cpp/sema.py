@@ -689,6 +689,11 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                 candidate.internal_linkage = origin.internal_linkage
         ranks = []
         for index, (source, destination, null) in enumerate(zip(arguments, candidate.parameters, null_constants)):
+            if index == 0 and getattr(candidate, "neutral_object", False):
+                # [over.match.funcs]/4: a static member's implicit object
+                # parameter matches any object, with no conversion.
+                ranks.append(0)
+                continue
             if isinstance(destination, ReferenceType):
                 from pcc.frontends.cpp.references import conversion_rank
                 rank = conversion_rank(source_arguments[index], destination, lvalues[index], types, null)
@@ -718,6 +723,11 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                 second_ellipsis = index >= len(other.parameters)
                 if first_ellipsis or second_ellipsis:
                     comparisons.append(int(first_ellipsis) - int(second_ellipsis))
+                elif index == 0 and (getattr(candidate, "neutral_object", False)
+                                     or getattr(other, "neutral_object", False)):
+                    # [over.match.best]/1: a static member's ICS1 is neither
+                    # better nor worse than any other candidate's.
+                    comparisons.append(0)
                 else:
                     first, second = candidate.parameters[index], other.parameters[index]
                     if isinstance(first, ReferenceType) or isinstance(second, ReferenceType):
