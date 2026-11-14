@@ -1380,7 +1380,17 @@ def _execute_resource_driver(prefix, case, directory, owner, collector):
     receipt_path.write_text(json.dumps(record, indent=2, sort_keys=True) + "\n")
     assert result.returncode == 0, record
     assert result.stdout == "RESOURCE_ACCEPTANCE_OK " + case + "\n", record
-    assert result.stderr == "", record
+    expected_stderr = ""
+    if case == "oversized":
+        # The driver retains the actual refusal after catching it. Require
+        # exactly the bounded primary diagnostic emitted before pool cleanup.
+        refusal = (directory / "refusal").read_text()
+        expected_stderr = (
+            "pcc frontend primary resource error before cleanup: WorkerMemoryError="
+            + repr(refusal[:2048])
+            + (" [truncated]" if len(refusal) > 2048 else "") + "\n"
+        )
+    assert result.stderr == expected_stderr, record
     assert (directory / "complete").read_text() == owner + "\t" + str(collector)
     if case in RESOURCE_PORTABLE_CASES:
         budget = (directory / "budget.tsv").read_text().strip().split("\t")
@@ -1415,6 +1425,70 @@ def test_resource_acceptance_driver_matches_cpython(case, tmp_path):
         [sys.executable, "-B", str(RESOURCE_NATIVE_DRIVER)],
         case, tmp_path / case, "cpython", 0,
     )
+
+
+@pytest.mark.parametrize("variant", (
+    "recorded", "escaped", "bounded", "other-case-empty", "missing",
+    "wrong-type", "wrong-message", "duplicate", "extra", "unescaped",
+    "other-case-diagnostic", "missing-refusal",
+))
+def test_resource_driver_requires_exact_case_specific_stderr(tmp_path, monkeypatch, variant):
+    prefix = "pcc frontend primary resource error before cleanup: WorkerMemoryError="
+    refusal = "expected admission refusal"
+    stderr = prefix + "'expected admission refusal'\n"
+    case = "oversized"
+    accepted = variant in ("recorded", "escaped", "bounded", "other-case-empty")
+    if variant in ("escaped", "unescaped"):
+        refusal = "one\nline"
+        stderr = prefix + ("'one\\nline'\n" if variant == "escaped" else "'one\nline'\n")
+    elif variant == "bounded":
+        refusal = "x" * 2049
+        stderr = prefix + "'" + "x" * 2048 + "' [truncated]\n"
+    elif variant == "missing":
+        stderr = ""
+    elif variant == "wrong-type":
+        stderr = stderr.replace("WorkerMemoryError=", "RuntimeError=")
+    elif variant == "wrong-message":
+        stderr = prefix + "'unrelated refusal'\n"
+    elif variant == "duplicate":
+        stderr *= 2
+    elif variant == "extra":
+        stderr += "unexpected diagnostic\n"
+    elif variant in ("other-case-empty", "other-case-diagnostic"):
+        case = "spawn_failure"
+        if variant == "other-case-empty":
+            stderr = ""
+
+    directory = tmp_path / case
+    calls = []
+
+    def completed_driver(command, *, env, timeout):
+        calls.append(command)
+        assert command == ["synthetic-driver", case, str(directory)]
+        assert timeout == 20 and env["PCC_TEST_RESOURCE_OWNER"] == "cpython"
+        (directory / "complete").write_text("cpython\t0")
+        (directory / "configured-budget").write_text("4096")
+        (directory / "budget.tsv").write_text(
+            "4096\t2048\t0\t0\tmeasured-lower-bound-not-a-sufficient-budget\n"
+        )
+        if variant != "missing-refusal":
+            (directory / "refusal").write_text(refusal)
+        return subprocess.CompletedProcess(
+            command, 0, "RESOURCE_ACCEPTANCE_OK " + case + "\n", stderr,
+        )
+
+    monkeypatch.setitem(globals(), "run_process_group_timeout", completed_driver)
+    if accepted:
+        record = _execute_resource_driver(["synthetic-driver"], case, directory, "cpython", 0)
+        assert record["stderr"] == stderr
+    else:
+        error = FileNotFoundError if variant == "missing-refusal" else AssertionError
+        with pytest.raises(error):
+            _execute_resource_driver(["synthetic-driver"], case, directory, "cpython", 0)
+    assert calls == [["synthetic-driver", case, str(directory)]]
+    record = json.loads((directory / "execution.json").read_text())
+    assert record["returncode"] == 0 and record["stderr"] == stderr
+    assert record["stdout"] == "RESOURCE_ACCEPTANCE_OK " + case + "\n"
 
 
 @pytest.mark.pcc_gate(probe=lambda: os.name == "posix")
