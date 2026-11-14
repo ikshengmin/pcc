@@ -474,22 +474,26 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest (2026-11-14, Apple M1 Pro / macOS 27.2.1): two further rounds complete
+Latest (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or
 non-2xx responses and every row server-bound. Five-pair medians are
-**4,671.5 / 4,513.2 / 4,509.1 QPS** (GET /, dynamic GET, POST /user) versus
-same-run aiohttp 3.14.5 / CPython 3.14.10 **28,034.1 / 25,716.5 / 27,544.8**
-(16.4–17.5%); native p99 is 227.1 / 235.5 / 233.4 ms. The binary is gateway
-`4046022` from current-directory host pcc0/self at core `ac1d9ccf`. Round 1
-(core `ac1d9ccf`) reads the emitted poll's request flags monotonic instead of
-acquire on the fast path; `pcc_thread_safepoint` still acquires. Its GET /
-C512 native screen is +2.9% (4/6 wins, noisy). Round 2 (gateway `4046022`)
-adopts exact immutable response bytes as output storage: +1.2%, 10/12 wins.
-Focused poll/inliner checks, native stop-the-world hot-loop programs and the
-emitted five-GC buffer program pass. Details are in
-`pcc-gateway/benchmarks/web-frameworks.md`. The M2 Max figures below are a
-different host. GC1–4 HTTP, four carriers, whole suites, bootstrap and live
-TLS remain unrun.
+**4,689.2 / 4,550.3 / 4,548.9 QPS** (GET /, dynamic GET, POST /user) versus
+same-run aiohttp 3.14.5 / CPython 3.14.10 **27,200.2 / 24,043.2 / 26,620.9**
+(17.1–18.9%); native p99 is 233.4 / 246.6 / 239.2 ms. The binary is gateway
+`488d0c0` from current-directory host pcc0/self at core `6b0f2406` (compiler
+source identical to `8a795a99`). Kept rounds, each a GET / C512 native A/B
+against the previous binary: core `ac1d9ccf` reads emitted poll request flags
+monotonic on the fast path (`pcc_thread_safepoint` still acquires), +2.9%;
+gateway `4046022` adopts immutable response bytes as output storage, +1.2%;
+gateway `488d0c0` reads a lock-written lifecycle state snapshot on
+per-request keep-alive checks, +1.5%; core `8a795a99` decides dynamic `==`
+with an int operand inline for tagged ints, +0.2%. The profile is flat
+(largest function 5.2%; ownership 24.5%, allocation/release 15.6%, TLV 6.2%),
+so single-site changes give 1–3%. Focused poll/inliner checks, native
+stop-the-world programs and emitted buffer/compare programs on GC0–4 pass.
+Details are in `pcc-gateway/benchmarks/web-frameworks.md`. The M2 Max figures
+below are a different host. GC1–4 HTTP, four carriers, whole suites,
+bootstrap and live TLS remain unrun.
 
 The five-round local Mac optimization checkpoint (2026-11-14) completes the
 original comparison with **30/30 timed rows**, ten completed server arms and
