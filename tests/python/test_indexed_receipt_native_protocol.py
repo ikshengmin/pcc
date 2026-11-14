@@ -63,6 +63,34 @@ def main():
                 assert "diagnostic exceeds" in str(error)
                 refused = True
             assert refused
+        # Raw TypeDesc rows have seven fields and no nested cold tags.
+        # These widths are literal JSON byte counts, independent of the
+        # production wire shaper and the native JSON serializer.
+        type_cases = []
+        for number, width in ((0, 35), (9, 35), (10, 37), (-10, 39),
+                              ((1 << 63) - 1, 71), (-(1 << 63), 73),
+                              ((1 << 64) - 1, 73), (-((1 << 64) - 1), 75),
+                              (True, 41), (False, 43)):
+            type_cases.append((TypeDesc("array", width=number, count=number), width))
+        leaf = TypeDesc("int", 64)
+        pointer = TypeDesc("ptr", pointee=leaf)
+        array = TypeDesc("array", count=10, elem=pointer)
+        type_cases.append((TypeDesc("struct", fields=(leaf, pointer, array)), 232))
+        type_name = chr(0) + chr(233) + chr(0xD800) + chr(0x1F600)
+        type_cases.append((TypeDesc("struct", name=type_name, fields=(leaf,)), 100))
+        # The >64-bit atoms deliberately retain their bit-length bound.
+        type_cases.append((TypeDesc("array", width=1 << 64, count=1 << 64), 165))
+        for value, width in type_cases:
+            typed = ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None)
+            bound = 4877 + width
+            _bounded_capture_budget(typed, bound)
+            refused = False
+            try:
+                _bounded_capture_budget(typed, bound - 1)
+            except ValueError as error:
+                assert "diagnostic exceeds" in str(error)
+                refused = True
+            assert refused
     dump = os.path.join(root, "dump")
     source = os.path.join(root, "source.py")
     manifest = os.path.join(root, "worker.manifest")

@@ -106,6 +106,114 @@ def test_emission_failure_has_no_completed_receipt(tmp_path, monkeypatch):
     assert not (dump / "link.json").exists()
 
 
+def _type_capture_fixture(value):
+    from pcc.backend.self_backend_ir import GlobalDef, ParsedModule
+
+    # Specification: docs/project-intent.md, bounded owned transport must
+    # preserve the ordinary serialized values and fail closed on overflow.
+    # Outside the type payload: module 4096, triple 34, global 512,
+    # name 35, type cold-cell allowance 32, initializer 35, TLS 34,
+    # alignment 33, IR prefix 34 and empty trailing-attribute tuple 32.
+    return ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None), 4877
+
+
+@pytest.mark.parametrize("number", (
+    0, 1, 9, 10, 99, 100, -1, -9, -10, -99, -100,
+    (1 << 63) - 1, -(1 << 63), (1 << 64) - 1, -((1 << 64) - 1),
+    True, False,
+))
+def test_capture_type_integer_budget_matches_raw_json(number):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    value = TypeDesc("array", width=number, count=number)
+    parsed, outer = _type_capture_fixture(value)
+    expected = outer + len(json.dumps(codec._type_to_wire(value)).encode("utf-8"))
+    codec._bounded_capture_budget(parsed, expected)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, expected - 1, state)
+    assert state == {"observed_bytes": expected}
+
+
+@pytest.mark.parametrize("shape", ("leaf", "pointer", "array", "empty", "nested", "unicode"))
+def test_capture_nested_type_budget_matches_raw_json(shape):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    leaf = TypeDesc("int", 64)
+    pointer = TypeDesc("ptr", pointee=leaf)
+    array = TypeDesc("array", count=10, elem=pointer)
+    values = {
+        "leaf": leaf,
+        "pointer": pointer,
+        "array": array,
+        "empty": TypeDesc("struct"),
+        "nested": TypeDesc("struct", fields=(leaf, pointer, array)),
+        "unicode": TypeDesc("struct", name='n\0"\\\u00e9\ud800\U0001f600', fields=(array,)),
+    }
+    value = values[shape]
+    parsed, outer = _type_capture_fixture(value)
+    expected = outer + len(json.dumps(codec._type_to_wire(value)).encode("utf-8"))
+    codec._bounded_capture_budget(parsed, expected)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, expected - 1, state)
+    assert state == {"observed_bytes": expected}
+
+
+@pytest.mark.parametrize("number", (1 << 64, -(1 << 64), 10 ** 80, -(10 ** 80)))
+def test_capture_large_type_integer_keeps_conservative_bound(number):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    value = TypeDesc("array", width=number, count=number)
+    parsed, outer = _type_capture_fixture(value)
+    wire = len(json.dumps(codec._type_to_wire(value)).encode("utf-8"))
+    # Only the two large integer atoms retain the previous bit-length bound.
+    expected = outer + wire + 2 * (number.bit_length() + 1 - len(str(number)))
+    codec._bounded_capture_budget(parsed, expected)
+    state = {}
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, expected - 1, state)
+    assert state == {"observed_bytes": expected}
+
+
+def test_capture_type_fields_are_charged_before_traversal(monkeypatch):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    class Fields(tuple):
+        def __iter__(self):
+            raise AssertionError("oversized fields traversed before charging")
+
+    fields = Fields((TypeDesc("int", 8),) * 8192)
+    parsed, _outer = _type_capture_fixture(TypeDesc("struct", fields=fields))
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec._bounded_capture_budget(parsed, 8192)
+
+
+def test_capture_wide_type_keeps_same_wire_and_final_limit(tmp_path, monkeypatch):
+    from pcc.backend import self_backend_indexed_codec as codec
+    from pcc.backend.self_backend_ir import TypeDesc
+
+    value = TypeDesc("struct", fields=(TypeDesc("int", 64),) * 6500)
+    parsed, _outer = _type_capture_fixture(value)
+    reference = tmp_path / "wide-unbounded.pidx"
+    codec.encode_indexed_module_file(str(reference), parsed)
+    expected = reference.read_bytes()
+    bounded = tmp_path / "wide-bounded.pidx"
+    codec.encode_indexed_module_file(str(bounded), parsed, max_bytes=receipts.LIMIT)
+    assert bounded.read_bytes() == expected
+    assert len(expected) <= receipts.LIMIT
+    # Independent final guard, even if a future preflight undercounts.
+    monkeypatch.setattr(codec, "_bounded_capture_budget", lambda *args: None)
+    rejected = tmp_path / "wide-rejected.pidx"
+    with pytest.raises(ValueError, match="diagnostic exceeds"):
+        codec.encode_indexed_module_file(str(rejected), parsed, max_bytes=len(expected) - 1)
+    assert not rejected.exists()
+
+
 def test_link_rechecks_changed_output_and_order(tmp_path, monkeypatch):
     dump, _sources, names, contexts = setup(tmp_path, monkeypatch)
     capture = receipts.begin_capture(module(), contexts[0], [])

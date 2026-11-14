@@ -328,7 +328,9 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
     This is a conservative upper bound, deliberately not a fit guarantee. Raw
     arenas are counted without reading them. Cold cells are traversed without
     copying. Strings charge their exact ensure_ascii JSON representation;
-    scalar/container overhead remains conservative, not an exact wire size.
+    Type records count their raw JSON layout, retaining the old conservative
+    integer bound above 64 bits. Outer scalar/container overhead remains
+    conservative; this is not an exact whole-wire size or a fit guarantee.
     The ordinary sidecar path does not enter this diagnostic walk.
     """
     budget = [0]
@@ -340,39 +342,75 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
                 diagnostic["observed_bytes"] = budget[0]
             raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
 
+    def string(value):
+        # Reserve minimum bytes before the added escape inspection.
+        # Each such scan is bounded by the remaining capture budget,
+        # without materializing JSON or an encoded copy.
+        charge(len(value) + 2)
+        if value.isascii() and value.isprintable():
+            # Ordinary names/IR text need only two allocation-free counts.
+            charge(value.count('"') + value.count("\\"))
+        else:
+            for character in value:
+                point = ord(character)
+                if (
+                    point == 34 or point == 92 or point == 8
+                    or point == 12 or point == 10 or point == 13
+                    or point == 9
+                ):
+                    charge(1)
+                elif point < 0x20 or 0x7F <= point <= 0xFFFF:
+                    # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
+                    charge(5)
+                elif point > 0xFFFF:
+                    # A supplementary scalar is a JSON surrogate pair.
+                    charge(11)
+
+    def type_integer(value):
+        # bool is an int subclass, but JSON uses true/false rather than 1/0.
+        if isinstance(value, bool):
+            charge(4 if value else 5)
+            return
+        bits = value.bit_length()
+        if bits > 64:
+            # Preserve the existing bound for arbitrary-size integers. Do not
+            # allocate a decimal string or add a size-dependent division loop.
+            charge(bits + 1)
+            return
+        if value < 0:
+            charge(1)
+            value = -value
+        # At most 20 digits for a value with at most 64 significant bits.
+        charge(1)
+        while value >= 10:
+            charge(1)
+            value //= 10
+
+    def type_record(value):
+        # Mirror _type_to_wire, not _cold_to_wire: nested types are raw
+        # seven-element arrays, nulls and one raw fields array, with no tags.
+        if value is None:
+            charge(4)
+            return
+        charge(14)  # '[' + six ', ' separators + ']'.
+        string(value.kind)
+        type_integer(value.width)
+        type_record(value.pointee)
+        type_integer(value.count)
+        type_record(value.elem)
+        string(value.name)
+        field_count = len(value.fields)
+        charge(2 if field_count == 0 else 2 * field_count)
+        for field in value.fields:
+            type_record(field)
+
     def cold(value):
+        # Retain the conservative outer cold-cell/tag/separator allowance.
         charge(32)
         if isinstance(value, str):
-            # Reserve minimum bytes before the added escape inspection.
-            # Each such scan is bounded by the remaining capture budget,
-            # without materializing JSON or an encoded copy.
-            charge(len(value) + 2)
-            if value.isascii() and value.isprintable():
-                # Ordinary names/IR text need only two allocation-free counts.
-                charge(value.count('"') + value.count("\\"))
-            else:
-                for character in value:
-                    point = ord(character)
-                    if (
-                        point == 34 or point == 92 or point == 8
-                        or point == 12 or point == 10 or point == 13
-                        or point == 9
-                    ):
-                        charge(1)
-                    elif point < 0x20 or 0x7F <= point <= 0xFFFF:
-                        # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
-                        charge(5)
-                    elif point > 0xFFFF:
-                        # A supplementary scalar is a JSON surrogate pair.
-                        charge(11)
+            string(value)
         elif isinstance(value, TypeDesc):
-            cold(value.kind)
-            cold(value.width)
-            cold(value.pointee)
-            cold(value.count)
-            cold(value.elem)
-            cold(value.name)
-            cold(value.fields)
+            type_record(value)
         elif isinstance(value, (tuple, list)):
             for item in value:
                 cold(item)
