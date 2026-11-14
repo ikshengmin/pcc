@@ -89,8 +89,8 @@ def test_payload_owners_retire_before_next_read_and_first_solver_access(
 
         def __len__(self):
             # Ingestion appends without querying edge_pairs.__len__. Its
-            # first length query is the fixed-point while condition, even
-            # for an empty edge arena. effects has owner_index == 0.
+            # first length query starts fixed-point processing, even for an
+            # empty edge arena. effects has owner_index == 0.
             if self.owner_index == 1 and not solver_access:
                 _assert_retired(references)
                 solver_access.append(True)

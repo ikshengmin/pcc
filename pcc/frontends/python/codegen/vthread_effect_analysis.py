@@ -1776,11 +1776,18 @@ def annotate_closed_world_vthread_effect_summaries(
             edges = None
             summary = None
 
+        # Once a pass makes progress, retire visited edges whose callee parks:
+        # their callers are now permanently parked too. Keep the unchanged
+        # prefix and other edges in stable order, so a no-progress pass never
+        # needs compaction writes. The original arena length still reports
+        # input edges; no second buffer or heap adjacency index is needed.
+        active_edge_words = len(edge_pairs)
         changed = True
         while changed:
             changed = False
             index = 0
-            while index < len(edge_pairs):
+            remaining_edge_words = 0
+            while index < active_edge_words:
                 caller = edge_pairs.get_unchecked(index)
                 callee = edge_pairs.get_unchecked(index + 1)
                 if effects.get_unchecked(callee) & _VTHREAD_EFFECT_PARKS:
@@ -1790,7 +1797,18 @@ def annotate_closed_world_vthread_effect_summaries(
                             caller, caller_state | _VTHREAD_EFFECT_PARKS
                         )
                         changed = True
+                    if not changed:
+                        remaining_edge_words += 2
+                else:
+                    # The write cursor never passes the read cursor, and
+                    # both source words have already been read. Moving a
+                    # retained pair cannot overwrite an unread edge.
+                    if remaining_edge_words != index:
+                        edge_pairs.set_unchecked(remaining_edge_words, caller)
+                        edge_pairs.set_unchecked(remaining_edge_words + 1, callee)
+                    remaining_edge_words += 2
                 index += 2
+            active_edge_words = remaining_edge_words
 
         for module_name, exports in native_exports.items():
             for export_name, info in exports.items():
