@@ -10,12 +10,14 @@ import sys
 
 import pytest
 
-from pcc.frontends.python.codegen.layer1 import L1CodeGen
-from tests.python.test_slot_call_operand_roots import _emit
+pytestmark = pytest.mark.xdist_group(name="vthread_loaded_methods")
 
 
 @pytest.mark.parametrize("target", ["callback", "receiver.method"])
 def test_deferred_call_retires_synchronous_operand_roots_before_driving(monkeypatch, target):
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+    from tests.python.test_slot_call_operand_roots import _emit
+
     original = L1CodeGen._new_slot_call_root
     observed = []
 
