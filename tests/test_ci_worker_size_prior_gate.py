@@ -118,8 +118,9 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_worker_observation_scope.py',
     )
     assert gate.HOST_COUNTS[72:85] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
-    assert gate.HOST_FILES[85:] == ("tests/python/test_lambda_rejection_diagnostics.py",)
-    assert gate.HOST_COUNTS[85:] == (33,)
+    assert gate.HOST_FILES[85:] == ("tests/python/test_lambda_rejection_diagnostics.py",
+                                     "tests/python/test_lambda_scaffold_capture_owner.py")
+    assert gate.HOST_COUNTS[85:] == (33, 27)
     assert "tests/python/test_precise_stackmap_abi.py" not in gate.HOST_FILES
     assert gate.GC_MARK_COLOR_ATOMIC_TEST == "tests/python/test_gc_mark_color_atomic.py"
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
@@ -129,8 +130,8 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert "tests/python/test_freestanding_gc_relocation_selector.py" not in gate.HOST_FILES
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
-    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 86
-    assert sum(gate.HOST_COUNTS) == 3844 and sum(gate.HOST_COUNTS[:85]) == 3811
+    assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
+    assert sum(gate.HOST_COUNTS) == 3871 and sum(gate.HOST_COUNTS[:85]) == 3811
     assert sum(gate.HOST_COUNTS[:72]) == 3451
     assert sum(gate.HOST_COUNTS[:70]) == 3393
     assert sum(gate.HOST_COUNTS[:65]) == 3183
@@ -192,12 +193,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3844, "selected_passed_count": 3844,
+        "universe_count": 3871, "selected_passed_count": 3871,
         "platform_unrun": [], "worker_witnesses": 6,
     }
     # A complete report cannot pass stale counts or omit the new module. Dropping
     # the added nodes from every witness/report still fails the fixed receipt.
-    for index, old_count in ((12, 433), (84, 11), (85, 0), (85, 32)):
+    for index, old_count in ((12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
         old_counts = list(gate.HOST_COUNTS)
         old_counts[index] = old_count
         put(tmp_path, inventory_reports(inventory_nodes))
@@ -219,10 +220,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     lambda_moved = list(inventory_nodes)
     lambda_moved[lambda_moved.index(gate.HOST_FILES[85] + "::test_inventory[32]")] = (
         gate.HOST_FILES[84] + "::test_inventory[13]")
+    capture_moved = list(inventory_nodes)
+    capture_moved[capture_moved.index(gate.HOST_FILES[86] + "::test_inventory[26]")] = (
+        gate.HOST_FILES[84] + "::test_inventory[13]")
     for invalid in (inventory_nodes + [inventory_nodes[-1]],
                     inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[12]"],
                     inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[13]"],
-                    moved, lambda_moved):
+                    moved, lambda_moved, capture_moved):
         put(tmp_path, inventory_reports(invalid))
         with pytest.raises(AssertionError):
             gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
@@ -242,7 +246,8 @@ def test_default_command_retains_project_xdist(tmp_path):
                                      (gate.HOST_FILES[73], 36),
                                      (gate.HOST_FILES[75], 41),
                                      (gate.HOST_FILES[84], 13),
-                                     (gate.HOST_FILES[85], 33)):
+                                     (gate.HOST_FILES[85], 33),
+                                     (gate.HOST_FILES[86], 27)):
         count = 0
         for node in ast.parse((ROOT / filename).read_text()).body:
             if isinstance(node, ast.FunctionDef) and node.name.startswith("test_"):
@@ -2222,7 +2227,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 41, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

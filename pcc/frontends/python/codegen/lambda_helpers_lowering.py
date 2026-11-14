@@ -10,10 +10,33 @@ from typing import Optional
 
 from pcc.ir.compat import ir
 
-from pcc.frontends.python.py_ast import Attr, BoolType, Call, DictType, DynType, FloatType, IntType, Lambda, ListType, Name, NoneType, SourceSpan, StrType, TupleExpr, TupleType, Type
+from pcc.frontends.python.py_ast import (
+    Attr,
+    BoolType,
+    Call,
+    DictType,
+    DynType,
+    FloatType,
+    FuncDef,
+    IntType,
+    Lambda,
+    ListType,
+    Name,
+    NoneType,
+    SourceSpan,
+    StrType,
+    TupleExpr,
+    TupleType,
+    Type,
+)
 from pcc.frontends.python.codegen.layer1_support import _dataclass_field_names, _dataclass_field_value
 from pcc.frontends.python.codegen import marshal
-from pcc.frontends.python.codegen.hoist_boxing import CELL_CAPTURE, CELL_READ, CELL_UNBOUND
+from pcc.frontends.python.codegen.hoist_boxing import (
+    CELL_CAPTURE,
+    CELL_READ,
+    CELL_UNBOUND,
+    function_local_bindings,
+)
 
 _I8 = ir.IntType(8)
 _I64 = ir.IntType(64)
@@ -207,6 +230,10 @@ class LambdaHelperLoweringMixin:
 
         lexical_shadow_names = set(getattr(self, "_lambda_lexical_shadow_names", set()))
         cur_fd = getattr(self, "current_func_def", None)
+        if isinstance(cur_fd, FuncDef):
+            # Source locals shadow providers throughout their lexical scope,
+            # including before assignment and for metadata-only imports.
+            lexical_shadow_names.update(function_local_bindings(cur_fd))
         if cur_fd is not None:
             for p in getattr(cur_fd, "params", ()) or ():
                 pname = getattr(p, "name", "")
@@ -302,6 +329,23 @@ class LambdaHelperLoweringMixin:
                 for body_expr in body_exprs:
                     collect(body_expr, comp_bound, acc)
                 return
+            if isinstance(e, Attr):
+                # An owned provider attribute can be emitted without loading
+                # its compile-time namespace. Ask that expression's owner,
+                # rather than whitelisting imported names as runtime globals.
+                # Lexical receivers (including nested lambda parameters) must
+                # remain ordinary reads even when they share provider spelling.
+                receiver = e.obj
+                while isinstance(receiver, Attr):
+                    receiver = receiver.obj
+                if (
+                    isinstance(receiver, Name)
+                    and receiver.ident not in bound
+                    and receiver.ident not in self.env
+                    and receiver.ident not in lexical_shadow_names
+                    and self._ir_scaffold_owns_symbol_value(e)
+                ):
+                    return
             if isinstance(e, Name):
                 if e.ident in bound:
                     return
