@@ -211,8 +211,8 @@ class NativeVirtualThreadLoweringMixin:
                 lexical_state = lexical_context["next_state"]
                 lexical_context["lexical_slot_operands"] = True
         try:
-            # These owners are enrolled in the persistent generator frame.
-            # A later argument may suspend before the callback is invoked.
+            # A later parking argument needs persistent frame owners. Proven
+            # synchronous operands use the lexical region established above.
             bound_self = None
             if isinstance(args[0], Attr):
                 callable_root, bound_self = self._emit_slot_call_method_target(
