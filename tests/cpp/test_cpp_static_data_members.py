@@ -132,7 +132,7 @@ def test_reference_compiler_rejects_the_same_sources(tmp_path):
 
 @pytest.mark.parametrize('source,code', (
     ('struct S{static const int K=42;};', 'cpp.unsupported.static-data-members'),
-    ('struct S{static int a[2];};', 'cpp.unsupported.static-data-members'),
+    # The array row moved to tests/cpp/test_cpp_static_member_arrays.py.
     ('struct T{int x;};struct S{static T t;};', 'cpp.unsupported.static-data-members'),
     ('namespace{struct S{static int v;};}', 'cpp.unsupported.static-data-members'),
     ('struct S{static int v, w;};', 'cpp.unsupported.init-declarator-list'),

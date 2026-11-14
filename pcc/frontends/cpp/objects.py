@@ -32,6 +32,11 @@ def static_initializer(parser, dtype, coord):
     assert equals is not None
     expression = parser._expression()
     parser._require_value(expression)
+    return static_value(parser, expression, dtype, coord)
+
+
+def static_value(parser, expression, dtype, coord):
+    """One checked scalar value with static storage: the object or an element."""
     converted = parser._convert(expression, dtype, coord)
     if pointer_type(dtype):
         if expression.null_pointer or expression.static_address is not None:
@@ -54,6 +59,31 @@ def static_initializer(parser, dtype, coord):
         return parser._enum_constant_expression(dtype, proof.value, coord).node, proof
     raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
                         "floating static constant evaluation is not implemented", coord)
+
+
+def static_array_initializer(parser, dtype, coord):
+    """`= { ... }` or `{ ... }` of a scalar-element array with static storage.
+
+    Explicit braces only ([dcl.init.aggr]); each element is a static_value and
+    omitted elements are zero-initialized by the shared C aggregate owner. An
+    unknown outer bound is completed by the list. Returns (init, dtype).
+    """
+    from pcc.frontends.cpp.arrays import deduce_list_bound, lower_array_initializer
+    from pcc.frontends.cpp.initializers import parse_initializer_list
+    parser._accept("=")
+    if parser._peek().value != "{":
+        raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
+                            "static arrays require explicit brace initialization", parser._peek().coord)
+    initializer = parse_initializer_list(parser)
+    if dtype.bound is None:
+        dtype = deduce_list_bound(dtype, initializer, parser.types)
+        parser._check_object_type(dtype, coord)
+
+    def element(expression, target, coord):
+        parser._require_value(expression)
+        return static_value(parser, expression, target, coord)[0]
+
+    return lower_array_initializer(dtype, initializer, parser.types, element), dtype
 
 
 def zero_initializer(parser, dtype, coord):

@@ -2185,15 +2185,60 @@
       ]
     },
     {
+      "id": "cpp.static-data-member-arrays",
+      "title": "Static data member arrays of scalar elements",
+      "chapter_ids": [
+        "class.mem",
+        "basic",
+        "dcl.dcl"
+      ],
+      "scope": "A static data member of a non-template class may be an array of integral, enum or pointer elements declared in the class with its bound ([class.static.data]/2). Its one namespace-scope definition may omit the major bound ([basic.link]/10) and initializes it with an explicit braced list, with or without `=` ([dcl.init.aggr]); each element is a static constant (integers and enumerators, null pointers, addresses of namespace objects, ordinary string literals for const char pointers), omitted elements and a definition without an initializer are zero-initialized, and a const array needs an initializer. Reads, writes, x.m / p->m, sizeof and separate translation units work as for scalar members. Too many clauses, a different bound or element type, a redefinition, private access and a non-const string pointer are ordinary errors. Arrays of unknown bound in the class, class-element arrays, string initialization of char arrays, brace elision and dynamic element initializers stay explicit. Seven programs run natively on the Mac with owned arm64 compile/assemble/link and match Apple clang, which also rejects the seven invalid sources; Linux execution unrun. TinyXML2's XMLDocument::_errorNames moves tinyxml2.cpp from tinyxml2.h:1959:21 to 1968:2 (the member class DepthTracker with member functions).",
+      "tests": [
+        "tests/cpp/test_cpp_static_member_arrays.py::test_definition_is_one_external_initialized_array",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_programs_compile_to_stable_linux_artifacts",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_programs_run_natively_with_owned_compile_assemble_and_link",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_reference_compiler_returns_the_same_value",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_programs_execute_against_real_cpp17_reference_on_linux",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_invalid_static_member_arrays_are_ordinary_errors",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_reference_compiler_rejects_the_same_sources",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_remaining_array_shapes_stay_explicit"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:0511e3d9ef70f95f47421358b73290dcd6b6741a5fb6b620e0a3ad46c78631b6",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/arrays.py",
+            "sha256": "db513d83902b39b12d01c72fe7e6655abfe08cd7821af2de42a61d6811df1a3f"
+          },
+          {
+            "path": "pcc/frontends/cpp/initializers.py",
+            "sha256": "ba951b6bf4389521f378776d1124caae7fb7fa258e9ee7e63b60033882223f5d"
+          },
+          {
+            "path": "pcc/frontends/cpp/objects.py",
+            "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
+          },
+          {
+            "path": "pcc/frontends/cpp/static_data_members.py",
+            "sha256": "f02abb1f33c255a95fd90751fe7a2edc5397d68038c340c7aa50ccd16f17cd75"
+          }
+        ]
+      }
+    },
+    {
       "id": "cpp.member-storage",
       "title": "Static data member storage \u2014 remaining capability boundary",
       "chapter_ids": [
         "dcl.dcl"
       ],
-      "scope": "Static data members of non-template classes are supported by cpp.static-data-members. In-class initializers (constant and inline members), arrays, class-type members, union and internal-linkage classes and class templates remain explicitly unavailable through cpp.unsupported.static-data-members. Non-inline static member functions are separately scoped in cpp.static-member-functions.",
+      "scope": "Static data members of non-template classes are supported by cpp.static-data-members. Scalar-element arrays declared with a bound are supported by cpp.static-data-member-arrays. In-class initializers (constant and inline members), arrays of unknown bound in the class, class-type members, union and internal-linkage classes and class templates remain explicitly unavailable through cpp.unsupported.static-data-members. Non-inline static member functions are separately scoped in cpp.static-member-functions.",
       "status": "explicitly_unimplemented",
       "tests": [
-        "tests/cpp/test_cpp_static_data_members.py::test_remaining_static_member_shapes_stay_explicit"
+        "tests/cpp/test_cpp_static_data_members.py::test_remaining_static_member_shapes_stay_explicit",
+        "tests/cpp/test_cpp_static_member_arrays.py::test_remaining_array_shapes_stay_explicit"
       ],
       "diagnostics": [
         "cpp.unsupported.static-data-members"
@@ -4556,7 +4601,7 @@
         "feature_id": "cpp.dynamic-initialization",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {
@@ -4740,7 +4785,7 @@
         "feature_id": "cpp.init-declarator-list",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {
@@ -4836,7 +4881,7 @@
         "feature_id": "cpp.namespace-array-objects",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {
@@ -4844,7 +4889,7 @@
         "feature_id": "cpp.namespace-object-initialization",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {
@@ -5068,7 +5113,7 @@
         "feature_id": "cpp.static-class-lifetime",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {
@@ -5076,7 +5121,7 @@
         "feature_id": "cpp.member-storage",
         "source": {
           "path": "pcc/frontends/cpp/static_data_members.py",
-          "sha256": "16be770899f427e3a8f3ad3fa6239e830ca08e6c75038b05aa78de0c2931347d"
+          "sha256": "f02abb1f33c255a95fd90751fe7a2edc5397d68038c340c7aa50ccd16f17cd75"
         }
       },
       {
@@ -5084,7 +5129,7 @@
         "feature_id": "cpp.static-initialization-analysis",
         "source": {
           "path": "pcc/frontends/cpp/objects.py",
-          "sha256": "1a6de18defbf2529582ed6977069b5c3a6b8c6755a92de91710e0ef3e9c5b9e4"
+          "sha256": "997237dbb2b42b98cb2d9d0a7d06e98492542195e8fd82f33a0f2b6f5729343f"
         }
       },
       {

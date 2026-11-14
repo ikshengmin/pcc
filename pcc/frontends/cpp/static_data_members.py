@@ -11,16 +11,24 @@ are those of an ordinary namespace object. The initializer reuses the
 namespace-object static initialization owner (constants, null, addresses,
 string literals); dynamic initialization stays explicit.
 
-Explicit gaps: in-class initializers (constant and inline members), arrays,
-class-type members, unions, local and unnamed-namespace classes, class
-templates, and several declarators in one declaration.
+A member may be an array of scalar elements declared with its bound; the
+definition may omit that major bound ([basic.link]/10) and initializes it
+with explicit braces whose elements are those same static constants
+([dcl.init.aggr]), omitted elements and a missing initializer zero-filled.
+
+Explicit gaps: in-class initializers (constant and inline members), arrays
+of unknown bound in the class and of class type, brace elision and string
+initialization of arrays, class-type members, unions, local and
+unnamed-namespace classes, class templates, and several declarators in one
+declaration.
 Original implementation; no upstream compiler source is copied.
 """
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.members import mangle_member
-from pcc.frontends.cpp.objects import static_initializer, zero_initializer
+from pcc.frontends.cpp.arrays import const_array_elements
+from pcc.frontends.cpp.objects import static_array_initializer, static_initializer, zero_initializer
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.templates import same_type
 from pcc.frontends.cpp.types import array_type, unqualified
@@ -31,9 +39,12 @@ def _gap(message, coord):
 
 
 def _check_type(parser, dtype, coord):
-    if array_type(dtype):
-        _gap("static data member arrays require static aggregate initialization", coord)
-    if is_class_type(dtype):
+    leaf = dtype
+    while array_type(leaf):
+        if leaf.bound is None:
+            _gap("static data member arrays of unknown bound require completion by the definition", coord)
+        leaf = leaf.element
+    if is_class_type(leaf):
         _gap("static data members of class type require static initialization and lifetime semantics", coord)
     parser._check_object_type(dtype, coord)
 
@@ -91,6 +102,10 @@ def _define(parser, name, dtype, storage, owner):
     if symbol is None or not getattr(symbol, "static_data_member", False):
         raise CppDiagnostic("cpp.no-matching-member",
                             "definition does not match a declared static data member", coord)
+    if (array_type(dtype) and dtype.bound is None and array_type(symbol.dtype)
+            and same_type(symbol.dtype.element, dtype.element)):
+        # [basic.link]/10: the definition may omit the declared major bound.
+        dtype = symbol.dtype
     if not same_type(unqualified(symbol.dtype), unqualified(dtype)) or not same_type(symbol.dtype, dtype):
         raise CppDiagnostic("cpp.conflicting-object-type",
                             "static data member definition has a different type", coord)
@@ -101,7 +116,16 @@ def _define(parser, name, dtype, storage, owner):
     previous = parser.scope
     parser.scope = Scope(owner.scope)
     try:
-        if parser._peek().value in ("=", "{"):
+        if array_type(dtype):
+            proof = None
+            if parser._peek().value in ("=", "{"):
+                init, dtype = static_array_initializer(parser, dtype, coord)
+            elif const_array_elements(dtype):
+                raise CppDiagnostic("cpp.const-initializer", "const array elements require initialization", coord)
+            else:
+                # Zero-initialized by the shared C aggregate owner.
+                init = c_ast.InitList([], coord)
+        elif parser._peek().value in ("=", "{"):
             init, proof = static_initializer(parser, dtype, coord)
         else:
             init, proof = zero_initializer(parser, dtype, coord), None
