@@ -81,6 +81,11 @@ class FieldStore(PublicStore):
             store_i64=lambda p, o, v: self.typed_store(p, o, v, 8),
             store_ptr=lambda p, o, v: self.typed_store(p, o, v, 8),
             _fields_lock_themselves=lambda: self.globals['pcc_gc_list_container_mode'],
+            # The GC0 owner fast path's gate; a GC4 model never selects it.
+            _gc0_owner_fast_path=lambda: int(
+                self.globals.get('pcc_gc_refcount_atomic', 0) != 0
+                and self.globals.get('pcc_diagnostics_runtime_log_fast_state', 0) == 0
+                and self.globals.get('pcc_debug_runtime_enabled_cache', 0) == 0),
             pcc_container_lock=self.container_lock,
             pcc_container_unlock=self.container_unlock,
         )
@@ -232,8 +237,15 @@ def test_field_fallback_body_remains_exact():
     old = body(OLD_FIELD_SOURCE)
     new = body(SOURCE.read_text())
     new.decorator_list = []
+    # The GC0 atomic owner fast path is a separate leading branch that
+    # returns; with its gate false the remaining body must stay exact.
+    gc0 = [node for node in new.body if isinstance(node, ast.If)
+           and ast.unparse(node.test)
+           == '_fields_lock_themselves() != 0 and _gc0_owner_fast_path() != 0']
+    assert len(gc0) == 1 and isinstance(gc0[0].body[-1], ast.Return) and not gc0[0].orelse
+    new.body.remove(gc0[0])
     transaction = next(node for node in new.body if isinstance(node, ast.If)
-                       and '_fields_lock_themselves' in ast.unparse(node.test))
+                       and ast.unparse(node.test) == '_fields_lock_themselves() != 0')
     fallback = []
     for node in transaction.orelse:
         if (isinstance(node, ast.AnnAssign)

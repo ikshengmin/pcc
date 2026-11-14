@@ -25,6 +25,11 @@ class FieldPlanWords(Store):
             pcc_gc_config_initialized=1,
             pcc_gc_backend_selected=backend,
             pcc_gc_list_container_mode=1,
+            # Backends 1/2 never select the GC0 atomic owner fast path, so
+            # the store keeps its StorePlan transaction in this model.
+            pcc_gc_refcount_atomic=0,
+            pcc_diagnostics_runtime_log_fast_state=0,
+            pcc_debug_runtime_enabled_cache=0,
         )
         self.ns.update(
             load_i32=lambda p, o: self.typed_load(p, o, 4),
@@ -39,6 +44,7 @@ class FieldPlanWords(Store):
         )
         names = {
             '_fields_lock_themselves',
+            '_gc0_owner_fast_path',
             'pcc_gc_store_field_ptr',
             'pcc_gc_store_field_ptr_if_empty',
         }

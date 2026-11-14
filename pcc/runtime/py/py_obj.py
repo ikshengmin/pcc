@@ -801,6 +801,58 @@ def pcc_gc_store_field_ptr(owner, slot, value) -> None:
     """
     if ptr_is_null(slot):
         return
+    if _fields_lock_themselves() != 0 and _gc0_owner_fast_path() != 0:
+        # GC0's StorePlan swaps under the container lock and releases the
+        # displaced value after it. Here the owners take pcc_gc_store_root's
+        # atomic fast paths, written out (a call would cost what they save);
+        # any other object, and a count that would reach zero, still goes
+        # through py_incref/py_decref. The caller holds ``value``, so its
+        # retain need not be inside the transaction.
+        if is_tagged_int(value) == 0 and ptr_is_null(value) == 0:
+            retained: int = 0
+            new_tag: int = load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if (
+                (new_tag >= PY_TYPE_NONE and new_tag < PY_TYPE_CONTINUATION)
+                or new_tag == PY_TYPE_CPY_HANDLE
+                or (new_tag >= PY_TYPE_USER and new_tag < PY_TYPE_CEXT_TAG_BASE)
+            ):
+                if (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    retained = 1
+                elif atomic_load_i64(value, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
+                    atomic_rmw_i64("add", value, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
+                    retained = 1
+            if retained == 0:
+                py_incref(value)
+        pcc_container_lock(owner)
+        displaced = load_ptr(slot, 0)
+        store_ptr(slot, 0, value)
+        pcc_container_unlock(owner)
+        if is_tagged_int(displaced) == 0 and ptr_is_null(displaced) == 0:
+            dropped: int = 0
+            old_tag: int = load_i32(displaced, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+            if (
+                (old_tag >= PY_TYPE_NONE and old_tag < PY_TYPE_CONTINUATION)
+                or old_tag == PY_TYPE_CPY_HANDLE
+                or (old_tag >= PY_TYPE_USER and old_tag < PY_TYPE_CEXT_TAG_BASE)
+            ):
+                if (load_i32(displaced, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) != 0:
+                    dropped = 1
+                else:
+                    count: i64 = i64(atomic_load_i64(
+                        displaced, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed"
+                    ))
+                    while count > 1 and dropped == 0:
+                        observed: i64 = i64(atomic_cas_i64(
+                            displaced, PYOBJECTHEADER_REFCOUNT_OFFSET, count, count - 1,
+                            "release", "relaxed",
+                        ))
+                        if observed == count:
+                            dropped = 1
+                        else:
+                            count = observed
+            if dropped == 0:
+                py_decref(displaced)
+        return
     backend: int = 0
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
         backend = pcc_gc_backend()
@@ -1155,24 +1207,32 @@ def _store_root_count_free_unforwarded(slot, value) -> int:
     return 1
 
 
+def _gc0_owner_fast_path() -> int:
+    """py_incref/py_decref's own gate: backend 0, no probe, no log, threads.
+
+    Owners then take their atomic fast paths inline instead of two calls that
+    repeat this gate, each entering a polled frame. (The single-thread
+    non-atomic variant never ran: the runtime is always threaded.)
+    PCC_DEBUG_RUNTIME validates a value before reading its header; these
+    paths read the tag directly, so they run only once the debug cache is
+    known to be off (the first allocation fills it).
+    """
+    return (
+        load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
+        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0
+    )
+
+
 @c_abi_export("pcc_gc_store_root")
 def pcc_gc_store_root(slot, value) -> None:
     if ptr_is_null(slot) != 0:
         return
-    # py_incref/py_decref's own gate (backend 0, no probe, no log, any number
-    # of threads): the new and old owners take their atomic fast paths here
-    # instead of two calls that repeat this gate, each entering a polled
-    # frame. (The single-thread non-atomic variant never ran: the runtime is
-    # always threaded.) Any other object, and a count that would reach zero,
-    # still goes through those functions. PCC_DEBUG_RUNTIME validates a
-    # value before reading its header; this path reads the tag directly, so
-    # it runs only once the debug cache is known to be off (the first
-    # allocation fills it).
-    if (
-        load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0
-    ):
+    if _gc0_owner_fast_path() != 0:
+        # The new and old owners take their atomic fast paths here; any other
+        # object, and a count that would reach zero, still goes through
+        # py_incref/py_decref. pcc_gc_store_field_ptr writes the same two
+        # paths out around its container lock.
         fast_old = load_ptr(slot, 0)
         if ptr_eq(fast_old, value) != 0:
             return
