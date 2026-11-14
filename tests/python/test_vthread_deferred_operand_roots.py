@@ -41,7 +41,7 @@ def test_deferred_call_retires_synchronous_operand_roots_before_driving(monkeypa
 
 
 @pytest.mark.parametrize("parking_argument", [False, True])
-def test_deferred_tuple_transfer_respects_the_operand_resume_boundary(parking_argument):
+def test_deferred_tuple_inputs_keep_the_registered_retaining_path(parking_argument):
     import re
 
     from tests.python.test_slot_call_operand_roots import _calls, _emit
@@ -53,8 +53,8 @@ def test_deferred_tuple_transfer_respects_the_operand_resume_boundary(parking_ar
                  "    return vt.call(fn, value, " + last + ")\n")
     body = re.search(r"(?ms)^define[^\n]*@[^\n]*worker__gen_resume\([^\n]*\{\n(.*?)^}", text)
     assert body is not None
-    assert bool(_calls(body[1], "py_tuple_from_owned_roots")) == (not parking_argument)
-    assert bool(_calls(body[1], "py_tuple_set_item")) == parking_argument
+    assert not _calls(body[1], "py_tuple_from_owned_roots")
+    assert _calls(body[1], "py_tuple_set_item")
 
 
 PROGRAM = '''import gc
