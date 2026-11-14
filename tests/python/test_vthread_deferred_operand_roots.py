@@ -40,6 +40,23 @@ def test_deferred_call_retires_synchronous_operand_roots_before_driving(monkeypa
     assert "@py_gen_is_continuation(" in text
 
 
+@pytest.mark.parametrize("parking_argument", [False, True])
+def test_deferred_tuple_transfer_respects_the_operand_resume_boundary(parking_argument):
+    import re
+
+    from tests.python.test_slot_call_operand_roots import _calls, _emit
+
+    last = "pause(value)" if parking_argument else "value"
+    text = _emit("import pcc.virtual_thread as vt\n"
+                 "def pause(value):\n    vt.yield_now()\n    return value\n"
+                 "def worker(fn, value):\n    vt.yield_now()\n"
+                 "    return vt.call(fn, value, " + last + ")\n")
+    body = re.search(r"(?ms)^define[^\n]*@[^\n]*worker__gen_resume\([^\n]*\{\n(.*?)^}", text)
+    assert body is not None
+    assert bool(_calls(body[1], "py_tuple_from_owned_roots")) == (not parking_argument)
+    assert bool(_calls(body[1], "py_tuple_set_item")) == parking_argument
+
+
 PROGRAM = '''import gc
 import pcc.virtual_thread as vt
 selected = ValueError("selected")
@@ -64,6 +81,12 @@ def fail(value):
     gc.collect()
     assert value == 10**30 + 7
     raise selected
+def capture(first, second, big, negative, flag, text, raw, empty):
+    gc.collect()
+    assert first is second
+    assert big == 10**30 and negative == -(10**30)
+    assert flag is True and text == "kept" and raw == b"bytes" and empty is None
+    return first
 def worker():
     vt.yield_now()
     box = Box()
@@ -80,6 +103,10 @@ def worker():
         print("selected error")
     else:
         raise AssertionError("callback exception lost")
+    alias = [10**30 + 7]
+    assert vt.call(capture, alias, alias, 10**30, -(10**30), True, "kept", b"bytes", None) is alias
+    gc.collect()
+    assert alias == [10**30 + 7]
     vt.yield_now()
     gc.collect()
     print("DEFERRED_ROOTS_OK")

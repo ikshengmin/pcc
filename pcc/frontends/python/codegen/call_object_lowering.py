@@ -1839,7 +1839,15 @@ class CallObjectLoweringMixin:
             # Finish user evaluation before making a partially filled tuple.
             # Every captured owner remains in its registered slot across
             # allocation, collection and generated suspension/continuation.
-            if items and not getattr(self, "_generator_ctx_stack", ()):
+            contexts = getattr(self, "_generator_ctx_stack", ())
+            synchronous = not contexts or (
+                contexts[-1].get("resume_function") is self.current_function
+                and contexts[-1].get("lexical_slot_operands", False)
+            )
+            # A proven synchronous operand region has the same stack-slot
+            # lifetime as an ordinary call. Transfer its owners together;
+            # arguments that can resume still use the retaining path below.
+            if items and synchronous:
                 sources = self._alloca_in_entry(
                     ir.ArrayType(_CSTR, len(items)), name=self._fresh(label + ".sources"),
                 )
