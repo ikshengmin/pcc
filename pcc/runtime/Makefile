@@ -37,7 +37,10 @@ PCC_IR_TO_OBJ ?= $(PYTHON) -m pcc.tools.ir_to_obj
 # around ``pcc_gc_pointer_is_managed`` that a C=100 gateway profile put at
 # 1,788 samples.  Same list ``benchmarks/build_runtime_variants.py`` uses,
 # which measured +12.3% on that arm.
-PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined,instsimplify,instcombine,dce
+# inline-defined-wide: runtime helper chains exceed the general 32-instruction
+# definition limit; 96 measured -3% to -7% on GC0 allocation primitives and
+# +1.8% (GC0) to +4.7% handler requests per second.
+PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined-wide,instsimplify,instcombine,dce
 PCC_REPO_ROOT ?= $(abspath ../..)
 
 CFLAGS   ?= -O2 -fPIC -Wall -Wextra -std=c11

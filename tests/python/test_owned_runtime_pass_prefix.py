@@ -16,7 +16,7 @@ from pcc.ir.optimization.driver import optimize_ir
 
 
 PREFIX = "mem2reg,sroa"
-TAIL = "instsimplify,inline-defined,instsimplify,instcombine,dce"
+TAIL = "instsimplify,inline-defined-wide,instsimplify,instcombine,dce"
 PASSES = PREFIX + "," + TAIL
 IR = "define i64 @probe() {\nentry:\n  ret i64 7\n}\n"
 ROOT = Path(__file__).resolve().parents[2]

@@ -47,11 +47,16 @@ from .text_tokens import global_name_counts, replace_local_names
 # ---------------------------------------------------------------------------
 
 
+# Largest definition body (instructions) include_definitions inlines.
+DEFINITION_LIMIT = 32
+
+
 def inline_module(
     ir_text: str,
     *,
     require_alwaysinline: bool = False,
     include_definitions: bool = False,
+    definition_limit: int = DEFINITION_LIMIT,
 ) -> tuple[str, bool]:
     module = MutableModule.parse(ir_text)
 
@@ -100,7 +105,7 @@ def inline_module(
             continue
         if include_definitions:
             instruction_count = sum(len(block.instructions) for block in blocks)
-            if instruction_count > 32:
+            if instruction_count > definition_limit:
                 continue
             if len(blocks) > 1 and (
                 re.search(r"=\s*phi\s+ptr\b", body_text)

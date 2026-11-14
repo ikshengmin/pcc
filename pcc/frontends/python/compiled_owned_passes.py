@@ -21,8 +21,14 @@ from pcc.frontends.python.compiled_default_passes import _has_py_cpy_call, _mem2
 
 OWNED_PASS_NAMES = (
     "mem2reg", "sroa", "instsimplify", "simplifycfg", "fold-two-entry-phi",
-    "instcombine", "dce", "inline", "inline-defined",
+    "instcombine", "dce", "inline", "inline-defined", "inline-defined-wide",
 )
+# inline-defined-wide is the runtime archive's definition inliner. Runtime
+# chains (allocation, release, root stores) pass through many small helpers
+# whose bodies exceed the general 32-instruction limit, so each kept its
+# call, frame, entry poll and thread-local lookup. Applications keep the
+# general limit.
+WIDE_DEFINITION_LIMIT = 96
 
 
 def owns_passes(names: list[str]) -> bool:
@@ -92,6 +98,11 @@ def run_owned_passes(text: str, names: list[str]) -> str:
                 current, changed = inline_module(current)
             elif name == "inline-defined":
                 current, changed = inline_module(current, include_definitions=True)
+            elif name == "inline-defined-wide":
+                current, changed = inline_module(
+                    current, include_definitions=True,
+                    definition_limit=WIDE_DEFINITION_LIMIT,
+                )
         except Exception as exc:
             _write_owned_pass_exc(name, index, exc)
             raise
