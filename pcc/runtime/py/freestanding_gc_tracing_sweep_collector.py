@@ -84,8 +84,17 @@ py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
 py_gen_finalize_tracing_candidate = extern(
     "py_gen_finalize_tracing_candidate", (c_ptr,), c_void
 )
-py_weakref_invalidate_tracing_candidates = extern(
-    "py_weakref_invalidate_tracing_candidates", (), c_int64
+py_weakref_queue_tracing_candidates = extern(
+    "py_weakref_queue_tracing_candidates", (c_ptr,), c_int64
+)
+py_weakref_run_queued_callbacks = extern(
+    "py_weakref_run_queued_callbacks", (c_ptr, c_int64), c_void
+)
+py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_thread_world_release_held = extern("pcc_thread_world_release_held", (), c_int64)
+pcc_thread_world_reacquire_held = extern(
+    "pcc_thread_world_reacquire_held", (c_int64,), c_void
 )
 py_weakref_clear_tracing_candidates = extern(
     "py_weakref_clear_tracing_candidates", (), c_int64
@@ -502,6 +511,58 @@ def pcc_gc_concurrent_sweep_finish_stopped() -> i64:
     return freed
 
 
+@c_abi_export("pcc_gc_tracing_user_code_window_open")
+def _user_code_window_open(window) -> None:
+    """Resume the world this sweep holds, for finalizers and weak callbacks.
+
+    User code runs with the world running, as CPython's gc_collect_internal
+    calls them after _PyEval_StartTheWorld: a finalizer that waits for a lock
+    a parked mutator holds would otherwise wait forever. No other collection
+    starts meanwhile -- gc.collect(), automatic collections and steps, and a
+    new mark all stand aside while pcc_gc_explicit_collect_active is set --
+    so no candidate is freed or re-coloured before the world stops again.
+    ``window`` (16 bytes) records what _user_code_window_close restores.
+    """
+    store_i64(window, 8, load_i32(global_addr("pcc_gc_explicit_collect_active"), 0))
+    store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 1)
+    store_i64(window, 0, pcc_thread_world_release_held())
+
+
+@c_abi_export("pcc_gc_tracing_user_code_window_close")
+def _user_code_window_close(window) -> None:
+    """Stop the world again to the depth _user_code_window_open released."""
+    pcc_thread_world_reacquire_held(load_i64(window, 0))
+    if load_i64(window, 8) == 0:
+        store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 0)
+
+
+@c_abi_export("pcc_gc_tracing_finalizer_targets_append")
+def _finalizer_targets_append(targets, obj) -> None:
+    """Append ``obj`` to PASS0's target array (data @0, count @8, capacity @16)."""
+    count: i64 = load_i64(targets, 8)
+    capacity: i64 = load_i64(targets, 16)
+    data = load_ptr(targets, 0)
+    if count >= capacity:
+        grown: i64 = capacity * 2
+        if grown < 64:
+            grown = 64
+        bigger = malloc(grown * 8)
+        if ptr_is_null(bigger) != 0:
+            pcc_platform_abort()
+            return
+        index: i64 = 0
+        while index < count:
+            store_ptr(bigger, index * 8, load_ptr(data, index * 8))
+            index = index + 1
+        if ptr_is_null(data) == 0:
+            free(data)
+        data = bigger
+        store_ptr(targets, 0, data)
+        store_i64(targets, 16, grown)
+    store_ptr(data, count * 8, obj)
+    store_i64(targets, 8, count + 1)
+
+
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:
@@ -517,9 +578,18 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     held: i64 = pcc_thread_world_stop_epoch_held()
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+    window = stack_alloc(16)
     weak_callbacks: i64 = 0
     if count_free != 0:
-        weak_callbacks = py_weakref_invalidate_tracing_candidates()
+        pending_cell = stack_alloc(16)
+        store_ptr(pending_cell, 0, null())
+        store_ptr(pending_cell, 8, null())
+        weak_callbacks = py_weakref_queue_tracing_candidates(pending_cell)
+        if weak_callbacks > 0:
+            # The callbacks are user code: they run with the world running.
+            _user_code_window_open(window)
+            py_weakref_run_queued_callbacks(pending_cell, 0)
+            _user_code_window_close(window)
         if weak_callbacks != 0:
             # Weak callbacks can resurrect other candidates. Their new roots
             # must be visible before any candidate's finalizer can run.
@@ -548,11 +618,19 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         listed_commit = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
-    # because their lifecycle is owned by the C-API bridge.
+    # because their lifecycle is owned by the C-API bridge. The stopped
+    # world selects the candidates whose finalizer runs user code (the
+    # object and candidate lists change once mutators run); those finalizers
+    # then run with the world running, and the world stops again for the
+    # resurrection recheck below.
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
-    # A listed pass visits the list's entries; a finish committed by a
-    # collection nested in a finalizer ends it (that collection swept them).
+    targets = stack_alloc(24)
+    store_ptr(targets, 0, null())
+    store_i64(targets, 8, 0)
+    store_i64(targets, 16, 0)
+    # A listed pass visits the list's entries; a finish committed since the
+    # list was sealed ends it (that finish's own sweep owns its candidates).
     cursor: i64 = 0
     node = pcc_gc_object_walk_first() if listed == 0 else (
         load_ptr(listed_nodes, 0) if listed_count > 0 else null())
@@ -581,16 +659,27 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 flags = flags & ~1024
                 store_i32(obj, 12, flags)
             if (flags & 1024) != 0 and (flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0:
-                tag: i64 = load_i32(obj, 8)
-                if pcc_capi_is_cext_type_tag(tag) == 0:
-                    if count_free != 0 and tag == abi_constant("object.type.gen"):
-                        # Per-target generator invalidation would deliver late
-                        # weak callbacks before close/resurrection and before
-                        # the collector's silent late clear below.
-                        py_gen_finalize_tracing_candidate(obj)
-                    else:
-                        py_user_del_dispatch(obj)
+                if py_user_del_pending(obj) != 0:
+                    _finalizer_targets_append(targets, obj)
         node = nxt
+    target_count: i64 = load_i64(targets, 8)
+    if target_count > 0:
+        _user_code_window_open(window)
+        target_data = load_ptr(targets, 0)
+        index: i64 = 0
+        while index < target_count:
+            target = load_ptr(target_data, index * 8)
+            if count_free != 0 and load_i32(target, 8) == abi_constant("object.type.gen"):
+                # Per-target generator invalidation would deliver late
+                # weak callbacks before close/resurrection and before
+                # the collector's silent late clear below.
+                py_gen_finalize_tracing_candidate(target)
+            else:
+                py_user_del_dispatch(target)
+            index = index + 1
+        _user_code_window_close(window)
+    if ptr_is_null(load_ptr(targets, 0)) == 0:
+        free(load_ptr(targets, 0))
     _record_sweep_phase(1, started, pcc_platform_monotonic_us(), visited,
                         load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) - finalizer_runs)
 

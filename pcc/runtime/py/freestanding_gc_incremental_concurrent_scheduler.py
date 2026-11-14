@@ -825,6 +825,14 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         if load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0) != 0:
             pcc_py_gc_minor_graph_unlock()
             return local_processed
+        # Nor while a collection that resumed the world for finalizers and
+        # weak callbacks still owns its candidates. Collections drive their
+        # own steps holding the stopped world; only that window leaves the
+        # flag set with the world running.
+        if (load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
+                and pcc_thread_owns_stopped_world() == 0):
+            pcc_py_gc_minor_graph_unlock()
+            return local_processed
         if (
             load_i64(
                 global_addr("pcc_gc_tracing_finish_claim_epoch"), 0

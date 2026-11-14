@@ -1729,6 +1729,44 @@ def pcc_resume_world() -> int:
     return 0
 
 
+@c_abi_export("pcc_thread_world_release_held")
+def pcc_thread_world_release_held() -> int:
+    """Resume the world this thread holds, at every nested depth.
+
+    A collector runs user code -- finalizers, weakref callbacks -- only with
+    the world running (CPython's gc_collect_internal does the same): a
+    parked mutator may hold a lock that code takes. Returns the depth to
+    restore with pcc_thread_world_reacquire_held, or 0 when this thread holds
+    no stopped world and nothing was resumed.
+    """
+    if pcc_thread_world_stop_epoch_held() < 0:
+        return 0
+    depth: int = _world_i64(global_addr("pcc_stop_depth_py"))
+    released: int = 0
+    while released < depth:
+        if pcc_resume_world() != 0:
+            pcc_platform_abort()
+            return released
+        released = released + 1
+    return depth
+
+
+@c_abi_export("pcc_thread_world_reacquire_held")
+def pcc_thread_world_reacquire_held(depth: int) -> None:
+    """Stop the world again to the depth pcc_thread_world_release_held gave.
+
+    Each stop takes a new epoch, so verdicts of the released world are
+    revalidated by their owners; a stop that must wait parks at a safepoint.
+    """
+    stopped: int = 0
+    while stopped < depth:
+        stw: int = pcc_stop_the_world()
+        while stw != 0:
+            pcc_thread_safepoint()
+            stw = pcc_stop_the_world()
+        stopped = stopped + 1
+
+
 pcc_allocator_thread_cache_drain = extern(
     "pcc_allocator_thread_cache_drain", (), c_void
 )

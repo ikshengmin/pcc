@@ -3342,6 +3342,14 @@ def _cross_object_signatures_part_15():
     "pcc_gc_tracing_candidates_seal": (("c_int64",), "c_void"),
     # Its sweep clears a candidate whose weak refs are already settled.
     "pcc_gc_tracing_clear_referents": (("c_ptr",), "c_void"),
+    # Collectors run finalizers and weak callbacks with the world running.
+    "pcc_thread_world_release_held": ((), "c_int64"),
+    "pcc_thread_world_reacquire_held": (("c_int64",), "c_void"),
+    "py_user_del_pending": (("c_ptr",), "c_int64"),
+    "py_gen_finalize_pending": (("c_ptr",), "c_int64"),
+    "py_weakref_queue_tracing_candidates": (("c_ptr",), "c_int64"),
+    "py_weakref_queue_gc0_candidates": (("c_ptr",), "c_int64"),
+    "py_weakref_run_queued_callbacks": (("c_ptr", "c_int64"), "c_void"),
     }
 
 

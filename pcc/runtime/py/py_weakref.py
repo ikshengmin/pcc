@@ -673,18 +673,46 @@ def _close_late_window() -> None:
         store_i32(global_addr("pcc_weakref_late_windows"), 0, windows - 1)
 
 
+@c_abi_export("py_weakref_run_queued_callbacks")
+def py_weakref_run_queued_callbacks(pending_cell, gc0: int) -> None:
+    """Run and drop a queue a py_weakref_queue_*_candidates pass filled.
+
+    The collector calls this with the world running: a callback is user code
+    and may wait for a lock a parked thread holds. Each hold (a count under
+    GC0, an address lease otherwise) keeps its ref alive until it ran.
+    """
+    pending = load_ptr(pending_cell, 0)
+    store_ptr(pending_cell, 0, null())
+    store_ptr(pending_cell, 8, null())
+    _run_callback_queue(pending, gc0)
+
+
 @c_abi_export("py_weakref_invalidate_gc0_candidates")
 def py_weakref_invalidate_gc0_candidates() -> int:
+    """py_weakref_queue_gc0_candidates, then its callbacks at once."""
+    pending_cell = stack_alloc(16)
+    store_ptr(pending_cell, 0, null())
+    store_ptr(pending_cell, 8, null())
+    count: int = py_weakref_queue_gc0_candidates(pending_cell)
+    if count < 0:
+        return count
+    py_weakref_run_queued_callbacks(pending_cell, 1)
+    return count
+
+
+@c_abi_export("py_weakref_queue_gc0_candidates")
+def py_weakref_queue_gc0_candidates(pending_cell) -> int:
     """GC0's early pass over its unreachable batch (CPython handle_weakrefs).
 
     The collector owns the stopped world and the materialized tracking table.
     A ref with a callback loses its target now; a live one (not itself in
-    the batch) runs its callback after every such target is cleared. Every
-    hold is prepared before any target is cleared, so allocation failure
-    leaves no partial invalidation. A ref without a callback keeps its target
-    through finalizers: it moves to the late list for
-    py_weakref_clear_gc0_candidates. This opens a weak window, which that
-    late clear closes.
+    the batch) has its callback queued in ``pending_cell`` (head @0, tail @8,
+    both null on entry) after every such target is cleared, for
+    py_weakref_run_queued_callbacks. Every hold is prepared before any target
+    is cleared, so allocation failure leaves no partial invalidation. A ref
+    without a callback keeps its target through finalizers: it moves to the
+    late list for py_weakref_clear_gc0_candidates. This opens a weak window,
+    which that late clear closes.
     """
     if pcc_gc_backend() != 0:
         return 0
@@ -692,9 +720,6 @@ def py_weakref_invalidate_gc0_candidates() -> int:
         pcc_platform_abort()
         return -1
     _open_late_window()
-    pending_cell = stack_alloc(16)
-    store_ptr(pending_cell, 0, null())
-    store_ptr(pending_cell, 8, null())
     count: int = 0
     wr = global_load_ptr("py_weakref_head")
     while ptr_is_null(wr) == 0:
@@ -721,7 +746,6 @@ def py_weakref_invalidate_gc0_candidates() -> int:
             store_ptr(wr, _WEAKREF_TARGET, null())
             pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
         wr = load_ptr(wr, _WEAKREF_NEXT)
-    _run_callback_queue(load_ptr(pending_cell, 0), 1)
     return count
 
 
@@ -767,19 +791,31 @@ def _tracing_target_dies(target) -> int:
 
 @c_abi_export("py_weakref_invalidate_tracing_candidates")
 def py_weakref_invalidate_tracing_candidates() -> int:
+    """py_weakref_queue_tracing_candidates, then its callbacks at once."""
+    pending_cell = stack_alloc(16)
+    store_ptr(pending_cell, 0, null())
+    store_ptr(pending_cell, 8, null())
+    count: int = py_weakref_queue_tracing_candidates(pending_cell)
+    if count < 0:
+        return count
+    py_weakref_run_queued_callbacks(pending_cell, 0)
+    return count
+
+
+@c_abi_export("py_weakref_queue_tracing_candidates")
+def py_weakref_queue_tracing_candidates(pending_cell) -> int:
     """The tracing sweep's early pass (CPython handle_weakrefs).
 
     The tracing collector owns the stopped world. A ref with a callback to an
-    unreachable target loses it now; one which is itself unreachable must
+    unreachable target loses it now and its callback is queued in
+    ``pending_cell`` (head @0, tail @8, both null on entry) for
+    py_weakref_run_queued_callbacks; one which is itself unreachable must
     not run its callback. Independent counted address leases retain queued
     refs across callback allocation, collection and mutation. A ref without
     a callback keeps its target through finalizers on the late list. This
     opens a weak window, which py_weakref_clear_tracing_candidates closes.
     """
     _open_late_window()
-    pending_cell = stack_alloc(16)
-    store_ptr(pending_cell, 0, null())
-    store_ptr(pending_cell, 8, null())
     count: int = 0
     wr = global_load_ptr("py_weakref_head")
     while ptr_is_null(wr) == 0:
@@ -797,7 +833,6 @@ def py_weakref_invalidate_tracing_candidates() -> int:
                         return -1
                     count = count + 1
         wr = nxt
-    _run_callback_queue(load_ptr(pending_cell, 0), 0)
     return count
 
 

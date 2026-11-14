@@ -81,6 +81,7 @@ py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
 py_gen_finalize = extern("py_gen_finalize", (c_ptr,), c_void)
+py_gen_finalize_pending = extern("py_gen_finalize_pending", (c_ptr,), c_int64)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 strlen = extern("strlen", (c_ptr,), c_int64)
 pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
@@ -605,6 +606,38 @@ def py_user_iter_dispatch(o):
 @c_abi_export("py_user_next_dispatch")
 def py_user_next_dispatch(o):
     return py_user_special_dispatch(o, cstr("__next__"), null(), null(), 0, 0, null(), null())
+
+
+@c_abi_export("py_user_del_pending")
+def py_user_del_pending(o) -> int:
+    """1 when py_user_del_dispatch(o) would run user code, else 0.
+
+    The same guards, without calling anything: a collector asks this in a
+    stopped world, and resumes the world only for objects whose finalizer
+    (``__del__`` or a suspended generator's close) can take a lock a parked
+    thread holds.
+    """
+    if ptr_is_null(o):
+        return 0
+    if is_tagged_int(o):
+        return 0
+    tag: int = load_i32(o, 8)
+    if tag == PY_TYPE_GEN:
+        return py_gen_finalize_pending(o)
+    if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
+        return 0
+    if pcc_capi_is_cext_type_tag(tag) != 0:
+        return 0
+    if load_i32(global_addr("pcc_class_del_defined_count"), 0) == 0:
+        return 0
+    if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 4) != 0:
+        return 0
+    cls = _load_instance_cls(o)
+    if ptr_is_null(cls):
+        return 0
+    if ptr_is_null(py_class_lookup(cls, cstr("__del__"))):
+        return 0
+    return 1
 
 
 @c_abi_export("py_user_del_dispatch")

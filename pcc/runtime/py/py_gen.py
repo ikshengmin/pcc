@@ -580,6 +580,20 @@ def py_gen_finalize_tracing_candidate(gen) -> None:
     _gen_finalize_mode(gen, 0)
 
 
+@c_abi_export("py_gen_finalize_pending")
+def py_gen_finalize_pending(gen) -> int:
+    """1 when _gen_finalize_mode would close ``gen`` (run user code), else 0.
+
+    Reads only the generator's own words: a collector asks this in a stopped
+    world to learn whether it must resume the world before finalizing.
+    """
+    if ptr_is_null(gen) or load_i64(gen, 40) != 0 or load_i64(gen, 32) == 0:
+        return 0
+    if (load_i32(gen, 12) & 4) != 0:
+        return 0
+    return 1
+
+
 def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
     # An unstarted generator has not entered its try/finally body.
     if ptr_is_null(gen) or load_i64(gen, 40) != 0 or load_i64(gen, 32) == 0:

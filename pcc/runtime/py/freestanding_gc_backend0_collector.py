@@ -23,6 +23,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_is_null,
     ptr_eq,
+    stack_alloc,
     store_i32,
     store_i64,
     store_ptr,
@@ -91,6 +92,20 @@ pcc_gc_default_unlink_tracked_node = extern(
     "pcc_gc_default_unlink_tracked_node", (c_ptr,), c_void
 )
 pcc_gc_default_table_lock = extern("pcc_gc_default_table_lock", (), c_void)
+py_incref = extern("py_incref", (c_ptr,), c_void)
+pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+py_decref = extern("py_decref", (c_ptr,), c_void)
+py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
+py_weakref_queue_gc0_candidates = extern(
+    "py_weakref_queue_gc0_candidates", (c_ptr,), c_int64
+)
+py_weakref_run_queued_callbacks = extern(
+    "py_weakref_run_queued_callbacks", (c_ptr, c_int64), c_void
+)
+pcc_thread_world_release_held = extern("pcc_thread_world_release_held", (), c_int64)
+pcc_thread_world_reacquire_held = extern(
+    "pcc_thread_world_reacquire_held", (c_int64,), c_void
+)
 pcc_gc_tracked_materialize = extern("pcc_gc_tracked_materialize", (), c_int64)
 pcc_gc_tracked_dematerialize = extern("pcc_gc_tracked_dematerialize", (c_int64,), c_void)
 pcc_gc_default_table_unlock = extern(
@@ -124,6 +139,10 @@ _SUBSET_REACHABLE = 1
 _COLLECTOR_FINALIZED_ZERO = 8
 # The fixed disposal set for early callbacks and silent late weakref clearing.
 _COLLECTOR_WEAK_CANDIDATE = 16
+# The collection holds one reference to each member of its batch while
+# finalizers and weak callbacks run with the world resumed (CPython's
+# unreachable worklist reference); reachability discounts it.
+_COLLECTOR_HELD = 32
 
 
 @c_abi_export("pcc_gc_backend0_is_weak_candidate")
@@ -202,8 +221,12 @@ def _recompute_subset() -> None:
         node = _subset_node(index)
         if ptr_is_null(node) == 0:
             obj = load_ptr(node, 0)
-            store_i64(node, 8, load_i64(obj, 0))
-            store_i32(node, 16, _SUBSET_CANDIDATE | (load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO))
+            kept: i64 = load_i32(node, 16) & (_COLLECTOR_FINALIZED_ZERO | _COLLECTOR_HELD)
+            held: i64 = 0
+            if (kept & _COLLECTOR_HELD) != 0:
+                held = 1
+            store_i64(node, 8, load_i64(obj, 0) - held)
+            store_i32(node, 16, _SUBSET_CANDIDATE | kept)
         index = index + 1
     index = 0
     while index < count:
@@ -346,8 +369,12 @@ def _recompute_reachability() -> None:
     node = global_load_ptr("py_gc_head")
     while ptr_is_null(node) == 0:
         obj = load_ptr(node, 0)
-        store_i64(node, 8, load_i64(obj, 0))
-        store_i32(node, 16, load_i32(node, 16) & _COLLECTOR_FINALIZED_ZERO)
+        kept: i64 = load_i32(node, 16) & (_COLLECTOR_FINALIZED_ZERO | _COLLECTOR_HELD)
+        held: i64 = 0
+        if (kept & _COLLECTOR_HELD) != 0:
+            held = 1
+        store_i64(node, 8, load_i64(obj, 0) - held)
+        store_i32(node, 16, kept)
         node = load_ptr(node, 32)
 
     node = global_load_ptr("py_gc_head")
@@ -572,11 +599,44 @@ def _collect(pairs, candidate_count: i64) -> i64:
         if ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
             store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_WEAK_CANDIDATE)
         i = i + 1
+    # Hold every member of the batch (CPython's unreachable worklist
+    # reference): with the world resumed below, a mutator that reaches one
+    # through a late weak ref and drops it again must not free it under the
+    # collection. Reachability discounts the hold (_COLLECTOR_HELD).
+    user_code: i64 = 0
+    i = 0
+    while i < count:
+        node = load_ptr(unreachable, i * 8)
+        if ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
+            obj = load_ptr(node, 0)
+            py_incref(obj)
+            store_i32(node, 16, load_i32(node, 16) | _COLLECTOR_HELD)
+            if user_code == 0 and py_user_del_pending(obj) != 0:
+                user_code = 1
+        i = i + 1
     # Clear the entire isolate's weak links before any weakref callback or
     # finalizer can observe another still-live link. Callbacks on weakrefs
     # which are themselves in this isolate are suppressed.
-    weak_callbacks: i64 = py_weakref_invalidate_gc0_candidates()
-    finalized: i64 = _maybe_finalize_unreachable(unreachable, count)
+    pending_cell = stack_alloc(16)
+    store_ptr(pending_cell, 0, null())
+    store_ptr(pending_cell, 8, null())
+    weak_callbacks: i64 = py_weakref_queue_gc0_candidates(pending_cell)
+    finalized: i64 = 0
+    if weak_callbacks > 0 or user_code != 0:
+        # Callbacks and finalizers are user code: they run with the world
+        # resumed and the table unlocked, as CPython's gc_collect_internal
+        # calls them after _PyEval_StartTheWorld. One may wait for a lock a
+        # parked mutator holds. py_gc_collecting keeps every other GC0
+        # collection out until this one ends.
+        pcc_gc_default_table_unlock()
+        depth: i64 = pcc_thread_world_release_held()
+        if weak_callbacks > 0:
+            py_weakref_run_queued_callbacks(pending_cell, 1)
+        _maybe_finalize_unreachable(unreachable, count)
+        pcc_thread_world_reacquire_held(depth)
+        pcc_gc_default_table_lock()
+        # Mutators ran: any of them may have resurrected a member.
+        finalized = 1
     if weak_callbacks != 0 or finalized != 0:
         _recompute_reachability()
         # Recompute erased the batch bit; rearm only the original disposal
@@ -607,7 +667,8 @@ def _collect(pairs, candidate_count: i64) -> i64:
             # even on resurrected survivors before callbacks can create new
             # terminal ownership; never carry it into a future collection.
             store_i32(node, 16, load_i32(node, 16)
-                      & ~(_COLLECTOR_FINALIZED_ZERO | _COLLECTOR_WEAK_CANDIDATE))
+                      & ~(_COLLECTOR_FINALIZED_ZERO | _COLLECTOR_WEAK_CANDIDATE
+                          | _COLLECTOR_HELD))
         if (
             ptr_is_null(node) == 0
             and ptr_is_null(load_ptr(node, 0)) == 0
@@ -621,8 +682,15 @@ def _collect(pairs, candidate_count: i64) -> i64:
     # A class is not freed here: its instances and subclasses own counted
     # references to it and read it while they are freed, so it dies by
     # reference count when the last of them releases it.
+    # A freed member's hold ends with its storage. Every other member (a
+    # resurrected one, a class) keeps its hold until the world runs again:
+    # releasing it there may finalize or free, which is user code.
     i: i64 = 0
     collected: i64 = 0
+    survivors = malloc((count + 1) * 8)
+    if ptr_is_null(survivors) != 0:
+        pcc_platform_abort()
+    survivor_count: i64 = 0
     while i < count:
         node = load_ptr(unreachable, i * 8)
         if (
@@ -641,6 +709,9 @@ def _collect(pairs, candidate_count: i64) -> i64:
             pcc_gc_note_object_freeing(obj)
             _dealloc_unreachable(obj)
             collected = collected + 1
+        elif ptr_is_null(node) == 0 and ptr_is_null(load_ptr(node, 0)) == 0:
+            store_ptr(survivors, survivor_count * 8, load_ptr(node, 0))
+            survivor_count = survivor_count + 1
         i = i + 1
 
     free(unreachable)
@@ -650,4 +721,9 @@ def _collect(pairs, candidate_count: i64) -> i64:
     pcc_gc_default_table_unlock()
     pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
     pcc_resume_world()
+    i = 0
+    while i < survivor_count:
+        py_decref(load_ptr(survivors, i * 8))
+        i = i + 1
+    free(survivors)
     return collected
