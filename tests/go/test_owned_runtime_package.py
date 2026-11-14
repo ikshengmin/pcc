@@ -81,7 +81,7 @@ def test_math_bits_external_test_package_now_stops_at_the_testing_import():
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     }
     # Formerly bits_test.go:458:23, :461:3, :716:10, :851:4, :1038:26 and
-    # :9:2 (this runtime import); `testing` must come from its original
-    # licensed sources, which are not provided.
+    # :9:2 (this runtime import). Without the pinned standard-library closure,
+    # `testing` has no source; tests/go/test_std_closure_pin.py supplies it.
     with pytest.raises(GoDiagnostic, match=r'bits_test.go:10:2: Go: import source unavailable: testing'):
         compile_go_packages(packages, target_triple=TARGET)

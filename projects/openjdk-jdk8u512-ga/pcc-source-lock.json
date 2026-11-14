@@ -1,0 +1,136 @@
+{
+  "schema_version": 1,
+  "project": "openjdk-jdk8u",
+  "version": "jdk8u512-ga",
+  "repository": "https://github.com/openjdk/jdk8u",
+  "revision": "b661ee6ff840d6922aa7424a4d8f24760b21cf26",
+  "tag": "jdk8u512-ga",
+  "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+  "license_file": "LICENSE",
+  "complete_build_closure": false,
+  "selection": "The Java SE 8 API sources (javac --release 8, the Commons Numbers Primes source level) of every java.* type that the pinned Primes production and upstream test units import directly: java.math.BigInteger and java.util.AbstractMap, ArrayList, Arrays, Collections, HashSet, List, Map and Set, plus the repository LICENSE and ASSEMBLY_EXCEPTION. Their own imports and java.lang are not pinned. Every file is unchanged; each git blob was checked against the GitHub contents API at the tag's commit.",
+  "imported_types": {
+    "java.math.BigInteger": "jdk/src/share/classes/java/math/BigInteger.java",
+    "java.util.AbstractMap.SimpleImmutableEntry": "jdk/src/share/classes/java/util/AbstractMap.java",
+    "java.util.ArrayList": "jdk/src/share/classes/java/util/ArrayList.java",
+    "java.util.Arrays": "jdk/src/share/classes/java/util/Arrays.java",
+    "java.util.Collections": "jdk/src/share/classes/java/util/Collections.java",
+    "java.util.HashSet": "jdk/src/share/classes/java/util/HashSet.java",
+    "java.util.List": "jdk/src/share/classes/java/util/List.java",
+    "java.util.Map.Entry": "jdk/src/share/classes/java/util/Map.java",
+    "java.util.Set": "jdk/src/share/classes/java/util/Set.java"
+  },
+  "total_bytes": 850593,
+  "files": [
+    {
+      "path": "LICENSE",
+      "role": "license",
+      "size": 19274,
+      "sha256": "4b9abebc4338048a7c2dc184e9f800deb349366bdf28eb23c2677a77b4c87726",
+      "git_blob": "8b400c7ab81b7b18baff3f81d597f5e511883134",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/LICENSE",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "OpenJDK repository root license file"
+    },
+    {
+      "path": "ASSEMBLY_EXCEPTION",
+      "role": "license",
+      "size": 1522,
+      "sha256": "a44eb7b5caf5534c6ef536b21edb40b4d6babf91bf97d9d45596868618b2c6fb",
+      "git_blob": "065b8d90239f30b7de3eba350f6446a932d4d131",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/ASSEMBLY_EXCEPTION",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "OpenJDK repository root license file"
+    },
+    {
+      "path": "jdk/src/share/classes/java/math/BigInteger.java",
+      "role": "java-se-8-api-source",
+      "size": 174519,
+      "sha256": "0e4688c295f6ee95d9e88217a06c70017acf3ff5db230c9438a977f0e89fbaaf",
+      "git_blob": "752556d542a1b28d27279b987e4d872be7810cfa",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/math/BigInteger.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/AbstractMap.java",
+      "role": "java-se-8-api-source",
+      "size": 30305,
+      "sha256": "f6e0750288834c5287170aaec7133cf36d702959f960cdb5d81af1b4f65b3cab",
+      "git_blob": "948bf519a0c067e1556f615bed5f621be6ffc2c4",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/AbstractMap.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/ArrayList.java",
+      "role": "java-se-8-api-source",
+      "size": 55445,
+      "sha256": "9446d5e23cf06943f54fa71b7fe0723423a63538c1892ac18e52a20c88490fd7",
+      "git_blob": "48628a43050fd7555806c42724138595540a63c7",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/ArrayList.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/Arrays.java",
+      "role": "java-se-8-api-source",
+      "size": 228752,
+      "sha256": "152e9aa5584d49ff84d7c55f30ef4bd2440b570c0693a312d306015f9cb00ff4",
+      "git_blob": "7f6cc1da073f7309fc1d3f7a8e81046fafaaa6f6",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/Arrays.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/Collections.java",
+      "role": "java-se-8-api-source",
+      "size": 219126,
+      "sha256": "da9060bf94e798187704cbb765f9f2969728cedc6546bb8d2611639287ae3211",
+      "git_blob": "3ab4c5ec0681ccce557bafbabea38e10dc4c1cf0",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/Collections.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/HashSet.java",
+      "role": "java-se-8-api-source",
+      "size": 14411,
+      "sha256": "32a4cab33709b42efa3b7424de9e57d4f3581c3bad4e144a02d343822c741e05",
+      "git_blob": "f5ca6a6762760caf81376b9beeeb2bd14e893a31",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/HashSet.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/List.java",
+      "role": "java-se-8-api-source",
+      "size": 34179,
+      "sha256": "b145032f95cbb1bd650599c374a1209bbed305f7a5434c63c9bb09c28a76a5d4",
+      "git_blob": "80fe4be9229b2d413c55a182f35bf8b0c172f6f7",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/List.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/Map.java",
+      "role": "java-se-8-api-source",
+      "size": 54224,
+      "sha256": "f6d3a0d3582f4e73e8c091f76aa4aac8e774d0d75b71e347b030905410e67355",
+      "git_blob": "19840b268fedd6217b4774e015cc8c2d80397fbf",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/Map.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    },
+    {
+      "path": "jdk/src/share/classes/java/util/Set.java",
+      "role": "java-se-8-api-source",
+      "size": 18836,
+      "sha256": "e6e876a4a82dc266d35baa15c4705ce614b13e06f5a5989dd14daec712267eba",
+      "git_blob": "2703049b30d11bdc624d066201ec9bb875bf69e2",
+      "url": "https://raw.githubusercontent.com/openjdk/jdk8u/b661ee6ff840d6922aa7424a4d8f24760b21cf26/jdk/src/share/classes/java/util/Set.java",
+      "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+      "license_evidence": "LICENSE and ASSEMBLY_EXCEPTION; the original header designates the file as subject to the Classpath exception"
+    }
+  ]
+}
