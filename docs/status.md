@@ -17,12 +17,11 @@ CPython's free-threaded collector does.
 (four threads rebinding fields, `__init__`/`__del__` sharing a lock):
 before the change all five collectors hung; after it GC1-GC4 match CPython
 (local Mac); a later local run of the same program at `4de52048c` also passes on
-GC0. The windows then broke GC4: a mid-sweep resume settled GC4's
-relocation and its retirement freed candidates still waiting for
-finalizers (`__del__` ran twice or never in about a third of the runs).
-The follow-up keeps the world stopped for a GC4 sweep while relocation is
-unsettled; such a sweep can still deadlock, and deferred finalization is
-the open fix (see the architecture page).
+GC0. The windows broke GC4: `__del__` ran twice or never in about half of
+its runs, and a guard on unsettled relocation (`fcef1fda7`) did not remove
+it, so the cause is not established. GC4 now keeps its sweep's user code in
+the stopped world as before; a GC4 finalizer can still deadlock, and
+deferred finalization is the open fix (see the architecture page).
 
 The current collector architecture, the approved per-collector design, the
 remaining steps in order (GC3 generations, GC4 phase 2, GC1 incremental, GC2
