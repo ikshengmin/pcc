@@ -1256,6 +1256,7 @@ def _add_local_callable_effect(
     proof_cache,
     effect_summary: Optional[dict] = None,
     summary_module_name: str = "",
+    fresh_summary: bool = False,
 ) -> None:
     """Add one function/method node without a self-host closure."""
     scope_nodes, binding_state, attribute_calls, local_class_hints = (
@@ -1313,12 +1314,24 @@ def _add_local_callable_effect(
                 fd.name,
                 native_exports,
             )
-        _vthread_summary_reset_caller(effect_summary, summary_caller)
-        # Reset removed every previous edge for this canonical caller.  Its
+        # Only the builder opts in with a new, exclusively owned summary.
+        # An unpublished caller then has no seeds or outgoing edges to reset.
+        # Canonical aliases and redefinitions are already published and still
+        # take the complete last-binding reset path.
+        fresh_caller = (
+            fresh_summary and summary_caller not in effect_summary["publish"]
+        )
+        if not fresh_caller:
+            _vthread_summary_reset_caller(effect_summary, summary_caller)
+        # No previous edge remains for this canonical caller.  Its
         # new edges are appended contiguously until this callable is done,
         # so duplicate checks need not rescan unrelated callers' prefixes.
         summary_edges_start = len(effect_summary["edges"])
-        _vthread_summary_append_unique(effect_summary["publish"], summary_caller)
+        if fresh_summary:
+            if fresh_caller:
+                effect_summary["publish"].append(summary_caller)
+        else:
+            _vthread_summary_append_unique(effect_summary["publish"], summary_caller)
         for callee in callees:
             _vthread_summary_add_edge(
                 effect_summary,
@@ -1457,6 +1470,7 @@ def _compute_local_vthread_effects(
     summary_module_name: str = "",
     local_context=None,
     summary_only: bool = False,
+    fresh_summary: bool = False,
 ) -> Optional[tuple[set[int], set[str], set[int], set[str]]]:
     """Collect callable effects, then normally solve the local fixed point.
 
@@ -1465,6 +1479,9 @@ def _compute_local_vthread_effects(
     ``summary_only`` returns None without deriving unused local result sets.
     All ordinary callers, including those collecting a summary as a side
     output, retain the complete local function/method result.
+
+    ``fresh_summary`` is reserved for the builder's exclusively owned, empty
+    summary.  Supplied summaries retain their original reset/alias behavior.
     """
     if local_context is None:
         local_context = _local_vthread_context(module)
@@ -1511,6 +1528,7 @@ def _compute_local_vthread_effects(
             proof_cache,
             effect_summary,
             summary_module_name,
+            fresh_summary,
         )
     for class_name, fd in method_defs:
         _add_local_callable_effect(
@@ -1533,6 +1551,7 @@ def _compute_local_vthread_effects(
             proof_cache,
             effect_summary,
             summary_module_name,
+            fresh_summary,
         )
 
     if summary_only:
@@ -1594,6 +1613,7 @@ def build_closed_world_vthread_effect_summary(
         effect_summary=summary,
         summary_module_name=module_name,
         summary_only=True,
+        fresh_summary=True,
     )
     return summary
 
