@@ -374,6 +374,7 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
     if selected_destructors and not closed:
         raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                             "unknown construction effects require partial member exception cleanup", coord)
+    require_deferred_construction_proof(symbol, closed)
     symbol.closed_construction_body = closed
     symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, coord)
@@ -509,6 +510,43 @@ def call_free_body(body):
     return True
 
 
+def pending_construction_body(selected):
+    """A C1 whose body is bound later in this unit, not one already bound."""
+    return not hasattr(selected, "closed_construction_body") and not getattr(selected, "defined", False)
+
+
+def register_pending_construction(parser, selected):
+    """Every selected C1 bound later; closed_construction_body may move a
+    caller's proof obligation onto it."""
+    if pending_construction_body(selected):
+        parser.pending_construction_proofs[id(selected)] = selected
+
+
+def defer_construction_proof(parser, selected, coord):
+    """The obligation moves to the body; the unit fails if none is bound."""
+    if getattr(selected, "closed_construction_required", None) is None:
+        selected.closed_construction_required = coord
+    register_pending_construction(parser, selected)
+
+
+def require_deferred_construction_proof(symbol, closed):
+    required = getattr(symbol, "closed_construction_required", None)
+    if required is not None and not closed:
+        raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                            "member-owning constructor call requires a bound closed-construction proof", required)
+
+
+def unbound_construction_proofs(parser):
+    """End of unit: a deferred C1 proof whose body never arrived (another unit
+    or no definition) has no proof of its construction effects."""
+    for symbol in parser.pending_construction_proofs.values():
+        if (getattr(symbol, "closed_construction_required", None) is not None
+                and not hasattr(symbol, "closed_construction_body")):
+            raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
+                                "member-owning constructor call requires a bound closed-construction proof",
+                                symbol.closed_construction_required)
+
+
 def closed_construction_body(body, construction_calls):
     """Prove exact generated member C1 chains, including every argument effect.
 
@@ -528,7 +566,9 @@ def closed_construction_body(body, construction_calls):
                     and not getattr(selected, "defined", False)):
                 # A pending class template C1 (instantiated after this caller)
                 # takes the obligation; its own instantiation proves the chain
-                # or fails the compilation.
+                # or fails the compilation. A later non-template definition
+                # carries one only when its own call required the proof
+                # (constructor_call, member cleanup).
                 selected.closed_construction_required = node.coord
             if selected is None or not (getattr(selected, "closed_construction_body", False)
                                         or getattr(selected, "closed_construction_required", None) is not None):
@@ -577,12 +617,12 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     request_body(parser, selected, coord)
     from pcc.frontends.cpp.member_initialization import requires_destruction
     member_cleanup = any(requires_destruction(member.dtype) for member in dtype.definition.members)
+    register_pending_construction(parser, selected)
     if member_cleanup and not getattr(selected, "closed_construction_body", False):
-        if (getattr(selected, "class_template_instance", None) is not None
-                and not getattr(selected, "defined", False)):
-            # A class template C1 body is instantiated after this call is
-            # requested; its instantiation proves (or rejects) the same chain.
-            selected.closed_construction_required = coord
+        if pending_construction_body(selected):
+            # Its body (a class template instantiation or a later definition
+            # in this unit) proves or rejects the same chain when it is bound.
+            defer_construction_proof(parser, selected, coord)
         else:
             raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                                 "member-owning constructor call requires a bound closed-construction proof", coord)

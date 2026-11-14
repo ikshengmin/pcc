@@ -1244,7 +1244,7 @@
         "dcl.init.ref",
         "over.ics.rank"
       ],
-      "scope": "One direct non-virtual base per class (public, protected or private), at offset 0 as a leading C field or, when empty, with no storage (Itanium empty-base optimization). Member lookup, unqualified names in member functions and C::m qualified lookup follow the base chain; access follows [class.access.base]/5 and [class.protected]. Derived-to-base pointer conversion and direct reference binding to the base subobject are admitted, ranked by [over.ics.rank]/4.4. sizeof includes the base field. A declared derived constructor constructs the base first (a Base(args) mem-initializer or default construction through a declared base constructor); that base constructor is access-checked as a member named through *this ([class.access.base]/5, [class.protected]), so a protected constructor, or one inherited through a private base, is accessible there while a separate base object in a derived member still is not (TinyXML2's XMLText : XMLNode(doc); five programs run natively on the Mac with owned arm64 compile/assemble/link and match Apple clang, which also rejects the three inaccessible uses; Linux execution unrun). a declared derived destructor destroys it after the members. Only layouts the natural C record reproduces exactly are admitted (a POD base, a base without tail padding, or a derived class without data members). Source revision is sha256 of the sorted compact JSON source list.",
+      "scope": "One direct non-virtual base per class (public, protected or private), at offset 0 as a leading C field or, when empty, with no storage (Itanium empty-base optimization). Member lookup, unqualified names in member functions and C::m qualified lookup follow the base chain; access follows [class.access.base]/5 and [class.protected]. Derived-to-base pointer conversion and direct reference binding to the base subobject are admitted, ranked by [over.ics.rank]/4.4. sizeof includes the base field. A declared derived constructor constructs the base first (a Base(args) mem-initializer or default construction through a declared base constructor); that base constructor is access-checked as a member named through *this ([class.access.base]/5, [class.protected]), so a protected constructor, or one inherited through a private base, is accessible there while a separate base object in a derived member still is not (TinyXML2's XMLText : XMLNode(doc); five programs run natively on the Mac with owned arm64 compile/assemble/link and match Apple clang, which also rejects the three inaccessible uses; Linux execution unrun). a declared derived destructor destroys it after the members. Only layouts the natural C record reproduces exactly are admitted (a POD base, a base without tail padding, or a derived class without data members). Source revision is sha256 of the sorted compact JSON source list. A member-owning constructor called before its out-of-line definition in the same unit (TinyXML2's XMLText : XMLNode(doc)) defers its closed-construction proof to that body, as a class template instance does: the body proves or rejects it, and a unit that never binds it fails at the call. Three programs run natively on the Mac with owned arm64 compile/assemble/link and match Apple clang (Linux execution unrun), moving tinyxml2.cpp from tinyxml2.h:993:25 to 1695:17.",
       "tests": [
         "tests/cpp/test_cpp_single_inheritance.py::test_inheritance_originals_lower_to_ir",
         "tests/cpp/test_cpp_single_inheritance.py::test_nonempty_base_is_the_leading_field_and_empty_base_has_no_storage",
@@ -1257,13 +1257,18 @@
         "tests/cpp/test_cpp_protected_base_constructors.py::test_reference_compiler_returns_the_same_value",
         "tests/cpp/test_cpp_protected_base_constructors.py::test_programs_execute_against_real_cpp17_reference_on_linux",
         "tests/cpp/test_cpp_protected_base_constructors.py::test_inaccessible_constructors_are_ordinary_errors",
-        "tests/cpp/test_cpp_protected_base_constructors.py::test_reference_compiler_rejects_the_same_sources"
+        "tests/cpp/test_cpp_protected_base_constructors.py::test_reference_compiler_rejects_the_same_sources",
+        "tests/cpp/test_cpp_deferred_construction_proofs.py::test_programs_compile_to_stable_linux_artifacts",
+        "tests/cpp/test_cpp_deferred_construction_proofs.py::test_programs_run_natively_with_owned_compile_assemble_and_link",
+        "tests/cpp/test_cpp_deferred_construction_proofs.py::test_reference_compiler_returns_the_same_value",
+        "tests/cpp/test_cpp_deferred_construction_proofs.py::test_programs_execute_against_real_cpp17_reference_on_linux",
+        "tests/cpp/test_cpp_deferred_construction_proofs.py::test_unproven_construction_stays_explicit"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:1b87c5fd457cca8b605dfdbe62d035a2a637755b2d96bec7e973bd79c295201b",
+        "source_revision": "sha256:fb092c7b6ec93db2efea8eaafef06045fa5b486ae7a7be65a5c3d112a14c4c5c",
         "sources": [
           {
             "path": "pcc/frontends/cpp/classes.py",
@@ -1271,11 +1276,11 @@
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
-            "sha256": "814ae2263330297e17f9e47c871b2d24aafcce8d753edf658b444ff32add01c9"
+            "sha256": "3879b680112d5218d31bce0b68ed783b977d8d1d66c67855c7b5d5a9ac71623b"
           },
           {
             "path": "pcc/frontends/cpp/default_constructors.py",
-            "sha256": "eb3c70899b0a10d9540d5625350225260cc2df2b10a9f035710e58849bf4c7bf"
+            "sha256": "b4f71d5f4881bcc3a51819081fe57542600af429dbd90123e136813b97b3bece"
           },
           {
             "path": "pcc/frontends/cpp/destructors.py",
@@ -1295,7 +1300,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           },
           {
             "path": "pcc/frontends/cpp/references.py",
@@ -1349,7 +1354,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:e0407f72cf8cfe9c3fd8999ada0faae7063c4e4cd8404b07ab50485a445420c4",
+        "source_revision": "sha256:095c9051485bc3d077f5c8d8cce4cbd0e752703e4848265d199c0ee6e74bc0bf",
         "sources": [
           {
             "path": "pcc/frontends/cpp/allocation.py",
@@ -1361,11 +1366,11 @@
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
-            "sha256": "814ae2263330297e17f9e47c871b2d24aafcce8d753edf658b444ff32add01c9"
+            "sha256": "3879b680112d5218d31bce0b68ed783b977d8d1d66c67855c7b5d5a9ac71623b"
           },
           {
             "path": "pcc/frontends/cpp/default_constructors.py",
-            "sha256": "eb3c70899b0a10d9540d5625350225260cc2df2b10a9f035710e58849bf4c7bf"
+            "sha256": "b4f71d5f4881bcc3a51819081fe57542600af429dbd90123e136813b97b3bece"
           },
           {
             "path": "pcc/frontends/cpp/default_destructors.py",
@@ -1418,11 +1423,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:0bb94205731286cd4cb3c680d5bb3a41059b0e194017fc61a28868feda05bb36",
+        "source_revision": "sha256:7d374214add7f66f098e2f430dfcda425b9c676e2c03f694cf9d58e2b0a02f0e",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "372e5bb84dc1998b5477f993cbc7f9612237879612edbc460cbdeab17586f4de"
+            "sha256": "3f50e29d4f7292c5bd34f76f33140c2340a99a1d9bc06b3f0635e318fd15fed8"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
@@ -1463,11 +1468,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:022626f656fd454da9d3b8fb729c41ad748dcc0f96b9d932d2ec07c15ebefb3f",
+        "source_revision": "sha256:5b3512791ac4811986aefb74d6718b830db07ca7d9673a70f76003efaab55017",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "372e5bb84dc1998b5477f993cbc7f9612237879612edbc460cbdeab17586f4de"
+            "sha256": "3f50e29d4f7292c5bd34f76f33140c2340a99a1d9bc06b3f0635e318fd15fed8"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
@@ -1503,7 +1508,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:c4fd8ce4381a7c7c77978122018e09e2d301bf7ae4da52c47953746f0903688c",
+        "source_revision": "sha256:d3768406a4dfd2af61363cc7fed403d337a2cef5d2df75b41fdb8b89bd0548ed",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_enums.py",
@@ -1511,7 +1516,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "372e5bb84dc1998b5477f993cbc7f9612237879612edbc460cbdeab17586f4de"
+            "sha256": "3f50e29d4f7292c5bd34f76f33140c2340a99a1d9bc06b3f0635e318fd15fed8"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
@@ -1519,7 +1524,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           },
           {
             "path": "pcc/frontends/cpp/template_id_members.py",
@@ -3913,7 +3918,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:219df7ee61ce1dcad3db0db9c2d5e85f46f18f0d85fd20a983542cda9109759e",
+        "source_revision": "sha256:03d212c705c4b04357509fa47aae4b2a80be72df0a705aedce7165be74ebcc78",
         "sources": [
           {
             "path": "pcc/frontends/cpp/arrays.py",
@@ -3921,7 +3926,7 @@
           },
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "372e5bb84dc1998b5477f993cbc7f9612237879612edbc460cbdeab17586f4de"
+            "sha256": "3f50e29d4f7292c5bd34f76f33140c2340a99a1d9bc06b3f0635e318fd15fed8"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
@@ -3966,11 +3971,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:a544f210d4dd2990e5e5ea637fd7214c2bf09439d32150bd36115c20e7703c72",
+        "source_revision": "sha256:19c20bb5ce5e908f803b6b27fc3c14f95d45553e6c0effebe9a3b4a68fabbdfe",
         "sources": [
           {
             "path": "pcc/frontends/cpp/class_template_members.py",
-            "sha256": "372e5bb84dc1998b5477f993cbc7f9612237879612edbc460cbdeab17586f4de"
+            "sha256": "3f50e29d4f7292c5bd34f76f33140c2340a99a1d9bc06b3f0635e318fd15fed8"
           },
           {
             "path": "pcc/frontends/cpp/class_templates.py",
@@ -3978,7 +3983,7 @@
           },
           {
             "path": "pcc/frontends/cpp/constructors.py",
-            "sha256": "814ae2263330297e17f9e47c871b2d24aafcce8d753edf658b444ff32add01c9"
+            "sha256": "3879b680112d5218d31bce0b68ed783b977d8d1d66c67855c7b5d5a9ac71623b"
           },
           {
             "path": "pcc/frontends/cpp/declarators.py",
@@ -3990,7 +3995,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           },
           {
             "path": "pcc/frontends/cpp/sema.py",
@@ -4022,7 +4027,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:d9a8869fea6264900afaef3df6fb360cf101cdcd5da6be998f05ec3abe045178",
+        "source_revision": "sha256:d072f44665ea85e40cedf3d140da47cbe22f91dab0aed82a523d72d9aa8587a8",
         "sources": [
           {
             "path": "pcc/frontends/c/evaluator/c_evaluator.py",
@@ -4042,7 +4047,7 @@
           },
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           }
         ]
       }
@@ -4064,11 +4069,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7c8cdf5973121fb1a38e4e352a602b755f2d3f1346c6b0869a8dd30488f5dc54",
+        "source_revision": "sha256:6b99c06eaec8280e0d134ac392c4a8830014011bb7d34ca47970ae4ec267041f",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           },
           {
             "path": "pcc/frontends/cpp/static_casts.py",
@@ -4096,11 +4101,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:a56734048299da2ed5c36f753f3da900348ee3c7d02a8b33a109e3edd07d2c6f",
+        "source_revision": "sha256:ad99ec42b23607329c5163d32e728f94892cfc25048af248c0e51f6c95115495",
         "sources": [
           {
             "path": "pcc/frontends/cpp/parser.py",
-            "sha256": "98d883a4e1425fed2b3dbe7c87b23b376e972cd3682c6dc8ed326a60c52f36f6"
+            "sha256": "3a2d71b7a568b69a9a9be906864980fd5f3c1894ad39c796dce2b6ca1038f288"
           },
           {
             "path": "pcc/frontends/cpp/string_literals.py",

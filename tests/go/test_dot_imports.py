@@ -92,16 +92,17 @@ def test_original_bits_test_dot_import_is_retained_before_the_next_real_syntax_b
 
     parser = RecordingParser()
     parser.recorded_imports = []
-    # Complete original input is supplied. Later syntax remains a real failure,
-    # rather than a rewritten test file or a fabricated testing package.
-    with pytest.raises(GoDiagnostic) as failure:
-        parser.parse(original.decode(), 'bits_test.go', require_main=False)
+    # Complete original input is supplied, never a rewritten test file or a
+    # fabricated testing package. With type assertions parsed
+    # (tests/go/test_type_assertions.py) the whole file now parses; its
+    # imports' package sources are the next, semantic boundary.
+    unit = parser.parse(original.decode(), 'bits_test.go', require_main=False)
     imported = parser.recorded_imports
     assert [(item.alias, item.path) for item in imported] == [
         ('.', 'math/bits'), (None, 'runtime'), (None, 'testing'), (None, 'unsafe'),
     ]
     assert imported[0].token.line == 8
-    assert failure.value.filename == 'bits_test.go' and failure.value.line > 12
+    assert unit.functions and unit.functions[0].token.line > 12
     assert path.read_bytes() == original
 
 

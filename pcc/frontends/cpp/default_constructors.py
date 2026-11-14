@@ -98,6 +98,8 @@ def bind_defaulted_definitions(parser, definition):
         stores = lower_member_initializers(parser, definition, pending.this, {})
         body = c_ast.Compound(stores, pending.coord)
         closed = closed_construction_body(body, {})
+        from pcc.frontends.cpp.constructors import require_deferred_construction_proof
+        require_deferred_construction_proof(symbol, closed)
         symbol.closed_construction_body = symbol.closed_normal_body = closed
         if not closed:
             # Bound DMI expressions remain intact. Their calls need an owned

@@ -28,9 +28,13 @@ class NamedType:
     """
     tokens: tuple
     arguments: tuple = ()
+    # `new C<>(...)` (JLS 15.9): the diamond, whose arguments are inferred.
+    diamond: bool = False
 
     def __str__(self):
         name = ".".join(token.text for token in self.tokens)
+        if self.diamond:
+            return name + "<>"
         if not self.arguments:
             return name
         return name + "<" + ",".join(str(argument) for argument in self.arguments) + ">"

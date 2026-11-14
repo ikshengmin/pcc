@@ -23,7 +23,7 @@ from pcc.frontends.go.syntax import (
     PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
-    DefinedType, Field, InterfaceMethod, MethodSignature, StructType,
+    DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, StructType,
     underlying, is_named, same_underlying,
 )
 from pcc.frontends.go.types import (
@@ -1329,6 +1329,18 @@ class Analyzer:
         if literal.kind == "func_literal":
             raise UnsupportedGo(literal.token, 'go.unsupported.function-values',
                                 "function literals require closure values and captured-variable storage")
+        if kind == "type_assert":
+            # https://go.dev/ref/spec#Type_assertions: x must be of interface
+            # type. Interface values (and so any dynamic type check) remain the
+            # explicit interface-types boundary.
+            operand = expr.args[0]
+            self.expression(operand)
+            if not isinstance(underlying(operand.type), InterfaceType):
+                raise GoDiagnostic(operand.token, "invalid operation: " + operand.token.text
+                                   + " (of type " + str(operand.type) + ") is not an interface")
+            self.resolve_type(expr.value)
+            raise UnsupportedGo(expr.token, 'go.unsupported.interface-types',
+                                "type assertions require interface dynamic types and a runtime type check")
         if kind in ("index", "type_apply"):
             base = expr.args[0] if kind == "index" else expr.callee
             function = self.direct_function(base)

@@ -478,10 +478,8 @@ def instantiate_body(parser, context):
         if selected_destructors and not closed:
             raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
                                 'unknown construction effects require partial member exception cleanup', symbol.coord)
-        required = getattr(symbol, 'closed_construction_required', None)
-        if required is not None and not closed:
-            raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
-                                'member-owning constructor call requires a bound closed-construction proof', required)
+        from pcc.frontends.cpp.constructors import require_deferred_construction_proof
+        require_deferred_construction_proof(symbol, closed)
         symbol.closed_construction_body = closed
         symbol.closed_normal_body = call_free_body(body)
     return c_ast.FuncDef(declaration, None, body, symbol.coord)

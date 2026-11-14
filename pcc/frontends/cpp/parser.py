@@ -175,6 +175,7 @@ class CppParser:
         self.local_projection_index = 0
         self.function_projection_names = set()
         self.namespace_objects = []
+        self.pending_construction_proofs = {}
         self.language_linkage = None
         tokens = self._tokenize(text, filename)
         self.projection_names = {token.value for token in tokens if token.kind == "ID"}
@@ -199,6 +200,8 @@ class CppParser:
             else self._instantiate_body(entry.value, entry.context),
         )
         instances = [item for item in instances if item is not None]
+        from pcc.frontends.cpp.constructors import unbound_construction_proofs
+        unbound_construction_proofs(self)
         declarations = self.class_template_declarations + declarations
         if instances:
             # Instances may call declarations appearing anywhere earlier in

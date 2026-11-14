@@ -633,10 +633,11 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
         analyze_class_sources(sources)
     # SmallPrimes.PRIMES and PRIMES_LAST are class-initialization steps, the
     # int[] type argument of Entry<Set<Integer>, int[]> parses, and the blank
-    # static final (:90:45) and its static block now parse; the block's
-    # `new HashSet<>()` diamond creation is next.
-    assert class_error.value.code == "java.unsupported.generic-declarations"
-    assert PRODUCTION[1] + ":109:54:" in str(class_error.value)
+    # static final (:90:45) and its static block now parse, and so does the
+    # block's `new HashSet<>()` (:109:54); the call on a call result
+    # `primeNumbers.stream().reduce(...)` is next.
+    assert class_error.value.code == "java.unsupported.object-expressions"
+    assert PRODUCTION[1] + ":116:51:" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
     # The String constant variable folds; the enhanced for and the nextPrime
@@ -669,16 +670,17 @@ def test_complete_smallprimes_original_still_stops_at_static_array_storage():
     # the static array field at :39 (test_source_class_initialization_model)
     # and the int[] type argument at :90:38 (test_source_generic_type_arguments)
     # now parse, then the blank static final at :90:45 and its static block
-    # (test_source_static_initializers); the complete original stops at the
-    # block's diamond creation `new HashSet<>()` at :109:54.
+    # (test_source_static_initializers), then the diamond creation
+    # `new HashSet<>()` at :109:54 (test_source_generic_class_creation); the
+    # complete original stops at `primeNumbers.stream().reduce(...)`, :116:51.
     _, files = load_inputs()
     sources = original_sources(files, PRODUCTION)
     path = PRODUCTION[1]
     before = sources[path]
     with pytest.raises(UnsupportedJava) as caught:
         SourceParser(sources[path], path, class_model=True).parse()
-    assert caught.value.code == "java.unsupported.generic-declarations"
-    assert path + ":109:54:" in str(caught.value)
+    assert caught.value.code == "java.unsupported.object-expressions"
+    assert path + ":116:51:" in str(caught.value)
     assert sources[path] == before and before.encode("utf-8") == files[path]
 
 

@@ -1090,14 +1090,26 @@ class SourceParser:
             if self.peek().text == ".":
                 self.peek().error("qualified class creation requires complete implicit/member-type metadata; use a resolved single-type import",
                                   code="java.unsupported.implicit-type-metadata")
+            arguments, diamond = (), False
             if self.peek().text == "<":
-                self.peek().error("generic/diamond class creation requires the next source type domain",
-                                  code="java.unsupported.generic-declarations")
+                if not self.class_model:
+                    self.peek().error("generic/diamond class creation requires the next source type domain",
+                                      code="java.unsupported.generic-declarations")
+                # JLS 15.9 TypeArgumentsOrDiamond, retained for the class model.
+                if self.peek(1).text == ">":
+                    self.take()
+                    self.take()
+                    diamond = True
+                else:
+                    start = self.peek()
+                    arguments = self.type_arguments()
+                    if any(isinstance(argument, Wildcard) for argument in arguments):
+                        start.error("a class instance creation cannot use wildcard type arguments")
             if self.peek().text == "[":
                 self.peek().error("reference array creation requires the next array semantic domain",
                                   code="java.unsupported.array-model-shape")
             self.expect("(")
-            node = Node("class_new", token, NamedType((name,)), self.arguments())
+            node = Node("class_new", token, NamedType((name,), arguments, diamond), self.arguments())
             if self.peek().text == "{":
                 self.peek().error("anonymous class creation requires the nested-class source domain",
                                   code="java.unsupported.member-types")
