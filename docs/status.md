@@ -610,7 +610,11 @@ control: not separated from drift); together HTTP GC0 +1.5% (5/5), GC3 +0.8%
 (4/5). `64b59c4e` decodes an exact bytes object in place (driver GC0 −9.4%,
 GC3 −15.7%; HTTP GC0 5,432 → 5,484 +1.0% 5/5, GC3 3,953 → 4,061 +2.7% 5/5).
 The bytes/bytearray iterator now yields its byte in place (driver GC0 −1.0%
-4/5, GC3 −1.9% 5/5; HTTP not measured separately). Open gaps found on the
+4/5, GC3 −1.9% 5/5; HTTP not measured separately). `018078f7` skips GC0's
+free-watch thread-local evidence until a watch is armed (driver GC0 −1.6%,
+GC3 control +0.2%). The driver is now ~22 µs per request on GC0 against
+CPython's ~6 µs; `_tlv_get_addr` (7%) and `pcc_gc_store_root` (5%) remain the
+largest single entries. Open gaps found on the
 way, present on HEAD: a bytearray that grows while iterated stops at its old
 length; `del ba[i]` on a bytearray, `threading.Barrier` and the "Exception
 ignored" report of a raising `__del__` are not native.
