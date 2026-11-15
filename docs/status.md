@@ -7,7 +7,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
-## Imported property mutation (CI qualification pending)
+## Imported property mutation (finite CI qualification)
 
 The linked pcc-js, pcc-node and pcc-web consumers compile at `6ae154bac`,
 then raise `AttributeError` on ordinary imported `Cell.value` stores. The
@@ -19,11 +19,16 @@ retain their runtime errors.
 
 The unchanged library consumers and the independent multi-module oracle in
 `tests/fixtures/property_import_mutation/main.py` are the targeted CI gate.
-`tests/python/test_imported_property_mutation.py` compares that oracle with
+At `969596863`, [JS CI 43690991723](https://github.com/jiamo/pcc-js/actions/runs/43690991723)
+executes the unchanged linked wheel and matches the independent oracle with
 CPython on all five collectors, including imported/typed/inherited receivers,
-accessor defaults and read-only errors. Source review only so far; no local
-compiler or test ran. Full Python, bootstrap and native PCC1 qualification
-remain separate.
+accessor defaults and read-only errors. The linked Web consumer also passes
+[CI 43690996042](https://github.com/jiamo/pcc-web/actions/runs/43690996042).
+The Node consumer reaches the unchanged 90-second compilation limit in
+[CI 43690994087](https://github.com/jiamo/pcc-node/actions/runs/43690994087);
+that run has no native execution result. The integrated regression is registered
+in `tests/python/test_imported_property_mutation.py`. No local compiler or test
+ran. Full Python, bootstrap and native PCC1 qualification remain separate.
 
 ## Class publication during package cycles (finite CI qualification)
 
