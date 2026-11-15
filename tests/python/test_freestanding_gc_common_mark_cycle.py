@@ -46,7 +46,8 @@ TLS_STORAGE_SYMBOLS = {"pcc_gc_trace_stack_owner"}
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_walk_first",
     "pcc_gc_object_walk_next",
-    "pcc_gc_object_is_white",
+    # The finish reads a walked record's bit through its span and cell.
+    "pcc_gc_record_is_white",
     "pcc_gc_gray_worklist_take_locked",
     "pcc_gc_gray_worklist_flush",
     "pcc_gc_gray_worklist_clear_stopped",

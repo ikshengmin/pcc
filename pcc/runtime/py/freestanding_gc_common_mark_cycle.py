@@ -109,7 +109,9 @@ pcc_gc_gray_worklist_clear_stopped = extern(
 )
 pcc_gc_object_walk_first = extern("pcc_gc_object_walk_first", (), c_ptr)
 pcc_gc_object_walk_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
-pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
+pcc_gc_record_is_white = extern(
+    "pcc_gc_record_is_white", (c_ptr, c_ptr, c_int64), c_int64
+)
 pcc_gc_tracing_candidates_reset = extern("pcc_gc_tracing_candidates_reset", (), c_void)
 pcc_gc_tracing_candidates_note = extern("pcc_gc_tracing_candidates_note", (c_ptr,), c_void)
 pcc_gc_tracing_candidates_seal = extern("pcc_gc_tracing_candidates_seal", (c_int64,), c_void)
@@ -564,7 +566,8 @@ def pcc_gc_finish_tracing_cycle(
             node = nxt
             continue
         flags: i64 = load_i32(obj, 12)
-        if pcc_gc_object_is_white(obj, flags) != 0:
+        # The walk's node names its cell's mark bit directly.
+        if pcc_gc_record_is_white(node, obj, flags) != 0:
             store_i32(obj, 12, flags | 1024)
             if listing != 0:
                 pcc_gc_tracing_candidates_note(node)

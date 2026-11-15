@@ -24,15 +24,18 @@ them so the caller takes that path.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     atomic_load_i64,
     atomic_rmw_i64,
     atomic_store_i64,
     global_addr,
     is_tagged_int,
     load_i64,
+    load_ptr,
     null,
     ptr_add,
     ptr_is_null,
+    ptr_to_int,
     store_i64,
 )
 
@@ -47,6 +50,11 @@ PAGE_FLAG_EVACUATING = 1
 # The allocator's GC_PAGE_HEADER_BYTES and OBJECT_NODE_RECORD_BYTES.
 GC_PAGE_HEADER_BYTES = 64
 OBJECT_NODE_RECORD_BYTES = 96
+# A record node's span (freestanding_gc_object_nodes NODE_RECORD_SPAN) and
+# the span's record array (SPAN_NODE_RECORDS): record ``cell`` of the array
+# is the node of the span's cell ``cell``.
+NODE_RECORD_SPAN = 24
+SPAN_NODE_RECORDS = 48
 
 pcc_allocator_object_cell_span = extern(
     "pcc_allocator_object_cell_span", (c_ptr,), c_ptr
@@ -210,6 +218,32 @@ def pcc_gc_object_is_white(obj: c_ptr, flags: i64) -> i64:
     if marked == 0:
         return 1
     return 0
+
+
+@c_abi_export("pcc_gc_record_is_white")
+def pcc_gc_record_is_white(node: c_ptr, obj: c_ptr, flags: i64) -> i64:
+    """pcc_gc_object_is_white for the object of walked node ``node``.
+
+    A slab record names its span and, by its place in the span's record
+    array, its cell: the bit is read without locating the object's cell
+    again from its address (a span lookup and a division per object of every
+    finish walk). Any other node (object-list objects outside the slabs)
+    takes pcc_gc_object_is_white, as does every node while GC4 forwarding
+    edges exist (a moved object need not lie in its record's cell)."""
+    span = load_ptr(node, NODE_RECORD_SPAN)
+    if ptr_is_null(span) != 0:
+        return pcc_gc_object_is_white(obj, flags)
+    if atomic_load_i32(global_addr("pcc_gc_forwarding_population"), 0, "acquire") != 0:
+        return pcc_gc_object_is_white(obj, flags)
+    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
+    if ptr_is_null(bitmap) != 0:
+        return pcc_gc_object_is_white(obj, flags)
+    records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
+    cell: i64 = (ptr_to_int(node) - records) // OBJECT_NODE_RECORD_BYTES
+    word: i64 = atomic_load_i64(bitmap, (cell // 64) * 8, "acquire")
+    if (word & (1 << (cell & 63))) != 0:
+        return 0
+    return 1
 
 
 @c_abi_export("pcc_gc_object_is_black")

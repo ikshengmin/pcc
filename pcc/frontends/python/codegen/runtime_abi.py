@@ -3353,6 +3353,8 @@ def _cross_object_signatures_part_15():
     # The concurrent sweep hands the graph lock to a queued mutator at once.
     "pcc_thread_graph_lock_has_waiter": (("c_ptr",), "c_int64"),
     "pcc_py_gc_minor_graph_lock_contended": ((), "c_int64"),
+    # A mark's finish reads a walked record's bit through its span and cell.
+    "pcc_gc_record_is_white": (("c_ptr", "c_ptr", "c_int64"), "c_int64"),
     "pcc_py_gc_minor_graph_lock_yield": ((), "c_void"),
     }
 

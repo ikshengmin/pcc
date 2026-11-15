@@ -301,6 +301,15 @@ primitive (arms `gen` and `early`) PASS2 visited 0.15M instead of 2.3M nodes
 not tell it from host drift: GC1 +2.1%, GC2 +1.0% and GC3 +1.3%, while the
 untouched GC0 control moved +2.5%.
 
+The mark finish's walk over every registered object located each object's
+cell again from its address (a span lookup and a division). It now reads
+a slab record's bit through the record's span and its place in the record
+array (`pcc_gc_record_is_white`). Object-list nodes, and every node while
+GC4 forwarding exists, keep `pcc_gc_object_is_white`. On the request
+primitive (arms `early` and `rec`) the stopped time outside the sweep fell
+14-17% on GC1 and GC3. The HTTP A/B could not separate it from drift: GC1
++1.5%, GC3 +1.2%, GC0 control +0.9%.
+
 ### Measuring
 
 All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is

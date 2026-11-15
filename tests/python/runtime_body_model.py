@@ -75,6 +75,8 @@ EXTERN_DEFAULTS = {
     "pcc_gc_page_mark_assign": lambda obj, marked: None,
     "pcc_gc_page_marks_begin": lambda: None,
     "pcc_gc_object_is_white": lambda obj, flags: 1 if (flags & 8) != 0 else 0,
+    # A walked node's object, as pcc_gc_object_is_white answers it here.
+    "pcc_gc_record_is_white": lambda node, obj, flags: 1 if (flags & 8) != 0 else 0,
     "pcc_gc_object_is_black": lambda obj, flags: 1 if (flags & 32) != 0 else 0,
     # GC4 evacuates object slabs (freestanding_gc_relocation_selector);
     # modeled objects are no cells and have no slab page.

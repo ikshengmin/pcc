@@ -43,6 +43,9 @@ HARNESS = r'''
     extern void *pcc_allocator_object_cell_span(void *ptr);
     extern int64_t pcc_gc_page_mark_test(void *obj);
     extern int64_t pcc_gc_object_is_white(void *obj, int64_t flags);
+    extern int64_t pcc_gc_record_is_white(void *node, void *obj, int64_t flags);
+    extern int64_t pcc_gc_page_mark_set(void *obj);
+    extern void pcc_gc_page_mark_assign(void *obj, int64_t marked);
     extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
     extern int64_t pcc_py_gc_object_count;
     extern int64_t pcc_gc_live_bytes;
@@ -120,6 +123,15 @@ HARNESS = r'''
         /* Registered outside a mark: white in the page bitmap. */
         if (pcc_gc_page_mark_test(obj) != 0) return 41;
         if (pcc_gc_object_is_white(obj, *(int32_t *)((char *)obj + 12)) != 1) return 42;
+        /* A walk reads its record's bit through the record's span and cell
+           (the mark finish), with the same answer as the object's lookup. */
+        int64_t flags = *(int32_t *)((char *)obj + 12);
+        if (pcc_gc_record_is_white(record, obj, flags) != 1) return 45;
+        if (pcc_gc_page_mark_set(obj) != 1) return 46;
+        if (pcc_gc_record_is_white(record, obj, flags) != 0
+            || pcc_gc_object_is_white(obj, flags) != 0) return 47;
+        pcc_gc_page_mark_assign(obj, 0);
+        if (pcc_gc_record_is_white(record, obj, flags) != 1) return 48;
         if (known(obj) != 2) return 11;
         if (pcc_gc_object_index_find_stable(obj) != record) return 12;
         if (pcc_py_gc_object_count != hashed) return 13;
@@ -143,6 +155,11 @@ HARNESS = r'''
         if (other_record == NULL || other_record == record) return 21;
         if (field(other_record, RECORD_INDEX_KEY) != NULL) return 22;
         if (pcc_gc_object_index_find(other) != NULL || known(other) != 0) return 23;
+        /* Each record names its own cell's bit. */
+        if (pcc_gc_page_mark_set(obj) != 1) return 49;
+        if (pcc_gc_record_is_white(other_record, other, 0) != 1
+            || pcc_gc_record_is_white(record, obj, 0) != 0) return 50;
+        pcc_gc_page_mark_assign(obj, 0);
 
         /* Freeing retires the key and unlinks the record. */
         pcc_gc_note_object_freeing(obj);
@@ -172,6 +189,10 @@ HARNESS = r'''
         /* A pooled node is on the object list and has no span. */
         if (field(node, NODE_RECORD_SPAN) != NULL || !walked(node)) return 43;
         if (pcc_gc_page_mark_test(outside) != -1) return 44;
+        /* A pooled node has no span: its colour is in its header. */
+        if (pcc_gc_record_is_white(node, outside, 8) != pcc_gc_object_is_white(outside, 8)
+            || pcc_gc_record_is_white(node, outside, 32) != pcc_gc_object_is_white(outside, 32))
+            return 51;
         if (pcc_allocator_object_node_record_ensure(outside) != NULL) return 35;
         if (pcc_py_gc_object_count != hashed + 1) return 36;
         pcc_gc_note_object_freeing(outside);
