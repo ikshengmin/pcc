@@ -600,6 +600,24 @@ once are cheap here: the profile's cost is in calls doing real work
 (`pcc_gc_store_root` count updates 7.2% of carrier samples, `_tlv_get_addr`
 5.8%, allocation, `__sendto` 7.4%).
 
+The same parser driver is a CPU-bound benchmark of compiled code against the
+interpreter: CPython 3.15 parses a request in ~6 µs, pcc GC0 took ~26 µs and
+GC3 ~36 µs at `0b763470`. Measured since (5 alternating rounds of 40,000
+requests; HTTP A/Bs 5 pairs with the aiohttp control): `09bfc1e3` names common
+codecs without normalizing (driver GC0 −5.2%, GC3 −3.1%, both 5/5);
+`18ff4a2d` skips GC0's per-allocation gray flush (−0.8% against a −0.4% GC3
+control: not separated from drift); together HTTP GC0 +1.5% (5/5), GC3 +0.8%
+(4/5). `64b59c4e` decodes an exact bytes object in place (driver GC0 −9.4%,
+GC3 −15.7%; HTTP GC0 5,432 → 5,484 +1.0% 5/5, GC3 3,953 → 4,061 +2.7% 5/5).
+The bytes/bytearray iterator now yields its byte in place (driver GC0 −1.0%
+4/5, GC3 −1.9% 5/5; HTTP not measured separately). Open gaps found on the
+way, present on HEAD: a bytearray that grows while iterated stops at its old
+length; `del ba[i]` on a bytearray, `threading.Barrier` and the "Exception
+ignored" report of a raising `__del__` are not native.
+Inlining the TLV thunk was rejected: this macOS's `_tlv_get_addr` reads a
+32-bit key and offset at +8/+12, not the documented 64-bit descriptor
+fields, so its layout is dyld-internal.
+
 Latest GC0 (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or
 non-2xx responses and every row server-bound. Five-pair medians are
