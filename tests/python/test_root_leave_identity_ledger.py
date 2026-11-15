@@ -232,7 +232,8 @@ class Host:
         self.payload = payload
         self.on_leave = None
         self.on_group = None
-        self.runtime = {"pcc_gc_load_ptr": "load_ptr", "pcc_gc_store_root": "store_root"}
+        self.runtime = {"pcc_gc_load_ptr": "load_ptr", "pcc_gc_store_root": "store_root",
+                        "pcc_gc_store_return_root": "store_return_root"}
 
     def _ir_type_matches(self, left, right):
         return isinstance(left, PointerType) and isinstance(right, PointerType)
@@ -512,7 +513,8 @@ def test_shared_exit_preserves_value_and_cleanup_calls(rooted):
                 calls = [event for event in events if event[0] == "call"]
                 assert calls == [
                     ("call", "load_ptr", [("constant", None), "slot_ptr"], "ret.shared.value"),
-                    ("call", "store_root", ["slot_ptr", ("constant", None)], ""),
+                    # The shared slot roots the value without owning it.
+                    ("call", "store_return_root", ["slot_ptr", ("constant", None)], ""),
                 ]
                 assert events.index(calls[1]) < events.index(choices[1])
                 assert ("leave_lifo", "ret.shared") in events
@@ -539,7 +541,8 @@ def generation_reset_model(mutation=None):
             "ir": SimpleNamespace(Module=lambda name: SimpleNamespace(name=name, globals={})),
             "debug_source_path": lambda module, fallback: fallback,
             "closed_young_module_denial": lambda module: "",
-            "declare_runtime": lambda module: {"pcc_gc_load_ptr": "load_ptr", "pcc_gc_store_root": "store_root"},
+            "declare_runtime": lambda module: {"pcc_gc_load_ptr": "load_ptr", "pcc_gc_store_root": "store_root",
+                                               "pcc_gc_store_return_root": "store_return_root"},
             "marshal": SimpleNamespace(reset_boxed_i64_constants=lambda: None),
         },
         constant_factories=("frozenset",),

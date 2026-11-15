@@ -128,7 +128,8 @@ def test_shared_return_lifo_abi_is_paired(source, mapped):
         assert len(tails) == 1, (slot, tails)
         tail = tails[0]
         reload = tail.index("@pcc_gc_load_ptr(ptr null, ptr " + slot + ")")
-        clear = tail.index("@pcc_gc_store_root(ptr " + slot + ", ptr null)")
+        # The slot roots the value without owning it (pcc_gc_store_return_root).
+        clear = tail.index("@pcc_gc_store_return_root(ptr " + slot + ", ptr null)")
         leave = tail.index("@" + leaves[0] + "(ptr " + slot + ")")
         assert reload < clear < leave < tail.index("ret ptr")
         # Only the rooted predecessors enter this lifetime. Error and

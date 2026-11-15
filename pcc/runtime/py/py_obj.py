@@ -1224,6 +1224,28 @@ def _gc0_owner_fast_path() -> int:
     )
 
 
+@c_abi_export("pcc_gc_store_return_root")
+def pcc_gc_store_return_root(slot, value) -> None:
+    """Store or clear a function's shared return slot (return_lowering).
+
+    The slot keeps the returned value traced while the activation releases
+    its other locals and leaves its root frames; the value's reference is
+    held elsewhere throughout (the returned local, a borrowed parameter's
+    retain or the producing result), so the slot is a root, not an owner.
+    GC0 counts, so it stores without counting: pcc_gc_store_root's atomic
+    increment and decrement per return changed nothing. Its cycle collector
+    marks root slots as reachable rather than discounting them. Every
+    tracing collector counts nothing and keeps pcc_gc_store_root, with its
+    barriers and relocation healing. The backend is fixed for the process,
+    so a slot's store and its clear always take the same path."""
+    if ptr_is_null(slot) != 0:
+        return
+    if _gc_backend_fast() == 0:
+        store_ptr(slot, 0, value)
+        return
+    pcc_gc_store_root(slot, value)
+
+
 @c_abi_export("pcc_gc_store_root")
 def pcc_gc_store_root(slot, value) -> None:
     if ptr_is_null(slot) != 0:

@@ -114,7 +114,8 @@ class ReturnLoweringMixin:
                 [ir.Constant(ret_ty, None), slot_ptr],
                 name=self._fresh("ret.shared.value"),
             )
-            self.builder.call(self.runtime["pcc_gc_store_root"], [slot_ptr, ir.Constant(ret_ty, None)])
+            # The slot roots the value; it never owned a reference.
+            self.builder.call(self.runtime["pcc_gc_store_return_root"], [slot_ptr, ir.Constant(ret_ty, None)])
             self._emit_gc_frame_leave_lifo_for_slot(slot)
             self.builder.ret(value)
         else:
@@ -197,8 +198,11 @@ class ReturnLoweringMixin:
         leave, slot = self._shared_return_exit(rooted)
         if slot is not None:
             if rooted:
+                # A root for the value while this activation's locals are
+                # released and its frames left; the value's reference stays
+                # with its producer or the returned local.
                 self.builder.call(
-                    self.runtime["pcc_gc_store_root"],
+                    self.runtime["pcc_gc_store_return_root"],
                     [self._as_gc_ptr(slot, name=self._fresh("ret.shared.store")), value],
                 )
                 self._emit_current_gc_frame_enter_lifo(self._gc_one_slot_frame_map(), slot)

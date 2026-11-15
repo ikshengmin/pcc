@@ -240,6 +240,9 @@ PyObject *pcc_gc_load_borrowed_ptr(PyObject *owner, PyObject **slot);
 PyObject *pcc_gc_resolve_owned_ptr(PyObject *value);
 void      pcc_gc_store_ptr(PyObject *owner, PyObject **slot, PyObject *value);
 void      pcc_gc_store_root(PyObject **slot, PyObject *value);
+/* A function's shared return slot: a root that owns no reference (GC0
+   stores it uncounted; tracing collectors use pcc_gc_store_root). */
+void      pcc_gc_store_return_root(PyObject **slot, PyObject *value);
 void      pcc_gc_store_root_take(PyObject **slot, PyObject *value); /* consumes value's reference */
 /* A literal's fresh container while it is filled: uncounted and unpinned in
  * container mode, the counted pinned root otherwise; cleared only by leave. */

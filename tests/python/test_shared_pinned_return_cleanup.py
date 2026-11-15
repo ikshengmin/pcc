@@ -226,6 +226,8 @@ class Host:
         self.module = SimpleNamespace(globals={})
         self.runtime = {name: name for name in (
             "pcc_gc_unpin", "pcc_gc_store_root", "pcc_gc_load_ptr",
+            # The shared return slot roots its value without owning it.
+            "pcc_gc_store_return_root",
         )}
         for operation in ("enter", "leave", "enter_lifo", "leave_lifo"):
             for suffix in ("", "_local", "_mapped", "_local_mapped"):
@@ -347,7 +349,7 @@ def trace(entry, initial=None):
                 callee, operands = args
                 actual = tuple(evaluate(value) for value in operands)
                 events.append((callee, tuple(printable(value) for value in actual)))
-                if callee == "pcc_gc_store_root":
+                if callee in ("pcc_gc_store_root", "pcc_gc_store_return_root"):
                     memory[id(actual[0])] = actual[1]
                     result = None
                 elif callee == "pcc_gc_load_ptr":
@@ -655,7 +657,7 @@ def test_rooted_return_selects_early_abi_and_pairs_each_actual_enter(inline, map
         assert labels.index("frame_leave") < labels.index("pcc_gc_load_ptr")
         assert labels.index("pcc_gc_load_ptr") < labels.index("frame_leave_lifo")
         assert events[labels.index("frame_leave_lifo") - 1] == (
-            "pcc_gc_store_root", (("slot", "return-slot"), None),
+            "pcc_gc_store_return_root", (("slot", "return-slot"), None),
         )
     assert static_calls(host, "frame_enter_lifo") == 3
     assert static_calls(host, "frame_leave_lifo") == 1
