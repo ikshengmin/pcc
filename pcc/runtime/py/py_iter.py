@@ -50,6 +50,7 @@ from pcc.unsafe import (
     store_i64,
     store_i8,
     store_ptr,
+    tag_int,
 )
 
 py_tuple_iter_next = extern("py_tuple_iter_next", (c_ptr, c_int64), c_ptr)
@@ -78,6 +79,7 @@ py_str_byte_len  = extern("py_str_byte_len",  (c_ptr,),                 c_int64)
 py_str_char_at_byte = extern("py_str_char_at_byte", (c_ptr, c_int64), c_ptr)
 py_str_codepoint_byte_len = extern("py_str_codepoint_byte_len", (c_ptr, c_int64), c_int64)
 py_bytes_len     = extern("py_bytes_len",     (c_ptr,),                 c_int64)
+py_bytes_data_ptr = extern("py_bytes_data_ptr", (c_ptr,), c_ptr)
 py_bytes_getitem = extern("py_bytes_getitem", (c_ptr, c_ptr),           c_ptr)
 py_int_from_i64  = extern("py_int_from_i64",  (c_int64,),               c_ptr)
 py_dict_keys     = extern("py_dict_keys",     (c_ptr,),                 c_ptr)
@@ -698,7 +700,17 @@ def _obj_next_body(it_obj, quiet_exhaustion: i64):
         seq = pcc_gc_load_ptr(it_obj, ptr_add(it_obj, 16))
         step = py_str_codepoint_byte_len(seq, index)
         item = py_str_char_at_byte(seq, index)
-    elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW:
+    elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
+        # An item is its byte, 0..255: a tagged int read in place, with no
+        # boxed index or generic subscript. The length is read on every
+        # step, so a bytearray that shrinks or grows while iterated ends or
+        # continues as CPython's iterator does.
+        n = py_bytes_len(seq)
+        if index >= n:
+            _iter_exhausted(quiet_exhaustion)
+            return null()
+        item = tag_int(load_i8(py_bytes_data_ptr(seq), index) & 255)
+    elif tag == PY_TYPE_MEMORYVIEW:
         n = py_bytes_len(seq)
         if index >= n:
             _iter_exhausted(quiet_exhaustion)
