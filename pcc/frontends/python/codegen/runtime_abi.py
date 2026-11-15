@@ -66,8 +66,6 @@ def _runtime_signatures_part_0():
     "pcc_gc_resolve_owned_ptr": (_PYOBJ, [_PYOBJ], False),
     "pcc_gc_store_ptr": (_VOID, [_PYOBJ, _PTR, _PYOBJ], False),
     "pcc_gc_store_root": (_VOID, [_PTR, _PYOBJ], False),
-    # A shared return slot: a root, uncounted on GC0 (return_lowering).
-    "pcc_gc_store_return_root": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_note_write_barrier": (_VOID, [_PYOBJ, _PYOBJ], False),
     "pcc_gc_note_slot_write_barrier": (_VOID, [_PYOBJ, _PTR, _PYOBJ], False),
     "pcc_gc_scheduler_root_register_handle": (_PTR, [_PTR], False),
@@ -109,6 +107,8 @@ def _runtime_signatures_part_0():
 
 def _runtime_signatures_part_1():
     return {
+    # A shared return slot: a root, uncounted on GC0 (return_lowering).
+    "pcc_gc_store_return_root": (_VOID, [_PTR, _PYOBJ], False),
     "pcc_gc_backend3_enable_closed_young_domain": (_VOID, [], False),
     "pcc_gc_backend3_revoke_closed_young_domain": (_VOID, [], False),
     "pcc_gc_store_root_known": (_VOID, [_PTR, _PYOBJ], False),
