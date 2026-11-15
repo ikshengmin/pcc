@@ -894,7 +894,8 @@ def _private_seed_wire():
         "instruction_arithmetic_flags": [], "cold_instruction_data": [],
         "call_texts": [], "types": [], "args": [],
         "ret_type": ["void", 0, None, 0, None, "", []],
-        "arenas": [[name, 0] for name, _, _ in _ARENA_FIELDS],
+        "arenas": [[name, 4 if name == "block_facts" else 0]
+                   for name, _, _ in _ARENA_FIELDS],
     }
 
 
@@ -1089,7 +1090,8 @@ def test_private_seed_success_keeps_current_owners_open(monkeypatch, tmp_path):
     function, inventory = indexed_codec._seed_from_wire(_private_seed_wire())
     seed, originals = captured[0]
     assert function.indexed_seed is seed
-    assert inventory == tuple((name, 0) for name, _, _ in _ARENA_FIELDS)
+    assert inventory == tuple((name, 4 if name == "block_facts" else 0)
+                              for name, _, _ in _ARENA_FIELDS)
     assert all(not getattr(seed, name)._closed for name in _PRIVATE_SEED_FIELDS)
     assert originals["value_name_index"]._closed
     assert seed.value_name_index is not originals["value_name_index"]
@@ -1246,7 +1248,8 @@ def test_private_seed_rollback_native_all_collectors(
     codec_path.chmod(0o644)
     codec_path.write_text(observed + observer)
     codec_path.chmod(0o444)
-    inventory = repr([[row[0], 0] for row in indexed_codec._ARENA_FIELDS])
+    inventory = repr([[row[0], 4 if row[0] == "block_facts" else 0]
+                      for row in indexed_codec._ARENA_FIELDS])
     driver = '''import gc
 from pcc.backend.self_backend_indexed_codec import _seed_from_wire, _close_private_seed
 from pcc.backend.self_backend_kernel import IndexedFunctionSeed
@@ -2409,3 +2412,322 @@ def test_kernel_private_default_constructor_failure_scope(monkeypatch, failure_t
         monkeypatch.setattr(kernels.CompilerIntArena, "close", real_close)
         for kernel in captured:
             kernel.close_native_tables()
+
+
+def _block_fact_writer_module(monkeypatch, producer, block_count, version):
+    """Real writers for seed and ordinary ParsedFunction construction."""
+    from pcc.backend.self_backend_ir import (
+        ParsedBlock, ParsedFunction, ParsedInstr, ParsedModule, TypeDesc,
+        TypeParseContext,
+    )
+
+    if producer == "seed":
+        assert block_count > 0
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
+        monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
+        source = ir.Module(name="block_fact_shape")
+        source.triple = "arm64-apple-darwin23.6.0"
+        function = ir.Function(source, ir.FunctionType(ir.VoidType(), []), name="probe")
+        blocks = [function.append_basic_block("b" + str(i)) for i in range(block_count)]
+        for i, block in enumerate(blocks):
+            builder = ir.IRBuilder(block)
+            if i + 1 < block_count:
+                builder.branch(blocks[i + 1])
+            else:
+                builder.ret_void()
+        module = source.direct_indexed_module()
+    else:
+        assert producer == "ordinary"
+        blocks = []
+        for i in range(block_count):
+            terminator = (ParsedInstr("br", ("b" + str(i + 1),))
+                          if i + 1 < block_count else ParsedInstr("ret_void", ()))
+            blocks.append(ParsedBlock("b" + str(i), terminator=terminator))
+        function = ParsedFunction("probe", TypeDesc("void"), [], True, False, blocks)
+        assert function.indexed_seed is None
+        get_indexed_function_kernel(function)
+        module = ParsedModule("arm64-apple-darwin23.6.0", (), (function,), TypeParseContext())
+    if version == 2:
+        from pcc.backend.self_backend_debug import DebugMetadata
+        # Empty original debug metadata is a legitimate v2 transport, not a
+        # source-level debug emission claim.
+        assert module.type_context is not None
+        module.type_context.debug_info = DebugMetadata({})
+    elif version == 3:
+        module.functions[0].definition_linkage = "external_odr"
+    else:
+        assert version == 1
+    return module
+
+
+def _block_fact_wire_parts(path):
+    import json
+
+    with path.open("rb") as stream:
+        assert stream.readline() == indexed_codec._MAGIC
+        header = json.loads(stream.read(int(stream.readline())))
+        payload = stream.read()
+    assert len(payload) == header["total_scalars"] * 8
+    return header, payload
+
+
+def _rewrite_block_fact_count(path, count):
+    import json
+
+    header, payload = _block_fact_wire_parts(path)
+    offset = 0
+    inventory = header["functions"][0]["arenas"]
+    for row in inventory:
+        if row[0] == "block_facts":
+            old_count = row[1]
+            old = payload[offset:offset + old_count * 8]
+            replacement = old[:count * 8] + b"\0" * max(0, (count - old_count) * 8)
+            payload = payload[:offset] + replacement + payload[offset + old_count * 8:]
+            row[1] = count
+            header["total_scalars"] += count - old_count
+            break
+        offset += row[1] * 8
+    else:
+        raise AssertionError("writer omitted block_facts")
+    raw = json.dumps(header, sort_keys=True).encode()
+    path.write_bytes(indexed_codec._MAGIC + str(len(raw)).encode() + b"\n" + raw + payload)
+    checked, checked_payload = _block_fact_wire_parts(path)
+    assert checked["total_scalars"] == sum(
+        row[1] for function in checked["functions"] for row in function["arenas"]
+    )
+    assert len(checked_payload) == checked["total_scalars"] * 8
+
+
+@pytest.mark.parametrize("producer", ["seed", "ordinary"])
+@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("count", [0, 3, 4, 7, 9, 12])
+def test_block_fact_shape_rejected_before_raw_acquisition(
+    tmp_path, monkeypatch, producer, version, count,
+):
+    module = _block_fact_writer_module(monkeypatch, producer, 2, version)
+    path = tmp_path / "block-facts.pidx"
+    try:
+        encode_indexed_module_file(str(path), module)
+        _rewrite_block_fact_count(path, count)
+        captured = _capture_private_seed(monkeypatch)
+
+        def forbidden(*args, **kwargs):
+            pytest.fail("malformed block facts reached raw acquisition or kernel adoption")
+
+        monkeypatch.setattr(indexed_codec, "_read_host_arena", forbidden)
+        monkeypatch.setattr(indexed_codec, "_read_native_arena", forbidden)
+        monkeypatch.setattr(indexed_codec, "get_indexed_function_kernel", forbidden)
+        with pytest.raises(ValueError, match="^indexed module block fact columns are inconsistent$"):
+            decode_indexed_module_file(str(path))
+        assert len(captured) == 1
+        seed, originals = captured[0]
+        assert all(getattr(seed, field)._closed for field in _PRIVATE_SEED_FIELDS)
+        assert all(arena._closed for arena in originals.values())
+    finally:
+        for function in module.functions:
+            function.indexed_kernel.close_native_tables()
+
+
+@pytest.mark.parametrize("producer", ["seed", "ordinary"])
+@pytest.mark.parametrize("version", [1, 2, 3])
+@pytest.mark.parametrize("block_count", [1, 3])
+def test_block_fact_shape_writer_roundtrip(tmp_path, monkeypatch, producer, version, block_count):
+    module = _block_fact_writer_module(monkeypatch, producer, block_count, version)
+    path = tmp_path / "block-facts-valid.pidx"
+    restored = None
+    try:
+        encode_indexed_module_file(str(path), module)
+        header, _ = _block_fact_wire_parts(path)
+        assert header["schema"] == (indexed_codec._SCHEMA, indexed_codec._DEBUG_SCHEMA,
+                                    indexed_codec._ODR_SCHEMA)[version - 1]
+        restored = decode_indexed_module_file(str(path))
+        original = module.functions[0].indexed_kernel
+        decoded = restored.functions[0].indexed_kernel
+        assert len(decoded.block_names) == block_count
+        assert len(decoded.block_facts) == block_count * 4
+        for _, field, _ in _ARENA_FIELDS:
+            assert _arena_values(decoded, field) == _arena_values(original, field)
+        for block_id in range(block_count):
+            assert decoded.block_fact(block_id) == original.block_fact(block_id)
+    finally:
+        for owner in (module, restored):
+            if owner is not None:
+                for function in owner.functions:
+                    function.indexed_kernel.close_native_tables()
+
+
+def test_block_fact_shape_zero_block_writer_transport(tmp_path, monkeypatch):
+    # The writer accepts an explicitly published empty ordinary kernel. This
+    # is transport compatibility only, not a valid executable function claim.
+    module = _block_fact_writer_module(monkeypatch, "ordinary", 0, 1)
+    path = tmp_path / "zero-block-transport.pidx"
+    restored = None
+    try:
+        encode_indexed_module_file(str(path), module)
+        restored = decode_indexed_module_file(str(path))
+        assert restored.functions[0].indexed_kernel.block_names == []
+        assert len(restored.functions[0].indexed_kernel.block_facts) == 0
+    finally:
+        for owner in (module, restored):
+            if owner is not None:
+                owner.functions[0].indexed_kernel.close_native_tables()
+
+
+def _block_fact_shape_guard_source():
+    import ast
+    import inspect
+
+    source = inspect.getsource(indexed_codec._seed_from_wire)
+    function = ast.parse(source).body[0]
+    candidates = [node for node in ast.walk(function) if isinstance(node, ast.If)
+                  and any(isinstance(child, ast.Constant)
+                          and child.value == "indexed module block fact columns are inconsistent"
+                          for child in ast.walk(node))]
+    assert len(candidates) == 1
+    guard = candidates[0]
+    # Lock the exact minimal predicate and the inventory insertion ordering.
+    expected = ast.parse('if expected_name == "block_facts" and row[1] != len(seed.block_names) * 4:\n'
+                         '    raise BackendUnavailable("indexed module block fact columns are inconsistent")').body[0]
+    assert ast.dump(guard, include_attributes=False) == ast.dump(expected, include_attributes=False)
+    loop = next(node for node in ast.walk(function) if isinstance(node, ast.While)
+                and guard in node.body)
+    index = loop.body.index(guard)
+    assert isinstance(loop.body[index - 1], ast.If)
+    assert isinstance(loop.body[index + 1], ast.Expr)
+    assert loop.body[index + 1].value.func.attr == "append"
+    assert loop.body[index + 1].value.func.value.id == "arena_inventory"
+    return ast.get_source_segment(source, guard)
+
+
+def test_block_fact_shape_guard_inventory_boundary():
+    _block_fact_shape_guard_source()
+
+
+def _native_block_fact_shape_source():
+    """Exact guard with typed synthetic inventory, not the full JSON decoder."""
+    import ast
+    import textwrap
+
+    guard = _block_fact_shape_guard_source()
+    # ast.get_source_segment retains the original body indentation; dedent
+    # relative to its production inventory-loop column before embedding it.
+    guard = textwrap.dedent("            " + guard)
+    source = '''BackendUnavailable = ValueError
+
+class WireSeed:
+    def __init__(self, count: int) -> None:
+        self.block_names: list[str] = []
+        for index in range(count):
+            self.block_names.append("b")
+
+def check(block_count: int, count: int, expected_name: str, reject: bool) -> None:
+    seed = WireSeed(block_count)
+    # The real inventory validates the name separately; this typed synthetic
+    # row isolates its already-validated integer count. No JSON/seed claim.
+    row: list[int] = [0, count]
+    reached_acquisition = False
+    failed = False
+    try:
+'''
+    source += textwrap.indent(guard, "        ") + "\n"
+    source += '''        reached_acquisition = True
+    except ValueError as error:
+        assert str(error) == "indexed module block fact columns are inconsistent"
+        failed = True
+    assert failed == reject
+    assert reached_acquisition != reject
+
+def main() -> None:
+    for blocks in range(4):
+        check(blocks, blocks * 4, "block_facts", False)
+        check(blocks, blocks * 4 + 1, "block_facts", True)
+        check(blocks, blocks * 4 + 4, "block_facts", True)
+        if blocks > 0:
+            check(blocks, blocks * 4 - 1, "block_facts", True)
+            check(blocks, blocks * 4 - 4, "block_facts", True)
+        check(blocks, 1, "call_records", False)
+    print("block-fact-boundary|ok")
+main()
+'''
+    ast.parse(source)
+    return source, guard
+
+
+@pytest.mark.integration
+def test_block_fact_shape_native_boundary_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
+):
+    """Exact inventory guard only; synthetic typed seed/count and acquisition marker."""
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    source_text, guard = _native_block_fact_shape_source()
+    source = tmp_path / "block_fact_native.py"
+    source.write_text(source_text)
+    binary = tmp_path / "block_fact_native"
+
+    def identity(path):
+        if path is None:
+            return None
+        return {"path": os.path.abspath(os.fspath(path)),
+                "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+    captured = inspect.getclosurevars(python_program_compiler).nonlocals.get("compiler")
+    if not isinstance(captured, (str, os.PathLike)):
+        captured = None
+    route_path = os.environ.get("PCC_TEST_COMPILER_LOG")
+    route_offset = (Path(route_path).stat().st_size
+                    if route_path and Path(route_path).is_file() else 0)
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    receipt = {
+        "nominal_case": request.node.callspec.params["python_program_compiler"],
+        "ownership_boundary": "nominal fixture is not compiler ownership evidence; inspect callable, captured compiler, route log",
+        "compiler_callable": python_program_compiler.__module__ + "." + python_program_compiler.__qualname__,
+        "compiler_callable_source": identity(inspect.getsourcefile(python_program_compiler)),
+        "captured_compiler_before": identity(captured), "host_process": identity(sys.executable),
+        "source": identity(source), "codec": identity(indexed_codec.__file__), "runtime_archive": identity(pcc_runtime_archive),
+        "guard_sha256": hashlib.sha256(guard.encode()).hexdigest(),
+        "scope": "exact native block-fact inventory guard only; synthetic typed seed/count row and post-guard acquisition marker; no full JSON/decoder/kernel/native arena access or OOB control, fixed point, RSS or performance claim",
+        "returned_args": None, "route_records": [], "gc_runs": [],
+    }
+    receipt_path = tmp_path / "block_fact_native.receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    try:
+        compiled = python_program_compiler(
+            str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive),
+        )
+        args = getattr(compiled, "args", None)
+        if args is not None:
+            receipt["returned_args"] = ([os.fsdecode(value) for value in args]
+                                        if isinstance(args, (tuple, list)) else os.fsdecode(args))
+    finally:
+        receipt["captured_compiler_after"] = identity(captured)
+        if route_path and Path(route_path).is_file():
+            with Path(route_path).open("rb") as stream:
+                stream.seek(route_offset)
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError) as error:
+                        receipt["route_records"].append({"unparsed": str(error)})
+                        continue
+                    if record.get("test") == current_test and record.get("kind") == "compile_python":
+                        receipt["route_records"].append(record)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt["binary"] = identity(binary)
+    for collector in range(5):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
+        )
+        receipt["gc_runs"].append({"collector": collector, "returncode": result.returncode,
+                                   "stdout": result.stdout, "stderr": result.stderr})
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        assert result.returncode == 0, (collector, result.stdout, result.stderr)
+        assert result.stderr == ""
+        assert result.stdout == "block-fact-boundary|ok\n"

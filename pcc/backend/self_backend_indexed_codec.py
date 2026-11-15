@@ -791,6 +791,10 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
                 or row[1] < 0
             ):
                 raise BackendUnavailable("indexed module arena order is invalid")
+            if expected_name == "block_facts" and row[1] != len(seed.block_names) * 4:
+                raise BackendUnavailable(
+                    "indexed module block fact columns are inconsistent"
+                )
             arena_inventory.append((expected_name, row[1]))
             index += 1
         is_global = _wire_bool(value.get("is_global", False), "global flag")
