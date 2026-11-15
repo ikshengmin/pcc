@@ -7,7 +7,7 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
-## Class publication during package cycles (CI execution pending)
+## Class publication during package cycles (finite CI qualification)
 
 The unchanged pcc-electron wheel compiles against `7fc7c694d` but its native
 import cycle cannot observe an exception class whose definition already ran.
@@ -17,22 +17,27 @@ until initialization completed. Class statement lowering now publishes the
 completed decorated result through the existing module binding path, for inline
 and outlined initialization. The generic reproduction is
 `tests/fixtures/module_class_cycle/main.py`; its integration test compares five
-collectors with CPython. This is source-reviewed and unrun locally under CI-only
-instructions; full Python/shared-runtime qualification remains separate.
+collectors with CPython. At `952a517a3`, the unchanged metadata wheel and this generic source oracle
+pass in [CI 43662300469](https://github.com/jiamo/pcc-electron/actions/runs/43662300469);
+the oracle passes all five collectors. No local compiler/test ran. Full Python,
+shared-runtime, bootstrap and native PCC1 compiler qualification remain separate.
 
-## Explicit-endian UTF-16 package blocker (CI execution pending)
+## Explicit-endian UTF-16 codecs (finite CI qualification)
 
 The direct pcc-node and pcc-web wheels install and compile against `7fc7c694d`,
 but their native consumers refuse `str.encode('utf-16-le')`. The shared Python
 codec provider now adds explicit UTF-16 LE/BE string encoding and bytes/bytearray
-conversion, surrogate/error policies and owned decoder buffers. This is a
-source-reviewed checkpoint; no local compiler or tests were run under CI-only
-instructions. The ordinary oracle is `tests/fixtures/native_utf16_codec.py`, with
+conversion, surrogate/error policies and owned decoder buffers. At `4a0d18cc8`, the unchanged Node/Web wheels compile and execute natively.
+[CI 43662712115](https://github.com/jiamo/pcc-web/actions/runs/43662712115)
+also matches all 485 ordinary CPython oracle output lines on each of the five
+collectors, including exact surrogate error spans. No local compiler/tests ran. The ordinary oracle is `tests/fixtures/native_utf16_codec.py`, with
 five-collector integration coverage in `tests/python/test_native_utf16_codecs.py`.
 The current text-file packed codec/seek state remains explicitly unadmitted for
 UTF-16; automatic-BOM UTF-16 and complete codecs APIs are separate work. The
-existing UTF-8/ASCII/Latin-1 profiles retain their behavior. Qualification must
-use this source revision and unchanged generated wheels, not patched consumers.
+existing UTF-8/ASCII/Latin-1 profiles retain their behavior. These are host-PCC/self-backend native-output checks with the unchanged
+90-second/1-GiB consumer guard; complete Python and native PCC1 compiler
+qualification remain open. The Node run previously hit that time limit and its
+latest immutable-source run passed at 84.1 seconds without raising the limit.
 
 ## Five collectors: finalizers with the world running; identities open (local Mac, 2026-11-15)
 
