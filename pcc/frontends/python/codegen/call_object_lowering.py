@@ -1080,7 +1080,8 @@ class CallObjectLoweringMixin:
                     # then retain a separate owner before publishing it. Never
                     # infer this from a name's spelling or an arbitrary global:
                     # shadowed names took the authoritative slot-copy path.
-                    for literal in self._str_obj_pool.values():
+                    for literal in (*self._str_obj_pool.values(),
+                                    *self._bytes_obj_pool.values()):
                         if value is literal:
                             self.builder.call(
                                 self.runtime["py_incref"], [self._as_gc_ptr(value)],

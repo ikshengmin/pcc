@@ -226,6 +226,7 @@ L1_CODEGEN_HOST_ATTRS = (
     "_static_seq_counter",
     "_str_counter",
     "_str_obj_pool",
+    "_bytes_obj_pool",
     "_int_obj_pool",
     "_str_pool",
     "_strict_no_libpython",

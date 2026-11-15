@@ -264,6 +264,8 @@ class Layer1InitMixin:
         self._fmt_bool_false: Optional[ir.GlobalVariable] = None
         self._str_pool: dict[str, ir.GlobalVariable] = {}
         self._str_obj_pool: dict[str, ir.GlobalVariable] = {}
+        # Static immortal bytes objects for bytes literals.
+        self._bytes_obj_pool: dict[bytes, ir.GlobalVariable] = {}
         # Static immortal int objects for literals outside the tagged lane.
         self._int_obj_pool: dict = {}
         self._static_literal_init_fn = None

@@ -116,6 +116,10 @@ class LiteralLoweringMixin:
         register = self.runtime[register_name]
         for gv in self._str_obj_pool.values():
             builder.call(register, [builder.bitcast(gv, _CSTR)])
+        # Static bytes literals (_emit_bytes_literal) are the same kind of
+        # object and take the same registration.
+        for gv in self._bytes_obj_pool.values():
+            builder.call(register, [builder.bitcast(gv, _CSTR)])
         # Static float literals are the same kind of object as static string
         # literals -- immortal, in the data segment, pointed at rather than
         # allocated -- so they take the same one-shot registration. The pool
@@ -197,6 +201,41 @@ class LiteralLoweringMixin:
         return existing
 
     def _emit_bytes_literal(self, value: bytes) -> ir.Value:
+        if self._freestanding_module:
+            # Freestanding modules register no static literals at module
+            # start; keep their bytes literals on the runtime constructor.
+            return self._emit_runtime_bytes_literal(value)
+        existing = self._bytes_obj_pool.get(value)
+        if existing is None:
+            # py_bytes_new's layout: owner count, PY_TYPE_BYTES, flags,
+            # length, then the bytes and a NUL. PY_FLAG_IMMORTAL (1) keeps
+            # every collector from counting, moving or freeing it, as for a
+            # string literal; bytes are immutable, so one object per value
+            # serves every evaluation (CPython keeps literals as constants).
+            body = [int(b) & 0xFF for b in value] + [0]
+            data_ty = ir.ArrayType(_I8, len(body))
+            obj_ty = ir.LiteralStructType([_I64, _I32, _I32, _I64, data_ty])
+            self._str_counter += 1
+            gv = ir.GlobalVariable(
+                self.module, obj_ty, name=f".pybytes.obj.{self._str_counter}",
+            )
+            gv.linkage = "internal"
+            gv.global_constant = False
+            gv.initializer = ir.Constant(obj_ty, [
+                ir.Constant(_I64, 1),
+                ir.Constant(_I32, 17),
+                ir.Constant(_I32, 1),
+                ir.Constant(_I64, len(value)),
+                ir.Constant(data_ty, body),
+            ])
+            self._bytes_obj_pool[value] = gv
+            existing = gv
+        # Registered with the string literals at module start; no collector
+        # moves or frees it, so no pin, lease, release or temporary root.
+        self._note_never_gc_object(existing)
+        return existing
+
+    def _emit_runtime_bytes_literal(self, value: bytes) -> ir.Value:
         self._str_counter += 1
         body = [int(b) & 0xFF for b in value] + [0]
         arr_ty = ir.ArrayType(_I8, len(body))

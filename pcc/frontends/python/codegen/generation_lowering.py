@@ -312,6 +312,7 @@ class GenerationLoweringMixin:
         setattr(self, "_fmt_bool_false", None)
         setattr(self, "_str_pool", {})
         setattr(self, "_str_obj_pool", {})
+        setattr(self, "_bytes_obj_pool", {})
         setattr(self, "_static_literal_init_fn", None)
         setattr(self, "_attr_pool", {})
         setattr(self, "_cstr_pool", {})
