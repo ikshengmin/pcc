@@ -422,32 +422,64 @@ def test_actual_same_input_edition_check_is_not_replaced_by_a_resolution_guess(e
 def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_path, monkeypatch):
     from pcc.frontends.rust import check_rust_source
     from tests.rust.test_rust_certified_references import toolchain
-    original = Path(__file__).resolve().parents[2].joinpath(PROJECT).read_bytes()
+    project = Path(__file__).resolve().parents[2].joinpath(PROJECT)
+    original = project.read_bytes()
     assert hashlib.sha256(original).hexdigest() == PROJECT_SHA256
-    checked = check_rust_source(original.decode(), toolchain=toolchain(),
+    assert len(original) == 21146
+    source = original.decode('utf-8')
+    checked = check_rust_source(source, toolchain=toolchain(),
         evidence_directory=tmp_path / 'actual-check', edition=2015)
-    parser = Parser(original.decode(), edition=2015, rustc_check=checked)
+    parser = Parser(source, edition=2015, rustc_check=checked)
     # Keep the whole authenticated source. Observe the real parser's next
     # boundary without accepting a rewritten prefix or a discarded declaration:
-    # every earlier Fn-family bound, `Some(e)` pattern, closure, integer
-    # range loop, the impl lifetime parameter and both blanket trait impls
-    # (`&'a mut I`, and the cfg(feature = "std") `Box<I>` one, parsed then
-    # disabled) are parsed; the next boundary is `Iterator<Item = ..>`.
+    # all 28 associated declarations are observed, including the two in the
+    # parsed-then-disabled Box<I> impl. Earlier projection, outlives, tuple and
+    # match-guard boundaries have advanced to cfg(test). Predicate evaluation
+    # rejects `test` after consuming `]`, leaving the unentered module next.
     assert parse_retaining_associated_types(parser, monkeypatch, (
-        367, 16, 'generic trait bounds and associated projections are not implemented', '<')) == [
+        893, 7, 'cfg predicate requires an unimplemented built-in/target or custom configuration context',
+        ('mod', 894, 1))) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
         ('Item', 310, 10, 'I::Item', []),
         ('Error', 311, 10, 'I::Error', []),
         ('Item', 339, 10, 'I::Item', []),
         ('Error', 340, 10, 'I::Error', []),
+        ('Item', 382, 10, 'T', []),
+        ('Error', 383, 10, 'E', []),
+        ('Item', 430, 10, 'T', []),
+        ('Error', 431, 10, 'E', []),
+        ('Item', 467, 10, 'I::Item', []),
+        ('Error', 468, 10, 'I::Error', []),
+        ('Item', 508, 10, 'I::Item', []),
+        ('Error', 509, 10, 'I::Error', []),
+        ('Item', 595, 10, 'B', []),
+        ('Error', 596, 10, 'I::Error', []),
+        ('Item', 638, 10, 'B', []),
+        ('Error', 639, 10, 'I::Error', []),
+        ('Item', 679, 10, 'I::Item', []),
+        ('Error', 680, 10, 'B', []),
+        ('Item', 729, 10, 'I::Item', []),
+        ('Error', 730, 10, 'I::Error', []),
+        ('Item', 770, 10, 'I::Item', []),
+        ('Error', 771, 10, 'I::Error', []),
+        ('Item', 811, 10, 'I::Item', []),
+        ('Error', 812, 10, 'I::Error', []),
+        ('Item', 861, 10, 'I::Item', []),
+        ('Error', 862, 10, 'I::Error', []),
     ]
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
-    assert [original.decode()[slice(*item.source_span)] for item in parser.uses] == [
+    assert [(item.token.line, item.token.column, item.source_span) for item in parser.uses] == [
+        (22, 1, (659, 673)), (23, 1, (674, 704))]
+    assert [source[slice(*item.source_span)] for item in parser.uses] == [
         'use core::cmp;', 'use core::marker::PhantomData;']
+    assert not parser.modules  # cfg(test)'s module body has not been entered.
     assert checked.provenance.source_sha256 == PROJECT_SHA256
+    assert checked.provenance.edition == '2015'
+    assert checked.provenance.cfg == checked.provenance.dependencies == ()
     assert (tmp_path / 'actual-check/original.rs').read_bytes() == original
+    assert project.read_bytes() == original
     # This bounded parser observation is not the independent strict project
     # gate, an owned core dependency or permission to lower unresolved imports.
 
