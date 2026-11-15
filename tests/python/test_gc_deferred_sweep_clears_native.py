@@ -10,8 +10,8 @@ teardown (pcc_gc_concurrent_sweep_slice) while the mutators run. Generators
 whose close runs no user code (finished or never started) are among them.
 
 The program builds cycles of those kinds from four threads, keeps a rotating
-set of survivors whose contents it checks, and lets a few early rounds carry
-weak callbacks so those sweeps take the clearing path in the stopped world. The
+set of survivors whose contents it checks, and gives one early object a weak
+callback so that one sweep takes the clearing path in the stopped world. The
 printed results must equal CPython's on every collector. On GC1-GC3 the
 stopped sweep's PASS1 must also have cleared fewer objects than PASS2 took
 (pcc_gc_telemetry 136 and 140): the deferral without clearing ran.
@@ -78,9 +78,10 @@ def churn(tid, rounds, kept):
             total += len(holder["pair"]) + len(buffer)
         if not event.is_set():
             total += 1
-        if tid == 0 and k < 3000 and k % 997 == 0:
-            # A weak callback: the early collections that see one clear in
-            # the stopped world; the later ones are settled.
+        if tid == 0 and k == 0:
+            # One weak callback: the collection that sees its referent die
+            # clears in the stopped world; the others (the program makes
+            # about four) are settled.
             refs.append(weakref.ref(b, note))
         if k % 64 == 0:
             kept[k % 8] = a

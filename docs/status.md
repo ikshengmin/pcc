@@ -547,8 +547,11 @@ collector thread: HTTP A/B against `e0b983d8`, GC1 +3.9% (5/5), GC2 +3.1%
 stopped time fell 9–10% and the longest stop did not grow. Generators whose
 close runs no user code now go to the collector thread as well (HTTP A/B
 against `c5b0198b`: GC1 +4.1% 5/5, GC2 +2.3% 4/5, GC3 +3.0% 5/5, GC0
-control −0.4%; request-primitive stopped time −20–23%). Generations (step 1
-there) are not implemented yet.
+control −0.4%; request-primitive stopped time −20–23%). PASS1 now records
+those deferrals itself, so PASS2 walks only the remaining candidates. That
+cut request-primitive stopped time a further 7–14%; HTTP did not separate it
+from drift (GC0 control +2.5%). Generations (step 1 there) are not
+implemented yet.
 
 Latest GC0 (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or

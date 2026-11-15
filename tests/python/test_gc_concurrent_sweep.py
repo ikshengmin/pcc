@@ -564,6 +564,80 @@ def test_a_settled_sweep_leaves_eligible_candidates_uncleared_to_the_collector_t
     assert cls[12] & CANDIDATE and boundary.global_cells[REMAINING][0] == 1
 
 
+def _listed_deferring_boundary():
+    """A deferring GC1 sweep driven by its finish's sealed candidate list."""
+    boundary = _DeferringBoundary(backend=1)
+    # Swept in its finish's own stopped world: no reachability recheck.
+    boundary.held_epoch = 7
+    boundary.global_cells.update({
+        "pcc_gc_tracing_finish_stop_epoch": {0: 7},
+        "pcc_gc_tracing_finish_commits": {0: 1},
+        "pcc_gc_tracing_candidate_capacity": {0: 0},
+    })
+    boundary.visited = []
+    namespace = boundary.sweep.__globals__
+    is_active = namespace["pcc_gc_object_node_is_active"]
+
+    def node_is_active(node):
+        boundary.visited.append(node[0]["name"])
+        return is_active(node)
+
+    namespace["pcc_gc_object_node_is_active"] = node_is_active
+    boundary.listed_nodes = {}
+    object_head = namespace["global_load_ptr"]
+    namespace["global_load_ptr"] = lambda name: (
+        boundary.listed_nodes if name == "pcc_gc_tracing_candidate_nodes" else object_head(name)
+    )
+
+    def seal(*objects):
+        nodes = [node for node in boundary.nodes if any(node[0] is obj for obj in objects)]
+        boundary.listed_nodes.update({index * 8: node for index, node in enumerate(nodes)})
+        boundary.global_cells["pcc_gc_tracing_candidate_count"][0] = len(nodes)
+        boundary.global_cells["pcc_gc_tracing_candidate_commit"][0] = 1
+
+    boundary.seal = seal
+    return boundary
+
+
+def test_a_settled_listed_sweep_records_deferrals_in_pass1_and_walks_only_the_rest():
+    # PASS2 walked every candidate again only to record the ones PASS1 had
+    # already found eligible: about 63 ms of GC3's request-primitive stop
+    # time for 1.9M candidates. PASS1 now records them and keeps only the
+    # others in the candidate list, which PASS2 walks.
+    boundary = _listed_deferring_boundary()
+    dead = _without_finalizers(_instances(boundary, 3))
+    cext = boundary.object("cext", cext=True)
+    _without_finalizers([cext])
+    cls = boundary.object("cls", is_class=True)
+    boundary.seal(*dead, cext, cls)
+    # gc.collect() counts the same unreachable objects as before.
+    assert boundary.sweep(9223372036854775807) == 4
+    assert boundary.recorded() == dead
+    assert boundary.arrays[0]["size"] == 5 * 8
+    assert [boundary.listed_nodes[index * 8][0] for index in range(2)] == [cext, cls]
+    # PASS0 and PASS1 visit each candidate; PASS2 only the two it handles
+    # (the class-retirement walk then stops at the first pending instance).
+    assert boundary.visited.count("dead1") == 2 and boundary.visited.count("dead2") == 2
+    assert boundary.visited.count("cext") == 3
+    assert _freed(boundary) == ["free:cext"]
+    for obj in dead:
+        assert "clear:" + obj["name"] not in boundary.events
+    assert cls[12] & CANDIDATE and boundary.global_cells[REMAINING][0] == 1
+    assert boundary.global_cells[STATE][0] == 1
+
+
+def test_a_settled_listed_sweep_without_an_early_array_takes_the_old_passes():
+    boundary = _listed_deferring_boundary()
+    boundary.memory = False
+    dead = _without_finalizers(_instances(boundary, 2))
+    boundary.seal(*dead)
+    assert boundary.sweep(9223372036854775807) == 2
+    for obj in dead:
+        name = obj["name"]
+        assert boundary.events.index("clear:" + name) < boundary.events.index("free:" + name)
+    assert boundary.global_cells[STATE][0] == 0 and not boundary.published
+
+
 def test_a_settled_sweep_without_an_array_clears_before_destroying():
     boundary = _DeferringBoundary(memory=False)
     dead = _without_finalizers(_instances(boundary, 2))

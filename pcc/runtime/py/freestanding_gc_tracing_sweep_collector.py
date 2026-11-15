@@ -782,6 +782,16 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         and _concurrent_sweep_admitted(count_free) != 0
     ):
         defer_uncleared = 1
+    # With the finish's candidate list, PASS1 records those candidates in
+    # the deferral array itself and keeps only the others in the list, the
+    # only nodes PASS2 still has to visit (it used to walk every candidate
+    # again to record them). The list is this sweep's: PASS1 compacts it in
+    # place, writing behind its read cursor.
+    early = null()
+    early_count: i64 = 0
+    kept: i64 = 0
+    if defer_uncleared != 0 and listed != 0 and listed_count > 0:
+        early = malloc(listed_count * 8)
     started = pcc_platform_monotonic_us()
     visited = 0
     cleared: i64 = 0
@@ -808,6 +818,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             continue
         obj = load_ptr(node, 0)
         flags = load_i32(obj, 12)
+        recorded: i64 = 0
         # Re-evaluate eligibility after callback-capable finalizers.
         if (
             (flags & 1024) != 0
@@ -829,6 +840,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 # Settled for PASS2 (counted), cleared by the collector thread.
                 cleared_nonclasses = cleared_nonclasses + 1
                 cleared = cleared + 1
+                if ptr_is_null(early) == 0:
+                    store_ptr(early, early_count * 8, obj)
+                    early_count = early_count + 1
+                    recorded = 1
             elif count_free == 0 or is_class == 0 or _class_needs_clear(obj) != 0:
                 cleared_here = cleared_here + 1
                 if weak_settled != 0:
@@ -840,7 +855,12 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 else:
                     cleared_nonclasses = cleared_nonclasses + 1
                 cleared = cleared + 1
+        if ptr_is_null(early) == 0 and recorded == 0 and (flags & 1024) != 0:
+            store_ptr(listed_nodes, kept * 8, node)
+            kept = kept + 1
         node = nxt
+    if ptr_is_null(early) == 0:
+        listed_count = kept
     # Only a sweep that cleared every candidate may leave candidates to the
     # collector thread: an uncleared one still owns its referents.
     pass1_complete: i64 = 1 if ptr_is_null(node) != 0 else 0
@@ -855,7 +875,14 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     reclaimed: i64 = 0
     defer_concurrent: i64 = 0
     deferred_objects = null()
-    if pass1_complete != 0 and cleared_nonclasses > 0:
+    deferred: i64 = 0
+    if ptr_is_null(early) == 0:
+        # PASS1 recorded its deferrals; PASS2 visits the rest of the list.
+        defer_concurrent = 1
+        deferred_objects = early
+        deferred = early_count
+        reclaimed = early_count
+    elif pass1_complete != 0 and cleared_nonclasses > 0:
         defer_concurrent = _concurrent_sweep_admitted(count_free)
         if defer_concurrent != 0:
             # PASS2 frees at most the objects PASS1 cleared; without the
@@ -863,7 +890,6 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             deferred_objects = malloc(cleared_nonclasses * 8)
             if ptr_is_null(deferred_objects) != 0:
                 defer_concurrent = 0
-    deferred: i64 = 0
     classes_kept: i64 = 0
     cursor = 0
     node = pcc_gc_object_walk_first() if listed == 0 else (

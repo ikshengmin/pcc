@@ -293,6 +293,14 @@ GC1-GC3, and the longest stop fell (GC2 38.0 to 21.4 ms). The HTTP A/B
 (`c5b0198b`) gave GC1 +4.1% (5/5), GC2 +2.3% (4/5) and GC3 +3.0% (5/5),
 against a GC0 control of -0.4% (1/5).
 
+PASS2 then walked every candidate again only to record the deferred ones.
+With the finish's candidate list, PASS1 now records them itself and keeps
+the remaining nodes in the list, which PASS2 walks. On the request
+primitive (arms `gen` and `early`) PASS2 visited 0.15M instead of 2.3M nodes
+(69 to 30 ms), and stopped time fell 7-14% on GC1-GC3. The HTTP A/B could
+not tell it from host drift: GC1 +2.1%, GC2 +1.0% and GC3 +1.3%, while the
+untouched GC0 control moved +2.5%.
+
 ### Measuring
 
 All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is
