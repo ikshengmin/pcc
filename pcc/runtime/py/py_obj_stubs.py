@@ -23,6 +23,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PYBYTESOBJECT_BYTE_LEN_OFFSET,
     PYBYTESOBJECT_DATA_OFFSET,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
@@ -2938,7 +2939,33 @@ def _bytes_decode_body(slots, tokens, codec: int, mode: int) -> int:
     return _buffer_adopt(slots, tokens, _BUFFER_RESULT)
 
 
+def _bytes_decode_exact(value, encoding, errors, codec: int, mode: int):
+    """bytes.decode of an exact bytes object, read in place.
+
+    The caller keeps its three operands alive for the call and no collector
+    moves an object while a mutator runs (as _str_encode_guarded relies
+    on). A bytes object is immutable, so the general path's snapshot,
+    operand roots, leases and pinned result handoff guard nothing here.
+    The codec and handler names resolve in the general path's order, and
+    the decoded str is the call's new reference.
+    """
+    if codec < 0:
+        codec = py_text_decode_codec_id(encoding)
+        if py_err_occurred() != 0:
+            return null()
+        mode = py_text_error_id(errors)
+        if py_err_occurred() != 0:
+            return null()
+    return py_text_decode(
+        ptr_add(value, PYBYTESOBJECT_DATA_OFFSET),
+        load_i64(value, PYBYTESOBJECT_BYTE_LEN_OFFSET), codec, mode,
+    )
+
+
 def _bytes_decode_guarded(value, encoding, errors, codec: int, mode: int):
+    if (ptr_is_null(value) == 0 and is_tagged_int(value) == 0
+            and load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTES):
+        return _bytes_decode_exact(value, encoding, errors, codec, mode)
     borrowed = stack_alloc(3 * _BUFFER_BYTES)
     store_ptr(borrowed, 0, value)
     store_ptr(borrowed, 8, encoding)
