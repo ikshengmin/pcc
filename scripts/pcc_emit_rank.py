@@ -30,6 +30,27 @@ class EmitRankError(RuntimeError):
     pass
 
 
+def capture_indexed_input_guarded(args, **owner):
+    """Input preparation only; requires an existing live guard/lock owner.
+
+    No standalone capture CLI or performance/CI qualification is implied.
+    Keep the ordinary ranking route and its defaults unchanged.
+    """
+    import pcc_indexed_capture
+
+    if Path(pcc_indexed_capture.__file__).resolve() != REPO_ROOT / "scripts/pcc_indexed_capture.py":
+        raise EmitRankError("indexed capture helper comes from another tool tree")
+    return pcc_indexed_capture.capture_guarded(args, **owner)
+
+
+def verify_guarded_indexed_input_capture(result, **owner):
+    import pcc_indexed_capture
+
+    if Path(pcc_indexed_capture.__file__).resolve() != REPO_ROOT / "scripts/pcc_indexed_capture.py":
+        raise EmitRankError("indexed capture helper comes from another tool tree")
+    return pcc_indexed_capture.verify_guarded_capture(result, **owner)
+
+
 def _sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -111,6 +132,8 @@ def _load_items(
     item_indices: set[int] | None = None,
 ) -> tuple[dict, list[dict]]:
     payload = json.loads(path.read_text(encoding="utf-8"))
+    if "capture_qualification" in payload or "requires_live_guarded_verification" in payload:
+        raise EmitRankError("guarded capture inputs require their live owner; standalone ranking cannot admit them")
     if payload.get("schema") != INPUT_SCHEMA:
         raise EmitRankError(f"input manifest must use {INPUT_SCHEMA}")
     raw_items = payload.get("items")

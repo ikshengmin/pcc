@@ -311,3 +311,46 @@ def test_stage1_snapshot_canonicalizes_symlinked_parent(tmp_path: Path) -> None:
     )
 
     assert observed == [(real_parent / "snapshot").resolve()]
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_stage1_host_split_requires_explicit_selector(tmp_path, monkeypatch, split):
+    tool = _load_tool()
+    ab = tool._load_ab_tool()
+    monkeypatch.setenv("PCC_HOST_INDEXED_PROCESS_SPLIT", "1")
+    env = ab._measurement_env(
+        tmp_path / "runtime.a", 0, host_source_root=tmp_path / "source",
+        host_python=Path(sys.executable), private_root=tmp_path / "private",
+        frontend_jobs=2, self_backend_jobs=2,
+    )
+    assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in env
+    tool._set_stage1_build_modes(
+        env, with_threads=1, direct_indexed_emit=True,
+        host_indexed_process_split=split,
+    )
+    route = tool._stage1_execution_route(requested=split, env=env)
+    assert route["host_indexed_process_split_requested"] is split
+    assert route["host_indexed_process_split_effective"] is split
+    assert env.get("PCC_HOST_INDEXED_PROCESS_SPLIT") == ("1" if split else None)
+
+
+def test_stage1_host_split_rejects_implicit_direct_mode_before_build(tmp_path):
+    tool = _load_tool()
+    args = tool._parser().parse_args([
+        "--arm", "baseline", "--source-root", str(tmp_path / "missing-source"),
+        "--runtime-archive", str(tmp_path / "missing-runtime"),
+        "--output-dir", str(tmp_path / "output"), "--host-indexed-process-split",
+    ])
+    with pytest.raises(ValueError, match="requires --direct-indexed-emit"):
+        tool._run_build(args, None, run_token="test")
+    assert not (tmp_path / "output").exists()
+
+
+@pytest.mark.parametrize("value", ["0", "1", "true", ""])
+def test_stage1_host_split_rejects_constructed_environment_leakage(value):
+    tool = _load_tool()
+    with pytest.raises(ValueError, match="ambient host indexed process split"):
+        tool._set_stage1_build_modes(
+            {"PCC_HOST_INDEXED_PROCESS_SPLIT": value}, with_threads=1,
+            direct_indexed_emit=True,
+        )
