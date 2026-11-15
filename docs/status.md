@@ -7,6 +7,20 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Explicit-endian UTF-16 package blocker (CI execution pending)
+
+The direct pcc-node and pcc-web wheels install and compile against `7fc7c694d`,
+but their native consumers refuse `str.encode('utf-16-le')`. The shared Python
+codec provider now adds explicit UTF-16 LE/BE string encoding and bytes/bytearray
+conversion, surrogate/error policies and owned decoder buffers. This is a
+source-reviewed checkpoint; no local compiler or tests were run under CI-only
+instructions. The ordinary oracle is `tests/fixtures/native_utf16_codec.py`, with
+five-collector integration coverage in `tests/python/test_native_utf16_codecs.py`.
+The current text-file packed codec/seek state remains explicitly unadmitted for
+UTF-16; automatic-BOM UTF-16 and complete codecs APIs are separate work. The
+existing UTF-8/ASCII/Latin-1 profiles retain their behavior. Qualification must
+use this source revision and unchanged generated wheels, not patched consumers.
+
 ## Five collectors: finalizers with the world running; identities open (local Mac, 2026-11-15)
 
 Source `4de52048c`. Collectors ran `__del__` and weak callbacks inside the

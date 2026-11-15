@@ -2619,8 +2619,31 @@ def _text_utf8_expected(first: int) -> int:
     return 0
 
 
+def _text_utf16_word(data, start: int, codec: int) -> int:
+    first: int = load_i8(data, start) & 255
+    second: int = load_i8(data, start + 1) & 255
+    return first | (second << 8) if codec == 3 else (first << 8) | second
+
+
 def _text_decode_step(data, count: int, start: int, codec: int, mode: int, final: int) -> int:
     """Positive width, negative invalid-prefix width, or incomplete zero."""
+    if codec == 3 or codec == 4:
+        remaining: int = count - start
+        if remaining < 2:
+            return 0 if final == 0 else -remaining
+        word: int = _text_utf16_word(data, start, codec)
+        if word >= 55296 and word <= 56319:
+            if remaining < 4:
+                if final == 0:
+                    return 0
+                return 2 if mode == 4 else -remaining
+            tail: int = _text_utf16_word(data, start + 2, codec)
+            if tail >= 56320 and tail <= 57343:
+                return 4
+            return 2 if mode == 4 else -2
+        if word >= 56320 and word <= 57343 and mode != 4:
+            return -2
+        return 2
     first: int = load_i8(data, start) & 255
     if first < 128 or codec == 2:
         return 1
@@ -2665,7 +2688,17 @@ def _text_decode_step(data, count: int, start: int, codec: int, mode: int, final
 def _text_decode_failure(data, count: int, start: int, end: int, codec: int) -> None:
     encoding = cstr("utf-8")
     reason = cstr("invalid continuation byte")
-    if codec == 1:
+    if codec == 3 or codec == 4:
+        encoding = cstr("utf-16-le") if codec == 3 else cstr("utf-16-be")
+        if count - start < 2:
+            reason = cstr("truncated data")
+        else:
+            word: int = _text_utf16_word(data, start, codec)
+            if word >= 55296 and word <= 56319:
+                reason = cstr("unexpected end of data") if count - start < 4 else cstr("illegal UTF-16 surrogate")
+            else:
+                reason = cstr("illegal encoding")
+    elif codec == 1:
         encoding = cstr("ascii")
         reason = cstr("ordinal not in range(128)")
     elif _text_utf8_expected(load_i8(data, start) & 255) == 0:
@@ -2711,7 +2744,7 @@ def py_text_decode_buffer_spans(data, count: int, codec: int, mode: int, final: 
     store_ptr(result, 0, null())
     store_i64(result, 8, 0)
     store_i64(result, 16, 0)
-    if codec < 0 or codec > 2:
+    if codec < 0 or codec > 4:
         py_raise_owned(py_exc_new(13, cstr("unknown or unsupported native encoding")))
         return -1
     if count < 0 or count > 2305843009213693951:
@@ -2729,7 +2762,34 @@ def py_text_decode_buffer_spans(data, count: int, codec: int, mode: int, final: 
             break
         if width > 0:
             first: int = load_i8(data, position) & 255
-            if codec == 2 and first >= 128:
+            if codec == 3 or codec == 4:
+                point: int = _text_utf16_word(data, position, codec)
+                if width == 4:
+                    point = 65536 + ((point - 55296) << 10) + (_text_utf16_word(data, position + 2, codec) - 56320)
+                before: int = used
+                if point < 128:
+                    store_i8(output, used, point)
+                    used = used + 1
+                elif point < 2048:
+                    store_i8(output, used, 192 | (point >> 6))
+                    store_i8(output, used + 1, 128 | (point & 63))
+                    used = used + 2
+                elif point < 65536:
+                    store_i8(output, used, 224 | (point >> 12))
+                    store_i8(output, used + 1, 128 | ((point >> 6) & 63))
+                    store_i8(output, used + 2, 128 | (point & 63))
+                    used = used + 3
+                else:
+                    store_i8(output, used, 240 | (point >> 18))
+                    store_i8(output, used + 1, 128 | ((point >> 12) & 63))
+                    store_i8(output, used + 2, 128 | ((point >> 6) & 63))
+                    store_i8(output, used + 3, 128 | (point & 63))
+                    used = used + 4
+                if _text_decode_record(spans, before, used - before, position + width) != 0:
+                    py_mem_free(output)
+                    py_raise_owned(py_exc_new(19, cstr("cannot allocate decoder spans")))
+                    return -1
+            elif codec == 2 and first >= 128:
                 store_i8(output, used, 192 | (first >> 6))
                 store_i8(output, used + 1, 128 | (first & 63))
                 used = used + 2
@@ -2755,12 +2815,19 @@ def py_text_decode_buffer_spans(data, count: int, codec: int, mode: int, final: 
                 offset = position
                 while offset < end and recorded == 0:
                     byte: int = load_i8(data, offset) & 255
+                    if byte < 128:
+                        break
                     recorded = _text_decode_record(spans, used, 3, offset + 1)
                     store_i8(output, used, 237)
                     store_i8(output, used + 1, 176 | (byte >> 6))
                     store_i8(output, used + 2, 128 | (byte & 63))
                     used = used + 3
                     offset = offset + 1
+                if offset == position:
+                    py_mem_free(output)
+                    _text_decode_failure(data, count, position, end, codec)
+                    return -1
+                end = offset
             elif mode == 5:
                 offset = position
                 while offset < end and recorded == 0:
