@@ -2765,7 +2765,11 @@ def py_text_decode_buffer_spans(data, count: int, codec: int, mode: int, final: 
             if codec == 3 or codec == 4:
                 point: int = _text_utf16_word(data, position, codec)
                 if width == 4:
-                    point = 65536 + ((point - 55296) << 10) + (_text_utf16_word(data, position + 2, codec) - 56320)
+                    # The high half is at most 0x3FF. A left shift would make
+                    # point an arbitrary-precision object (boxed, rooted and
+                    # cleaned up on every decode of every codec); the product
+                    # is the same machine value.
+                    point = 65536 + (point - 55296) * 1024 + (_text_utf16_word(data, position + 2, codec) - 56320)
                 before: int = used
                 if point < 128:
                     store_i8(output, used, point)

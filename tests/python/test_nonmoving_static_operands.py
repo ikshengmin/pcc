@@ -16,11 +16,13 @@ from tests.python.test_shared_call_binding import _emit
 
 
 def test_only_proven_publication_omits_address_lease():
-    for expression in ("None", "'static'", "1267650600228229401496703205376"):
+    # A bytes literal is a module-static immortal object, as a str literal is
+    # (test_static_bytes_literals.py); a float literal is still allocated.
+    for expression in ("None", "'static'", "b'static'", "1267650600228229401496703205376"):
         body = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(" + expression + ")\n"))
         assert "call.slot.publish.lease" not in body
         assert "@pcc_gc_note_slot_write_barrier(" in body
-    heap = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(b'heap')\n"))
+    heap = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(1.5)\n"))
     assert "call.slot.publish.lease" in heap
     dynamic = _probe_function(emit_operand("def probe(value: str):\n    return slot_operand_probe(value)\n"))
     assert any(copy.source.startswith("%value.addr") for copy in
