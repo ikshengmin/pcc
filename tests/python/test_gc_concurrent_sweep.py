@@ -328,8 +328,25 @@ class _DeferringBoundary(_SweepBoundary):
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "malloc": self.malloc,
-            "free": self.freed_arrays.append,
+            "free": self.free_array,
+            "_finalizer_targets_append": self.append_target,
         })
+
+    @staticmethod
+    def append_target(targets, obj):
+        # PASS0's target array is the sweep's own scratch, not a deferral
+        # array: keep it out of the arrays these tests account for.
+        data = targets.get(0)
+        if data is None:
+            data = {"targets": True}
+            targets[0] = data
+        count = targets[8]
+        data[count * 8] = obj
+        targets[8] = count + 1
+
+    def free_array(self, array):
+        if not array.get("targets"):
+            self.freed_arrays.append(array)
 
     def malloc(self, size):
         if not self.memory:

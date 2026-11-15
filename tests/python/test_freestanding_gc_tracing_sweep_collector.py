@@ -42,6 +42,11 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_candidates_note",
     "pcc_gc_tracing_candidates_seal",
     "pcc_gc_tracing_candidates_retire",
+    # Finalizers and weak callbacks run in a window with the world resumed;
+    # PASS0 selects their targets first.
+    "pcc_gc_tracing_user_code_window_open",
+    "pcc_gc_tracing_user_code_window_close",
+    "pcc_gc_tracing_finalizer_targets_append",
 }
 RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_walk_first",
@@ -75,10 +80,19 @@ RAW_FUNCTION_IMPORTS = {
     'py_gc_untrack',
     'py_gen_finalize_tracing_candidate',
     'py_user_del_dispatch',
-    'py_weakref_invalidate_tracing_candidates',
     'py_weakref_clear_tracing_candidates',
+    # User code runs with the world resumed: weak callbacks are queued, then
+    # run, and PASS0 runs the finalizers it selected (4de52048).
+    'py_weakref_queue_tracing_candidates',
+    'py_weakref_run_queued_callbacks',
+    'py_user_del_pending',
+    'pcc_thread_world_release_held',
+    'pcc_thread_world_reacquire_held',
+    'pcc_platform_abort',
 }
 RAW_GLOBAL_IMPORTS = {
+    # Collections stand aside while user code runs in a sweep's window.
+    "pcc_gc_explicit_collect_active",
     # The finish's candidate list.
     "pcc_gc_tracing_candidate_nodes",
     "pcc_gc_tracing_candidate_count",
@@ -186,7 +200,8 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     recheck = "pcc_gc_tracing_recheck_reachability_after_finalizers()"
     # Initial verdict, early callbacks, finalizers, then a silent late clear.
     assert sweep.count(recheck) == 3
-    batch = "py_weakref_invalidate_tracing_candidates()"
+    # Callback refs are cleared and their callbacks queued in one batch.
+    batch = "py_weakref_queue_tracing_candidates(pending_cell)"
     silent = "py_weakref_clear_tracing_candidates()"
     assert sweep.count(batch) == 1
     assert sweep.count(silent) == 1
@@ -198,8 +213,8 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     assert batch not in post_finalizer
     assert post_finalizer.index(recheck) < post_finalizer.index(silent)
     assert sweep.index("if budget <= 0:") < sweep.index(recheck)
-    assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(obj)")
-    assert sweep.index("py_user_del_dispatch(obj)") < sweep.rindex(recheck)
+    assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(target)")
+    assert sweep.index("py_user_del_dispatch(target)") < sweep.rindex(recheck)
     assert sweep.rindex(recheck) < sweep.index(
         "pcc_gc_tracing_clear_unpinned(obj)"
     )
@@ -210,7 +225,12 @@ def test_tracing_sweep_preserves_pep442_and_two_pass_order():
         "(flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0"
         in sweep
     )
-    assert "pcc_capi_is_cext_type_tag(tag) == 0" in sweep
+    # PASS0 selects user-code finalizers with py_user_del_pending, which
+    # leaves C-extension objects to the C-API bridge.
+    assert "py_user_del_pending(obj) != 0" in sweep
+    dunder = (STRICT_SOURCE.parent / "py_dunder.py").read_text(encoding="utf-8")
+    pending = dunder.split("def py_user_del_pending(", 1)[1].split("\ndef ", 1)[0]
+    assert "pcc_capi_is_cext_type_tag(tag) != 0" in pending
 
     # The checked entry tests pinning, then finalizes through the body a
     # sweep walk calls directly once it has read the object's own node.
@@ -410,6 +430,7 @@ class _SweepModel(_CandidateModel):
         self.finalizer_runs = finalizer_runs
         self.rechecks = []
         self.events = []
+        self.windows = []
 
     def environment(self):
         env = super().environment()
@@ -457,12 +478,55 @@ class _SweepModel(_CandidateModel):
             return load_i32(base, offset)
 
         env["load_i32"] = load_i32_tag
+
+        # The sweep's own scratch (PASS0's target array and the user-code
+        # window record) is a dict; the walked nodes and objects stay tuples.
+        node_load_ptr = env["load_ptr"]
+        word_load_i64 = env["load_i64"]
+        word_store_i64 = env["store_i64"]
+
+        def scratch_load_ptr(base, offset):
+            if isinstance(base, dict):
+                return base.get(offset)
+            return node_load_ptr(base, offset)
+
+        def scratch_load_i64(base, offset):
+            if isinstance(base, dict):
+                return base[offset]
+            return word_load_i64(base, offset)
+
+        def scratch_store_i64(base, offset, value):
+            if isinstance(base, dict):
+                base[offset] = value
+            else:
+                word_store_i64(base, offset, value)
+
+        def abort():
+            raise AssertionError("pcc_platform_abort")
+
+        env.update(
+            stack_alloc=lambda size: {},
+            malloc=lambda size: {},
+            free=lambda pointer: None,
+            load_ptr=scratch_load_ptr,
+            load_i64=scratch_load_i64,
+            store_i64=scratch_store_i64,
+            store_ptr=lambda base, offset, value: base.__setitem__(offset, value),
+            pcc_platform_abort=abort,
+            # Every candidate of this model has a finalizer that runs user
+            # code; PASS0 selects them, then runs them in one window.
+            py_user_del_pending=lambda obj: 1,
+            _user_code_window_open=lambda window: model.windows.append("open"),
+            _user_code_window_close=lambda window: model.windows.append("close"),
+        )
         return env
 
 
 def _sweep(model):
     namespace = load_functions(
-        STRICT_SOURCE, {"pcc_gc_tracing_sweep_unreachable"}, model.environment()
+        STRICT_SOURCE,
+        {"pcc_gc_tracing_sweep_unreachable", "_finalizer_targets_append"},
+        model.environment(),
     )
     return namespace["pcc_gc_tracing_sweep_unreachable"]
 
@@ -492,6 +556,8 @@ def test_sweep_rechecks_reachability_only_when_something_could_change_it(
     assert len(model.rechecks) == rechecks
     dels = [event for event in model.events if event[0] == "del"]
     assert dels == [("del", 0), ("del", 2)]
+    # Both finalizers run in one window with the world resumed.
+    assert model.windows == ["open", "close"]
     if finalizer_runs and rechecks:
         # The post-finalizer recheck follows every PASS 0 finalizer.
         assert model.rechecks[-1] == 2

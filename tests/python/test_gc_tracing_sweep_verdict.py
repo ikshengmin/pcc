@@ -111,14 +111,26 @@ class _SweepBoundary:
             "pcc_gc_tracing_finalize_unpinned": self.reclaim_unpinned,
             "pcc_gc_visit_object_slots": self.visit_slots,
             "py_weakref_invalidate_tracing_candidates": self.invalidate_candidates,
-            # This verdict model's weakref boundary has no user callbacks.
+            # This verdict model's weakref boundary has no user callbacks:
+            # the early batch clears every candidate's refs and queues none.
+            "py_weakref_queue_tracing_candidates": lambda pending: self.invalidate_candidates(),
+            "py_weakref_run_queued_callbacks": self.no_queued_callbacks,
             "py_weakref_clear_tracing_candidates": self.invalidate_candidates,
+            # PASS0 selects the candidates whose finalizer runs user code,
+            # then runs them in a window with the world resumed.
+            "py_user_del_pending": self.del_pending,
+            "_user_code_window_open": lambda window: None,
+            "_user_code_window_close": lambda window: None,
+            "malloc": lambda size: {},
+            "free": lambda pointer: None,
+            "pcc_platform_abort": self.abort,
             # Capture the production phase boundaries independently of the
             # collector event oracle. Atomic storage has its own native test.
             "pcc_platform_monotonic_us": lambda: 100,
             "_record_sweep_phase": lambda *args: self.phase_observations.append(args),
         }
         load_functions(SOURCE, {
+            "_finalizer_targets_append",
             "pcc_gc_tracing_recheck_reachability_after_finalizers",
             "pcc_gc_tracing_sweep_unreachable",
         }, namespace)
@@ -197,6 +209,19 @@ class _SweepBoundary:
         if forwarding is not None:
             obj = forwarding[8]
         obj[12] = (obj[12] & ~56) | GRAY
+
+    def del_pending(self, obj):
+        # As py_user_del_pending: user code would run for this object. The
+        # C-API bridge owns a C-extension object's lifecycle.
+        if obj[8] == ABI_CONSTANTS["object.type.class"] or obj[8] == 10001:
+            return 0
+        return 0 if obj[12] & FINALIZED else 1
+
+    def no_queued_callbacks(self, pending, flags):
+        raise AssertionError("this model queues no weak callbacks")
+
+    def abort(self):
+        raise AssertionError("pcc_platform_abort")
 
     def dispatch(self, obj):
         if obj[8] == ABI_CONSTANTS["object.type.class"]:
@@ -748,8 +773,11 @@ def test_listed_sweep_visits_only_its_finish_candidates_with_the_walks_verdicts(
 
 
 def test_listed_sweep_stops_when_a_finalizer_commits_another_finish():
-    """A collection nested in a finalizer finishes and sweeps on its own;
-    the outer listed sweep must not keep visiting its stale list."""
+    """PASS0 selects its finalizer targets in the stopped world and runs them
+    all in one window with the world resumed (4de52048). Collections stand
+    aside while that window is open (pcc_gc_explicit_collect_active), so no
+    finish can commit there; if one did, the clearing and freeing passes
+    must still not visit the stale list."""
     boundary = _listed_boundary()
     first = boundary.object("first")
     second = boundary.object("second")
@@ -757,7 +785,7 @@ def test_listed_sweep_stops_when_a_finalizer_commits_another_finish():
     commits = boundary.global_cells["pcc_gc_tracing_finish_commits"]
     boundary.callbacks["first"] = lambda obj: commits.__setitem__(0, commits[0] + 1)
     assert boundary.sweep(9223372036854775807) == 0
-    assert "del:first" in boundary.events and "del:second" not in boundary.events
+    assert boundary.events[:2] == ["del:first", "del:second"]
     assert not any(event.startswith(("clear:", "free:")) for event in boundary.events)
 
 
