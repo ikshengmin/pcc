@@ -390,13 +390,9 @@ class DeleteLoweringMixin:
                                 continue
                             # Otherwise ``py_obj_delattr`` below runs the
                             # deleter and binds its other parameters.
-                        elif self._resolve_property_mro(hint, target.name) is not None:
-                            self._emit_builtin_exception_and_branch(
-                                "AttributeError",
-                                "can't delete attribute",
-                                target.span,
-                            )
-                            continue
+                        # Missing local deleter metadata does not prove that
+                        # the live property has no deleter: imported classes
+                        # retain their original descriptors in the owner.
                 obj = self._emit_as_object(target.obj)
                 status = self.builder.call(
                     self.runtime["py_obj_delattr"],

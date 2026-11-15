@@ -7,6 +7,24 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Imported property mutation (CI qualification pending)
+
+The linked pcc-js, pcc-node and pcc-web consumers compile at `6ae154bac`,
+then raise `AttributeError` on ordinary imported `Cell.value` stores. The
+class export retains a getter without registering its setter/deleter in the
+consumer's class metadata. Store/delete lowering must not infer a missing
+runtime mutator from that incomplete local metadata. It now uses the original
+live descriptor when no local accessor is known; actual read-only properties
+retain their runtime errors.
+
+The unchanged library consumers and the independent multi-module oracle in
+`tests/fixtures/property_import_mutation/main.py` are the targeted CI gate.
+`tests/python/test_imported_property_mutation.py` compares that oracle with
+CPython on all five collectors, including imported/typed/inherited receivers,
+accessor defaults and read-only errors. Source review only so far; no local
+compiler or test ran. Full Python, bootstrap and native PCC1 qualification
+remain separate.
+
 ## Class publication during package cycles (finite CI qualification)
 
 The unchanged pcc-electron wheel compiles against `7fc7c694d` but its native

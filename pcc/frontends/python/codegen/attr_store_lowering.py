@@ -328,11 +328,19 @@ class AttrStoreLoweringMixin:
                     )
                     return
                 info = self._resolve_property_setter_mro(hint, target.name)
-                if info is not None and not self._property_accessor_takes_protocol_args(
-                    info, target.name, "setter", info.property_setters[target.name],
+                if (
+                    info is None
+                    and self._resolve_property_mro(hint, target.name) is not None
+                ) or (
+                    info is not None
+                    and not self._property_accessor_takes_protocol_args(
+                        info, target.name, "setter", info.property_setters[target.name],
+                    )
                 ):
-                    # The runtime property call binds the setter's other
-                    # parameters; a field-slot store would bypass it.
+                    # Imported class metadata can retain a getter without its
+                    # setter. That is not proof that the live descriptor is
+                    # read-only. Let the runtime select the setter (including
+                    # its other parameters) or report a real missing setter.
                     obj_val = self._emit_expr(target.obj)
                     value_obj = marshal.marshal_to_object(
                         self.builder,
@@ -368,13 +376,6 @@ class AttrStoreLoweringMixin:
                                 value_ty,
                             )
                     self._call_user(setter_fn, [obj_val, value], "")
-                    return
-                if self._resolve_property_mro(hint, target.name) is not None:
-                    self._emit_builtin_exception_and_branch(
-                        "AttributeError",
-                        "can't set attribute",
-                        target.span,
-                    )
                     return
                 data_descr = self._class_attr_descriptor_class(
                     hint,
