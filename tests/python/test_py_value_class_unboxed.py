@@ -2059,3 +2059,114 @@ def test_valueclass_weakref_from_import_rejected_at_compile_time():
         r = ref(p)
         """)
     _generate_ir(user_ref_source)
+
+
+def test_valueclass_conditional_self_attribute_store_boxes_under_root_and_lease():
+    # Python language reference: assignment statements / attribute references.
+    source = textwrap.dedent("""
+        import pcc
+
+        @pcc.valueclass
+        class Pair:
+            first: int
+            second: int
+
+        class Source:
+            def make(self) -> Pair:
+                return Pair(3, 4)
+
+        class Holder:
+            def __init__(self, source: Source, choose: bool):
+                try:
+                    self.value: Pair = source.make() if choose else Pair(-1, 0)
+                except Exception:
+                    raise
+
+        Holder(Source(), True)
+        Holder(Source(), False)
+        """)
+    ir_text = _generate_ir(source)
+    body = re.search(
+        r"^define [^\n]*@user_value_mod_Holder___init__\([^\n]*\).*?^}",
+        ir_text, re.M | re.S,
+    )
+    assert body is not None
+    text = body.group(0)
+    assert "attribute.store.payload.operand" in text
+    assert "attribute.store.payload.lease" in text
+    assert "attribute.store.payload.current" in text
+    assert "attribute.store.payload.release" in text
+    assert "@py_valuebox_new" in text
+    assert "@pcc_gc_foreign_lease_acquire" in text
+    assert "@pcc_gc_foreign_lease_release" in text
+    assert "@py_cleanup" in text
+    assert not re.search(r"extractvalue ptr", text)
+
+
+def test_valueclass_attribute_payload_boxing_keeps_managed_source_requirement():
+    from types import SimpleNamespace
+    import pytest
+    from pcc.ir.compat import ir
+    from pcc.frontends.python.codegen.type_abi_lowering import TypeAbiLoweringMixin
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+
+    # No IR-shape recovery is allowed for a payload with managed leaves.
+    value = SimpleNamespace(type=ir.LiteralStructType([ir.PointerType()]))
+    ty = object()
+    host = SimpleNamespace(
+        _valueclass_payload_source=lambda value: None,
+        _is_valueclass_payload_type=lambda actual: actual is ty,
+        _valueclass_payload_pointer_field_paths=lambda actual: ((0,),),
+    )
+    with pytest.raises(L1CodegenError, match="producer-owned payload slot"):
+        TypeAbiLoweringMixin._emit_valueclass_payload_to_object(host, value, ty)
+
+
+def test_valueclass_attribute_payload_boxing_preserves_pointer_identity():
+    from types import SimpleNamespace
+    from pcc.ir.compat import ir
+    from pcc.frontends.python.codegen.type_abi_lowering import TypeAbiLoweringMixin
+
+    value = SimpleNamespace(type=ir.PointerType())
+    ty = object()
+    host = SimpleNamespace(
+        _valueclass_payload_source=lambda value: None,
+        _is_valueclass_payload_type=lambda actual: actual is ty,
+    )
+    assert TypeAbiLoweringMixin._emit_valueclass_payload_to_object(host, value, ty) is value
+
+
+def test_valueclass_attribute_payload_missing_publication_fails_closed(monkeypatch):
+    from types import SimpleNamespace
+    import pytest
+    from pcc.ir.compat import ir
+    from pcc.frontends.python.codegen import attr_store_lowering
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+
+    monkeypatch.setattr(attr_store_lowering, "rooted_attribute_store", lambda host, target: False)
+    value = SimpleNamespace(type=ir.LiteralStructType([ir.IntType(64), ir.IntType(64)]))
+    root, old_error, old_cpy, cleanup, ty = (object() for _ in range(5))
+    host = SimpleNamespace(
+        _maybe_emit_valueclass_constructor_payload=lambda actual, expr: None,
+        _emit_expr=lambda expr: value,
+        _is_valueclass_payload_type=lambda actual: actual is ty,
+        _new_slot_call_root=lambda label: root,
+        _current_try_err_block=lambda: old_error,
+        _slot_call_cleanup_block=lambda roots, error: cleanup,
+        _cpy_operand_cleanup_block=old_cpy,
+        _try_err_block=old_error,
+    )
+
+    def missing_publication(payload, actual, *, result_slot):
+        assert payload is value and actual is ty and result_slot is root
+        assert host._try_err_block is cleanup
+        assert host._cpy_operand_cleanup_block is cleanup
+        return None
+
+    host._emit_valueclass_payload_to_object = missing_publication
+    target = SimpleNamespace(obj=object(), span=None)
+    expr = SimpleNamespace(ty=ty)
+    with pytest.raises(L1CodegenError, match="did not publish"):
+        attr_store_lowering.AttrStoreLoweringMixin._emit_attr_store(host, target, expr)
+    assert host._try_err_block is old_error
+    assert host._cpy_operand_cleanup_block is old_cpy

@@ -40,6 +40,43 @@ def certify(source, directory, *, edition=2021):
                              target_triple=TARGET, edition=edition)
 
 
+def observe_function_owners(monkeypatch):
+    # Inline parsers copy the parent's instance dictionary. Patch the class so
+    # each call binds to its actual parser, never to a copied parent closure.
+    owners = {}
+    finish_configured_item = Parser.finish_configured_item
+
+    def retain_function_owner(parser, pending, functions):
+        if parser in owners:
+            assert owners[parser] is functions
+        else:
+            owners[parser] = functions
+        return finish_configured_item(parser, pending, functions)
+
+    monkeypatch.setattr(Parser, 'finish_configured_item', retain_function_owner)
+    return owners
+
+
+def test_function_owner_observer_distinguishes_parent_and_inline_child(monkeypatch):
+    parser = Parser('fn before(){}mod child{fn first(){}fn second(){}}fn after(){}')
+    original_finish = Parser.finish_configured_item
+    with monkeypatch.context() as patch:
+        owners = observe_function_owners(patch)
+        functions = parser.parse()
+    assert Parser.finish_configured_item is original_finish
+    assert owners[parser] is functions
+    assert [function.token.text for function in functions] == ['before', 'after']
+    child, = [owner for owner in owners if owner is not parser]
+    module, = parser.modules
+    assert module.body is not None
+    assert owners[child] is module.body.functions
+    assert owners[child] is not functions
+    assert [function.token.text for function in owners[child]] == ['first', 'second']
+    assert all(function is not nested for function in functions for nested in owners[child])
+    assert 'finish_configured_item' not in parser.__dict__
+    assert 'finish_configured_item' not in child.__dict__
+
+
 def test_uncertified_lints_retain_original_syntax_but_cannot_authorize_lowering(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified lint reached IR'))
@@ -221,24 +258,17 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
     # Observe the real function owner, not a reconstructed list of declarations:
     # finish_configured_item must remove disabled methods as well as their impl.
-    parsed_functions = None
-    finish_configured_item = parser.finish_configured_item
-
-    def retain_function_owner(pending, functions):
-        nonlocal parsed_functions
-        if parsed_functions is None:
-            parsed_functions = functions
-        else:
-            assert parsed_functions is functions
-        return finish_configured_item(pending, functions)
-
     # The exact authenticated library source now parses through cfg(test) to
     # EOF. Lint/syntax retention still does not imply whole-crate compilation.
     with monkeypatch.context() as owned:
-        owned.setattr(parser, 'finish_configured_item', retain_function_owner)
+        function_owners = observe_function_owners(owned)
         owned.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool entered owned parser'))
         functions = parser.parse()
+    parsed_functions = function_owners[parser]
     assert parsed_functions is functions
+    assert any(owner is not parser for owner in function_owners)
+    assert all(owned_functions is not functions for owner, owned_functions in function_owners.items()
+               if owner is not parser)
     assert (parser.token.text, parser.token.line, parser.token.column) == ('<eof>', 900, 1)
     assert parser.token.source_path == 'src/lib.rs' and not parser.modules
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [

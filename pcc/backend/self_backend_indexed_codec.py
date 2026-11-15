@@ -588,7 +588,16 @@ def _read_host_arena(stream, count: int) -> CompilerIntArena:
 
 def _read_native_arena(fd: int, count: int) -> CompilerIntArena:
     arena = CompilerIntArena(count)
-    arena.read_raw_fd(fd, count)
+    try:
+        arena.read_raw_fd(fd, count)
+    except BaseException:
+        # The arena is still private until the read succeeds. Keep the read
+        # failure authoritative even if releasing its payload also fails.
+        try:
+            arena.close()
+        except BaseException:
+            pass
+        raise
     return arena
 
 
@@ -603,6 +612,97 @@ def _replace_seed_arena(
     setattr(seed, seed_field, arena)
 
 
+def _close_private_seed(seed: IndexedFunctionSeed) -> None:
+    # Only a fully constructed, not-yet-returned seed belongs here. Close the
+    # current indexes, not the originals that name registration may replace.
+    # Keep each attempt independent and use direct fields: no error-time owner
+    # list, kernel construction, payload alias, or dynamic attribute dispatch.
+    try:
+        seed.records.close()
+    except BaseException:
+        pass
+    try:
+        seed.args.close()
+    except BaseException:
+        pass
+    try:
+        seed.block_name_index.close()
+    except BaseException:
+        pass
+    try:
+        seed.value_name_index.close()
+    except BaseException:
+        pass
+    try:
+        seed.block_facts.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_facts.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_kind_ids.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_metadata.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_record_dest_ids.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_record_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.gep_index_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.gep_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.instruction_overflow_use_ids.close()
+    except BaseException:
+        pass
+    try:
+        seed.terminator_case_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.terminator_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.block_phi_facts.close()
+    except BaseException:
+        pass
+    try:
+        seed.phi_incoming_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.phi_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.error_edge_scalars.close()
+    except BaseException:
+        pass
+    try:
+        seed.error_edge_spans.close()
+    except BaseException:
+        pass
+    try:
+        seed.error_landing_scalars.close()
+    except BaseException:
+        pass
+
+
 def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]:
     if not isinstance(value, dict):
         raise BackendUnavailable("indexed module has an invalid function record")
@@ -611,129 +711,133 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
     if not isinstance(block_names, list) or not isinstance(value_names, list):
         raise BackendUnavailable("indexed module function names are invalid")
     seed = IndexedFunctionSeed(len(block_names), len(value_names))
-    for name in block_names:
-        seed.register_block(_wire_str(name, "block name"))
-    for name in value_names:
-        seed._append_value_columns(_wire_str(name, "value name"))
-    seed._ensure_value_name_index()
-    seed.first_duplicate_definition_value_id = _wire_int(
-        value.get("first_duplicate_definition_value_id", -1),
-        "duplicate definition ID",
-    )
-    seed.instruction_use_total = _wire_int(
-        value.get("instruction_use_total", 0), "instruction use total"
-    )
-    seed.instruction_arithmetic_flag_values = {}
-    arithmetic_rows = value.get("instruction_arithmetic_flags")
-    if not isinstance(arithmetic_rows, list):
-        raise BackendUnavailable("indexed module arithmetic flags are invalid")
-    for row in arithmetic_rows:
-        if not isinstance(row, list) or len(row) != 2 or not isinstance(row[1], list):
-            raise BackendUnavailable("indexed module arithmetic flag row is invalid")
-        instruction_id = _wire_int(row[0], "arithmetic instruction ID")
-        seed.instruction_arithmetic_flag_values[instruction_id] = tuple(
-            _wire_str(item, "arithmetic flag") for item in row[1]
+    try:
+        for name in block_names:
+            seed.register_block(_wire_str(name, "block name"))
+        for name in value_names:
+            seed._append_value_columns(_wire_str(name, "value name"))
+        seed._ensure_value_name_index()
+        seed.first_duplicate_definition_value_id = _wire_int(
+            value.get("first_duplicate_definition_value_id", -1),
+            "duplicate definition ID",
         )
-    cold = value.get("cold_instruction_data")
-    if not isinstance(cold, list):
-        raise BackendUnavailable("indexed module cold data is invalid")
-    seed.cold_instruction_data = [_cold_from_wire(item) for item in cold]
-    call_texts = value.get("call_texts")
-    type_rows = value.get("types")
-    if not isinstance(call_texts, list) or not isinstance(type_rows, list):
-        raise BackendUnavailable("indexed module call tables are invalid")
-    seed.texts = [_wire_str(item, "call text") for item in call_texts]
-    seed.text_identity_ids = {
-        id(item): index for index, item in enumerate(seed.texts)
-    }
-    seed.types = []
-    for row in type_rows:
-        item = _type_from_wire(row)
-        if item is None:
-            raise BackendUnavailable("indexed module type table contains null")
-        seed.types.append(item)
-    seed.type_identity_ids = {
-        id(item): (index, item) for index, item in enumerate(seed.types)
-    }
-    seed.terminator_records_complete = True
-    seed.phi_records_complete = True
-    seed.use_records_complete = True
-    seed.complete = True
+        seed.instruction_use_total = _wire_int(
+            value.get("instruction_use_total", 0), "instruction use total"
+        )
+        seed.instruction_arithmetic_flag_values = {}
+        arithmetic_rows = value.get("instruction_arithmetic_flags")
+        if not isinstance(arithmetic_rows, list):
+            raise BackendUnavailable("indexed module arithmetic flags are invalid")
+        for row in arithmetic_rows:
+            if not isinstance(row, list) or len(row) != 2 or not isinstance(row[1], list):
+                raise BackendUnavailable("indexed module arithmetic flag row is invalid")
+            instruction_id = _wire_int(row[0], "arithmetic instruction ID")
+            seed.instruction_arithmetic_flag_values[instruction_id] = tuple(
+                _wire_str(item, "arithmetic flag") for item in row[1]
+            )
+        cold = value.get("cold_instruction_data")
+        if not isinstance(cold, list):
+            raise BackendUnavailable("indexed module cold data is invalid")
+        seed.cold_instruction_data = [_cold_from_wire(item) for item in cold]
+        call_texts = value.get("call_texts")
+        type_rows = value.get("types")
+        if not isinstance(call_texts, list) or not isinstance(type_rows, list):
+            raise BackendUnavailable("indexed module call tables are invalid")
+        seed.texts = [_wire_str(item, "call text") for item in call_texts]
+        seed.text_identity_ids = {
+            id(item): index for index, item in enumerate(seed.texts)
+        }
+        seed.types = []
+        for row in type_rows:
+            item = _type_from_wire(row)
+            if item is None:
+                raise BackendUnavailable("indexed module type table contains null")
+            seed.types.append(item)
+        seed.type_identity_ids = {
+            id(item): (index, item) for index, item in enumerate(seed.types)
+        }
+        seed.terminator_records_complete = True
+        seed.phi_records_complete = True
+        seed.use_records_complete = True
+        seed.complete = True
 
-    args_value = value.get("args")
-    if not isinstance(args_value, list):
-        raise BackendUnavailable("indexed module function args are invalid")
-    args = []
-    for row in args_value:
-        if not isinstance(row, list) or len(row) != 2:
-            raise BackendUnavailable("indexed module function arg is invalid")
-        arg_type = _type_from_wire(row[1])
-        if arg_type is None:
-            raise BackendUnavailable("indexed module function arg type is null")
-        args.append(ArgInfo(_wire_str(row[0], "argument name"), arg_type))
-    ret_type = _type_from_wire(value.get("ret_type"))
-    if ret_type is None:
-        raise BackendUnavailable("indexed module function return type is null")
-    arena_rows = value.get("arenas")
-    if not isinstance(arena_rows, list) or len(arena_rows) != len(_ARENA_FIELDS):
-        raise BackendUnavailable("indexed module arena inventory is invalid")
-    arena_inventory = []
-    index = 0
-    while index < len(_ARENA_FIELDS):
-        row = arena_rows[index]
-        expected_name = _ARENA_FIELDS[index][0]
-        if (
-            not isinstance(row, list)
-            or len(row) != 2
-            or row[0] != expected_name
-            or not isinstance(row[1], int)
-            or row[1] < 0
-        ):
-            raise BackendUnavailable("indexed module arena order is invalid")
-        arena_inventory.append((expected_name, row[1]))
-        index += 1
-    is_global = _wire_bool(value.get("is_global", False), "global flag")
-    definition_linkage = _wire_str(
-        value.get("definition_linkage", "external" if is_global else "internal"),
-        "function definition linkage",
-    )
-    if definition_linkage not in ("external", "internal", "external_odr"):
-        raise BackendUnavailable("unsupported indexed function definition linkage")
-    if is_global != (definition_linkage != "internal"):
-        raise BackendUnavailable("inconsistent indexed function definition linkage")
-    function = ParsedFunction(
-        name=_wire_str(value.get("name", ""), "function name"),
-        ret_type=ret_type,
-        args=args,
-        is_global=is_global,
-        definition_linkage=definition_linkage,
-        is_vararg=_wire_bool(value.get("is_vararg", False), "vararg flag"),
-        blocks=[],
-        value_types={},
-        value_slots={},
-        value_slot_buckets={},
-        alloca_slots={},
-        alloca_slot_buckets={},
-        block_map={},
-        used_values=[],
-        block_local_last_uses=None,
-        value_registers={},
-        aarch64_madd_fusions=[],
-        aarch64_block_layout=[],
-        aarch64_cold_fallthrough_edges=[],
-        hidden_sret_slot=None,
-        frame_size=0,
-        indexed_kernel=None,
-        indexed_seed=seed,
-        indexed_slot_projection=False,
-        aarch64_tail_call_ids=[],
-        aarch64_callee_saved=[],
-        aarch64_reload_slot_offsets=[],
-        aarch64_fused_branch_values={},
-        aarch64_frameless=False,
-        aarch64_dynamic_stack=False,
-    )
-    return function, tuple(arena_inventory)
+        args_value = value.get("args")
+        if not isinstance(args_value, list):
+            raise BackendUnavailable("indexed module function args are invalid")
+        args = []
+        for row in args_value:
+            if not isinstance(row, list) or len(row) != 2:
+                raise BackendUnavailable("indexed module function arg is invalid")
+            arg_type = _type_from_wire(row[1])
+            if arg_type is None:
+                raise BackendUnavailable("indexed module function arg type is null")
+            args.append(ArgInfo(_wire_str(row[0], "argument name"), arg_type))
+        ret_type = _type_from_wire(value.get("ret_type"))
+        if ret_type is None:
+            raise BackendUnavailable("indexed module function return type is null")
+        arena_rows = value.get("arenas")
+        if not isinstance(arena_rows, list) or len(arena_rows) != len(_ARENA_FIELDS):
+            raise BackendUnavailable("indexed module arena inventory is invalid")
+        arena_inventory = []
+        index = 0
+        while index < len(_ARENA_FIELDS):
+            row = arena_rows[index]
+            expected_name = _ARENA_FIELDS[index][0]
+            if (
+                not isinstance(row, list)
+                or len(row) != 2
+                or row[0] != expected_name
+                or not isinstance(row[1], int)
+                or row[1] < 0
+            ):
+                raise BackendUnavailable("indexed module arena order is invalid")
+            arena_inventory.append((expected_name, row[1]))
+            index += 1
+        is_global = _wire_bool(value.get("is_global", False), "global flag")
+        definition_linkage = _wire_str(
+            value.get("definition_linkage", "external" if is_global else "internal"),
+            "function definition linkage",
+        )
+        if definition_linkage not in ("external", "internal", "external_odr"):
+            raise BackendUnavailable("unsupported indexed function definition linkage")
+        if is_global != (definition_linkage != "internal"):
+            raise BackendUnavailable("inconsistent indexed function definition linkage")
+        function = ParsedFunction(
+            name=_wire_str(value.get("name", ""), "function name"),
+            ret_type=ret_type,
+            args=args,
+            is_global=is_global,
+            definition_linkage=definition_linkage,
+            is_vararg=_wire_bool(value.get("is_vararg", False), "vararg flag"),
+            blocks=[],
+            value_types={},
+            value_slots={},
+            value_slot_buckets={},
+            alloca_slots={},
+            alloca_slot_buckets={},
+            block_map={},
+            used_values=[],
+            block_local_last_uses=None,
+            value_registers={},
+            aarch64_madd_fusions=[],
+            aarch64_block_layout=[],
+            aarch64_cold_fallthrough_edges=[],
+            hidden_sret_slot=None,
+            frame_size=0,
+            indexed_kernel=None,
+            indexed_seed=seed,
+            indexed_slot_projection=False,
+            aarch64_tail_call_ids=[],
+            aarch64_callee_saved=[],
+            aarch64_reload_slot_offsets=[],
+            aarch64_fused_branch_values={},
+            aarch64_frameless=False,
+            aarch64_dynamic_stack=False,
+        )
+        return function, tuple(arena_inventory)
+    except BaseException:
+        _close_private_seed(seed)
+        raise
 
 
 def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule:

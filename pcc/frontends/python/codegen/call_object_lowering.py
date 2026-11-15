@@ -1773,15 +1773,18 @@ class CallObjectLoweringMixin:
                 self.builder.call(swap_exception, [self._as_gc_ptr(exception_slot)])
                 self._slot_call_note_published(exception_slot)
             while leases:
-                slot, token = leases.pop()
+                # A rejected release has not consumed its token. Keep it on
+                # the error cleanup edge until the success continuation.
+                slot, token = leases[-1]
                 released = self.builder.call(
                     self.runtime["pcc_gc_foreign_lease_release"],
                     [self._as_gc_ptr(slot), token],
                     name=self._fresh("call.slot.argument.release"),
                 )
+                self._slot_call_check_status(released, "argument lease release", span)
+                leases.pop()
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
-                self._slot_call_check_status(released, "argument lease release", span)
         finally:
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy

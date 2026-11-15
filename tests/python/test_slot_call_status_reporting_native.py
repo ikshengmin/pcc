@@ -1,8 +1,9 @@
 """Actual generated status helper versus its former inline runtime protocol.
 
 Host pcc0 owns IR construction, C compilation, object emission and linking.
-This exercises the real runtime, not a modeled exception provider or pcc1.
-An explicit source-matched runtime is mandatory; this test never builds one.
+The generated-IR harness exercises the real runtime, not a modeled exception
+provider or pcc1. The separate ordinary consumer selects pcc0 and pcc1 explicitly.
+An explicit source-matched runtime is mandatory; these tests never build one.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_targets import host_target_triple
 from pcc.frontends.python.py_ast import SourceSpan
 from tests.python.owned_regression_support import (
+    assert_owned_program,
     assert_reference_program,
     explicit_owned_runtime,
 )
@@ -423,3 +425,79 @@ def test_production_callsite_temporaries_exception_and_gc(
     }, indent=2) + "\n")
     for backend in range(5):
         _run_native(executable, [], tmp_path, backend, "slot-status-owned-callsite-ok\n")
+
+
+_LEASE_CONSUMER = '''import gc
+events = []
+original = ValueError('lease-consumer-error')
+
+class Operand:
+    def __init__(self, label, fail):
+        self.label = label
+        self.fail = fail
+    def __add__(self, other):
+        gc.collect()
+        assert self.label == 'left'
+        assert other.label == 'right'
+        if self.fail:
+            raise original
+        return [self, other]
+    def __del__(self):
+        events.append(self.label)
+
+def take(*, value, later=None):
+    gc.collect()
+    assert value[0].label == 'left'
+    assert value[1].label == 'right'
+    return value
+
+def later():
+    gc.collect()
+    return None
+
+def success():
+    value = take(value=Operand('left', False) + Operand('right', False), later=later())
+    assert events == []
+    assert value[0].label == 'left'
+    assert value[1].label == 'right'
+
+def failure():
+    try:
+        take(value=Operand('left', True) + Operand('right', False), later=later())
+    except ValueError as caught:
+        assert caught is original
+        assert str(caught) == 'lease-consumer-error'
+    else:
+        raise AssertionError('missing original error')
+
+def main():
+    success()
+    gc.collect()
+    assert sorted(events) == ['left', 'right']
+    events.clear()
+    failure()
+    # CPython's traceback retains callback frames and their operands while
+    # the original exception is globally reachable. Drop that owner first.
+    global original
+    original = None
+    gc.collect()
+    assert sorted(events) == ['left', 'right']
+    print('slot-lease-consumer-ok')
+
+main()
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('python_program_compiler', ('pcc0', 'pcc1'), indirect=True)
+def test_runtime_call_lease_consumer_native_five_gc(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    # This is the real binary-operation consumer, with callbacks, collection,
+    # temporary disposal and exact exception identity. Refusal injection is
+    # deliberately confined to the host control-flow test, not runtime ABI.
+    mode = request.node.callspec.params['python_program_compiler']
+    assert_owned_program(_LEASE_CONSUMER, 'slot-lease-consumer-ok\n', tmp_path,
+                         python_program_compiler, mode, explicit_owned_runtime,
+                         capfd, provenance_probe='2')
+    assert (tmp_path / 'compiler-wrapper.stderr').read_text() == ''

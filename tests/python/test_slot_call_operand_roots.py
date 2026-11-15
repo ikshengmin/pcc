@@ -1190,3 +1190,209 @@ def _check_slot_call_rejection_bounds_source_and_never_formats_arbitrary_values(
     assert "\n" not in detail and "\r" not in detail and "\t" not in detail
     assert len(detail) < 450
     assert "callee=not-call" in detail
+
+
+class _LeaseEdgeSelected(Exception):
+    """Stop the synchronous control-flow model at its generated error edge."""
+
+
+class _LeaseCallModel:
+    """Run the production emitter with eager calls and modeled error edges.
+
+    Lease acquire/release execute the real runtime bodies in the existing
+    metadata model. Only the requested one-shot failure is injected; a rejected
+    release does NOT consume its token. This is not a native-runtime failure
+    reproduction or a model of the IR backend.
+    """
+
+    def __init__(self, *, token_kind, fail_release=0, fail_acquire=0, pending=False):
+        from types import SimpleNamespace
+        from tests.python.test_foreign_address_leases import Model
+
+        self.memory = Model()
+        self.slots = tuple(self.memory.object(1000 + index * 100,
+                           node=token_kind != 2) for index in range(3))
+        if token_kind == 0:
+            for slot in self.slots:
+                self.memory.store(slot, 0, 0)
+        self.token_kind = token_kind
+        self.fail_release, self.fail_acquire = fail_release, fail_acquire
+        self.release_attempts = self.acquire_attempts = 0
+        self.successful_releases = []
+        self.original = object()
+        self.pending = self.original if pending else None
+        self.outer_seen = None
+        self.output = None
+        self.runtime_called = False
+        self._try_err_block = self.outer
+        self._cpy_operand_cleanup_block = self.outer
+        self._slot_call_borrowed_operands = {id(self.slots[1]): self.slots[1]}
+        self.builder = SimpleNamespace(call=lambda fn, args, **kwargs: fn(*args),
+                                       load=lambda slot, **kwargs: self.memory.load(slot))
+        self.module = SimpleNamespace(globals={"py_tls_exc_swap_slot": self.swap})
+        self.runtime = {
+            "pcc_gc_foreign_lease_acquire": self.acquire,
+            "pcc_gc_borrowed_lease_acquire": self.acquire,
+            "pcc_gc_foreign_lease_release": self.release,
+            "py_obj_add": self.produce,
+        }
+        self.exception_owner = None
+
+    def _current_try_err_block(self):
+        return self._try_err_block
+
+    def _fresh(self, name):
+        return name
+
+    def _as_gc_ptr(self, slot):
+        return slot
+
+    def _value_is_never_gc_object(self, slot):
+        return False
+
+    def acquire(self, slot):
+        self.acquire_attempts += 1
+        if self.acquire_attempts == self.fail_acquire:
+            return -2
+        token = self.memory.acquire(slot)
+        assert token == self.token_kind
+        return token
+
+    def release(self, slot, token):
+        self.release_attempts += 1
+        if self.release_attempts == self.fail_release:
+            # Deliberate transient refusal. Do not call the runtime body or
+            # consume its counters. Cleanup must retry this exact slot/token.
+            return -3
+        assert self.memory.release(slot, token) == 0
+        assert slot not in self.successful_releases
+        self.successful_releases.append(slot)
+        return 0
+
+    def produce(self, *values):
+        self.runtime_called = True
+        assert len(values) == len(self.slots)
+        return 17
+
+    def _publish_slot_call_owned(self, slot, value, label):
+        self.output = value
+
+    def _slot_call_note_published(self, slot):
+        pass
+
+    def swap(self, slot):
+        self.exception_owner, self.pending = self.pending, self.exception_owner
+
+    def _slot_call_cleanup_block(self, roots, target, leases=()):
+        assert roots == ()
+        if not leases:
+            return target
+
+        def cleanup():
+            selected = self.pending
+            for slot, token in reversed(leases):
+                assert self.release(slot, token) == 0
+                # Simulate a cleanup callback replacing TLS. The enclosing
+                # exception-preserving cleanup must restore the selected one.
+                self.pending = object()
+            self.pending = selected
+            target()
+        return cleanup
+
+    def outer(self):
+        self.outer_seen = self.pending
+        assert self.memory.active() == 0, "outer root retirement still has a live lease"
+        raise _LeaseEdgeSelected
+
+    def _slot_call_check_status(self, status, operation, span):
+        if status < 0:
+            if self.pending is None:
+                self.pending = self.original
+            self._try_err_block()
+
+    def _emit_post_call_err_check(self, span):
+        if self.pending is not None:
+            self._try_err_block()
+
+
+@pytest.mark.parametrize("token_kind", (0, 1, 2))
+@pytest.mark.parametrize("fail_release", (0, 1, 2, 3))
+@pytest.mark.parametrize("result_kind", ("scalar", "object", "iteration"))
+def test_runtime_call_retires_lease_only_on_success(token_kind, fail_release, result_kind):
+    model = _LeaseCallModel(token_kind=token_kind, fail_release=fail_release)
+    outer, cpy = model._try_err_block, model._cpy_operand_cleanup_block
+    kwargs = ({"result_slot": object()} if result_kind == "object" else
+              {"exception_slot": object()} if result_kind == "iteration" else {})
+    if fail_release:
+        with pytest.raises(_LeaseEdgeSelected):
+            L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
+        assert model.outer_seen is model.original
+        assert model.release_attempts == 4
+    else:
+        result = L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
+        assert result == (None if result_kind == "object" else 17)
+        assert model.release_attempts == 3
+    assert model.memory.active() == 0
+    assert model.successful_releases == list(reversed(model.slots))
+    assert model._try_err_block is outer and model._cpy_operand_cleanup_block is cpy
+    assert model.runtime_called
+    assert model.output == (17 if result_kind == "object" else None)
+
+
+@pytest.mark.parametrize("fail_acquire", (1, 2, 3))
+def test_runtime_call_partial_acquisition_keeps_only_successful_prefix(fail_acquire):
+    model = _LeaseCallModel(token_kind=1, fail_acquire=fail_acquire)
+    with pytest.raises(_LeaseEdgeSelected):
+        L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots)
+    assert model.successful_releases == list(reversed(model.slots[:fail_acquire - 1]))
+    assert not model.runtime_called
+    assert model.outer_seen is model.original
+    assert model.memory.active() == 0
+
+
+@pytest.mark.parametrize("result_kind", ("scalar", "object", "iteration"))
+def test_runtime_call_pending_exception_keeps_identity_across_cleanup(result_kind):
+    model = _LeaseCallModel(token_kind=1, pending=True)
+    kwargs = ({"result_slot": object()} if result_kind == "object" else
+              {"exception_slot": object()} if result_kind == "iteration" else {})
+    if result_kind == "iteration":
+        L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
+        assert model.pending is None and model.exception_owner is model.original
+    else:
+        with pytest.raises(_LeaseEdgeSelected):
+            L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
+        assert model.outer_seen is model.original
+    assert model.memory.active() == 0
+    assert model.successful_releases == list(reversed(model.slots))
+
+
+def test_emitted_runtime_release_failure_keeps_exact_token_in_cleanup(monkeypatch):
+    # This observer requires the owned builder's text records. The native
+    # consumer retains the normal compiler route and is a separate proof.
+    monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_CAPTURE', '0')
+    monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_EMIT', '0')
+    checks = []
+    original = L1CodeGen._slot_call_check_status
+
+    def observe(self, status, operation, span=None):
+        if operation == 'argument lease release':
+            releases = [str(instruction) for instruction in self.builder.block.instructions
+                        if '@pcc_gc_foreign_lease_release(' in str(instruction)]
+            assert releases
+            released = releases[-1]
+            assert released.startswith(str(status) + ' = call i64 ')
+            token = re.search(r', i64 ([^)]+)\)$', released).group(1)
+            target = self._current_try_err_block()
+            cleanup_calls = [str(instruction) for instruction in target.instructions
+                             if ('@pcc_gc_foreign_lease_release(' in str(instruction)
+                                 or '@py_cleanup_one_lease_preserving_exception(' in str(instruction))]
+            assert any(line.endswith(', i64 ' + token + ')') for line in cleanup_calls), (
+                released, cleanup_calls,
+            )
+            checks.append(token)
+        return original(self, status, operation, span)
+
+    monkeypatch.setattr(L1CodeGen, '_slot_call_check_status', observe)
+    text = _emit('def probe(left, right):\n    return slot_operand_probe(left + right)\n')
+    assert _calls(_probe_function(text), 'py_obj_add')
+    assert len(checks) >= 2, 'expected both operand release edges, not a nearby publisher'

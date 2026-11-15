@@ -449,3 +449,939 @@ main()
         executable.chmod(0o755)
         executed = subprocess.run([str(executable)], capture_output=True, timeout=10)
         assert executed.returncode == 42, (backend, executed.stderr)
+
+
+@pytest.mark.parametrize("count", [0, 3])
+@pytest.mark.parametrize("read_type", [OSError, ValueError, MemoryError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("close_type", [None, RuntimeError, KeyboardInterrupt])
+def test_native_arena_read_failure_releases_private_owner(
+    monkeypatch, count, read_type, close_type,
+):
+    events = []
+    original = read_type("read failed")
+    cause = RuntimeError("original cause")
+    context = LookupError("original context")
+    original.__cause__ = cause
+    original.__context__ = context
+    original.__suppress_context__ = True
+    cleanup = close_type("cleanup failed") if close_type is not None else None
+
+    class Arena:
+        def __init__(self, capacity):
+            events.append(("construct", capacity, self))
+
+        def read_raw_fd(self, fd, size):
+            events.append(("read", fd, size, self))
+            raise original
+
+        def close(self):
+            events.append(("close", self))
+            if cleanup is not None:
+                raise cleanup
+
+    monkeypatch.setattr(indexed_codec, "CompilerIntArena", Arena)
+    with pytest.raises(read_type) as escaped:
+        indexed_codec._read_native_arena(71, count)
+    assert escaped.value is original
+    assert original.__cause__ is cause
+    assert original.__context__ is context
+    assert original.__suppress_context__ is True
+    arena = events[0][2]
+    assert events == [("construct", count, arena), ("read", 71, count, arena),
+                      ("close", arena)]
+    frames = []
+    traceback = escaped.value.__traceback__
+    while traceback is not None:
+        frames.append(traceback.tb_frame.f_code.co_name)
+        traceback = traceback.tb_next
+    assert frames[-1] == "read_raw_fd"
+    assert "close" not in frames
+
+
+@pytest.mark.parametrize("failure_type", [MemoryError, KeyboardInterrupt])
+def test_native_arena_constructor_failure_has_no_returned_owner(monkeypatch, failure_type):
+    events = []
+    original = failure_type("constructor failed")
+
+    class Arena:
+        def __init__(self, capacity):
+            events.append(("construct", capacity))
+            raise original
+
+        def read_raw_fd(self, fd, count):
+            pytest.fail("a failed constructor cannot supply a readable arena")
+
+        def close(self):
+            pytest.fail("the helper does not own a constructor that did not return")
+
+    monkeypatch.setattr(indexed_codec, "CompilerIntArena", Arena)
+    with pytest.raises(failure_type) as escaped:
+        indexed_codec._read_native_arena(71, 3)
+    assert escaped.value is original
+    assert events == [("construct", 3)]
+
+
+@pytest.mark.parametrize("count", [0, 3])
+def test_native_arena_read_success_transfers_open_owner(monkeypatch, count):
+    events = []
+
+    class Arena:
+        def __init__(self, capacity):
+            events.append(("construct", capacity, self))
+
+        def read_raw_fd(self, fd, size):
+            events.append(("read", fd, size, self))
+
+        def close(self):
+            pytest.fail("successful read must transfer the still-open arena")
+
+    monkeypatch.setattr(indexed_codec, "CompilerIntArena", Arena)
+    arena = indexed_codec._read_native_arena(71, count)
+    assert events == [("construct", count, arena), ("read", 71, count, arena)]
+
+
+def _native_read_ownership_source():
+    import ast
+    import inspect
+    from pathlib import Path
+    from pcc.backend import self_backend_value_arena as arena_module
+
+    # Copy the actual class and helper. Instrument only allocation call names
+    # inside the class; typed wrappers retain raw-pointer intrinsic provenance.
+    arena = Path(arena_module.__file__).read_text().split(
+        "class CompilerRecordSpanArena:", 1,
+    )[0]
+    prefix, body = arena.split("class CompilerIntArena:", 1)
+    observed = body
+    for name in ("malloc", "realloc", "free"):
+        observed = observed.replace(name + "(", "_read_observed_" + name + "(")
+    restored = observed
+    for name in ("malloc", "realloc", "free"):
+        restored = restored.replace("_read_observed_" + name + "(", name + "(")
+    assert restored == body
+    # Freeze the negative control against the original helper's normalized
+    # AST, excluding only its renamed callable and nonsemantic comments.
+    legacy = next(node for node in ast.parse(_NATIVE_READ_OWNERSHIP_DRIVER).body
+                  if isinstance(node, ast.FunctionDef)
+                  and node.name == "_legacy_read_native_arena")
+    legacy.name = "_read_native_arena"
+    expected_legacy = ast.parse(
+        "def _read_native_arena(fd: int, count: int) -> CompilerIntArena:\n"
+        "    arena = CompilerIntArena(count)\n"
+        "    arena.read_raw_fd(fd, count)\n"
+        "    return arena\n"
+    ).body[0]
+    assert ast.dump(legacy, include_attributes=False) == ast.dump(
+        expected_legacy, include_attributes=False,
+    )
+    return (prefix + "class CompilerIntArena:" + observed + "\n"
+            + inspect.getsource(indexed_codec._read_native_arena)
+            + _NATIVE_READ_OWNERSHIP_DRIVER)
+
+
+_NATIVE_READ_OWNERSHIP_DRIVER = '''
+import os
+from pcc.unsafe import malloc as _read_real_malloc
+from pcc.unsafe import realloc as _read_real_realloc
+from pcc.unsafe import free as _read_real_free
+
+# Each case owns at most one raw allocation. No observer container can grow
+# with input. An invalid observer never grants authority to recover a pointer.
+_read_track = False
+_read_observer_invalid = False
+_read_address = 0
+_read_allocations = 0
+_read_releases = 0
+_read_inject_observer_failure = False
+
+def _read_invalidate_observer() -> None:
+    global _read_observer_invalid, _read_track
+    _read_observer_invalid = True
+    _read_track = False
+
+def _read_observed_malloc(size: int) -> c_ptr:
+    global _read_address, _read_allocations
+    pointer: c_ptr = _read_real_malloc(size)
+    if _read_track:
+        try:
+            address = ptr_to_int(pointer)
+            if address != 0:
+                assert _read_address == 0
+                _read_address = address
+                _read_allocations += 1
+                if _read_inject_observer_failure:
+                    raise RuntimeError("injected allocation observer failure")
+        except BaseException:
+            # Always return a successful real allocation to its arena owner.
+            _read_invalidate_observer()
+    return pointer
+
+def _read_observed_realloc(pointer: c_ptr, size: int) -> c_ptr:
+    # Constructor capacity equals the requested count, so growth is forbidden
+    # for this witness. Invalidate BEFORE realloc can make any address stale.
+    if _read_track:
+        _read_invalidate_observer()
+    return _read_real_realloc(pointer, size)
+
+def _read_observed_free(pointer: c_ptr) -> None:
+    global _read_address, _read_releases
+    if _read_track:
+        try:
+            address = ptr_to_int(pointer)
+            assert address != 0 and address == _read_address
+            # Retire recovery authority before the actual release.
+            _read_address = 0
+            _read_releases += 1
+        except BaseException:
+            _read_invalidate_observer()
+    _read_real_free(pointer)
+
+def _read_require_valid_observer() -> None:
+    assert not _read_observer_invalid, "allocation observer invalid"
+
+def _read_recover_private() -> bool:
+    global _read_address
+    if _read_observer_invalid:
+        return False
+    address = _read_address
+    _read_address = 0
+    if address != 0:
+        _read_real_free(int_to_ptr(address))
+    return True
+
+def _legacy_read_native_arena(fd: int, count: int) -> CompilerIntArena:
+    # Frozen pre-fix negative control, differing only in callable name.
+    arena = CompilerIntArena(count)
+    arena.read_raw_fd(fd, count)
+    return arena
+
+def _read_case(case: str, count: int) -> None:
+    global _read_track, _read_allocations, _read_releases
+    _read_require_valid_observer()
+    assert _read_address == 0
+    _read_allocations = 0
+    _read_releases = 0
+    fd = -1
+    if case != "invalid-fd":
+        path = os.environ["PCC_READ_COMPLETE"]
+        if case == "partial" or case == "legacy":
+            path = os.environ["PCC_READ_PARTIAL"]
+        elif case == "empty":
+            path = os.environ["PCC_READ_EMPTY"]
+        fd = os.open(path, os.O_RDONLY)
+    returned = None
+    failed = False
+    _read_track = True
+    try:
+        try:
+            if case == "legacy":
+                returned = _legacy_read_native_arena(fd, count)
+            else:
+                returned = _read_native_arena(fd, count)
+        except OSError as error:
+            assert str(error) == "compiler arena raw read was truncated"
+            failed = True
+        _read_require_valid_observer()
+        assert _read_allocations == 1
+        if case == "success" or case == "zero":
+            assert not failed
+            assert returned is not None
+            assert returned.uses_native_storage
+            assert not returned._closed
+            assert returned.native_address() == _read_address
+            assert len(returned) == count
+            assert _read_releases == 0
+            if count != 0:
+                assert returned.get(0) == 7
+                assert returned.get(1) == -11
+            returned.close()
+            _read_require_valid_observer()
+            assert _read_releases == 1 and _read_address == 0
+            returned.close()
+            assert _read_releases == 1
+        else:
+            assert failed and returned is None
+            if case == "legacy":
+                assert _read_releases == 0 and _read_address != 0
+                # The valid observer detects the original real allocation leak.
+                assert _read_recover_private()
+            else:
+                assert _read_releases == 1 and _read_address == 0
+        print(case + "|ok")
+    finally:
+        _read_track = False
+        try:
+            if returned is not None:
+                if _read_address != 0:
+                    # An earlier assertion may have interrupted success before
+                    # owner close. Untracked close would leave a stale address:
+                    # revoke recovery authority BEFORE releasing through owner.
+                    _read_invalidate_observer()
+                returned.close()
+            _read_recover_private()
+        finally:
+            if fd != -1:
+                os.close(fd)
+
+def _read_invalid_observer_control() -> None:
+    global _read_track, _read_inject_observer_failure
+    _read_require_valid_observer()
+    assert _read_address == 0
+    _read_inject_observer_failure = True
+    _read_track = True
+    fd = os.open(os.environ["PCC_READ_COMPLETE"], os.O_RDONLY)
+    returned = None
+    try:
+        returned = _read_native_arena(fd, 2)
+        assert returned.uses_native_storage and len(returned) == 2
+        assert _read_observer_invalid
+        rejected = False
+        try:
+            _read_require_valid_observer()
+        except AssertionError:
+            rejected = True
+        assert rejected
+        # Close through the real owner; the saved observer address is now
+        # stale. Recovery must still refuse it, without touching freed memory.
+        returned.close()
+        assert not _read_recover_private()
+        print("invalid-observer|rejected")
+    finally:
+        _read_track = False
+        try:
+            if returned is not None:
+                if _read_address != 0:
+                    _read_invalidate_observer()
+                returned.close()
+        finally:
+            os.close(fd)
+
+def main():
+    _read_case("legacy", 2)
+    _read_case("empty", 1)
+    _read_case("partial", 2)
+    _read_case("invalid-fd", 1)
+    _read_case("success", 2)
+    _read_case("zero", 0)
+    # Invalid observation is permanent, never reset into trusted evidence.
+    _read_invalid_observer_control()
+
+main()
+'''
+
+
+@pytest.mark.integration
+def test_native_read_private_ownership_under_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
+):
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import struct
+    import subprocess
+    import sys
+    from pcc.backend import self_backend_value_arena as arena_module
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    source = tmp_path / "native_read_ownership.py"
+    binary = tmp_path / "native_read_ownership"
+    source.write_text(_native_read_ownership_source())
+    complete = tmp_path / "complete.bin"
+    partial = tmp_path / "partial.bin"
+    empty = tmp_path / "empty.bin"
+    payload = struct.pack("<qq", 7, -11)
+    complete.write_bytes(payload)
+    partial.write_bytes(payload[:9])
+    empty.write_bytes(b"")
+
+    def identity(path):
+        if path is None:
+            return None
+        return {"path": os.path.abspath(os.fspath(path)),
+                "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+    captured = inspect.getclosurevars(python_program_compiler).nonlocals.get("compiler")
+    if not isinstance(captured, (str, os.PathLike)):
+        captured = None
+    route_path = os.environ.get("PCC_TEST_COMPILER_LOG")
+    route_offset = (Path(route_path).stat().st_size
+                    if route_path and Path(route_path).is_file() else 0)
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    receipt = {
+        "nominal_case": request.node.callspec.params["python_program_compiler"],
+        "ownership_boundary": "nominal case is not compiler ownership evidence; inspect callable, captured compiler and route log",
+        "compiler_callable": python_program_compiler.__module__ + "." + python_program_compiler.__qualname__,
+        "compiler_callable_source": identity(inspect.getsourcefile(python_program_compiler)),
+        "captured_compiler_before": identity(captured),
+        "host_process": identity(sys.executable),
+        "source": identity(source),
+        "runtime_archive": identity(pcc_runtime_archive),
+        "codec": identity(indexed_codec.__file__),
+        "arena": identity(arena_module.__file__),
+        "helper_sha256": hashlib.sha256(inspect.getsource(
+            indexed_codec._read_native_arena,
+        ).encode()).hexdigest(),
+        "inputs": [identity(path) for path in (complete, partial, empty)],
+        "instrumentation": "exact helper and arena source; bounded single-allocation observers call real unsafe intrinsics",
+        "scope": "extracted helper native execution, not full decoder, self-host fixed point, or RSS/performance evidence",
+        "returned_args": None,
+        "route_records": [],
+        "gc_runs": [],
+    }
+    receipt_path = tmp_path / "native_read_ownership.receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    try:
+        compiled = python_program_compiler(
+            str(source), str(binary), backend="self",
+            runtime_archive=str(pcc_runtime_archive),
+        )
+        args = getattr(compiled, "args", None)
+        if args is not None:
+            receipt["returned_args"] = ([os.fsdecode(value) for value in args]
+                                        if isinstance(args, (tuple, list)) else os.fsdecode(args))
+    finally:
+        receipt["captured_compiler_after"] = identity(captured)
+        if route_path and Path(route_path).is_file():
+            with Path(route_path).open("rb") as stream:
+                stream.seek(route_offset)
+                for line in stream:
+                    try:
+                        row = json.loads(line)
+                    except (ValueError, UnicodeDecodeError) as error:
+                        receipt["route_records"].append({"unparsed": str(error)})
+                        continue
+                    if row.get("test") == current_test and row.get("kind") == "compile_python":
+                        receipt["route_records"].append(row)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt["binary"] = identity(binary)
+    expected = ("legacy|ok\nempty|ok\npartial|ok\ninvalid-fd|ok\n"
+                "success|ok\nzero|ok\ninvalid-observer|rejected\n")
+    for collector in range(5):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=20,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),
+                     PCC_READ_COMPLETE=str(complete), PCC_READ_PARTIAL=str(partial),
+                     PCC_READ_EMPTY=str(empty)),
+        )
+        (tmp_path / f"read-gc{collector}.stdout").write_text(result.stdout)
+        (tmp_path / f"read-gc{collector}.stderr").write_text(result.stderr)
+        receipt["gc_runs"].append({"collector": collector, "returncode": result.returncode,
+                                   "stdout": result.stdout, "stderr": result.stderr})
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        assert result.returncode == 0, (collector, result.stdout, result.stderr)
+        assert result.stderr == ""
+        assert result.stdout == expected
+
+
+# This inventory is checked against both constructors and the wire mapping.
+# It is test-only; the production failure path never constructs an owner list.
+_PRIVATE_SEED_FIELDS = (
+    "records", "args", "block_name_index", "value_name_index",
+    "block_facts", "instruction_facts", "instruction_kind_ids",
+    "instruction_metadata", "instruction_record_dest_ids",
+    "instruction_record_scalars", "gep_index_scalars", "gep_scalars",
+    "instruction_overflow_use_ids", "terminator_case_scalars",
+    "terminator_scalars", "block_phi_facts", "phi_incoming_scalars",
+    "phi_scalars", "error_edge_scalars", "error_edge_spans",
+    "error_landing_scalars",
+)
+
+
+def _private_seed_wire():
+    return {
+        "name": "empty", "block_names": ["entry"], "value_names": ["%x"],
+        "instruction_arithmetic_flags": [], "cold_instruction_data": [],
+        "call_texts": [], "types": [], "args": [],
+        "ret_type": ["void", 0, None, 0, None, "", []],
+        "arenas": [[name, 0] for name, _, _ in _ARENA_FIELDS],
+    }
+
+
+def _capture_private_seed(monkeypatch):
+    real = indexed_codec.IndexedFunctionSeed
+    captured = []
+
+    def construct(*args):
+        seed = real(*args)
+        captured.append((seed, {name: getattr(seed, name)
+                                for name in _PRIVATE_SEED_FIELDS}))
+        return seed
+
+    monkeypatch.setattr(indexed_codec, "IndexedFunctionSeed", construct)
+    return captured
+
+
+@pytest.mark.parametrize("field,bad", [
+    ("block_names", [7]), ("block_names", ["entry", 7]),
+    ("value_names", [7]), ("value_names", ["%x", 7]),
+    ("first_duplicate_definition_value_id", "bad"),
+    ("instruction_use_total", "bad"),
+    ("instruction_arithmetic_flags", None),
+    ("instruction_arithmetic_flags", [[0]]),
+    ("instruction_arithmetic_flags", [["bad", []]]),
+    ("instruction_arithmetic_flags", [[0, [7]]]),
+    ("cold_instruction_data", None),
+    ("cold_instruction_data", [{"q": 7}]),
+    ("cold_instruction_data", [{"d": [[1]]}]),
+    ("call_texts", [7]), ("types", [None]),
+    ("types", [["int", "bad", None, 0, None, "", []]]),
+    ("args", None), ("args", [["%x"]]), ("args", [["%x", None]]),
+    ("args", [[7, ["int", 32, None, 0, None, "", []]]]),
+    ("ret_type", None), ("arenas", []),
+    ("is_global", 7), ("definition_linkage", "bad"),
+    ("definition_linkage", "external"), ("name", 7), ("is_vararg", 7),
+])
+def test_private_seed_malformed_wire_closes_actual_owners(monkeypatch, field, bad):
+    captured = _capture_private_seed(monkeypatch)
+    row = _private_seed_wire()
+    row[field] = bad
+    with pytest.raises(ValueError):
+        indexed_codec._seed_from_wire(row)
+    assert len(captured) == 1
+    seed, originals = captured[0]
+    current = [getattr(seed, name) for name in _PRIVATE_SEED_FIELDS]
+    assert len({id(arena) for arena in current}) == 21
+    assert all(arena._closed for arena in current)
+    assert all(arena._closed for arena in originals.values())
+    if field not in ("block_names", "value_names"):
+        assert seed.value_name_index is not originals["value_name_index"]
+
+
+@pytest.mark.parametrize("index", [0, len(_ARENA_FIELDS) // 2, len(_ARENA_FIELDS) - 1])
+@pytest.mark.parametrize("bad_kind", ["name", "count", "negative", "shape"])
+def test_private_seed_inventory_failure_closes_actual_owners(monkeypatch, index, bad_kind):
+    captured = _capture_private_seed(monkeypatch)
+    row = _private_seed_wire()
+    if bad_kind == "name":
+        row["arenas"][index][0] = "wrong"
+    elif bad_kind == "count":
+        row["arenas"][index][1] = "wrong"
+    elif bad_kind == "negative":
+        row["arenas"][index][1] = -1
+    else:
+        row["arenas"][index] = []
+    with pytest.raises(ValueError, match="arena order"):
+        indexed_codec._seed_from_wire(row)
+    seed, originals = captured[0]
+    assert all(getattr(seed, name)._closed for name in _PRIVATE_SEED_FIELDS)
+    assert all(arena._closed for arena in originals.values())
+
+
+@pytest.mark.parametrize("failure_type", [ValueError, MemoryError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("close_index", [0, 10, 20])
+@pytest.mark.parametrize("point", ["wire", "parsed", "inventory_tuple", "return_tuple"])
+def test_private_seed_failure_identity_and_independent_close_attempts(
+    monkeypatch, failure_type, close_index, point,
+):
+    # Host fault injection covers close failures and every transaction exit.
+    # Native execution coverage below uses ordinary malformed wire validation.
+    import builtins
+    real_seed = indexed_codec.IndexedFunctionSeed
+    arena_type = indexed_codec.CompilerIntArena
+    real_close = arena_type.close
+    attempts = []
+    captured = []
+    original = failure_type("original seed failure")
+    cause, context = RuntimeError("cause"), LookupError("context")
+    original.__cause__, original.__context__ = cause, context
+    original.__suppress_context__ = True
+
+    def construct(*args):
+        seed = real_seed(*args)
+        captured.append(seed)
+        return seed
+
+    def close(arena):
+        seed = captured[0]
+        owners = [getattr(seed, name) for name in _PRIVATE_SEED_FIELDS]
+        # Ignore original name-index replacement closes before the failure.
+        if not in_failure[0]:
+            return real_close(arena)
+        index = next(i for i, owner in enumerate(owners) if owner is arena)
+        attempts.append(index)
+        if index == close_index:
+            raise KeyboardInterrupt("cleanup failure")
+        real_close(arena)
+
+    in_failure = [False]
+
+    def fail(*args, **kwargs):
+        in_failure[0] = True
+        raise original
+
+    monkeypatch.setattr(indexed_codec, "IndexedFunctionSeed", construct)
+    monkeypatch.setattr(arena_type, "close", close)
+    row = _private_seed_wire()
+    if point == "wire":
+        monkeypatch.setattr(indexed_codec, "_wire_int", fail)
+    elif point == "parsed":
+        monkeypatch.setattr(indexed_codec, "ParsedFunction", fail)
+    elif point == "inventory_tuple":
+        def tuple_at_inventory(items):
+            if isinstance(items, list) and items and isinstance(items[0], tuple):
+                return fail()
+            return builtins.tuple(items)
+
+        monkeypatch.setattr(indexed_codec, "tuple", tuple_at_inventory, raising=False)
+    else:
+        # BUILD_TUPLE cannot be independently monkeypatched in CPython. A
+        # trace callback fails at the return line, inside the same try region.
+        import sys
+        code = indexed_codec._seed_from_wire.__code__
+        import inspect
+        lines, start = inspect.getsourcelines(indexed_codec._seed_from_wire)
+        line = start + next(i for i, text in enumerate(lines)
+                            if "return function, tuple(arena_inventory)" in text)
+
+        def trace(frame, event, arg):
+            if frame.f_code is code and event == "line" and frame.f_lineno == line:
+                fail()
+            return trace
+
+        old_trace = sys.gettrace()
+        sys.settrace(trace)
+    try:
+        with pytest.raises(failure_type) as escaped:
+            indexed_codec._seed_from_wire(row)
+        assert escaped.value is original
+        assert original.__cause__ is cause and original.__context__ is context
+        assert original.__suppress_context__
+        assert attempts == list(range(21))
+        owners = [getattr(captured[0], name) for name in _PRIVATE_SEED_FIELDS]
+        assert [arena._closed for arena in owners] == [i != close_index for i in range(21)]
+    finally:
+        if point == "return_tuple":
+            sys.settrace(old_trace)
+        # Failure injection left exactly one real host owner open.
+        for seed in captured:
+            for name in _PRIVATE_SEED_FIELDS:
+                real_close(getattr(seed, name))
+
+
+@pytest.mark.parametrize("failure_type", [MemoryError, KeyboardInterrupt])
+def test_private_seed_constructor_no_return_has_no_cleanup(monkeypatch, failure_type):
+    original = failure_type("constructor did not return")
+
+    def construct(*args):
+        raise original
+
+    def forbidden(*args):
+        pytest.fail("no seed ownership was acquired")
+
+    monkeypatch.setattr(indexed_codec, "IndexedFunctionSeed", construct)
+    monkeypatch.setattr(indexed_codec, "_close_private_seed", forbidden)
+    with pytest.raises(failure_type) as escaped:
+        indexed_codec._seed_from_wire(_private_seed_wire())
+    assert escaped.value is original
+
+
+def test_private_seed_success_keeps_current_owners_open(monkeypatch, tmp_path):
+    # Real decoder payload adoption and byte roundtrip remain separate from
+    # the private header transaction's successful ownership transfer.
+    module = _executable_direct_module(monkeypatch)
+    source, restored_path = tmp_path / "before.pidx", tmp_path / "after.pidx"
+    encode_indexed_module_file(str(source), module)
+    restored = decode_indexed_module_file(str(source))
+    encode_indexed_module_file(str(restored_path), restored)
+    assert source.read_bytes() == restored_path.read_bytes()
+    captured = _capture_private_seed(monkeypatch)
+    function, inventory = indexed_codec._seed_from_wire(_private_seed_wire())
+    seed, originals = captured[0]
+    assert function.indexed_seed is seed
+    assert inventory == tuple((name, 0) for name, _, _ in _ARENA_FIELDS)
+    assert all(not getattr(seed, name)._closed for name in _PRIVATE_SEED_FIELDS)
+    assert originals["value_name_index"]._closed
+    assert seed.value_name_index is not originals["value_name_index"]
+    indexed_codec._close_private_seed(seed)
+    for owner_module in (module, restored):
+        for func in owner_module.functions:
+            get_indexed_function_kernel(func).close_native_tables()
+
+
+def test_private_seed_cleanup_matches_actual_constructor_ownership():
+    import ast
+    import inspect
+    import textwrap
+    from pcc.backend import self_backend_kernel as kernel_module
+    from pcc.backend import self_backend_ir as ir_module
+
+    def constructor_owners(cls):
+        tree = ast.parse(textwrap.dedent(inspect.getsource(cls.__init__)))
+        names = set()
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+                continue
+            value = node.value
+            if not isinstance(value, ast.Call) or not isinstance(value.func, ast.Name):
+                continue
+            targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+            if value.func.id == "CompilerIntArena":
+                for target in targets:
+                    assert isinstance(target, ast.Attribute)
+                    names.add(target.attr)
+            elif value.func.id == "_new_text_id_index":
+                assert len(targets) == 1 and isinstance(targets[0], ast.Tuple)
+                names.add(targets[0].elts[0].attr)
+        return names
+
+    actual = constructor_owners(kernel_module.IndexedFunctionSeed)
+    actual |= constructor_owners(ir_module.IndexedCallPlane)
+    assert actual == set(_PRIVATE_SEED_FIELDS)
+    assert actual == {field for _, _, field in _ARENA_FIELDS if field} | {
+        "block_name_index", "value_name_index",
+    }
+    helper = ast.parse(inspect.getsource(indexed_codec._close_private_seed)).body[0]
+    attempts = helper.body
+    assert len(attempts) == 21
+    fields = []
+    for attempt in attempts:
+        assert isinstance(attempt, ast.Try)
+        assert len(attempt.body) == len(attempt.handlers) == 1
+        assert not attempt.orelse and not attempt.finalbody
+        assert attempt.handlers[0].type.id == "BaseException"
+        assert len(attempt.handlers[0].body) == 1
+        assert isinstance(attempt.handlers[0].body[0], ast.Pass)
+        call = attempt.body[0].value
+        assert call.func.attr == "close" and not call.args and not call.keywords
+        assert call.func.value.value.id == "seed"
+        fields.append(call.func.value.attr)
+    assert tuple(fields) == _PRIVATE_SEED_FIELDS
+    transaction = ast.parse(inspect.getsource(indexed_codec._seed_from_wire)).body[0]
+    assert transaction.body[-2].value.func.id == "IndexedFunctionSeed"
+    guard = transaction.body[-1]
+    assert isinstance(guard, ast.Try) and isinstance(guard.body[-1], ast.Return)
+    assert guard.handlers[0].type.id == "BaseException"
+    assert isinstance(guard.handlers[0].body[-1], ast.Raise)
+    assert guard.handlers[0].body[-1].exc is None
+    # The transaction cannot replace the nineteen payload owners or adopt a
+    # kernel. Only the two name indexes may be replaced by seed methods.
+    payload = actual - {"block_name_index", "value_name_index"}
+    for node in ast.walk(guard):
+        if isinstance(node, ast.Attribute) and isinstance(node.ctx, ast.Store):
+            assert node.attr not in payload
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            assert node.func.id != "get_indexed_function_kernel"
+
+
+@pytest.mark.integration
+def test_private_seed_rollback_native_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
+):
+    """Real package seed/wire boundary; no full-decoder or native fault-injection claim."""
+    import ast
+    import importlib.util
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+
+    repo = Path(__file__).resolve().parents[2]
+    spec = importlib.util.spec_from_file_location(
+        "seed_rollback_stage1_tool", repo / "scripts/run_pcc_stage1_build.py",
+    )
+    stage1_tool = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(stage1_tool)
+    ab = stage1_tool._load_ab_tool()
+    snapshot = tmp_path / "source"
+    stage1_tool._snapshot_sources(repo, stage1_tool.source_manifest(repo, ab), snapshot, ab)
+    codec_path = snapshot / "pcc/backend/self_backend_indexed_codec.py"
+    original = codec_path.read_text()
+    fields = [row[2] for row in indexed_codec._ARENA_FIELDS if row[2]]
+    fields += ["block_name_index", "value_name_index"]
+    assert len(fields) == len(set(fields)) == 21
+    # Generated assertions use direct typed fields, not dynamic native getattr.
+    native_assertions = "".join(
+        "    assert seed." + field + ".uses_native_storage\n"
+        "    assert not seed." + field + "._closed\n"
+        for field in fields
+    )
+    closed_assertions = "".join(
+        "    assert seed." + field + "._closed\n"
+        "    assert seed." + field + ".native_address() == 0\n"
+        for field in fields
+    )
+    observer = (
+        "\ndef _seed_rollback_require_native(seed: IndexedFunctionSeed) -> None:\n"
+        + native_assertions
+        + "\ndef _seed_rollback_require_closed(seed: IndexedFunctionSeed) -> None:\n"
+        + closed_assertions
+        + '    print("closed-21")\n'
+    )
+    tree = ast.parse(original)
+    close_node = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == "_close_private_seed")
+    # Insert around the exact helper body, preserving its complete implementation.
+    lines = original.splitlines(keepends=True)
+    lines.insert(close_node.end_lineno, "    _seed_rollback_require_closed(seed)\n")
+    first_body = close_node.body[0].lineno - 1
+    if isinstance(close_node.body[0], ast.Expr) and isinstance(
+        close_node.body[0].value, ast.Constant,
+    ) and isinstance(close_node.body[0].value.value, str):
+        first_body = close_node.body[0].end_lineno
+    lines.insert(first_body, "    _seed_rollback_require_native(seed)\n")
+    observed = "".join(lines)
+    constructor = "    seed = IndexedFunctionSeed(len(block_names), len(value_names))\n"
+    assert observed.count(constructor) == 1
+    observed = observed.replace(constructor, constructor +
+        "    _seed_rollback_require_native(seed)\n"
+        "    _seed_rollback_initial_index = seed.value_name_index\n", 1)
+    close_call = "        _close_private_seed(seed)\n"
+    assert observed.count(close_call) == 1
+    check_rebuilt = (
+        "        if seed.value_name_index_active and seed.value_names:\n"
+        "            assert seed.value_name_index is not _seed_rollback_initial_index\n"
+        "            assert _seed_rollback_initial_index._closed\n"
+    )
+    observed = observed.replace(close_call, check_rebuilt + close_call, 1)
+    # Reversibility is mandatory: no changes to validation, close or guard bodies.
+    restored = observed.replace(check_rebuilt, "", 1).replace(
+        "    _seed_rollback_initial_index = seed.value_name_index\n", "", 1,
+    ).replace("    _seed_rollback_require_native(seed)\n", "").replace(
+        "    _seed_rollback_require_closed(seed)\n", "",
+    )
+    assert restored == original
+    codec_path.chmod(0o644)
+    codec_path.write_text(observed + observer)
+    codec_path.chmod(0o444)
+    inventory = repr([[row[0], 0] for row in indexed_codec._ARENA_FIELDS])
+    driver = '''import gc
+from pcc.backend.self_backend_indexed_codec import _seed_from_wire, _close_private_seed
+from pcc.backend.self_backend_kernel import IndexedFunctionSeed
+
+def row():
+    return {"block_names": ["entry"], "value_names": ["%v"],
+            "instruction_arithmetic_flags": [], "cold_instruction_data": [],
+            "call_texts": [], "types": [], "args": [],
+            "ret_type": ["void", 0, None, 0, None, "", []],
+            "arenas": INVENTORY}
+
+def main():
+    for case in range(12):
+        value = row()
+        if case == 0:
+            value["block_names"] = [7]
+        elif case == 1:
+            value["block_names"] = ["entry", 7]
+        elif case == 2:
+            value["value_names"] = ["%v", 7]
+        elif case == 3:
+            value["instruction_arithmetic_flags"] = [[0, [7]]]
+        elif case == 4:
+            value["cold_instruction_data"] = [{"q": 7}]
+        elif case == 5:
+            value["types"] = [None]
+        elif case == 6:
+            value["args"] = [["x", None]]
+        elif case == 7:
+            value["ret_type"] = None
+        elif case == 8:
+            value["arenas"] = []
+        elif case == 9:
+            value["definition_linkage"] = "bad"
+        elif case == 10:
+            value["name"] = 7
+        else:
+            value["is_vararg"] = 7
+        failed = False
+        try:
+            _seed_from_wire(value)
+        except ValueError:
+            failed = True
+        assert failed
+        gc.collect()
+        print("malformed|" + str(case))
+    function, inventory = _seed_from_wire(row())
+    seed_value = function.indexed_seed
+    assert isinstance(seed_value, IndexedFunctionSeed)
+    seed: IndexedFunctionSeed = seed_value
+    assert len(inventory) == 22
+    assert not seed.records._closed
+    assert seed.records.uses_native_storage
+    gc.collect()
+    _close_private_seed(seed)
+    print("success-transfer|ok")
+main()
+'''.replace("INVENTORY", inventory)
+    source = snapshot / "pcc/backend/seed_rollback_native.py"
+    source.parent.chmod(0o755)
+    source.write_text(driver)
+    source.chmod(0o444)
+    source.parent.chmod(0o555)
+    binary = tmp_path / "seed_rollback_native"
+
+    def identity(path):
+        if path is None:
+            return None
+        return {"path": os.path.abspath(os.fspath(path)),
+                "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+    captured = inspect.getclosurevars(python_program_compiler).nonlocals.get("compiler")
+    if not isinstance(captured, (str, os.PathLike)):
+        captured = None
+    route_path = os.environ.get("PCC_TEST_COMPILER_LOG")
+    route_offset = (Path(route_path).stat().st_size
+                    if route_path and Path(route_path).is_file() else 0)
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    receipt = {
+        "nominal_case": request.node.callspec.params["python_program_compiler"],
+        "ownership_boundary": "nominal case is not compiler ownership evidence; inspect callable, captured compiler and route log",
+        "compiler_callable": python_program_compiler.__module__ + "." + python_program_compiler.__qualname__,
+        "compiler_callable_source": identity(inspect.getsourcefile(python_program_compiler)),
+        "captured_compiler_before": identity(captured),
+        "host_process": identity(sys.executable),
+        "source": identity(source),
+        "runtime_archive": identity(pcc_runtime_archive),
+        "codec_original": identity(indexed_codec.__file__),
+        "codec_instrumented": identity(codec_path),
+        "kernel": identity(snapshot / "pcc/backend/self_backend_kernel.py"),
+        "arena": identity(snapshot / "pcc/backend/self_backend_value_arena.py"),
+        "instrumentation": "reversible native/open and closed assertions around exact package constructor/cleanup; original-index local verifies real value-index replacement; no raw pointer recovery",
+        "scope": "full private seed/wire boundary, not full decoder ownership, native close-failure injection, fixed point, RSS or performance",
+        "returned_args": None, "route_records": [], "gc_runs": [],
+    }
+    receipt_path = tmp_path / "seed_rollback_native.receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    monkeypatch.chdir(snapshot)
+    try:
+        compiled = python_program_compiler(
+            str(source), str(binary), backend="self",
+            runtime_archive=str(pcc_runtime_archive),
+        )
+        args = getattr(compiled, "args", None)
+        if args is not None:
+            receipt["returned_args"] = ([os.fsdecode(value) for value in args]
+                                        if isinstance(args, (tuple, list)) else os.fsdecode(args))
+    finally:
+        receipt["captured_compiler_after"] = identity(captured)
+        if route_path and Path(route_path).is_file():
+            with Path(route_path).open("rb") as stream:
+                stream.seek(route_offset)
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError) as error:
+                        receipt["route_records"].append({"unparsed": str(error)})
+                        continue
+                    if record.get("test") == current_test and record.get("kind") == "compile_python":
+                        receipt["route_records"].append(record)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt["binary"] = identity(binary)
+    expected = "".join("closed-21\nmalformed|" + str(case) + "\n" for case in range(12))
+    expected += "closed-21\nsuccess-transfer|ok\n"
+    for collector in range(5):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
+        )
+        (tmp_path / ("seed-gc" + str(collector) + ".stdout")).write_text(result.stdout)
+        (tmp_path / ("seed-gc" + str(collector) + ".stderr")).write_text(result.stderr)
+        receipt["gc_runs"].append({"collector": collector, "returncode": result.returncode,
+                                   "stdout": result.stdout, "stderr": result.stderr})
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        assert result.returncode == 0, (collector, result.stdout, result.stderr)
+        assert result.stderr == ""
+        assert result.stdout == expected
