@@ -227,6 +227,41 @@
       "tools": {"macos-arm64": ["clang"]}
     },
     {
+      "domain": "go",
+      "lane": "ordinary",
+      "nodeid": "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link[Anonymous-270480]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "go",
+      "lane": "ordinary",
+      "nodeid": "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link[Indexed-9478]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "go",
+      "lane": "ordinary",
+      "nodeid": "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link[Nested-123546]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "go",
+      "lane": "ordinary",
+      "nodeid": "tests/go/test_elided_composite_literals.py::test_fixture_runs_natively_with_owned_compile_assemble_and_link[Rows-254]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "go",
+      "lane": "ordinary",
+      "nodeid": "tests/go/test_floating_types.py::test_program_runs_with_owned_compile_assemble_and_link",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
       "domain": "java",
       "lane": "integration",
       "nodeid": "tests/java/test_source_floating_darwin_abi.py::test_real_clang_caller_observes_tenth_java_float_on_darwin_arm64",

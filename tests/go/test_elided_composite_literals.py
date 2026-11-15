@@ -54,6 +54,7 @@ def test_fixture_compiles_without_an_external_owner(target, monkeypatch):
 
 @pytest.mark.parametrize('function,expected', EXPECTED)
 @pytest.mark.xdist_group(name='go-darwin-native')
+@pytest.mark.pcc_source_group(legacy='go-darwin-native', name='go-darwin-owned')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 def test_fixture_runs_natively_with_owned_compile_assemble_and_link(function, expected, tmp_path, monkeypatch):
     assert run_owned_go_function(FIXTURE, function, tmp_path, monkeypatch) == expected

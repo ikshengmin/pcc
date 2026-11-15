@@ -846,6 +846,68 @@ class IndexedFunctionSeed(IndexedCallPlane):
         IndexedCallPlane.release_construction_indexes(self)
 
 
+def _close_private_kernel_tables(
+    definition_positions: CompilerIntArena | None,
+    type_field_ids: CompilerIntArena | None,
+    type_scalars: CompilerIntArena | None,
+    value_scalars: CompilerIntArena | None,
+    used_value_ids: CompilerIntArena | None,
+    slot_scalars: CompilerIntArena | None,
+    block_layout_ids: CompilerIntArena | None,
+) -> None:
+    # Failed construction never publishes these owners. Each release is tried
+    # independently, without masking the original error or retrying a close.
+    arena = definition_positions
+    definition_positions = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = type_field_ids
+    type_field_ids = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = type_scalars
+    type_scalars = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = value_scalars
+    value_scalars = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = used_value_ids
+    used_value_ids = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = slot_scalars
+    slot_scalars = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+    arena = block_layout_ids
+    block_layout_ids = None
+    try:
+        if arena is not None:
+            arena.close()
+    except BaseException:
+        pass
+
+
 class IndexedFunctionKernel:
     """One function's stable IDs and shared indexed analysis."""
 
@@ -966,233 +1028,262 @@ class IndexedFunctionKernel:
         if seed is not None and not seed.complete:
             raise BackendUnavailable("parsed function has an incomplete indexed seed")
 
-        self.block_names: list[str] = [] if seed is None else seed.block_names
-        self.block_name_buckets: dict[int, list[tuple[str, int]]] = {}
-        self.block_name_index_capacity = (
-            0 if seed is None else seed.block_name_index_capacity
-        )
-        if seed is not None:
-            self.block_name_index = seed.block_name_index
-        self.instruction_arenas = []
-        self.indexed_call_plane = seed
-        if seed is None and func.blocks:
-            candidate_call_plane = func.blocks[0].instructions._indexed_call_plane
-            if isinstance(candidate_call_plane, IndexedCallPlane):
-                self.indexed_call_plane = candidate_call_plane
-        # One raw fixed-width record per instruction:
-        # kind ID, packed payload ID, volatile bit, arithmetic-flags bit.
-        # A function-wide bytearray is not viable under pcc: bytearray.append
-        # rebuilds the inline payload, so N instructions retain/copy O(N^2)
-        # bytes.  CompilerIntArena gives this compiler-private scalar plane a
-        # true growable native representation.
-        self.instruction_kind_ids = (
-            CompilerIntArena() if seed is None else seed.instruction_kind_ids
-        )
-        self.instruction_metadata = (
-            CompilerIntArena() if seed is None else seed.instruction_metadata
-        )
-        self.instruction_arithmetic_flag_values: dict[int, tuple[str, ...]] = (
-            {} if seed is None else seed.instruction_arithmetic_flag_values
-        )
-        self.cold_instruction_data: list[tuple] = (
-            [] if seed is None else seed.cold_instruction_data
-        )
-        if self.indexed_call_plane is None:
-            self.call_arg_scalars = CompilerIntArena()
-            self.call_scalars = CompilerIntArena()
-            self.call_texts: list[str] = []
-        else:
-            self.call_arg_scalars = self.indexed_call_plane.args
-            self.call_scalars = self.indexed_call_plane.records
-            self.call_texts = self.indexed_call_plane.texts
-        self.call_diagnostic_projections = 0
-        self.value_names: list[str] = [] if seed is None else seed.value_names
-        self.value_name_buckets: dict[int, list[tuple[str, int]]] = {}
-        self.value_name_index_capacity = (
-            0 if seed is None else seed.value_name_index_capacity
-        )
-        if seed is not None:
-            self.value_name_index = seed.value_name_index
-        self.definition_blocks: list[int] = (
-            [] if seed is None else seed.definition_blocks
-        )
-        self.definition_position_values: list[int] = (
-            [] if seed is None else seed.definition_positions
-        )
-        self.definition_positions = CompilerIntArena()
-        self.first_duplicate_definition_value_id = (
-            -1 if seed is None else seed.first_duplicate_definition_value_id
-        )
-        # block_facts: instruction start/count, terminator use count/id.
-        # instruction_facts: destination ID, use count, first use ID, and
-        # either the second use ID or ``-(overflow start)-2`` for >2 uses.
-        # Both are fixed-width value records.  Only the uncommon >2-use tail
-        # reaches the scalar overflow arena.
-        self.block_facts = (
-            CompilerIntArena(max(1, len(func.blocks) * 4))
-            if seed is None
-            else seed.block_facts
-        )
-        self.instruction_facts = (
-            CompilerIntArena() if seed is None else seed.instruction_facts
-        )
-        self.instruction_record_dest_ids = (
-            CompilerIntArena()
-            if seed is None
-            else seed.instruction_record_dest_ids
-        )
-        self.instruction_record_scalars = (
-            CompilerIntArena()
-            if seed is None
-            else seed.instruction_record_scalars
-        )
-        self.gep_index_scalars = (
-            CompilerIntArena() if seed is None else seed.gep_index_scalars
-        )
-        self.gep_scalars = (
-            CompilerIntArena() if seed is None else seed.gep_scalars
-        )
-        self.instruction_overflow_use_ids = (
-            CompilerIntArena()
-            if seed is None
-            else seed.instruction_overflow_use_ids
-        )
-        self.instruction_use_total = (
-            0 if seed is None else seed.instruction_use_total
-        )
-        self.used_value_ids_in_order: list[int] = (
-            [] if seed is None else seed.used_value_ids_in_order
-        )
-        self.value_is_used_flags: list[bool] = (
-            [] if seed is None else seed.value_is_used_flags
-        )
-        self.value_last_use_positions: list[int] = (
-            [] if seed is None else seed.value_last_use_positions
-        )
-        self.types: list[TypeDesc] = (
-            []
-            if self.indexed_call_plane is None
-            else self.indexed_call_plane.types
-        )
-        self.type_identity_ids: dict[int, tuple[int, TypeDesc]] = {}
-        self.pointer_type_ids: dict[int, int] = {}
-        self.type_field_ids = CompilerIntArena()
-        self.type_scalars = CompilerIntArena()
-        self.type_object_projections = 0
-        if self.indexed_call_plane is not None:
-            self._adopt_indexed_call_types()
-        self.terminator_case_scalars = (
-            CompilerIntArena()
-            if seed is None
-            else seed.terminator_case_scalars
-        )
-        self.terminator_scalars = (
-            CompilerIntArena() if seed is None else seed.terminator_scalars
-        )
-        self.terminator_diagnostic_projections = 0
-        self.block_phi_facts = (
-            CompilerIntArena() if seed is None else seed.block_phi_facts
-        )
-        self.phi_incoming_scalars = (
-            CompilerIntArena() if seed is None else seed.phi_incoming_scalars
-        )
-        self.phi_scalars = (
-            CompilerIntArena() if seed is None else seed.phi_scalars
-        )
-        self.error_edge_scalars = (
-            CompilerIntArena() if seed is None else seed.error_edge_scalars
-        )
-        self.error_edge_spans = (
-            CompilerIntArena() if seed is None else seed.error_edge_spans
-        )
-        self.error_landing_scalars = (
-            CompilerIntArena() if seed is None else seed.error_landing_scalars
-        )
-        self.phi_diagnostic_projections = 0
-        self.value_scalars = CompilerIntArena()
-        self.used_value_ids = CompilerIntArena()
-        self.slot_scalars = CompilerIntArena()
-        self.block_layout_ids = CompilerIntArena()
-        self.value_type_ids: list[int] = (
-            [] if seed is None else seed.value_type_ids
-        )
-        self.slot_offsets: list[int] = []
-        self.slot_type_ids: list[int] = []
-        self.slot_ids_by_offset: dict[int, dict[int, int]] = {}
-        self.hidden_sret_slot_id = -1
-        value_count = len(self.value_names)
-        self.value_slot_ids: list[int] = [-1] * value_count
-        self.alloca_offsets: list[int] = [-1] * value_count
-        self.alloca_type_ids: list[int] = (
-            [] if seed is None else seed.alloca_type_ids
-        )
-        self.value_registers: list[int] = [-1] * value_count
-        self.diagnostic_projections = 0
-        self.block_diagnostic_projections = 0
-        self.instruction_arena_diagnostic_projections = 0
-        self.legacy_slot_projections = 0
-
-        for block_id, block in enumerate(func.blocks):
-            self.instruction_arenas.append(block.instructions)
-            if seed is None:
-                self.block_names.append(block.name)
-                bucket_key = _stable_text_bucket_key(block.name)
-                self.block_name_buckets.setdefault(bucket_key, []).append(
-                    (block.name, block_id)
-                )
-            elif not text_key_names_equal(self.block_names[block_id], block.name):
-                raise BackendUnavailable(
-                    "indexed function seed block order is inconsistent"
-                )
-        if seed is None or (
-            len(self.error_edge_scalars) == 0
-            and len(self.error_edge_spans) == 0
-        ):
-            block_id = 0
-            while block_id < len(self.block_names):
-                self.error_edge_spans.append2(0, 0)
-                block_id += 1
-        elif len(self.error_edge_spans) != len(self.block_names) * 2:
-            raise BackendUnavailable(
-                "indexed inline error-edge spans do not match block count"
+        # These seven tables are fresh constructor owners, never seed aliases.
+        # Keep acquired owners visible if a later allocation or validation fails.
+        private_definition_positions: CompilerIntArena | None = None
+        private_type_field_ids: CompilerIntArena | None = None
+        private_type_scalars: CompilerIntArena | None = None
+        private_value_scalars: CompilerIntArena | None = None
+        private_used_value_ids: CompilerIntArena | None = None
+        private_slot_scalars: CompilerIntArena | None = None
+        private_block_layout_ids: CompilerIntArena | None = None
+        try:
+            self.block_names: list[str] = [] if seed is None else seed.block_names
+            self.block_name_buckets: dict[int, list[tuple[str, int]]] = {}
+            self.block_name_index_capacity = (
+                0 if seed is None else seed.block_name_index_capacity
             )
-        self._freeze_block_name_index()
+            if seed is not None:
+                self.block_name_index = seed.block_name_index
+            self.instruction_arenas = []
+            self.indexed_call_plane = seed
+            if seed is None and func.blocks:
+                candidate_call_plane = func.blocks[0].instructions._indexed_call_plane
+                if isinstance(candidate_call_plane, IndexedCallPlane):
+                    self.indexed_call_plane = candidate_call_plane
+            # One raw fixed-width record per instruction:
+            # kind ID, packed payload ID, volatile bit, arithmetic-flags bit.
+            # A function-wide bytearray is not viable under pcc: bytearray.append
+            # rebuilds the inline payload, so N instructions retain/copy O(N^2)
+            # bytes.  CompilerIntArena gives this compiler-private scalar plane a
+            # true growable native representation.
+            self.instruction_kind_ids = (
+                CompilerIntArena() if seed is None else seed.instruction_kind_ids
+            )
+            self.instruction_metadata = (
+                CompilerIntArena() if seed is None else seed.instruction_metadata
+            )
+            self.instruction_arithmetic_flag_values: dict[int, tuple[str, ...]] = (
+                {} if seed is None else seed.instruction_arithmetic_flag_values
+            )
+            self.cold_instruction_data: list[tuple] = (
+                [] if seed is None else seed.cold_instruction_data
+            )
+            if self.indexed_call_plane is None:
+                self.call_arg_scalars = CompilerIntArena()
+                self.call_scalars = CompilerIntArena()
+                self.call_texts: list[str] = []
+            else:
+                self.call_arg_scalars = self.indexed_call_plane.args
+                self.call_scalars = self.indexed_call_plane.records
+                self.call_texts = self.indexed_call_plane.texts
+            self.call_diagnostic_projections = 0
+            self.value_names: list[str] = [] if seed is None else seed.value_names
+            self.value_name_buckets: dict[int, list[tuple[str, int]]] = {}
+            self.value_name_index_capacity = (
+                0 if seed is None else seed.value_name_index_capacity
+            )
+            if seed is not None:
+                self.value_name_index = seed.value_name_index
+            self.definition_blocks: list[int] = (
+                [] if seed is None else seed.definition_blocks
+            )
+            self.definition_position_values: list[int] = (
+                [] if seed is None else seed.definition_positions
+            )
+            private_definition_positions = CompilerIntArena()
+            self.definition_positions = private_definition_positions
+            self.first_duplicate_definition_value_id = (
+                -1 if seed is None else seed.first_duplicate_definition_value_id
+            )
+            # block_facts: instruction start/count, terminator use count/id.
+            # instruction_facts: destination ID, use count, first use ID, and
+            # either the second use ID or ``-(overflow start)-2`` for >2 uses.
+            # Both are fixed-width value records.  Only the uncommon >2-use tail
+            # reaches the scalar overflow arena.
+            self.block_facts = (
+                CompilerIntArena(max(1, len(func.blocks) * 4))
+                if seed is None
+                else seed.block_facts
+            )
+            self.instruction_facts = (
+                CompilerIntArena() if seed is None else seed.instruction_facts
+            )
+            self.instruction_record_dest_ids = (
+                CompilerIntArena()
+                if seed is None
+                else seed.instruction_record_dest_ids
+            )
+            self.instruction_record_scalars = (
+                CompilerIntArena()
+                if seed is None
+                else seed.instruction_record_scalars
+            )
+            self.gep_index_scalars = (
+                CompilerIntArena() if seed is None else seed.gep_index_scalars
+            )
+            self.gep_scalars = (
+                CompilerIntArena() if seed is None else seed.gep_scalars
+            )
+            self.instruction_overflow_use_ids = (
+                CompilerIntArena()
+                if seed is None
+                else seed.instruction_overflow_use_ids
+            )
+            self.instruction_use_total = (
+                0 if seed is None else seed.instruction_use_total
+            )
+            self.used_value_ids_in_order: list[int] = (
+                [] if seed is None else seed.used_value_ids_in_order
+            )
+            self.value_is_used_flags: list[bool] = (
+                [] if seed is None else seed.value_is_used_flags
+            )
+            self.value_last_use_positions: list[int] = (
+                [] if seed is None else seed.value_last_use_positions
+            )
+            self.types: list[TypeDesc] = (
+                []
+                if self.indexed_call_plane is None
+                else self.indexed_call_plane.types
+            )
+            self.type_identity_ids: dict[int, tuple[int, TypeDesc]] = {}
+            self.pointer_type_ids: dict[int, int] = {}
+            private_type_field_ids = CompilerIntArena()
+            self.type_field_ids = private_type_field_ids
+            private_type_scalars = CompilerIntArena()
+            self.type_scalars = private_type_scalars
+            self.type_object_projections = 0
+            if self.indexed_call_plane is not None:
+                self._adopt_indexed_call_types()
+            self.terminator_case_scalars = (
+                CompilerIntArena()
+                if seed is None
+                else seed.terminator_case_scalars
+            )
+            self.terminator_scalars = (
+                CompilerIntArena() if seed is None else seed.terminator_scalars
+            )
+            self.terminator_diagnostic_projections = 0
+            self.block_phi_facts = (
+                CompilerIntArena() if seed is None else seed.block_phi_facts
+            )
+            self.phi_incoming_scalars = (
+                CompilerIntArena() if seed is None else seed.phi_incoming_scalars
+            )
+            self.phi_scalars = (
+                CompilerIntArena() if seed is None else seed.phi_scalars
+            )
+            self.error_edge_scalars = (
+                CompilerIntArena() if seed is None else seed.error_edge_scalars
+            )
+            self.error_edge_spans = (
+                CompilerIntArena() if seed is None else seed.error_edge_spans
+            )
+            self.error_landing_scalars = (
+                CompilerIntArena() if seed is None else seed.error_landing_scalars
+            )
+            self.phi_diagnostic_projections = 0
+            private_value_scalars = CompilerIntArena()
+            self.value_scalars = private_value_scalars
+            private_used_value_ids = CompilerIntArena()
+            self.used_value_ids = private_used_value_ids
+            private_slot_scalars = CompilerIntArena()
+            self.slot_scalars = private_slot_scalars
+            private_block_layout_ids = CompilerIntArena()
+            self.block_layout_ids = private_block_layout_ids
+            self.value_type_ids: list[int] = (
+                [] if seed is None else seed.value_type_ids
+            )
+            self.slot_offsets: list[int] = []
+            self.slot_type_ids: list[int] = []
+            self.slot_ids_by_offset: dict[int, dict[int, int]] = {}
+            self.hidden_sret_slot_id = -1
+            value_count = len(self.value_names)
+            self.value_slot_ids: list[int] = [-1] * value_count
+            self.alloca_offsets: list[int] = [-1] * value_count
+            self.alloca_type_ids: list[int] = (
+                [] if seed is None else seed.alloca_type_ids
+            )
+            self.value_registers: list[int] = [-1] * value_count
+            self.diagnostic_projections = 0
+            self.block_diagnostic_projections = 0
+            self.instruction_arena_diagnostic_projections = 0
+            self.legacy_slot_projections = 0
 
-        if seed is None:
-            self._index_function_definitions(func)
-            self._index_function_uses(func)
-        elif not seed.use_records_complete:
-            self._index_seed_function_uses(func)
-
-        self._freeze_value_name_index()
-        if seed is None or not seed.terminator_records_complete:
-            self._freeze_terminator_records(func)
-        if seed is None or not seed.phi_records_complete:
-            self._freeze_phi_records(func)
-
-        # Publish any types the parser already knows. Stack preparation fills
-        # the remaining result types through ``publish_value_type``.
-        value_id = 0
-        while value_id < len(self.value_names):
-            # Definitions-first seeds already own authoritative type IDs for
-            # arguments, PHIs and supported instruction results.  Re-hashing
-            # every spelling through the compatibility ``value_types`` map is
-            # both redundant and a large direct-capture owner.  Unknown/cold
-            # definitions retain the original lookup and stackprep fallback.
-            if self.value_type_ids[value_id] < 0:
-                value_type = text_key_mapping_get(
-                    func.value_types, self.value_names[value_id]
+            for block_id, block in enumerate(func.blocks):
+                self.instruction_arenas.append(block.instructions)
+                if seed is None:
+                    self.block_names.append(block.name)
+                    bucket_key = _stable_text_bucket_key(block.name)
+                    self.block_name_buckets.setdefault(bucket_key, []).append(
+                        (block.name, block_id)
+                    )
+                elif not text_key_names_equal(self.block_names[block_id], block.name):
+                    raise BackendUnavailable(
+                        "indexed function seed block order is inconsistent"
+                    )
+            if seed is None or (
+                len(self.error_edge_scalars) == 0
+                and len(self.error_edge_spans) == 0
+            ):
+                block_id = 0
+                while block_id < len(self.block_names):
+                    self.error_edge_spans.append2(0, 0)
+                    block_id += 1
+            elif len(self.error_edge_spans) != len(self.block_names) * 2:
+                raise BackendUnavailable(
+                    "indexed inline error-edge spans do not match block count"
                 )
-                if value_type is not None:
-                    self.publish_value_type(value_id, value_type)
-            value_id += 1
-        self._freeze_call_records()
-        self._freeze_alloca_records()
-        self._freeze_fixed_instruction_records()
-        self._freeze_gep_records()
-        self._freeze_instruction_payload_ids()
-        self._freeze_value_scalar_columns()
-        func.indexed_seed = None
+            self._freeze_block_name_index()
+
+            if seed is None:
+                self._index_function_definitions(func)
+                self._index_function_uses(func)
+            elif not seed.use_records_complete:
+                self._index_seed_function_uses(func)
+
+            self._freeze_value_name_index()
+            if seed is None or not seed.terminator_records_complete:
+                self._freeze_terminator_records(func)
+            if seed is None or not seed.phi_records_complete:
+                self._freeze_phi_records(func)
+
+            # Publish any types the parser already knows. Stack preparation fills
+            # the remaining result types through ``publish_value_type``.
+            value_id = 0
+            while value_id < len(self.value_names):
+                # Definitions-first seeds already own authoritative type IDs for
+                # arguments, PHIs and supported instruction results.  Re-hashing
+                # every spelling through the compatibility ``value_types`` map is
+                # both redundant and a large direct-capture owner.  Unknown/cold
+                # definitions retain the original lookup and stackprep fallback.
+                if self.value_type_ids[value_id] < 0:
+                    value_type = text_key_mapping_get(
+                        func.value_types, self.value_names[value_id]
+                    )
+                    if value_type is not None:
+                        self.publish_value_type(value_id, value_type)
+                value_id += 1
+            self._freeze_call_records()
+            self._freeze_alloca_records()
+            self._freeze_fixed_instruction_records()
+            self._freeze_gep_records()
+            self._freeze_instruction_payload_ids()
+            self._freeze_value_scalar_columns()
+            func.indexed_seed = None
+        except BaseException:
+            _close_private_kernel_tables(
+                private_definition_positions,
+                private_type_field_ids,
+                private_type_scalars,
+                private_value_scalars,
+                private_used_value_ids,
+                private_slot_scalars,
+                private_block_layout_ids,
+            )
+            raise
+
 
     def _intern_build_value(self, name: str) -> int:
         if self.value_name_index_capacity > 0:

@@ -32,7 +32,7 @@ def mutate(path, change):
     put(path, value)
 
 
-def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='reference'):
+def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='reference', go_source=False):
     root = tmp_path / 'checkout'
     root.mkdir()
     (root / 'pyproject.toml').write_text('[tool.pcc-ci.group_policy]\n')
@@ -44,6 +44,12 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
          'tools': {'linux-x86_64': [], 'macos-arm64': ['clang']}}]}
     manifest['overrides'].append({'domain': 'go', 'lane': owned_lane, 'nodeid': module + '::test_darwin',
         'platforms': ['macos-arm64'], 'tools': {'macos-arm64': ['clang']}})
+    if go_source:
+        from tests.test_ci_validation_owners import ROOT, go_darwin_rows
+        manifest, _ = owners.read_manifest(ROOT)
+        manifest = dict(manifest, overrides=[rule for rule in manifest['overrides'] if rule['domain'] == 'go'])
+        source_rows = go_darwin_rows()
+    files = sorted({row['file'] for row in source_rows}) if go_source else [module]
     put(root / owners.MANIFEST, manifest)
     _, sha = owners.read_manifest(root)
     current = dict(repository='example/pcc', sha='a' * 40, run_id='17', run_attempt='2')
@@ -51,7 +57,7 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
     source = dict(sha=current['sha'], files={'test.py': 'b' * 64}, sparse_omissions=[],
                   ownership_manifest=manifest, ownership_manifest_sha256=sha)
     monkeypatch.setattr(runner, 'identity', lambda: copy.deepcopy(source))
-    monkeypatch.setattr(runner, 'modules', lambda domain, root=root: [module])
+    monkeypatch.setattr(runner, 'modules', lambda domain, root=root: files)
     matrix = [dict(domain='go', lane=lane) for lane in runner.LANES]
     extra = owners.additional_campaigns(['go'], manifest)
     plan = dict(schema=1, context=current, after=current['sha'], domains=['go'], source=True,
@@ -67,16 +73,24 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
                 reference_activity='model', selected_by_repository=True) for lane in runner.LANES]
     raw.append(dict(raw[-1], lane=owned_lane, function='test_darwin', nodeid=module + '::test_darwin',
                     canonical_nodeid=module + '::test_darwin'))
-    base_rows = raw
+    base_rows = source_rows if go_source else raw
+    native_ids = ({rule['nodeid'] for rule in manifest['overrides']} if go_source else
+                  {module + '::test_darwin'})
     directories = {}
     for item in [dict(row, platform='linux-x86_64') for row in matrix] + extra:
         lane, platform = item['lane'], item['platform']
-        raw = copy.deepcopy(base_rows)
-        raw[-1]['gates'] = [{'unavailable': 'Darwin SDK only' if platform == 'linux-x86_64' else None}]
-        raw[-1]['selected_by_repository'] = platform == 'macos-arm64'
-        if owner_deselected and platform == 'macos-arm64':
-            raw[-1]['selected_by_repository'] = False
-            raw[-1]['gates'] = [{'unavailable': 'required owner prerequisite absent'}]
+        local_files = (files if platform == 'linux-x86_64' else
+                       owners.owner_modules(manifest, 'go', lane, platform))
+        raw = copy.deepcopy([row for row in base_rows if row['file'] in local_files])
+        for row in raw:
+            if row['canonical_nodeid'] not in native_ids:
+                continue
+            row['gates'] = [{'unavailable': ('Darwin required' if go_source else 'Darwin SDK only')
+                              if platform == 'linux-x86_64' else None}]
+            row['selected_by_repository'] = platform == 'macos-arm64'
+            if owner_deselected and platform == 'macos-arm64':
+                row['selected_by_repository'] = False
+                row['gates'] = [{'unavailable': 'required owner prerequisite absent'}]
         directory = artifacts / f"coverage-go-{lane}-{platform}-{current['sha']}-{current['run_attempt']}"
         directory.mkdir()
         directories[(lane, platform)] = directory
@@ -92,14 +106,14 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
                             if row['canonical_nodeid'] in partition['local_nodeids']
                             and not row['selected_by_repository']]
         for filename, value in [('source-before', source), ('source-after', source),
-                ('ownership-manifest', manifest), ('modules', [module]), ('collection-plan', [[module]]),
-                ('raw-inventory', {'modules': [module], 'rows': raw}), ('tools-setup-receipt', {}),
+                ('ownership-manifest', manifest), ('modules', local_files), ('collection-plan', [local_files]),
+                ('raw-inventory', {'modules': local_files, 'rows': raw}), ('tools-setup-receipt', {}),
                 ('tools-before', {'verified': [], 'claim': 'declared tool bytes only; execution results are separate'}),
                 ('tools-after', {'verified': [], 'claim': 'declared tool bytes only; execution results are separate'}),
                 ('required-tools-before', {'platform': platform, 'bindings': []}),
                 ('required-tools-after', {'platform': platform, 'bindings': []})]:
             put(directory / (filename + '.json'), value)
-        if platform == 'macos-arm64':
+        if platform == 'macos-arm64' and not go_source:
             invocation = '/model/bin/clang'
             tool = dict(status='AVAILABLE', invocation=invocation, resolved=invocation, sha256='d' * 64,
                         version_observation=dict(status='COMPLETE', exit_code=0, command=[invocation, '--version'],
@@ -119,11 +133,11 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
                     dict(tool='clang', invocation=invocation, resolved=invocation, sha256=tool['sha256'])]})
         collect = directory / 'collection-000'
         collect.mkdir()
-        put(collect / 'modules.json', [module])
+        put(collect / 'modules.json', local_files)
         raw_nodes = [row['nodeid'] for row in raw]
         selected = [row['nodeid'] for row in raw if row['selected_by_repository']]
         witness = dict(collect_only=True, workers=0, dist='no', marker='', local_schedule={'workers': 0, 'dist': 'no'},
-                       requested_modules=[module], module_reports=[{'nodeid': module, 'outcome': 'passed'}],
+                       requested_modules=local_files, module_reports=[{'nodeid': name, 'outcome': 'passed'} for name in local_files],
                        collection_anomalies=[], rows=raw, raw_nodeids=raw_nodes, selected=selected)
         put(collect / 'inventory/controller.json', witness)
         collection_events = [dict(event='start', collect_only=True, maxfail=0,
@@ -137,8 +151,8 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
         guarded = dict(status='COMPLETE', timeout_s=90, max_tree_rss_bytes=runner.RSS,
                        peak_tree_rss_bytes=1000, returncode=0)
         put(collect / 'result.json', guarded)
-        part = runner.summarize_collection(collect, [module], 0)
-        receipt['collections'] = [dict(directory=collect.name, modules=[module], status=part['status'],
+        part = runner.summarize_collection(collect, local_files, 0)
+        receipt['collections'] = [dict(directory=collect.name, modules=local_files, status=part['status'],
                                        returncode=0, raw_count=len(raw), selected_count=len(selected))]
         local = set(partition['local_nodeids'])
         selected_rows = [dict(row, selected_by_repository=row['selected_by_repository'] and row['canonical_nodeid'] in local) for row in raw]
@@ -149,18 +163,25 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='referenc
             path.mkdir()
             selection = [row['canonical_nodeid'] for row in batch]
             put(path / 'selection.json', selection)
-            execution = dict(collect_only=False, workers=6, dist='loadgroup', rows=raw,
-                             raw_nodeids=raw_nodes, selected=selection)
+            batch_files = {row['file'] for row in batch}
+            batch_rows = [copy.deepcopy(row) for row in raw if row['file'] in batch_files]
+            scheduled = selection
+            if go_source:
+                for row in batch_rows:
+                    row['nodeid'] = row['canonical_nodeid'] + '@' + row['groups'][0]
+                scheduled = [row['nodeid'] for row in batch_rows if row['canonical_nodeid'] in selection]
+            execution = dict(collect_only=False, workers=6, dist='loadgroup', rows=batch_rows,
+                             raw_nodeids=[row['canonical_nodeid'] for row in batch_rows], selected=scheduled)
             for worker in range(6):
                 put(path / f'inventory/gw{worker}.json', execution)
             reports = [dict(event='start', maxfail=0, platform='linux' if platform == 'linux-x86_64' else 'darwin', machine=coverage.HOSTS[platform]['machine'])]
-            for ident in selection:
+            for ident in scheduled:
                 reports += [dict(event='report', nodeid=ident, when=phase, outcome='passed')
                             for phase in ('setup', 'call', 'teardown')]
             reports.append(dict(event='finish', exitstatus=0, testsfailed=0))
             events(path / 'live.jsonl', reports)
             put(path / 'result.json', guarded)
-            summary = runner.summarize_batch(path, selection, raw)
+            summary = runner.summarize_batch(path, selection, [row for row in raw if row['file'] in batch_files])
             put(path / 'outcomes.json', summary)
             result = dict(directory=path.name, returncode=0, guard_error=None, **summary)
             proceed, reason = runner.batch_continuation(result)
@@ -200,6 +221,27 @@ def test_modeled_two_owner_pass_uses_real_summary_functions(tmp_path, monkeypatc
         assert join(data)['status'] == 'FAIL'
 
 
+    # The real five-node manifest also joins through production campaign and
+    # aggregate functions without a Go/clang/compiler prerequisite on Mac.
+    directory = tmp_path / 'go-source'
+    directory.mkdir()
+    data = model(directory, monkeypatch, go_source=True)
+    result = join(data)
+    assert result['status'] == 'PASS', result
+    owned = [row for row in result['obligations'] if row['platform'] == 'macos-arm64']
+    assert len(owned) == 5 and all(row['lane'] == 'ordinary' and row['tools'] == [] for row in owned)
+    assert all(row['evidence']['full_phase'] for row in owned)
+    linux = [row for row in result['obligations'] if row['platform'] == 'linux-x86_64']
+    assert len(linux) == 11 and sum(row['lane'] == 'ordinary' for row in linux) == 9
+    receipt = data['directories'][('ordinary', 'macos-arm64')] / 'receipt.json'
+    saved = receipt.read_bytes()
+    receipt.unlink()
+    assert join(data)['status'] == 'FAIL'
+    receipt.write_bytes(saved)
+    mutate(receipt, lambda row: row['coverage'].update(host=coverage.HOSTS['linux-x86_64']))
+    assert join(data)['status'] == 'FAIL'
+
+
 def test_consistent_owner_deselection_remains_unresolved(tmp_path, monkeypatch):
     for lane in ('reference', 'ordinary'):
         directory = tmp_path / lane
@@ -209,6 +251,16 @@ def test_consistent_owner_deselection_remains_unresolved(tmp_path, monkeypatch):
         assert result['status'] == 'FAIL'
         assert any('INCOMPLETE_UNRUN' in error for error in result['errors'])
         assert any(row.get('platform') == 'macos-arm64' for row in result['unresolved'])
+
+
+    directory = tmp_path / 'go-source'
+    directory.mkdir()
+    data = model(directory, monkeypatch, owner_deselected=True, go_source=True)
+    result = join(data)
+    assert result['status'] == 'FAIL'
+    assert any('INCOMPLETE_UNRUN' in error for error in result['errors'])
+    receipt = json.loads((data['directories'][('ordinary', 'macos-arm64')] / 'receipt.json').read_text())
+    assert receipt['status'] == 'INCOMPLETE_UNRUN' and len(receipt['unrun']) == 5
 
 
 @pytest.mark.parametrize('fault', ['missing-owner', 'duplicate', 'unknown', 'sha', 'run_id', 'run_attempt',
