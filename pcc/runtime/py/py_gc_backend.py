@@ -4605,7 +4605,10 @@ def pcc_gc_free_object_memory(o) -> None:
         # answers for it are the free-watch note and one lifecycle CAS, so
         # take those directly instead of repeating the provenance probe
         # and the cell's radix validation.
-        if ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0:
+        # Without an armed free watch ever (pcc_gc_free_watch_used), the
+        # note's evidence below records nothing for this lifetime.
+        if (load_i32(global_addr("pcc_gc_free_watch_used"), 0) != 0
+                and ptr_eq(o, global_load_ptr("pcc_gc_last_noted_free")) == 0):
             watch = global_load_ptr("pcc_gc_free_watch")
             if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
                 store_i64(watch, _FREE_WATCH_NOTED, 1)
@@ -5237,6 +5240,10 @@ def pcc_gc_free_watch_begin(record, o) -> None:
     whether this death noted ``o``; while it has not, the bytes are still
     ``o``'s. Records nest (deaths inside a deallocator) through PREVIOUS.
     """
+    # Set once and never cleared: from now on GC0's terminal frees keep
+    # their free-watch evidence (pcc_gc_note_object_freeing).
+    if load_i32(global_addr("pcc_gc_free_watch_used"), 0) == 0:
+        atomic_store_i32(global_addr("pcc_gc_free_watch_used"), 0, 1, "release")
     store_ptr(record, _FREE_WATCH_PREVIOUS, global_load_ptr("pcc_gc_free_watch"))
     store_ptr(record, _FREE_WATCH_OBJECT, o)
     store_i64(record, _FREE_WATCH_NOTED, 0)
@@ -5303,6 +5310,13 @@ def pcc_gc_note_object_freeing(o) -> None:
         if ptr_is_null(lease_node) == 0 and load_i64(lease_node, 32) < 0:
             _object_graph_unlock()
             return
+    if (backend == 0 and load_i32(global_addr("pcc_gc_free_watch_used"), 0) == 0
+            and _gc0_terminal_free_has_no_metadata(o) != 0):
+        # No free watch was ever armed (only backend 4's delayed zpage notes
+        # arm one), and this lifetime has no metadata to retire: its note
+        # records nothing, and its free reads no last-note evidence either
+        # (pcc_gc_free_object_memory). Two thread-local accesses per free.
+        return
     watch = global_load_ptr("pcc_gc_free_watch")
     if ptr_is_null(watch) == 0 and ptr_eq(load_ptr(watch, _FREE_WATCH_OBJECT), o) != 0:
         store_i64(watch, _FREE_WATCH_NOTED, 1)

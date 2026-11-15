@@ -30,6 +30,10 @@ define_global_i32("pcc_gc_backend_frozen", 0)
 # without the refcount provenance probe. Set with pcc_gc_backend_frozen,
 # before the first object exists, and never changed afterwards.
 define_global_i32("pcc_gc_list_container_mode", 0)
+# 1 once any thread has armed a free watch (pcc_gc_free_watch_begin); never
+# cleared. Only backend 4's delayed zpage notes arm one, so under GC0-GC3 it
+# stays 0 and a terminal free skips the watch's thread-local evidence.
+define_global_i32("pcc_gc_free_watch_used", 0)
 # Fixed with the collector: 1 for the nonmoving count-free GC1/GC2. They need
 # no native activation frames for list entries (py_list_native_entry), and
 # the container fast paths admit them beside GC0 (pcc_gc_try_init_ptr_locked).

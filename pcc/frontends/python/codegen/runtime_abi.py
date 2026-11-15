@@ -1814,6 +1814,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_config_initialized',
         'pcc_gc_backend_frozen',
         'pcc_gc_list_container_mode',
+        'pcc_gc_free_watch_used',
         'pcc_gc_nonmoving_count_free',
         'pcc_gc_tracking_flag_mode',
         'pcc_gc_tracking_materialized',

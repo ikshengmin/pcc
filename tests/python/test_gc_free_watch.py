@@ -48,6 +48,7 @@ class WatchRuntime:
             "pcc_gc_backend_selected": {0: 0},
             "pcc_gc_backend4_no_refcounts": {0: 0},
             "pcc_diagnostics_runtime_log_fast_state": {0: 0},
+            "pcc_gc_free_watch_used": {0: 0},
         }
         self.notes = []
         self.probes = []
@@ -62,6 +63,7 @@ class WatchRuntime:
             "global_addr": lambda n: self.globals[n],
             "load_ptr": self.load, "load_i64": self.load, "load_i32": self.load,
             "store_ptr": self.store, "store_i64": self.store, "store_i32": self.store,
+            "atomic_store_i32": lambda p, off, value, order: self.store(p, off, value),
             "stack_alloc": self.allocate,
             "_object_graph_lock": lambda: self.lock(1),
             "_object_graph_unlock": lambda: self.lock(-1),

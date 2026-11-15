@@ -289,6 +289,8 @@ class Gc0TerminalRuntime(TerminalRuntime):
         record = self.next_address
         self.next_address += 64
         self.memory[record] = {0: 0, 8: obj, 16: 0}
+        # As pcc_gc_free_watch_begin: a watch marks free watches as used.
+        self.write(self.global_address("pcc_gc_free_watch_used"), 0, 1)
         self.ns["global_store_ptr"]("pcc_gc_free_watch", record)
         return record
 
@@ -302,7 +304,20 @@ def test_gc0_terminal_free_retires_its_cell_without_another_probe():
     assert rt.kinds() == ["retire_live", "free"]
     assert ("retire_live", obj, 0) in rt.events
     assert rt.granules[obj] == "free" and obj in rt.freed
-    assert rt.scalar("pcc_gc_last_noted_free") == obj
+    # No free watch was ever armed (pcc_gc_free_watch_used is 0): the free
+    # reads and records no watch evidence, two thread-local accesses.
+    assert rt.scalar("pcc_gc_last_noted_free") == 0
+
+
+def test_gc0_terminal_free_keeps_evidence_once_a_watch_was_used():
+    rt = Gc0TerminalRuntime()
+    earlier = rt.object(noted=False)
+    record = rt.watch(earlier)
+    rt.ns["global_store_ptr"]("pcc_gc_free_watch", 0)  # that watch ended
+    obj = rt.object(noted=False)
+    rt.terminal(obj)
+    assert rt.read(record, 16) == 0
+    assert rt.scalar("pcc_gc_last_noted_free") == obj and obj in rt.freed
 
 
 def test_gc0_terminal_free_reports_its_death_to_a_watch():
