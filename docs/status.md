@@ -609,6 +609,23 @@ codecs without normalizing (driver GC0 −5.2%, GC3 −3.1%, both 5/5);
 control: not separated from drift); together HTTP GC0 +1.5% (5/5), GC3 +0.8%
 (4/5). `64b59c4e` decodes an exact bytes object in place (driver GC0 −9.4%,
 GC3 −15.7%; HTTP GC0 5,432 → 5,484 +1.0% 5/5, GC3 3,953 → 4,061 +2.7% 5/5).
+Where a request's CPU goes (2026-11-15, local Mac, `b549336e`, GC0, GET /
+C512, the busy carrier's self samples grouped by mechanism): reference counting
+in root/field stores 8.1% and retain/release/incref/decref chains 10.2%,
+object allocation 9.3%, object free 7.4%, pins/leases/root loads 7.9%,
+thread-local access 4.6%, pointer validation 3.2%, container/graph locks 2.2%:
+**memory management and the ownership protocol are ~53% of the CPU**. Calls,
+frames and generators 8.7%, syscalls 8.7%, attribute lookup 6.4%,
+dict/list/tuple/str/bytes/int work ~10%, compiled application code 4.8%. The
+single largest function is `pcc_gc_store_root` (6.4% self; 14.8% with the
+deaths it triggers). Per primitive, GC0 against CPython: method call 3.7×,
+list/dict/instance creation ~4×, while loops, calls, tuples and try are faster
+than CPython. Byte loops of the parser run at CPython speed (~25 ns/byte), not
+at compiled speed. Same-session HTTP, `4753a9a3` → `b549336e` (3 pairs):
+GC0 5,008 → 5,224, GC1 3,672 → 3,868, GC2 3,494 → 3,818, GC3 3,621 → 3,805,
+GC4 1,688 → 1,729; aiohttp ~27,000. `py_bytearray_append` returns a new
+object instead of mutating in place (identity and quadratic-copy bug, open).
+
 The bytes/bytearray iterator now yields its byte in place (driver GC0 −1.0%
 4/5, GC3 −1.9% 5/5; HTTP not measured separately). `018078f7` skips GC0's
 free-watch thread-local evidence until a watch is armed (driver GC0 −1.6%,
