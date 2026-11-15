@@ -41,6 +41,8 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     "pcc_gc_count_free_barrier_shade",
     "pcc_gc_dispatch_selected_backend",
     "pcc_gc_dispatch_tracing_work_pending",
+    # A slot frame's published result is barriered as a root (1db2494e).
+    "pcc_gc_note_root_slot_barrier",
     # Mark-complete predicate the allocator (py_obj, not the managed backend)
     # gates its sweeps on.
     "pcc_gc_sweep_owed",
@@ -50,6 +52,10 @@ RAW_PROVIDER_SYMBOLS = {
     "pcc_gc_backend4_step_remembered_roots",
 }
 RAW_FUNCTION_IMPORTS = {
+    # Outside container mode a root-slot barrier rereads its slot under the
+    # graph lock (1db2494e).
+    "pcc_py_gc_minor_graph_lock",
+    "pcc_py_gc_minor_graph_unlock",
     "pcc_gc_object_is_white",
     # One counted gray transition, beside lock-free container barriers.
     "pcc_gc_shade_gray_atomic",
@@ -94,6 +100,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_cycle_requested",
     "pcc_gc_explicit_collect_active",
     "pcc_gc_forwarding_population",
+    # Root-slot barriers take no lock in container mode (1db2494e).
+    "pcc_gc_list_container_mode",
     "pcc_gc_mark_active",
     "pcc_gc_metric_step",
     # Fixed with the collector: GC1/GC2 heap and root barriers skip the lock.
