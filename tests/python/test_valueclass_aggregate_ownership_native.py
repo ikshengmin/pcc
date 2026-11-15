@@ -1010,6 +1010,164 @@ print('CONSTRUCTOR_ATTRIBUTE_OWNER_OK')
 """
 
 
+
+# Python language reference: assignment statements / attribute references.
+ATTRIBUTE_PAYLOAD_PROGRAM = """
+import gc
+import pcc
+from typing import Any
+
+@pcc.valueclass
+class Pair:
+    first: int
+    second: int
+
+@pcc.valueclass
+class Managed:
+    items: list[int]
+
+events = []
+
+class Token:
+    def __init__(self, name: str):
+        self.name = name
+
+    def __del__(self):
+        events.append(self.name)
+
+@pcc.valueclass
+class ManagedOwner:
+    token: Token
+    items: list[int]
+
+class Source:
+    def make(self) -> Pair:
+        return Pair(3, 4)
+
+class Parent:
+    def set_value(self, source: Source, choose: bool):
+        try:
+            self.value: Pair = source.make() if choose else Pair(-1, 0)
+        except Exception:
+            raise
+
+class Holder(Parent):
+    def __init__(self, source: Source, choose: bool):
+        try:
+            self.value: Pair = source.make() if choose else Pair(-1, 0)
+        except Exception:
+            raise
+
+class Reject:
+    @property
+    def value(self):
+        return None
+
+    @value.setter
+    def value(self, replacement):
+        gc.collect()
+        raise ValueError('reject payload')
+
+    def set_value(self, source: Source, choose: bool):
+        self.value = source.make() if choose else Pair(-1, 0)
+
+    def set_managed(self, replacement: Managed):
+        self.value = replacement
+
+    def set_owner(self, replacement: ManagedOwner):
+        self.value = replacement
+
+
+def pair() -> Pair:
+    return Pair(8, 9)
+
+
+def identity(value: Any) -> Any:
+    return value
+
+
+def run_case():
+    source = Source()
+    left = Holder(source, True)
+    right = Holder(source, False)
+    assert (left.value.first, left.value.second) == (3, 4)
+    assert (right.value.first, right.value.second) == (-1, 0)
+    left.set_value(source, False)
+    right.set_value(source, True)
+    assert left.value.first == -1
+    assert right.value.first == 3
+    left.value = pair()
+    local: Pair = Pair(5, 6)
+    right.value = local
+    assert (left.value.first, right.value.second) == (8, 6)
+    already_boxed = identity(local)
+    left.pointer = already_boxed
+    assert left.pointer is already_boxed
+    # The computed receiver retains the pre-existing rooted-store route.
+    identity(right).value = pair()
+    assert right.value.second == 9
+    managed: Managed = Managed([10, 11])
+    left.managed = managed
+    gc.collect()
+    left.managed.items.append(12)
+    assert managed.items == [10, 11, 12]
+    reject = Reject()
+    for choose in (True, False):
+        try:
+            reject.set_value(source, choose)
+        except ValueError as error:
+            assert str(error) == 'reject payload'
+        else:
+            raise AssertionError('setter did not reject')
+    try:
+        reject.set_managed(managed)
+    except ValueError as error:
+        assert str(error) == 'reject payload'
+    else:
+        raise AssertionError('managed setter did not reject')
+    gc.collect()
+    assert managed.items == [10, 11, 12]
+    assert left.managed.items is managed.items
+
+def terminal_scope(name: str, reject_store: bool):
+    # This scope alone owns the payload's Token. A borrowed source must stay
+    # alive during a rejecting setter, but no temporary box/root/lease may
+    # keep it alive after the scope exits.
+    payload: ManagedOwner = ManagedOwner(Token(name), [20])
+    before = len(events)
+    if reject_store:
+        receiver = Reject()
+        try:
+            receiver.set_owner(payload)
+        except ValueError as error:
+            assert str(error) == 'reject payload'
+        else:
+            raise AssertionError('owned setter did not reject')
+    else:
+        receiver = Holder(Source(), True)
+        receiver.owner = payload
+        assert receiver.owner.items is payload.items
+    gc.collect()
+    assert len(events) == before
+    assert payload.token.name == name
+    payload.items.append(21)
+    assert payload.items == [20, 21]
+
+run_case()
+gc.collect()
+assert events == []
+terminal_scope('success', False)
+gc.collect()
+assert events == ['success'], events
+terminal_scope('rejected', True)
+gc.collect()
+assert events == ['success', 'rejected'], events
+gc.collect()
+assert events == ['success', 'rejected'], events
+print('ATTRIBUTE_PAYLOAD_OWNER_OK')
+"""
+
+
 CASES = SCENARIOS[:2] + (
     Case("original-name", ORIGINAL_NAME_PROGRAM, "VALUECLASS_NAME_OWNERS_OK\n"),
 ) + SCENARIOS[2:] + (
@@ -1021,6 +1179,7 @@ CASES = SCENARIOS[:2] + (
     ),
     Case("original-valuebox", VALUEBOX_PROGRAM, "\n".join(VALUEBOX_EXPECTED) + "\n"),
     Case("original-constructor-attribute", CONSTRUCTOR_ATTRIBUTE_PROGRAM, "CONSTRUCTOR_ATTRIBUTE_OWNER_OK\n"),
+    Case("attribute-payload", ATTRIBUTE_PAYLOAD_PROGRAM, "ATTRIBUTE_PAYLOAD_OWNER_OK\n"),
 )
 
 

@@ -7,6 +7,7 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.export_meta import decode_type
 from pcc.frontends.python.py_ast import Attr, DynType, Expr, IntType, Name, Type
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.cpy_import_state import live_import_expr_binding
 
 
@@ -583,5 +584,56 @@ class AttrStoreLoweringMixin:
                     )
                     return
             value = self._emit_expr(value_expr)
+        if (
+            self._is_valueclass_payload_type(value_expr.ty)
+            and not isinstance(value.type, ir.PointerType)
+        ):
+            # A conditional, local or native call can produce the same typed
+            # payload as a constructor. Box from that producer's ownership
+            # record, never infer a class from the aggregate's field layout.
+            root = self._new_slot_call_root("attribute.store.payload")
+            previous = self._current_try_err_block()
+            error = previous if previous is not None else self._ensure_fn_err_exit()
+            saved_cpy = self._cpy_operand_cleanup_block
+            root_cleanup = self._slot_call_cleanup_block((root,), error)
+            self._try_err_block = root_cleanup
+            self._cpy_operand_cleanup_block = root_cleanup
+            try:
+                boxed_payload = self._emit_valueclass_payload_to_object(
+                    value, value_expr.ty, result_slot=root,
+                )
+                if boxed_payload is None:
+                    raise L1CodegenError("attribute payload boxing did not publish a value")
+                # Only the published root is authoritative from this point.
+                # Do not reuse the pre-boxing aggregate across safepoints.
+                token = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_acquire"],
+                    [self._as_gc_ptr(root)],
+                    name=self._fresh("attribute.store.payload.lease"),
+                )
+                self._slot_call_check_status(token, "attribute payload lease", target.span)
+                leased_cleanup = self._slot_call_cleanup_block(
+                    (root,), error, ((root, token),),
+                )
+                self._try_err_block = leased_cleanup
+                self._cpy_operand_cleanup_block = leased_cleanup
+                boxed = self.builder.load(root, name=self._fresh("attribute.store.payload.current"))
+                self._emit_attr_store_value(target, boxed, DynType(name="dyn"))
+                self._emit_post_call_err_check(target.span)
+                released = self.builder.call(
+                    self.runtime["pcc_gc_foreign_lease_release"],
+                    [self._as_gc_ptr(root), token],
+                    name=self._fresh("attribute.store.payload.release"),
+                )
+                # A negative release status leaves the token outstanding.
+                # Keep lease cleanup until the success edge has checked it.
+                self._slot_call_check_status(released, "attribute payload lease release", target.span)
+                self._try_err_block = root_cleanup
+                self._cpy_operand_cleanup_block = root_cleanup
+                self._release_slot_call_roots((root,))
+            finally:
+                self._try_err_block = previous
+                self._cpy_operand_cleanup_block = saved_cpy
+            return
         self._emit_attr_store_value(target, value, value_expr.ty)
         self._gc_release_if_owned(value, value_expr)
