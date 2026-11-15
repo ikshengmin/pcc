@@ -19,6 +19,102 @@ ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github/workflows/pcc1-package-parity.yml"
 
 
+class _SourceGroupItem:
+    """Authored item model; real pluggy/xdist hooks below never run a body."""
+
+    def __init__(self, root, name, marks, inherited=()):
+        self.path = root / "tests/cpp/test_source_group_model.py"
+        self.name = self.originalname = name
+        self._nodeid = "tests/cpp/test_source_group_model.py::" + name
+        self.own_markers = list(marks)
+        self.inherited = list(inherited)
+
+    @property
+    def nodeid(self):
+        return self._nodeid
+
+    def iter_markers(self, name):
+        return (mark for mark in [*self.own_markers, *self.inherited] if mark.name == name)
+
+    def get_closest_marker(self, name):
+        return next(self.iter_markers(name), None)
+
+    def add_marker(self, marker):
+        self.own_markers.append(marker.mark)
+
+
+def _source_group_items(root, platform):
+    legacy = pytest.mark.xdist_group(name="shared-original").mark
+    declaration = pytest.mark.pcc_source_group(legacy="shared-original", name="owned-source").mark
+    gate = pytest.mark.pcc_gate(unavailable=None if platform == "macos-arm64" else "Darwin required").mark
+    return [_SourceGroupItem(root, "test_native", [legacy, declaration, gate]),
+            _SourceGroupItem(root, "test_reference", [legacy])]
+
+
+def _source_group_inventory(directory, monkeypatch, *, platform, worker=None,
+                            scoped=True, worker_first=False, gate_first=False, drift=None):
+    from scripts import ci_validation_inventory as inventory
+    from xdist.remote import WorkerInteractor
+
+    directory.mkdir(parents=True)
+    items = _source_group_items(directory, platform)
+    original_items = list(items)
+    module = items[0].path.relative_to(directory).as_posix()
+    (directory / "references.json").write_text('{"functions":{}}')
+    (directory / "modules.json").write_text(json.dumps([module]))
+    monkeypatch.setenv("PCC_VALIDATION_INVENTORY", str(directory / "inventory"))
+    monkeypatch.setenv("PCC_VALIDATION_REFERENCES", str(directory / "references.json"))
+    monkeypatch.setenv("PCC_VALIDATION_COLLECTION", str(directory / "modules.json"))
+    monkeypatch.delenv("PCC_VALIDATION_SELECTION", raising=False)
+    if worker is not None:
+        selected = module + ("::test_native" if platform == "macos-arm64" else "::test_reference")
+        (directory / "selection.json").write_text(json.dumps([selected]))
+        monkeypatch.setenv("PCC_VALIDATION_SELECTION", str(directory / "selection.json"))
+        monkeypatch.delenv("PCC_VALIDATION_COLLECTION")
+    options = {"collectonly": worker is None, "numprocesses": 0, "dist": "no", "markexpr": "", "keyword": ""}
+    manager = pytest.PytestPluginManager()
+    config = SimpleNamespace(rootpath=directory, getoption=options.__getitem__,
+                             getvalue=lambda name: name == "loadgroup", pluginmanager=manager,
+                             hook=manager.hook)
+    if worker is not None:
+        config.workerinput = {"workerid": worker, "pcc_validation_schedule": {"workers": 6, "dist": "loadgroup"}}
+
+    class StockWorkerHook:
+        def pytest_collection_modifyitems(self, config, items):
+            # Exercise the pinned xdist implementation, including its suffix.
+            WorkerInteractor.pytest_collection_modifyitems(None, config, items)
+
+    class Gates:
+        @pytest.hookimpl(tryfirst=gate_first, trylast=not gate_first)
+        def pytest_collection_modifyitems(self, items):
+            items[:] = [item for item in items if not any(
+                mark.kwargs.get("unavailable") for mark in item.iter_markers("pcc_gate"))]
+
+    class Drift:
+        @pytest.hookimpl(trylast=True)
+        def pytest_collection_modifyitems(self, items):
+            native = original_items[0]
+            if drift == "marker":
+                native.add_marker(pytest.mark.xdist_group(name="late"))
+            elif drift == "suffix":
+                native._nodeid = module + "::test_native@shared-original"
+
+    if worker is not None and worker_first:
+        manager.register(StockWorkerHook())
+    if scoped:
+        inventory.pytest_configure(config)
+    if worker is not None and not worker_first:
+        manager.register(StockWorkerHook())
+    manager.register(Gates())
+    if drift:
+        manager.register(Drift())
+    manager.hook.pytest_collectreport(report=SimpleNamespace(nodeid=module, outcome="passed"))
+    manager.hook.pytest_collection_modifyitems(session=None, config=config, items=items)
+    witness = (json.loads((directory / "inventory" / ((worker or "controller") + ".json")).read_text())
+               if scoped else None)
+    return witness, original_items, items
+
+
 def test_frontend_only_batch_avoids_legacy_but_runs_complete_three_lanes():
     result = plan.select([("M", "pcc/frontends/cpp/parser.py"), ("A", "tests/rust/test_new.py")])
     assert result["domains"] == ["cpp", "rust"]
@@ -295,6 +391,14 @@ def test_collection_plugin_records_actual_collectors_including_empty_modules(tmp
     if fault is None:
         summary = run.summarize_collection(tmp_path, files, 0)
         assert summary["status"] == "COLLECTED_NOT_EXECUTED" and len(summary["rows"]) == 1
+        for platform in ("linux-x86_64", "macos-arm64"):
+            witness, original, selected = _source_group_inventory(tmp_path / platform, monkeypatch, platform=platform)
+            assert [entry["groups"] for entry in witness["rows"]] == [["owned-source"], ["shared-original"]]
+            assert witness["rows"][0]["selected_by_repository"] is (platform == "macos-arm64")
+            assert witness["rows"][0]["gates"] == [{"unavailable": None if platform == "macos-arm64" else "Darwin required"}]
+            assert [entry["canonical_nodeid"] for entry in witness["rows"]] == [item.nodeid for item in original]
+            assert witness["selected"] == [item.nodeid for item in selected]
+            assert all(entry["lane"] == "ordinary" for entry in witness["rows"])
     else:
         with pytest.raises(ValueError, match="collection evidence"):
             run.summarize_collection(tmp_path, files, 0)
@@ -689,12 +793,91 @@ def test_planner_dependency_does_not_turn_one_producer_into_another_gate():
     assert not has_only_validation_plan_dependency("    needs: validation-plan\n    needs: pcc1-package-parity\n")
 
 
-def test_execution_inventory_uses_controller_policy_not_worker_local_n0():
+def test_execution_inventory_uses_controller_policy_not_worker_local_n0(tmp_path, monkeypatch):
+    from scripts import ci_validation_inventory as inventory
+    from scripts import ci_validation_owners as owners
+
     text = (ROOT / "scripts/ci_validation_inventory.py").read_text()
     assert 'node.workerinput["pcc_validation_schedule"] = schedule' in text
     assert 'schedule = config.workerinput.get("pcc_validation_schedule")' in text
     assert 'schedule != {"workers": 6, "dist": "loadgroup"}' in text
     assert '"local_schedule": local_schedule' in text
+
+    module = "tests/cpp/test_source_group_model.py"
+    native, reference = (module + "::test_" + name for name in ("native", "reference"))
+    manifest = {"schema": 1, "default_platform": "linux-x86_64", "overrides": [
+        {"domain": "cpp", "lane": "ordinary", "nodeid": native,
+         "platforms": ["macos-arm64"], "tools": {"macos-arm64": []}}]}
+    for platform in ("linux-x86_64", "macos-arm64"):
+        frozen, _, _ = _source_group_inventory(tmp_path / platform / "collect", monkeypatch, platform=platform)
+        partition = owners.partition(frozen["rows"], manifest, "cpp", "ordinary", platform,
+                                     complete=platform == "linux-x86_64")
+        assert partition["local_nodeids"] == [native if platform == "macos-arm64" else reference]
+        witnesses = []
+        for number in range(6):
+            witness, _, selected = _source_group_inventory(
+                tmp_path / platform / str(number), monkeypatch, platform=platform, worker=f"gw{number}",
+                worker_first=bool(number % 2))
+            assert witness["workers"] == 6 and witness["dist"] == "loadgroup"
+            assert witness["local_schedule"] == {"workers": 0, "dist": "no"}
+            assert [{key: value for key, value in entry.items() if key != "nodeid"}
+                    for entry in witness["rows"]] == [
+                        {key: value for key, value in entry.items() if key != "nodeid"}
+                        for entry in frozen["rows"]]
+            assert witness["selected"] == [item.nodeid for item in selected]
+            assert witness["selected"] == [native + "@owned-source" if platform == "macos-arm64"
+                                           else reference + "@shared-original"]
+            witnesses.append(witness)
+        assert all(witness == witnesses[0] for witness in witnesses)
+        early_gate, _, _ = _source_group_inventory(
+            tmp_path / platform / "early-gate", monkeypatch, platform=platform, worker="gw0", gate_first=True)
+        assert early_gate["selected"] == witnesses[0]["selected"]
+        assert [{key: value for key, value in entry.items() if key != "nodeid"}
+                for entry in early_gate["rows"]] == [
+                    {key: value for key, value in entry.items() if key != "nodeid"}
+                    for entry in witnesses[0]["rows"]]
+
+    # Without the source plugin, the real xdist hook still puts both Mac
+    # consumers in the original group. Merely inheriting source environment
+    # variables above must not change legacy scheduling.
+    witness, original, selected = _source_group_inventory(
+        tmp_path / "legacy", monkeypatch, platform="macos-arm64", worker="gw0", scoped=False)
+    assert witness is None and selected == original
+    assert [item.nodeid for item in selected] == [native + "@shared-original", reference + "@shared-original"]
+    for drift in ("marker", "suffix"):
+        with pytest.raises(pytest.UsageError, match="source group"):
+            _source_group_inventory(tmp_path / drift, monkeypatch, platform="macos-arm64", worker="gw0", drift=drift)
+
+    # Malformed, duplicate, inherited or conflicting declarations must fail
+    # before any valid sibling is changed, even when their own gate is absent.
+    declaration = pytest.mark.pcc_source_group(legacy="shared-original", name="owned-source").mark
+    legacy = pytest.mark.xdist_group(name="shared-original").mark
+    invalid = [
+        ([legacy, declaration, declaration], []),
+        ([legacy, declaration, pytest.mark.pcc_source_group(legacy="shared-original", name="other").mark], []),
+        ([legacy], [declaration]),
+        ([declaration], [legacy]),
+        ([declaration], []),
+        ([legacy, legacy, declaration], []),
+        ([pytest.mark.xdist_group(name="wrong").mark, declaration], []),
+        ([pytest.mark.xdist_group("wrong", name="shared-original").mark, declaration], []),
+        ([legacy, pytest.mark.pcc_source_group("shared-original", name="owned-source").mark], []),
+        ([legacy, pytest.mark.pcc_source_group(legacy="shared-original", name="owned-source", extra=True).mark], []),
+    ]
+    for name in ("", " ", "bad@group", "bad/group", "bad\ngroup", 1, None, "shared-original"):
+        invalid.append(([legacy, pytest.mark.pcc_source_group(legacy="shared-original", name=name).mark], []))
+    invalid.append(([legacy, pytest.mark.pcc_source_group(legacy="bad@legacy", name="owned-source").mark], []))
+    for index, (marks, inherited) in enumerate(invalid):
+        good = _source_group_items(tmp_path, "macos-arm64")[0]
+        unchanged = list(good.own_markers)
+        bad = _SourceGroupItem(tmp_path, f"test_bad_{index}", marks, inherited)
+        with pytest.raises(pytest.UsageError, match="pcc_source_group"):
+            inventory.apply_source_groups([good, bad])
+        assert good.own_markers == unchanged
+    positional = _SourceGroupItem(tmp_path, "test_positional", [
+        pytest.mark.xdist_group("shared-original").mark, declaration])
+    assert inventory.apply_source_groups([positional]) == {id(positional): "owned-source"}
+    assert [mark.kwargs for mark in positional.iter_markers("xdist_group")] == [{"name": "owned-source"}]
 
 
 def test_every_path_reaches_planner_and_source_lane_avoids_unrelated_nginx_warmup():

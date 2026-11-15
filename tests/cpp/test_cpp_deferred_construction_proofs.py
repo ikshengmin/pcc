@@ -44,6 +44,7 @@ def test_programs_compile_to_stable_linux_artifacts(owned_only, name, units):
 
 @pytest.mark.parametrize('name,units', PROGRAMS, ids=[row[0] for row in PROGRAMS])
 @pytest.mark.xdist_group(name='cpp-darwin-native')
+@pytest.mark.pcc_source_group(legacy='cpp-darwin-native', name='cpp-darwin-owned')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 def test_programs_run_natively_with_owned_compile_assemble_and_link(name, units, tmp_path, monkeypatch):
     assert run_owned_cpp(units, tmp_path, monkeypatch) == 42

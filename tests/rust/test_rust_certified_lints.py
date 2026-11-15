@@ -209,32 +209,145 @@ def test_actual_check_cannot_admit_other_lints_or_semantic_attributes(tmp_path, 
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=ACTUAL_UNAVAILABLE)
-def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path):
+def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path, monkeypatch):
     from tests.rust.test_fallible_streaming_iterator_project import certify_original, load_inputs
+    from pcc.frontends.rust.syntax import Function, Implementation
     _, files = load_inputs()
     _, checked = certify_original(files, tmp_path / 'actual-check')
-    source = files['src/lib.rs'].decode()
+    original = files['src/lib.rs']
+    assert len(original) == 21146
+    assert sha256(original).hexdigest() == '7fb7428997bdd89c3ee0818ecee642f8d93882c9c66171c9c6194b732f337089'
+    source = original.decode('utf-8')
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    # Keep the exact current capability boundary after retained use items.
-    # This lint-retention observation is not successful whole-crate compilation.
-    with pytest.raises(RustError, match=(
-            r"^src/lib\.rs: 841:21: match guards require additional effect and binding analysis, which is not implemented$")):
-        parser.parse()
+    # Observe the real function owner, not a reconstructed list of declarations:
+    # finish_configured_item must remove disabled methods as well as their impl.
+    parsed_functions = None
+    finish_configured_item = parser.finish_configured_item
+
+    def retain_function_owner(pending, functions):
+        nonlocal parsed_functions
+        if parsed_functions is None:
+            parsed_functions = functions
+        else:
+            assert parsed_functions is functions
+        return finish_configured_item(pending, functions)
+
+    # The exact authenticated library source now parses through cfg(test) to
+    # EOF. Lint/syntax retention still does not imply whole-crate compilation.
+    with monkeypatch.context() as owned:
+        owned.setattr(parser, 'finish_configured_item', retain_function_owner)
+        owned.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool entered owned parser'))
+        functions = parser.parse()
+    assert parsed_functions is functions
+    assert (parser.token.text, parser.token.line, parser.token.column) == ('<eof>', 900, 1)
+    assert parser.token.source_path == 'src/lib.rs' and not parser.modules
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
+    assert [(item.token.line, item.token.column, item.source_span) for item in parser.uses] == [
+        (22, 1, (659, 673)), (23, 1, (674, 704))]
+    assert all(item.token.source_path == 'src/lib.rs' for item in parser.uses)
     assert [source[slice(*item.source_span)] for item in parser.uses] == [
         'use core::cmp;', 'use core::marker::PhantomData;']
     lint, = parser.crate_lint_attributes
     assert lint.level == 'warn' and lint.lints[0].name == 'missing_docs'
+    missing_docs, = lint.lints
+    assert (lint.token.line, lint.token.column, lint.source_span) == (16, 4, (548, 570))
+    assert (missing_docs.form, missing_docs.value, missing_docs.children) == ('word', None, ())
+    assert (missing_docs.token.line, missing_docs.token.column) == (16, 9)
+    assert source[slice(*missing_docs.source_span)] == 'missing_docs'
     assert source[slice(*lint.source_span)] == '#![warn(missing_docs)]'
-    assert parser.crate_cfg_attributes[0].enabled
+    configured_crate, = parser.crate_cfg_attributes
+    assert configured_crate.enabled
+    assert configured_crate.syntax.source_span == (571, 613)
+    assert source[slice(*configured_crate.syntax.source_span)] == '#![cfg_attr(not(feature = "std"), no_std)]'
+    no_std, = configured_crate.syntax.attributes
+    assert no_std.name == 'no_std' and no_std.form == 'word'
+    assert parser.crate_policy.no_std is no_std.token
+    assert (no_std.token.line, no_std.token.column) == (17, 35)
+    assert parser.crate_policy.no_core is None and parser.crate_policy.edition == 2015
     assert parser.crate_policy.implicit_library_import == 'core'
-    conditional, = parser.conditional_items
+    assert parser.crate_policy.implicit_extern_prelude == ('core',)
+    assert parser.crate_policy.standard_prelude_path == ('core', 'prelude', 'rust_2015')
+
+    # Exhaust all three retained disabled items, including the newly handled
+    # test module. Keep every original extern/Box<I> retention obligation.
+    conditional, boxed, test_module = parser.conditional_items
     assert not conditional.enabled and not parser.crate_aliases
     assert conditional.item.crate.text == 'core' and conditional.item.token.line == 20
+    assert conditional.item.token.column == 1 and conditional.item.crate.column == 14
+    assert conditional.item.alias is None and not conditional.item.public
     assert conditional.attributes[0].syntax.token.line == 19
+    assert conditional.source_span == conditional.item.source_span == (615, 657)
     assert source[slice(*conditional.source_span)] == '#[cfg(feature = "std")]\nextern crate core;'
+    assert not boxed.enabled and boxed.source_span == (8781, 9347)
+    boxed_source = source[slice(*boxed.source_span)]
+    assert boxed_source == '\n'.join(source.splitlines()[333:361])
+    assert sha256(boxed_source.encode('utf-8')).hexdigest() == 'dc35eff5d806f419c229e7c1cd9b01b7f332175631e5fa776575ac1106ac0dba'
+    for item, line, span in ((conditional, 19, (615, 638)), (boxed, 334, (8781, 8804))):
+        attribute, = item.attributes
+        assert not attribute.enabled
+        assert (attribute.syntax.token.line, attribute.syntax.token.column) == (line, 3)
+        assert attribute.syntax.source_span == span
+        assert source[slice(*span)] == '#[cfg(feature = "std")]'
+        predicate = attribute.syntax.predicate
+        assert (predicate.name, predicate.form, predicate.value, predicate.children) == ('feature', 'value', 'std', ())
+        assert attribute.configuration == configured_crate.configuration
+        assert all(token.source_path == 'src/lib.rs' for token in item.tokens)
+    assert [(item.tokens[0].text, item.tokens[0].line, item.tokens[0].column,
+             item.tokens[-1].text, item.tokens[-1].line, item.tokens[-1].column)
+            for item in (conditional, boxed)] == [
+        ('#', 19, 1, ';', 20, 18), ('#', 334, 1, '}', 361, 1)]
+    # The disabled impl parsed fully: keep its four methods and associated types
+    # as retained syntax, while proving none remains in the live owners.
+    assert len(boxed.item) == 5
+    boxed_impl, = [item for item in boxed.item if isinstance(item, Implementation)]
+    boxed_methods = [item for item in boxed.item if isinstance(item, Function)]
+    assert str(boxed_impl.owner) == 'Box<I>' and boxed_impl.trait == 'FallibleStreamingIterator'
+    assert (boxed_impl.token.line, boxed_impl.token.column) == (335, 1)
+    assert [(item.token.text, item.token.line, item.token.column, item.value)
+            for item in boxed_impl.associated_types] == [
+        ('Item', 339, 10, 'I::Item'), ('Error', 340, 10, 'I::Error')]
+    assert [(item.token.text, item.token.line) for item in boxed_methods] == [
+        ('advance', 343), ('get', 348), ('size_hint', 353), ('next', 358)]
+    assert all(method.implementation is boxed_impl for method in boxed_methods)
+    assert all(item is not boxed_impl and str(item.owner) != 'Box<I>' for item in parser.implementations)
+    assert parsed_functions is not None and parsed_functions
+    assert all(all(function is not method for function in parsed_functions) for method in boxed_methods)
+    assert all(function.implementation is None or str(function.implementation.owner) != 'Box<I>'
+               for function in parsed_functions)
+    # cfg(test)'s whole token-bounded module is retained but never admitted.
+    assert [item.source_span for item in parser.item_cfg_syntax] == [(615, 638), (8781, 8804), (20923, 20935)]
+    test_cfg = parser.item_cfg_syntax[-1]
+    assert (test_cfg.predicate.name, test_cfg.predicate.form) == ('test', 'word')
+    assert source[slice(*test_cfg.source_span)] == '#[cfg(test)]'
+    test_attribute, = test_module.attributes
+    assert test_attribute.syntax is test_cfg and not test_attribute.enabled
+    assert test_attribute.configuration == configured_crate.configuration
+    assert test_attribute.configuration.test_harness is False
+    assert not test_module.enabled and test_module.item == ()
+    assert test_module.source_span == (20923, 21145)
+    assert source[slice(*test_module.source_span)] == '\n'.join(source.splitlines()[892:899])
+    assert all(token.source_path == 'src/lib.rs' for token in test_module.tokens)
+    assert [(token.text, token.line, token.column)
+            for token in (test_module.tokens[0], test_module.tokens[-1])] == [
+        ('#', 893, 1), ('}', 899, 1)]
+    assert all(function.token.text not in {'_is_object_safe', '_is_object_safe_double'}
+               for function in functions)
+
     assert parser.crate_documentation[0].text == ' Fallible, streaming iteration.'
+    assert len(parser.crate_documentation) == 15
+    assert [source[slice(*doc.source_span)] for doc in parser.crate_documentation] == source.splitlines()[:15]
+    assert all(doc.inner and doc.token.source_path == 'src/lib.rs' for doc in parser.crate_documentation)
+    assert [doc.text for doc in parser.crate_documentation[:14]] == [line[3:] for line in source.splitlines()[:14]]
+    html_root, = parser.crate_documentation[-1].options
+    assert (html_root.name, html_root.form, html_root.value) == (
+        'html_root_url', 'value', 'https://docs.rs/fallible-streaming-iterator/0.1')
+    configuration = configured_crate.configuration
+    assert configuration.source_sha256 == checked.provenance.source_sha256 == sha256(original).hexdigest()
+    assert configuration.edition == 2015 and checked.provenance.edition == '2015'
+    assert configuration.target_triple == checked.provenance.target_triple == TARGET
+    assert configuration.explicit_cfg == checked.provenance.cfg == checked.provenance.dependencies == ()
+    assert (tmp_path / 'actual-check/original.rs').read_bytes() == original
     assert load_inputs()[1] == files
     # This is syntax retention at a capability failure, never an object/package
     # pass. The existing strict original-crate object test is unchanged.

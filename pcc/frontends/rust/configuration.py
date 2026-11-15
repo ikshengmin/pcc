@@ -4,7 +4,8 @@ Rust Reference conditional-compilation.html, retrieved 2026-11-03. Cargo
 features are outside-source --cfg inputs. Two configuration owners exist:
 
 * `RustConfiguration`, bound to an actual CheckedRustSource command, whose
-  explicit cfg set is empty; built-in/target predicates are gaps there.
+  explicit cfg set is empty and authenticated library build has no test
+  harness; other built-in/target predicates remain gaps there.
 * `OwnedRustConfiguration`, built by PCC from an explicit `CfgOptions`
   (rustc's --cfg, --test, -C debug-assertions and -C panic) and PCC's own
   record of each admitted target's built-in cfg set. No host tool is asked;
@@ -168,10 +169,15 @@ class RustConfiguration:
     edition: int
     target_triple: str
     explicit_cfg: tuple[str, ...]
+    # None is not an inferred non-test build. Only the checked command's
+    # finite, validated library invocation supplies False.
+    test_harness: bool | None = None
 
     def predicate(self, item):
         if self.explicit_cfg != ():
             raise item.token.error('nonempty Rust cfg inputs are not implemented by the authenticated adapter')
+        if item.form == 'word' and item.name == 'test' and self.test_harness is False:
+            return False
         if item.form == 'word' and item.name in {'true', 'false'}:
             return item.name == 'true'
         if item.name == 'feature' and item.form == 'value':
