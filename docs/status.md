@@ -7,6 +7,19 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Class publication during package cycles (CI execution pending)
+
+The unchanged pcc-electron wheel compiles against `7fc7c694d` but its native
+import cycle cannot observe an exception class whose definition already ran.
+Module functions/imports/assignments already publish at statement time; module
+classes only wrote their registered global, leaving the module dictionary empty
+until initialization completed. Class statement lowering now publishes the
+completed decorated result through the existing module binding path, for inline
+and outlined initialization. The generic reproduction is
+`tests/fixtures/module_class_cycle/main.py`; its integration test compares five
+collectors with CPython. This is source-reviewed and unrun locally under CI-only
+instructions; full Python/shared-runtime qualification remains separate.
+
 ## Explicit-endian UTF-16 package blocker (CI execution pending)
 
 The direct pcc-node and pcc-web wheels install and compile against `7fc7c694d`,
