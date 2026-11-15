@@ -44,7 +44,9 @@ PAGE_MARK_FUNCTION_IMPORTS = {
     "pcc_allocator_record_span_page", "pcc_allocator_record_span_mark_words",
     "pcc_allocator_record_span_first", "pcc_allocator_record_span_next",
 }
-PAGE_MARK_GLOBAL_IMPORTS = {"pcc_gc_page_mark_epoch_word"}
+PAGE_MARK_GLOBAL_IMPORTS = {
+    "pcc_gc_page_mark_epoch_word", "pcc_gc_forwarding_population",
+}
 
 EMIT_MODULE = r"""
 from pathlib import Path
@@ -290,10 +292,15 @@ def emitted_copy(tmp_path_factory):
     )
     (build / "compile.log").write_text(compile_result.stdout + compile_result.stderr)
     assert compile_result.returncode == 0, compile_result.stdout + compile_result.stderr
+    # The whole page-marks object includes pcc_gc_record_is_white, whose i32
+    # forwarding-population load must resolve even though these cases never
+    # call it. Match the production definition's width and zero initial value;
+    # this fixture's counted forwarding stub does not model its population.
     (build / "harness_globals.h").write_text(
         "\n".join("uint64_t " + name + ";" for name in sorted(
-            contract.RAW_GLOBAL_IMPORTS | PAGE_MARK_GLOBAL_IMPORTS))
-        + "\n"
+            (contract.RAW_GLOBAL_IMPORTS | PAGE_MARK_GLOBAL_IMPORTS)
+            - {"pcc_gc_forwarding_population"}))
+        + "\nuint32_t pcc_gc_forwarding_population = 0;\n"
     )
     executable = build / "copy-harness"
     remaining = deadline - time.monotonic()

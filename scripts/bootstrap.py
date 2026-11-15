@@ -101,6 +101,7 @@ class Options:
 
     def __init__(self, env: dict[str, str]) -> None:
         self.env = dict(env)
+        self.stage1_worker_traceback = env.get("PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK") == "1"
         self.repo_root = ROOT
         self.out_dir = Path(
             env.get("PCC_BOOTSTRAP_OUT_DIR") or (ROOT / "build" / "bootstrap")
@@ -189,6 +190,7 @@ class Options:
 
         environment = dict(self.env)
         environment.pop("LC_ALL", None)
+        environment.pop("PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK", None)
         return environment
 
 
@@ -400,6 +402,8 @@ def _host_python_command() -> list[str]:
 
 def stage_environment(stage: int, options: Options) -> dict[str, str]:
     environment = options.child_env()
+    if stage == 1 and options.stage1_worker_traceback:
+        environment["PCC_DEBUG_WORKER_RERAISE"] = "1"
     if stage != 1 or options.checkpoint_attempt is None:
         environment = _without_stage1_checkpoint(environment)
     frontend_jobs = (

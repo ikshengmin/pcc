@@ -270,8 +270,10 @@ def _runtime_identity_matches(runtime, identity):
     return True
 
 
-def _stage_compiler_environment(environment, out_dir, stage, gc_backend):
+def _stage_compiler_environment(environment, out_dir, stage, gc_backend, *, stage1_worker_traceback=False):
     stage_env = environment.copy()
+    if stage == 1 and stage1_worker_traceback:
+        stage_env["PCC_DEBUG_WORKER_RERAISE"] = "1"
     stage_env.pop("PCC_STAGE2_EXPORT_EVIDENCE_DIR", None)
     if stage > 1:
         stage_env["PCC_HOST_PYTHON"] = str(out_dir / "forbidden-host-python")
@@ -327,6 +329,7 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
     runtime_identity = None
     configuration = build_configuration(target)
     environment = _stage_environment(gc_backend, jobs, rss_limit)
+    stage1_worker_traceback = environment.pop("PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK", "") == "1"
     suffix = ".exe" if os.name == "nt" else ""
     records = []
     incomplete_stage = None
@@ -387,7 +390,10 @@ def run_chain(gc_backend, out_dir, *, stage_limit=3, timeout=2400, stage1_timeou
                     raise RuntimeError("runtime archive changed before stage " + str(stage))
                 compiler_digest = _digest(compiler[0])
                 output = out_dir / ("pcc" + str(stage) + suffix)
-                stage_env = _stage_compiler_environment(environment, out_dir, stage, gc_backend)
+                stage_env = _stage_compiler_environment(
+                    environment, out_dir, stage, gc_backend,
+                    stage1_worker_traceback=stage1_worker_traceback,
+                )
                 command = compiler + ["--backend", "self",
                                       "--ir-scaffold=on", str(ROOT / "pcc" / "__main__.py"), "-o", str(output)]
                 print(f"GC{gc_backend} stage{stage}: {' '.join(command)}", flush=True)

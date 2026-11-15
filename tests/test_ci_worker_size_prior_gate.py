@@ -60,7 +60,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -131,41 +131,41 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
-    assert sum(gate.HOST_COUNTS) == 3914 and sum(gate.HOST_COUNTS[:85]) == 3854
-    assert sum(gate.HOST_COUNTS[:72]) == 3494
-    assert sum(gate.HOST_COUNTS[:70]) == 3436
-    assert sum(gate.HOST_COUNTS[:65]) == 3183
-    assert sum(gate.HOST_COUNTS[:63]) == 3145
-    assert sum(gate.HOST_COUNTS[:62]) == 3136
-    assert sum(gate.HOST_COUNTS[:61]) == 2904
-    assert sum(gate.HOST_COUNTS[:60]) == 2751
-    assert sum(gate.HOST_COUNTS[:59]) == 2740
-    assert sum(gate.HOST_COUNTS[:58]) == 2623
-    assert sum(gate.HOST_COUNTS[:57]) == 2615
-    assert sum(gate.HOST_COUNTS[:53]) == 2502
-    assert sum(gate.HOST_COUNTS[:52]) == 2477
-    assert sum(gate.HOST_COUNTS[:51]) == 2446
-    assert sum(gate.HOST_COUNTS[:50]) == 2404 and sum(gate.HOST_COUNTS[:49]) == 2358
-    assert sum(gate.HOST_COUNTS[:48]) == 2317
-    assert sum(gate.HOST_COUNTS[:47]) == 2274
-    assert sum(gate.HOST_COUNTS[:43]) == 2182
-    assert sum(gate.HOST_COUNTS[:42]) == 2066
-    assert sum(gate.HOST_COUNTS[:40]) == 2057
-    assert sum(gate.HOST_COUNTS[:38]) == 2047
-    assert sum(gate.HOST_COUNTS[:36]) == 2038
-    assert sum(gate.HOST_COUNTS[:34]) == 2020
-    assert sum(gate.HOST_COUNTS[:32]) == 1985
-    assert sum(gate.HOST_COUNTS[:30]) == 1825
-    assert sum(gate.HOST_COUNTS[:28]) == 1729
-    assert sum(gate.HOST_COUNTS[:27]) == 1674
-    assert sum(gate.HOST_COUNTS[:25]) == 1534
-    assert sum(gate.HOST_COUNTS[:23]) == 1379
-    assert sum(gate.HOST_COUNTS[:22]) == 1363
-    assert sum(gate.HOST_COUNTS[:21]) == 1308
-    assert sum(gate.HOST_COUNTS[:20]) == 1219
-    assert sum(gate.HOST_COUNTS[:18]) == 1182
-    assert sum(gate.HOST_COUNTS[:17]) == 1115 and sum(gate.HOST_COUNTS[:16]) == 1054
-    assert sum(gate.HOST_COUNTS[:14]) == 1045
+    assert sum(gate.HOST_COUNTS) == 3941 and sum(gate.HOST_COUNTS[:85]) == 3881
+    assert sum(gate.HOST_COUNTS[:72]) == 3521
+    assert sum(gate.HOST_COUNTS[:70]) == 3463
+    assert sum(gate.HOST_COUNTS[:65]) == 3210
+    assert sum(gate.HOST_COUNTS[:63]) == 3172
+    assert sum(gate.HOST_COUNTS[:62]) == 3163
+    assert sum(gate.HOST_COUNTS[:61]) == 2931
+    assert sum(gate.HOST_COUNTS[:60]) == 2778
+    assert sum(gate.HOST_COUNTS[:59]) == 2767
+    assert sum(gate.HOST_COUNTS[:58]) == 2650
+    assert sum(gate.HOST_COUNTS[:57]) == 2642
+    assert sum(gate.HOST_COUNTS[:53]) == 2529
+    assert sum(gate.HOST_COUNTS[:52]) == 2504
+    assert sum(gate.HOST_COUNTS[:51]) == 2473
+    assert sum(gate.HOST_COUNTS[:50]) == 2431 and sum(gate.HOST_COUNTS[:49]) == 2385
+    assert sum(gate.HOST_COUNTS[:48]) == 2344
+    assert sum(gate.HOST_COUNTS[:47]) == 2301
+    assert sum(gate.HOST_COUNTS[:43]) == 2209
+    assert sum(gate.HOST_COUNTS[:42]) == 2093
+    assert sum(gate.HOST_COUNTS[:40]) == 2084
+    assert sum(gate.HOST_COUNTS[:38]) == 2074
+    assert sum(gate.HOST_COUNTS[:36]) == 2065
+    assert sum(gate.HOST_COUNTS[:34]) == 2047
+    assert sum(gate.HOST_COUNTS[:32]) == 2012
+    assert sum(gate.HOST_COUNTS[:30]) == 1852
+    assert sum(gate.HOST_COUNTS[:28]) == 1756
+    assert sum(gate.HOST_COUNTS[:27]) == 1701
+    assert sum(gate.HOST_COUNTS[:25]) == 1561
+    assert sum(gate.HOST_COUNTS[:23]) == 1406
+    assert sum(gate.HOST_COUNTS[:22]) == 1390
+    assert sum(gate.HOST_COUNTS[:21]) == 1335
+    assert sum(gate.HOST_COUNTS[:20]) == 1246
+    assert sum(gate.HOST_COUNTS[:18]) == 1209
+    assert sum(gate.HOST_COUNTS[:17]) == 1142 and sum(gate.HOST_COUNTS[:16]) == 1081
+    assert sum(gate.HOST_COUNTS[:14]) == 1072
     # Exercise the complete fixed inventory through its real consumer. These
     # are synthetic all-passed report controls, not collection/run evidence.
     inventory_nodes = [path + "::test_inventory[" + str(index) + "]"
@@ -193,12 +193,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3914, "selected_passed_count": 3914,
+        "universe_count": 3941, "selected_passed_count": 3941,
         "platform_unrun": [], "worker_witnesses": 6,
     }
     # A complete report cannot pass stale counts or omit the new module. Dropping
     # the added nodes from every witness/report still fails the fixed receipt.
-    for index, old_count in ((12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
+    for index, old_count in ((2, 291), (12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
         old_counts = list(gate.HOST_COUNTS)
         old_counts[index] = old_count
         put(tmp_path, inventory_reports(inventory_nodes))
@@ -1196,6 +1196,123 @@ def load_platform(monkeypatch):
     watchdog.run = lambda *args, **kwargs: None
     monkeypatch.setitem(sys.modules, "scripts.platform_process_watchdog", watchdog)
     return load_file("prior_platform_bootstrap", ROOT / "scripts/bootstrap_platform.py", monkeypatch)
+
+
+@pytest.mark.parametrize("requested", (None, "0", "1"))
+@pytest.mark.parametrize("inherited", (None, "0", "1"))
+def test_bootstrap_stage1_traceback_survives_chain_setup_without_leaking(
+    tmp_path, monkeypatch, requested, inherited,
+):
+    module = load_file("prior_portable_bootstrap", ROOT / "scripts/bootstrap.py", monkeypatch)
+    control, generic = "PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK", "PCC_DEBUG_WORKER_RERAISE"
+    original = {"KEEP": "unchanged", "PCC_BOOTSTRAP_STAGE_TIMEOUT": "7200"}
+    if requested is not None:
+        original[control] = requested
+    if inherited is not None:
+        original[generic] = inherited
+    options = module.Options(original)
+    options.out_dir = tmp_path / "bootstrap"
+    before = dict(original)
+    stages = []
+    monkeypatch.setattr(module, "cache_identity_environment", lambda *_args: None)
+    monkeypatch.setattr(module, "verify_fixed_point", lambda _options: 0)
+
+    def stage(number, output, command, current):
+        selected = module.stage_environment(number, current)
+        expected = "1" if number == 1 and requested == "1" else inherited
+        assert selected.get(generic) == expected
+        assert (generic in selected) == (expected is not None)
+        assert control not in selected and selected["KEEP"] == "unchanged"
+        assert current.stage_timeout == 7200
+        assert current.max_tree_rss_bytes == 17179869184
+        stages.append(number)
+
+    monkeypatch.setattr(module, "run_stage", stage)
+    assert module._run_locked_chain(options) == 0
+    assert stages == [1, 2, 3]
+    # _run_locked_chain rewrites options.env through child_env before Stage1.
+    # The independent option must survive that, but never reach barrier/link children.
+    assert control not in options.child_env() and control not in options.env
+    assert options.child_env().get(generic) == inherited
+    assert original == before
+
+
+@pytest.mark.parametrize("requested", (None, "0", "1"))
+@pytest.mark.parametrize("inherited", (None, "0", "1"))
+@pytest.mark.parametrize("provided_runtime", (False, True))
+def test_platform_traceback_is_stage1_only_through_full_chain(
+    tmp_path, monkeypatch, requested, inherited, provided_runtime,
+):
+    """Mocked orchestration only: synthetic images never compile or execute."""
+    module = load_platform(monkeypatch)
+    from pcc.frontends.python import owned_runtime_build as owner, pipeline_targets
+
+    control, generic = "PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK", "PCC_DEBUG_WORKER_RERAISE"
+    for name, value in ((control, requested), (generic, inherited)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+    for name in ("PCC_HOST_ASSEMBLY_PROFILE", "PCC_HOST_ELF_STAGE_PROFILE", "PCC_HOST_ARM_BACKEND_PROFILE"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(module, "ROOT", tmp_path)
+    monkeypatch.setattr(module, "source_identity", lambda *_args: {"commit": "fixed", "clean_commit": True})
+    monkeypatch.setattr(module, "build_configuration", lambda target: {"target": target})
+    monkeypatch.setattr(module.ci_failed_stage_identity, "capture", lambda *_args: None)
+    monkeypatch.setattr(pipeline_targets, "host_target_triple", lambda: "x86_64-unknown-linux-gnu")
+    monkeypatch.setattr(module, "dependency_receipt", lambda _path: {"format": "ELF"})
+
+    def write_runtime(path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        for suffix in ("", ".provenance.json", ".capi_syms"):
+            Path(str(path) + suffix).write_bytes(b"synthetic runtime fixture")
+
+    archive = tmp_path / "input.a"
+    write_runtime(archive)
+    monkeypatch.setattr(owner, "ensure_target_runtime", lambda *_args, **_kwargs: str(archive))
+    events = []
+
+    def run(command, *, log_path, env, timeout, rss_limit, **_kwargs):
+        assert control not in env
+        assert rss_limit == 17179869184
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        if "pcc.frontends.python.owned_runtime_build" in command:
+            assert not provided_runtime and env.get(generic) == inherited and timeout == 6000
+            write_runtime(Path(command[command.index("--output") + 1]))
+            events.append("runtime")
+        elif "-o" in command:
+            output = Path(command[command.index("-o") + 1])
+            output.write_bytes(b"\x7fELFsynthetic-same-image")
+            if str(tmp_path / "pcc/__main__.py") in command:
+                number = int(output.stem.removeprefix("pcc"))
+                expected = "1" if number == 1 and requested == "1" else inherited
+                assert env.get(generic) == expected
+                assert (generic in env) == (expected is not None)
+                assert timeout == (7200 if number == 1 else 6000)
+                events.append("stage" + str(number))
+            else:
+                # This independent native-canary opt-in predates Stage1 tracing.
+                assert env[generic] == "1" and timeout == 6000
+                events.append("canary-compile")
+        else:
+            assert env[generic] == "1" and timeout == 60
+            log_path.write_text("0\n" + str(2 ** 80 + 42) + "\n")
+            events.append("canary-run")
+        return {"seconds": 1, "peak_tree_rss": 1, "command": command, "log": str(log_path)}
+
+    monkeypatch.setattr(module, "run", run)
+    receipt = module.run_chain(
+        "0", tmp_path / "out", stage_limit=3, lock_held=True,
+        timeout=6000, stage1_timeout=7200, rss_limit=17179869184,
+        runtime_archive=archive if provided_runtime else None,
+    )
+    assert events == ([] if provided_runtime else ["runtime"]) + [
+        "stage1", "canary-compile", "canary-run", "stage2", "canary-compile", "canary-run",
+        "stage3", "canary-compile", "canary-run",
+    ]
+    assert [row["stage"] for row in receipt["stages"]] == [1, 2, 3]
+    assert module.os.environ.get(control) == requested
+    assert module.os.environ.get(generic) == inherited
 
 
 @pytest.mark.parametrize("mismatch", ["source", "codegen", "missing"])
@@ -2227,7 +2344,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:
@@ -3692,6 +3809,8 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
         assert command == ["chosen-python", "-m", "pcc.frontends.python.owned_runtime_build", "--output", str(archive)]
         assert directory == out / "runtime-build" and timeout == 1200
         assert "PCC_RUNTIME_ARCHIVE" not in env and "PCC_TEST_NO_NATIVE_PROVISIONING" not in env
+        assert "PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK" not in env
+        assert "PCC_DEBUG_WORKER_RERAISE" not in env
         calls.append("runtime-build")
 
     def identity(path):
@@ -3704,6 +3823,8 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
         assert cwd == root and env["PCC_RUNTIME_ARCHIVE"] == str(archive)
         assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
         assert env["PCC_PY_FRONTEND_WORKER_TIMING"] == "1"
+        assert env["PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK"] == "1"
+        assert "PCC_DEBUG_WORKER_RERAISE" not in env
         assert not (out / "preflight.json").exists()
         destination = root / "build" / ("bootstrap" if target == "darwin" else "platform-qualification")
         if target == "darwin":
@@ -3780,6 +3901,8 @@ def test_stage1_stops_at_runtime_or_bootstrap_failure_without_preflight(tmp_path
         calls.append("runtime-identity")
         raise ValueError(fault + " rejected")
     def bootstrap(*args, **kwargs):
+        assert kwargs["env"]["PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK"] == "1"
+        assert "PCC_DEBUG_WORKER_RERAISE" not in kwargs["env"]
         calls.append("bootstrap")
         return SimpleNamespace(returncode=7)
     monkeypatch.setattr(gate, "guarded", build)

@@ -340,18 +340,17 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3871 ordinary raw nodes.
-# CI at d956440d reported the prior 3844-node universe on all six workers of all
-# four platforms, including all 33 Lambda diagnostic cases. Linux x86_64
-# selected 3844; the other platforms selected 3843 because the existing
-# text-index owned-linker case is Linux x86_64-only. Its declarative platform
-# gate is accounted for as UNRUN, not subtracted from the fixed universe.
-# Those runs stopped at a workflow contract failure; collection is not a pass.
-# The 27 added provider-capture cases are source-counted; execution is UNRUN.
+# Expected default-marker inventory: 87 modules, 3941 ordinary raw nodes.
+# CI at 033a225 reported 3914 prior nodes on all six Linux x86_64/AArch64
+# workers, including 291 in test_ci_worker_size_prior_gate.py. The ordinary
+# x86_64 packet passed all 3914; AArch64 passed 3913 plus the existing text-index
+# owned-linker case recorded as platform-inapplicable UNRUN, not subtracted.
+# Only this module gains 27 Stage1 traceback cases: its count is now 318.
+# The new cases and 3941-node inventory are source-counted; execution is UNRUN.
 # Keep all paths and explicit counts. Reconcile source hashes and actual node
 # identities before updating this receipt; collection is not execution evidence.
 HOST_COUNTS = (
-    106, 3, 291, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17,
+    106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17,
     4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55,
     84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
@@ -794,6 +793,9 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
             env.update(PCC_RUNTIME_ARCHIVE=str(archive), PCC_TEST_NO_NATIVE_PROVISIONING="1",
                        PCC_PY_FRONTEND_WORKER_TIMING="1")
             if phase == "stage1":
+                # Bootstrap consumes this opt-in only for host Stage1 workers;
+                # do not force the generic switch on later full-chain stages.
+                env["PCC_BOOTSTRAP_STAGE1_WORKER_TRACEBACK"] = "1"
                 destination = ROOT / "build" / ("bootstrap" if sys.platform == "darwin" else "platform-qualification")
                 assert not destination.exists()
                 if sys.platform == "darwin":

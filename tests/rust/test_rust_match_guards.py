@@ -137,6 +137,8 @@ def test_checked_program_runs_with_owned_compile_assemble_and_link(tmp_path, mon
 
 
 # Borrow-check rules of guards, enforced by the actual check.
+# This target-matched metadata check does not execute a Darwin binary. Keep
+# its audited compiler/target libraries mandatory on every supported host.
 BORROW_ERRORS = (
     ('pub struct N { v: u64 } pub enum E { A(N), B } '
      'pub fn f(e: E) -> u64 { match e { E::A(n) if { let m = n; m.v > 1 } => 1, _ => 0 } }', 'E0507'),
@@ -146,7 +148,7 @@ BORROW_ERRORS = (
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')
-@pytest.mark.pcc_gate(unavailable=DARWIN_LANE)
+@pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 @pytest.mark.parametrize('source,code', BORROW_ERRORS, ids=[row[1] for row in BORROW_ERRORS])
 def test_actual_check_rejects_guard_borrow_errors(source, code, tmp_path):
     from pcc.frontends.rust import RustExternalCheckError
