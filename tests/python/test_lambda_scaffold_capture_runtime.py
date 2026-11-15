@@ -201,7 +201,55 @@ def check_builder_call_callbacks():
     assert str(standalone.type) == "i64" and "standalone" in str(standalone)
     assert "callee" in str(module)
 
+def check_constant_obj_callbacks():
+    # Unannotated captured/parameter objects exercise Constant_obj, including
+    # the real lambda-body and tuple-item ownership boundaries.
+    def captured(value):
+        return lambda: ir.Constant(WORD, value)
+    direct = lambda kind, value: ir.Constant(kind, value)
+    paired = lambda kind, value: (ir.Constant(kind, value), value)
+    read = captured(41)
+    first = read()
+    second = read()
+    assert first is not second
+    assert str(first) == "41" and str(second) == "41"
+    value = direct(WORD, 42)
+    pair = paired(WORD, 43)
+    assert str(value) == "42" and str(pair[0]) == "43" and pair[1] == 43
+    gc.collect()
+    assert str(first) == "41" and str(value) == "42"
+    # A real provider formatting failure returns NULL with a pending native
+    # TypeError. The sink must select exception-preserving output cleanup.
+    invalid = lambda unused: ir.Constant(WORD, "not an integer")
+    cleanup_events = []
+    try:
+        invalid(CleanupProbe(cleanup_events))
+    except TypeError:
+        cleanup_events.append("constant provider error")
+    else:
+        raise AssertionError("lost Constant_obj provider exception")
+    gc.collect()
+    gc.collect()
+    assert cleanup_events.count("constant provider error") == 1
+    assert cleanup_events.count("cleanup") == 1
+    # A later argument can fail after result publication; it must not erase
+    # the later error or corrupt an earlier independent result.
+    events = []
+    later = lambda item: take_constant(
+        value=ir.Constant(WORD, item), later=fail_after_none(events))
+    try:
+        later(44)
+    except ValueError as error:
+        assert str(error) == "after none constant"
+    else:
+        raise AssertionError("lost later Constant_obj operand exception")
+    assert events == ["later"]
+    gc.collect()
+    assert str(first) == "41" and str(read()) == "41"
+    assert str(direct(WORD, 45)) == "45"
+
 def main():
+    check_constant_obj_callbacks()
     check_builder_call_callbacks()
     check_none_payload()
     events = []

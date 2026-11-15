@@ -58,11 +58,15 @@ _VOID = ir.VoidType()
 _CSTR = ir.IntType(8).as_pointer()
 
 
-def _scaffold_call_with_result_owner(host, fn, args, name, call_expr):
-    """Publish a builder.call result without changing its legacy arguments.
+def _scaffold_call_with_result_owner(
+    host, fn, args, name, call_expr, *, label="IR builder.call result",
+):
+    """Publish an explicitly known object producer without changing arguments.
 
     call0..9 and call_dyn return a new Python Value, even when the represented
-    LLVM instruction is void. Preserve the actual declaration, raw operand
+    LLVM instruction is void. scaffold_Constant_obj constructs a new Constant.
+    Only these proven producers use this helper, not arbitrary pointer calls.
+    Preserve the actual declaration, raw operand
     conversion and call instruction; only its proven object result transfers
     to an existing consumer slot. This is not an argument-ABI bridge.
     """
@@ -92,7 +96,7 @@ def _scaffold_call_with_result_owner(host, fn, args, name, call_expr):
         return result
     # The caller registered this slot and its error cleanup before evaluating
     # any operand. Nothing may park between the producer and the first store.
-    host._publish_slot_call_owned(sink, result, label="IR builder.call result")
+    host._publish_slot_call_owned(sink, result, label=label)
     # A provider can return NULL with a pending native exception. Select the
     # caller's exception-preserving cleanup before later moves or finalizers.
     host._emit_post_call_err_check(call_expr.span)
@@ -2136,10 +2140,9 @@ class IrScaffoldLoweringMixin:
             _CSTR,
             [_CSTR, _CSTR],
         )
-        return self.builder.call(
-            fn,
-            [ty, value],
-            name=self._fresh("scaffold.Constant"),
+        return _scaffold_call_with_result_owner(
+            self, fn, [ty, value], self._fresh("scaffold.Constant"), expr,
+            label="IR Constant object result",
         )
 
     def _emit_scaffold_constant_exact(self, ty: ir.Value, value_expr) -> ir.Value:

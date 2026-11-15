@@ -38,6 +38,8 @@ def test_scaffold_object_result_is_published_at_return(tmp_path, monkeypatch, ex
             tmp_path, monkeypatch, "ir.Constant(ir.IntType(64), None)",
             "scaffold_Constant_none", contextual, caller_sink=False,
         )
+    if suffix == "scaffold_IntType":
+        _assert_constant_obj_result_sinks(tmp_path, monkeypatch, contextual)
     if suffix == "IRBuilder_add":
         _assert_builder_call_result_sinks(tmp_path, monkeypatch, contextual)
         if not contextual:
@@ -134,6 +136,7 @@ def test_scaffold_rejects_provider_raw_or_manual_pointer_result(tmp_path, monkey
     for symbol, expression in (
         ("scaffold_IntType", "ir.IntType(64)"),
         ("scaffold_Constant_none", "ir.Constant(operand, None)"),
+        ("scaffold_Constant_obj", "ir.Constant(operand, operand)"),
     ):
         _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
             tmp_path, monkeypatch, manual, symbol, expression,
@@ -147,7 +150,8 @@ def _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     provider = tmp_path / "provider.py"
-    parameter = "width: int" if symbol == "scaffold_IntType" else "ty"
+    parameter = ("width: int" if symbol == "scaffold_IntType" else
+                 "ty, value" if symbol == "scaffold_Constant_obj" else "ty")
     raw_value = "width" if symbol == "scaffold_IntType" else "0"
     provider.write_text("from pcc.extern import c_ptr\nfrom pcc.unsafe import int_to_ptr\n"
                         + ("__pcc_runtime_port__ = True\n" if manual else "")
@@ -188,6 +192,7 @@ def test_unknown_pointer_declaration_does_not_imply_owned_result():
         _scaffold_emit_declared_call(host, function.name, function.function_type.return_type,
                                      (), call_expr=object())
     _assert_builder_call_finish_contract()
+    _assert_builder_call_finish_contract("scaffold_Constant_obj")
     _assert_builder_call_legacy_handles()
 
 
@@ -394,7 +399,7 @@ def _assert_builder_call_excluded_results(tmp_path, monkeypatch, manual):
         assert not re.search(r"\bcall [^\n]*@user_pcc_ir_ir_" + symbol + r"\(", str(codegen.module))
 
 
-def _assert_builder_call_finish_contract():
+def _assert_builder_call_finish_contract(symbol="IRBuilder_call0"):
     from types import SimpleNamespace
     from pcc.ir.compat import ir
     from pcc.frontends.python.codegen.ir_scaffold_lowering import _scaffold_call_with_result_owner
@@ -416,14 +421,14 @@ def _assert_builder_call_finish_contract():
         for sink in (None, object()):
             events = []
             module = ir.Module("finish_contract")
-            fn = ir.Function(module, ir.FunctionType(actual_return, [pointer]), "user_pcc_ir_ir_IRBuilder_call0")
+            fn = ir.Function(module, ir.FunctionType(actual_return, [pointer]), "user_pcc_ir_ir_" + symbol)
             result = ir.Value(actual_return, "%result")
             current = ir.Value(actual_return, "%current")
             args = [object()]
             span = object()
             expression = SimpleNamespace(span=span)
             host = SimpleNamespace(
-                _native_module_exports={"pcc.ir.ir": {"IRBuilder_call0": info}} if info else None,
+                _native_module_exports={"pcc.ir.ir": {symbol: info}} if info else None,
                 _manual_pointer_abi_functions={fn.name} if manual else set(),
                 _freestanding_module=freestanding,
                 _is_valueclass_payload_type=lambda ty: isinstance(ty, ClassType) and ty.valueclass,
@@ -573,3 +578,66 @@ def _assert_builder_call_provider_scalar_contract(monkeypatch):
             provider.IRBuilder_call_dyn(builder, target, [41])
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
+
+
+
+def _assert_constant_obj_result_sinks(tmp_path, monkeypatch, contextual):
+    from pcc.frontends.python.codegen import ir_scaffold_lowering as lowering
+
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
+    source = tmp_path / "constant_obj_results.py"
+    source.write_text(
+        "from pcc.ir.compat import ir\n"
+        "def take(*, value, **extras):\n    return value\n"
+        "def probe_direct(kind, operand):\n    return take(value=ir.Constant(kind, operand))\n"
+        "def probe_tuple(kind, operand):\n    return take(value=(ir.Constant(kind, operand), operand))\n"
+        "def probe_lambda(kind):\n    return lambda operand: ir.Constant(kind, operand)\n"
+        "def probe_nested(value):\n    return lambda: ir.Constant(ir.IntType(64), value)\n"
+        "def probe_standalone(kind, operand):\n    return ir.Constant(kind, operand)\n"
+    )
+    provider = Path(__file__).resolve().parents[2] / "pcc/ir/ir.py"
+    paths = [str(provider), str(source)] if contextual else [str(source)]
+    names = ["pcc.ir.ir", "constant_obj_results"] if contextual else ["constant_obj_results"]
+    modules, exports, derived = build_closed_world_context(paths, names)
+    typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
+    codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
+    codegen._native_module_exports = exports if contextual else None
+    codegen._strict_no_libpython = True
+    codegen._prefer_native_callable_values = True
+    original = lowering._scaffold_call_with_result_owner
+    standalone_events = []
+
+    def checked_finish(host, fn, args, name, call_expr, **kwargs):
+        if fn.name != "user_pcc_ir_ir_scaffold_Constant_obj":
+            return original(host, fn, args, name, call_expr, **kwargs)
+        assert len(args) == 2
+        assert len(fn.args) == 2
+        if host._slot_call_result_sink(call_expr) is not None:
+            return original(host, fn, args, name, call_expr, **kwargs)
+        # The actual no-sink producer must still emit exactly the original
+        # call: no root, conversion, pin, release, or exception branch.
+        block = host.builder._block
+        before = len(block._instrs)
+        result = original(host, fn, args, name, call_expr, **kwargs)
+        added = block._instrs[before:]
+        assert host.builder._block is block
+        assert len(added) == 1
+        assert "@user_pcc_ir_ir_scaffold_Constant_obj(" in str(added[0])
+        standalone_events.append(True)
+        return result
+
+    with monkeypatch.context() as patch:
+        patch.setattr(lowering, "_scaffold_call_with_result_owner", checked_finish)
+        text = str(codegen.generate(typed))
+    bodies = re.findall(r"^define [^\n]*@user_constant_obj_results_[^\n]*\([^\n]*\).*?^}", text, re.M | re.S)
+    result_bodies = [body for body in bodies
+                     if re.search(r"\bcall [^\n]*@user_pcc_ir_ir_scaffold_Constant_obj\(", body)]
+    assert len(result_bodies) == 5
+    for body in result_bodies:
+        if "probe_standalone(" not in body.splitlines()[0]:
+            _assert_builder_sink_publication_and_cleanup(body, "scaffold_Constant_obj")
+    assert standalone_events == [True]
+    assert not re.search(r"\bcall [^\n]*@py_cpy_", text)
+    (tmp_path / "constant_obj_results.ll").write_text(text)
