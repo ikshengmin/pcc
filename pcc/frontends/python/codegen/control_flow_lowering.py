@@ -31,6 +31,7 @@ from pcc.frontends.python.py_ast import (
     With,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.types import type_eq
 from pcc.frontends.python.codegen.cpy_import_state import live_import_name_slot
 from pcc.frontends.python.codegen.generator_lowering import (
     begin_generator_statement_spills,
@@ -45,6 +46,18 @@ from pcc.frontends.python.codegen.method_call_lowering import _method_pointer_pr
 _CSTR = ir.IntType(8).as_pointer()
 _I1 = ir.IntType(1)
 _TARGET_SYS_VERSION_INFO = PYTHON_TARGET_VERSION_INFO
+
+
+def _emit_scalar_valueclass_conditional_branch(host, branch, target_ty):
+    # A constructor of a different class must not be built directly into the
+    # target layout. Preserve the original expression/coercion route whenever
+    # semantic payload identity is unknown or different, including foreign and
+    # raw values. Nested conditionals choose their own branch protocol.
+    if (isinstance(branch, IfExpr)
+            or not host._is_valueclass_payload_type(branch.ty)
+            or not type_eq(branch.ty, target_ty)):
+        return host._emit_expr(branch)
+    return host._emit_valueclass_payload_expr(branch, target_ty)
 
 
 def _jumping_conditions_enabled() -> bool:
@@ -461,6 +474,10 @@ class ControlFlowLoweringMixin:
         """Lower ``then_e if cond else else_e`` into a diamond CFG plus phi."""
         if self._valueclass_payload_pointer_field_paths(expr.ty):
             return self._emit_valueclass_payload_expr(expr, expr.ty)
+        # Scalar-only payloads still need an authoritative source when a
+        # branch returns a boxed object. Select that owner before evaluation,
+        # while keeping constructors and native aggregate results inline.
+        scalar_payload_join = self._is_valueclass_payload_type(expr.ty)
         static_cond = self._static_bool_condition(expr.cond)
         raw_manual_join = (
             (getattr(self, "_runtime_port_module", False) or getattr(self, "_freestanding_module", False))
@@ -474,7 +491,11 @@ class ControlFlowLoweringMixin:
         )
         if static_cond is not None:
             selected = expr.then_e if static_cond else expr.else_e
-            selected_val = self._emit_expr(selected)
+            selected_val = (
+                _emit_scalar_valueclass_conditional_branch(self, selected, expr.ty)
+                if scalar_payload_join
+                else self._emit_expr(selected)
+            )
             if raw_manual_join and isinstance(selected_val.type, ir.PointerType):
                 coerced = selected_val
             else:
@@ -510,14 +531,22 @@ class ControlFlowLoweringMixin:
         self.builder.cbranch(cond_b, then_bb, else_bb)
 
         self.builder.position_at_end(then_bb)
-        then_val = self._emit_expr(expr.then_e)
+        then_val = (
+            _emit_scalar_valueclass_conditional_branch(self, expr.then_e, result_ty)
+            if scalar_payload_join
+            else self._emit_expr(expr.then_e)
+        )
         if not ((raw_freestanding_join and isinstance(then_val.type, ir.IntType))
                 or (raw_manual_join and isinstance(then_val.type, ir.PointerType))):
             then_val = self._coerce(then_val, expr.then_e.ty, result_ty, expr.then_e)
         then_exit = self.builder._block
 
         self.builder.position_at_end(else_bb)
-        else_val = self._emit_expr(expr.else_e)
+        else_val = (
+            _emit_scalar_valueclass_conditional_branch(self, expr.else_e, result_ty)
+            if scalar_payload_join
+            else self._emit_expr(expr.else_e)
+        )
         if not ((raw_freestanding_join and isinstance(else_val.type, ir.IntType))
                 or (raw_manual_join and isinstance(else_val.type, ir.PointerType))):
             else_val = self._coerce(else_val, expr.else_e.ty, result_ty, expr.else_e)
