@@ -145,6 +145,7 @@ def test_valid_floating_sources_compile(source):
 
 
 @pytest.mark.xdist_group(name='go-darwin-native')
+@pytest.mark.pcc_source_group(legacy='go-darwin-native', name='go-darwin-owned')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 def test_program_runs_with_owned_compile_assemble_and_link(tmp_path, monkeypatch):
     assert run_owned_go_function((('floats.go', PROGRAM),), 'Answer', tmp_path, monkeypatch) == EXPECTED

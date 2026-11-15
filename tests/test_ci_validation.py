@@ -844,6 +844,45 @@ def test_execution_inventory_uses_controller_policy_not_worker_local_n0(tmp_path
         tmp_path / "legacy", monkeypatch, platform="macos-arm64", worker="gw0", scoped=False)
     assert witness is None and selected == original
     assert [item.nodeid for item in selected] == [native + "@shared-original", reference + "@shared-original"]
+    # Every real Go consumer retains the legacy mutex when the inventory
+    # plugin is absent. Feed the source markers to the pinned stock xdist hook.
+    from tests.test_ci_validation_owners import go_darwin_rows
+    from xdist.remote import WorkerInteractor
+    go_rows = go_darwin_rows()
+    legacy_items, source_items = [], []
+    for entry in go_rows:
+        tree = ast.parse((ROOT / entry["file"]).read_text())
+        function = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                        and node.name == entry["function"])
+        marks = []
+        for declaration in function.decorator_list:
+            if not isinstance(declaration, ast.Call):
+                continue
+            kind = ast.unparse(declaration.func)
+            if kind not in {"pytest.mark.xdist_group", "pytest.mark.pcc_source_group"}:
+                continue
+            values = {key.arg: ast.literal_eval(key.value) for key in declaration.keywords}
+            marks.append(getattr(pytest.mark, kind.rsplit(".", 1)[1])(**values).mark)
+        for items in (legacy_items, source_items):
+            item = _SourceGroupItem(tmp_path, entry["function"], marks)
+            item.path = tmp_path / entry["file"]
+            item._nodeid = entry["canonical_nodeid"]
+            items.append(item)
+    stock_config = SimpleNamespace(getvalue=lambda name: name == "loadgroup",
+                                  getoption=lambda name: False if name == "collectonly" else None)
+    WorkerInteractor.pytest_collection_modifyitems(None, stock_config, legacy_items)
+    assert [item.nodeid for item in legacy_items] == [
+        entry["canonical_nodeid"] + "@go-darwin-native" for entry in go_rows]
+    assert all([mark.kwargs for mark in item.iter_markers("xdist_group")] ==
+               [{"name": "go-darwin-native"}] for item in legacy_items)
+    changed = inventory.apply_source_groups(source_items)
+    assert len(changed) == 5
+    WorkerInteractor.pytest_collection_modifyitems(None, stock_config, source_items)
+    assert [item.nodeid for item in source_items] == [
+        entry["canonical_nodeid"] + "@" + entry["groups"][0] for entry in go_rows]
+    assert all([mark.kwargs for mark in item.iter_markers("xdist_group")] ==
+               [{"name": "go-darwin-native"}] for item in legacy_items)
+
     for drift in ("marker", "suffix"):
         with pytest.raises(pytest.UsageError, match="source group"):
             _source_group_inventory(tmp_path / drift, monkeypatch, platform="macos-arm64", worker="gw0", drift=drift)

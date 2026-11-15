@@ -43,12 +43,21 @@ def test_cpp_adds_exact_mac_owner_without_replacing_whole_linux_lanes():
 
 
 def test_go_only_has_no_invented_mac_obligation():
+    # No path/host inference: removing the explicit Go owners still gives
+    # the original three Linux lanes with no invented Mac obligation.
+    manifest = json.loads((ROOT / "scripts/data/ci_validation_owners.json").read_text())
+    manifest["overrides"] = [rule for rule in manifest["overrides"] if rule["domain"] != "go"]
+    without = plan.select([("M", "tests/go/test_math_bits.py")], ownership_manifest=(manifest, "no-go-owners"))
+    assert not without["source_platform"] and without["matrix_platform"] == {"include": []}
     result = plan.select([("M", "tests/go/test_math_bits.py")])
-    assert not result["source_platform"]
-    assert result["matrix_platform"] == {"include": []}
-    assert result["matrix"]["include"] == [
+    assert result["source_platform"]
+    assert result["matrix_platform"]["include"] == [
+        {"domain": "go", "lane": "ordinary", "platform": "macos-arm64", "runner": "macos-15"}]
+    assert result["matrix"]["include"] == without["matrix"]["include"] == [
         {"domain": "go", "lane": lane} for lane in plan.LANES]
-    assert not result["native_stage1"]
+    assert result["matrix_independent"] == result["matrix"] and result["matrix_native"] == {"include": []}
+    assert not result["native_stage1"] and not result["legacy"]
+    assert not plan.requires_native_inputs("go", "ordinary")
 
 
 def test_manifest_optional_input_and_shared_scope_preserve_full_producers():

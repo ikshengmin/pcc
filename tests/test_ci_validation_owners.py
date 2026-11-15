@@ -77,6 +77,79 @@ def cpp_darwin_rows():
     return sorted(rows, key=lambda entry: entry["canonical_nodeid"])
 
 
+def go_darwin_rows():
+    """Exact shared Go group from source literals; no Go test module import."""
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    native_functions = {
+        "tests/go/test_elided_composite_literals.py":
+            "test_fixture_runs_natively_with_owned_compile_assemble_and_link",
+        "tests/go/test_floating_types.py": "test_program_runs_with_owned_compile_assemble_and_link",
+    }
+    grouped_functions = {
+        "test_defer_statements": {"test_reference_accepts_and_rejects_the_same_sources"},
+        "test_elided_composite_literals": {
+            "test_fixture_runs_natively_with_owned_compile_assemble_and_link",
+            "test_reference_toolchain_computes_the_same_values",
+            "test_reference_rejects_the_same_sources_at_the_same_positions"},
+        "test_floating_types": {"test_program_runs_with_owned_compile_assemble_and_link",
+            "test_reference_returns_the_same_value", "test_reference_accepts_and_rejects_the_same_sources"},
+        "test_function_literal_syntax": {"test_reference_accepts_the_same_sources"},
+        "test_owned_runtime_package": {"test_reference_gives_the_same_verdicts"},
+        "test_type_assertions": {"test_reference_accepts_and_rejects_the_same_sources"},
+    }
+    modules = {f"tests/go/{stem}.py" for stem in grouped_functions}
+    assert {path.relative_to(ROOT).as_posix() for path in (ROOT / "tests/go").glob("test_*.py")
+            if "go-darwin-native" in path.read_text()} == modules
+    rows = []
+    for module in sorted(modules):
+        tree = ast.parse((ROOT / module).read_text())
+        expected = next((ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                         and any(isinstance(target, ast.Name) and target.id == "EXPECTED"
+                                 for target in node.targets)), None)
+        found = set()
+        for function in (node for node in tree.body if isinstance(node, ast.FunctionDef)):
+            marks = {ast.unparse(mark.func): mark for mark in function.decorator_list if isinstance(mark, ast.Call)}
+            is_native = function.name == native_functions.get(module)
+            if is_native:
+                declaration = marks["pytest.mark.pcc_source_group"]
+                assert not declaration.args
+                assert {keyword.arg: ast.literal_eval(keyword.value) for keyword in declaration.keywords} == {
+                    "legacy": "go-darwin-native", "name": "go-darwin-owned"}
+            else:
+                assert "pytest.mark.pcc_source_group" not in marks
+            if "pytest.mark.xdist_group" not in marks:
+                continue
+            found.add(function.name)
+            group = marks["pytest.mark.xdist_group"]
+            assert not group.args and {keyword.arg: ast.literal_eval(keyword.value)
+                for keyword in group.keywords} == {"name": "go-darwin-native"}
+            gate = marks["pytest.mark.pcc_gate"]
+            assert not gate.args and len(gate.keywords) == 1 and gate.keywords[0].arg == "unavailable"
+            assert ast.unparse(gate.keywords[0].value) == ("UNAVAILABLE" if is_native else "REFERENCE_UNAVAILABLE")
+            assert not any(ast.unparse(mark) == "pytest.mark.integration" for mark in function.decorator_list)
+            suffixes = [""]
+            if "pytest.mark.parametrize" in marks:
+                param = marks["pytest.mark.parametrize"]
+                assert not param.keywords and len(param.args) == 2
+                assert ast.literal_eval(param.args[0]) == "function,expected" and ast.unparse(param.args[1]) == "EXPECTED"
+                assert expected == (("Rows", 254), ("Anonymous", 270480), ("Indexed", 9478), ("Nested", 123546))
+                suffixes = [f"[{name}-{value}]" for name, value in expected]
+            for suffix in suffixes:
+                node = module + "::" + function.name + suffix
+                rows.append({"file": module, "function": function.name, "nodeid": node, "canonical_nodeid": node,
+                    "lane": classify(module, function.name, False, registry),
+                    "groups": ["go-darwin-owned" if is_native else "go-darwin-native"],
+                    "gates": [{"unavailable": "Darwin required" if is_native else None}],
+                    "selected_by_repository": not is_native,
+                    "reference_activity": registry.get(module, {}).get(function.name, "unknown")})
+        assert found == grouped_functions[Path(module).stem]
+    assert len(rows) == 16
+    assert sum(row["groups"] == ["go-darwin-owned"] for row in rows) == 5
+    assert sum(row["groups"] == ["go-darwin-native"] and row["lane"] == "ordinary" for row in rows) == 9
+    assert sum(row["lane"] == "reference" for row in rows) == 2
+    return sorted(rows, key=lambda row: row["canonical_nodeid"])
+
+
 def row(name, *, selected=True, lane="reference", groups=()):
     return {"file": MODULE, "function": name, "nodeid": MODULE + "::" + name,
             "canonical_nodeid": MODULE + "::" + name, "lane": lane,
@@ -164,6 +237,57 @@ def test_mixed_module_partition_preserves_raw_gate_metadata():
             entry["groups"] = ["cpp-darwin-native"]
     with pytest.raises(ValueError, match="splits xdist group"):
         owners.partition(legacy_rows, actual, "cpp", "ordinary", LINUX)
+
+
+    # Go has the same mixed legacy mutex, with five owned nodes and eleven
+    # untouched host-native Go oracles across the original two lanes.
+    go_rows = go_darwin_rows()
+    frozen_go = copy.deepcopy(go_rows)
+    native_ids = [entry["canonical_nodeid"] for entry in go_rows if entry["groups"] == ["go-darwin-owned"]]
+    expected_rules = [{"domain": "go", "lane": "ordinary", "nodeid": node,
+                       "platforms": [MAC], "tools": {MAC: []}} for node in native_ids]
+    assert [rule for rule in actual["overrides"] if rule["domain"] == "go"] == expected_rules
+    linux = owners.partition(go_rows, actual, "go", "ordinary", LINUX)
+    assert len(linux["local_nodeids"]) == 9
+    assert linux["transfers"] == [dict(domain="go", lane="ordinary", nodeid=node, platform=MAC, tools=[])
+                                  for node in native_ids]
+    reference = owners.partition(go_rows, actual, "go", "reference", LINUX)
+    assert len(reference["local_nodeids"]) == 2 and reference["transfers"] == []
+    assert owners.additional_campaigns(["go"], actual) == [
+        dict(domain="go", lane="ordinary", platform=MAC, runner="macos-15")]
+    modules = owners.owner_modules(actual, "go", "ordinary", MAC)
+    assert modules == ["tests/go/test_elided_composite_literals.py", "tests/go/test_floating_types.py"]
+    mac_rows = [copy.deepcopy(entry) for entry in go_rows if entry["file"] in modules]
+    unavailable = owners.partition(mac_rows, actual, "go", "ordinary", MAC, complete=False)
+    assert unavailable["local_nodeids"] == native_ids
+    unrun = [dict(entry, status="UNRUN_PREREQUISITE") for entry in mac_rows
+             if entry["canonical_nodeid"] in native_ids and not entry["selected_by_repository"]]
+    assert len(unrun) == 5
+    assert run.campaign_status({"batches": [], "unrun": unrun, "lane_count": 5,
+                               "coverage": unavailable}) == "INCOMPLETE_UNRUN"
+    for entry in mac_rows:
+        if entry["canonical_nodeid"] in native_ids:
+            entry.update(selected_by_repository=True, gates=[{"unavailable": None}])
+    mac = owners.partition(mac_rows, actual, "go", "ordinary", MAC, complete=False)
+    assert mac["local_nodeids"] == native_ids and len(mac["transfers"]) == 7
+    assert owners.required_tool_bindings(mac["obligations"], MAC,
+        {"go": {"status": "UNRUN_PREREQUISITE"}}) == {"platform": MAC, "bindings": []}
+    assert go_rows == frozen_go
+    for wrong in ("missing", "linux", "both"):
+        bad = copy.deepcopy(actual)
+        target = next(rule for rule in bad["overrides"] if rule["nodeid"] == native_ids[0])
+        if wrong == "missing":
+            bad["overrides"].remove(target)
+        else:
+            platforms = [LINUX] if wrong == "linux" else [LINUX, MAC]
+            target.update(platforms=platforms, tools={platform: [] for platform in platforms})
+        with pytest.raises(ValueError, match="splits xdist group"):
+            owners.partition(go_rows, bad, "go", "ordinary", LINUX)
+    legacy_rows = copy.deepcopy(go_rows)
+    for entry in legacy_rows:
+        entry["groups"] = ["go-darwin-native"]
+    with pytest.raises(ValueError, match="splits xdist group"):
+        owners.partition(legacy_rows, actual, "go", "ordinary", LINUX)
 
 
 def test_all_of_owners_never_becomes_fallback():
