@@ -7,6 +7,35 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Imported property mutation (finite CI qualification)
+
+The linked pcc-js, pcc-node and pcc-web consumers compile at `6ae154bac`,
+then raise `AttributeError` on ordinary imported `Cell.value` stores. The
+class export retains a getter without registering its setter/deleter in the
+consumer's class metadata. Store/delete lowering must not infer a missing
+runtime mutator from that incomplete local metadata. It now uses the original
+live descriptor when no local accessor is known; actual read-only properties
+retain their runtime errors.
+
+The unchanged library consumers and the independent multi-module oracle in
+`tests/fixtures/property_import_mutation/main.py` are the targeted CI gate.
+At `969596863`, [JS CI 43690991723](https://github.com/jiamo/pcc-js/actions/runs/43690991723)
+executes the unchanged linked wheel and matches the independent oracle with
+CPython on all five collectors, including imported/typed/inherited receivers,
+accessor defaults and read-only errors. The linked Web consumer also passes
+[CI 43690996042](https://github.com/jiamo/pcc-web/actions/runs/43690996042).
+The Node consumer reaches the unchanged 90-second compilation limit in
+[CI 43690994087](https://github.com/jiamo/pcc-node/actions/runs/43690994087) and
+the identical-input [CI 43691532047](https://github.com/jiamo/pcc-node/actions/runs/43691532047);
+neither has a native execution result. Electron also retains an initial timeout,
+then its same-input [CI 43691667436](https://github.com/jiamo/pcc-electron/actions/runs/43691667436)
+passes at 76.3 seconds and matches the class-cycle oracle on five collectors.
+Timeout snapshots still contain native backend emission workers; this is an
+investigation lead, not a proven cause or a qualified performance change.
+The integrated regression is registered
+in `tests/python/test_imported_property_mutation.py`. No local compiler or test
+ran. Full Python, bootstrap and native PCC1 qualification remain separate.
+
 ## Class publication during package cycles (finite CI qualification)
 
 The unchanged pcc-electron wheel compiles against `7fc7c694d` but its native
