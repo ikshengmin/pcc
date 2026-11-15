@@ -47,6 +47,12 @@ pcc_py_gc_minor_graph_lock = extern(
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
+pcc_py_gc_minor_graph_lock_contended = extern(
+    "pcc_py_gc_minor_graph_lock_contended", (), c_int64
+)
+pcc_py_gc_minor_graph_lock_yield = extern(
+    "pcc_py_gc_minor_graph_lock_yield", (), c_void
+)
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
@@ -451,7 +457,12 @@ def pcc_gc_concurrent_sweep_slice(budget: i64) -> i64:
     under the graph lock, in batches: the object's own unlink, index and
     allocator transactions then nest in one acquisition instead of taking it
     again from mutators for each object, and nothing parks half-destroyed
-    for a stopped collection to see. Between batches this thread may park
+    for a stopped collection to see. A mutator that queues for the lock gets
+    it after the destruction in progress (pcc_py_gc_minor_graph_lock_yield).
+    A plain unlock and lock between batches did not let it in: the fast CAS
+    took the word back before the queued head saw it free, and the GC3 HTTP
+    gateway's carrier spent 13% of its time spinning for the lock through
+    whole slices. Between batches this thread may park
     and a stopped collection may finish the sweep
     (pcc_gc_concurrent_sweep_finish_stopped): each entry is claimed and
     loaded under the lock, and the loop stops once the sweep is over.
@@ -469,8 +480,12 @@ def pcc_gc_concurrent_sweep_slice(budget: i64) -> i64:
             objects = global_load_ptr("pcc_gc_concurrent_sweep_objects")
             pcc_gc_tracing_finalize_unpinned(load_ptr(objects, next_index * 8))
             freed = freed + 1
-            if (freed & 31) == 0:
-                # Let waiting mutators allocate between batches.
+            if pcc_py_gc_minor_graph_lock_contended() != 0:
+                # A queued mutator takes the lock now; this thread does not
+                # barge back in before it.
+                pcc_py_gc_minor_graph_lock_yield()
+            elif (freed & 31) == 0:
+                # Let a pending stop in between batches.
                 pcc_py_gc_minor_graph_unlock()
                 pcc_py_gc_minor_graph_lock()
     pcc_py_gc_minor_graph_unlock()

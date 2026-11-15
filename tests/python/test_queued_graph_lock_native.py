@@ -25,6 +25,8 @@ extern int64_t pcc_thread_join(void *, void **);
 extern int64_t pcc_py_gc_minor_graph_lock_depth(void);
 extern void pcc_thread_graph_lock_acquire_for(void *, int64_t);
 extern int64_t pcc_thread_graph_lock_release(void *);
+extern int64_t pcc_py_gc_minor_graph_lock_contended(void);
+extern void pcc_py_gc_minor_graph_lock_yield(void);
 extern int32_t g_pcc_py_gc_minor_graph_lock;
 extern void *pcc_graph_wait_context_head_py;
 
@@ -69,12 +71,44 @@ static void *queued_once(void *argument) {
     if (handoff_payload != worker->id) fail(24);
     handoff_payload = worker->id + 1;
     if (__atomic_load_n(&g_pcc_py_gc_minor_graph_lock, __ATOMIC_ACQUIRE) != 1) fail(25);
+    /* Workers 1 and 2 queued behind worker 0, and 2 behind 1, before main
+       released: a holder that acquired through the queue sees them, never
+       its own node, which stays the tail until a later waiter links. */
+    if (worker->id < 2 && pcc_py_gc_minor_graph_lock_contended() != 1) fail(26);
     int64_t position = __atomic_fetch_add(&entered, 1, __ATOMIC_ACQ_REL);
     if (position < 0 || position >= 3) fail(20);
     else order[position] = worker->id;
     if (pcc_py_gc_minor_graph_lock_depth() != 1 || pcc_thread_no_park_depth() != 1) fail(21);
     pcc_py_gc_minor_graph_unlock();
     if (pcc_py_gc_minor_graph_lock_depth() != 0 || pcc_thread_no_park_depth() != 0) fail(22);
+    return 0;
+}
+/* A queued head polls the word; the holder's yield must let it in instead
+ * of retaking the word with its own fast CAS. */
+static int64_t yield_entered;
+static void *yield_waiter(void *unused) {
+    (void)unused;
+    pcc_py_gc_minor_graph_lock();
+    __atomic_store_n(&yield_entered, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+    return 0;
+}
+static int yield_phase(void) {
+    void *waiter = 0;
+    pcc_py_gc_minor_graph_lock();
+    if (pcc_py_gc_minor_graph_lock_contended() != 0) return 70;
+    uint64_t previous = tail();
+    if (pcc_thread_start(&waiter, yield_waiter, 0) != 0) return 71;
+    if (!wait_tail_changes(previous)) return 72;
+    if (pcc_py_gc_minor_graph_lock_contended() != 1) return 73;
+    pcc_py_gc_minor_graph_lock_yield();
+    /* The waiter held the lock and left before this thread got it back. */
+    if (__atomic_load_n(&yield_entered, __ATOMIC_ACQUIRE) != 1) return 74;
+    if (pcc_py_gc_minor_graph_lock_depth() != 1 || pcc_thread_no_park_depth() != 1) return 75;
+    pcc_py_gc_minor_graph_unlock();
+    void *result = 0;
+    if (pcc_thread_join(waiter, &result) != 0 || result) return 76;
+    if (tail() != 0 || pcc_py_gc_minor_graph_lock_contended() != 0) return 77;
     return 0;
 }
 static void *late_newcomer(void *unused) {
@@ -165,14 +199,19 @@ int main(void) {
     pcc_current_thread_id();
     int fast_result = registered_fast_phase();
     if (fast_result != 0) return fast_result;
+    int yield_result = yield_phase();
+    if (yield_result != 0) return yield_result;
     void *handles[4] = {0, 0, 0, 0};
     pcc_py_gc_minor_graph_lock();
     if (tail() != 0) return 2;
+    /* A fast-path holder with an empty queue has no waiter to hand over to. */
+    if (pcc_py_gc_minor_graph_lock_contended() != 0) return 17;
     for (int i = 0; i < 3; i++) {
         workers[i].id = i;
         uint64_t previous = tail();
         if (pcc_thread_start(&handles[i], queued_once, &workers[i]) != 0) return 3;
         if (!wait_tail_changes(previous)) return 4;
+        if (pcc_py_gc_minor_graph_lock_contended() != 1) return 18;
     }
     if (__atomic_load_n(&entered, __ATOMIC_ACQUIRE) != 0) return 5;
     if (pcc_thread_start(&handles[3], stopper, 0) != 0) return 6;
@@ -201,6 +240,7 @@ int main(void) {
     if (__atomic_load_n(&failure, __ATOMIC_ACQUIRE)) return (int)failure;
     if (counter != 4 * ROUNDS || tail() != 0
             || pcc_thread_no_park_depth() != 0 || pcc_py_gc_minor_graph_lock_depth() != 0) return 13;
+    if (pcc_py_gc_minor_graph_lock_contended() != 0) return 19;
     if (pcc_stop_the_world() != 0) return 14;
     if (tail() != 0) return 15;
     if (pcc_resume_world() != 0) return 16;

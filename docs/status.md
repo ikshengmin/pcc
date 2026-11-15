@@ -501,7 +501,17 @@ fence-lifetime qualification. M2 and later local-model milestones remain open.
 
 ## Gateway Web Frameworks Benchmark: native request path
 
-Latest (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
+GC1–GC3 (2026-11-15, local Mac, GET / C512, one carrier): the concurrent
+sweep now hands the graph lock to a queued mutator instead of barging back in.
+Five-pair same-session A/B, `0f5ad3a4` against itself plus the change:
+GC1 3,349 → 3,599 (+7.5%), GC2 3,278 → 3,538 (+7.9%), GC3 3,285 → 3,541
+(+7.8%), all 5/5 pairs; GC0 control +0.3% (2/5). GC1–GC4 remain well below
+GC0 (5,289). Connection errors over the five runs fell from 80 to 72 on GC1,
+36 to 29 on GC2 and 63 to 0 on GC3; GC4 was not measured. The cost breakdown is in
+`docs/architecture/04-runtime-and-gc.md` ("Where GC1-GC3 time goes").
+Generations (step 1 there) are not implemented yet.
+
+Latest GC0 (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or
 non-2xx responses and every row server-bound. Five-pair medians are
 **4,689.2 / 4,550.3 / 4,548.9 QPS** (GET /, dynamic GET, POST /user) versus

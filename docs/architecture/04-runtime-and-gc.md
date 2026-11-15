@@ -232,6 +232,42 @@ than one, for every collector.
 - `test_gc4_field_direct_store::test_field_direct_store_keeps_scalar_ir_and_opaque_plan`
   expects the StorePlan commit inlined into `pcc_gc_store_field_ptr`.
 
+### Where GC1-GC3 time goes on the HTTP gateway (2026-11-15)
+
+Local Mac evidence (Apple M1 Pro): gateway GET / with C512 load, 1 carrier,
+`sample` of the server. In one session, the `f9a99815` binary served 5,279
+QPS on GC0, 3,359 on GC1, 3,242 on GC2, 3,285 on GC3 and 1,807 on GC4, while
+aiohttp served 28,333. GC1-GC4 also dropped connections under load. These
+were connect/write errors from collector stalls, with a listen backlog of
+128 and connection recycling every 1,000 requests.
+
+The time on the GC3 carrier went to:
+- 13.5% spinning for the graph lock while the collector thread's
+  concurrent sweep slice held it;
+- 13.1% in its own stopped-world collection (finish walk, PASS0-PASS2);
+- 4.1% parked at safepoints.
+
+The collector thread spent 14.5% in sweep slices, 12.9% parked and 6.1%
+marking. The mark is a small share. Generations cut mark and finish work,
+not the per-dead-object sweep cost (about 140 ns per object in the request
+primitive's stopped sweep).
+
+The sweep slice released and retook the lock between batches. Its fast CAS
+took the free word back before the queued head that polls it could see it
+free, so a mutator waited out the whole slice. The slice now hands the lock
+to a queued thread with `pcc_py_gc_minor_graph_lock_yield`. In a same-session
+five-pair A/B (`0f5ad3a4` against `0f5ad3a4` plus the change), the carrier's
+lock wait fell from 13.5% to 4.6%. Throughput rose:
+
+| Collector | Change | Pairs won |
+|---|---|---|
+| GC1 | +7.5% | 5/5 |
+| GC2 | +7.9% | 5/5 |
+| GC3 | +7.8% | 5/5 |
+| GC0 (control) | +0.3% | 2/5 |
+
+The collector's mark step holds the lock for a whole step in the same way.
+
 ### Measuring
 
 All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is

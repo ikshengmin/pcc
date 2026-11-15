@@ -3350,6 +3350,10 @@ def _cross_object_signatures_part_15():
     "py_weakref_queue_tracing_candidates": (("c_ptr",), "c_int64"),
     "py_weakref_queue_gc0_candidates": (("c_ptr",), "c_int64"),
     "py_weakref_run_queued_callbacks": (("c_ptr", "c_int64"), "c_void"),
+    # The concurrent sweep hands the graph lock to a queued mutator at once.
+    "pcc_thread_graph_lock_has_waiter": (("c_ptr",), "c_int64"),
+    "pcc_py_gc_minor_graph_lock_contended": ((), "c_int64"),
+    "pcc_py_gc_minor_graph_lock_yield": ((), "c_void"),
     }
 
 

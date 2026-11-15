@@ -1117,6 +1117,35 @@ def _graph_wait_release(lock_word) -> None:
     # No subsequent access to successor or any shared field of this node.
 
 
+@c_abi_export("pcc_thread_graph_lock_has_waiter")
+def pcc_thread_graph_lock_has_waiter(lock_word) -> int:
+    """1 when another thread is queued for ``lock_word``, else 0.
+
+    A holder asks this to hand the lock over now instead of after a batch.
+    It is read-only: a word nobody has waited for has no context and answers
+    0. The queue's tail names its last thread. A holder that acquired through
+    the queue stays the tail until a later waiter links behind it, so only a
+    tail other than its own node is another thread. A thread between its
+    failed CAS and its enqueue is not seen yet; it is served at the holder's
+    next release.
+    """
+    context = int_to_ptr(i64(atomic_load_i64(
+        global_addr("pcc_graph_wait_context_head_py"), 0, "acquire"
+    )))
+    while ptr_is_null(context) == 0:
+        if ptr_to_int(load_ptr(context, _GRAPH_CONTEXT_WORD)) == ptr_to_int(lock_word):
+            tail_bits: i64 = i64(atomic_load_i64(context, _GRAPH_CONTEXT_TAIL, "acquire"))
+            if tail_bits == 0:
+                return 0
+            state: i64 = i64(load_i64(global_addr("pcc_tls_thread_state_py"), 0))
+            own_bits: i64 = i64(ptr_to_int(global_load_ptr("pcc_tls_graph_wait_node_py")))
+            if (state & _GRAPH_QUEUED_BIT) != 0 and tail_bits == own_bits:
+                return 0
+            return 1
+        context = load_ptr(context, _GRAPH_CONTEXT_NEXT)
+    return 0
+
+
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_record_graph_lock_wait = extern(
     "pcc_gc_record_graph_lock_wait", (c_int64, c_int64, c_int64), c_void

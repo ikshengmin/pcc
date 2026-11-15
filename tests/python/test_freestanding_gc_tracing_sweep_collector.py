@@ -89,6 +89,8 @@ RAW_FUNCTION_IMPORTS = {
     'pcc_thread_world_release_held',
     'pcc_thread_world_reacquire_held',
     'pcc_platform_abort',
+    # The concurrent sweep hands the graph lock to a queued mutator.
+    'pcc_py_gc_minor_graph_lock_contended',
 }
 RAW_GLOBAL_IMPORTS = {
     # Collections stand aside while user code runs in a sweep's window.

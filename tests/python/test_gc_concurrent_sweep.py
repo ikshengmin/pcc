@@ -56,6 +56,9 @@ class _Heap:
         self.finalized = []
         self.freed_arrays = []
         self.on_handoff = None
+        # Another thread queued for the graph lock (the kernel's queue tail).
+        self.waiting = False
+        self.yields = []
         self.ns = {
             "i64": int,
             "global_addr": self.global_addr,
@@ -74,6 +77,8 @@ class _Heap:
             "pcc_capi_is_cext_type_tag": lambda tag: int(tag == CEXT),
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
+            "pcc_py_gc_minor_graph_lock_contended": self.contended,
+            "pcc_py_gc_minor_graph_lock_yield": self.yield_lock,
             "pcc_gc_object_node_is_active": lambda node: int(self.load(node, 32) == 0),
             "pcc_gc_tracing_finalize_unpinned": self.finalize,
             "free": self.free,
@@ -137,6 +142,18 @@ class _Heap:
         self.graph -= 1
         if self.graph == 0 and self.on_handoff is not None:
             self.on_handoff()
+
+    def contended(self):
+        # Only a holder asks whether to hand the lock over.
+        assert self.graph > 0
+        return int(self.waiting)
+
+    def yield_lock(self):
+        # The kernel's yield: release, let the queued thread in, take it back.
+        assert self.graph == 1
+        self.yields.append(len(self.finalized))
+        self.unlock()
+        self.lock()
 
     # Objects ---------------------------------------------------------------
     def object(self, tag, *, candidate=True):
@@ -268,6 +285,37 @@ def test_batches_hand_the_graph_lock_back_to_mutators():
     assert heap.slice(256) == 100
     # Every 32 destructions, then once at the end of the slice.
     assert released == [32, 64, 96, 100]
+
+
+def test_a_queued_mutator_gets_the_graph_lock_after_one_destruction():
+    # A mutator that queues for the graph lock mid-batch used to wait for the
+    # rest of the batch (up to 31 destructions); measured on the GC3 HTTP
+    # gateway, the carrier spent 12% of its time waiting so. The slice hands
+    # the lock over after the destruction in progress.
+    heap = _Heap()
+    dead = [heap.object(TAG("object.type.tuple")) for _ in range(100)]
+    heap.publish(dead)
+    released = []
+    finalize = heap.finalize
+
+    def finalize_while_a_mutator_queues(obj):
+        finalize(obj)
+        if len(heap.finalized) in (5, 40):
+            heap.waiting = True
+
+    def handoff():
+        released.append(len(heap.finalized))
+        # The queued mutator takes the lock, runs and leaves.
+        heap.waiting = False
+
+    heap.ns["pcc_gc_tracing_finalize_unpinned"] = finalize_while_a_mutator_queues
+    heap.on_handoff = handoff
+    assert heap.slice(256) == 100
+    assert released == [5, 32, 40, 64, 96, 100]
+    # Only the two queued mutators were yielded to; the other releases are
+    # the batch boundaries and the end of the slice.
+    assert heap.yields == [5, 40]
+    assert heap.finalized == dead and heap.get(STATE) == 0
 
 
 def test_slice_stops_when_a_stopped_collection_finished_the_sweep():
