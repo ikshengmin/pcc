@@ -1706,3 +1706,434 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
     assert 'PCC_BOOTSTRAP_MIN_TREE_RSS_BYTES: "2147483648"' in environment
     assert 'PCC_BOOTSTRAP_HOST_MEMORY_RESERVE_BYTES: "536870912"' in environment
     assert "PCC_BOOTSTRAP_MAX_TREE_RSS_BYTES:" not in environment
+
+
+
+def _diagnostic_publication(tmp_path, monkeypatch, *, enabled=True):
+    report = tmp_path / "rss"
+    token = "a" * 64
+    calls = []
+    monkeypatch.setenv(policy.RESOURCE_REPORT_ENV, str(report))
+    monkeypatch.setenv(policy.RESOURCE_TOKEN_ENV, token)
+    monkeypatch.setattr(workers, "_coordinator_rss_bytes", lambda: calls.append("current") or 120)
+    monkeypatch.setattr(workers, "_worker_peak_rss_bytes", lambda: calls.append("peak") or 110)
+    diagnostics = policy.worker_resource_diagnostics(str(tmp_path / "published.tsv")) if enabled else None
+    return report, token, calls, diagnostics
+
+
+def test_resource_diagnostics_disabled_preserves_publication_and_reader(tmp_path, monkeypatch):
+    report, token, calls, _ = _diagnostic_publication(tmp_path, monkeypatch, enabled=False)
+
+    def forbidden(*args):
+        raise AssertionError("default path called diagnostics")
+
+    monkeypatch.setattr(policy, "record_worker_resource_diagnostic", forbidden)
+    policy.publish_worker_resource("complete")
+    assert policy.read_worker_resource(str(report), os.getpid(), token) == ("complete", 120, 120)
+    assert calls == ["current", "peak"]
+    assert sorted(path.name for path in tmp_path.iterdir()) == ["rss"]
+
+
+def test_resource_diagnostics_bind_actual_publication_and_single_accepted_read(tmp_path, monkeypatch):
+    import ast
+    from io import StringIO
+
+    report, token, calls, published = _diagnostic_publication(tmp_path, monkeypatch)
+    policy.publish_worker_resource("started", published)
+    text = report.read_text()
+    rows = [ast.literal_eval(line) for line in (tmp_path / "published.tsv").read_text().splitlines()]
+    assert rows == [("published", (text, 120, 110, 120))]
+    assert calls == ["current", "peak"]
+    reads = []
+
+    class SameRead(StringIO):
+        def read(self):
+            reads.append("read")
+            report.write_text("overwritten after this read")
+            return super().read()
+
+    stream = SameRead(text)
+    monkeypatch.setattr(policy, "_open_worker_resource", lambda path: stream)
+    accepted = policy.worker_resource_diagnostics(str(tmp_path / "accepted.tsv"))
+    assert policy.read_worker_resource(str(report), os.getpid(), token, accepted) == ("started", 120, 120)
+    assert stream.closed and reads == ["read"]
+    assert ast.literal_eval((tmp_path / "accepted.tsv").read_text()) == (
+        "accepted", (os.getpid(), token, "started", 120, 120, text))
+
+
+def test_resource_diagnostics_rejected_reports_never_become_accepted(tmp_path):
+    report = tmp_path / "rss"
+    state = policy.worker_resource_diagnostics(str(tmp_path / "diagnostic.tsv"))
+    valid = policy.RESOURCE_REPORT_SCHEMA + "\n123\ncomplete\n120\n130\n" + "a" * 64 + "\n"
+    for text, pid, token in (
+        (valid, 124, "a" * 64), (valid, 123, "b" * 64),
+        (valid.replace("120\n130", "120\n119"), 123, "a" * 64),
+        (valid.replace("120\n130", "0\n130"), 123, "a" * 64),
+        (valid + "extra\n", 123, "a" * 64),
+        (valid.replace("120\n130", "bad\n130"), 123, "a" * 64),
+    ):
+        report.write_text(text)
+        assert policy.read_worker_resource(str(report), pid, token, state) is None
+    assert state["records"] == 0 and not (tmp_path / "diagnostic.tsv").exists()
+
+
+def test_resource_diagnostics_failed_replace_keeps_original_error_and_no_publication(tmp_path, monkeypatch):
+    report, token, calls, state = _diagnostic_publication(tmp_path, monkeypatch)
+    original = OSError("replace sentinel")
+
+    def fail(source, destination):
+        raise original
+
+    monkeypatch.setattr(policy, "_replace_worker_resource", fail)
+    with pytest.raises(OSError) as raised:
+        policy.publish_worker_resource("complete", state)
+    assert raised.value is original
+    assert state["records"] == 0 and not Path(state["path"]).exists()
+    assert not report.exists() and not Path(str(report) + ".tmp").exists()
+    assert calls == ["current", "peak"]
+
+
+def test_resource_diagnostics_write_and_close_failures_do_not_change_report_result(tmp_path, monkeypatch):
+    import builtins
+
+    report, token, calls, state = _diagnostic_publication(tmp_path, monkeypatch)
+    real_open = builtins.open
+
+    class BrokenClose:
+        def __enter__(self):
+            return self
+
+        def write(self, text):
+            return len(text)
+
+        def __exit__(self, *args):
+            raise OSError("diagnostic close sentinel")
+
+    def controlled_open(path, *args, **kwargs):
+        if str(path) == state["path"]:
+            return BrokenClose()
+        return real_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(policy, "open", controlled_open, raising=False)
+    policy.publish_worker_resource("complete", state)
+    assert state["incomplete"] == "write-error"
+    assert policy.read_worker_resource(str(report), os.getpid(), token, state) == ("complete", 120, 120)
+    assert calls == ["current", "peak"]
+    # A missing directory fails opening, not only close; preserve acceptance.
+    missing = policy.worker_resource_diagnostics(str(tmp_path / "absent" / "journal"))
+    assert policy.read_worker_resource(str(report), os.getpid(), token, missing) == ("complete", 120, 120)
+    assert missing["incomplete"] == "write-error"
+    policy.finish_worker_resource_diagnostics(missing)  # Status I/O is best effort too.
+
+
+def test_resource_diagnostics_bounds_are_explicit_and_never_grow_after_overflow(tmp_path):
+    import ast
+
+    state = policy.worker_resource_diagnostics(str(tmp_path / "journal"))
+    for index in range(256):
+        policy.record_worker_resource_diagnostic(state, "published", ("report", index, index, index))
+    before = Path(state["path"]).read_bytes()
+    policy.record_worker_resource_diagnostic(state, "published", ("report", 256, 256, 256))
+    assert state["records"] == 256 and state["incomplete"] == "limit"
+    assert Path(state["path"]).read_bytes() == before
+    policy.finish_worker_resource_diagnostics(state)
+    assert ast.literal_eval(Path(state["path"] + ".status").read_text()) == (256, len(before), "limit")
+    large = policy.worker_resource_diagnostics(str(tmp_path / "large"))
+    policy.record_worker_resource_diagnostic(large, "published", ("x" * 1024, 1, 1, 1))
+    assert large["incomplete"] == "shape-limit" and large["records"] == 0
+    assert not Path(large["path"]).exists()
+    byte_bound = policy.worker_resource_diagnostics(str(tmp_path / "bytes"))
+    byte_bound["bytes"] = 262144
+    policy.record_worker_resource_diagnostic(byte_bound, "accepted", ())
+    assert byte_bound["incomplete"] == "limit" and not Path(byte_bound["path"]).exists()
+
+
+def test_resource_diagnostics_pool_retains_actual_observation_and_both_acceptances(tmp_path, monkeypatch):
+    import ast
+
+    actual_reader = policy.read_worker_resource
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch, count=1)
+    start = pool._start_resource_worker
+
+    def publish_on_start(specs, index):
+        pid = start(specs, index)
+        token = state["starts"][-1][2]
+        Path(tasks[index]["report_path"]).write_text(
+            policy.RESOURCE_REPORT_SCHEMA + "\n" + str(pid) + "\ncomplete\n100\n120\n" + token + "\n")
+        return pid
+
+    monkeypatch.setattr(pool, "_start_resource_worker", publish_on_start)
+    monkeypatch.setattr(policy, "read_worker_resource", actual_reader)
+    diagnostics = policy.worker_resource_diagnostics(str(tmp_path / "driver.tsv"))
+    history = []
+    pool.run_resource_worker_processes(commands, tasks, 1, 512 * MIB,
+                                      observations=history, diagnostics=diagnostics)
+    records = [ast.literal_eval(line) for line in Path(diagnostics["path"]).read_text().splitlines()]
+    assert [row[0] for row in records] == ["accepted", "accepted", "observation"]
+    assert records[0][1] == records[1][1]
+    assert records[2][1] == (0, state["starts"][0][1], state["starts"][0][2], history[0])
+    assert history[0][2] == 120 and state["retired"] == [state["starts"][0][1]]
+
+
+def _complete_diagnostic_chain(directory):
+    directory.mkdir()
+    driver = policy.worker_resource_diagnostics(str(directory / "resource-driver.tsv"))
+    children = []
+    starts, retires = [], []
+    for index in range(3):
+        pid, token = 123 + index, chr(97 + index) * 64
+        (directory / ("started." + str(index) + ".1")).write_text(
+            str(pid) + "\t" + token + "\tpcc\t1")
+        child = policy.worker_resource_diagnostics(str(directory / (
+            "resource-child-" + str(index) + "-" + token + ".tsv")))
+        for phase, peak in (("started", 120), ("complete", 125)):
+            text = (policy.RESOURCE_REPORT_SCHEMA + "\n" + str(pid) + "\n" + phase
+                    + "\n120\n" + str(peak) + "\n" + token + "\n")
+            policy.record_worker_resource_diagnostic(child, "published", (text, 120, peak, peak))
+            policy.record_worker_resource_diagnostic(driver, "accepted", (pid, token, phase, 120, peak, text))
+        sample = ("prior-component:" + str(index), [0, 0, 0, 0, 0, 1], 125,
+                  ("host-export-v1", 343932928))
+        policy.record_worker_resource_diagnostic(driver, "observation", (index, pid, token, sample))
+        policy.finish_worker_resource_diagnostics(child)
+        children.append(child)
+        starts.append("start\t" + str(index) + "\t" + str(pid) + "\t1\t1\t0\t1\n")
+        retires.append("retire\t" + str(index) + "\t" + str(pid) + "\t1\t0\t125\t2\n")
+    policy.finish_worker_resource_diagnostics(driver)
+    (directory / "admission.tsv").write_text("".join(starts + retires))
+    return driver, children
+
+
+def _rewrite_diagnostic_journal(path, records):
+    payload = "".join(repr(row) + "\n" for row in records).encode("utf-8")
+    path.write_bytes(payload)
+    Path(str(path) + ".status").write_bytes((repr((len(records), len(payload), "")) + "\n").encode())
+
+
+def test_resource_diagnostics_receipt_matches_exact_text_marks_ambiguity_and_partial_history(tmp_path):
+    import ast
+    from tests.python.test_worker_size_prior_processes import _fixture_resource_diagnostics
+
+    directory = tmp_path / "width"
+    driver, children = _complete_diagnostic_chain(directory)
+    first = _fixture_resource_diagnostics(directory)
+    assert first["complete"] and len(first["verified_observations"]) == 3
+    assert first["accepted"][0]["state"] == "matched"
+    assert first["accepted"][0]["raw_candidates"] == [(120, 120, 120)]
+    child = children[0]
+    text = ast.literal_eval(Path(child["path"]).read_text().splitlines()[0])[1][0]
+    policy.record_worker_resource_diagnostic(child, "published", (text, 120, 119, 120))
+    policy.finish_worker_resource_diagnostics(child)
+    ambiguous = _fixture_resource_diagnostics(directory)
+    assert not ambiguous["complete"] and ambiguous["accepted"][0]["state"] == "ambiguous"
+    Path(child["path"] + ".status").unlink()
+    partial = _fixture_resource_diagnostics(directory)
+    assert not partial["complete"] and partial["accepted"][0]["state"] == "ambiguous"
+    Path(child["path"]).write_bytes(b"broken journal\n")
+    invalid = _fixture_resource_diagnostics(directory)
+    assert not invalid["complete"] and invalid["accepted"][0]["state"] == "unmatched"
+    Path(child["path"]).write_bytes(b"x" * 262145)
+    limited = _fixture_resource_diagnostics(directory)
+    assert not limited["complete"] and limited["journals"][Path(child["path"]).name]["truncated"]
+
+
+
+def test_resource_diagnostics_native_fixture_keeps_exact_gate_and_width_only_activation():
+    import ast
+
+    root = Path(__file__).resolve().parents[2]
+    source = (root / "tests/fixtures/native/worker_size_priors.py").read_text()
+    tree = ast.parse(source)
+    functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+    original_gate = ast.dump(ast.parse("samples == [report[2]]", mode="eval").body)
+    assert sum(isinstance(node, ast.Assert) and ast.dump(node.test) == original_gate
+               for node in ast.walk(functions["run_case"])) == 1
+    main = functions["main"]
+    factories = [node for node in ast.walk(main) if isinstance(node, ast.If)
+                 and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Attribute)
+                         and child.func.attr == "worker_resource_diagnostics"
+                         for statement in node.body for child in ast.walk(statement))]
+    width_conditions = {ast.dump(ast.parse('sys.argv[1] == "width"', mode="eval").body),
+                        ast.dump(ast.parse('sys.argv[3] == "width"', mode="eval").body)}
+    assert sum(ast.dump(node.test) in width_conditions for node in factories) == 2
+    assert 'timeout=20' in (root / "tests/python/test_worker_size_prior_processes.py").read_text()
+    assert 'diagnostics=diagnostics' in ast.get_source_segment(source, functions["run_case"])
+    assert 'policy.publish_worker_resource("complete", diagnostics)' in source
+
+
+def test_resource_diagnostics_checks_shape_before_repr_and_bounds_encoded_bytes(tmp_path):
+    calls = []
+
+    class Hostile:
+        def __repr__(self):
+            calls.append("repr")
+            raise AssertionError("must not serialize")
+
+    for index, payload in enumerate(((Hostile(), 1, 1, 1), ("x" * 385, 1, 1, 1),
+                                     ("report", 2**10000, 1, 1),
+                                     ("report", True, 1, 1))):
+        state = policy.worker_resource_diagnostics(str(tmp_path / str(index)))
+        policy.record_worker_resource_diagnostic(state, "published", payload)
+        assert state["incomplete"] == "shape-limit" and state["records"] == 0
+        assert not Path(state["path"]).exists()
+    assert calls == []
+    state = policy.worker_resource_diagnostics(str(tmp_path / "unicode"))
+    policy.record_worker_resource_diagnostic(state, "published", ("\U0001f600" * 384, 1, 1, 1))
+    assert state["incomplete"] == "limit" and not Path(state["path"]).exists()
+
+
+def test_resource_diagnostics_preserve_cancellation_and_prior_exception(tmp_path, monkeypatch):
+    import builtins
+
+    real_open = builtins.open
+    report, token, calls, state = _diagnostic_publication(tmp_path, monkeypatch)
+    for error in (KeyboardInterrupt(), SystemExit(37)):
+        def interrupt_journal(path, *args, **kwargs):
+            if str(path).startswith(state["path"]):
+                raise error
+            return real_open(path, *args, **kwargs)
+
+        monkeypatch.setattr(policy, "open", interrupt_journal, raising=False)
+        with pytest.raises(type(error)) as raised:
+            policy.publish_worker_resource("complete", state)
+        assert raised.value is error and report.exists()
+        with pytest.raises(type(error)) as raised:
+            policy.read_worker_resource(str(report), os.getpid(), token, state)
+        assert raised.value is error
+        with pytest.raises(type(error)) as raised:
+            policy.finish_worker_resource_diagnostics(state)
+        assert raised.value is error
+        original = ValueError("original case assertion surrogate")
+        with pytest.raises(ValueError) as raised:
+            try:
+                raise original
+            finally:
+                policy.finish_worker_resource_diagnostics(state, preserve_error=True)
+        assert raised.value is original
+
+
+def test_resource_diagnostics_receipt_rejects_invalid_observation_retirement_and_roles(tmp_path):
+    import ast
+    from tests.python.test_worker_size_prior_processes import _fixture_resource_diagnostics
+
+    mutations = ("missing-observation", "null-observation", "wrong-pid", "wrong-token", "wrong-index",
+                 "wrong-class", "wrong-inputs", "wrong-binding", "wrong-peak", "duplicate-observation",
+                 "missing-complete", "late-acceptance", "retire-peak", "retire-pid", "duplicate-retire",
+                 "driver-role", "child-role", "missing-marker", "missing-child", "partial-line",
+                 "partial-admission", "partial-status")
+    for mutation in mutations:
+        directory = tmp_path / mutation
+        driver, children = _complete_diagnostic_chain(directory)
+        path = Path(driver["path"])
+        records = [ast.literal_eval(line) for line in path.read_text().splitlines()]
+        observation = list(records[2][1])
+        sample = list(observation[3])
+        if mutation == "missing-observation":
+            del records[2]
+        elif mutation == "null-observation":
+            records[2] = ("observation", None)
+        elif mutation == "wrong-pid":
+            observation[1] = 999
+        elif mutation == "wrong-token":
+            observation[2] = "d" * 64
+        elif mutation == "wrong-index":
+            observation[0] = 1
+        elif mutation == "wrong-class":
+            sample[0] = "prior-component:1"
+        elif mutation == "wrong-inputs":
+            sample[1] = [True, 0, 0, 0, 0, 1]
+        elif mutation == "wrong-binding":
+            sample[3] = ("host-export-v1", False)
+        elif mutation == "wrong-peak":
+            sample[2] = 126
+        elif mutation == "duplicate-observation":
+            records.append(records[2])
+        elif mutation == "missing-complete":
+            del records[1]
+        elif mutation == "late-acceptance":
+            records.append(records[1])
+        elif mutation == "driver-role":
+            child_row = ast.literal_eval(Path(children[0]["path"]).read_text().splitlines()[0])
+            records = [child_row]
+        if mutation.startswith("wrong-"):
+            observation[3] = tuple(sample)
+            records[2] = ("observation", tuple(observation))
+        _rewrite_diagnostic_journal(path, records)
+        admission = directory / "admission.tsv"
+        if mutation == "retire-peak":
+            admission.write_text(admission.read_text().replace("\t125\t2\n", "\t126\t2\n", 1))
+        elif mutation == "retire-pid":
+            admission.write_text(admission.read_text().replace("retire\t0\t123", "retire\t0\t999"))
+        elif mutation == "duplicate-retire":
+            admission.write_text(admission.read_text() + admission.read_text().splitlines(keepends=True)[-1])
+        elif mutation == "child-role":
+            _rewrite_diagnostic_journal(Path(children[0]["path"]), [records[0]])
+        elif mutation == "missing-marker":
+            (directory / "started.0.1").unlink()
+        elif mutation == "missing-child":
+            Path(children[0]["path"]).unlink()
+        elif mutation == "partial-line":
+            path.write_bytes(path.read_bytes()[:-1])
+        elif mutation == "partial-admission":
+            admission.write_bytes(admission.read_bytes()[:-1])
+        elif mutation == "partial-status":
+            status_path = Path(str(path) + ".status")
+            status_path.write_bytes(status_path.read_bytes()[:-1])
+        result = _fixture_resource_diagnostics(directory)
+        assert not result["complete"], mutation
+
+
+def test_resource_diagnostics_binary_journal_enforces_physical_byte_bound(tmp_path, monkeypatch):
+    import builtins
+
+    real_open = builtins.open
+    calls = []
+
+    def observe_open(path, mode, **kwargs):
+        calls.append((mode, kwargs))
+        return real_open(path, mode, **kwargs)
+
+    monkeypatch.setattr(policy, "open", observe_open, raising=False)
+    state = policy.worker_resource_diagnostics(str(tmp_path / "physical.tsv"))
+    payload = ("\x00" * 248 + "aaa", 1, 1, 1)
+    expected = (repr(("published", payload)) + "\n").encode("utf-8")
+    assert len(expected) == 1024  # Text-mode CRLF would have made this 1025.
+    for index in range(256):
+        policy.record_worker_resource_diagnostic(state, "published", payload)
+    policy.record_worker_resource_diagnostic(state, "published", payload)
+    policy.finish_worker_resource_diagnostics(state)
+    actual = Path(state["path"]).read_bytes()
+    assert actual == expected * 256 and len(actual) == 262144
+    assert state["incomplete"] == "limit" and state["bytes"] == len(actual)
+    assert calls == [("ab", {})] * 256 + [("wb", {})]
+    assert b"\r\n" not in actual
+
+
+def test_resource_diagnostics_complete_can_explain_original_peak_equality_failure(tmp_path):
+    import ast
+    from tests.python.test_worker_size_prior_processes import _fixture_resource_diagnostics
+
+    directory = tmp_path / "decreased-final-report"
+    driver, children = _complete_diagnostic_chain(directory)
+    child_path = Path(children[0]["path"])
+    publications = [ast.literal_eval(line) for line in child_path.read_text().splitlines()]
+    old_text = publications[0][1][0]
+    higher_text = old_text.replace("\n120\n120\n", "\n120\n130\n")
+    publications[0] = ("published", (higher_text, 120, 130, 130))
+    _rewrite_diagnostic_journal(child_path, publications)
+    driver_path = Path(driver["path"])
+    records = [ast.literal_eval(line) for line in driver_path.read_text().splitlines()]
+    first = list(records[0][1])
+    first[4], first[5] = 130, higher_text
+    records[0] = ("accepted", tuple(first))
+    observed = list(records[2][1])
+    sample = list(observed[3])
+    sample[2] = 130
+    observed[3] = tuple(sample)
+    records[2] = ("observation", tuple(observed))
+    _rewrite_diagnostic_journal(driver_path, records)
+    admission = directory / "admission.tsv"
+    admission.write_text(admission.read_text().replace("retire\t0\t123\t1\t0\t125", "retire\t0\t123\t1\t0\t130"))
+    result = _fixture_resource_diagnostics(directory)
+    assert result["complete"]  # Complete evidence, NOT a passing fixture assertion.
+    assert result["verified_observations"][0]["accepted_maximum"] == 130
+    assert result["accepted"][1]["phase"] == "complete" and result["accepted"][1]["peak"] == 125

@@ -603,17 +603,120 @@ def _open_worker_resource(path: str):
     return open(path, "r", encoding="utf-8")
 
 
-def read_worker_resource(path: str, expected_pid: int, expected_token: str = ""):
+def worker_resource_diagnostics(path):
+    """Explicit synthetic-fixture journal; never enabled by an environment key."""
+    return {"path": path, "records": 0, "bytes": 0, "incomplete": ""}
+
+
+def _diagnostic_integer(value):
+    return type(value) is int and -9223372036854775808 <= value <= 9223372036854775807
+
+
+def _diagnostic_text(value, limit):
+    return type(value) is str and len(value) <= limit
+
+
+def _diagnostic_payload_fits(event, payload):
+    # Check exact builtin types and lengths BEFORE repr/encode. This journal
+    # is deliberately limited to the small synthetic fixture protocol, not
+    # arbitrary production task inputs or user-defined representation methods.
+    if type(event) is not str or type(payload) is not tuple:
+        return False
+    if event == "published":
+        return (len(payload) == 4 and _diagnostic_text(payload[0], 384)
+                and all(_diagnostic_integer(value) for value in payload[1:]))
+    if event == "accepted":
+        return (len(payload) == 6 and _diagnostic_integer(payload[0])
+                and _diagnostic_text(payload[1], 64) and _diagnostic_text(payload[2], 32)
+                and _diagnostic_integer(payload[3]) and _diagnostic_integer(payload[4])
+                and _diagnostic_text(payload[5], 384))
+    if event != "observation" or len(payload) != 4:
+        return False
+    if (not _diagnostic_integer(payload[0]) or not _diagnostic_integer(payload[1])
+            or not _diagnostic_text(payload[2], 64)):
+        return False
+    sample = payload[3]
+    if type(sample) is not tuple or len(sample) not in (3, 4):
+        return False
+    if (not _diagnostic_text(sample[0], 256) or type(sample[1]) is not list
+            or len(sample[1]) > 8 or not all(_diagnostic_integer(value) for value in sample[1])
+            or not _diagnostic_integer(sample[2])):
+        return False
+    if len(sample) == 3:
+        return True
+    binding = sample[3]
+    return (type(binding) is tuple and len(binding) == 2
+            and _diagnostic_text(binding[0], 64) and _diagnostic_integer(binding[1]))
+
+
+def record_worker_resource_diagnostic(diagnostics, event, payload):
+    """Bounded best-effort evidence, with no sampling or scheduler decisions.
+
+    A missing final status or a nonempty incomplete reason means the journal
+    is not a complete history. The fixture owns a fresh private path per PID
+    and one driver path; production callers never construct this state.
+    """
+    if diagnostics["incomplete"]:
+        return
+    try:
+        if diagnostics["records"] >= 256 or diagnostics["bytes"] >= 262144:
+            diagnostics["incomplete"] = "limit"
+            return
+        if not _diagnostic_payload_fits(event, payload):
+            diagnostics["incomplete"] = "shape-limit"
+            return
+        line = repr((event, payload)) + "\n"
+        encoded = line.encode("utf-8")
+        size = len(encoded)
+        if size > 1024 or diagnostics["bytes"] + size > 262144:
+            diagnostics["incomplete"] = "limit"
+            return
+        # Binary append writes exactly the bytes just bounded, including on
+        # Windows. Native py_file_write accepts bytes and uses raw fwrite.
+        with open(diagnostics["path"], "ab") as stream:
+            stream.write(encoded)
+        diagnostics["records"] += 1
+        diagnostics["bytes"] += size
+    except Exception:
+        # Ordinary evidence failure must not change the report outcome.
+        # KeyboardInterrupt/SystemExit retain their cancellation semantics.
+        diagnostics["incomplete"] = "write-error"
+
+
+def finish_worker_resource_diagnostics(diagnostics, preserve_error=False):
+    # Missing/unreadable status is incomplete too, including a killed child.
+    try:
+        with open(diagnostics["path"] + ".status", "wb") as stream:
+            stream.write((repr((diagnostics["records"], diagnostics["bytes"],
+                                diagnostics["incomplete"])) + "\n").encode("utf-8"))
+    except Exception:
+        pass
+    except BaseException:
+        if not preserve_error:
+            raise
+
+
+def read_worker_resource(path: str, expected_pid: int, expected_token: str = "",
+                         diagnostics=None):
     if not path:
         return None
     try:
         with _open_worker_resource(path) as stream:
-            rows = stream.read().splitlines()
+            if diagnostics is None:
+                rows = stream.read().splitlines()
+            else:
+                report_text = stream.read()
+                rows = report_text.splitlines()
         if len(rows) != 6 or rows[0] != RESOURCE_REPORT_SCHEMA or rows[5] != expected_token:
             return None
         pid, current, peak = int(rows[1]), int(rows[3]), int(rows[4])
         if pid != expected_pid or current <= 0 or peak < current:
             return None
+        if diagnostics is not None:
+            record_worker_resource_diagnostic(
+                diagnostics, "accepted",
+                (expected_pid, expected_token, rows[2], current, peak, report_text),
+            )
         return rows[2], current, peak
     except (OSError, ValueError):
         return None
@@ -841,7 +944,7 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
     del result
 
 
-def publish_worker_resource(phase: str) -> None:
+def publish_worker_resource(phase: str, diagnostics=None) -> None:
     """Publish self high-water RSS at existing worker phase boundaries."""
     path = str(os.environ.get(RESOURCE_REPORT_ENV, "") or "")
     if not path:
@@ -851,16 +954,28 @@ def publish_worker_resource(phase: str) -> None:
     )
 
     current = _coordinator_rss_bytes()
-    peak = max(current, _worker_peak_rss_bytes())
+    if diagnostics is None:
+        peak = max(current, _worker_peak_rss_bytes())
+    else:
+        raw_peak = _worker_peak_rss_bytes()
+        peak = max(current, raw_peak)
     if current <= 0 or peak <= 0:
         raise WorkerMemoryError("worker RSS observation is unavailable")
     temporary = path + ".tmp"
     with open(temporary, "w", encoding="utf-8") as stream:
-        stream.write(
-            RESOURCE_REPORT_SCHEMA + "\n" + str(os.getpid()) + "\n" + phase
-            + "\n" + str(current) + "\n" + str(peak)
-            + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
-        )
+        if diagnostics is None:
+            stream.write(
+                RESOURCE_REPORT_SCHEMA + "\n" + str(os.getpid()) + "\n" + phase
+                + "\n" + str(current) + "\n" + str(peak)
+                + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
+            )
+        else:
+            report_text = (
+                RESOURCE_REPORT_SCHEMA + "\n" + str(os.getpid()) + "\n" + phase
+                + "\n" + str(current) + "\n" + str(peak)
+                + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
+            )
+            stream.write(report_text)
     # CPython's Windows reader can deny delete sharing while reading the old
     # snapshot. Keep that valid snapshot until atomic replacement succeeds;
     # never truncate it or treat a failed final publication as completion.
@@ -895,3 +1010,7 @@ def publish_worker_resource(phase: str) -> None:
         except OSError:
             pass
         raise
+    if diagnostics is not None:
+        record_worker_resource_diagnostic(
+            diagnostics, "published", (report_text, current, raw_peak, peak),
+        )
