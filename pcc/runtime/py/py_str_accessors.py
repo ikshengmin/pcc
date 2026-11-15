@@ -769,6 +769,11 @@ def _encode_invalid(cp: int, codec: int) -> int:
 
 
 def _encode_raise_unicode(s, codec: int, byte_at: int, start: int) -> None:
+    if codec == 3 or codec == 4:
+        # CPython's UTF-16 encoder invokes the handler for one surrogate at
+        # a time, unlike the contiguous invalid runs of its other codecs.
+        py_unicode_encode_error(s, cstr("utf-16-le") if codec == 3 else cstr("utf-16-be"), start, start + 1, cstr("surrogates not allowed"))
+        return
     end: int = start
     length: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
     while byte_at < length:
@@ -779,8 +784,6 @@ def _encode_raise_unicode(s, codec: int, byte_at: int, start: int) -> None:
         end = end + 1
     if codec == 0:
         py_unicode_encode_error(s, cstr("utf-8"), start, end, cstr("surrogates not allowed"))
-    elif codec == 3 or codec == 4:
-        py_unicode_encode_error(s, cstr("utf-16-le") if codec == 3 else cstr("utf-16-be"), start, end, cstr("surrogates not allowed"))
     elif codec == 1:
         py_unicode_encode_error(s, cstr("ascii"), start, end, cstr("ordinal not in range(128)"))
     else:
@@ -846,30 +849,6 @@ def _str_encode_utf16(s, codec: int, mode: int):
             pass
         elif mode == 2:
             used = _encode_utf16_word(output, used, 63, codec)
-        elif mode == 3:
-            # The shared surrogateescape handler returns raw bytes. UTF-16
-            # accepts that replacement only when it contains whole words.
-            end: int = at
-            escaped: int = 0
-            valid: int = 1
-            while end < length:
-                probe: int = _utf8_ord_at_byte(s, end)
-                if probe < 55296 or probe > 57343:
-                    break
-                if probe < 56448 or probe > 56575:
-                    valid = 0
-                end = end + _encode_width(probe)
-                escaped = escaped + 1
-            if valid == 0 or escaped % 2 != 0:
-                free(output)
-                _encode_raise_unicode(s, codec, at, index)
-                return null()
-            while at < end:
-                store_i8(output, used, _utf8_ord_at_byte(s, at) - 56320)
-                used = used + 1
-                at = at + 3
-                index = index + 1
-            continue
         elif mode == 5 or mode == 7:
             # Surrogates have no Unicode character names, so namereplace
             # selects the same backslash form as backslashreplace here.
