@@ -1385,3 +1385,567 @@ main()
         assert result.returncode == 0, (collector, result.stdout, result.stderr)
         assert result.stderr == ""
         assert result.stdout == expected
+
+
+_PRIVATE_VALUE_COLUMNS = ("value_scalars", "definition_positions", "used_value_ids")
+
+
+def _private_value_sidecar(tmp_path, monkeypatch, case="valid"):
+    import json
+    import struct
+
+    path = tmp_path / (case + ".pidx")
+    encode_indexed_module_file(str(path), _executable_direct_module(monkeypatch))
+    with path.open("rb") as stream:
+        magic = stream.readline()
+        header_size = int(stream.readline())
+        header = json.loads(stream.read(header_size))
+        payload = bytearray(stream.read())
+    offset = 0
+    for row in header["functions"][0]["arenas"]:
+        name, count = row
+        if case == "short-" + name:
+            assert count > 0
+            del payload[offset:offset + 8]
+            row[1] -= 1
+            header["total_scalars"] -= 1
+            break
+        if name == "value_scalars" and case.startswith("prepared-"):
+            struct.pack_into("<q", payload, offset + int(case[-1]) * 8, 0)
+            break
+        offset += count * 8
+    raw = json.dumps(header, sort_keys=True).encode()
+    path.write_bytes(magic + str(len(raw)).encode() + b"\n" + raw + payload)
+    return path
+
+
+def _observe_private_value_owners(monkeypatch, failure=None, read_index=None,
+                                  close_index=None, kernel_failure=False, cleanup_failure=None):
+    real_read = indexed_codec._read_host_arena
+    real_seed = indexed_codec._seed_from_wire
+    real_close = indexed_codec.CompilerIntArena.close
+    captured, reads, attempts, functions = [], [], [], []
+
+    def seed(value):
+        result = real_seed(value)
+        functions.append(result[0])
+        return result
+
+    def read(stream, count):
+        index = len(reads)
+        if index == read_index:
+            raise failure
+        arena = real_read(stream, count)
+        name = _ARENA_FIELDS[index % len(_ARENA_FIELDS)][0]
+        reads.append((name, arena))
+        if name in _PRIVATE_VALUE_COLUMNS:
+            captured.append(arena)
+        return arena
+
+    def close(arena):
+        index = next((i for i, owner in enumerate(captured) if owner is arena), None)
+        if index is not None:
+            attempts.append(index)
+            if index == close_index:
+                raise cleanup_failure if cleanup_failure is not None else failure
+        real_close(arena)
+
+    def kernel(function):
+        raise failure
+
+    monkeypatch.setattr(indexed_codec, "_seed_from_wire", seed)
+    monkeypatch.setattr(indexed_codec, "_read_host_arena", read)
+    monkeypatch.setattr(indexed_codec.CompilerIntArena, "close", close)
+    if kernel_failure:
+        monkeypatch.setattr(indexed_codec, "get_indexed_function_kernel", kernel)
+
+    def finish():
+        # Fault injection may deliberately leave one owner open. Restore the
+        # real operation before test teardown, outside all attempt assertions.
+        monkeypatch.setattr(indexed_codec.CompilerIntArena, "close", real_close)
+        for _, arena in reads:
+            real_close(arena)
+        for function in functions:
+            if function.indexed_seed is not None:
+                indexed_codec._close_private_seed(function.indexed_seed)
+            if function.indexed_kernel is not None:
+                function.indexed_kernel.close_native_tables()
+
+    return captured, reads, attempts, functions, finish
+
+
+def _assert_private_value_boundary(reads, attempts, captured, functions):
+    assert attempts == list(range(len(captured)))
+    # Only the three copied columns are owned by the new rollback. The raw
+    # payloads already transferred to the seed/kernel must remain untouched.
+    for offset, (_, arena) in enumerate(reads):
+        if _ARENA_FIELDS[offset % len(_ARENA_FIELDS)][2]:
+            assert not arena._closed
+    for function in functions:
+        owner = function.indexed_kernel or function.indexed_seed
+        assert not owner.block_name_index._closed
+        assert not owner.value_name_index._closed
+
+
+@pytest.mark.parametrize("case", ["short-value_scalars", "short-definition_positions",
+                                  "prepared-2", "prepared-3", "prepared-5"])
+@pytest.mark.parametrize("close_index", [None, 0, 1, 2])
+def test_private_value_columns_released_after_malformed_wire(
+    tmp_path, monkeypatch, case, close_index,
+):
+    path = _private_value_sidecar(tmp_path, monkeypatch, case)
+    cleanup = KeyboardInterrupt("cleanup must not replace validation")
+    captured, reads, attempts, functions, finish = _observe_private_value_owners(
+        monkeypatch, failure=cleanup, close_index=close_index,
+    )
+    try:
+        message = "already prepared" if case.startswith("prepared") else "columns are inconsistent"
+        with pytest.raises(ValueError, match=message):
+            decode_indexed_module_file(str(path))
+        assert len(captured) == 3
+        _assert_private_value_boundary(reads, attempts, captured, functions)
+        assert [owner._closed for owner in captured] == [i != close_index for i in range(3)]
+    finally:
+        finish()
+
+
+@pytest.mark.parametrize("failure_type", [MemoryError, OSError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("point", ["read-0", "read-1", "read-2", "kernel"])
+@pytest.mark.parametrize("close_index", [None, 0, 1, 2])
+def test_private_value_columns_preserve_read_and_kernel_failures(
+    tmp_path, monkeypatch, failure_type, point, close_index,
+):
+    path = _private_value_sidecar(tmp_path, monkeypatch)
+    original = failure_type("original private column failure")
+    cause, context = RuntimeError("cause"), LookupError("context")
+    original.__cause__, original.__context__ = cause, context
+    original.__suppress_context__ = True
+    read_offset = len(_ARENA_FIELDS) - 3
+    read_index = read_offset + int(point[-1]) if point.startswith("read-") else None
+    captured, reads, attempts, functions, finish = _observe_private_value_owners(
+        monkeypatch, failure=original, read_index=read_index, kernel_failure=point == "kernel",
+        close_index=close_index, cleanup_failure=KeyboardInterrupt("secondary cleanup failure"),
+    )
+    try:
+        with pytest.raises(failure_type) as escaped:
+            decode_indexed_module_file(str(path))
+        assert escaped.value is original
+        assert original.__cause__ is cause and original.__context__ is context
+        assert original.__suppress_context__
+        expected = 3 if point == "kernel" else int(point[-1])
+        assert len(captured) == expected
+        _assert_private_value_boundary(reads, attempts, captured, functions)
+        assert [owner._closed for owner in captured] == [i != close_index for i in range(expected)]
+        origin = escaped.value.__traceback__
+        while origin.tb_next is not None:
+            origin = origin.tb_next
+        assert origin.tb_frame.f_code.co_name == ("kernel" if point == "kernel" else "read")
+    finally:
+        finish()
+
+
+@pytest.mark.parametrize("failure_type", [RuntimeError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("close_index", [0, 1, 2])
+def test_private_value_column_close_failure_is_not_retried(
+    tmp_path, monkeypatch, failure_type, close_index,
+):
+    path = _private_value_sidecar(tmp_path, monkeypatch)
+    original = failure_type("first close failed")
+    captured, reads, attempts, functions, finish = _observe_private_value_owners(
+        monkeypatch, failure=original, close_index=close_index,
+    )
+    try:
+        with pytest.raises(failure_type) as escaped:
+            decode_indexed_module_file(str(path))
+        assert escaped.value is original
+        assert len(captured) == 3
+        _assert_private_value_boundary(reads, attempts, captured, functions)
+        assert [owner._closed for owner in captured] == [i != close_index for i in range(3)]
+        assert functions[0].indexed_kernel is not None
+        for name in _PRIVATE_VALUE_COLUMNS:
+            assert not getattr(functions[0].indexed_kernel, name)._closed
+    finally:
+        finish()
+
+
+def test_private_value_columns_success_keeps_kernel_owners_open(tmp_path, monkeypatch):
+    path = _private_value_sidecar(tmp_path, monkeypatch)
+    captured, reads, attempts, functions, finish = _observe_private_value_owners(monkeypatch)
+    try:
+        restored = decode_indexed_module_file(str(path))
+        assert len(captured) == len(restored.functions) * 3
+        _assert_private_value_boundary(reads, attempts, captured, functions)
+        assert all(owner._closed for owner in captured)
+        for index, function in enumerate(restored.functions):
+            for offset, name in enumerate(_PRIVATE_VALUE_COLUMNS):
+                owner = getattr(function.indexed_kernel, name)
+                assert owner is not captured[index * 3 + offset]
+                assert not owner._closed
+    finally:
+        finish()
+
+
+def test_private_value_column_guard_matches_wire_ownership():
+    import ast
+    import inspect
+
+    assert [name for name, _, field in _ARENA_FIELDS if not field] == list(_PRIVATE_VALUE_COLUMNS)
+    assert all(field for _, _, field in _ARENA_FIELDS[:-3])
+    helper = ast.parse(inspect.getsource(indexed_codec._close_private_value_columns)).body[0]
+    assert [arg.arg for arg in helper.args.args] == list(_PRIVATE_VALUE_COLUMNS)
+    assert len(helper.body) == 3
+    for name, guard in zip(_PRIVATE_VALUE_COLUMNS, helper.body):
+        assert isinstance(guard, ast.Try) and len(guard.handlers) == 1
+        assert guard.handlers[0].type.id == "BaseException"
+        assert isinstance(guard.handlers[0].body[0], ast.Pass)
+        call = guard.body[0].body[0].value
+        assert call.func.value.id == name and call.func.attr == "close"
+    decoder = ast.parse(inspect.getsource(indexed_codec.decode_indexed_module_file)).body[0]
+    rollback = [node for node in ast.walk(decoder) if isinstance(node, ast.Try)
+                and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                        and child.func.id == "_close_private_value_columns"
+                        for handler in node.handlers for child in ast.walk(handler))]
+    assert len(rollback) == 1
+    assert isinstance(rollback[0].handlers[0].body[-1], ast.Raise)
+    assert rollback[0].handlers[0].body[-1].exc is None
+
+
+@pytest.mark.parametrize("mutation", ["extra", "renamed", "reordered"])
+def test_private_value_inventory_still_rejects_unknown_columns(tmp_path, monkeypatch, mutation):
+    import json
+
+    path = _private_value_sidecar(tmp_path, monkeypatch)
+    with path.open("rb") as stream:
+        magic = stream.readline()
+        header = json.loads(stream.read(int(stream.readline())))
+        payload = stream.read()
+    rows = header["functions"][0]["arenas"]
+    if mutation == "extra":
+        rows.append(["unexpected_private_column", 0])
+    elif mutation == "renamed":
+        rows[-1][0] = "unexpected_private_column"
+    else:
+        rows[-1], rows[-2] = rows[-2], rows[-1]
+    raw = json.dumps(header, sort_keys=True).encode()
+    path.write_bytes(magic + str(len(raw)).encode() + b"\n" + raw + payload)
+
+    def no_payload_read(*args):
+        pytest.fail("invalid inventory reached raw arena acquisition")
+
+    monkeypatch.setattr(indexed_codec, "_read_host_arena", no_payload_read)
+    monkeypatch.setattr(indexed_codec, "_read_native_arena", no_payload_read)
+    with pytest.raises(ValueError, match="arena (inventory|order) is invalid"):
+        decode_indexed_module_file(str(path))
+
+
+def _native_private_columns_source():
+    import ast
+    import inspect
+    from pathlib import Path
+    import textwrap
+    from pcc.backend import self_backend_value_arena as arena_module
+
+    original = inspect.getsource(indexed_codec.decode_indexed_module_file)
+    tree = ast.parse(original)
+    owner_start = next(node for node in ast.walk(tree) if isinstance(node, ast.AnnAssign)
+                       and isinstance(node.target, ast.Name) and node.target.id == "value_scalars")
+    guard = next(node for node in ast.walk(tree) if isinstance(node, ast.Try)
+                 and any(isinstance(child, ast.Call) and isinstance(child.func, ast.Name)
+                         and child.func.id == "_close_private_value_columns"
+                         for handler in node.handlers for child in ast.walk(handler)))
+    segment = textwrap.dedent("".join(original.splitlines(keepends=True)[
+        owner_start.lineno - 1:guard.end_lineno
+    ]))
+    statements = ast.parse(segment).body
+    assert len(statements) == 4 and isinstance(statements[-1], ast.Try)
+    assert ast.dump(statements[-1], include_attributes=False) == ast.dump(guard, include_attributes=False)
+    assert [node.target.id for node in statements[:3]] == list(_PRIVATE_VALUE_COLUMNS)
+    replacement = "_columns_observed_read(fd, count, wire_name)"
+    assert segment.count("_read_native_arena(fd, count)") == 1
+    observed = segment.replace("_read_native_arena(fd, count)", replacement)
+    assert observed.replace(replacement, "_read_native_arena(fd, count)") == segment
+    # The control uses the exact guard body without its exception handler.
+    # It must leave observed owners open on malformed data/read failure, so
+    # the checks cannot pass merely because the observer retains references.
+    control = textwrap.dedent("".join(segment.splitlines(keepends=True)[
+        statements[-1].body[0].lineno - 1:statements[-1].body[-1].end_lineno
+    ]))
+    control = "".join(segment.splitlines(keepends=True)[:3]) + control
+    control = control.replace("_read_native_arena(fd, count)", replacement)
+    prelude = '''    seed = function.seed
+    native = True
+    stream = 0
+    inventory = [("value_scalars", counts[0]), ("definition_positions", counts[1]),
+                 ("used_value_ids", counts[2])]
+'''
+    wrapper = (
+        "\ndef _columns_restore(fd: int, counts: list[int], function: ColumnFunction) -> None:\n"
+        + prelude + textwrap.indent(observed, "    ")
+        + "\ndef _columns_unguarded_control(fd: int, counts: list[int], function: ColumnFunction) -> None:\n"
+        + prelude + textwrap.indent(control, "    ")
+    )
+    arena = Path(arena_module.__file__).read_text().split("class CompilerRecordSpanArena:", 1)[0]
+    source = (arena + "\n" + inspect.getsource(indexed_codec._read_native_arena)
+              + "\n" + inspect.getsource(indexed_codec._close_private_value_columns)
+              + _NATIVE_PRIVATE_COLUMNS_BOUNDARY + wrapper + _NATIVE_PRIVATE_COLUMNS_MAIN)
+    ast.parse(source)
+    return source, segment
+
+
+_NATIVE_PRIVATE_COLUMNS_BOUNDARY = '''
+import os
+import sys
+import gc
+
+BackendUnavailable = ValueError
+_ARENA_FIELDS = (("value_scalars", "value_scalars", ""),
+                 ("definition_positions", "definition_positions", ""),
+                 ("used_value_ids", "used_value_ids", ""))
+_columns_observed: list[CompilerIntArena] = []
+_columns_read_failure: str = ""
+_columns_kernel_failure: bool = False
+
+# Explicit boundary substitutes. Host tests cover the complete seed/kernel;
+# this native fixture executes the unchanged production ownership transaction
+# and real arenas without importing the full compiler/backend package closure.
+class ColumnSeed:
+    def __init__(self, empty: bool) -> None:
+        self.value_names: list[str] = [] if empty else ["%x"]
+        self.definition_blocks: list[int] = []
+        self.definition_positions: list[int] = []
+        self.value_type_ids: list[int] = []
+        self.alloca_type_ids: list[int] = []
+        self.value_is_used_flags: list[bool] = []
+        self.value_last_use_positions: list[int] = []
+        self.used_value_ids_in_order: list[int] = []
+
+class ColumnKernel:
+    def __init__(self, seed: ColumnSeed) -> None:
+        self.value_scalars = CompilerIntArena()
+        self.definition_positions = CompilerIntArena()
+        self.used_value_ids = CompilerIntArena()
+        for value_id in range(len(seed.value_names)):
+            self.value_scalars.append(seed.definition_blocks[value_id])
+            self.value_scalars.append(seed.value_type_ids[value_id])
+            self.value_scalars.append(-1)
+            self.value_scalars.append(-1)
+            self.value_scalars.append(seed.alloca_type_ids[value_id])
+            self.value_scalars.append(-1)
+            self.value_scalars.append(seed.value_last_use_positions[value_id])
+            self.value_scalars.append(1 if seed.value_is_used_flags[value_id] else 0)
+            self.definition_positions.append(seed.definition_positions[value_id])
+        for value in seed.used_value_ids_in_order:
+            self.used_value_ids.append(value)
+
+class ColumnFunction:
+    def __init__(self, empty: bool) -> None:
+        self.seed = ColumnSeed(empty)
+        self.kernel: ColumnKernel | None = None
+
+def get_indexed_function_kernel(function: ColumnFunction) -> ColumnKernel:
+    if _columns_kernel_failure:
+        raise ValueError("boundary kernel failure")
+    kernel = ColumnKernel(function.seed)
+    function.kernel = kernel
+    return kernel
+
+def _replace_seed_arena(seed: ColumnSeed, seed_field: str, arena: CompilerIntArena) -> None:
+    raise AssertionError("seed payload adoption is outside this native boundary")
+
+def _read_host_arena(stream: int, count: int) -> CompilerIntArena:
+    raise AssertionError("native private columns must not use the host reader")
+
+def _columns_observed_read(fd: int, count: int, wire_name: str) -> CompilerIntArena:
+    if wire_name == _columns_read_failure:
+        assert count > 0
+        arena = _read_native_arena(-1, count)
+    else:
+        arena = _read_native_arena(fd, count)
+    assert arena.uses_native_storage
+    assert not arena._closed
+    _columns_observed.append(arena)
+    return arena
+'''
+
+
+_NATIVE_PRIVATE_COLUMNS_MAIN = '''
+def main():
+    global _columns_read_failure, _columns_kernel_failure
+    case = sys.argv[1]
+    control = case.startswith("control-")
+    if control:
+        case = case[8:]
+    empty = case == "zero"
+    function = ColumnFunction(empty)
+    counts = [0, 0, 0] if empty else [8, 1, 1]
+    if case == "short-value_scalars":
+        counts[0] = 7
+    elif case == "short-definition_positions":
+        counts[1] = 0
+    _columns_read_failure = case[5:] if case.startswith("read-") else ""
+    _columns_kernel_failure = case == "kernel"
+    failed = False
+    fd = os.open(sys.argv[2], os.O_RDONLY)
+    try:
+        if control:
+            _columns_unguarded_control(fd, counts, function)
+        else:
+            _columns_restore(fd, counts, function)
+    except OSError:
+        assert _columns_read_failure != ""
+        failed = True
+    except ValueError:
+        assert _columns_read_failure == ""
+        failed = True
+    finally:
+        os.close(fd)
+    assert failed == (case not in ("valid", "zero"))
+    expected = 3
+    if _columns_read_failure == "value_scalars":
+        expected = 0
+    elif _columns_read_failure == "definition_positions":
+        expected = 1
+    elif _columns_read_failure == "used_value_ids":
+        expected = 2
+    assert len(_columns_observed) == expected
+    gc.collect()
+    for arena in _columns_observed:
+        if control:
+            assert not arena._closed
+            assert arena.uses_native_storage
+            arena.close()
+        else:
+            assert arena._closed
+            assert arena.native_address() == 0
+    if not failed:
+        kernel = function.kernel
+        assert isinstance(kernel, ColumnKernel)
+        assert not kernel.value_scalars._closed
+        assert not kernel.definition_positions._closed
+        assert not kernel.used_value_ids._closed
+        assert kernel.value_scalars.uses_native_storage
+        assert kernel.definition_positions.uses_native_storage
+        assert kernel.used_value_ids.uses_native_storage
+        assert len(kernel.value_scalars) == (0 if empty else 8)
+        assert len(kernel.definition_positions) == (0 if empty else 1)
+        assert len(kernel.used_value_ids) == (0 if empty else 1)
+        if not empty:
+            assert kernel.value_scalars.get_unchecked(2) == -1
+            assert kernel.value_scalars.get_unchecked(7) == 1
+            assert kernel.definition_positions.get_unchecked(0) == 4
+            assert kernel.used_value_ids.get_unchecked(0) == 0
+        kernel.value_scalars.close()
+        kernel.definition_positions.close()
+        kernel.used_value_ids.close()
+    print("private-columns|" + sys.argv[1] + "|ok")
+main()
+'''
+
+
+@pytest.mark.integration
+def test_private_value_columns_native_boundary_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
+):
+    """Exact production guard and raw readers; explicit seed/kernel substitutes."""
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import struct
+    import subprocess
+    import sys
+    from pcc.backend import self_backend_value_arena as arena_module
+
+    cases = ["short-value_scalars", "short-definition_positions",
+             "prepared-2", "prepared-3", "prepared-5",
+             "read-value_scalars", "read-definition_positions", "read-used_value_ids",
+             "kernel", "valid", "zero", "control-prepared-2", "control-read-used_value_ids"]
+    inputs = {}
+    for case in cases:
+        values = [0, 0, -1, -1, -1, -1, 7, 9]
+        positions, used = [4], [0]
+        if case == "short-value_scalars":
+            values.pop()
+        elif case == "short-definition_positions":
+            positions.clear()
+        elif case == "zero":
+            values.clear()
+            positions.clear()
+            used.clear()
+        elif "prepared-" in case:
+            values[int(case[-1])] = 0
+        path = tmp_path / (case + ".bin")
+        path.write_bytes(b"".join(struct.pack("<q", value) for value in values + positions + used))
+        inputs[case] = path
+    source = tmp_path / "private_columns_native.py"
+    source_text, segment = _native_private_columns_source()
+    source.write_text(source_text)
+    binary = tmp_path / "private_columns_native"
+
+    def identity(path):
+        if path is None:
+            return None
+        return {"path": os.path.abspath(os.fspath(path)),
+                "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+    captured = inspect.getclosurevars(python_program_compiler).nonlocals.get("compiler")
+    if not isinstance(captured, (str, os.PathLike)):
+        captured = None
+    route_path = os.environ.get("PCC_TEST_COMPILER_LOG")
+    route_offset = (Path(route_path).stat().st_size
+                    if route_path and Path(route_path).is_file() else 0)
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    receipt = {
+        "nominal_case": request.node.callspec.params["python_program_compiler"],
+        "ownership_boundary": "nominal case is not compiler ownership evidence; inspect callable, captured compiler and route log",
+        "compiler_callable": python_program_compiler.__module__ + "." + python_program_compiler.__qualname__,
+        "compiler_callable_source": identity(inspect.getsourcefile(python_program_compiler)),
+        "captured_compiler_before": identity(captured),
+        "host_process": identity(sys.executable), "source": identity(source),
+        "runtime_archive": identity(pcc_runtime_archive),
+        "codec": identity(indexed_codec.__file__), "arena": identity(arena_module.__file__),
+        "transaction_sha256": hashlib.sha256(segment.encode()).hexdigest(),
+        "inputs": {case: identity(path) for case, path in inputs.items()},
+        "instrumentation": "exact production transaction and helper; one reversible read-call observer with real invalid FD; retained real arena objects, no raw-pointer recovery; unguarded-body leak controls",
+        "scope": "extracted three-column guard with seed/kernel substitutes, not full decoder, native constructor/close fault injection, fixed point, RSS or performance",
+        "returned_args": None, "route_records": [], "gc_runs": [],
+    }
+    receipt_path = tmp_path / "private_columns_native.receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    try:
+        compiled = python_program_compiler(
+            str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive),
+        )
+        args = getattr(compiled, "args", None)
+        if args is not None:
+            receipt["returned_args"] = ([os.fsdecode(value) for value in args]
+                                        if isinstance(args, (tuple, list)) else os.fsdecode(args))
+    finally:
+        receipt["captured_compiler_after"] = identity(captured)
+        if route_path and Path(route_path).is_file():
+            with Path(route_path).open("rb") as stream:
+                stream.seek(route_offset)
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError) as error:
+                        receipt["route_records"].append({"unparsed": str(error)})
+                        continue
+                    if record.get("test") == current_test and record.get("kind") == "compile_python":
+                        receipt["route_records"].append(record)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt["binary"] = identity(binary)
+    for collector in range(5):
+        for case in cases:
+            result = subprocess.run(
+                [str(binary), case, str(inputs[case])], capture_output=True, text=True, timeout=30,
+                env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
+            )
+            receipt["gc_runs"].append({"collector": collector, "case": case,
+                                       "returncode": result.returncode,
+                                       "stdout": result.stdout, "stderr": result.stderr})
+            receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+            assert result.returncode == 0, (collector, case, result.stdout, result.stderr)
+            assert result.stderr == ""
+            assert result.stdout == "private-columns|" + case + "|ok\n"

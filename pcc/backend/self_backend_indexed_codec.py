@@ -840,6 +840,30 @@ def _seed_from_wire(value) -> tuple[ParsedFunction, tuple[tuple[str, int], ...]]
         raise
 
 
+def _close_private_value_columns(
+    value_scalars: CompilerIntArena | None,
+    definition_positions: CompilerIntArena | None,
+    used_value_ids: CompilerIntArena | None,
+) -> None:
+    # These wire columns are copied, never adopted by the seed or kernel.
+    # This helper runs only while another failure is already authoritative.
+    try:
+        if value_scalars is not None:
+            value_scalars.close()
+    except BaseException:
+        pass
+    try:
+        if definition_positions is not None:
+            definition_positions.close()
+    except BaseException:
+        pass
+    try:
+        if used_value_ids is not None:
+            used_value_ids.close()
+    except BaseException:
+        pass
+
+
 def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule:
     """Read and fully validate one v1 direct indexed module sidecar."""
 
@@ -914,81 +938,98 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
             if not isinstance(seed, IndexedFunctionSeed):
                 raise BackendUnavailable("indexed module seed construction failed")
             inventory = inventories[function_index]
-            temporary_arenas = {}
-            arena_index = 0
-            while arena_index < len(_ARENA_FIELDS):
-                wire_name, _kernel_field, seed_field = _ARENA_FIELDS[arena_index]
-                count = inventory[arena_index][1]
-                arena = (
-                    _read_native_arena(fd, count)
-                    if native
-                    else _read_host_arena(stream, count)
-                )
-                if seed_field:
-                    _replace_seed_arena(seed, seed_field, arena)
-                else:
-                    temporary_arenas[wire_name] = arena
-                arena_index += 1
-            value_scalars: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("value_scalars"))
-            definition_positions: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("definition_positions"))
-            used_value_ids: CompilerIntArena = cast(CompilerIntArena, temporary_arenas.get("used_value_ids"))
-            value_count = len(seed.value_names)
-            if (
-                not isinstance(value_scalars, CompilerIntArena)
-                or not isinstance(definition_positions, CompilerIntArena)
-                or not isinstance(used_value_ids, CompilerIntArena)
-                or len(value_scalars) != value_count * 8
-                or len(definition_positions) != value_count
-            ):
-                raise BackendUnavailable(
-                    "indexed module value scalar columns are inconsistent"
-                )
-            seed.definition_blocks = []
-            seed.definition_positions = []
-            seed.value_type_ids = []
-            seed.alloca_type_ids = []
-            seed.value_is_used_flags = []
-            seed.value_last_use_positions = []
-            value_id = 0
-            while value_id < value_count:
-                seed.definition_blocks.append(
-                    value_scalars.get_unchecked(value_id * 8)
-                )
-                seed.value_type_ids.append(
-                    value_scalars.get_unchecked(value_id * 8 + 1)
-                )
+            value_scalars: CompilerIntArena | None = None
+            definition_positions: CompilerIntArena | None = None
+            used_value_ids: CompilerIntArena | None = None
+            try:
+                arena_index = 0
+                while arena_index < len(_ARENA_FIELDS):
+                    wire_name, _kernel_field, seed_field = _ARENA_FIELDS[arena_index]
+                    count = inventory[arena_index][1]
+                    arena = (
+                        _read_native_arena(fd, count)
+                        if native
+                        else _read_host_arena(stream, count)
+                    )
+                    if seed_field:
+                        _replace_seed_arena(seed, seed_field, arena)
+                    elif wire_name == "value_scalars":
+                        value_scalars = arena
+                    elif wire_name == "definition_positions":
+                        definition_positions = arena
+                    else:
+                        used_value_ids = arena
+                    arena_index += 1
+                value_count = len(seed.value_names)
                 if (
-                    value_scalars.get_unchecked(value_id * 8 + 2) != -1
-                    or value_scalars.get_unchecked(value_id * 8 + 3) != -1
-                    or value_scalars.get_unchecked(value_id * 8 + 5) != -1
+                    not isinstance(value_scalars, CompilerIntArena)
+                    or not isinstance(definition_positions, CompilerIntArena)
+                    or not isinstance(used_value_ids, CompilerIntArena)
+                    or len(value_scalars) != value_count * 8
+                    or len(definition_positions) != value_count
                 ):
                     raise BackendUnavailable(
-                        "indexed module value state is already prepared"
+                        "indexed module value scalar columns are inconsistent"
                     )
-                seed.alloca_type_ids.append(
-                    value_scalars.get_unchecked(value_id * 8 + 4)
+                seed.definition_blocks = []
+                seed.definition_positions = []
+                seed.value_type_ids = []
+                seed.alloca_type_ids = []
+                seed.value_is_used_flags = []
+                seed.value_last_use_positions = []
+                value_id = 0
+                while value_id < value_count:
+                    seed.definition_blocks.append(
+                        value_scalars.get_unchecked(value_id * 8)
+                    )
+                    seed.value_type_ids.append(
+                        value_scalars.get_unchecked(value_id * 8 + 1)
+                    )
+                    if (
+                        value_scalars.get_unchecked(value_id * 8 + 2) != -1
+                        or value_scalars.get_unchecked(value_id * 8 + 3) != -1
+                        or value_scalars.get_unchecked(value_id * 8 + 5) != -1
+                    ):
+                        raise BackendUnavailable(
+                            "indexed module value state is already prepared"
+                        )
+                    seed.alloca_type_ids.append(
+                        value_scalars.get_unchecked(value_id * 8 + 4)
+                    )
+                    seed.value_last_use_positions.append(
+                        value_scalars.get_unchecked(value_id * 8 + 6)
+                    )
+                    seed.value_is_used_flags.append(
+                        bool(value_scalars.get_unchecked(value_id * 8 + 7))
+                    )
+                    seed.definition_positions.append(
+                        definition_positions.get_unchecked(value_id)
+                    )
+                    value_id += 1
+                seed.used_value_ids_in_order = []
+                used_index = 0
+                while used_index < len(used_value_ids):
+                    seed.used_value_ids_in_order.append(
+                        used_value_ids.get_unchecked(used_index)
+                    )
+                    used_index += 1
+                get_indexed_function_kernel(function)
+                # Remove each private owner before close so a failing release is
+                # not retried by rollback. Later columns still get one attempt.
+                arena = value_scalars
+                value_scalars = None
+                arena.close()
+                arena = definition_positions
+                definition_positions = None
+                arena.close()
+                arena = used_value_ids
+                used_value_ids = None
+                arena.close()
+            except BaseException:
+                _close_private_value_columns(
+                    value_scalars, definition_positions, used_value_ids,
                 )
-                seed.value_last_use_positions.append(
-                    value_scalars.get_unchecked(value_id * 8 + 6)
-                )
-                seed.value_is_used_flags.append(
-                    bool(value_scalars.get_unchecked(value_id * 8 + 7))
-                )
-                seed.definition_positions.append(
-                    definition_positions.get_unchecked(value_id)
-                )
-                value_id += 1
-            seed.used_value_ids_in_order = []
-            used_index = 0
-            while used_index < len(used_value_ids):
-                seed.used_value_ids_in_order.append(
-                    used_value_ids.get_unchecked(used_index)
-                )
-                used_index += 1
-            get_indexed_function_kernel(function)
-            value_scalars.close()
-            definition_positions.close()
-            used_value_ids.close()
+                raise
             function_index += 1
         if os.path.getsize(path) != expected_size or initial_size != expected_size:
             raise BackendUnavailable("indexed module changed during read")
