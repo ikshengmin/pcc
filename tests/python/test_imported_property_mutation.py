@@ -1,6 +1,7 @@
 """Cross-module property mutation retains live descriptor behavior.
 
 Python data model: Implementing Descriptors; builtin property accessor methods.
+https://docs.python.org/3/reference/datamodel.html#implementing-descriptors
 """
 from pathlib import Path
 import os

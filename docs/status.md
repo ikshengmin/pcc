@@ -25,8 +25,14 @@ CPython on all five collectors, including imported/typed/inherited receivers,
 accessor defaults and read-only errors. The linked Web consumer also passes
 [CI 43690996042](https://github.com/jiamo/pcc-web/actions/runs/43690996042).
 The Node consumer reaches the unchanged 90-second compilation limit in
-[CI 43690994087](https://github.com/jiamo/pcc-node/actions/runs/43690994087);
-that run has no native execution result. The integrated regression is registered
+[CI 43690994087](https://github.com/jiamo/pcc-node/actions/runs/43690994087) and
+the identical-input [CI 43691532047](https://github.com/jiamo/pcc-node/actions/runs/43691532047);
+neither has a native execution result. Electron also retains an initial timeout,
+then its same-input [CI 43691667436](https://github.com/jiamo/pcc-electron/actions/runs/43691667436)
+passes at 76.3 seconds and matches the class-cycle oracle on five collectors.
+Timeout snapshots still contain native backend emission workers; this is an
+investigation lead, not a proven cause or a qualified performance change.
+The integrated regression is registered
 in `tests/python/test_imported_property_mutation.py`. No local compiler or test
 ran. Full Python, bootstrap and native PCC1 qualification remain separate.
 
