@@ -583,6 +583,23 @@ from drift (GC0 control +2.5%). The mark finish reads walked records' bits
 directly (request-primitive stop time outside the sweep −14–17%; HTTP within
 drift). Generations (step 1 there) are not implemented yet.
 
+GC0 ownership protocol (2026-11-15, local Mac): the same-session aiohttp
+control is ~28,000 QPS against ~5,300 for GC0, so a request costs ~190 µs
+of carrier time against ~36 µs. An lldb census of an HTTP/1 parser driver
+(the gateway's own `http1.py`, one GET with three headers) counts ~2,100
+protocol calls per parsed request: `pcc_gc_store_root` 324 (159 clear an
+empty slot, 15 a tagged int, 144 release an object), `py_err_occurred` 272,
+`pcc_gc_unpin` 248, lease release 182 and acquire 135, `store_root_take` 148,
+`pcc_gc_pin` 131. `0d17b37e` removes the decoder's exact-int temporaries
+(99 empty clears and 99 unpins per request); HTTP A/B shows no change (GC0
+−0.5% 2/5, GC3 −0.1% 3/5). Inlining the trivial answers of
+`py_err_occurred` (pending-thread count 0) and of a zero-token lease release
+removed ~450 calls per parse but added 3.3% instructions and measured GC0
+−0.7% (2/5), GC3 +0.2% (4/5); it was not committed. Calls that return at
+once are cheap here: the profile's cost is in calls doing real work
+(`pcc_gc_store_root` count updates 7.2% of carrier samples, `_tlv_get_addr`
+5.8%, allocation, `__sendto` 7.4%).
+
 Latest GC0 (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or
 non-2xx responses and every row server-bound. Five-pair medians are
