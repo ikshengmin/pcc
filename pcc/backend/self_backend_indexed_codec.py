@@ -588,7 +588,16 @@ def _read_host_arena(stream, count: int) -> CompilerIntArena:
 
 def _read_native_arena(fd: int, count: int) -> CompilerIntArena:
     arena = CompilerIntArena(count)
-    arena.read_raw_fd(fd, count)
+    try:
+        arena.read_raw_fd(fd, count)
+    except BaseException:
+        # The arena is still private until the read succeeds. Keep the read
+        # failure authoritative even if releasing its payload also fails.
+        try:
+            arena.close()
+        except BaseException:
+            pass
+        raise
     return arena
 
 
