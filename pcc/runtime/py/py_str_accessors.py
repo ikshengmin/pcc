@@ -638,9 +638,42 @@ def _codec_lookup_error(encoding, direction: int) -> None:
     py_raise_owned(py_exc_new(11 if kind == 1 else 13, message))
 
 
+def _codec_common_spelling(encoding) -> int:
+    """The codec id of an exact common spelling, or -1.
+
+    Normalization compares a name against every candidate spelling in turn,
+    about twenty before Latin-1 matches, on each encode and decode. These
+    spellings normalize to utf_8, ascii and latin_1/iso8859_1 themselves,
+    so their bytes decide the codec at once; any other spelling, case or
+    punctuation keeps the normalizing comparison below.
+    """
+    length: int = load_i64(encoding, PYSTROBJECT_BYTE_LEN_OFFSET)
+    if length == 5:
+        if _encode_name_equal(encoding, cstr("utf-8"), 5) != 0:
+            return 0
+        if _encode_name_equal(encoding, cstr("ascii"), 5) != 0:
+            return 1
+    elif length == 4:
+        if _encode_name_equal(encoding, cstr("utf8"), 4) != 0:
+            return 0
+    elif length == 7:
+        if _encode_name_equal(encoding, cstr("latin-1"), 7) != 0:
+            return 2
+    elif length == 6:
+        if _encode_name_equal(encoding, cstr("latin1"), 6) != 0:
+            return 2
+    elif length == 10:
+        if _encode_name_equal(encoding, cstr("iso-8859-1"), 10) != 0:
+            return 2
+    return -1
+
+
 def _encode_codec_id(encoding) -> int:
     if ptr_is_null(encoding):
         return 0
+    common: int = _codec_common_spelling(encoding)
+    if common >= 0:
+        return common
     if (_encode_codec_equal(encoding, cstr("utf_8"), 5)
         or _encode_codec_equal(encoding, cstr("utf8"), 4)
         or _encode_codec_equal(encoding, cstr("csutf8"), 6)
@@ -797,9 +830,17 @@ def _encode_validate_name(name) -> int:
         py_raise_owned(py_exc_new(3, cstr("encode() argument must be str")))
         return 0
     length: int = load_i64(name, PYSTROBJECT_BYTE_LEN_OFFSET)
+    data = ptr_add(name, PYSTROBJECT_DATA_OFFSET)
     byte_at: int = 0
     index: int = 0
     while byte_at < length:
+        # A nonzero ASCII byte is one code point that is neither NUL nor a
+        # surrogate; decode only the other bytes.
+        first: int = load_i8(data, byte_at) & 255
+        if first != 0 and first < 128:
+            byte_at = byte_at + 1
+            index = index + 1
+            continue
         cp: int = _utf8_ord_at_byte(name, byte_at)
         if cp == 0:
             py_raise_owned(py_exc_new(2, cstr("embedded null character")))
