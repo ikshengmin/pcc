@@ -232,15 +232,14 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
             assert parsed_functions is functions
         return finish_configured_item(pending, functions)
 
-    # Keep the exact current capability boundary after retained use items.
-    # This lint-retention observation is not successful whole-crate compilation.
+    # The exact authenticated library source now parses through cfg(test) to
+    # EOF. Lint/syntax retention still does not imply whole-crate compilation.
     with monkeypatch.context() as owned:
         owned.setattr(parser, 'finish_configured_item', retain_function_owner)
         owned.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool entered owned parser'))
-        with pytest.raises(RustError, match=(
-                r"^src/lib\.rs: 893:7: cfg predicate requires an unimplemented built-in/target or custom configuration context$")):
-            parser.parse()
-    assert (parser.token.text, parser.token.line, parser.token.column) == ('mod', 894, 1)
+        functions = parser.parse()
+    assert parsed_functions is functions
+    assert (parser.token.text, parser.token.line, parser.token.column) == ('<eof>', 900, 1)
     assert parser.token.source_path == 'src/lib.rs' and not parser.modules
     assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
         'core::cmp', 'core::marker::PhantomData']
@@ -270,9 +269,9 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     assert parser.crate_policy.implicit_extern_prelude == ('core',)
     assert parser.crate_policy.standard_prelude_path == ('core', 'prelude', 'rust_2015')
 
-    # Exhaust both retained disabled items. The original extern item is not
-    # replaced by selecting the first result and ignoring the later Box<I> impl.
-    conditional, boxed = parser.conditional_items
+    # Exhaust all three retained disabled items, including the newly handled
+    # test module. Keep every original extern/Box<I> retention obligation.
+    conditional, boxed, test_module = parser.conditional_items
     assert not conditional.enabled and not parser.crate_aliases
     assert conditional.item.crate.text == 'core' and conditional.item.token.line == 20
     assert conditional.item.token.column == 1 and conditional.item.crate.column == 14
@@ -316,12 +315,24 @@ def test_unchanged_project_retains_lint_before_the_next_source_boundary(tmp_path
     assert all(all(function is not method for function in parsed_functions) for method in boxed_methods)
     assert all(function.implementation is None or str(function.implementation.owner) != 'Box<I>'
                for function in parsed_functions)
-    # cfg(test) syntax is retained, but evaluation failed before a third
-    # configured item or any test-module declaration could be admitted.
+    # cfg(test)'s whole token-bounded module is retained but never admitted.
     assert [item.source_span for item in parser.item_cfg_syntax] == [(615, 638), (8781, 8804), (20923, 20935)]
     test_cfg = parser.item_cfg_syntax[-1]
     assert (test_cfg.predicate.name, test_cfg.predicate.form) == ('test', 'word')
     assert source[slice(*test_cfg.source_span)] == '#[cfg(test)]'
+    test_attribute, = test_module.attributes
+    assert test_attribute.syntax is test_cfg and not test_attribute.enabled
+    assert test_attribute.configuration == configured_crate.configuration
+    assert test_attribute.configuration.test_harness is False
+    assert not test_module.enabled and test_module.item == ()
+    assert test_module.source_span == (20923, 21145)
+    assert source[slice(*test_module.source_span)] == '\n'.join(source.splitlines()[892:899])
+    assert all(token.source_path == 'src/lib.rs' for token in test_module.tokens)
+    assert [(token.text, token.line, token.column)
+            for token in (test_module.tokens[0], test_module.tokens[-1])] == [
+        ('#', 893, 1), ('}', 899, 1)]
+    assert all(function.token.text not in {'_is_object_safe', '_is_object_safe_double'}
+               for function in functions)
 
     assert parser.crate_documentation[0].text == ' Fallible, streaming iteration.'
     assert len(parser.crate_documentation) == 15

@@ -83,8 +83,12 @@ class CheckedRustSource:
         self.validate(source, target_triple=self._record.target_triple,
                       overflow_checks=self._record.overflow_checks, edition=edition)
         from .configuration import RustConfiguration
+        # validate() accepts exactly the adapter's --crate-type=lib command,
+        # without --test or --cfg. This fact belongs to that checked command,
+        # never to an unauthenticated parser default or the host environment.
         return RustConfiguration(self._record.source_sha256, edition,
-                                 self._record.target_triple, self._record.cfg)
+                                 self._record.target_triple, self._record.cfg,
+                                 test_harness=False)
 
     def validate(self, source, *, target_triple, overflow_checks, edition=2021):
         if self._seal is not _SEAL or source != self._source:

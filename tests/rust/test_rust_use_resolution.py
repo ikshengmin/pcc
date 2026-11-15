@@ -430,15 +430,11 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
     checked = check_rust_source(source, toolchain=toolchain(),
         evidence_directory=tmp_path / 'actual-check', edition=2015)
     parser = Parser(source, edition=2015, rustc_check=checked)
-    # Keep the whole authenticated source. Observe the real parser's next
-    # boundary without accepting a rewritten prefix or a discarded declaration:
-    # all 28 associated declarations are observed, including the two in the
-    # parsed-then-disabled Box<I> impl. Earlier projection, outlives, tuple and
-    # match-guard boundaries have advanced to cfg(test). Predicate evaluation
-    # rejects `test` after consuming `]`, leaving the unentered module next.
-    assert parse_retaining_associated_types(parser, monkeypatch, (
-        893, 7, 'cfg predicate requires an unimplemented built-in/target or custom configuration context',
-        ('mod', 894, 1))) == [
+    # Parse the whole authenticated source to EOF. All 28 associated
+    # declarations remain observed, including the two in the parsed-then-
+    # disabled Box<I> impl. The checked library command disables cfg(test);
+    # no source prefix, guessed next error, or discarded declaration is used.
+    assert parse_retaining_associated_types(parser, monkeypatch) == [
         ('Item', 28, 10, None, [('Sized', True)]),
         ('Error', 31, 10, None, []),
         ('Item', 310, 10, 'I::Item', []),
@@ -474,7 +470,19 @@ def test_original_project_keeps_both_use_items_before_the_next_parser_gap(tmp_pa
         (22, 1, (659, 673)), (23, 1, (674, 704))]
     assert [source[slice(*item.source_span)] for item in parser.uses] == [
         'use core::cmp;', 'use core::marker::PhantomData;']
-    assert not parser.modules  # cfg(test)'s module body has not been entered.
+    assert parser.token.kind == 'eof' and not parser.modules
+    conditional, boxed, test_module = parser.conditional_items
+    assert not conditional.enabled and not boxed.enabled and not test_module.enabled
+    assert test_module.item == () and test_module.source_span == (20923, 21145)
+    assert source[slice(*test_module.source_span)] == '\n'.join(source.splitlines()[892:899])
+    attribute, = test_module.attributes
+    assert attribute.syntax is parser.item_cfg_syntax[-1]
+    assert (attribute.syntax.predicate.name, attribute.syntax.predicate.form) == ('test', 'word')
+    assert attribute.configuration.test_harness is False
+    assert attribute.configuration.source_sha256 == PROJECT_SHA256
+    assert attribute.configuration.edition == 2015
+    assert attribute.configuration.target_triple == checked.provenance.target_triple
+    assert (test_module.tokens[0].line, test_module.tokens[-1].line) == (893, 899)
     assert checked.provenance.source_sha256 == PROJECT_SHA256
     assert checked.provenance.edition == '2015'
     assert checked.provenance.cfg == checked.provenance.dependencies == ()

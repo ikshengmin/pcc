@@ -1,5 +1,70 @@
 {
   "functions": {
+    "tests/rust/test_rust_authenticated_test_cfg.py": {
+      "test_actual_library_build_identity_reaches_parser_and_owned_object": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify on the exact source/edition before authenticated non-test configuration, real parsing and owned object emission."
+        ]
+      },
+      "test_actual_standalone_or_active_unknown_authenticated_predicate_stays_closed": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before asserting standalone/active unknown authenticated predicates and every all/any child remain explicit boundaries."
+        ]
+      },
+      "test_actual_disabled_item_retains_existing_attribute_order_boundary": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before preserving the existing disabled-item token recovery and unknown-first attribute boundary without expanding authentication."
+        ]
+      },
+      "test_actual_disabled_nested_module_preserves_one_whole_token_boundary": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before full original-coordinate token retention and owned object emission after an inactive nested module."
+        ]
+      },
+      "test_actual_enabled_module_still_rejects_unsupported_contents": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before asserting an enabled module still rejects unsupported use-glob resolution before owned IR."
+        ]
+      },
+      "test_actual_test_predicate_preserves_nested_crate_cfg_attr_semantics": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before applying or retaining nested crate cfg_attr metadata under the authenticated test-mode predicate."
+        ]
+      },
+      "test_actual_test_mode_does_not_authorize_unknown_active_cfg_attr_payloads": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before asserting active unknown crate cfg_attr predicates and attributes remain explicit boundaries."
+        ]
+      },
+      "test_actual_test_build_identity_rejects_command_and_source_substitution": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls certify before rejecting modified source, edition, target, cfg, finite argv and conflicting owned configuration."
+        ]
+      },
+      "test_unchanged_test_cfg_program_has_owned_native_and_separate_reference_results": {
+        "activity": "mandatory-same-input-certification-and-owned-contract",
+        "conditional": true,
+        "reason": [
+          "Calls test_rust_certified_lints.test_unchanged_lint_program_has_owned_native_and_actual_rustc_reference_results with the unchanged certified_cfg_test.rs fixture: actual check_rust_source, owned compile/link/run and separate actual rustc reference processes."
+        ]
+      }
+    },
     "tests/python/test_native_min_max_i64_ownership.py": {
       "test_i64_min_max_reference": {
         "activity": "external-reference",

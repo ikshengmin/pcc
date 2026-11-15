@@ -242,9 +242,9 @@ def test_original_package_self_checks_and_real_api_native_reference(tmp_path):
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite())
 def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
-    """The same frontier, certified for the local aarch64-apple-darwin target
+    """Whole-source syntax, certified for the local aarch64-apple-darwin target
     (the Linux-target lanes need x86_64-unknown-linux-gnu core/std)."""
-    from pcc.frontends.rust import RustError, check_rust_source
+    from pcc.frontends.rust import check_rust_source
     from pcc.frontends.rust.syntax import Parser
     from tests.rust.test_rust_certified_references import toolchain
     _, files = load_inputs()
@@ -252,15 +252,28 @@ def test_parser_frontier_under_an_actual_darwin_target_check(tmp_path):
     checked = check_rust_source(source, toolchain=toolchain(), evidence_directory=tmp_path / 'actual-check',
                                 target_triple='aarch64-apple-darwin', edition=2015)
     parser = Parser(source, source_path='src/lib.rs', edition=2015, rustc_check=checked)
-    # Formerly 367:16, the bound Iterator<Item = Result<&'a T, E>> of
-    # `convert`, then 373:28, the outlives bound `T: 'a` of `struct Convert`;
-    # then 427:23, the tuple struct `pub struct Empty<T, E>(PhantomData<(T, E)>);`
-    # (tests/rust/test_rust_tuple_structs.py), then 836:13, the tuple pattern
-    # `let (lower, upper) = ...` (tests/rust/test_rust_let_patterns.py), then
-    # 841:21, the match guard `Some(x) if x < self.n => ...`
-    # (tests/rust/test_rust_match_guards.py); now `#[cfg(test)] mod test`.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: 893:7: cfg predicate requires an unimplemented built-in/target or custom configuration context$"):
-        parser.parse()
+    # The authenticated non-test library command now supplies cfg(test)=false
+    # on this target too. Parse every original byte; do not guess a next gap.
+    functions = parser.parse()
+    assert parser.token.kind == 'eof' and not parser.modules
+    assert ['::'.join(token.text for token in item.path) for item in parser.uses] == [
+        'core::cmp', 'core::marker::PhantomData']
+    conditional, boxed, test_module = parser.conditional_items
+    assert not conditional.enabled and not boxed.enabled and not test_module.enabled
+    assert test_module.item == () and test_module.source_span == (20923, 21145)
+    assert source[slice(*test_module.source_span)] == '\n'.join(source.splitlines()[892:899])
+    attribute, = test_module.attributes
+    assert attribute.configuration.test_harness is False
+    assert attribute.configuration.target_triple == 'aarch64-apple-darwin'
+    assert attribute.configuration.edition == 2015
+    assert attribute.configuration.source_sha256 == digest(files['src/lib.rs'])
+    assert checked.provenance.source_sha256 == digest(files['src/lib.rs'])
+    assert checked.provenance.edition == '2015'
+    assert checked.provenance.cfg == checked.provenance.dependencies == ()
+    assert (tmp_path / 'actual-check/original.rs').read_bytes() == files['src/lib.rs']
+    assert load_inputs()[1] == files
+    assert all(function.token.text not in {'_is_object_safe', '_is_object_safe_double'}
+               for function in functions)
     # The trait impls before it, including both for Convert and Empty, were retained.
     owners = [str(item.owner) for item in parser.implementations if item.trait]
     assert owners[:5] == [
