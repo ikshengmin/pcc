@@ -6527,250 +6527,285 @@ def build_aarch64_stack_map_section(
     ordered_plans = sorted(plans, key=lambda item: item.function_id)
     chunks: list[bytes] = [b""]
     relocations: list[Relocation] = []
-    global_locations = CompilerIntArena()
-    global_location_content_index: dict[str, int] = {}
-    payload_size = _STACK_MAP_HEADER_CODEC.size
-    previous_function_id = -1
-    seen_safepoints: set[int] = set()
-    packed_record_scalars = CompilerIntArena()
-    packed_record_path = packed_record_scalars.uses_native_storage
+    # Only these scratch arenas belong to this writer. Caller-owned plans
+    # retain their existing success/failure contract below. Record a normal
+    # close before calling it so an error from that close is not retried.
+    global_locations: CompilerIntArena | None = None
+    packed_record_scalars: CompilerIntArena | None = None
+    final_records: CompilerIntArena | None = None
+    close_global_locations = True
+    close_packed_record_scalars = True
+    close_final_records = True
+    try:
+        global_locations = CompilerIntArena()
+        global_location_content_index: dict[str, int] = {}
+        payload_size = _STACK_MAP_HEADER_CODEC.size
+        previous_function_id = -1
+        seen_safepoints: set[int] = set()
+        packed_record_scalars = CompilerIntArena()
+        packed_record_path = packed_record_scalars.uses_native_storage
 
-    for plan in ordered_plans:
-        if plan.function_id <= previous_function_id:
-            raise BackendUnavailable(
-                "stack-map functions need unique ordered stable ids"
-            )
-        previous_function_id = plan.function_id
-        symbol = function_symbol(plan.function_name)
-        if not symbol or "\0" in symbol:
-            raise BackendUnavailable("stack-map function symbol is invalid")
-        start = offsets.get(symbol)
-        end = offsets.get(plan.end_label)
-        if start is None or end is None or end <= start:
-            raise BackendUnavailable(
-                f"target-final stack-map range missing for {plan.function_name!r}"
-            )
-        code_size = end - start
-        if plan.frame_size < 0 or plan.frame_size % 16:
-            raise BackendUnavailable(
-                f"stack-map frame size is invalid for {plan.function_name!r}"
-            )
-        maybe_packed_records = plan.packed_records
-        if maybe_packed_records is None:
-            raise BackendUnavailable(
-                "AArch64 stack-map plan is missing packed records"
-            )
-        packed_records: PackedPlannedSafepoints = maybe_packed_records
-        final_records = CompilerIntArena(max(1, len(packed_records) * 4))
-        record_index = 0
-        while record_index < len(packed_records):
-            scalar: CompilerInt4 = packed_records.scalar(record_index)
-            label = packed_records.label(record_index)
-            pc = offsets.get(label)
-            if pc is None:
+        for plan in ordered_plans:
+            if plan.function_id <= previous_function_id:
                 raise BackendUnavailable(
-                    f"target-final safepoint label missing: {label!r}"
+                    "stack-map functions need unique ordered stable ids"
                 )
-            exceptional_offset = NO_OFFSET
-            exceptional_block = packed_records.exceptional_block(record_index)
-            if exceptional_block:
-                exceptional_pc = offsets.get(
-                    block_label(plan.function_name, exceptional_block)
+            previous_function_id = plan.function_id
+            symbol = function_symbol(plan.function_name)
+            if not symbol or "\0" in symbol:
+                raise BackendUnavailable("stack-map function symbol is invalid")
+            start = offsets.get(symbol)
+            end = offsets.get(plan.end_label)
+            if start is None or end is None or end <= start:
+                raise BackendUnavailable(
+                    f"target-final stack-map range missing for {plan.function_name!r}"
                 )
-                if exceptional_pc is None:
+            code_size = end - start
+            if plan.frame_size < 0 or plan.frame_size % 16:
+                raise BackendUnavailable(
+                    f"stack-map frame size is invalid for {plan.function_name!r}"
+                )
+            maybe_packed_records = plan.packed_records
+            if maybe_packed_records is None:
+                raise BackendUnavailable(
+                    "AArch64 stack-map plan is missing packed records"
+                )
+            packed_records: PackedPlannedSafepoints = maybe_packed_records
+            final_records = None
+            close_final_records = True
+            final_records = CompilerIntArena(max(1, len(packed_records) * 4))
+            record_index = 0
+            while record_index < len(packed_records):
+                scalar: CompilerInt4 = packed_records.scalar(record_index)
+                label = packed_records.label(record_index)
+                pc = offsets.get(label)
+                if pc is None:
                     raise BackendUnavailable(
-                        "target-final exception successor label missing for "
-                        f"{plan.function_name!r}/{exceptional_block!r}"
+                        f"target-final safepoint label missing: {label!r}"
                     )
-                exceptional_offset = exceptional_pc - start
-            final_records.append4(
-                pc - start,
-                scalar.first,
-                record_index,
-                exceptional_offset,
-            )
-            record_index += 1
-        _sort_final_stack_map_records(final_records)
+                exceptional_offset = NO_OFFSET
+                exceptional_block = packed_records.exceptional_block(record_index)
+                if exceptional_block:
+                    exceptional_pc = offsets.get(
+                        block_label(plan.function_name, exceptional_block)
+                    )
+                    if exceptional_pc is None:
+                        raise BackendUnavailable(
+                            "target-final exception successor label missing for "
+                            f"{plan.function_name!r}/{exceptional_block!r}"
+                        )
+                    exceptional_offset = exceptional_pc - start
+                final_records.append4(
+                    pc - start,
+                    scalar.first,
+                    record_index,
+                    exceptional_offset,
+                )
+                record_index += 1
+            _sort_final_stack_map_records(final_records)
 
-        relocations.append(Relocation(
-            payload_size + 8,
-            symbol,
-            _macho_spec.ARM64_RELOC_UNSIGNED,
-            pcrel=False,
-            length=3,
-        ))
-        # Every record is validated below; rootless ones are not written.
-        kept_records = 0
-        kept_scan = 0
-        while kept_scan < len(final_records) // 4:
-            if not _packed_record_is_rootless(
-                packed_records, final_records.get_unchecked(kept_scan * 4 + 2)
-            ):
-                kept_records += 1
-            kept_scan += 1
-        function_chunk = _STACK_MAP_FUNCTION_CODEC.pack(
-            plan.function_id,
-            0,
-            code_size,
-            plan.frame_size,
-            kept_records,
-            0,
-        )
-        chunks.append(function_chunk)
-        payload_size += len(function_chunk)
-
-        local_location_indices: dict[int, int] = {}
-        previous_pc = -1
-        final_record_index = 0
-        while final_record_index < len(final_records) // 4:
-            final_offset = final_record_index * 4
-            instruction_offset = final_records.get_unchecked(final_offset)
-            record_id = final_records.get_unchecked(final_offset + 1)
-            record_index = final_records.get_unchecked(final_offset + 2)
-            exceptional_offset = final_records.get_unchecked(final_offset + 3)
-            scalar: CompilerInt4 = packed_records.scalar(record_index)
-            span: CompilerInt4 = packed_records.span(record_index)
-            record_kind = scalar.second
-            record_flags = scalar.third
-            continuation_id = scalar.fourth
-            if record_id <= 0 or record_id in seen_safepoints:
-                raise BackendUnavailable(
-                    "stack-map safepoint id is invalid or duplicate"
-                )
-            seen_safepoints.add(record_id)
-            if not previous_pc < instruction_offset < code_size:
-                raise BackendUnavailable(
-                    "stack-map safepoints are not ordered inside the function"
-                )
-            previous_pc = instruction_offset
-            has_exception = exceptional_offset != NO_OFFSET
-            if has_exception != bool(record_flags & RECORD_HAS_EXCEPTION_EDGE):
-                raise BackendUnavailable(
-                    "stack-map exception-edge flag and offset disagree"
-                )
-            is_continuation = record_kind == SAFEPOINT_CONTINUATION
-            if is_continuation != bool(continuation_id):
-                raise BackendUnavailable(
-                    "stack-map continuation needs one non-zero continuation id"
-                )
-            if bool(record_flags & RECORD_SUSPENDED) != is_continuation:
-                raise BackendUnavailable(
-                    "stack-map suspended flag is reserved for continuations"
-                )
-            location_group_id = span.first
-            location_group: CompilerInt2 = packed_records.location_group(
-                record_index
+            relocations.append(Relocation(
+                payload_size + 8,
+                symbol,
+                _macho_spec.ARM64_RELOC_UNSIGNED,
+                pcrel=False,
+                length=3,
+            ))
+            # Every record is validated below; rootless ones are not written.
+            kept_records = 0
+            kept_scan = 0
+            while kept_scan < len(final_records) // 4:
+                if not _packed_record_is_rootless(
+                    packed_records, final_records.get_unchecked(kept_scan * 4 + 2)
+                ):
+                    kept_records += 1
+                kept_scan += 1
+            function_chunk = _STACK_MAP_FUNCTION_CODEC.pack(
+                plan.function_id,
+                0,
+                code_size,
+                plan.frame_size,
+                kept_records,
+                0,
             )
-            if location_group_id in local_location_indices:
-                location_index = local_location_indices[location_group_id]
-            else:
-                location_offset = 0
-                while location_offset < location_group.second:
-                    location: CompilerInt2 = packed_records.location_scalar(
-                        location_group.first + location_offset
+            chunks.append(function_chunk)
+            payload_size += len(function_chunk)
+
+            local_location_indices: dict[int, int] = {}
+            previous_pc = -1
+            final_record_index = 0
+            while final_record_index < len(final_records) // 4:
+                final_offset = final_record_index * 4
+                instruction_offset = final_records.get_unchecked(final_offset)
+                record_id = final_records.get_unchecked(final_offset + 1)
+                record_index = final_records.get_unchecked(final_offset + 2)
+                exceptional_offset = final_records.get_unchecked(final_offset + 3)
+                scalar: CompilerInt4 = packed_records.scalar(record_index)
+                span: CompilerInt4 = packed_records.span(record_index)
+                record_kind = scalar.second
+                record_flags = scalar.third
+                continuation_id = scalar.fourth
+                if record_id <= 0 or record_id in seen_safepoints:
+                    raise BackendUnavailable(
+                        "stack-map safepoint id is invalid or duplicate"
                     )
-                    _validate_planned_location_offset(
-                        location.first,
-                        frame_size=plan.frame_size,
+                seen_safepoints.add(record_id)
+                if not previous_pc < instruction_offset < code_size:
+                    raise BackendUnavailable(
+                        "stack-map safepoints are not ordered inside the function"
                     )
-                    location_offset += 1
-                content_key = packed_records.location_group_key(
-                    location_group_id
+                previous_pc = instruction_offset
+                has_exception = exceptional_offset != NO_OFFSET
+                if has_exception != bool(record_flags & RECORD_HAS_EXCEPTION_EDGE):
+                    raise BackendUnavailable(
+                        "stack-map exception-edge flag and offset disagree"
+                    )
+                is_continuation = record_kind == SAFEPOINT_CONTINUATION
+                if is_continuation != bool(continuation_id):
+                    raise BackendUnavailable(
+                        "stack-map continuation needs one non-zero continuation id"
+                    )
+                if bool(record_flags & RECORD_SUSPENDED) != is_continuation:
+                    raise BackendUnavailable(
+                        "stack-map suspended flag is reserved for continuations"
+                    )
+                location_group_id = span.first
+                location_group: CompilerInt2 = packed_records.location_group(
+                    record_index
                 )
-                if content_key in global_location_content_index:
-                    location_index = global_location_content_index[content_key]
+                if location_group_id in local_location_indices:
+                    location_index = local_location_indices[location_group_id]
                 else:
-                    location_index = len(global_locations) // 2
-                    global_location_content_index[content_key] = location_index
                     location_offset = 0
                     while location_offset < location_group.second:
-                        global_location: CompilerInt2 = (
-                            packed_records.location_scalar(
-                                location_group.first + location_offset
-                            )
+                        location: CompilerInt2 = packed_records.location_scalar(
+                            location_group.first + location_offset
                         )
-                        global_locations.append2(
-                            global_location.first,
-                            global_location.second,
+                        _validate_planned_location_offset(
+                            location.first,
+                            frame_size=plan.frame_size,
                         )
                         location_offset += 1
-                local_location_indices[location_group_id] = location_index
-            if not _packed_record_is_rootless(packed_records, record_index):
-                if packed_record_path:
-                    packed_record_scalars.append4(
-                        record_id,
-                        instruction_offset,
-                        exceptional_offset,
-                        continuation_id,
+                    content_key = packed_records.location_group_key(
+                        location_group_id
                     )
-                    packed_record_scalars.append4(
-                        location_group.second,
-                        0,
-                        record_kind,
-                        record_flags,
-                    )
-                    packed_record_scalars.append2(0, location_index)
-                else:
-                    chunks.append(_STACK_MAP_RECORD_CODEC.pack(
-                        record_id,
-                        instruction_offset,
-                        exceptional_offset,
-                        continuation_id,
-                        location_group.second,
-                        0,
-                        record_kind,
-                        record_flags,
-                        0,
-                        location_index,
-                    ))
-                payload_size += _STACK_MAP_RECORD_CODEC.size
-            final_record_index += 1
-        if packed_record_path and len(packed_record_scalars):
-            chunks.append(_pack_stack_map_record_arena(packed_record_scalars))
-            packed_record_scalars.clear()
-        final_records.close()
+                    if content_key in global_location_content_index:
+                        location_index = global_location_content_index[content_key]
+                    else:
+                        location_index = len(global_locations) // 2
+                        global_location_content_index[content_key] = location_index
+                        location_offset = 0
+                        while location_offset < location_group.second:
+                            global_location: CompilerInt2 = (
+                                packed_records.location_scalar(
+                                    location_group.first + location_offset
+                                )
+                            )
+                            global_locations.append2(
+                                global_location.first,
+                                global_location.second,
+                            )
+                            location_offset += 1
+                    local_location_indices[location_group_id] = location_index
+                if not _packed_record_is_rootless(packed_records, record_index):
+                    if packed_record_path:
+                        packed_record_scalars.append4(
+                            record_id,
+                            instruction_offset,
+                            exceptional_offset,
+                            continuation_id,
+                        )
+                        packed_record_scalars.append4(
+                            location_group.second,
+                            0,
+                            record_kind,
+                            record_flags,
+                        )
+                        packed_record_scalars.append2(0, location_index)
+                    else:
+                        chunks.append(_STACK_MAP_RECORD_CODEC.pack(
+                            record_id,
+                            instruction_offset,
+                            exceptional_offset,
+                            continuation_id,
+                            location_group.second,
+                            0,
+                            record_kind,
+                            record_flags,
+                            0,
+                            location_index,
+                        ))
+                    payload_size += _STACK_MAP_RECORD_CODEC.size
+                final_record_index += 1
+            if packed_record_path and len(packed_record_scalars):
+                chunks.append(_pack_stack_map_record_arena(packed_record_scalars))
+                packed_record_scalars.clear()
+            close_final_records = False
+            final_records.close()
 
-    location_count = len(global_locations) // 2
-    chunks[0] = _STACK_MAP_HEADER_CODEC.pack(
-        MAGIC,
-        VERSION,
-        ARCH_AARCH64,
-        POINTER_SIZE,
-        len(ordered_plans),
-        location_count,
-        0,
-    )
-    location_index = 0
-    while location_index < location_count:
-        location: CompilerInt2 = global_locations.get2_unchecked(location_index)
-        flags = LOCATION_MANAGED | (
-            LOCATION_OWNED if location.second != 0 else 0
+        location_count = len(global_locations) // 2
+        chunks[0] = _STACK_MAP_HEADER_CODEC.pack(
+            MAGIC,
+            VERSION,
+            ARCH_AARCH64,
+            POINTER_SIZE,
+            len(ordered_plans),
+            location_count,
+            0,
         )
-        chunks.append(_STACK_MAP_LOCATION_CODEC.pack(
-            LOCATION_STACK_INDIRECT,
-            flags,
-            POINTER_SIZE,
-            29,
-            NO_BASE,
-            location.first,
-            POINTER_SIZE,
-        ))
-        location_index += 1
-    global_locations.close()
-    packed_record_scalars.close()
-    for plan in ordered_plans:
-        maybe_packed_records = plan.packed_records
-        assert maybe_packed_records is not None
-        packed_records: PackedPlannedSafepoints = maybe_packed_records
-        packed_records.close()
-    return Section(
-        sectname="__pcc_stackmaps",
-        segname="__DATA",
-        data=b"".join(chunks),
-        align_log2=3,
-        flags=PCC_STACKMAP_SECTION_FLAGS,
-        relocations=tuple(relocations),
-    )
+        location_index = 0
+        while location_index < location_count:
+            location: CompilerInt2 = global_locations.get2_unchecked(location_index)
+            flags = LOCATION_MANAGED | (
+                LOCATION_OWNED if location.second != 0 else 0
+            )
+            chunks.append(_STACK_MAP_LOCATION_CODEC.pack(
+                LOCATION_STACK_INDIRECT,
+                flags,
+                POINTER_SIZE,
+                29,
+                NO_BASE,
+                location.first,
+                POINTER_SIZE,
+            ))
+            location_index += 1
+        close_global_locations = False
+        global_locations.close()
+        close_packed_record_scalars = False
+        packed_record_scalars.close()
+        for plan in ordered_plans:
+            maybe_packed_records = plan.packed_records
+            assert maybe_packed_records is not None
+            packed_records: PackedPlannedSafepoints = maybe_packed_records
+            packed_records.close()
+        return Section(
+            sectname="__pcc_stackmaps",
+            segname="__DATA",
+            data=b"".join(chunks),
+            align_log2=3,
+            flags=PCC_STACKMAP_SECTION_FLAGS,
+            relocations=tuple(relocations),
+        )
+    except BaseException:
+        # Keep the original failure (including BaseException) even if a
+        # scratch release fails. Attempt every other acquired scratch owner;
+        # do not consume caller plans or retry a close already attempted.
+        if close_final_records and final_records is not None:
+            try:
+                final_records.close()
+            except BaseException:
+                pass
+        if close_global_locations and global_locations is not None:
+            try:
+                global_locations.close()
+            except BaseException:
+                pass
+        if close_packed_record_scalars and packed_record_scalars is not None:
+            try:
+                packed_record_scalars.close()
+            except BaseException:
+                pass
+        raise
 
 
 def _append_bytes(lines: list[str], values: bytes) -> None:

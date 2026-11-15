@@ -678,6 +678,16 @@ def _encode_codec_id(encoding) -> int:
         or _encode_codec_equal(encoding, cstr("ibm819"), 6)
         or _encode_codec_equal(encoding, cstr("csisolatin1"), 11)):
         return 2
+    if (_encode_codec_equal(encoding, cstr("utf_16_le"), 9)
+        or _encode_codec_equal(encoding, cstr("utf_16le"), 8)
+        or _encode_codec_equal(encoding, cstr("csutf16le"), 9)
+        or _encode_codec_equal(encoding, cstr("unicodelittleunmarked"), 21)):
+        return 3
+    if (_encode_codec_equal(encoding, cstr("utf_16_be"), 9)
+        or _encode_codec_equal(encoding, cstr("utf_16be"), 8)
+        or _encode_codec_equal(encoding, cstr("csutf16be"), 9)
+        or _encode_codec_equal(encoding, cstr("unicodebigunmarked"), 18)):
+        return 4
     return -1
 
 
@@ -711,6 +721,11 @@ def py_text_codec_id(encoding) -> int:
     codec: int = _encode_codec_id(encoding)
     if codec < 0:
         _codec_lookup_error(encoding, 0)
+    elif codec > 2:
+        # TextIO has a separate packed codec/state/seek contract. Do not
+        # accidentally interpret a new bytes codec as its single-byte profile.
+        py_raise_owned(py_exc_new(11, cstr("native UTF-16 text-file state is not implemented")))
+        return -1
     return codec
 
 
@@ -744,7 +759,7 @@ def _encode_width(cp: int) -> int:
 
 
 def _encode_invalid(cp: int, codec: int) -> int:
-    if codec == 0:
+    if codec == 0 or codec == 3 or codec == 4:
         if cp >= 55296 and cp <= 57343:
             return 1
         return 0
@@ -754,6 +769,11 @@ def _encode_invalid(cp: int, codec: int) -> int:
 
 
 def _encode_raise_unicode(s, codec: int, byte_at: int, start: int) -> None:
+    if codec == 3 or codec == 4:
+        # CPython's UTF-16 encoder invokes the handler for one surrogate at
+        # a time, unlike the contiguous invalid runs of its other codecs.
+        py_unicode_encode_error(s, cstr("utf-16-le") if codec == 3 else cstr("utf-16-be"), start, start + 1, cstr("surrogates not allowed"))
+        return
     end: int = start
     length: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
     while byte_at < length:
@@ -792,6 +812,75 @@ def _encode_validate_name(name) -> int:
     return 1
 
 
+def _encode_utf16_word(output, at: int, word: int, codec: int) -> int:
+    if codec == 3:
+        store_i8(output, at, word & 255)
+        store_i8(output, at + 1, (word >> 8) & 255)
+    else:
+        store_i8(output, at, (word >> 8) & 255)
+        store_i8(output, at + 1, word & 255)
+    return at + 2
+
+
+def _str_encode_utf16(s, codec: int, mode: int):
+    length: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
+    scale: int = 20 if mode == 5 or mode == 6 or mode == 7 else 2
+    if length > (9223372036854775807 - 1) // scale:
+        py_raise_owned(py_exc_new(15, cstr("encoded string is too long")))
+        return null()
+    output = malloc(length * scale + 1)
+    if ptr_is_null(output):
+        py_raise_owned(py_exc_new(19, cstr("cannot allocate encoded string")))
+        return null()
+    at: int = 0
+    index: int = 0
+    used: int = 0
+    while at < length:
+        cp: int = _utf8_ord_at_byte(s, at)
+        width: int = _encode_width(cp)
+        if cp < 55296 or cp > 57343 or mode == 4:
+            if cp >= 65536:
+                scalar: int = cp - 65536
+                used = _encode_utf16_word(output, used, 55296 | (scalar >> 10), codec)
+                used = _encode_utf16_word(output, used, 56320 | (scalar & 1023), codec)
+            else:
+                used = _encode_utf16_word(output, used, cp, codec)
+        elif mode == 1:
+            pass
+        elif mode == 2:
+            used = _encode_utf16_word(output, used, 63, codec)
+        elif mode == 5 or mode == 7:
+            # Surrogates have no Unicode character names, so namereplace
+            # selects the same backslash form as backslashreplace here.
+            used = _encode_utf16_word(output, used, 92, codec)
+            used = _encode_utf16_word(output, used, 117, codec)
+            shift: int = 12
+            while shift >= 0:
+                digit: int = (cp >> shift) & 15
+                used = _encode_utf16_word(output, used, 48 + digit if digit < 10 else 87 + digit, codec)
+                shift = shift - 4
+        elif mode == 6:
+            used = _encode_utf16_word(output, used, 38, codec)
+            used = _encode_utf16_word(output, used, 35, codec)
+            divisor: int = 10000
+            while divisor > 0:
+                used = _encode_utf16_word(output, used, 48 + ((cp // divisor) % 10), codec)
+                divisor = divisor // 10
+            used = _encode_utf16_word(output, used, 59, codec)
+        else:
+            free(output)
+            if mode < 0:
+                py_raise_owned(py_exc_new(13, cstr("unknown error handler name")))
+            else:
+                _encode_raise_unicode(s, codec, at, index)
+            return null()
+        at = at + width
+        index = index + 1
+    result = py_bytes_new(output, used)
+    free(output)
+    return result
+
+
 def _str_encode_codec(s, codec: int, mode: int):
     # The guarded exports hold a counted address lease for s throughout this
     # body, including malloc, character helpers, error construction and the
@@ -799,6 +888,8 @@ def _str_encode_codec(s, codec: int, mode: int):
     if ptr_is_null(s) or is_tagged_int(s) or load_i32(s, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_STR:
         py_raise_owned(py_exc_new(3, cstr("encode() requires str")))
         return null()
+    if codec == 3 or codec == 4:
+        return _str_encode_utf16(s, codec, mode)
     byte_len: int = load_i64(s, PYSTROBJECT_BYTE_LEN_OFFSET)
     capacity: int = byte_len
     if mode == 5 or mode == 6:
@@ -914,8 +1005,8 @@ def _str_encode_guarded(s, encoding, errors, forced_codec: int):
     if forced_codec < 0:
         result = _str_encode_names_leased(s, encoding, errors)
     else:
-        policy: int = forced_codec // 3
-        result = _str_encode_codec(s, forced_codec % 3, -1 if policy == 8 else policy)
+        policy: int = forced_codec // 5
+        result = _str_encode_codec(s, forced_codec % 5, -1 if policy == 8 else policy)
     if py_err_occurred() != 0:
         py_decref(result)
         return null()
@@ -931,10 +1022,10 @@ def py_str_encode_with_encoding(s, encoding, errors):
 def py_text_encode_ids(s, codec: int, mode: int):
     # Mode -1 is an unknown handler name, reported at the first character
     # that needs it; it travels as policy 8 in the packed codec id.
-    if codec < 0 or codec > 2 or mode < -1 or mode > 7:
+    if codec < 0 or codec > 4 or mode < -1 or mode > 7:
         py_raise_owned(py_exc_new(11, cstr("unsupported native text encoding policy")))
         return null()
-    return _str_encode_guarded(s, null(), null(), codec + 3 * (8 if mode < 0 else mode))
+    return _str_encode_guarded(s, null(), null(), codec + 5 * (8 if mode < 0 else mode))
 
 
 @c_abi_export("py_str_utf8_encode")

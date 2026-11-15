@@ -169,6 +169,20 @@ def _stop_resource_worker(pid):
     _retire_resource_worker(pid)
 
 
+def _stop_resource_workers(active):
+    # A failed stop can retain that child's ownership. Attempt every peer,
+    # then propagate the first cleanup error with the original error context.
+    first_error = None
+    for _index, pid, _reservation, _exclusive, _peak in active:
+        try:
+            _stop_resource_worker(pid)
+        except Exception as error:
+            if first_error is None:
+                first_error = error
+    if first_error is not None:
+        raise first_error
+
+
 def _resource_event(path, event, index, pid, reservation, available, peak):
     if path:
         with open(path, "a", encoding="utf-8") as stream:
@@ -618,8 +632,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
             pass  # Best-effort evidence must not replace the primary error.
         raise
     finally:
-        for _index, pid, _reservation, _exclusive, _peak in active:
-            _stop_resource_worker(pid)
+        _stop_resource_workers(active)
 
 
 def _host_pool(specs, width):

@@ -492,6 +492,7 @@ def _primary_resource_error_case(tmp_path, monkeypatch, primary, *, cleanup_at=N
     launched = []
     reports = []
     cleanup_error = subprocess.TimeoutExpired("fixture cleanup", 2)
+    cleanup_errors = {cleanup_at: cleanup_error} if cleanup_at is not None else {}
     if diagnostic_error is None:
         diagnostic_error = OSError("diagnostic stream unavailable")
 
@@ -515,8 +516,8 @@ def _primary_resource_error_case(tmp_path, monkeypatch, primary, *, cleanup_at=N
 
         def wait(self, timeout):
             events.append(("wait", self.pid, timeout))
-            if self.pid == cleanup_at:
-                raise cleanup_error
+            if self.pid in cleanup_errors:
+                raise cleanup_errors[self.pid]
             self.returncode = 0
             return 0
 
@@ -568,16 +569,16 @@ def _primary_resource_error_case(tmp_path, monkeypatch, primary, *, cleanup_at=N
         )
 
     return SimpleNamespace(run=run, events=events, output=output, launched=launched,
-                           reports=reports, cleanup_error=cleanup_error)
+                           reports=reports, cleanup_error=cleanup_error,
+                           cleanup_errors=cleanup_errors, start=start)
 
 
 def _expected_resource_cleanup(cleanup_at=None):
     events = []
     for pid in (1001, 1002, 1003):
         events.extend((("signal", pid, 9), ("wait", pid, 2)))
-        if pid == cleanup_at:
-            break
-        events.append(("wait", pid, 2))  # Existing retirement also waits.
+        if pid != cleanup_at:
+            events.append(("wait", pid, 2))  # Existing retirement also waits.
     return events
 
 
@@ -604,7 +605,8 @@ def test_real_singleton_refusal_evidence_survives_cleanup_timeout(tmp_path, monk
         + repr(str(primary)) + "\n"
     ]
     assert case.launched == [1001]
-    assert case.events == [("write",), ("flush",)] + _expected_resource_cleanup(1001)
+    assert case.events == [("write",), ("flush",), ("signal", 1001, 9), ("wait", 1001, 2)]
+    assert set(pool._HOST_WORKERS) == {1001}
 
 
 @pytest.mark.parametrize("cleanup_at", [None, 1001, 1002, 1003])
@@ -620,6 +622,7 @@ def test_primary_resource_evidence_preserves_error_and_cleanup_order(
     if cleanup_at is not None:
         assert caught.value.__context__ is primary
     assert case.launched == [1001, 1002, 1003]
+    assert set(pool._HOST_WORKERS) == ({cleanup_at} if cleanup_at is not None else set())
     assert case.events == [("write",), ("flush",)] + _expected_resource_cleanup(cleanup_at)
     assert case.output == [
         "pcc frontend primary resource error before cleanup: WorkerMemoryError="
@@ -691,6 +694,66 @@ def test_no_primary_resource_error_adds_no_diagnostic_calls(tmp_path, monkeypatc
         assert case.events == _expected_resource_cleanup()
     assert case.output == []
 
+    # Exercise cleanup without an enclosing exception as well as with a
+    # primary. Keep the existing node inventory; these are explicit subcases.
+    class FalseyCleanupError(subprocess.TimeoutExpired):
+        def __bool__(self):
+            return False
+
+    for failed in ((), (1001,), (1002,), (1003,), (1001, 1003), (1002, 1003)):
+        case = _primary_resource_error_case(tmp_path, monkeypatch, primary)
+        errors = {pid: FalseyCleanupError("fixture cleanup " + str(pid), 2)
+                  for pid in failed}
+        case.cleanup_errors.update(errors)
+        active = [(index, case.start([], index), 1, False, 0) for index in range(3)]
+
+        def clean():
+            if primary is None:
+                pool._stop_resource_workers(active)
+            else:
+                try:
+                    raise primary
+                finally:
+                    pool._stop_resource_workers(active)
+
+        expected = errors[failed[0]] if failed else primary
+        if expected is None:
+            assert clean() is None
+        else:
+            with pytest.raises(type(expected)) as caught:
+                clean()
+            assert caught.value is expected
+            if failed:
+                assert caught.value.__context__ is primary
+                assert caught.value.__cause__ is None
+                assert not caught.value.__suppress_context__
+        expected_events = []
+        for pid in (1001, 1002, 1003):
+            expected_events.extend((("signal", pid, 9), ("wait", pid, 2)))
+            if pid not in failed:
+                expected_events.append(("wait", pid, 2))
+        assert case.events == expected_events
+        assert set(pool._HOST_WORKERS) == set(failed)
+        assert all(process.returncode is None for process in pool._HOST_WORKERS.values())
+        # Already-reaped and unowned children must never receive another signal.
+        for pid in (1001, 1002, 1003):
+            if pid not in failed:
+                pool._stop_resource_worker(pid)
+        assert case.events == expected_events
+        assert case.output == []
+
+    # A cached wait failure after known completion is different: retirement
+    # already released ownership and must not signal a potentially reused PID.
+    case = _primary_resource_error_case(tmp_path, monkeypatch, None, cleanup_at=1001)
+    active = [(index, case.start([], index), 1, False, 0) for index in range(3)]
+    pool._HOST_WORKERS[1001].returncode = 0
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        pool._stop_resource_workers(active)
+    assert caught.value is case.cleanup_error
+    assert caught.value.__context__ is None
+    assert case.events == [("wait", 1001, 2)] + _expected_resource_cleanup()[3:]
+    assert pool._HOST_WORKERS == {}
+
 
 @pytest.mark.parametrize("control", [KeyboardInterrupt(), SystemExit(7)])
 def test_primary_resource_diagnostic_does_not_swallow_control_flow(tmp_path, monkeypatch, control):
@@ -702,3 +765,23 @@ def test_primary_resource_diagnostic_does_not_swallow_control_flow(tmp_path, mon
         case.run()
     assert caught.value is control
     assert case.events == [("write",)] + _expected_resource_cleanup()
+
+
+    # A nonordinary cancellation during cleanup still interrupts immediately,
+    # including after an ordinary failure. Do not swallow control flow merely
+    # to finish the peer loop.
+    for first_fails in (False, True):
+        case = _primary_resource_error_case(tmp_path, monkeypatch, primary)
+        if first_fails:
+            case.cleanup_errors[1001] = case.cleanup_error
+        case.cleanup_errors[1002] = control
+        with pytest.raises(type(control)) as caught:
+            case.run()
+        assert caught.value is control
+        assert caught.value.__context__ is primary
+        expected = [("write",), ("flush",), ("signal", 1001, 9), ("wait", 1001, 2)]
+        if not first_fails:
+            expected.append(("wait", 1001, 2))
+        expected.extend((("signal", 1002, 9), ("wait", 1002, 2)))
+        assert case.events == expected
+        assert set(pool._HOST_WORKERS) == ({1001, 1002, 1003} if first_fails else {1002, 1003})

@@ -5344,7 +5344,19 @@ class ClassLowering:
         if info is None:
             return
         if not self._maybe_emit_class_init_outline(cd, info):
-            self._emit_class_init(cd, info)
+            if self._emit_class_init(cd, info) is None:
+                return
+        parent = self.parent
+        if parent._builder_block_is_terminated():
+            return
+        # A completed class statement binds its decorated result immediately.
+        # A later cyclic import must see this class before the final module
+        # namespace synchronization. The registered class global owns it across
+        # the publication call, including allocation and moving collection.
+        value = parent.builder.load(info.global_var, name=self._fresh("class.binding.current"))
+        parent._note_global_backed_value(value, info.global_var)
+        parent._publish_module_scope_import_binding(cd.name, value)
+        parent._emit_post_call_err_check(cd.span)
 
     def emit_local_class_statement_init(self, cd: ClassDef) -> None:
         """Construct and bind a function-local class at its source position."""
