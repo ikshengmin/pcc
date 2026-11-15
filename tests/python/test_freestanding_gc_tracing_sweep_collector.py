@@ -87,6 +87,8 @@ RAW_FUNCTION_IMPORTS = {
     'py_weakref_queue_tracing_candidates',
     'py_weakref_run_queued_callbacks',
     'py_user_del_pending',
+    # A generator whose close runs no user code goes to the collector thread.
+    'py_gen_finalize_pending',
     'pcc_thread_world_release_held',
     'pcc_thread_world_reacquire_held',
     'pcc_platform_abort',

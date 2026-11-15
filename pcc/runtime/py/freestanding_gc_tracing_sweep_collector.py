@@ -97,6 +97,7 @@ py_weakref_run_queued_callbacks = extern(
     "py_weakref_run_queued_callbacks", (c_ptr, c_int64), c_void
 )
 py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
+py_gen_finalize_pending = extern("py_gen_finalize_pending", (c_ptr,), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_thread_world_release_held = extern("pcc_thread_world_release_held", (), c_int64)
 pcc_thread_world_reacquire_held = extern(
@@ -443,13 +444,21 @@ def _concurrent_sweep_eligible_object(obj, tag: i64) -> i64:
     A bytearray is freed like bytes (py_dealloc_generic). A Lock or Event
     with no parked virtual thread frees its own native mutex and condition;
     with a waiter its teardown would resume or drop that thread, so it stays
-    in the stopped sweep. The stopped world keeps the state fixed between
-    PASS1 and PASS2.
+    in the stopped sweep. A generator whose close runs no user code
+    (py_gen_finalize_pending) drops its frame, send value and inline slots,
+    which a count-free collector does not count, and frees its own cell; one
+    whose close is pending is PASS0's. Only the count-free collectors defer
+    (_concurrent_sweep_admitted). The stopped world keeps the state fixed
+    between PASS1 and PASS2.
     """
     if _concurrent_sweep_eligible(tag) != 0:
         return 1
     if tag == abi_constant("object.type.bytearray"):
         return 1
+    if tag == abi_constant("object.type.gen"):
+        if py_gen_finalize_pending(obj) == 0:
+            return 1
+        return 0
     if tag == abi_constant("object.type.thread_lock") or tag == abi_constant("object.type.thread_event"):
         if ptr_is_null(load_ptr(obj, _THREAD_WAITERS_HEAD)) != 0:
             return 1

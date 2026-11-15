@@ -79,6 +79,8 @@ class _Heap:
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_py_gc_minor_graph_lock_contended": self.contended,
+            # A generator whose close would run user code (a suspended frame).
+            "py_gen_finalize_pending": lambda gen: int(self.memory[gen].get(40, 0) == 2),
             "pcc_py_gc_minor_graph_lock_yield": self.yield_lock,
             "pcc_gc_object_node_is_active": lambda node: int(self.load(node, 32) == 0),
             "pcc_gc_tracing_finalize_unpinned": self.finalize,
@@ -255,9 +257,29 @@ def test_bytearray_is_freed_like_bytes_and_the_listed_kinds_keep_their_answer():
     for tag in ELIGIBLE:
         assert eligible(heap.allocate(32), tag) == 1
     for tag in KEPT:
-        assert eligible(heap.allocate(64), tag) == 0
+        if tag != TAG("object.type.gen"):
+            assert eligible(heap.allocate(64), tag) == 0
     for name in ("memoryview", "thread_rlock", "thread_condition", "thread_semaphore"):
         assert eligible(heap.allocate(64), TAG("object.type." + name)) == 0
+
+
+def test_a_generator_that_needs_no_close_frees_only_its_own_storage():
+    # On a count-free collector a generator's teardown drops its frame, send
+    # value and inline slots without counting them: after the clear it frees
+    # only its own cell. The stopped sweep destroyed most of a request's
+    # garbage this way (lldb count on the request primitive, GC3: 4523 of
+    # the first 6000 stopped-world destructions were generators).
+    heap = _Heap()
+    eligible = heap.ns["_concurrent_sweep_eligible_object"]
+    gen = TAG("object.type.gen")
+    finished = heap.allocate(64)
+    assert eligible(finished, gen) == 1
+    # Its close would run user code: PASS0 owns it, never the thread.
+    suspended = heap.allocate(64)
+    heap.memory[suspended][40] = 2
+    assert eligible(suspended, gen) == 0
+    # The tag alone still answers no: the object's state decides.
+    assert heap.ns["_concurrent_sweep_eligible"](gen) == 0
 
 
 def test_slice_clears_each_object_right_before_its_teardown():

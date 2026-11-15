@@ -281,6 +281,18 @@ grow (GC3 23.0 to 20.7 ms). The HTTP A/B (`e0b983d8` against it plus the
 change) gave GC1 +3.9% (5/5), GC2 +3.1% (3/5) and GC3 +3.6% (5/5), against a
 GC0 control of +0.7% (5/5).
 
+Most of what the stopped world still destroyed was generators. An lldb count
+of `pcc_gc_tracing_finalize_unpinned` on GC3's request primitive found 4,523
+generators and 1,477 virtual threads among the first 6,000 stopped-world
+destructions. On a count-free collector, a generator whose close runs no
+user code (`py_gen_finalize_pending` 0) frees only its own cell, so it is
+now eligible too. Virtual threads stay in the stopped sweep because their
+teardown touches the scheduler. On the request primitive (arms `head-c5b`
+and `gen`) PASS2 fell from about 129 to 63 ms. Stopped time fell 20-23% on
+GC1-GC3, and the longest stop fell (GC2 38.0 to 21.4 ms). The HTTP A/B
+(`c5b0198b`) gave GC1 +4.1% (5/5), GC2 +2.3% (4/5) and GC3 +3.0% (5/5),
+against a GC0 control of -0.4% (1/5).
+
 ### Measuring
 
 All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is

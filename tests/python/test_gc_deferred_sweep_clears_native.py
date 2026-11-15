@@ -6,7 +6,8 @@ the threading and weakref library documentation. A GC1-GC3 automatic sweep
 that ran no finalizer or weak callback leaves its eligible candidates
 (instances, lists, dicts, tuples, bytearrays, idle Locks and Events)
 uncleared to the collector thread, which clears each right before its
-teardown (pcc_gc_concurrent_sweep_slice) while the mutators run.
+teardown (pcc_gc_concurrent_sweep_slice) while the mutators run. Generators
+whose close runs no user code (finished or never started) are among them.
 
 The program builds cycles of those kinds from four threads, keeps a rotating
 set of survivors whose contents it checks, and lets a few early rounds carry
@@ -48,6 +49,12 @@ def note(ref):
         callbacks[0] += 1
 
 
+def countdown(n):
+    while n > 0:
+        yield n
+        n -= 1
+
+
 def churn(tid, rounds, kept):
     total = 0
     k = 0
@@ -63,6 +70,10 @@ def churn(tid, rounds, kept):
         buffer = bytearray(b"x" * (k % 48))
         holder = {"a": a, "buffer": buffer, "pair": [a, b], "lock": lock, "event": event}
         a.holder = holder
+        # A finished and a never-started generator: neither one's close
+        # runs user code, so the collector thread may destroy them.
+        total += sum(countdown(k % 5))
+        holder["pending"] = countdown(k % 3)
         with lock:
             total += len(holder["pair"]) + len(buffer)
         if not event.is_set():
