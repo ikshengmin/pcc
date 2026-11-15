@@ -268,6 +268,19 @@ lock wait fell from 13.5% to 4.6%. Throughput rose:
 
 The collector's mark step holds the lock for a whole step in the same way.
 
+The sweep then moved more of its work out of the stopped world. A sweep
+that ran no finalizer or weak callback, has no budget and may defer now
+leaves its eligible candidates uncleared. The collector thread clears each
+one right before destroying it, because clearing and teardown touch only
+the object itself. Eligibility now also depends on the object's state:
+bytearrays, and Locks and Events with no parked virtual thread, qualify.
+On the request primitive (`pcc_perf` arms `head-e0b` and `defer`, three
+alternating runs) the stopped-world PASS1 cleared 0.54M objects instead of
+2.16M, and stopped time fell by 9-10% on GC1-GC3. The longest stop did not
+grow (GC3 23.0 to 20.7 ms). The HTTP A/B (`e0b983d8` against it plus the
+change) gave GC1 +3.9% (5/5), GC2 +3.1% (3/5) and GC3 +3.6% (5/5), against a
+GC0 control of +0.7% (5/5).
+
 ### Measuring
 
 All runtime measurement goes through `scripts/pcc_perf.py` (its docstring is

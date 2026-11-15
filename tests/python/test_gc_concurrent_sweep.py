@@ -20,7 +20,7 @@ from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANT
 from tests.python.runtime_body_model import gc_state_cells, load_functions
 from tests.python.test_gc_deferred_free import Runtime, _install_worker_loop
 from tests.python.test_gc_gray_worklist_scheduler import _SchedulerMemory
-from tests.python.test_gc_tracing_sweep_verdict import CANDIDATE, _SweepBoundary
+from tests.python.test_gc_tracing_sweep_verdict import CANDIDATE, FINALIZED, _SweepBoundary
 
 
 RUNTIME = Path(__file__).resolve().parents[2] / "pcc" / "runtime" / "py"
@@ -54,6 +54,7 @@ class _Heap:
         self.next_address = 0x1000
         self.graph = 0
         self.finalized = []
+        self.cleared = []
         self.freed_arrays = []
         self.on_handoff = None
         # Another thread queued for the graph lock (the kernel's queue tail).
@@ -81,12 +82,14 @@ class _Heap:
             "pcc_py_gc_minor_graph_lock_yield": self.yield_lock,
             "pcc_gc_object_node_is_active": lambda node: int(self.load(node, 32) == 0),
             "pcc_gc_tracing_finalize_unpinned": self.finalize,
+            "pcc_gc_tracing_clear_referents": self.clear,
             "free": self.free,
         }
         self.set("pcc_gc_backend_selected", backend)
         load_functions(SWEEP, {
             "_concurrent_sweep_admitted",
             "_concurrent_sweep_eligible",
+            "_concurrent_sweep_eligible_object",
             "pcc_gc_concurrent_sweep_slice",
             "pcc_gc_concurrent_sweep_finish_stopped",
         }, self.ns)
@@ -204,6 +207,13 @@ class _Heap:
         del self.memory[node]
         del self.memory[obj]
 
+    def clear(self, obj):
+        # The stopped sweep may leave a deferred object uncleared: the slice
+        # clears it under the graph lock right before its teardown.
+        assert self.graph >= 1
+        assert obj not in self.finalized
+        self.cleared.append(obj)
+
     def slice(self, budget):
         freed = self.ns["pcc_gc_concurrent_sweep_slice"](budget)
         assert self.graph == 0
@@ -218,6 +228,44 @@ def test_eligible_kinds_free_only_their_own_storage(tag):
 @pytest.mark.parametrize("tag", KEPT)
 def test_shared_or_foreign_teardown_stays_in_the_stopped_sweep(tag):
     assert _Heap().ns["_concurrent_sweep_eligible"](tag) == 0
+
+
+def _thread_object(heap, tag, waiter):
+    obj = heap.allocate(64)
+    heap.memory[obj][8] = tag
+    # The parked virtual-thread FIFO head of a Lock or an Event.
+    heap.memory[obj][40] = waiter
+    return obj
+
+
+@pytest.mark.parametrize("name", ("thread_lock", "thread_event"))
+def test_a_lock_or_event_without_parked_threads_frees_only_its_own_storage(name):
+    heap = _Heap()
+    eligible = heap.ns["_concurrent_sweep_eligible_object"]
+    assert eligible(_thread_object(heap, TAG("object.type." + name), 0), TAG("object.type." + name)) == 1
+    # A parked waiter would be resumed or dropped by the teardown.
+    waiting = _thread_object(heap, TAG("object.type." + name), heap.allocate(16))
+    assert eligible(waiting, TAG("object.type." + name)) == 0
+
+
+def test_bytearray_is_freed_like_bytes_and_the_listed_kinds_keep_their_answer():
+    heap = _Heap()
+    eligible = heap.ns["_concurrent_sweep_eligible_object"]
+    assert eligible(heap.allocate(32), TAG("object.type.bytearray")) == 1
+    for tag in ELIGIBLE:
+        assert eligible(heap.allocate(32), tag) == 1
+    for tag in KEPT:
+        assert eligible(heap.allocate(64), tag) == 0
+    for name in ("memoryview", "thread_rlock", "thread_condition", "thread_semaphore"):
+        assert eligible(heap.allocate(64), TAG("object.type." + name)) == 0
+
+
+def test_slice_clears_each_object_right_before_its_teardown():
+    heap = _Heap()
+    dead = [heap.object(TAG("object.type.list")) for _ in range(40)]
+    heap.publish(dead)
+    assert heap.slice(256) == 40
+    assert heap.cleared == dead and heap.finalized == dead
 
 
 @pytest.mark.parametrize("backend", range(5))
@@ -463,6 +511,56 @@ def test_pass2_records_eligible_candidates_finalized_and_cleared(backend):
     # PASS1 cleared four non-classes: the array's capacity bound.
     assert boundary.arrays[-1]["size"] == 4 * 8
     assert boundary.graph == 0 and not boundary.freed_arrays
+
+
+def _without_finalizers(objects):
+    # FINALIZED: no user code is pending (py_user_del_pending answers 0), so
+    # no finalizer or weak callback runs and the weak refs stay settled.
+    for obj in objects:
+        obj[12] |= FINALIZED
+    return objects
+
+
+@pytest.mark.parametrize("backend", (1, 2, 3))
+def test_a_settled_sweep_leaves_eligible_candidates_uncleared_to_the_collector_thread(backend):
+    boundary = _DeferringBoundary(backend=backend)
+    dead = _without_finalizers(_instances(boundary, 3))
+    cext = boundary.object("cext", cext=True)
+    _without_finalizers([cext])
+    cls = boundary.object("cls", is_class=True)
+    assert boundary.sweep(9223372036854775807) == 4
+    # No finalizer ran, so PASS1 clears only what the stopped world itself
+    # destroys: the C-extension object. The instances go to the collector
+    # thread uncleared; it clears each before its teardown.
+    assert not any(event.startswith("del:") for event in boundary.events)
+    for obj in dead:
+        assert "clear:" + obj["name"] not in boundary.events
+        assert obj[12] & CANDIDATE
+    assert boundary.events.count("clear:cext") == 1
+    assert _freed(boundary) == ["free:cext"]
+    assert boundary.recorded() == dead
+    assert cls[12] & CANDIDATE and boundary.global_cells[REMAINING][0] == 1
+
+
+def test_a_settled_sweep_without_an_array_clears_before_destroying():
+    boundary = _DeferringBoundary(memory=False)
+    dead = _without_finalizers(_instances(boundary, 2))
+    assert boundary.sweep(9223372036854775807) == 2
+    # PASS1 left them to a collector thread that cannot take them: each is
+    # cleared right before its teardown in the stopped world.
+    for obj in dead:
+        name = obj["name"]
+        assert boundary.events.index("clear:" + name) < boundary.events.index("free:" + name)
+    assert boundary.global_cells[STATE][0] == 0 and not boundary.published
+
+
+def test_a_budgeted_sweep_clears_in_the_stopped_world():
+    boundary = _DeferringBoundary()
+    dead = _without_finalizers(_instances(boundary, 2))
+    boundary.sweep(1 << 40)
+    # Only an unbounded sweep leaves candidates uncleared.
+    for obj in dead:
+        assert "clear:" + obj["name"] in boundary.events
 
 
 @pytest.mark.parametrize("allowed, worker", ((0, 1), (1, 0), (1, 3)))

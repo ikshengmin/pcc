@@ -24,6 +24,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 OWNED_SYMBOLS = {
     # Automatic GC1/GC2 sweeps defer plain dead objects to the collector thread.
     "pcc_gc_concurrent_sweep_eligible",
+    "pcc_gc_concurrent_sweep_eligible_object",
     "pcc_gc_concurrent_sweep_admitted",
     "pcc_gc_concurrent_sweep_slice",
     "pcc_gc_concurrent_sweep_finish_stopped",

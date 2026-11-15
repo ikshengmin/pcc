@@ -541,7 +541,11 @@ GC1 3,349 → 3,599 (+7.5%), GC2 3,278 → 3,538 (+7.9%), GC3 3,285 → 3,541
 GC0 (5,289). Connection errors over the five runs fell from 80 to 72 on GC1,
 36 to 29 on GC2 and 63 to 0 on GC3; GC4 was not measured. The cost breakdown is in
 `docs/architecture/04-runtime-and-gc.md` ("Where GC1-GC3 time goes").
-Generations (step 1 there) are not implemented yet.
+The sweep also leaves a settled sweep's plain garbage uncleared to the
+collector thread: HTTP A/B against `e0b983d8`, GC1 +3.9% (5/5), GC2 +3.1%
+(3/5), GC3 +3.6% (5/5), GC0 control +0.7% (5/5). On the request primitive,
+stopped time fell 9–10% and the longest stop did not grow. Generations
+(step 1 there) are not implemented yet.
 
 Latest GC0 (2026-11-14, Apple M1 Pro / macOS 27.2.1): four further rounds complete
 the default matrix with **30/30 timed rows**, ten arms, zero zrk errors or

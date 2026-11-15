@@ -402,7 +402,8 @@ def _concurrent_sweep_eligible(tag: i64) -> i64:
     """1 for a kind whose destruction frees only its own storage.
 
     Scalars, plain containers, functions, iterators and instances qualify:
-    PASS1 cleared their slots, PASS0 ran their finalizers, and an instance
+    their slots are cleared before their teardown (by PASS1, or by the
+    collector thread right before it), PASS0 ran their finalizers, and an instance
     reads only its class layout (classes retire last, in a stopped world).
     Classes, weakrefs, generators and coroutines, tasks and threads, files,
     exceptions, C-API handles and C-extension objects keep the stopped
@@ -425,6 +426,32 @@ def _concurrent_sweep_eligible(tag: i64) -> i64:
         return 1
     if tag >= abi_constant("object.type.user_class_start"):
         if pcc_capi_is_cext_type_tag(tag) == 0:
+            return 1
+    return 0
+
+
+# A Lock's and an Event's parked virtual-thread FIFO head
+# (py_threading: mutex@16, cond@24, waiters head@40, tail@48).
+_THREAD_WAITERS_HEAD = 40
+
+
+@c_abi_export("pcc_gc_concurrent_sweep_eligible_object")
+def _concurrent_sweep_eligible_object(obj, tag: i64) -> i64:
+    """_concurrent_sweep_eligible for one dead object, whose state can also
+    show that its teardown frees only its own storage.
+
+    A bytearray is freed like bytes (py_dealloc_generic). A Lock or Event
+    with no parked virtual thread frees its own native mutex and condition;
+    with a waiter its teardown would resume or drop that thread, so it stays
+    in the stopped sweep. The stopped world keeps the state fixed between
+    PASS1 and PASS2.
+    """
+    if _concurrent_sweep_eligible(tag) != 0:
+        return 1
+    if tag == abi_constant("object.type.bytearray"):
+        return 1
+    if tag == abi_constant("object.type.thread_lock") or tag == abi_constant("object.type.thread_event"):
+        if ptr_is_null(load_ptr(obj, _THREAD_WAITERS_HEAD)) != 0:
             return 1
     return 0
 
@@ -478,7 +505,11 @@ def pcc_gc_concurrent_sweep_slice(budget: i64) -> i64:
         else:
             store_i64(global_addr("pcc_gc_concurrent_sweep_next"), 0, next_index + 1)
             objects = global_load_ptr("pcc_gc_concurrent_sweep_objects")
-            pcc_gc_tracing_finalize_unpinned(load_ptr(objects, next_index * 8))
+            dead = load_ptr(objects, next_index * 8)
+            # The stopped sweep may have left it uncleared (its PASS1);
+            # clearing a cleared object finds nothing to clear.
+            pcc_gc_tracing_clear_referents(dead)
+            pcc_gc_tracing_finalize_unpinned(dead)
             freed = freed + 1
             if pcc_py_gc_minor_graph_lock_contended() != 0:
                 # A queued mutator takes the lock now; this thread does not
@@ -729,10 +760,25 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         weak_settled = 1
 
     # PASS 1: clear at most budget candidates without freeing any sibling.
+    # A sweep that ran no user code since its weak refs settled, has no
+    # budget and may defer, leaves its eligible candidates uncleared: the
+    # collector thread clears each right before destroying it
+    # (pcc_gc_concurrent_sweep_slice). Clearing reads and writes only the
+    # object itself, and no destruction reads another object, so the order
+    # is free; this moves the clearing out of the stopped world.
+    defer_uncleared: i64 = 0
+    if (
+        weak_settled != 0
+        and budget == 9223372036854775807
+        and _concurrent_sweep_admitted(count_free) != 0
+    ):
+        defer_uncleared = 1
     started = pcc_platform_monotonic_us()
     visited = 0
     cleared: i64 = 0
     cleared_nonclasses: i64 = 0
+    # The phase's work: the candidates this stopped world cleared itself.
+    cleared_here: i64 = 0
     cursor = 0
     node = pcc_gc_object_walk_first() if listed == 0 else (
         load_ptr(listed_nodes, 0) if listed_count > 0 else null())
@@ -766,7 +812,16 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             # A class can remain until a later budget slice frees its
             # instances. Empty owning slots prove clearing already finished;
             # do not spend each slice clearing the same class again.
-            if count_free == 0 or is_class == 0 or _class_needs_clear(obj) != 0:
+            if (
+                defer_uncleared != 0
+                and is_class == 0
+                and _concurrent_sweep_eligible_object(obj, load_i32(obj, 8)) != 0
+            ):
+                # Settled for PASS2 (counted), cleared by the collector thread.
+                cleared_nonclasses = cleared_nonclasses + 1
+                cleared = cleared + 1
+            elif count_free == 0 or is_class == 0 or _class_needs_clear(obj) != 0:
+                cleared_here = cleared_here + 1
                 if weak_settled != 0:
                     pcc_gc_tracing_clear_referents(obj)
                 else:
@@ -780,7 +835,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # Only a sweep that cleared every candidate may leave candidates to the
     # collector thread: an uncleared one still owns its referents.
     pass1_complete: i64 = 1 if ptr_is_null(node) != 0 else 0
-    _record_sweep_phase(2, started, pcc_platform_monotonic_us(), visited, cleared)
+    _record_sweep_phase(2, started, pcc_platform_monotonic_us(), visited, cleared_here)
 
     # PASS 2: finalize the same number of still-candidate objects. An
     # automatic GC1/GC2 sweep leaves plain dead objects to the collector
@@ -839,10 +894,15 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
                 else:
                     classes_kept = classes_kept + 1
             elif reclaimed < (cleared_nonclasses if count_free != 0 else cleared):
-                if defer_concurrent != 0 and _concurrent_sweep_eligible(load_i32(obj, 8)) != 0:
+                eligible: i64 = _concurrent_sweep_eligible_object(obj, load_i32(obj, 8))
+                if defer_concurrent != 0 and eligible != 0:
                     store_ptr(deferred_objects, deferred * 8, obj)
                     deferred = deferred + 1
                 else:
+                    if defer_uncleared != 0 and eligible != 0:
+                        # PASS1 left it to the collector thread, which could
+                        # not take it (no array): clear it before its teardown.
+                        pcc_gc_tracing_clear_referents(obj)
                     deferred_scalar: i64 = 0
                     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
                     if selected == 1 or selected == 2 or selected == 3:
