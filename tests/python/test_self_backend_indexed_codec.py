@@ -1949,3 +1949,463 @@ def test_private_value_columns_native_boundary_all_collectors(
             assert result.returncode == 0, (collector, case, result.stdout, result.stderr)
             assert result.stderr == ""
             assert result.stdout == "private-columns|" + case + "|ok\n"
+
+
+_KERNEL_PRIVATE_FIELDS = (
+    "definition_positions", "type_field_ids", "type_scalars", "value_scalars",
+    "used_value_ids", "slot_scalars", "block_layout_ids",
+)
+
+
+def _kernel_private_wire_row(case="valid"):
+    row = {
+        "name": "private_owner_probe", "block_names": [], "value_names": [],
+        "instruction_arithmetic_flags": [], "cold_instruction_data": [],
+        "call_texts": [], "types": [], "args": [],
+        "ret_type": ["void", 0, None, 0, None, "", []],
+        "arenas": [[name, 0] for name, _, _ in _ARENA_FIELDS],
+    }
+    payload = b""
+    if case == "spans":
+        next(item for item in row["arenas"] if item[0] == "error_edge_spans")[1] = 1
+        payload = b"\0" * 8
+    elif case == "nested-type":
+        integer = ["int", 64, None, 0, None, "", []]
+        row["types"] = [["ptr", 0, integer, 0, None, "", []]]
+    elif case == "metadata":
+        next(item for item in row["arenas"] if item[0] == "instruction_metadata")[1] = 1
+        payload = b"\0" * 8
+    return row, payload
+
+
+def _kernel_private_sidecar(tmp_path, case):
+    import json
+
+    row, payload = _kernel_private_wire_row(case)
+    header = {"schema": indexed_codec._SCHEMA, "scalar_width": 8,
+              "byte_order": "little", "functions": [row], "globals": [],
+              "total_scalars": len(payload) // 8}
+    raw = json.dumps(header, sort_keys=True).encode()
+    path = tmp_path / (case + "-kernel.pidx")
+    path.write_bytes(indexed_codec._MAGIC + str(len(raw)).encode() + b"\n" + raw + payload)
+    return path
+
+
+def _observe_kernel_private_acquisitions(monkeypatch, *, fail_at=None,
+                                         failure=None, close_at=None):
+    from pcc.backend import self_backend_kernel as kernels
+
+    original_init = kernels.CompilerIntArena.__init__
+    original_close = kernels.CompilerIntArena.close
+    original_constructor = kernels.IndexedFunctionKernel.__init__
+    owners, attempts, functions = [], [], []
+    active = False
+
+    def initialize(arena, initial_capacity=8):
+        if active and len(owners) == fail_at:
+            raise failure
+        original_init(arena, initial_capacity)
+        if active:
+            owners.append(arena)
+
+    def close(arena):
+        index = next((i for i, owner in enumerate(owners) if owner is arena), None)
+        if index is not None:
+            attempts.append(index)
+            if index == close_at:
+                raise KeyboardInterrupt("secondary constructor cleanup")
+        original_close(arena)
+
+    def constructor(kernel, function):
+        nonlocal active
+        functions.append(function)
+        active = True
+        try:
+            return original_constructor(kernel, function)
+        finally:
+            active = False
+
+    monkeypatch.setattr(kernels.CompilerIntArena, "__init__", initialize)
+    monkeypatch.setattr(kernels.CompilerIntArena, "close", close)
+    monkeypatch.setattr(kernels.IndexedFunctionKernel, "__init__", constructor)
+
+    def finish():
+        monkeypatch.setattr(kernels.CompilerIntArena, "close", original_close)
+        for owner in owners:
+            original_close(owner)
+        for function in functions:
+            if function.indexed_kernel is not None:
+                function.indexed_kernel.close_native_tables()
+            elif function.indexed_seed is not None:
+                indexed_codec._close_private_seed(function.indexed_seed)
+
+    return owners, attempts, functions, finish
+
+
+def _assert_kernel_seed_aliases_open(function):
+    seed = function.indexed_seed
+    assert seed is not None
+    assert function.indexed_kernel is None
+    for _, _, field in _ARENA_FIELDS:
+        if field:
+            assert not getattr(seed, field)._closed
+    assert not seed.block_name_index._closed
+    assert not seed.value_name_index._closed
+
+
+@pytest.mark.parametrize("case,count,message", [
+    ("nested-type", 3, "indexed call plane omitted a nested type record"),
+    ("spans", 7, "indexed inline error-edge spans do not match block count"),
+    ("metadata", 7, "indexed function seed metadata count is inconsistent"),
+])
+@pytest.mark.parametrize("close_at", [None, 0, 1, 2, 3, 4, 5, 6])
+def test_kernel_private_owners_real_decoder_failures(tmp_path, monkeypatch, case, count,
+                                                     message, close_at):
+    from pcc.backend import BackendUnavailable
+
+    path = _kernel_private_sidecar(tmp_path, case)
+    owners, attempts, functions, finish = _observe_kernel_private_acquisitions(
+        monkeypatch, close_at=close_at,
+    )
+    try:
+        with pytest.raises(BackendUnavailable, match=message):
+            decode_indexed_module_file(str(path))
+        assert len(owners) == count
+        assert attempts == list(range(count))
+        assert [owner._closed for owner in owners] == [i != close_at for i in range(count)]
+        _assert_kernel_seed_aliases_open(functions[0])
+    finally:
+        finish()
+
+
+@pytest.mark.parametrize("failure_type", [MemoryError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("fail_at", range(7))
+@pytest.mark.parametrize("close_at", [None, 0])
+def test_kernel_private_partial_acquisitions_preserve_exception(
+    tmp_path, monkeypatch, failure_type, fail_at, close_at,
+):
+    path = _kernel_private_sidecar(tmp_path, "valid")
+    original = failure_type("constructor acquisition failed")
+    cause = ValueError("original cause")
+    original.__cause__ = cause
+    owners, attempts, functions, finish = _observe_kernel_private_acquisitions(
+        monkeypatch, fail_at=fail_at, failure=original, close_at=close_at,
+    )
+    try:
+        with pytest.raises(failure_type) as caught:
+            decode_indexed_module_file(str(path))
+        assert caught.value is original
+        assert caught.value.__cause__ is cause
+        assert caught.value.__context__ is None
+        assert len(owners) == fail_at
+        assert attempts == list(range(fail_at))
+        assert [owner._closed for owner in owners] == [i != close_at for i in range(fail_at)]
+        _assert_kernel_seed_aliases_open(functions[0])
+    finally:
+        finish()
+
+
+def test_kernel_private_zero_length_success_handoff(tmp_path, monkeypatch):
+    path = _kernel_private_sidecar(tmp_path, "valid")
+    owners, attempts, functions, finish = _observe_kernel_private_acquisitions(monkeypatch)
+    try:
+        module = decode_indexed_module_file(str(path))
+        function = module.functions[0]
+        assert function is functions[0]
+        assert function.indexed_seed is None
+        kernel = function.indexed_kernel
+        assert kernel is not None
+        assert len(owners) == 7
+        assert attempts == []
+        for field, owner in zip(_KERNEL_PRIVATE_FIELDS, owners):
+            assert getattr(kernel, field) is owner
+            assert len(owner) == 0
+            assert not owner._closed
+        assert get_indexed_function_kernel(function) is kernel
+        assert len(owners) == 7
+    finally:
+        finish()
+
+
+def test_kernel_private_helper_keeps_unrelated_owners_open(monkeypatch):
+    from pcc.backend import self_backend_kernel as kernels
+
+    borrowed = kernels.CompilerIntArena(0)
+    private = [kernels.CompilerIntArena(0) for _ in range(7)]
+    try:
+        kernels._close_private_kernel_tables(*private)
+        assert all(owner._closed for owner in private)
+        assert not borrowed._closed
+    finally:
+        borrowed.close()
+        for owner in private:
+            owner.close()
+
+
+def test_kernel_private_constructor_guard_ast_contract():
+    import ast
+    import inspect
+    import textwrap
+    from pcc.backend import self_backend_kernel as kernels
+
+    constructor = ast.parse(textwrap.dedent(inspect.getsource(kernels.IndexedFunctionKernel.__init__))).body[0]
+    guard = next(node for node in constructor.body if isinstance(node, ast.Try))
+    assert len(guard.handlers) == 1
+    assert isinstance(guard.handlers[0].type, ast.Name)
+    assert guard.handlers[0].type.id == "BaseException"
+    assert isinstance(guard.handlers[0].body[-1], ast.Raise)
+    assert guard.handlers[0].body[-1].exc is None
+    initialized = [node.target.id for node in constructor.body if isinstance(node, ast.AnnAssign)]
+    assert initialized == ["private_" + field for field in _KERNEL_PRIVATE_FIELDS]
+    helper = ast.parse(inspect.getsource(kernels._close_private_kernel_tables)).body[0]
+    releases = [node for node in helper.body if isinstance(node, ast.Try)]
+    assert len(releases) == 7
+    assert all(isinstance(node.handlers[0].type, ast.Name)
+               and node.handlers[0].type.id == "BaseException" for node in releases)
+    assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                   and node.func.attr == "close_native_tables" for node in ast.walk(constructor))
+
+
+def _native_kernel_private_source():
+    """Exact acquisition/rollback syntax; deliberately excludes the kernel body."""
+    import ast
+    import inspect
+    import textwrap
+    from pathlib import Path
+    from pcc.backend import self_backend_value_arena as arena_module
+    from pcc.backend import self_backend_kernel as kernels
+
+    constructor_source = textwrap.dedent(inspect.getsource(kernels.IndexedFunctionKernel.__init__))
+    constructor = ast.parse(constructor_source).body[0]
+    guard = next(node for node in constructor.body if isinstance(node, ast.Try))
+    initializers = [ast.get_source_segment(constructor_source, node)
+                    for node in constructor.body if isinstance(node, ast.AnnAssign)]
+    assert len(initializers) == 7
+    acquisitions = []
+    for node in guard.body:
+        if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                and isinstance(node.targets[0], ast.Name)
+                and node.targets[0].id in {"private_" + field for field in _KERNEL_PRIVATE_FIELDS}):
+            acquisitions.append(ast.get_source_segment(constructor_source, node))
+    assert len(acquisitions) == 7
+    handler = ast.get_source_segment(constructor_source, guard.handlers[0])
+    handler = textwrap.dedent("    " + handler)
+    helper = inspect.getsource(kernels._close_private_kernel_tables)
+    body = ""
+    for index, acquisition in enumerate(acquisitions):
+        body += f'if fail_at == {index}:\n    raise ValueError("acquisition boundary")\n'
+        body += acquisition + "\n"
+        body += "owners.append(private_" + _KERNEL_PRIVATE_FIELDS[index] + ")\n"
+        body += "assert private_" + _KERNEL_PRIVATE_FIELDS[index] + ".uses_native_storage\n"
+        body += "assert len(private_" + _KERNEL_PRIVATE_FIELDS[index] + ") == 0\n"
+    body += 'if fail_at == 7:\n    raise ValueError("validation boundary")\n'
+    # Reuse the real arena source/support without importing the full backend
+    # package into this isolated native protocol fixture.
+    arena = Path(arena_module.__file__).read_text().split("class CompilerRecordSpanArena:", 1)[0]
+    source = arena + "\n" + helper + "\n"
+    for name, guarded in (("run_guarded", True), ("run_control", False)):
+        source += "def " + name + "(fail_at: int) -> None:\n"
+        source += "    owners: list[CompilerIntArena] = []\n"
+        source += textwrap.indent("\n".join(initializers), "    ") + "\n"
+        source += "    try:\n"
+        if guarded:
+            source += "        try:\n" + textwrap.indent(body, "            ")
+            source += textwrap.indent(handler, "        ") + "\n"
+        else:
+            source += textwrap.indent(body, "        ")
+        source += "    except ValueError:\n        pass\n"
+        source += "    assert len(owners) == min(fail_at, 7)\n"
+        source += "    for owner in owners:\n"
+        if guarded:
+            source += "        if fail_at < 8:\n            assert owner._closed\n        else:\n            assert not owner._closed\n"
+        else:
+            source += "        assert not owner._closed\n"
+        source += "        owner.close()\n\n"
+    source += "def zero_capacity() -> None:\n"
+    for field in _KERNEL_PRIVATE_FIELDS:
+        source += "    " + field + " = CompilerIntArena(0)\n"
+        source += "    assert " + field + ".uses_native_storage\n"
+        source += "    assert len(" + field + ") == 0\n"
+    source += "    _close_private_kernel_tables(" + ", ".join(_KERNEL_PRIVATE_FIELDS) + ")\n"
+    for field in _KERNEL_PRIVATE_FIELDS:
+        source += "    assert " + field + "._closed\n"
+    source += "def main() -> None:\n    for position in range(9):\n        run_guarded(position)\n        run_control(position)\n    zero_capacity()\n    print('kernel-private-boundary|ok')\nmain()\n"
+    ast.parse(source)
+    return source, handler, helper
+
+
+@pytest.mark.integration
+def test_kernel_private_acquisition_rollback_native_boundary_all_collectors(
+    tmp_path, monkeypatch, python_program_compiler, pcc_runtime_archive, request,
+):
+    """Real native arenas; exact helper/handler, synthetic constructor body."""
+    import inspect
+    import json
+    import os
+    from pathlib import Path
+    import subprocess
+    import sys
+    from pcc.backend import self_backend_kernel as kernels
+    from pcc.backend import self_backend_value_arena as arena_module
+
+    source_text, handler, helper = _native_kernel_private_source()
+    source = tmp_path / "kernel_private_native.py"
+    source.write_text(source_text)
+    binary = tmp_path / "kernel_private_native"
+
+    def identity(path):
+        if path is None:
+            return None
+        return {"path": os.path.abspath(os.fspath(path)),
+                "sha256": hashlib.sha256(Path(path).read_bytes()).hexdigest()}
+
+    captured = inspect.getclosurevars(python_program_compiler).nonlocals.get("compiler")
+    if not isinstance(captured, (str, os.PathLike)):
+        captured = None
+    route_path = os.environ.get("PCC_TEST_COMPILER_LOG")
+    route_offset = (Path(route_path).stat().st_size
+                    if route_path and Path(route_path).is_file() else 0)
+    current_test = os.environ.get("PYTEST_CURRENT_TEST", "")
+    receipt = {
+        "nominal_case": request.node.callspec.params["python_program_compiler"],
+        "ownership_boundary": "nominal fixture is not compiler ownership evidence; inspect callable, captured compiler, route log",
+        "compiler_callable": python_program_compiler.__module__ + "." + python_program_compiler.__qualname__,
+        "compiler_callable_source": identity(inspect.getsourcefile(python_program_compiler)),
+        "captured_compiler_before": identity(captured), "host_process": identity(sys.executable),
+        "source": identity(source), "kernel": identity(kernels.__file__),
+        "arena": identity(arena_module.__file__), "runtime_archive": identity(pcc_runtime_archive),
+        "handler_sha256": hashlib.sha256(handler.encode()).hexdigest(),
+        "helper_sha256": hashlib.sha256(helper.encode()).hexdigest(),
+        "scope": "native seven-owner acquisition and rollback boundary only; exact production optional locals, acquisitions, handler and helper; synthetic failure body with retained arena observations; no full kernel/decoder or native malloc/close fault injection, fixed point, RSS or performance claim",
+        "returned_args": None, "route_records": [], "gc_runs": [],
+    }
+    receipt_path = tmp_path / "kernel_private_native.receipt.json"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
+    try:
+        compiled = python_program_compiler(
+            str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive),
+        )
+        args = getattr(compiled, "args", None)
+        if args is not None:
+            receipt["returned_args"] = ([os.fsdecode(value) for value in args]
+                                        if isinstance(args, (tuple, list)) else os.fsdecode(args))
+    finally:
+        receipt["captured_compiler_after"] = identity(captured)
+        if route_path and Path(route_path).is_file():
+            with Path(route_path).open("rb") as stream:
+                stream.seek(route_offset)
+                for line in stream:
+                    try:
+                        record = json.loads(line)
+                    except (ValueError, UnicodeDecodeError) as error:
+                        receipt["route_records"].append({"unparsed": str(error)})
+                        continue
+                    if record.get("test") == current_test and record.get("kind") == "compile_python":
+                        receipt["route_records"].append(record)
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    receipt["binary"] = identity(binary)
+    for collector in range(5):
+        result = subprocess.run(
+            [str(binary)], capture_output=True, text=True, timeout=30,
+            env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
+        )
+        receipt["gc_runs"].append({"collector": collector, "returncode": result.returncode,
+                                   "stdout": result.stdout, "stderr": result.stderr})
+        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+        assert result.returncode == 0, (collector, result.stdout, result.stderr)
+        assert result.stderr == ""
+        assert result.stdout == "kernel-private-boundary|ok\n"
+
+
+def test_kernel_private_nonempty_decoder_success_handoff(tmp_path, monkeypatch):
+    path = _private_value_sidecar(tmp_path, monkeypatch)
+    owners, attempts, functions, finish = _observe_kernel_private_acquisitions(monkeypatch)
+    try:
+        module = decode_indexed_module_file(str(path))
+        assert len(owners) == 7 * len(module.functions)
+        assert len(functions) == len(module.functions)
+        assert attempts == []
+        for index, function in enumerate(module.functions):
+            kernel = function.indexed_kernel
+            assert kernel is not None
+            assert function.indexed_seed is None
+            for offset, field in enumerate(_KERNEL_PRIVATE_FIELDS):
+                owner = owners[index * 7 + offset]
+                assert getattr(kernel, field) is owner
+                assert not owner._closed
+        assert any(len(owner) for owner in owners)
+    finally:
+        finish()
+
+
+def test_kernel_private_default_constructor_success(monkeypatch):
+    from pcc.backend import self_backend_kernel as kernels
+
+    row, _ = _kernel_private_wire_row()
+    function, _ = indexed_codec._seed_from_wire(row)
+    old_seed = function.indexed_seed
+    function.indexed_seed = None
+    try:
+        kernel = kernels.IndexedFunctionKernel(function)
+        try:
+            assert function.indexed_kernel is None
+            assert function.indexed_seed is None
+            for field in _KERNEL_PRIVATE_FIELDS:
+                assert not getattr(kernel, field)._closed
+        finally:
+            kernel.close_native_tables()
+    finally:
+        indexed_codec._close_private_seed(old_seed)
+
+
+@pytest.mark.parametrize("failure_type", [ValueError, KeyboardInterrupt, SystemExit])
+@pytest.mark.parametrize("close_at", [None, 0, 6])
+def test_kernel_private_default_constructor_failure_scope(monkeypatch, failure_type, close_at):
+    from pcc.backend import self_backend_kernel as kernels
+
+    row, _ = _kernel_private_wire_row()
+    function, _ = indexed_codec._seed_from_wire(row)
+    old_seed = function.indexed_seed
+    function.indexed_seed = None
+    indexed_codec._close_private_seed(old_seed)
+    original = failure_type("late no-seed construction failure")
+    cause = ValueError("original cause")
+    original.__cause__ = cause
+    captured, private, attempts = [], [], []
+    real_close = kernels.CompilerIntArena.close
+
+    def fail(kernel):
+        captured.append(kernel)
+        private.extend(getattr(kernel, field) for field in _KERNEL_PRIVATE_FIELDS)
+        raise original
+
+    def close(arena):
+        index = next((i for i, owner in enumerate(private) if owner is arena), None)
+        if index is not None:
+            attempts.append(index)
+            if index == close_at:
+                raise KeyboardInterrupt("secondary no-seed cleanup")
+        real_close(arena)
+
+    monkeypatch.setattr(kernels.IndexedFunctionKernel, "_freeze_value_scalar_columns", fail)
+    monkeypatch.setattr(kernels.CompilerIntArena, "close", close)
+    try:
+        with pytest.raises(failure_type) as caught:
+            kernels.IndexedFunctionKernel(function)
+        assert caught.value is original
+        assert caught.value.__cause__ is cause
+        assert caught.value.__context__ is None
+        assert attempts == list(range(7))
+        assert [owner._closed for owner in private] == [i != close_at for i in range(7)]
+        assert function.indexed_kernel is None and function.indexed_seed is None
+        kernel = captured[0]
+        other_owners = [getattr(kernel, field) for field in kernels.IndexedFunctionKernel.__slots__
+                        if isinstance(getattr(kernel, field, None), kernels.CompilerIntArena)
+                        and field not in _KERNEL_PRIVATE_FIELDS]
+        assert other_owners
+        assert all(not owner._closed for owner in other_owners)
+    finally:
+        monkeypatch.setattr(kernels.CompilerIntArena, "close", real_close)
+        for kernel in captured:
+            kernel.close_native_tables()
