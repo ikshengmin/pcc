@@ -65,6 +65,7 @@ addopts = "-n 6 --dist=loadgroup -m 'not integration'"
 testpaths = ["tests"]
 norecursedirs = ["projects", "build", "build_py", "build_pcc", "build_libpython", "refs_docs", "_tmp_*"]
 markers = [
+    "pcc_source_group(legacy=, name=): explicit item-local scheduling group only for the ci_validation_inventory plugin; ordinary pytest retains the original xdist_group",
     "integration: expensive end-to-end integration tests excluded from the default test run",
     "intent: AGENTS.md design-intent constraint locks (fast source/contract-level checks)",
     "pcc_gate(env=, dep=, probe=, unavailable=): opt-in/hardware gate; deselected at collection when the env var is unset, the dependency is missing, the probe fails, or the tool is unavailable. A selected test whose gate is unmet fails instead of skipping",

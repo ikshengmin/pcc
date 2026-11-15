@@ -32,7 +32,7 @@ def mutate(path, change):
     put(path, value)
 
 
-def model(tmp_path, monkeypatch, *, owner_deselected=False):
+def model(tmp_path, monkeypatch, *, owner_deselected=False, owned_lane='reference'):
     root = tmp_path / 'checkout'
     root.mkdir()
     (root / 'pyproject.toml').write_text('[tool.pcc-ci.group_policy]\n')
@@ -42,7 +42,7 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False):
         {'domain': 'go', 'lane': 'reference', 'nodeid': node,
          'platforms': ['linux-x86_64', 'macos-arm64'],
          'tools': {'linux-x86_64': [], 'macos-arm64': ['clang']}}]}
-    manifest['overrides'].append({'domain': 'go', 'lane': 'reference', 'nodeid': module + '::test_darwin',
+    manifest['overrides'].append({'domain': 'go', 'lane': owned_lane, 'nodeid': module + '::test_darwin',
         'platforms': ['macos-arm64'], 'tools': {'macos-arm64': ['clang']}})
     put(root / owners.MANIFEST, manifest)
     _, sha = owners.read_manifest(root)
@@ -65,7 +65,7 @@ def model(tmp_path, monkeypatch, *, owner_deselected=False):
     raw = [dict(file=module, function='test_' + lane, nodeid=module + '::test_' + lane,
                 canonical_nodeid=module + '::test_' + lane, lane=lane, groups=[], gates=[],
                 reference_activity='model', selected_by_repository=True) for lane in runner.LANES]
-    raw.append(dict(raw[-1], function='test_darwin', nodeid=module + '::test_darwin',
+    raw.append(dict(raw[-1], lane=owned_lane, function='test_darwin', nodeid=module + '::test_darwin',
                     canonical_nodeid=module + '::test_darwin'))
     base_rows = raw
     directories = {}
@@ -176,20 +176,39 @@ def join(data):
 
 
 def test_modeled_two_owner_pass_uses_real_summary_functions(tmp_path, monkeypatch):
-    data = model(tmp_path, monkeypatch)
-    result = join(data)
-    assert result['status'] == 'PASS', result
-    reference = [row for row in result['obligations'] if row['lane'] == 'reference']
-    assert {row['platform'] for row in reference} == {'linux-x86_64', 'macos-arm64'}
-    assert all(row['evidence']['full_phase'] for row in reference)
+    for lane in ('reference', 'ordinary'):
+        directory = tmp_path / lane
+        directory.mkdir()
+        data = model(directory, monkeypatch, owned_lane=lane)
+        result = join(data)
+        assert result['status'] == 'PASS', result
+        reference = [row for row in result['obligations'] if row['lane'] == 'reference']
+        assert {row['platform'] for row in reference} == {'linux-x86_64', 'macos-arm64'}
+        assert all(row['evidence']['full_phase'] for row in reference)
+        owned = [row for row in result['obligations'] if row['nodeid'].endswith('::test_darwin')]
+        assert len(owned) == 1 and owned[0]['lane'] == lane
+        assert owned[0]['platform'] == 'macos-arm64' and owned[0]['evidence']['full_phase']
+        # A local transfer or green sibling cannot replace the owner's receipt.
+        receipt = data['directories'][(lane, 'macos-arm64')] / 'receipt.json'
+        saved = receipt.read_bytes()
+        receipt.unlink()
+        missing = join(data)
+        assert missing['status'] == 'FAIL'
+        assert any(row.get('platform') == 'macos-arm64' for row in missing['unresolved'])
+        receipt.write_bytes(saved)
+        mutate(receipt, lambda row: row['coverage'].update(host=coverage.HOSTS['linux-x86_64']))
+        assert join(data)['status'] == 'FAIL'
 
 
 def test_consistent_owner_deselection_remains_unresolved(tmp_path, monkeypatch):
-    data = model(tmp_path, monkeypatch, owner_deselected=True)
-    result = join(data)
-    assert result['status'] == 'FAIL'
-    assert any('INCOMPLETE_UNRUN' in error for error in result['errors'])
-    assert any(row.get('platform') == 'macos-arm64' for row in result['unresolved'])
+    for lane in ('reference', 'ordinary'):
+        directory = tmp_path / lane
+        directory.mkdir()
+        data = model(directory, monkeypatch, owner_deselected=True, owned_lane=lane)
+        result = join(data)
+        assert result['status'] == 'FAIL'
+        assert any('INCOMPLETE_UNRUN' in error for error in result['errors'])
+        assert any(row.get('platform') == 'macos-arm64' for row in result['unresolved'])
 
 
 @pytest.mark.parametrize('fault', ['missing-owner', 'duplicate', 'unknown', 'sha', 'run_id', 'run_attempt',

@@ -8,8 +8,54 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 
 import pytest
+
+
+def source_group_override(item):
+    """Validate an explicit item-local override; legacy pytest ignores it.
+
+    This is not inferred from owners, gates, host identity or an environment
+    variable. Keep the original xdist marker on the test and replace only the
+    collected item's marker inside this explicitly loaded source plugin.
+    """
+    declarations = list(item.iter_markers("pcc_source_group"))
+    if not declarations:
+        return None
+    if (len(declarations) != 1 or
+            not any(mark is declarations[0] for mark in item.own_markers)):
+        raise pytest.UsageError("pcc_source_group must be one item-local marker")
+    declaration = declarations[0]
+    if declaration.args or set(declaration.kwargs) != {"legacy", "name"}:
+        raise pytest.UsageError("pcc_source_group requires exactly legacy and name")
+    legacy, name = declaration.kwargs["legacy"], declaration.kwargs["name"]
+    if (any(not isinstance(value, str) or
+            re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", value) is None
+            for value in (legacy, name)) or legacy == name):
+        raise pytest.UsageError("pcc_source_group requires distinct valid group names")
+    groups = list(item.iter_markers("xdist_group"))
+    if (len(groups) != 1 or
+            not any(mark is groups[0] for mark in item.own_markers)):
+        raise pytest.UsageError("pcc_source_group requires one item-local legacy xdist group")
+    group = groups[0]
+    if not ((not group.args and group.kwargs == {"name": legacy}) or
+            (group.args == (legacy,) and not group.kwargs)):
+        raise pytest.UsageError("pcc_source_group legacy xdist marker differs")
+    return group, name
+
+
+def apply_source_groups(items):
+    """Validate the whole input before changing any effective scheduling key."""
+    changes = []
+    for item in items:
+        override = source_group_override(item)
+        if override is not None:
+            changes.append((item, *override))
+    for item, legacy, name in changes:
+        item.own_markers[:] = [mark for mark in item.own_markers if mark is not legacy]
+        item.add_marker(pytest.mark.xdist_group(name=name))
+    return {id(item): name for item, _legacy, name in changes}
 
 
 def serial(value):
@@ -79,6 +125,10 @@ def pytest_configure(config):
 
         @pytest.hookimpl(wrapper=True, tryfirst=True)
         def pytest_collection_modifyitems(self, items):
+            # Run before ordinary hooks, including stock xdist's loadgroup
+            # suffixing. The raw witness and xdist therefore see the same key
+            # in single-process collection and all six execution workers.
+            source_groups = apply_source_groups(items)
             before = []
             for item in items:
                 path = item.path.relative_to(config.rootpath).as_posix()
@@ -96,6 +146,18 @@ def pytest_configure(config):
             selected_ids = {id(item) for item in items}
             rows = []
             for item, row in before:
+                if id(item) in source_groups:
+                    name = source_groups[id(item)]
+                    groups = list(item.iter_markers("xdist_group"))
+                    if len(groups) != 1 or groups[0].args or groups[0].kwargs != {"name": name}:
+                        raise pytest.UsageError("source group changed after its raw witness")
+                    canonical = row["canonical_nodeid"]
+                    scheduled = canonical + "@" + name
+                    expected = {canonical} if collecting else {scheduled}
+                    if id(item) not in selected_ids:
+                        expected.add(canonical)  # A prior gate may precede xdist.
+                    if item.nodeid not in expected:
+                        raise pytest.UsageError("source group differs from xdist scheduling identity")
                 row["nodeid"] = item.nodeid  # final xdist @group spelling
                 row["selected_by_repository"] = id(item) in selected_ids
                 rows.append(row)

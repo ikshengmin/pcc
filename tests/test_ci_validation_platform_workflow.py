@@ -31,12 +31,15 @@ def test_cpp_adds_exact_mac_owner_without_replacing_whole_linux_lanes():
         {"domain": "cpp", "lane": lane} for lane in plan.LANES]
     assert result["source_platform"]
     assert result["matrix_platform"]["include"] == [
-        {"domain": "cpp", "lane": "reference", "platform": "macos-arm64", "runner": "macos-15"}]
+        {"domain": "cpp", "lane": lane, "platform": "macos-arm64", "runner": "macos-15"}
+        for lane in ("ordinary", "reference")]
     assert result["ownership_manifest_sha256"] == hashlib.sha256(
         (ROOT / "scripts/data/ci_validation_owners.json").read_bytes()).hexdigest()
     assert result["matrix_native"]["include"] == [{"domain": "cpp", "lane": "integration"}]
     assert result["native_stage1"] and not result["legacy"]
     assert result["matrix_native_stage1"]["include"] == list(plan.NATIVE_PLATFORMS[:1])
+    assert not plan.requires_native_inputs("cpp", "ordinary")
+    assert {"domain": "cpp", "lane": "ordinary"} in result["matrix_independent"]["include"]
 
 
 def test_go_only_has_no_invented_mac_obligation():
@@ -93,6 +96,17 @@ def test_all_source_producers_keep_original_guards_and_frozen_sparse_inputs():
     mac = job("source-platform-validation")
     assert "needs: validation-plan" in mac and "matrix_platform" in mac and "runs-on: ${{ matrix.runner }}" in mac
     assert "stage1" not in mac and "native-wheel" not in mac
+    # The explicit source plugin is present in the common collection/body
+    # command. Complete legacy pytest does not activate scoped group markers.
+    from scripts import ci_pytest_markers, ci_validation_run
+    for collect in (False, True):
+        command = ci_validation_run.pytest_command(Path("model"), ["tests/model.py"], collect=collect)
+        assert command.count("scripts.ci_validation_inventory") == 1
+    command = ci_pytest_markers.marker_command(Path("model"), "not integration")
+    assert "scripts.ci_validation_inventory" not in command
+    assert "tests" in command
+    config = (ROOT / "pyproject.toml").read_text()
+    assert '"pcc_source_group(legacy=, name=):' in config
 
 
 def test_aggregate_is_required_even_for_failed_cancelled_or_missing_producer():

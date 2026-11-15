@@ -1,6 +1,7 @@
 """Authored platform coverage models. These never invoke PCC or pytest children."""
 from __future__ import annotations
 
+import ast
 import copy
 import hashlib
 import json
@@ -12,10 +13,68 @@ import pytest
 from scripts import ci_validation_owners as owners
 from scripts import ci_validation_run as run
 from scripts import ci_validation_tools as tools
+from scripts.ci_validation_inventory import classify
 
 MODULE = "tests/cpp/test_headers.py"
 LINUX = "linux-x86_64"
 MAC = "macos-arm64"
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def cpp_darwin_rows():
+    """Read source declarations, never import the native fixtures or run PCC."""
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    rows = []
+    counts = {"deferred_construction_proofs": 3, "mixed_static_overloads": 4,
+              "protected_base_constructors": 5, "static_data_members": 10, "static_member_arrays": 7}
+    native_name = "test_programs_run_natively_with_owned_compile_assemble_and_link"
+    assert {path.relative_to(ROOT).as_posix() for path in (ROOT / "tests/cpp").glob("test_*.py")
+            if "cpp-darwin-native" in path.read_text()} == {
+                f"tests/cpp/test_cpp_{stem}.py" for stem in counts}
+    for stem, count in counts.items():
+        module = f"tests/cpp/test_cpp_{stem}.py"
+        tree = ast.parse((ROOT / module).read_text())
+        functions = {node.name: node for node in tree.body if isinstance(node, ast.FunctionDef)}
+        programs = next(ast.literal_eval(node.value) for node in tree.body if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "PROGRAMS" for target in node.targets))
+        assert len(programs) == count
+        grouped = set()
+        for function in functions.values():
+            marks = {ast.unparse(mark.func): mark for mark in function.decorator_list if isinstance(mark, ast.Call)}
+            if function.name == native_name:
+                declaration = marks["pytest.mark.pcc_source_group"]
+                assert not declaration.args
+                assert {keyword.arg: ast.literal_eval(keyword.value) for keyword in declaration.keywords} == {
+                    "legacy": "cpp-darwin-native", "name": "cpp-darwin-owned"}
+                assert ast.unparse(marks["pytest.mark.pcc_gate"].keywords[0].value) == "UNAVAILABLE"
+            else:
+                assert "pytest.mark.pcc_source_group" not in marks
+            if "pytest.mark.xdist_group" in marks:
+                grouped.add(function.name)
+                group = marks["pytest.mark.xdist_group"]
+                assert not group.args
+                assert {keyword.arg: ast.literal_eval(keyword.value) for keyword in group.keywords} == {
+                    "name": "cpp-darwin-native"}
+        assert grouped == {native_name, "test_reference_compiler_returns_the_same_value"} | (
+            {"test_reference_compiler_rejects_the_same_sources"}
+            if "test_reference_compiler_rejects_the_same_sources" in functions else set())
+        for name in (native_name, "test_reference_compiler_returns_the_same_value",
+                     "test_programs_compile_to_stable_linux_artifacts", "test_reference_compiler_rejects_the_same_sources"):
+            if name not in functions:
+                continue
+            assert not any(ast.unparse(mark) == "pytest.mark.integration" for mark in functions[name].decorator_list)
+            suffixes = [f"[{program[0]}]" for program in programs] if name != "test_reference_compiler_rejects_the_same_sources" else [""]
+            for suffix in suffixes:
+                node = module + "::" + name + suffix
+                is_native = name == native_name
+                rows.append({"file": module, "function": name, "nodeid": node, "canonical_nodeid": node,
+                             "lane": classify(module, name, False, registry),
+                             "groups": ["cpp-darwin-owned"] if is_native else
+                                       ["cpp-darwin-native"] if name.startswith("test_reference") else [],
+                             "gates": [{"unavailable": "Darwin required"}] if is_native else [],
+                             "selected_by_repository": not is_native,
+                             "reference_activity": registry.get(module, {}).get(name, "unknown")})
+    return sorted(rows, key=lambda entry: entry["canonical_nodeid"])
 
 
 def row(name, *, selected=True, lane="reference", groups=()):
@@ -46,6 +105,65 @@ def test_mixed_module_partition_preserves_raw_gate_metadata():
     assert owners.owner_modules(manifest(), "cpp", "reference", MAC) == [MODULE]
     assert owners.additional_campaigns(["cpp"], manifest()) == [
         {"domain": "cpp", "lane": "reference", "platform": MAC, "runner": "macos-15"}]
+
+    actual, _ = owners.read_manifest(ROOT)
+    cpp_rows = cpp_darwin_rows()
+    native = [entry for entry in cpp_rows if entry["groups"] == ["cpp-darwin-owned"]]
+    reference = [entry for entry in cpp_rows if entry["groups"] == ["cpp-darwin-native"]]
+    assert len(native) == 29 and all(entry["lane"] == "ordinary" for entry in native)
+    assert sum(entry["lane"] == "ordinary" for entry in reference) == 16
+    assert sum(entry["lane"] == "reference" for entry in reference) == 17
+    native_ids = [entry["canonical_nodeid"] for entry in native]
+    assert [rule for rule in actual["overrides"] if rule["domain"] == "cpp" and rule["lane"] == "ordinary"] == [
+        {"domain": "cpp", "lane": "ordinary", "nodeid": node, "platforms": [MAC], "tools": {MAC: []}}
+        for node in native_ids]
+    # Full-domain partition also checks the existing, independent SDK rule.
+    sdk, = [rule for rule in actual["overrides"] if rule["domain"] == "cpp" and rule["lane"] == "reference"]
+    sdk_file, sdk_function = sdk["nodeid"].split("::")
+    all_rows = [*cpp_rows, {"file": sdk_file, "function": sdk_function, "nodeid": sdk["nodeid"],
+                          "canonical_nodeid": sdk["nodeid"], "lane": "reference", "groups": [], "gates": [],
+                          "selected_by_repository": False, "reference_activity": "external-reference"}]
+    frozen = copy.deepcopy(all_rows)
+    linux = owners.partition(all_rows, actual, "cpp", "ordinary", LINUX)
+    assert linux["local_nodeids"] == sorted(entry["canonical_nodeid"] for entry in cpp_rows
+                                           if entry["lane"] == "ordinary" and entry not in native)
+    assert linux["transfers"] == [dict(domain="cpp", lane="ordinary", nodeid=node, platform=MAC, tools=[])
+                                    for node in native_ids]
+    assert all_rows == frozen
+    mac_rows = copy.deepcopy(cpp_rows)
+    for entry in mac_rows:
+        if entry["canonical_nodeid"] in native_ids:
+            entry.update(selected_by_repository=True, gates=[{"unavailable": None}])
+    mac = owners.partition(mac_rows, actual, "cpp", "ordinary", MAC, complete=False)
+    assert mac["local_nodeids"] == native_ids
+    assert {entry["nodeid"] for entry in mac["transfers"]} == set(linux["local_nodeids"])
+    assert owners.owner_modules(actual, "cpp", "ordinary", MAC) == sorted({entry["file"] for entry in native})
+
+    # The routing declaration never satisfies an unavailable prerequisite.
+    unavailable = owners.partition(cpp_rows, actual, "cpp", "ordinary", MAC, complete=False)
+    unrun = [dict(entry, status="UNRUN_PREREQUISITE") for entry in cpp_rows
+             if entry["canonical_nodeid"] in unavailable["local_nodeids"] and not entry["selected_by_repository"]]
+    assert len(unrun) == 29 and all(entry["groups"] == ["cpp-darwin-owned"] for entry in unrun)
+    assert run.campaign_status({"batches": [], "unrun": unrun, "lane_count": 29,
+                                "coverage": unavailable}) == "INCOMPLETE_UNRUN"
+
+    # Neither an omitted/wrong owner nor bypassing the explicit source-only
+    # declaration can silently split the serial native group.
+    for wrong in ("missing", "linux"):
+        bad = copy.deepcopy(actual)
+        target = next(rule for rule in bad["overrides"] if rule["nodeid"] == native_ids[0])
+        if wrong == "missing":
+            bad["overrides"].remove(target)
+        else:
+            target.update(platforms=[LINUX], tools={LINUX: []})
+        with pytest.raises(ValueError, match="splits xdist group"):
+            owners.partition(all_rows, bad, "cpp", "ordinary", LINUX)
+    legacy_rows = copy.deepcopy(all_rows)
+    for entry in legacy_rows:
+        if entry["canonical_nodeid"] in native_ids:
+            entry["groups"] = ["cpp-darwin-native"]
+    with pytest.raises(ValueError, match="splits xdist group"):
+        owners.partition(legacy_rows, actual, "cpp", "ordinary", LINUX)
 
 
 def test_all_of_owners_never_becomes_fallback():
