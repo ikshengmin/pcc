@@ -272,3 +272,200 @@ def test_missing_frontend_policy_is_reported_as_missing_not_inferred():
     envelope = stage_ab._resource_envelope(args=_args(), environment={}, process={})
     assert set(envelope["effective_frontend_policy"].values()) == {""}
     assert envelope["frontend_policy_parity"] == "not_checked"
+
+
+def _host_split_entry_chain(tmp_path, monkeypatch, split, tamper=None):
+    """Real harness -> builder entry/receipts; only external work is simulated.
+
+    This is command/receipt contract coverage, not native compile evidence.
+    Existing sealing and native integration tests retain their own obligations.
+    """
+    import hashlib
+    import json
+    import subprocess
+
+    stage_ab = _load_stage_ab()
+    builder = stage_ab._load_module(stage_ab.STAGE1_TOOL, "host_split_builder")
+    support = builder._load_ab_tool()
+    source = tmp_path / "source"
+    # A complete, sealed source fixture, not a bypass of strict receipt loading.
+    names = {*support.BUILD_SOURCE_SUPPORT, support.PRIMARY_SOURCE,
+             "pcc/__main__.py", "pcc/driver/cli_core.py",
+             "utils/fake_libc_include/Python.h"}
+    for name in sorted(names):
+        path = source / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("# fixture\n")
+    support._seal_source_snapshot(source, "host split source fixture")
+    runtime = tmp_path / "runtime.a"
+    runtime.write_bytes(b"runtime")
+    arm_root = tmp_path / "arm"
+    arm_root.mkdir()
+    observed = {}
+    sha = lambda path: hashlib.sha256(Path(path).read_bytes()).hexdigest()
+
+    def process(command, *, timeout, env, cwd):
+        observed.setdefault("processes", []).append((list(command), dict(env)))
+        if "-m" in command:
+            output = Path(command[-1])
+            output.write_bytes(b"fake-compiler")
+            output.chmod(0o755)
+            Path(command[command.index("--profile-json") + 1]).write_text("{}")
+            Path(command[3]).write_text(
+                "real 1.0\nuser 0.8\nsys 0.1\n"
+                "100 maximum resident set size\n100 instructions retired\n"
+                "100 cycles elapsed\n100 peak memory footprint\n"
+            )
+            pycache = Path(env["PYTHONPYCACHEPREFIX"])
+            (pycache / "compiler.pyc").write_bytes(b"test")
+        elif "--backend" in command:
+            Path(command[-1]).write_bytes(b"fake-program")
+        return subprocess.CompletedProcess(command, 0, "42\n", "")
+
+    noop = lambda *args, **kwargs: None
+    fake = SimpleNamespace(**vars(support))
+    fake.require_claim_platform = noop
+    fake._prepare_runtime_bundle = lambda *a, **k: {"archive": str(runtime)}
+    fake.runtime_bundle_evidence = lambda bundle: {
+        "files": {runtime.name: {"sha256": sha(runtime),
+                                 "size_bytes": runtime.stat().st_size}}
+    }
+    fake.external_tool_evidence = lambda host: []
+    fake.host_python_runtime_evidence = lambda host: {"schema": "pcc.host-python-runtime.v1"}
+    fake._run_process = process
+    fake._linkage = lambda *a, **k: {
+        "checked": True, "links_libpython": False, "links_llvm": False, "stdout": "strict",
+    }
+    fake._verify_runtime_bundle = noop
+    # CI may put --basetemp under build/. Allow this known fixture root;
+    # retain the real complete-source manifests, copying and read-only checks.
+    def fixture_source(path, ab):
+        assert Path(path).resolve() == source.resolve()
+        return source.resolve()
+
+    monkeypatch.setattr(builder, "_validate_source_root", fixture_source)
+    monkeypatch.setenv("PCC_HOST_INDEXED_PROCESS_SPLIT", "1")
+    monkeypatch.setattr(stage_ab, "_sampler_args", lambda sampler, **kw: kw)
+
+    def sample(options):
+        command = options["command"]
+        observed["builder_command"] = command
+        parsed = builder._parser().parse_args(command[2:])
+        parsed.jobs = int(parsed.jobs)
+        builder.run(parsed, _ab=fake)
+        output = arm_root / "stage1"
+        # Exercise the real strict consumer on the actual builder's persisted
+        # output, including source/tool/artifact identities. No loader stubs.
+        observed["strict_loaded"] = support._load_build_receipt(
+            output / "build-receipt.json", arm="baseline",
+            compiler_sha256=sha(output / "pcc1"),
+            compiler_size_bytes=(output / "pcc1").stat().st_size,
+            runtime_sha256=sha(runtime), expected_gc_backend=0,
+        )
+        if tamper is not None:
+            path = arm_root / "stage1/build-receipt.json"
+            receipt = json.loads(path.read_text())
+            manifest_path = output / "manifest.json"
+            manifest = json.loads(manifest_path.read_text())
+            tamper(receipt, manifest)
+            path.write_text(json.dumps(receipt))
+            manifest_path.write_text(json.dumps(manifest))
+        return _proc()
+
+    argv = ["--baseline-source", str(source), "--candidate-source", str(source),
+            "--runtime-archive", str(runtime), "--output-dir", str(tmp_path / "campaign")]
+    if split:
+        argv.append("--host-indexed-process-split")
+    args = stage_ab._parser().parse_args(argv)
+    assert args.host_indexed_process_split is split
+    record = stage_ab._run_stage1(
+        arm="baseline", source_root=source, runtime_archive=runtime,
+        arm_root=arm_root, args=args, ab=fake, stage1=builder,
+        sampler=SimpleNamespace(run=sample),
+    )
+    return stage_ab, builder, args, record, observed
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_host_split_real_builder_and_harness_entries(tmp_path, monkeypatch, split):
+    stage_ab, builder, args, record, observed = _host_split_entry_chain(
+        tmp_path, monkeypatch, split,
+    )
+    route = record["execution_route"]
+    loaded = observed["strict_loaded"]
+    assert "execution_route" not in loaded["receipt"]
+    assert "execution_route" not in loaded["stage_result"]
+    assert loaded["receipt"]["environment"]["PCC_DIRECT_INDEXED_KERNEL_EMIT"] == "1"
+    assert loaded["receipt"]["environment"].get("PCC_HOST_INDEXED_PROCESS_SPLIT") == (
+        "1" if split else None
+    )
+    assert route["host_indexed_process_split_requested"] is split
+    assert route["host_indexed_process_split_effective"] is split
+    assert ("--host-indexed-process-split" in observed["builder_command"]) is split
+    command, env = observed["processes"][0]
+    assert command[5:7] == ["-m", "pcc"]
+    assert env.get("PCC_HOST_INDEXED_PROCESS_SPLIT") == ("1" if split else None)
+    assert env["PCC_WORKER_TREE_BUDGET_BYTES"] == str(args.max_tree_rss_bytes)
+    assert env["PCC_DIRECT_INDEXED_KERNEL_EMIT"] == "1"
+    assert route["configured_route"] == (
+        "host-indexed-process-split" if split else "host-direct-indexed"
+    )
+
+
+@pytest.mark.parametrize("mutation", ["route", "environment", "command", "command-owner", "direct-mode", "digest"])
+def test_host_split_harness_rejects_inconsistent_producer(tmp_path, monkeypatch, mutation):
+    stage_ab = _load_stage_ab()
+
+    def tamper(receipt, manifest):
+        if mutation == "route":
+            manifest["execution_route"]["host_indexed_process_split_effective"] = False
+        elif mutation == "environment":
+            receipt["environment"].pop("PCC_HOST_INDEXED_PROCESS_SPLIT")
+            receipt["environment_sha256"] = stage_ab._canonical_sha256(receipt["environment"])
+        elif mutation in ("command", "command-owner"):
+            receipt["command"][4] = "/unrecorded/python"
+            receipt["command_sha256"] = stage_ab._canonical_sha256(receipt["command"])
+            if mutation == "command-owner":
+                manifest["command"] = list(receipt["command"])
+        elif mutation == "digest":
+            receipt["environment_sha256"] = "unbound"
+        else:
+            receipt["environment"]["PCC_DIRECT_INDEXED_KERNEL_EMIT"] = "0"
+            receipt["environment_sha256"] = stage_ab._canonical_sha256(receipt["environment"])
+
+    # Each loader creates its own StageABError class.
+    expected = ("Stage1 command does not select the recorded host Python"
+                if mutation == "command-owner" else "Stage1|host split")
+    with pytest.raises(RuntimeError, match=expected):
+        _host_split_entry_chain(tmp_path, monkeypatch, True, tamper)
+
+
+@pytest.mark.parametrize("split", [False, True])
+def test_host_split_does_not_leak_to_real_stage2_entry(tmp_path, monkeypatch, split):
+    import os
+
+    stage_ab, builder, args, record, observed = _host_split_entry_chain(
+        tmp_path, monkeypatch, split,
+    )
+    args.stage2_timeout = 540
+    captured = {}
+    original = dict(os.environ)
+
+    def stop(options):
+        captured.update(options)
+        captured["environment"] = dict(os.environ)
+        raise RuntimeError("stop at native stage sampler boundary")
+
+    with pytest.raises(RuntimeError, match="native stage sampler boundary"):
+        stage_ab._run_stage2(
+            arm="baseline", pair_index=1, stage1_record=record,
+            arm_root=tmp_path / "arm", args=args, ab=None,
+            sampler=SimpleNamespace(run=stop),
+        )
+    assert dict(os.environ) == original
+    env = captured["environment"]
+    assert "PCC_HOST_INDEXED_PROCESS_SPLIT" not in env
+    assert "PCC_BOOTSTRAP_DEFER_FRONTEND_CODEGEN" not in env
+    assert env["PCC_PY_FRONTEND_JOBS"] == "auto"
+    assert captured["command"][-5:] == ["--from-stage", "2", "--stage", "2", "--reuse-stage1"]
+    assert captured["max_tree_rss_bytes"] == args.max_tree_rss_bytes

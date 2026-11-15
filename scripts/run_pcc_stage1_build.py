@@ -195,8 +195,13 @@ def _set_stage1_build_modes(
     *,
     with_threads: int,
     direct_indexed_emit: bool = False,
+    host_indexed_process_split: bool = False,
     python_ir_passes: str = "default",
 ) -> None:
+    if host_indexed_process_split and not direct_indexed_emit:
+        raise ValueError("--host-indexed-process-split requires --direct-indexed-emit")
+    if "PCC_HOST_INDEXED_PROCESS_SPLIT" in env:
+        raise ValueError("ambient host indexed process split leaked into measurement environment")
     # Every runtime (and so pcc1 itself) is threaded.
     if with_threads != 1:
         raise ValueError("stage1 thread mode must be 1: the single-thread runtime was removed")
@@ -212,6 +217,33 @@ def _set_stage1_build_modes(
                 "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND": "1",
             }
         )
+
+    if host_indexed_process_split:
+        env["PCC_HOST_INDEXED_PROCESS_SPLIT"] = "1"
+
+
+def _stage1_execution_route(*, requested: bool, env: dict[str, str]) -> dict:
+    """Bind the configured host route, not a claim of backend execution proof."""
+    effective = env.get("PCC_HOST_INDEXED_PROCESS_SPLIT") == "1"
+    if type(requested) is not bool or effective != requested:
+        raise ValueError("Stage1 requested/effective host split mismatch")
+    if not requested and "PCC_HOST_INDEXED_PROCESS_SPLIT" in env:
+        raise ValueError("unexpected host split selector in Stage1 environment")
+    direct = all(env.get(key) == "1" for key in (
+        "PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
+        "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK",
+        "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES",
+        "PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND",
+    ))
+    if requested and not direct:
+        raise ValueError("host split requires the complete direct indexed mode")
+    return {
+        "owner": "host-python",
+        "host_indexed_process_split_requested": requested,
+        "host_indexed_process_split_effective": effective,
+        "configured_route": ("host-indexed-process-split" if effective else
+                             "host-direct-indexed" if direct else "host-default"),
+    }
 
 
 def run_function_smoke(
@@ -301,6 +333,8 @@ def _validate_source_root(path: str, ab) -> Path:
 
 
 def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any]:
+    if getattr(args, "host_indexed_process_split", False) and not args.direct_indexed_emit:
+        raise ValueError("--host-indexed-process-split requires --direct-indexed-emit")
     ab.require_claim_platform()
     source_root = _validate_source_root(args.source_root, ab)
     runtime_archive = ab._absolute_existing(args.runtime_archive)
@@ -366,7 +400,11 @@ def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any
         env,
         with_threads=args.with_threads,
         direct_indexed_emit=args.direct_indexed_emit,
+        host_indexed_process_split=getattr(args, "host_indexed_process_split", False),
         python_ir_passes=args.python_ir_passes,
+    )
+    execution_route = _stage1_execution_route(
+        requested=getattr(args, "host_indexed_process_split", False), env=env,
     )
     output = output_dir / "pcc1"
     time_path = output_dir / "stage1.time"
@@ -543,6 +581,7 @@ def _run_build(args: argparse.Namespace, ab, *, run_token: str) -> dict[str, Any
     manifest.update(
         {
             "status": "SUCCEEDED",
+            "execution_route": execution_route,
             "completed_at_utc": dt.datetime.now(dt.timezone.utc).isoformat(),
             "runtime_bundle": runtime_bundle,
             "memory_budget_selection": getattr(args, "memory_budget_selection", {
@@ -595,6 +634,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--gc-backend", type=int, default=0, choices=range(5))
     parser.add_argument("--with-threads", type=int, default=1, choices=(1,))
     parser.add_argument("--direct-indexed-emit", action="store_true")
+    parser.add_argument(
+        "--host-indexed-process-split", action="store_true",
+        help="split host Stage1 frontend/backend processes; requires --direct-indexed-emit",
+    )
     parser.add_argument(
         "--python-ir-passes", choices=("default", "off"), default="default",
         help="owned IR pass policy for the compiler being built; off is an explicit diagnostic control",

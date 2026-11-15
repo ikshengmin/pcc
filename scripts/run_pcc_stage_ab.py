@@ -855,6 +855,28 @@ def _assert_stage1_admission_budget(
         raise StageABError(arm + " Stage1 admission budget differs from the external cap")
 
 
+def _assert_stage1_execution_route(receipt, manifest, *, requested, stage1):
+    environment = receipt.get("environment")
+    command = receipt.get("command")
+    if (not isinstance(environment, dict) or not isinstance(command, list)
+            or receipt.get("environment_sha256") != _canonical_sha256(environment)
+            or receipt.get("command_sha256") != _canonical_sha256(command)):
+        raise StageABError("Stage1 execution identity mismatch")
+    try:
+        route = stage1._stage1_execution_route(requested=requested, env=environment)
+    except ValueError as exc:
+        raise StageABError(str(exc)) from exc
+    if (manifest.get("execution_route") != route
+            or manifest.get("status") != "SUCCEEDED"
+            or manifest.get("environment") != environment
+            or manifest.get("command") != command):
+        raise StageABError("Stage1 execution route manifest mismatch")
+    if (len(command) < 7 or command[4] != environment.get("PCC_HOST_PYTHON")
+            or command[5:7] != ["-m", "pcc"]):
+        raise StageABError("Stage1 command does not select the recorded host Python")
+    return route
+
+
 def _run_stage1(
     *,
     arm: str,
@@ -896,6 +918,8 @@ def _run_stage1(
         "--direct-indexed-emit",
         "--no-performance-lock",
     ]
+    if getattr(args, "host_indexed_process_split", False):
+        command.append("--host-indexed-process-split")
     if getattr(args, "measure_compile_window", False):
         command.append("--measure-compile-window")
     process = sampler.run(
@@ -921,6 +945,11 @@ def _run_stage1(
         raise StageABError(arm + " Stage1 metric scope mismatch")
     if result.get("comparison_contract") != stage1.STAGE1_COMPARISON_CONTRACT:
         raise StageABError(arm + " Stage1 comparison contract mismatch")
+    execution_route = _assert_stage1_execution_route(
+        receipt, _read_json(output / "manifest.json"),
+        requested=getattr(args, "host_indexed_process_split", False),
+        stage1=stage1,
+    )
     pycache_root = Path(receipt["environment"]["PYTHONPYCACHEPREFIX"])
     pycache_files = sum(1 for path in pycache_root.rglob("*.pyc") if path.is_file())
     if pycache_files <= 0 or "PYTHONDONTWRITEBYTECODE" in receipt["environment"]:
@@ -942,6 +971,7 @@ def _run_stage1(
             expected_cap=args.max_tree_rss_bytes,
         )
     return {
+        "execution_route": execution_route,
         "compile_measurement": compile_measurement,
         "host_runtime_sha256": receipt.get("host_python_runtime_sha256"),
         "source_sha256": receipt["bootstrap_source_sha256"],
@@ -994,6 +1024,9 @@ def _run_stage2(
     source_root = Path(stage1_record["source_snapshot"])
     receipt = _read_json(Path(stage1_record["receipt_path"]))
     environment = {str(key): str(value) for key, value in receipt["environment"].items()}
+    # This selector belongs only to the host build. Native Stage2 retains its
+    # existing deferred route and must not inherit a host-only opt-in.
+    environment.pop("PCC_HOST_INDEXED_PROCESS_SPLIT", None)
     profile = output / "profile"
     environment.update({"PCC_BOOTSTRAP_PROFILE_DIR": str(profile)})
     environment.update(
@@ -1196,6 +1229,7 @@ def _run_prepared(args, *, ab, context, output, manifest_path):
         "runtime_archive": str(runtime_archive),
         "runtime_archive_sha256": ab.sha256_path(runtime_archive),
         "requested_stages": args.stages,
+        "host_indexed_process_split_requested": getattr(args, "host_indexed_process_split", False),
         "resource_limits": {
             "stage1_timeout_s": args.stage1_timeout,
             "stage2_timeout_s": args.stage2_timeout,
@@ -1370,6 +1404,10 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument("--runtime-archive", required=True)
     parser.add_argument("--output-dir", required=True)
     parser.add_argument("--measure-compile-window", action="store_true")
+    parser.add_argument(
+        "--host-indexed-process-split", action="store_true",
+        help="opt in to split host Stage1 processes; native Stage2 is unchanged",
+    )
     parser.add_argument("--pairs", type=int, default=2)
     parser.add_argument("--first-pair-index", type=int, default=1)
     parser.add_argument(
