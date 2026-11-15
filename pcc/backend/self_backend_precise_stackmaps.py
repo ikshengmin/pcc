@@ -5819,23 +5819,49 @@ def build_stack_map_plans(
     if _share_globals_index and target == "aarch64-darwin":
         globals_index: list[dict[str, GlobalDef]] = []
         plans: list[FunctionStackMapPlan] = []
+        pending_plan: FunctionStackMapPlan | None = None
         try:
-            for func in functions:
-                identity_name = (
-                    function_symbol(func.name)
-                    if function_symbol is not None
-                    else func.name
-                )
-                plans.append(_build_function_stack_map_plan_native(
-                    func, globals_, identity_name, globals_index,
-                ))
-            return tuple(plans)
-        finally:
-            # Do not retain the name table across emission, timing callbacks,
-            # or tail-call replanning. Clear entries even on a failed plan.
-            if globals_index:
-                globals_index[0].clear()
-            globals_index.clear()
+            try:
+                for func in functions:
+                    identity_name = (
+                        function_symbol(func.name)
+                        if function_symbol is not None
+                        else func.name
+                    )
+                    pending_plan = _build_function_stack_map_plan_native(
+                        func, globals_, identity_name, globals_index,
+                    )
+                    plans.append(pending_plan)
+                    pending_plan = None
+                return tuple(plans)
+            finally:
+                # Do not retain the name table across emission, timing callbacks,
+                # or tail-call replanning. Clear entries even on a failed plan.
+                if globals_index:
+                    globals_index[0].clear()
+                globals_index.clear()
+        except BaseException:
+            # No caller received this batch. Release only completed plans,
+            # including a builder result whose list append failed. The existing
+            # globals-index finally runs first and retains its error precedence.
+            if pending_plan is not None:
+                try:
+                    if not plans or plans[-1] is not pending_plan:
+                        pending_records = pending_plan.packed_records
+                        if pending_records is not None:
+                            pending_records.close()
+                except BaseException:
+                    pass
+            plan_index = 0
+            while plan_index < len(plans):
+                try:
+                    packed_records = plans[plan_index].packed_records
+                    if packed_records is not None:
+                        packed_records.close()
+                except BaseException:
+                    pass
+                plan_index += 1
+            raise
     return tuple(
         build_function_stack_map_plan(
             func,

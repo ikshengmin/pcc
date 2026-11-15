@@ -116,6 +116,8 @@
       "tests/python/test_aarch64_instruction_semantics.py",
       "tests/python/test_aarch64_noop_span_snapshot.py",
       "tests/python/test_aarch64_owned_layout_offsets.py",
+      "tests/python/test_aarch64_stackmap_batch_cleanup.py",
+      "tests/python/test_aarch64_stackmap_batch_cleanup_native.py",
       "tests/python/test_aarch64_stackmap_scratch_cleanup.py",
       "tests/python/test_aarch64_stackmap_scratch_cleanup_native.py",
       "tests/python/test_aarch64_typed_block_labels.py",
