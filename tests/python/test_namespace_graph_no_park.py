@@ -42,7 +42,9 @@ class GraphPollModel:
                     # A pending stop belongs to another thread.
                     'pcc_stop_owner_thread_id_py':8 if stop_requested else 0,
                     'pcc_thread_stop_requested':stop_requested,
-                    'pcc_gc_gray_worklist_flush_requested':0}
+                    'pcc_gc_gray_worklist_flush_requested':0,
+                    # A count-free tracer: only it records gray batches.
+                    'pcc_gc_backend4_no_refcounts':1}
         self.world_entries=[]
         self.gray_worklist_events=[]
         self.env=dict(i64=int,c_ptr=int,
@@ -173,6 +175,18 @@ def test_publication_request_polls_only_after_outermost_lease(exit_kind, request
     assert model.gray_worklist_events == (['flush'] if requested else [])
     assert not model.world_entries and no_park_depth(model.state) == 0
     assert model.state['pcc_gc_gray_worklist_flush_requested'] == requested
+
+
+def test_counting_collector_poll_reads_no_gray_batch():
+    """GC0 records no gray batch (pcc_gc_gray_worklist_note returns first
+    while pcc_gc_backend4_no_refcounts is 0), so its poll -- one per
+    allocation -- skips the thread-local flush; a tracer's poll keeps it."""
+    for counting, expected in ((1, []), (0, ['flush'])):
+        model = GraphPollModel(0)
+        model.state['pcc_gc_backend4_no_refcounts'] = 0 if counting else 1
+        model.env['pcc_thread_safepoint']()
+        assert model.gray_worklist_events == expected
+        assert not model.world_entries
 
 
 def test_publication_request_does_not_bypass_scheduler_lock_tripwire():

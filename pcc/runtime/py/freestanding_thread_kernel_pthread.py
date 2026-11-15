@@ -1493,7 +1493,12 @@ def pcc_thread_safepoint() -> None:
     if (state & 281474976710656) != 0:
         pcc_platform_abort()
         return
-    pcc_gc_gray_worklist_flush()
+    # Only a count-free tracer records gray batches (pcc_gc_gray_worklist_note
+    # returns first while pcc_gc_backend4_no_refcounts is 0, and the backend
+    # commit sets it before any tracing allocation). Under GC0 every poll,
+    # one per allocation, would read an always-empty thread-local batch.
+    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
+        pcc_gc_gray_worklist_flush()
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is
     # not still marked parked from an earlier stop, and either no stop is
