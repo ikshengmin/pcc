@@ -346,7 +346,8 @@ class _Pass:
                 return -2
             t = [_reg(dest), _reg(src), CompilerInt4(sem.TOKEN_IMMEDIATE, 255, 16, sem.IMMEDIATE_HASH)]
             return self.new("and", t, encode_producer_immediate("and", _spelling(dest), _spelling(src), 255))
-        if dest == src:
+        # A W self-move still clears the upper half of its X register.
+        if dest == src and _class(dest) != "w":
             return -1
         if _class(dest) != _class(src):
             return -2
@@ -451,7 +452,7 @@ def _run(fragments, semantics, span, mode):
                         and not any(token.first == sem.TOKEN_ADDRESS and token.second in (sem.ADDRESS_PREINDEX, sem.ADDRESS_POSTINDEX) for token in t[1:])):
                         p.output.truncate(len(p.output) - 1)
                         if p.op(previous) == "mov" and len(t) == 2 and p.register(previous, 1) == move[0]:
-                            replacement = -1
+                            replacement = p.new_move(move[0], move[0])
                         else:
                             replacement = p.changed_register(previous, 0, move[0], 0)
                         consumed = 1

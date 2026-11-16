@@ -1507,7 +1507,8 @@ def _parse_stack_transfer(line: str, opcode: str) -> tuple[str, str] | None:
 
 
 def _forward_move(dest_reg: str, src_reg: str) -> str | None:
-    if dest_reg == src_reg:
+    # W writes zero-extend into X even when the low 32 bits are unchanged.
+    if dest_reg == src_reg and not dest_reg.startswith("w"):
         return ""
     if len(dest_reg) < 2 or len(src_reg) < 2 or dest_reg[0] != src_reg[0]:
         return None
@@ -2272,7 +2273,7 @@ def _fold_scratch_def_into_move(lines: list[str]) -> list[str]:
             ):
                 renamed = _rename_destination(out[-1], src_reg, dest_reg)
                 if renamed is not None:
-                    if renamed == "  mov " + dest_reg + ", " + dest_reg:
+                    if dest_reg.startswith("x") and renamed == "  mov " + dest_reg + ", " + dest_reg:
                         out.pop()
                     else:
                         out[-1] = renamed
