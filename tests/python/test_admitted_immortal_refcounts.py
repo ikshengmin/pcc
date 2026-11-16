@@ -19,8 +19,11 @@ class RefcountModel:
         self.flags = abi.PY_FLAG_IMMORTAL if immortal else 0
         self.tag, self.backend, self.probe, self.managed = tag, backend, probe, managed
         self.events = []
+        # Collector identity fixes ownership: only GC0 counts references
+        # (pcc_gc_fix_backend / pcc_gc_config_ensure, 8429b667).
         self.globals = {'pcc_gc_refcount_atomic': int(backend == 0 and probe == 0),
                         'pcc_gc_refcount_fast': 0,
+                        'pcc_gc_backend4_no_refcounts': int(backend != 0),
                         'pcc_diagnostics_runtime_log_fast_state': int(logging)}
         self.ns = {n: getattr(abi, n) for n in dir(abi) if n.startswith('PY')}
         self.ns.update({
@@ -102,11 +105,17 @@ def test_provenance_mode_rejects_before_any_unmanaged_header_load(operation):
 
 
 @pytest.mark.parametrize('operation', ['py_incref', 'py_decref'])
+@pytest.mark.parametrize('immortal', [True, False])
 @pytest.mark.parametrize('backend', [1, 2, 3, 4])
-def test_other_collectors_keep_the_checked_prepare_finish_path(operation, backend):
-    model = RefcountModel(backend=backend)
+def test_tracing_collectors_change_no_count(operation, immortal, backend):
+    # A tracing collector never counts (8429b667), so no mode can pair one
+    # with the checked prepare/finish tail: the operation returns before any
+    # header load, provenance check or count change.
+    # managed=False turns any object-header load into a model failure.
+    model = RefcountModel(backend=backend, immortal=immortal, managed=False)
     model.ns[operation]('object')
-    assert model.events == ['backend', 'prepare', 'finish']
+    assert model.events == []
+    assert model.count == 17
 
 
 @pytest.mark.parametrize('operation', ['py_incref', 'py_decref'])

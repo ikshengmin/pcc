@@ -145,8 +145,17 @@ def test_backend4_container_constructor_publication_excludes_partial_objects(
                 }
                 if (add_after_reset(partial) != 0) return 12;
                 py_tuple_set_item(partial, 1, py_int_from_i64(12));
-                if ((py_header(partial)->flags & PY_FLAG_GC_FRESH_ALLOC) != 0) {
+                /* Filling the last slot publishes nothing (d09ce30d retired
+                 * GC4's own tuple publication): an element-built tuple stays a
+                 * fresh allocation, outside every relocation set, until its
+                 * builder publishes it as a constructor does. */
+                if ((py_header(partial)->flags & PY_FLAG_GC_FRESH_ALLOC) == 0) {
                     return 13;
+                }
+                if (add_after_reset(partial) != 0) return 15;
+                pcc_gc_publish_initialized(partial);
+                if ((py_header(partial)->flags & PY_FLAG_GC_FRESH_ALLOC) != 0) {
+                    return 16;
                 }
                 if (add_after_reset(partial) != 1) return 14;
                 pcc_gc_reset_relocation_set();
@@ -227,7 +236,10 @@ def test_backend4_wrapper_constructor_publication_excludes_partial_objects(
                 }
 
                 PyObject *func = py_list_new(0);
-                PyObject *target = py_list_new(0);
+                /* A weak-referenceable target: CPython's list has no weak
+                 * reference list, so weakref.ref(list) is a TypeError
+                 * (a5cd28b7); a set has one. */
+                PyObject *target = py_set_new();
                 if (func == NULL || target == NULL) return 20;
                 PyObject *objects[3] = {
                     py_property_new(func, py_None, py_None),
@@ -351,29 +363,54 @@ def test_backend4_selector_skips_fresh_pages_with_counter(
             #include "py_internal.h"
             #include <stdint.h>
 
-            extern int64_t pcc_gc_backend4_select_relocation_pages(int64_t);
             extern int64_t pcc_gc_backend4_candidate_fresh_skips_count(void);
             extern int64_t pcc_gc_backend4_relocation_add_refusals_count(void);
+
+            static PyObject *raw_root;
+
+            /* GC4 allocates from object slabs (f4ce1776) and selects in a
+             * stopped world after pinning what stacks name (6bda7e91); a
+             * pinned object is refused before the fresh check, so the fresh
+             * owner is built out of line and only a static names it. */
+            __attribute__((noinline)) static int probe_build(void) {
+                raw_root = pcc_gc_alloc(64, PY_TYPE_LIST, 0);
+                if (raw_root == NULL) return 3;
+                if ((py_header(raw_root)->flags & PY_FLAG_GC_FRESH_ALLOC) == 0) {
+                    return 4;
+                }
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
 
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
                     ) != 0) return 2;
-                PyObject *raw = pcc_gc_alloc(64, PY_TYPE_LIST, 0);
-                if (raw == NULL) return 3;
-                if ((py_header(raw)->flags & PY_FLAG_GC_FRESH_ALLOC) == 0) {
-                    return 4;
-                }
-                if ((py_header(raw)->flags & PY_FLAG_GC_ZPAGE_ALLOC) == 0) {
-                    /* Not zpage-backed: the selector cannot see it and the
-                     * probe cannot conclude.  Fail loud rather than pass. */
-                    return 21;
-                }
+                int built = probe_build();
+                if (built != 0) return built;
+                probe_scrub_stack();
                 int64_t skips0 =
                     pcc_gc_backend4_candidate_fresh_skips_count();
                 int64_t refusals0 =
                     pcc_gc_backend4_relocation_add_refusals_count();
-                pcc_gc_backend4_select_relocation_pages(8);
+                if (pcc_stop_the_world() != 0) return 7;
+                pcc_gc_reset_relocation_set();
+                (void)pcc_gc_select_relocation_set(1000);
+                PyObject *raw = *(PyObject *volatile *)&raw_root;
+                int pinned = pcc_gc_object_is_address_pinned(raw) != 0;
+                int64_t selected = pcc_gc_relocation_set_contains(raw);
+                pcc_gc_reset_relocation_set();
+                if (pcc_resume_world() != 0) return 8;
+                if (pinned) {
+                    /* A stack still names it: the pin, not freshness, kept
+                     * it out, and the probe cannot conclude. Fail loud. */
+                    return 21;
+                }
+                if (selected != 0) return 9;
                 int64_t skips1 =
                     pcc_gc_backend4_candidate_fresh_skips_count();
                 int64_t refusals1 =
@@ -381,7 +418,6 @@ def test_backend4_selector_skips_fresh_pages_with_counter(
                 if (skips1 <= skips0) return 5;
                 if (refusals1 != refusals0) return 6;
                 pcc_gc_publish_initialized(raw);
-                pcc_gc_reset_relocation_set();
                 pcc_gc_free_object_memory(raw);
                 return 0;
             }
@@ -527,19 +563,26 @@ def test_store_ptr_shades_white_child_during_real_incremental_cycle(
 
             #define ROOT_COUNT 64
 
-            int main(void) {
-                static int32_t frame_map[ROOT_COUNT + 1] = {ROOT_COUNT};
-                static PyObject *roots[ROOT_COUNT];
-                /* Only the explicit step below advances the cycle: with
-                 * collection disabled the GC1 collector thread stays out,
-                 * so it cannot blacken the shaded child before the check. */
-                py_gc_disable();
-                if (pcc_gc_set_backend(
-                        PCC_GC_KIND_INCREMENTAL_TRICOLOR
-                    ) != 0) {
-                    fprintf(stderr, "backend selection failed\n");
-                    return 2;
-                }
+            extern int32_t pcc_gc_mark_active;
+            extern int64_t pcc_gc_object_index_seen_stable(PyObject *obj);
+            extern int64_t pcc_gc_object_is_white(PyObject *obj, int64_t flags);
+
+            static int64_t is_white(PyObject *obj) {
+                return pcc_gc_object_is_white(
+                    obj, __atomic_load_n(&py_header(obj)->flags, __ATOMIC_ACQUIRE)
+                );
+            }
+
+            static int32_t frame_map[ROOT_COUNT + 1] = {ROOT_COUNT};
+            static PyObject *roots[ROOT_COUNT];
+            /* Not a root: only roots[1] -> inner -> child reaches it. */
+            static PyObject *child_ref;
+
+            /* The child is two scans from the roots, so a one-object step
+             * cannot have reached it. The cycle's start also scans the stack
+             * conservatively: build out of line, then scrub the builder's
+             * residue, or a stale word would mark the child as a root. */
+            __attribute__((noinline)) static int probe_build(void) {
                 for (int i = 0; i < ROOT_COUNT; i++) {
                     roots[i] = py_list_new(0);
                     if (roots[i] == NULL) {
@@ -547,7 +590,34 @@ def test_store_ptr_shades_white_child_during_real_incremental_cycle(
                         return 3;
                     }
                 }
+                PyObject *inner = py_list_new(0);
+                child_ref = py_list_new(0);
+                if (inner == NULL || child_ref == NULL) return 3;
+                py_list_append(inner, child_ref);
+                py_list_append(roots[1], inner);
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            int main(void) {
+                /* Only the explicit step below advances the cycle: with
+                 * collection disabled the GC1 collector thread stays out,
+                 * so it cannot mark the child before the store. */
+                py_gc_disable();
+                if (pcc_gc_set_backend(
+                        PCC_GC_KIND_INCREMENTAL_TRICOLOR
+                    ) != 0) {
+                    fprintf(stderr, "backend selection failed\n");
+                    return 2;
+                }
+                int built = probe_build();
+                if (built != 0) return built;
                 pcc_gc_note_frame_enter(frame_map, roots);
+                probe_scrub_stack();
                 int64_t processed = pcc_gc_step(1);
                 if (processed != 1) {
                     fprintf(
@@ -557,36 +627,33 @@ def test_store_ptr_shades_white_child_during_real_incremental_cycle(
                     );
                     return 4;
                 }
-
-                PyObject *owner = roots[0];
-                PyObject *child = roots[1];
-                int32_t owner_flags = __atomic_load_n(
-                    &py_header(owner)->flags, __ATOMIC_ACQUIRE
-                );
-                int32_t child_flags = __atomic_load_n(
-                    &py_header(child)->flags, __ATOMIC_ACQUIRE
-                );
-                __atomic_store_n(
-                    &py_header(owner)->flags,
-                    (owner_flags & ~PY_FLAG_GC_COLOR_MASK) | PY_FLAG_GC_BLACK,
-                    __ATOMIC_RELEASE
-                );
-                __atomic_store_n(
-                    &py_header(child)->flags,
-                    (child_flags & ~PY_FLAG_GC_COLOR_MASK) | PY_FLAG_GC_WHITE,
-                    __ATOMIC_RELEASE
-                );
-
-                PyObject *slot = NULL;
-                pcc_gc_store_ptr(owner, &slot, child);
-                child_flags = __atomic_load_n(
-                    &py_header(child)->flags, __ATOMIC_ACQUIRE
-                );
-                if ((child_flags & PY_FLAG_GC_GRAY) == 0) {
+                /* Colors are the collector's own (an object cell's page mark
+                 * bit), never forced through header flags. */
+                PyObject *child = *(PyObject *volatile *)&child_ref;
+                if (__atomic_load_n(&pcc_gc_mark_active, __ATOMIC_ACQUIRE) == 0
+                    || is_white(child) == 0) {
+                    /* The probe needs an active cycle and an unreached child;
+                     * without them it proves nothing. Fail loud. */
                     fprintf(
                         stderr,
-                        "active-cycle child was not shaded: flags=%d\n",
-                        child_flags
+                        "no unreached child in an active cycle: mark_active=%d "
+                        "white=%lld\n",
+                        __atomic_load_n(&pcc_gc_mark_active, __ATOMIC_ACQUIRE),
+                        (long long)is_white(child)
+                    );
+                    return 6;
+                }
+
+                PyObject *owner = roots[0];
+                PyObject *slot = NULL;
+                pcc_gc_store_ptr(owner, &slot, child);
+                if (is_white(child) != 0) {
+                    fprintf(
+                        stderr,
+                        "active-cycle child was not shaded: flags=%d "
+                        "indexed=%lld\n",
+                        __atomic_load_n(&py_header(child)->flags, __ATOMIC_ACQUIRE),
+                        (long long)pcc_gc_object_index_seen_stable(child)
                     );
                     return 5;
                 }
@@ -671,15 +738,38 @@ def test_backend4_dict_set_rehash_retargets_pending_raw_slots(
                 return code; \
             } while (0)
 
-            static int drain_store_buffer(void) {
-                for (
-                    int i = 0;
-                    i < 32 && pcc_gc_backend4_store_buffer_entries() > 0;
-                    i++
-                ) {
-                    (void)pcc_gc_backend4_step_remembered_roots(64);
+            /* GC4 shares the count-free mutator protocol: a store owes only
+             * an active cycle's marking work and records no old-to-young
+             * edge, even from an old owner (pcc_gc_note_slot_write_barrier),
+             * so a rehash has no pending raw slots to retarget. What remains
+             * is that the rehash keeps every entry. */
+            static PyObject *probe_key(int64_t value) {
+                PyObject *key = py_tuple_new(1);
+                if (key != NULL) {
+                    py_tuple_set_item(key, 0, py_int_from_i64(value));
+                    pcc_gc_publish_initialized(key);
                 }
-                return pcc_gc_backend4_store_buffer_entries() == 0;
+                return key;
+            }
+
+            static int64_t dict_value(PyObject *dict, int64_t key_value) {
+                PyObject *key = probe_key(key_value);
+                if (key == NULL) return -1;
+                PyObject *value = py_dict_get(dict, key);
+                pcc_gc_release(key);
+                if (value == NULL) return -1;
+                int overflow = 0;
+                int64_t out = py_int_to_i64(value, &overflow);
+                py_decref(value);
+                return overflow ? -1 : out;
+            }
+
+            static int set_has(PyObject *set, int64_t key_value) {
+                PyObject *key = probe_key(key_value);
+                if (key == NULL) return 0;
+                int found = py_set_contains(set, key) == 1;
+                pcc_gc_release(key);
+                return found;
             }
 
             int main(void) {
@@ -700,57 +790,34 @@ def test_backend4_dict_set_rehash_retargets_pending_raw_slots(
                         & ~(PY_FLAG_GC_YOUNG | PY_FLAG_GC_MINOR_ARENA))
                     | PY_FLAG_GC_OLD;
                 for (int i = 0; i < 5; i++) {
-                    PyObject *key = py_tuple_new(1);
+                    PyObject *key = probe_key(3000 + i);
                     if (key == NULL) FAIL(5, "set seed key allocation failed");
-                    py_tuple_set_item(key, 0, py_int_from_i64(3000 + i));
                     py_set_add(set, key);
                     pcc_gc_release(key);
                 }
-                if (!drain_store_buffer()) FAIL(6, "set seed drain failed");
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(6, "a set store recorded an old-to-young edge");
+                }
                 set = pcc_gc_load_ptr(NULL, &set_root);
                 SetEntry *old_set_entries = ((PySetObject *)set)->entries;
-                PyObject **old_set_slots[8];
-                for (int i = 0; i < 8; i++) {
-                    old_set_slots[i] = &old_set_entries[i].key;
-                }
-                PyObject *set_key = py_tuple_new(1);
+                PyObject *set_key = probe_key(3005);
                 if (set_key == NULL) FAIL(7, "set growth key allocation failed");
-                py_tuple_set_item(set_key, 0, py_int_from_i64(3005));
-                pcc_gc_telemetry_reset();
                 py_set_add(set, set_key);
                 PySetObject *grown_set = (PySetObject *)set;
                 if (grown_set->entries == old_set_entries) {
                     FAIL(8, "set did not rehash");
                 }
-                for (int i = 0; i < 8; i++) {
-                    if (pcc_gc_backend4_remembered_page_contains_slot(
-                            old_set_slots[i]
-                        )) FAIL(9, "set retained an old remembered slot");
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(11, "the set rehash recorded an old-to-young edge");
                 }
-                PyObject **new_set_slot = NULL;
-                for (int64_t i = 0; i < grown_set->capacity; i++) {
-                    if (grown_set->entries[i].key == set_key) {
-                        new_set_slot = &grown_set->entries[i].key;
-                        break;
-                    }
-                }
-                if (
-                    new_set_slot == NULL
-                    || !pcc_gc_backend4_remembered_page_contains_slot(
-                        new_set_slot
-                    )
-                ) FAIL(10, "set new slot is not remembered");
-                if (pcc_gc_backend4_store_buffer_entries() != 1) {
-                    FAIL(11, "set pending edge count changed across rehash");
-                }
-                if (
-                    pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BARRIERS)
-                    != 1
-                ) FAIL(12, "set duplicate rehash barrier was re-enqueued");
                 pcc_gc_release(set_key);
-                if (!drain_store_buffer()) FAIL(13, "set growth drain failed");
                 set = pcc_gc_load_ptr(NULL, &set_root);
                 if (py_set_len(set) != 6) FAIL(14, "set length drifted");
+                for (int i = 0; i < 6; i++) {
+                    if (!set_has(set, 3000 + i)) {
+                        FAIL(10, "the set rehash lost an entry");
+                    }
+                }
 
                 PyObject *dict_root = NULL;
                 void *dict_handle = pcc_gc_scheduler_root_register_handle(
@@ -765,59 +832,35 @@ def test_backend4_dict_set_rehash_retargets_pending_raw_slots(
                         & ~(PY_FLAG_GC_YOUNG | PY_FLAG_GC_MINOR_ARENA))
                     | PY_FLAG_GC_OLD;
                 for (int i = 0; i < 5; i++) {
-                    PyObject *key = py_tuple_new(1);
+                    PyObject *key = probe_key(4000 + i);
                     if (key == NULL) FAIL(17, "dict seed key allocation failed");
-                    py_tuple_set_item(key, 0, py_int_from_i64(4000 + i));
                     py_dict_set(dict, key, py_int_from_i64(5000 + i));
                     pcc_gc_release(key);
                 }
-                if (!drain_store_buffer()) FAIL(18, "dict seed drain failed");
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(18, "a dict store recorded an old-to-young edge");
+                }
                 dict = pcc_gc_load_ptr(NULL, &dict_root);
                 PyDictObject *dict_obj = (PyDictObject *)dict;
                 DictEntry *old_dict_entries = dict_obj->entries;
-                PyObject **old_dict_slots[16];
-                for (int i = 0; i < 8; i++) {
-                    old_dict_slots[i * 2] = &old_dict_entries[i].key;
-                    old_dict_slots[i * 2 + 1] = &old_dict_entries[i].value;
-                }
-                PyObject *dict_key = py_tuple_new(1);
+                PyObject *dict_key = probe_key(4005);
                 if (dict_key == NULL) FAIL(19, "dict growth key allocation failed");
-                py_tuple_set_item(dict_key, 0, py_int_from_i64(4005));
-                pcc_gc_telemetry_reset();
                 py_dict_set(dict, dict_key, py_int_from_i64(5005));
                 dict_obj = (PyDictObject *)dict;
                 if (dict_obj->entries == old_dict_entries) {
                     FAIL(20, "dict did not rehash");
                 }
-                for (int i = 0; i < 16; i++) {
-                    if (pcc_gc_backend4_remembered_page_contains_slot(
-                            old_dict_slots[i]
-                        )) FAIL(21, "dict retained an old remembered slot");
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(23, "the dict rehash recorded an old-to-young edge");
                 }
-                PyObject **new_dict_slot = NULL;
-                for (int64_t i = 0; i < dict_obj->entries_used; i++) {
-                    if (dict_obj->entries[i].key == dict_key) {
-                        new_dict_slot = &dict_obj->entries[i].key;
-                        break;
-                    }
-                }
-                if (
-                    new_dict_slot == NULL
-                    || !pcc_gc_backend4_remembered_page_contains_slot(
-                        new_dict_slot
-                    )
-                ) FAIL(22, "dict new slot is not remembered");
-                if (pcc_gc_backend4_store_buffer_entries() != 1) {
-                    FAIL(23, "dict pending edge count changed across rehash");
-                }
-                if (
-                    pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BARRIERS)
-                    != 1
-                ) FAIL(24, "dict duplicate rehash barrier was re-enqueued");
                 pcc_gc_release(dict_key);
-                if (!drain_store_buffer()) FAIL(25, "dict growth drain failed");
                 dict = pcc_gc_load_ptr(NULL, &dict_root);
                 if (py_dict_len(dict) != 6) FAIL(26, "dict length drifted");
+                for (int i = 0; i < 6; i++) {
+                    if (dict_value(dict, 4000 + i) != 5000 + i) {
+                        FAIL(22, "the dict rehash lost or changed an entry");
+                    }
+                }
 
                 pcc_gc_store_root(&dict_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(dict_handle);
@@ -880,48 +923,29 @@ def test_backend4_list_growth_retargets_pending_raw_slots(
                     py_list_append(list, item);
                     pcc_gc_release(item);
                 }
-                if (pcc_gc_backend4_store_buffer_entries() != 4) {
-                    FAIL(6, "seed pending-edge count is not four");
+                /* GC4 shares the count-free mutator protocol: a store owes
+                 * only an active cycle's marking work and records no
+                 * old-to-young edge, even from an old owner
+                 * (pcc_gc_note_slot_write_barrier), so there are no pending
+                 * raw slots for growth to retarget. */
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(6, "a store recorded an old-to-young edge");
                 }
                 PyListObject *old_list = (PyListObject *)list;
                 PyObject **old_items = old_list->items;
-                PyObject **old_slots[4];
-                for (int i = 0; i < 4; i++) old_slots[i] = &old_items[i];
 
                 PyObject *growth_item = py_tuple_new(1);
                 if (growth_item == NULL) FAIL(7, "growth item allocation failed");
                 py_tuple_set_item(growth_item, 0, py_int_from_i64(7004));
-                pcc_gc_telemetry_reset();
                 py_list_append(list, growth_item);
                 PyListObject *grown = (PyListObject *)list;
                 if (grown->items == old_items || grown->capacity <= 4) {
                     FAIL(8, "list did not replace its item array");
                 }
-                for (int i = 0; i < 4; i++) {
-                    if (pcc_gc_backend4_remembered_page_contains_slot(
-                            old_slots[i]
-                        )) FAIL(9, "list retained an old remembered slot");
+                if (pcc_gc_backend4_store_buffer_entries() != 0) {
+                    FAIL(11, "growth recorded an old-to-young edge");
                 }
-                for (int i = 0; i < 5; i++) {
-                    if (!pcc_gc_backend4_remembered_page_contains_slot(
-                            &grown->items[i]
-                        )) FAIL(10, "list new slot is not remembered");
-                }
-                if (pcc_gc_backend4_store_buffer_entries() != 5) {
-                    FAIL(11, "list pending edges changed across growth");
-                }
-                if (
-                    pcc_gc_telemetry(PCC_GC_COUNTER_GENZGC_STORE_BARRIERS)
-                    != 1
-                ) FAIL(12, "list copied pending edges were re-enqueued");
                 pcc_gc_release(growth_item);
-                for (
-                    int i = 0;
-                    i < 32 && pcc_gc_backend4_store_buffer_entries() > 0;
-                    i++
-                ) {
-                    (void)pcc_gc_backend4_step_remembered_roots(64);
-                }
                 list = pcc_gc_load_ptr(NULL, &list_root);
                 if (list == NULL || py_list_len(list) != 5) {
                     FAIL(13, "list length drifted after drain");
@@ -970,49 +994,61 @@ def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
             #include <stdint.h>
             #include <stdio.h>
 
+/*GC4_STOP_MOVES_ROOTED*/
+            static PyObject *source_root;
+            static PyObject *holder_root;
+            static PyObject *dst_root;
+
+            __attribute__((noinline)) static int probe_build(void) {
+                source_root = py_list_new(0);
+                holder_root = py_list_new(0);
+                dst_root = py_list_new(0);
+                if (source_root == NULL || holder_root == NULL
+                    || dst_root == NULL) return 3;
+                py_list_append(source_root, py_int_from_i64(8100));
+                py_list_append(source_root, py_int_from_i64(8101));
+                for (int i = 0; i < 4; i++) {
+                    py_list_append(holder_root, py_int_from_i64(8200 + i));
+                    py_list_append(dst_root, py_int_from_i64(8300 + i));
+                }
+                /* The holder's item names the source before it moves. */
+                py_list_append(holder_root, source_root);
+                return 0;
+            }
+
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
                     ) != 0) return 2;
-                PyObject *source = py_list_new(0);
-                if (source == NULL) return 3;
-                py_list_append(source, py_int_from_i64(8100));
-                py_list_append(source, py_int_from_i64(8101));
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(source) != 1) return 4;
-                PyObject *target = pcc_gc_relocate_copy(
-                    source, (int64_t)sizeof(PyListObject)
+                int built = probe_build();
+                if (built != 0) return built;
+                void *source_handle = pcc_gc_scheduler_root_register_handle(
+                    &source_root
                 );
-                if (target == NULL || target == source) return 5;
-
-                PyObject *holder_root = NULL;
                 void *holder_handle = pcc_gc_scheduler_root_register_handle(
                     &holder_root
                 );
-                if (holder_handle == NULL) return 6;
-                PyObject *holder = py_list_new(0);
-                if (holder == NULL) return 7;
-                pcc_gc_store_root(&holder_root, holder);
-                for (int i = 0; i < 4; i++) {
-                    py_list_append(holder, py_int_from_i64(8200 + i));
-                }
-                py_list_append(holder, source);
-                holder = pcc_gc_load_ptr(NULL, &holder_root);
-                PyObject *stored = py_list_get(holder, 4);
-                if (stored != target) return 8;
-                pcc_gc_release(stored);
-
-                PyObject *dst_root = NULL;
                 void *dst_handle = pcc_gc_scheduler_root_register_handle(
                     &dst_root
                 );
-                if (dst_handle == NULL) return 9;
-                PyObject *dst = py_list_new(0);
-                if (dst == NULL) return 10;
-                pcc_gc_store_root(&dst_root, dst);
-                for (int i = 0; i < 4; i++) {
-                    py_list_append(dst, py_int_from_i64(8300 + i));
-                }
+                if (source_handle == NULL || holder_handle == NULL
+                    || dst_handle == NULL) return 6;
+                gc4_scrub_stack();
+                /* The stop moves the source; its resume rewrites the root and
+                 * the holder's item, so no running code sees the source's old
+                 * address. */
+                int moved = gc4_stop_moves_rooted(
+                    &source_root, (int64_t)sizeof(PyListObject)
+                );
+                if (moved != 0) return moved;
+                PyObject *source = pcc_gc_load_ptr(NULL, &source_root);
+                if (source == gc4_moved_from) return 5;
+                PyObject *holder = pcc_gc_load_ptr(NULL, &holder_root);
+                PyObject *stored = py_list_get(holder, 4);
+                if (stored != source) return 8;
+                pcc_gc_release(stored);
+
+                PyObject *dst = pcc_gc_load_ptr(NULL, &dst_root);
                 py_list_extend(dst, source);
                 dst = pcc_gc_load_ptr(NULL, &dst_root);
                 if (py_list_len(dst) != 6) return 11;
@@ -1025,7 +1061,7 @@ def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
                 }
                 PyObject *copied = py_list_copy(source);
                 PyObject *repeated = py_list_repeat(source, 2);
-                PyObject *concatenated = py_list_concat(source, target);
+                PyObject *concatenated = py_list_concat(source, source);
                 if (
                     copied == NULL || repeated == NULL || concatenated == NULL
                     || py_list_len(copied) != 2
@@ -1059,7 +1095,7 @@ def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
                 pcc_gc_release(copied);
                 pcc_gc_release(repeated);
                 pcc_gc_release(concatenated);
-                if (pcc_gc_scheduler_root_count() != 2) {
+                if (pcc_gc_scheduler_root_count() != 3) {
                     fprintf(
                         stderr,
                         "temporary roots leaked: count=%lld\n",
@@ -1067,16 +1103,12 @@ def test_backend4_list_growth_reloads_forwarded_item_and_source_roots(
                     );
                     return 16;
                 }
-
-                pcc_gc_store_root(&dst_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(dst_handle);
-                pcc_gc_store_root(&holder_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(holder_handle);
-                py_decref(target);
-                py_decref(source);
+                pcc_gc_scheduler_root_unregister_handle(source_handle);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_MOVES_ROOTED*/", GC4_STOP_MOVES_ROOTED_C),
     )
     run = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -1103,38 +1135,55 @@ def test_backend4_list_get_pop_reverse_reload_forwarded_owner(
             #include <stdint.h>
             #include <stdio.h>
 
+/*GC4_STOP_MOVES_ROOTED*/
+            static PyObject *source_root;
+
+            __attribute__((noinline)) static int probe_build(void) {
+                source_root = py_list_new(0);
+                if (source_root == NULL) return 3;
+                py_list_append(source_root, py_int_from_i64(9100));
+                py_list_append(source_root, py_int_from_i64(9101));
+                py_list_append(source_root, py_int_from_i64(9102));
+                return 0;
+            }
+
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
                     ) != 0) return 2;
-                PyObject *source = py_list_new(0);
-                if (source == NULL) return 3;
-                py_list_append(source, py_int_from_i64(9100));
-                py_list_append(source, py_int_from_i64(9101));
-                py_list_append(source, py_int_from_i64(9102));
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(source) != 1) return 4;
-                PyObject *target = pcc_gc_relocate_copy(
-                    source, (int64_t)sizeof(PyListObject)
+                int built = probe_build();
+                if (built != 0) return built;
+                void *handle = pcc_gc_scheduler_root_register_handle(
+                    &source_root
                 );
-                if (target == NULL || target == source) return 5;
+                if (handle == NULL) return 4;
+                gc4_scrub_stack();
+                /* GC4 moves the list only in a stop that no stack names it
+                 * in; the resume rewrites its root, so these operations reach
+                 * the copy and never a forwarded address. */
+                int moved = gc4_stop_moves_rooted(
+                    &source_root, (int64_t)sizeof(PyListObject)
+                );
+                if (moved != 0) return moved;
+                PyObject *list = pcc_gc_load_ptr(NULL, &source_root);
+                if (list == gc4_moved_from) return 5;
 
-                PyObject *first = py_list_get(source, 0);
+                PyObject *first = py_list_get(list, 0);
                 int overflow = 0;
                 if (py_int_to_i64(first, &overflow) != 9100 || overflow) {
                     return 6;
                 }
                 pcc_gc_release(first);
-                py_list_reverse(source);
-                PyObject *popped = py_list_pop(source, -1);
+                py_list_reverse(list);
+                PyObject *popped = py_list_pop(list, -1);
                 overflow = 0;
                 if (py_int_to_i64(popped, &overflow) != 9100 || overflow) {
                     return 7;
                 }
                 pcc_gc_release(popped);
-                if (py_list_len(target) != 2) return 8;
-                PyObject *left = py_list_get(target, 0);
-                PyObject *right = py_list_get(target, 1);
+                if (py_list_len(list) != 2) return 8;
+                PyObject *left = py_list_get(list, 0);
+                PyObject *right = py_list_get(list, 1);
                 int overflow_left = 0;
                 int overflow_right = 0;
                 int64_t left_value = py_int_to_i64(left, &overflow_left);
@@ -1145,7 +1194,7 @@ def test_backend4_list_get_pop_reverse_reload_forwarded_owner(
                     overflow_left || overflow_right
                     || left_value != 9102 || right_value != 9101
                 ) return 9;
-                if (pcc_gc_scheduler_root_count() != 0) {
+                if (pcc_gc_scheduler_root_count() != 1) {
                     fprintf(
                         stderr,
                         "temporary roots leaked: count=%lld\n",
@@ -1153,11 +1202,10 @@ def test_backend4_list_get_pop_reverse_reload_forwarded_owner(
                     );
                     return 10;
                 }
-                py_decref(target);
-                py_decref(source);
+                pcc_gc_scheduler_root_unregister_handle(handle);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_MOVES_ROOTED*/", GC4_STOP_MOVES_ROOTED_C),
     )
     run = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -1195,7 +1243,7 @@ def test_backend4_list_remove_equality_callback_relocates_and_mutates_current_in
                 PyObject **items;
             } ProbeListObject;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
+/*GC4_STOP_PINS_NAMED_OWNER*/
 
             static PyObject *list_root;
             static int64_t callback_count;
@@ -1209,17 +1257,11 @@ def test_backend4_list_remove_equality_callback_relocates_and_mutates_current_in
                     Py_INCREF(Py_NotImplemented);
                     return Py_NotImplemented;
                 }
+                /* py_list_remove's frame still names the list. */
+                if (!gc4_stop_pins_named_owner(
+                        &list_root, (int64_t)sizeof(ProbeListObject)
+                    )) return NULL;
                 PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(list) != 1) {
-                    return NULL;
-                }
-                PyObject *target = pcc_gc_relocate_copy(
-                    list, (int64_t)sizeof(ProbeListObject)
-                );
-                if (target == NULL || target == list) return NULL;
-                py_decref(target);
-                list = pcc_gc_load_ptr(NULL, &list_root);
                 py_list_insert(list, 0, py_int_from_i64(4242));
                 callback_count++;
                 Py_INCREF(Py_True);
@@ -1274,7 +1316,7 @@ def test_backend4_list_remove_equality_callback_relocates_and_mutates_current_in
                 pcc_gc_scheduler_root_unregister_handle(root_handle);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
     )
     run = subprocess.run(
         [str(executable)], capture_output=True, text=True, timeout=30
@@ -1307,16 +1349,40 @@ def test_backend4_list_clear_native_finalizer_relocates_and_reenters_published_e
                 (void)self;
                 PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 observed_length = py_list_len(list);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(list) != 1) return;
-                PyObject *target = pcc_gc_relocate_copy(
-                    list, (int64_t)sizeof(PyListObject)
-                );
-                if (target == NULL || target == list) return;
-                py_decref(target);
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                /* GC4 moves nothing outside a stop and a finalizer stops no
+                 * world: the list stays where the operation left it. */
                 py_list_append(list, py_int_from_i64(777));
                 finalizer_hits++;
+            }
+
+            static PyClassObject *probe_cls;
+
+            /* The list is the only holder of the finalizable value: build
+             * out of line and scrub the builder's residue, or a tracing
+             * collector's conservative stack scan keeps the value alive. */
+            __attribute__((noinline)) static int probe_build(void) {
+                PyObject *list = py_list_new(0);
+                if (list == NULL) return 4;
+                pcc_gc_store_root(&list_root, list);
+                py_decref(list);
+                probe_cls = py_class_new("ClearNativeFinalizer", 0, 0, 0, 0);
+                if (probe_cls == NULL) return 5;
+                pcc_gc_pin((PyObject *)probe_cls);
+                py_class_add_method(
+                    probe_cls,
+                    "__del__",
+                    (PyObject *)(uintptr_t)probe_finalizer
+                );
+                PyObject *value = py_instance_new(probe_cls);
+                if (value == NULL) return 6;
+                py_list_append(list_root, value);
+                py_decref(value);
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
             }
 
             int main(void) {
@@ -1327,28 +1393,20 @@ def test_backend4_list_clear_native_finalizer_relocates_and_reenters_published_e
                     &list_root
                 );
                 if (root_handle == NULL) return 3;
-                PyObject *list = py_list_new(0);
-                if (list == NULL) return 4;
-                pcc_gc_store_root(&list_root, list);
-                py_decref(list);
-
-                PyClassObject *cls = py_class_new(
-                    "ClearNativeFinalizer", 0, 0, 0, 0
-                );
-                if (cls == NULL) return 5;
-                py_class_add_method(
-                    cls,
-                    "__del__",
-                    (PyObject *)(uintptr_t)probe_finalizer
-                );
-                PyObject *value = py_instance_new(cls);
-                if (value == NULL) return 6;
-                py_list_append(list_root, value);
-                py_decref(value);
+                int built = probe_build();
+                if (built != 0) return built;
+                probe_scrub_stack();
 
                 py_list_clear(list_root);
+                /* A counting collector finalizes the cleared value at once; a
+                 * tracing one when a collection finds it unreachable. Either
+                 * way the finalizer sees the published empty list and its
+                 * append survives the clear. */
+                for (int i = 0; i < 16 && finalizer_hits == 0; i++) {
+                    (void)pcc_gc_collect(0);
+                }
                 if (finalizer_hits != 1 || observed_length != 0) return 7;
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 if (list == NULL || py_list_len(list) != 1) return 8;
                 PyObject *inserted = py_list_get(list, 0);
                 int overflow = 0;
@@ -1360,7 +1418,8 @@ def test_backend4_list_clear_native_finalizer_relocates_and_reenters_published_e
                 py_list_clear(list);
                 pcc_gc_store_root(&list_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(root_handle);
-                py_decref((PyObject *)cls);
+                pcc_gc_unpin((PyObject *)probe_cls);
+                py_decref((PyObject *)probe_cls);
                 return 0;
             }
         ''',
@@ -1396,16 +1455,45 @@ def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_l
                 (void)self;
                 PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 observed_length = py_list_len(list);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(list) != 1) return;
-                PyObject *target = pcc_gc_relocate_copy(
-                    list, (int64_t)sizeof(PyListObject)
-                );
-                if (target == NULL || target == list) return;
-                py_decref(target);
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                /* GC4 moves nothing outside a stop and a finalizer stops no
+                 * world: the list stays where the operation left it. */
                 py_list_append(list, py_int_from_i64(777));
                 finalizer_hits++;
+            }
+
+            static PyClassObject *probe_cls;
+
+            /* The list is the only holder of the finalizable value: build
+             * out of line and scrub the builder's residue, or a tracing
+             * collector's conservative stack scan keeps the value alive. */
+            __attribute__((noinline)) static int probe_build(void) {
+                PyObject *list = py_list_new(0);
+                if (list == NULL) return 4;
+                pcc_gc_store_root(&list_root, list);
+                py_decref(list);
+                probe_cls = py_class_new(
+                    "DeleteSliceNativeFinalizer", 0, 0, 0, 0
+                );
+                if (probe_cls == NULL) return 5;
+                pcc_gc_pin((PyObject *)probe_cls);
+                py_class_add_method(
+                    probe_cls,
+                    "__del__",
+                    (PyObject *)(uintptr_t)probe_finalizer
+                );
+                PyObject *value = py_instance_new(probe_cls);
+                if (value == NULL) return 6;
+                py_list_append(list_root, py_int_from_i64(0));
+                py_list_append(list_root, value);
+                py_decref(value);
+                py_list_append(list_root, py_int_from_i64(2));
+                py_list_append(list_root, py_int_from_i64(3));
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
             }
 
             int main(void) {
@@ -1416,27 +1504,9 @@ def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_l
                     &list_root
                 );
                 if (root_handle == NULL) return 3;
-                PyObject *list = py_list_new(0);
-                if (list == NULL) return 4;
-                pcc_gc_store_root(&list_root, list);
-                py_decref(list);
-
-                PyClassObject *cls = py_class_new(
-                    "DeleteSliceNativeFinalizer", 0, 0, 0, 0
-                );
-                if (cls == NULL) return 5;
-                py_class_add_method(
-                    cls,
-                    "__del__",
-                    (PyObject *)(uintptr_t)probe_finalizer
-                );
-                PyObject *value = py_instance_new(cls);
-                if (value == NULL) return 6;
-                py_list_append(list_root, py_int_from_i64(0));
-                py_list_append(list_root, value);
-                py_decref(value);
-                py_list_append(list_root, py_int_from_i64(2));
-                py_list_append(list_root, py_int_from_i64(3));
+                int built = probe_build();
+                if (built != 0) return built;
+                probe_scrub_stack();
 
                 if (py_list_del_slice(
                         list_root,
@@ -1444,8 +1514,15 @@ def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_l
                         py_int_from_i64(2),
                         py_None
                     ) != 0) return 7;
+                /* A counting collector finalizes the removed value at once; a
+                 * tracing one when a collection finds it unreachable. Either
+                 * way the finalizer sees the published list and its append
+                 * survives the operation. */
+                for (int i = 0; i < 16 && finalizer_hits == 0; i++) {
+                    (void)pcc_gc_collect(0);
+                }
                 if (finalizer_hits != 1 || observed_length != 3) return 8;
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 if (list == NULL || py_list_len(list) != 4) return 9;
                 int64_t expected[4] = {0, 2, 3, 777};
                 for (int64_t i = 0; i < 4; i++) {
@@ -1461,7 +1538,8 @@ def test_backend4_list_delete_slice_finalizer_relocates_and_reenters_compacted_l
                 py_list_clear(list);
                 pcc_gc_store_root(&list_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(root_handle);
-                py_decref((PyObject *)cls);
+                pcc_gc_unpin((PyObject *)probe_cls);
+                py_decref((PyObject *)probe_cls);
                 return 0;
             }
         ''',
@@ -1497,14 +1575,8 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
                 (void)self;
                 PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 observed_length = py_list_len(list);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(list) != 1) return;
-                PyObject *target = pcc_gc_relocate_copy(
-                    list, (int64_t)sizeof(PyListObject)
-                );
-                if (target == NULL || target == list) return;
-                py_decref(target);
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                /* GC4 moves nothing outside a stop and a finalizer stops no
+                 * world: the list stays where the operation left it. */
                 py_list_append(list, py_int_from_i64(777));
                 finalizer_hits++;
             }
@@ -1517,6 +1589,45 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
                 return !overflow && number == expected;
             }
 
+            static PyClassObject *probe_cls;
+            static PyObject *replacement_root;
+
+            /* The list is the only holder of the finalizable value: build
+             * out of line and scrub the builder's residue, or a tracing
+             * collector's conservative stack scan keeps the value alive. */
+            __attribute__((noinline)) static int probe_build(void) {
+                PyObject *list = py_list_new(0);
+                if (list == NULL) return 4;
+                pcc_gc_store_root(&list_root, list);
+                py_decref(list);
+                probe_cls = py_class_new(
+                    "SetSliceNativeFinalizer", 0, 0, 0, 0
+                );
+                if (probe_cls == NULL) return 5;
+                pcc_gc_pin((PyObject *)probe_cls);
+                py_class_add_method(
+                    probe_cls,
+                    "__del__",
+                    (PyObject *)(uintptr_t)probe_finalizer
+                );
+                PyObject *value = py_instance_new(probe_cls);
+                replacement_root = py_list_new(0);
+                if (value == NULL || replacement_root == NULL) return 6;
+                py_list_append(list_root, py_int_from_i64(0));
+                py_list_append(list_root, value);
+                py_decref(value);
+                py_list_append(list_root, py_int_from_i64(2));
+                py_list_append(list_root, py_int_from_i64(3));
+                py_list_append(replacement_root, py_int_from_i64(7));
+                py_list_append(replacement_root, py_int_from_i64(8));
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
@@ -1525,41 +1636,32 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
                     &list_root
                 );
                 if (root_handle == NULL) return 3;
-                PyObject *list = py_list_new(0);
-                if (list == NULL) return 4;
-                pcc_gc_store_root(&list_root, list);
-                py_decref(list);
-
-                PyClassObject *cls = py_class_new(
-                    "SetSliceNativeFinalizer", 0, 0, 0, 0
+                void *replacement_handle = pcc_gc_scheduler_root_register_handle(
+                    &replacement_root
                 );
-                if (cls == NULL) return 5;
-                py_class_add_method(
-                    cls,
-                    "__del__",
-                    (PyObject *)(uintptr_t)probe_finalizer
-                );
-                PyObject *value = py_instance_new(cls);
-                PyObject *replacement = py_list_new(0);
-                if (value == NULL || replacement == NULL) return 6;
-                py_list_append(list_root, py_int_from_i64(0));
-                py_list_append(list_root, value);
-                py_decref(value);
-                py_list_append(list_root, py_int_from_i64(2));
-                py_list_append(list_root, py_int_from_i64(3));
-                py_list_append(replacement, py_int_from_i64(7));
-                py_list_append(replacement, py_int_from_i64(8));
+                if (replacement_handle == NULL) return 3;
+                int built = probe_build();
+                if (built != 0) return built;
+                probe_scrub_stack();
 
                 if (py_list_set_slice(
                         list_root,
                         py_int_from_i64(1),
                         py_int_from_i64(2),
                         py_None,
-                        replacement
+                        replacement_root
                     ) != 0) return 7;
-                py_decref(replacement);
+                pcc_gc_scheduler_root_unregister_handle(replacement_handle);
+                py_decref(replacement_root);
+                /* A counting collector finalizes the removed value at once; a
+                 * tracing one when a collection finds it unreachable. Either
+                 * way the finalizer sees the published list and its append
+                 * survives the operation. */
+                for (int i = 0; i < 16 && finalizer_hits == 0; i++) {
+                    (void)pcc_gc_collect(0);
+                }
                 if (finalizer_hits != 1 || observed_length != 5) return 8;
-                list = pcc_gc_load_ptr(NULL, &list_root);
+                PyObject *list = pcc_gc_load_ptr(NULL, &list_root);
                 if (list == NULL || py_list_len(list) != 6) return 9;
                 int64_t expected[6] = {0, 7, 8, 2, 3, 777};
                 for (int64_t i = 0; i < 6; i++) {
@@ -1590,7 +1692,8 @@ def test_backend4_list_set_slice_finalizer_relocates_and_reenters_published_payl
                 py_list_clear(list);
                 pcc_gc_store_root(&list_root, NULL);
                 pcc_gc_scheduler_root_unregister_handle(root_handle);
-                py_decref((PyObject *)cls);
+                pcc_gc_unpin((PyObject *)probe_cls);
+                py_decref((PyObject *)probe_cls);
                 return 0;
             }
         ''',
@@ -1630,6 +1733,7 @@ def test_backend4_real_container_growth_blocks_stw_until_commit_and_retires_sour
 #if PCC_PROBE_STRICT
             extern void pcc_py_gc_minor_graph_lock(void);
             extern void pcc_py_gc_minor_graph_unlock(void);
+            extern int32_t pcc_gc_backend4_no_refcounts;
 #define PROBE_GRAPH_LOCK() pcc_py_gc_minor_graph_lock()
 #define PROBE_GRAPH_UNLOCK() pcc_py_gc_minor_graph_unlock()
 #else
@@ -1858,7 +1962,10 @@ def test_backend4_real_container_growth_blocks_stw_until_commit_and_retires_sour
                 ) return 24;
                 container = pcc_gc_load_ptr(NULL, &set_root);
                 if (container != moved_target) return 25;
-                if (pcc_refcount_load(&py_header(container)->refcount) != 1) {
+                /* Only GC0 counts references (8429b667); a tracing collector
+                 * leaves the count at its allocation value. */
+                if (pcc_gc_backend4_no_refcounts == 0
+                    && pcc_refcount_load(&py_header(container)->refcount) != 1) {
                     return 26;
                 }
 #if PCC_PROBE_LIST

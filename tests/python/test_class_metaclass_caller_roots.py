@@ -56,8 +56,9 @@ class Example(metaclass=Meta):
             live, registered, leases = set(live), set(registered), set(leases)
             successors = []
             for line in blocks[block]:
-                # Frames register through the plain or the mapped entries.
-                enter = re.search(r'@pcc_gc_frame_enter(?:_lifo)?(?:_mapped)?\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
+                # Frames register through the plain or the mapped entries,
+                # thread-local for a private frame (c0f47b91).
+                enter = re.search(r'@pcc_gc_frame_enter(?:_lifo)?(?:_local)?(?:_mapped)?\(ptr [^,]+, ptr (%[-\w.]+)\)', line)
                 if enter:
                     registered.add(physical(enter.group(1)))
                 store = re.search(r'store ptr (null|%[-\w.]+), ptr (%[-\w.]+)', line)

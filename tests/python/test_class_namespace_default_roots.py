@@ -107,7 +107,12 @@ class Holder:
     body = re.search(r"^define [^\n]*@user_class_namespace_Holder_target\([^\n]*\).*?^}", text, re.M | re.S)
     assert body is not None
     assert "class.name" not in body.group(0)
-    assert "@pcc_gc_root_copy_borrowed_lease(" in body.group(0)
+    # The keyword argument is copied from the parameter's own frame slot
+    # (a thread-local root copy since c0f47b91), never looked up in the
+    # class namespace.
+    assert re.search(
+        r"@pcc_gc_root_copy(?:_borrowed_lease|_local)\(ptr [^,]+, ptr %fields\.addr\.", body.group(0)
+    )
 
 
 @pytest.mark.parametrize("default", ("sentinel", "(sentinel,)", "identity(sentinel)", "method"))

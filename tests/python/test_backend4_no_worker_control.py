@@ -50,6 +50,15 @@ def test_backend4_displaced_accounting_no_worker(
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
             }
 
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
             static PyObject *probe_del(PyObject *self) {
                 (void)self;
                 __atomic_add_fetch(&finalized, 1, __ATOMIC_ACQ_REL);
@@ -113,14 +122,15 @@ def test_backend4_displaced_accounting_no_worker(
                            seen > inserted - 1 ? "premature free" : "leak");
                     return 14;
                 }
-                if (refcount_of(last) != 2) {   /* dict + get ref */
+                if (counts_refs() && refcount_of(last) != 2) {   /* dict + get ref */
                     printf("survivor rc=%lld (expected 2)\n",
                            (long long)refcount_of(last));
                     return 29;
                 }
                 py_decref(got);
                 got = py_dict_get(dict_root, key_root);
-                if (got == NULL || refcount_of(got) != 2) {
+                if (got == NULL || got != last
+                    || (counts_refs() && refcount_of(got) != 2)) {
                     printf("dict + fresh get ref rc wrong\n");
                     return 30;
                 }

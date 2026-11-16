@@ -473,6 +473,29 @@ def test_concurrent_tracer_races_dict_hash_commit_paths(
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
             }
 
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
+            __attribute__((unused))
+            static int dict_stores_only_key(PyObject *dict, PyObject *key) {
+                PyObject *keys = py_dict_keys(dict);
+                if (keys == NULL) return 0;
+                int stored = 0;
+                if (py_list_len(keys) == 1) {
+                    PyObject *first = py_list_get(keys, 0);
+                    stored = first == key;
+                    py_decref(first);
+                }
+                py_decref(keys);
+                return stored;
+            }
+
             /* Allocating hash: every lookup/insert/delete takes the rooted
              * callback-restart path with an allocation inside the callback.
              * While inside it, sample the worker's in-step flag: observing it
@@ -726,7 +749,7 @@ def test_concurrent_tracer_races_dict_hash_commit_paths(
                 }
 
                 /* Exact refcounts at quiescence: dict + probe's own ref. */
-                if (refcount_of(last) != 2) {
+                if (counts_refs() && refcount_of(last) != 2) {
                     printf("surviving refcount=%lld (expected 2: dict + "
                            "probe)\n",
                            (long long)refcount_of(last));
@@ -735,7 +758,8 @@ def test_concurrent_tracer_races_dict_hash_commit_paths(
                 py_decref(last);
                 PyObject *stored = pcc_gc_load_ptr(NULL, &dict_root);
                 stored = py_dict_get(stored, key_root);
-                if (stored == NULL || refcount_of(stored) != 2) {
+                if (stored == NULL || stored != last
+                    || (counts_refs() && refcount_of(stored) != 2)) {
                     printf("dict-held refcount=%lld (expected 2: dict + "
                            "get ref)\n",
                            stored ? (long long)refcount_of(stored) : -1LL);
@@ -841,6 +865,29 @@ def test_concurrent_tracer_races_set_add_remove(
 
             static int64_t refcount_of(PyObject *obj) {
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
+            }
+
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
+            __attribute__((unused))
+            static int dict_stores_only_key(PyObject *dict, PyObject *key) {
+                PyObject *keys = py_dict_keys(dict);
+                if (keys == NULL) return 0;
+                int stored = 0;
+                if (py_list_len(keys) == 1) {
+                    PyObject *first = py_list_get(keys, 0);
+                    stored = first == key;
+                    py_decref(first);
+                }
+                py_decref(keys);
+                return stored;
             }
 
             static PyObject *probe_hash(PyObject *self) {
@@ -1035,14 +1082,14 @@ def test_concurrent_tracer_races_set_add_remove(
                 }
 
                 /* Set + probe's own ref. */
-                if (refcount_of(prev) != 2) {
+                if (counts_refs() && refcount_of(prev) != 2) {
                     printf("survivor rc=%lld (expected 2)\n",
                            (long long)refcount_of(prev));
                     return 29;
                 }
                 py_decref(prev);   /* drop the probe ref; the set keeps one */
                 if (py_set_contains(set_root, prev) != 1
-                    || refcount_of(prev) != 1) {
+                    || (counts_refs() && refcount_of(prev) != 1)) {
                     printf("post-drop membership/refcount wrong\n");
                     return 30;
                 }
@@ -1142,6 +1189,29 @@ def test_concurrent_tracer_races_dict_update_walk(
 
             static int64_t refcount_of(PyObject *obj) {
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
+            }
+
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
+            __attribute__((unused))
+            static int dict_stores_only_key(PyObject *dict, PyObject *key) {
+                PyObject *keys = py_dict_keys(dict);
+                if (keys == NULL) return 0;
+                int stored = 0;
+                if (py_list_len(keys) == 1) {
+                    PyObject *first = py_list_get(keys, 0);
+                    stored = first == key;
+                    py_decref(first);
+                }
+                py_decref(keys);
+                return stored;
             }
 
             static PyObject *probe_hash(PyObject *self) {
@@ -1345,7 +1415,8 @@ def test_concurrent_tracer_races_dict_update_walk(
                 }
                 /* src + dst hold each binding; the probe's get refs were
                  * counted too, so expect 3 while both get-refs are alive. */
-                if (refcount_of(ga) != 3 || refcount_of(gb) != 3) {
+                if (counts_refs()
+                    && (refcount_of(ga) != 3 || refcount_of(gb) != 3)) {
                     printf("shared-binding rc a=%lld b=%lld (expected 3 x2)\n",
                            (long long)refcount_of(ga),
                            (long long)refcount_of(gb));
@@ -1444,6 +1515,29 @@ def test_instance_eq_collapses_container_keys(
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
             }
 
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
+            __attribute__((unused))
+            static int dict_stores_only_key(PyObject *dict, PyObject *key) {
+                PyObject *keys = py_dict_keys(dict);
+                if (keys == NULL) return 0;
+                int stored = 0;
+                if (py_list_len(keys) == 1) {
+                    PyObject *first = py_list_get(keys, 0);
+                    stored = first == key;
+                    py_decref(first);
+                }
+                py_decref(keys);
+                return stored;
+            }
+
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
                 return py_int_from_i64(7);
@@ -1487,7 +1581,9 @@ def test_instance_eq_collapses_container_keys(
                     return 11;
                 }
                 /* The FIRST inserted key stays stored: k0 is root + dict. */
-                if (refcount_of(k0) != 2 || refcount_of(k1) != 1) {
+                if (counts_refs()
+                        ? (refcount_of(k0) != 2 || refcount_of(k1) != 1)
+                        : !dict_stores_only_key(d, k0)) {
                     printf("stored-key rc k0=%lld k1=%lld (expected 2/1)\n",
                            (long long)refcount_of(k0),
                            (long long)refcount_of(k1));
@@ -1687,6 +1783,29 @@ def test_concurrent_tracer_races_eq_key_preserved(
 
             static int64_t refcount_of(PyObject *obj) {
                 return pcc_refcount_load(&((PyObjectHeader *)obj)->refcount);
+            }
+
+            /* Only GC0 counts references; a tracing collector leaves the
+             * count at its allocation value (8429b667). Exact counts are
+             * checked where the collector keeps them; elsewhere the stored
+             * object's identity and its survival stand for them. */
+            extern int32_t pcc_gc_backend4_no_refcounts;
+            static int counts_refs(void) {
+                return pcc_gc_backend4_no_refcounts == 0;
+            }
+
+            __attribute__((unused))
+            static int dict_stores_only_key(PyObject *dict, PyObject *key) {
+                PyObject *keys = py_dict_keys(dict);
+                if (keys == NULL) return 0;
+                int stored = 0;
+                if (py_list_len(keys) == 1) {
+                    PyObject *first = py_list_get(keys, 0);
+                    stored = first == key;
+                    py_decref(first);
+                }
+                py_decref(keys);
+                return stored;
             }
 
             static void sample_tracer(volatile int64_t *counter) {
@@ -1894,12 +2013,14 @@ def test_concurrent_tracer_races_eq_key_preserved(
                     pcc_gc_safepoint();
                 }
 
-                if (refcount_of(k0_root) != 2) {
+                if (counts_refs()
+                        ? refcount_of(k0_root) != 2
+                        : !dict_stores_only_key(dict_root, k0_root)) {
                     printf("stored-key rc=%lld (expected 2: root + dict)\n",
                            (long long)refcount_of(k0_root));
                     return 33;
                 }
-                if (refcount_of(k1_root) != 1) {
+                if (counts_refs() && refcount_of(k1_root) != 1) {
                     printf("incoming-key rc=%lld (expected 1: root only)\n",
                            (long long)refcount_of(k1_root));
                     return 34;
@@ -1910,7 +2031,7 @@ def test_concurrent_tracer_races_eq_key_preserved(
                     printf("surviving value lost or not the last inserted\n");
                     return 12;
                 }
-                if (refcount_of(last) != 2) {
+                if (counts_refs() && refcount_of(last) != 2) {
                     printf("surviving rc=%lld (expected 2: dict + get ref)\n",
                            (long long)refcount_of(last));
                     return 29;

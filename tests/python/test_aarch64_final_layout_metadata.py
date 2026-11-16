@@ -1,7 +1,10 @@
 """Production AArch64 metadata must describe the relaxed instruction layout.
 
-The only synthetic code is a conditional branch over one data-in-code gap,
-inserted after a real function prologue.  Tiny ordinary IR still goes through
+The only synthetic code is a conditional branch over one gap, inserted after
+a real function prologue. The gap is a data-in-code region where the route
+accepts assembler text; the optimized structured route records every code
+event with typed producer provenance and has no data-in-code event, so there
+the gap is the same number of bytes of typed nops.  Tiny ordinary IR still goes through
 verification, stack-map planning, function emission, peepholes, metadata
 encoding and section assembly.  This avoids a quarter-million-instruction IR
 fixture and never links or executes AArch64 code.
@@ -30,6 +33,10 @@ from pcc.backend.precise_stackmap import (
     SAFEPOINT_ENTRY,
     SAFEPOINT_EXCEPTION,
     decode_stack_map,
+)
+from pcc.backend.self_backend_aarch64_darwin_mem import (
+    emitted_branch_line,
+    emitted_fixed_instruction_line,
 )
 from pcc.backend.self_backend_parse import parse_self_backend_module
 
@@ -110,23 +117,40 @@ def test_emitted_metadata_uses_final_relaxed_layout(
     plans = {}
     debug_plans = {}
     assembled_results = []
+    typed_gaps = []
 
-    def padded_prologue(func, module_symbols):
-        lines = real_prologue(func, module_symbols)
+    def padded_prologue(func, module_symbols, **options):
+        # Forward the emitter's frame options (registers_prepared, the
+        # compacted frame's padding, native event capture) unchanged.
+        lines = real_prologue(func, module_symbols, **options)
         if func.name == "layout_probe":
-            lines.extend([
-                _BRANCH + ":",
-                "  cbz x15, " + _RESUME,
-                ".data_region",
-                ".space " + str(padding),
-                ".end_data_region",
-                _RESUME + ":",
-                "  nop",
-            ])
+            events = options.get("native_events")
+            if events is not None and events.collecting_optimized:
+                # Typed producers only: each helper records its instruction
+                # when called, in output order.
+                lines.append(_BRANCH + ":")
+                lines.append(emitted_branch_line("cbz", _RESUME, "x15"))
+                lines.extend(
+                    emitted_fixed_instruction_line("nop") for _ in range(padding // 4)
+                )
+                lines.append(_RESUME + ":")
+                lines.append(emitted_fixed_instruction_line("nop"))
+                typed_gaps.append(func.name)
+            else:
+                lines.extend([
+                    _BRANCH + ":",
+                    "  cbz x15, " + _RESUME,
+                    ".data_region",
+                    ".space " + str(padding),
+                    ".end_data_region",
+                    _RESUME + ":",
+                    "  nop",
+                ])
         return lines
 
     def record_plan(
         func, plan, native_sink=None, *, debug_plan=None, phase_timing=None,
+        frame_padding=(),
     ):
         assert (debug_plan is not None) == source_debug
         if debug_plan is not None:
@@ -154,6 +178,7 @@ def test_emitted_metadata_uses_final_relaxed_layout(
         result = real_function(
             func, plan, native_sink=native_sink,
             debug_plan=debug_plan, phase_timing=phase_timing,
+            frame_padding=frame_padding,
         )
         if debug_plan is not None:
             # Accepting the keyword is not enough: the real emitter must use
@@ -181,11 +206,12 @@ def test_emitted_metadata_uses_final_relaxed_layout(
             module, optimize=route != "native", structured_instructions=True,
         )
         try:
-            # Source debug deliberately retains the unoptimized native sink.
-            assert transport.native_finalized == (route == "native" or source_debug)
-            if route == "native" or source_debug:
-                assert transport.fallback_instruction_count == 0
-                assert transport.fallback_instruction_lines == ()
+            # Source debug deliberately retains the unoptimized native sink;
+            # the optimized route publishes its final native sections through
+            # owned layout too, without instruction text (cb7a3ec5).
+            assert transport.native_finalized
+            assert transport.fallback_instruction_count == 0
+            assert transport.fallback_instruction_lines == ()
             sections, undefined = transport.assemble_sections()
         finally:
             if transport.encoded_line_records is not None:
@@ -225,10 +251,14 @@ def test_emitted_metadata_uses_final_relaxed_layout(
         assert skip == 0xB400000F | (((padding + 4) // 4) << 5)
         branch_size = 4
     assert resume - branch == padding + branch_size
-    assert any(
-        region.offset == branch + branch_size and region.length == padding
-        for region in text.data_in_code
-    )
+    if typed_gaps:
+        assert route == "optimized-structured" and not source_debug
+        assert not text.data_in_code
+    else:
+        assert any(
+            region.offset == branch + branch_size and region.length == padding
+            for region in text.data_in_code
+        )
     assert len(plans) == 2
 
     stackmaps = next(

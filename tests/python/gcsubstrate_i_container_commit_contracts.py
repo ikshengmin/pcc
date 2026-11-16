@@ -91,16 +91,10 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
             static int64_t del_seen_value = -1;
             static int64_t del_seen_error = -1;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
-
-            static int relocate_dict(PyObject **slot) {
-                PyObject *dict = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(dict) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(dict, 56);
-                if (target == NULL || target == dict) return 0;
-                py_decref(target);
-                return 1;
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            /* The insert's frame still names the dict. */
+            static int stop_pins_dict(PyObject **slot) {
+                return gc4_stop_pins_named_owner(slot, 56);
             }
 
             extern struct PyClassObject *py_class_new(
@@ -115,7 +109,7 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
                 if (mode == 1 && hash_relocations == 0) {
-                    if (!relocate_dict(&hash_dict_root)) return NULL;
+                    if (!stop_pins_dict(&hash_dict_root)) return NULL;
                     hash_relocations++;
                 }
                 return py_int_from_i64(7);
@@ -153,7 +147,7 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
                     return Py_NotImplemented;
                 }
                 if (mode == 2 && equality_relocations == 0) {
-                    if (!relocate_dict(&eq_dict_root)) return NULL;
+                    if (!stop_pins_dict(&eq_dict_root)) return NULL;
                     equality_relocations++;
                 }
                 Py_INCREF(Py_True);
@@ -170,6 +164,27 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
 
             static PyObject *new_key(void) {
                 return (PyObject *)PyObject_New(ProbeKeyObject, &ProbeKeyType);
+            }
+
+            static PyObject *del_key_root;
+
+            /* The dict is the only holder of the displaced value: build out
+             * of line and scrub the builder's residue, or a tracing
+             * collector's conservative stack scan keeps the value alive. */
+            __attribute__((noinline)) static int probe_build_displaced(void) {
+                del_dict_root = py_dict_new();
+                del_key_root = py_str_new("k", 1);
+                PyObject *displaced = py_instance_new(del_class);
+                if (del_dict_root == NULL || del_key_root == NULL
+                    || displaced == NULL) return 15;
+                py_dict_set(del_dict_root, del_key_root, displaced);
+                py_decref(displaced);   /* only the dict holds it now */
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
             }
 
             int main(void) {
@@ -242,20 +257,25 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
                 py_class_add_method(
                     del_class, "__del__", (PyObject *)(uintptr_t)probe_del
                 );
-                del_dict_root = py_dict_new();
-                PyObject *del_key = py_str_new("k", 1);
-                PyObject *displaced = py_instance_new(del_class);
-                if (del_dict_root == NULL || del_key == NULL
-                    || displaced == NULL) return 15;
+                int built = probe_build_displaced();
+                if (built != 0) return built;
                 void *del_handle = pcc_gc_scheduler_root_register_handle(
                     &del_dict_root
                 );
-                if (del_handle == NULL) return 16;
-                py_dict_set(del_dict_root, del_key, displaced);
-                py_decref(displaced);   /* only the dict holds it now */
+                void *del_key_handle = pcc_gc_scheduler_root_register_handle(
+                    &del_key_root
+                );
+                if (del_handle == NULL || del_key_handle == NULL) return 16;
+                probe_scrub_stack();
+                py_dict_set(del_dict_root, del_key_root, py_int_from_i64(33));
                 del_dict_root = pcc_gc_load_ptr(NULL, &del_dict_root);
-                py_dict_set(del_dict_root, del_key, py_int_from_i64(33));
-                del_dict_root = pcc_gc_load_ptr(NULL, &del_dict_root);
+                /* A counting collector finalizes the displaced value at
+                 * once; a tracing one when a collection finds it
+                 * unreachable. Either way the finalizer sees the committed
+                 * replacement. */
+                for (int i = 0; i < 16 && del_calls == 0; i++) {
+                    (void)pcc_gc_collect(0);
+                }
                 if (del_calls != 1
                     || del_seen_len != 1
                     || del_seen_value != 33
@@ -276,12 +296,13 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
                            (long long)equality_relocations);
                     return 18;
                 }
-                if (pcc_gc_scheduler_root_count() != 3) return 19;
+                if (pcc_gc_scheduler_root_count() != 4) return 19;
 
                 py_decref(hash_key);
                 Py_DECREF(eq_stored);
                 Py_DECREF(eq_query);
-                py_decref(del_key);
+                pcc_gc_scheduler_root_unregister_handle(del_key_handle);
+                py_decref(del_key_root);
                 pcc_gc_scheduler_root_unregister_handle(hash_handle);
                 pcc_gc_scheduler_root_unregister_handle(eq_handle);
                 pcc_gc_scheduler_root_unregister_handle(del_handle);
@@ -294,7 +315,7 @@ def test_backend4_dict_set_survives_callback_relocation_and_commits_before_final
                 py_decref((PyObject *)del_class);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
@@ -381,17 +402,12 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
             static int64_t del_seen_key = -1;
             static int64_t del_seen_error = -1;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
-            extern int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void);
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            extern int32_t pcc_gc_backend4_remap_owed;
 
-            static int relocate_dict(PyObject **slot) {
-                PyObject *dict = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(dict) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(dict, 56);
-                if (target == NULL || target == dict) return 0;
-                py_decref(target);
-                return 1;
+            /* py_dict_del's frame still names the dict. */
+            static int stop_pins_dict(PyObject **slot) {
+                return gc4_stop_pins_named_owner(slot, 56);
             }
 
             extern struct PyClassObject *py_class_new(
@@ -431,7 +447,7 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                     return Py_NotImplemented;
                 }
                 if (mode == 1 && equality_relocations == 0) {
-                    if (!relocate_dict(&del_dict_root)) return NULL;
+                    if (!stop_pins_dict(&del_dict_root)) return NULL;
                     equality_relocations++;
                 }
                 Py_INCREF(Py_True);
@@ -450,6 +466,29 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                 return (PyObject *)PyObject_New(ProbeKeyObject, &ProbeKeyType);
             }
 
+            static PyObject *stored;
+            static PyObject *query;
+
+            /* The dict is the only holder of the value: build out of line
+             * and scrub the builder's residue, or a tracing collector's
+             * conservative stack scan keeps the value alive. */
+            __attribute__((noinline)) static int probe_build(void) {
+                del_dict_root = py_dict_new();
+                stored = new_key();
+                query = new_key();
+                PyObject *value = py_instance_new(value_class);
+                if (del_dict_root == NULL || stored == NULL
+                    || query == NULL || value == NULL) return 5;
+                py_dict_set(del_dict_root, stored, value);
+                py_decref(value);   /* only the dict holds it now */
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
@@ -465,18 +504,20 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                     value_class, "__del__", (PyObject *)(uintptr_t)probe_del
                 );
 
-                del_dict_root = py_dict_new();
-                PyObject *stored = new_key();
-                PyObject *query = new_key();
-                PyObject *value = py_instance_new(value_class);
-                if (del_dict_root == NULL || stored == NULL
-                    || query == NULL || value == NULL) return 5;
-                py_dict_set(del_dict_root, stored, value);
-                py_decref(value);   /* only the dict holds it now */
+                int built = probe_build();
+                if (built != 0) return built;
                 void *handle = pcc_gc_scheduler_root_register_handle(
                     &del_dict_root
                 );
-                if (handle == NULL) return 6;
+                void *stored_handle = pcc_gc_scheduler_root_register_handle(
+                    &stored
+                );
+                void *query_handle = pcc_gc_scheduler_root_register_handle(
+                    &query
+                );
+                if (handle == NULL || stored_handle == NULL
+                    || query_handle == NULL) return 6;
+                probe_scrub_stack();
                 if (py_dict_len(del_dict_root) != 1) return 7;
 
                 mode = 1;
@@ -491,16 +532,14 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                            (long long)equality_relocations);
                     return 11;
                 }
-                /* The detached value was released while the dict carried a
-                 * forwarding shell, so its finalizer runs on a retirement
-                 * epoch rather than inline.  Two epochs match the proven set
-                 * remove precedent. */
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_remap_and_retire_stopped_world() <= 0) {
-                    return 15;
-                }
-                if (pcc_gc_backend4_remap_and_retire_stopped_world() <= 0) {
-                    return 16;
+                /* The callback's stop rewrote what it moved before resuming:
+                 * nothing is owed afterwards. */
+                if (pcc_gc_backend4_remap_owed != 0) return 15;
+                /* A counting collector finalizes the detached value at once;
+                 * a tracing one when a collection finds it unreachable.
+                 * Either way the finalizer sees the committed absence. */
+                for (int i = 0; i < 16 && del_calls == 0; i++) {
+                    (void)pcc_gc_collect(0);
                 }
                 if (del_calls != 1
                     || del_seen_len != 0
@@ -519,8 +558,10 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                 }
                 /* deleting an absent key must still report -1 */
                 if (py_dict_del(del_dict_root, query) != -1) return 13;
-                if (pcc_gc_scheduler_root_count() != 1) return 14;
+                if (pcc_gc_scheduler_root_count() != 3) return 14;
 
+                pcc_gc_scheduler_root_unregister_handle(stored_handle);
+                pcc_gc_scheduler_root_unregister_handle(query_handle);
                 Py_DECREF(stored);
                 Py_DECREF(query);
                 pcc_gc_scheduler_root_unregister_handle(handle);
@@ -529,7 +570,7 @@ def test_backend4_dict_del_relocates_then_finalizer_observes_committed_absence(
                 py_decref((PyObject *)value_class);
                 return 0;
             }
-        '''),
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C)),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(

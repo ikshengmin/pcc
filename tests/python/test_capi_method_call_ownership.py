@@ -8,6 +8,7 @@ import pytest
 ROOT = Path(__file__).resolve().parents[2]
 RAW = ROOT / 'pcc/runtime/py/py_capi_method_entry.py'
 BODY = RAW.with_name('py_capi_method_call_runtime.py')
+BARRIERS = RAW.with_name('freestanding_gc_barrier_dispatcher.py')
 
 
 class MethodModel:
@@ -27,6 +28,10 @@ class MethodModel:
         self.empty_keywords = empty_keywords
         self.keyword_count = 0 if empty_keywords else (2 if two_keywords else 1)
         self.events = []
+        # Moving unleased objects at polls is the provenance-probe protocol,
+        # outside container mode (1db2494e): its root barrier rereads the
+        # slot under the graph lock.
+        self.globals = {'pcc_gc_list_container_mode': 0}
         self.operation_count = 0
         self.register_count = 0
         self.depth = 0
@@ -108,6 +113,14 @@ class MethodModel:
             call_ptr_ptr_ptr_i64_ptr=self.foreign_fast,
             PY_TYPE_TUPLE=7, PY_TYPE_DICT=6, PY_TYPE_STR=4,
         )
+        # The actual root-slot barrier the _adopt helpers call.
+        barrier = [
+            node for node in ast.parse(BARRIERS.read_text()).body
+            if isinstance(node, ast.FunctionDef) and node.name == 'pcc_gc_note_root_slot_barrier'
+        ]
+        assert len(barrier) == 1
+        barrier[0].decorator_list = []
+        exec(compile(ast.Module(body=barrier, type_ignores=[]), str(BARRIERS), 'exec'), self.ns)
         for path in (BODY, RAW):
             nodes = []
             for node in ast.parse(path.read_text()).body:
@@ -183,6 +196,8 @@ class MethodModel:
         return self.memory.get(address, 0)
 
     def load32(self, base, offset):
+        if isinstance(base, str):
+            return self.globals[base]
         if base in self.objects:
             self.require(base)
             return {'tuple': 7, 'dict': 6, 'str': 4, 'int': 1, 'self': 16, 'class': 32, 'error': 20, 'none': 0}[self.objects[base]['kind']]
@@ -880,7 +895,11 @@ def test_real_entry_and_body_ir_enforce_the_slot_boundary(tmp_path, monkeypatch)
             managed_bodies[node.name] = function_body(texts[BODY], symbol)
     assert 'pcc_capi_method_call_into' in managed_bodies
     for name, body in managed_bodies.items():
-        assert '@pcc_thread_stop_requested' in body, name
+        # Runtime library functions poll at loop back-edges and explicit
+        # pcc_thread_safepoint calls, not at entry (55ce5ce2); the model
+        # still polls at every helper entry, a superset of the real points.
+        entry_block = re.split(r'(?m)^[\w.$-]+:', body.split('\n', 1)[1], maxsplit=1)[0]
+        assert '@pcc_thread_stop_requested' not in entry_block, name
         # Scalars, slot addresses and metadata must never create implicit
         # managed cleanup or boxed-index arithmetic in any method helper.
         forbidden = ('@py_tuple_get(', '@pcc_gc_frame_enter',

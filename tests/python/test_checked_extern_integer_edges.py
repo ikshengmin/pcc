@@ -80,6 +80,12 @@ def test_conversion_errors_are_checked_before_raw_addresses_and_foreign_call(
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.frontends.python.pipeline_targets import host_target_triple
 
+    if threads == "0":
+        # The single-thread runtime was removed: asking for it fails
+        # explicitly instead of compiling a runtime that no longer exists.
+        with pytest.raises(ValueError, match="single-thread runtime was removed"):
+            _compile_ir(tmp_path, monkeypatch, EDGE_SOURCE, threads)
+        return
     text = _compile_ir(tmp_path, monkeypatch, EDGE_SOURCE, threads)
     body = _body(text, "ContextualFillApp_fill")
     # Contextual business arguments remain objects; this boundary check must
@@ -114,14 +120,23 @@ def first(value, obj):
     numeric_first(value, obj, 7)
 def second(value):
     object_first((object(),), value)
-''', "0")
+''', "1")
     body = _body(text, "first")
     definitions = {match[1]: match[2] for match in re.finditer(r"^\s*(%[^ ]+) = ([^\n]+)", body, re.M)}
-    current = next(value for value, definition in definitions.items()
-                   if "extern.object.argument.current" in value and "@pcc_gc_load_ptr" in definition)
+    # The object operand the foreign call receives is reloaded from the root
+    # slot that holds ``obj``, never from the slot that keeps the integer
+    # argument's source alive across its conversion.
+    call = re.search(
+        r"call void \(i32, ptr, i64\) @checked_numeric_first\([^,]+, ptr (%[^ ,)]+), i64 7\)", body
+    )
+    assert call is not None
+    current = call[1]
+    assert "@pcc_gc_load_ptr(ptr null, ptr " in definitions[current]
     root_pointer = re.findall(r"%[^ ,)]+", definitions[current])[-1]
-    assert "extern.object.argument" in definitions[root_pointer]
-    assert "extern.integer.argument" not in definitions[root_pointer]
+    stored = [value for slot, value in re.findall(
+        r"@pcc_gc_store_root\(ptr (%[^ ,)]+), ptr (%[^ ,)]+)\)", body
+    ) if slot == root_pointer]
+    assert stored and all(value.startswith("%obj") for value in stored), stored
     assert "extern.argument.cleanup" in _body(text, "second")
     assert emit_owned_object(text, host_target_triple())
 

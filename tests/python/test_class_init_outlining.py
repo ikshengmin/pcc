@@ -297,8 +297,9 @@ def test_inline_oracle_preserves_constructors_and_root_operations(monkeypatch):
     for helper in _helpers(outlined).values():
         calls = _calls(helper)
         constructors.update(name for name in calls if name in selected)
-        assert "pcc_gc_frame_enter_lifo" in calls
-        assert "pcc_gc_frame_leave_lifo" in calls
+        # A private frame takes the thread-local LIFO entry (c0f47b91).
+        assert any(name.startswith("pcc_gc_frame_enter_lifo") for name in calls)
+        assert any(name.startswith("pcc_gc_frame_leave_lifo") for name in calls)
         assert "pcc_gc_foreign_lease_acquire" in calls
         assert "pcc_gc_foreign_lease_release" in calls
         assert "py_recursion_enter" not in calls

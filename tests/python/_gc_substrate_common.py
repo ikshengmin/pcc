@@ -224,7 +224,80 @@ __all__ = [
     "THREADING_SURFACE",
     "ALL_GC_KINDS",
     "TRACER_RACE_GC_KINDS",
+    "GC4_STOP_PINS_NAMED_OWNER_C",
+    "GC4_STOP_MOVES_ROOTED_C",
 ]
+
+# GC4 moves an object only inside a stopped world, and only when no thread's
+# stack or registers name it: the selection pins what the stopped threads'
+# words name before it chooses, and pcc_gc_relocate_copy refuses outside a
+# stop (6bda7e91). A callback that runs while a runtime frame still holds an
+# owner therefore cannot move that owner. This helper is what a callback can
+# check instead: inside its own stop, after the selection's conservative pin,
+# the owner (read from its static root only after the selection, so the pin
+# comes from the frames that held it, not from this one) is pinned, is not in
+# the relocation set, and an explicit copy is refused; the operation then
+# continues with the owner at the same address.
+# The moving half of the same protocol: an object that only a registered
+# root names (built out of line, the builder's stack residue scrubbed) is
+# not pinned by the stop's selection, an explicit copy moves it, and the
+# resume rewrites the registered root (pcc_gc_relocation_settle_stopped), so
+# the running code reaches the copy through that root and never holds a
+# forwarded address. Returns 0, or a code from 80 naming the failed step.
+GC4_STOP_MOVES_ROOTED_C = r"""
+            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
+            static PyObject *gc4_moved_from;
+
+            __attribute__((noinline)) static void gc4_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            __attribute__((noinline)) static int gc4_stop_moves_rooted(
+                PyObject *const *root, int64_t size
+            ) {
+                if (pcc_stop_the_world() != 0) return 80;
+                pcc_gc_reset_relocation_set();
+                (void)pcc_gc_select_relocation_set(1000);
+                PyObject *obj = *(PyObject *volatile const *)root;
+                gc4_moved_from = obj;
+                int rc = 0;
+                if (pcc_gc_object_is_address_pinned(obj) != 0) {
+                    rc = 81;
+                } else if (pcc_gc_relocation_set_contains(obj) != 1
+                           && pcc_gc_backend4_relocation_set_add(obj) != 1) {
+                    rc = 82;
+                } else {
+                    PyObject *copy = pcc_gc_relocate_copy(obj, size);
+                    if (copy == NULL || copy == obj) rc = 83;
+                }
+                pcc_gc_reset_relocation_set();
+                if (pcc_resume_world() != 0) return 84;
+                if (rc == 0
+                    && *(PyObject *volatile const *)root == gc4_moved_from) {
+                    rc = 85;
+                }
+                return rc;
+            }
+"""
+
+GC4_STOP_PINS_NAMED_OWNER_C = r"""
+            static int gc4_stop_pins_named_owner(
+                PyObject *const *owner_root, int64_t size
+            ) {
+                if (pcc_stop_the_world() != 0) return 0;
+                pcc_gc_reset_relocation_set();
+                (void)pcc_gc_select_relocation_set(1000);
+                PyObject *owner = *(PyObject *volatile const *)owner_root;
+                int pinned = pcc_gc_object_is_address_pinned(owner) != 0
+                    && pcc_gc_relocation_set_contains(owner) == 0
+                    && pcc_gc_relocate_copy(owner, size) == NULL;
+                pcc_gc_reset_relocation_set();
+                if (pcc_resume_world() != 0) return 0;
+                return pinned
+                    && *(PyObject *volatile const *)owner_root == owner;
+            }
+"""
 
 ALL_GC_KINDS = (
     "PCC_GC_KIND_REFCOUNT_CYCLE",

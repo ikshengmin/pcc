@@ -408,9 +408,12 @@ def _assert_owned_dynamic_calls(text, symbol, expected_count):
                    for _, _, call in calls), "raw callable dispatch lost slot owners"
     # Both precise-map and registered-slot targets publish this same slot ABI.
     # Keep families paired: a mapped enter cannot be discharged by an old leave.
+    # A private frame registers through the thread-local entries (c0f47b91).
     frame_families = {
         "pcc_gc_frame_enter_lifo": "pcc_gc_frame_leave_lifo",
         "pcc_gc_frame_enter_lifo_mapped": "pcc_gc_frame_leave_lifo_mapped",
+        "pcc_gc_frame_enter_lifo_local": "pcc_gc_frame_leave_lifo_local",
+        "pcc_gc_frame_enter_lifo_local_mapped": "pcc_gc_frame_leave_lifo_local_mapped",
     }
     registrations = {}
     releases = set()

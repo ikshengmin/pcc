@@ -410,7 +410,16 @@ def test_collect_during_set_add_update_discard_keeps_set_consistent(
             /* One control per armed phase, checked immediately after that
              * phase.  A single control checked at the end only shows that SOME
              * later collect swept, which is not the claim being made. */
-            static int make_control(void) {
+            /* The count-free collectors root by a conservative scan of the
+             * stack: words a builder left in its dead frame would keep the
+             * control cycle alive. Build out of line, then clear that
+             * residue, as the GC4 production probes do (6bda7e91). */
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            __attribute__((noinline)) static int make_control(void) {
                 PyObject *a = py_dict_new();
                 PyObject *b = py_dict_new();
                 PyObject *c = py_instance_new(control_class);
@@ -489,6 +498,7 @@ def test_collect_during_set_add_update_discard_keeps_set_consistent(
                 /* ---- add ---- */
                 armed = 1;
                 if (!make_control()) return 90;
+                probe_scrub_stack();
                 int64_t ctrl_add = control_finalized;
                 py_set_add(set_root, e0_root);
                 armed = 0;
@@ -527,6 +537,7 @@ def test_collect_during_set_add_update_discard_keeps_set_consistent(
                 }
                 armed = 2;
                 if (!make_control()) return 92;
+                probe_scrub_stack();
                 int64_t ctrl_update = control_finalized;
                 py_set_update(set_root, pcc_gc_load_ptr(NULL, &src_root));
                 armed = 0;
@@ -563,6 +574,7 @@ def test_collect_during_set_add_update_discard_keeps_set_consistent(
                 /* ---- discard ---- */
                 armed = 3;
                 if (!make_control()) return 94;
+                probe_scrub_stack();
                 int64_t ctrl_discard = control_finalized;
                 (void)py_set_remove(
                     set_root, pcc_gc_load_ptr(NULL, &e1_root)
@@ -735,7 +747,16 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
             /* One control per armed phase, checked immediately after that
              * phase.  A single control checked at the end only shows that SOME
              * later collect swept, which is not the claim being made. */
-            static int make_control(void) {
+            /* The count-free collectors root by a conservative scan of the
+             * stack: words a builder left in its dead frame would keep the
+             * control cycle alive. Build out of line, then clear that
+             * residue, as the GC4 production probes do (6bda7e91). */
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            __attribute__((noinline)) static int make_control(void) {
                 PyObject *a = py_dict_new();
                 PyObject *b = py_dict_new();
                 PyObject *c = py_instance_new(control_class);
@@ -831,6 +852,7 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
                 int64_t roots_before = pcc_gc_scheduler_root_count();
 
                 if (!make_control()) return 90;
+                probe_scrub_stack();
                 int64_t ctrl_update = control_finalized;
                 armed = 1;
                 py_dict_update(dst_root, pcc_gc_load_ptr(NULL, &src_root));
@@ -906,6 +928,7 @@ def test_collect_during_update_and_delete_keeps_container_consistent(
                 }
 
                 if (!make_control()) return 92;
+                probe_scrub_stack();
                 int64_t ctrl_delete = control_finalized;
                 armed = 2;
                 (void)py_dict_del(del_root, pcc_gc_load_ptr(
@@ -1104,7 +1127,16 @@ def test_collect_during_insert_keeps_fresh_entry_alive_on_every_backend(
              * sweep can.  One of these per armed phase, checked immediately
              * after that phase: a single shared control checked at the end only
              * shows that SOME later collect swept, which is not the claim. */
-            static int make_control(void) {
+            /* The count-free collectors root by a conservative scan of the
+             * stack: words a builder left in its dead frame would keep the
+             * control cycle alive. Build out of line, then clear that
+             * residue, as the GC4 production probes do (6bda7e91). */
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            __attribute__((noinline)) static int make_control(void) {
                 PyObject *a = py_dict_new();
                 PyObject *b = py_dict_new();
                 PyObject *c = py_instance_new(control_class);
@@ -1197,6 +1229,7 @@ def test_collect_during_insert_keeps_fresh_entry_alive_on_every_backend(
                 int64_t roots_before = pcc_gc_scheduler_root_count();
 
                 if (!make_control()) return 90;
+                probe_scrub_stack();
                 int64_t ctrl_before_insert = control_finalized;
 
                 armed = 1;
@@ -1319,9 +1352,11 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
     stale owner/table.  ``py_set_update`` already snapshots; this is the same
     contract for dict.
 
-    The update now holds an address lease on its source while destination
-    callbacks run, so GC4 must refuse to relocate it; a callback that shrinks
-    the source must still not make the update read a stale table.
+    GC4 moves an object only inside a stopped world and only when no
+    thread's stack names it (6bda7e91): a stop taken by a destination
+    callback pins the source the update's frame still names, and refuses to
+    copy it; a callback that shrinks the source must still not make the
+    update read a stale table.
     """
     executable = _compile_runtime_probe(
         tmp_path,
@@ -1345,26 +1380,8 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
             static int64_t fired;
             static PyObject *mutate_key;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
-            extern int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void);
             extern int64_t pcc_gc_object_is_address_pinned(PyObject *obj);
-
-            static int relocate(PyObject **slot) {
-                PyObject *obj = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(obj) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(obj, 56);
-                if (target == NULL || target == obj) return 0;
-                py_decref(target);
-                /* Retire the forwarding source so the old copy really goes
-                 * away.  Without this the stale table stays readable and a
-                 * caller holding it across the callback looks fine. */
-                pcc_gc_reset_relocation_set();
-                (void)pcc_gc_backend4_remap_and_retire_stopped_world();
-                (void)pcc_gc_backend4_remap_and_retire_stopped_world();
-                return 1;
-            }
-
+/*GC4_STOP_PINS_NAMED_OWNER*/
             /* Runs while dict.update is walking the source: try to relocate
              * it, then shrink it.  Fires once: the delete below compares keys
              * through this callback again. */
@@ -1381,10 +1398,9 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                  * is not rooted yet and strand the global pointer. */
                 if (armed && fired == 0) {
                     fired = 1;
-                    source_pinned = pcc_gc_object_is_address_pinned(
-                        pcc_gc_load_ptr(NULL, &src_root)
-                    );
-                    if (relocate(&src_root)) relocations++;
+                    /* The update's frame names the source: the stop pins it
+                     * and refuses to copy it (relocations stays 0). */
+                    source_pinned = gc4_stop_pins_named_owner(&src_root, 56);
                     /* Also shrink the source: py_dict_update cached
                      * entries_used before the loop, so a delete here makes the
                      * cached bound exceed the live table. */
@@ -1492,7 +1508,7 @@ def test_backend4_dict_update_snapshots_source_across_destination_callbacks(
                 }
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(

@@ -44,15 +44,7 @@ def test_backend4_callable_iterator_reloads_state_after_cext_equality_relocation
             static int64_t call_count;
             static int64_t equality_count;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
-            static int relocate_once(PyObject *value, int64_t size) {
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(value) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(value, size);
-                if (target == NULL || target == value) return 0;
-                py_decref(target);
-                return 1;
-            }
+/*GC4_STOP_PINS_NAMED_OWNER*/
 
             static PyObject *probe_eq(
                 PyObject *self,
@@ -66,12 +58,10 @@ def test_backend4_callable_iterator_reloads_state_after_cext_equality_relocation
                     return Py_NotImplemented;
                 }
                 if (equality_count == 0) {
-                    PyObject *iterator = pcc_gc_load_ptr(
-                        NULL, &iterator_root
-                    );
-                    if (!relocate_once(
-                            iterator, 32
-                        )) return NULL;
+                    /* py_obj_next's frame still names the iterator. */
+                    if (!gc4_stop_pins_named_owner(&iterator_root, 32)) {
+                        return NULL;
+                    }
                 }
                 equality_count++;
                 return py_bool_from_bit(0);
@@ -150,7 +140,7 @@ def test_backend4_callable_iterator_reloads_state_after_cext_equality_relocation
                 Py_DECREF(sentinel_root);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
@@ -194,7 +184,7 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
             static PyObject *tuple_root;
             static int64_t equality_count;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
+/*GC4_STOP_PINS_NAMED_OWNER*/
             extern int64_t py_tuple_index_range(
                 PyObject *tuple,
                 PyObject *item,
@@ -214,14 +204,10 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
                     return Py_NotImplemented;
                 }
                 if (equality_count == 0) {
-                    PyObject *tuple = pcc_gc_load_ptr(NULL, &tuple_root);
-                    pcc_gc_reset_relocation_set();
-                    if (pcc_gc_backend4_relocation_set_add(tuple) != 1) {
+                    /* The scan's frame still names the tuple. */
+                    if (!gc4_stop_pins_named_owner(&tuple_root, 40)) {
                         return NULL;
                     }
-                    PyObject *target = pcc_gc_relocate_copy(tuple, 40);
-                    if (target == NULL || target == tuple) return NULL;
-                    py_decref(target);
                 }
                 equality_count++;
                 Py_INCREF(Py_True);
@@ -255,6 +241,8 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
                     || tuple_root == NULL) return 4;
                 py_tuple_set_item(tuple_root, 0, left);
                 py_tuple_set_item(tuple_root, 1, right);
+                /* Published, so only a pin can keep a stop from moving it. */
+                pcc_gc_publish_initialized(tuple_root);
                 Py_DECREF(left);
                 Py_DECREF(right);
                 void *tuple_handle = pcc_gc_scheduler_root_register_handle(
@@ -279,7 +267,7 @@ def test_backend4_tuple_method_equality_callback_reloads_relocated_tuple(
                 py_decref(tuple_root);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
         extra_sources=(
             ()
@@ -308,6 +296,110 @@ def test_dict_get_contains_use_rooted_restartable_hash_equality_lookup():
     eq_at = py_read.index("equal = py_obj_eq(entry_key, key)")
     assert hash_at < eq_at
     assert "if stable == 0:" in py_read
+
+
+@pytest.mark.parametrize("kind", ["pcc_python"])
+def test_backend4_stop_moves_a_tuple_no_frame_names_and_rewrites_its_root(
+    tmp_path: Path,
+    kind: str,
+) -> None:
+    # The control for gc4_stop_pins_named_owner: a tuple that only a
+    # registered static root names (built out of line, its residue scrubbed)
+    # is selected and copied by a stop, and the resume rewrites the root, so
+    # "pinned" in the callback probes is a property of the frames, not of
+    # every object seen inside a stop.
+    executable = _compile_runtime_probe(
+        tmp_path,
+        kind=kind,
+        threaded=True,
+        stem="backend4_unnamed_tuple_moves",
+        source_text=r'''
+            #include "Python.h"
+            #include <stdint.h>
+
+            static PyObject *tuple_root;
+            static PyObject *item_root;
+            static PyObject *moved_from;
+
+            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
+
+            __attribute__((noinline)) static int probe_build(void) {
+                item_root = py_int_from_i64(1234567);
+                tuple_root = py_tuple_new(2);
+                if (item_root == NULL || tuple_root == NULL) return 3;
+                py_tuple_set_item(tuple_root, 0, item_root);
+                py_incref(item_root);
+                py_tuple_set_item(tuple_root, 1, item_root);
+                /* Built by element stores: publish it as its constructor
+                 * would, or it stays a fresh allocation no stop may move. */
+                pcc_gc_publish_initialized(tuple_root);
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
+            __attribute__((noinline)) static int probe_move(void) {
+                if (pcc_stop_the_world() != 0) return 10;
+                pcc_gc_reset_relocation_set();
+                (void)pcc_gc_select_relocation_set(1000);
+                PyObject *tuple = *(PyObject *volatile *)&tuple_root;
+                moved_from = tuple;
+                int rc = 0;
+                /* The selection's policy may pass over one small tuple;
+                 * after its conservative pin, name it explicitly. */
+                if (pcc_gc_object_is_address_pinned(tuple) != 0) rc = 11;
+                else if (pcc_gc_relocation_set_contains(tuple) != 1
+                         && pcc_gc_backend4_relocation_set_add(tuple) != 1) {
+                    rc = 12;
+                } else {
+                    PyObject *target = pcc_gc_relocate_copy(tuple, 40);
+                    if (target == NULL || target == tuple) rc = 13;
+                }
+                if (pcc_resume_world() != 0) return 14;
+                return rc;
+            }
+
+            int main(void) {
+                if (pcc_gc_set_backend(
+                        PCC_GC_KIND_COLORED_RELOCATING
+                    ) != 0) return 2;
+                int built = probe_build();
+                if (built != 0) return built;
+                void *tuple_handle = pcc_gc_scheduler_root_register_handle(
+                    &tuple_root
+                );
+                void *item_handle = pcc_gc_scheduler_root_register_handle(
+                    &item_root
+                );
+                if (tuple_handle == NULL || item_handle == NULL) return 4;
+                probe_scrub_stack();
+                int moved = probe_move();
+                if (moved != 0) return moved;
+                /* The resume rewrote the registered root to the copy. */
+                PyObject *tuple = pcc_gc_load_ptr(NULL, &tuple_root);
+                if (tuple == moved_from) return 15;
+                if (py_tuple_len(tuple) != 2) return 16;
+                PyObject *item = pcc_gc_load_ptr(NULL, &item_root);
+                if (py_tuple_get(tuple, 0) != item
+                    || py_tuple_get(tuple, 1) != item) return 17;
+                if (py_tuple_count(tuple, item) != 2) return 18;
+                pcc_gc_scheduler_root_unregister_handle(tuple_handle);
+                pcc_gc_scheduler_root_unregister_handle(item_handle);
+                return 0;
+            }
+        ''',
+        extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
+    )
+    run = subprocess.run(
+        [str(executable)], capture_output=True, text=True, timeout=30
+    )
+    assert run.returncode == 0, (
+        f"{kind} unnamed tuple move returned {run.returncode}: "
+        + run.stdout + run.stderr
+    )
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])
@@ -346,20 +438,16 @@ def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
             );
             extern PyObject *py_instance_new(struct PyClassObject *);
 
-            static int relocate_dict(PyObject **slot) {
-                PyObject *dict = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(dict) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(dict, 56);
-                if (target == NULL || target == dict) return 0;
-                py_decref(target);
-                return 1;
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            /* The lookup's frame still names the dict. */
+            static int stop_pins_dict(PyObject **slot) {
+                return gc4_stop_pins_named_owner(slot, 56);
             }
 
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
                 if (mode == 1 && hash_relocations == 0) {
-                    if (!relocate_dict(&hash_dict_root)) return NULL;
+                    if (!stop_pins_dict(&hash_dict_root)) return NULL;
                     hash_relocations++;
                 }
                 return py_int_from_i64(7);
@@ -377,7 +465,7 @@ def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
                     return Py_NotImplemented;
                 }
                 if (mode == 2 && equality_relocations == 0) {
-                    if (!relocate_dict(&eq_dict_root)) return NULL;
+                    if (!stop_pins_dict(&eq_dict_root)) return NULL;
                     equality_relocations++;
                 }
                 Py_INCREF(Py_True);
@@ -467,7 +555,7 @@ def test_backend4_dict_read_hash_and_equality_callbacks_reload_relocated_owner(
                 py_decref((PyObject *)hash_class);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
@@ -531,20 +619,16 @@ def test_backend4_set_contains_hash_and_equality_callbacks_reload_relocated_owne
             );
             extern PyObject *py_instance_new(struct PyClassObject *);
 
-            static int relocate_set(PyObject **slot) {
-                PyObject *set = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(set) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(set, 48);
-                if (target == NULL || target == set) return 0;
-                py_decref(target);
-                return 1;
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            /* The operation's frame still names the set. */
+            static int stop_pins_set(PyObject **slot) {
+                return gc4_stop_pins_named_owner(slot, 48);
             }
 
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
                 if (mode == 1 && hash_relocations == 0) {
-                    if (!relocate_set(&hash_set_root)) return NULL;
+                    if (!stop_pins_set(&hash_set_root)) return NULL;
                     hash_relocations++;
                 }
                 return py_int_from_i64(7);
@@ -562,7 +646,7 @@ def test_backend4_set_contains_hash_and_equality_callbacks_reload_relocated_owne
                     return Py_NotImplemented;
                 }
                 if (mode == 2 && equality_relocations == 0) {
-                    if (!relocate_set(&eq_set_root)) return NULL;
+                    if (!stop_pins_set(&eq_set_root)) return NULL;
                     equality_relocations++;
                 }
                 Py_INCREF(Py_True);
@@ -639,7 +723,7 @@ def test_backend4_set_contains_hash_and_equality_callbacks_reload_relocated_owne
                 py_decref((PyObject *)hash_class);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
@@ -716,14 +800,10 @@ def test_backend4_set_add_and_update_survive_callback_relocation_and_source_muta
 
             extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
 
-            static int relocate_set(PyObject **slot) {
-                PyObject *set = pcc_gc_load_ptr(NULL, slot);
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_relocation_set_add(set) != 1) return 0;
-                PyObject *target = pcc_gc_relocate_copy(set, 48);
-                if (target == NULL || target == set) return 0;
-                py_decref(target);
-                return 1;
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            /* The operation's frame still names the set. */
+            static int stop_pins_set(PyObject **slot) {
+                return gc4_stop_pins_named_owner(slot, 48);
             }
 
             extern struct PyClassObject *py_class_new(
@@ -738,7 +818,7 @@ def test_backend4_set_add_and_update_survive_callback_relocation_and_source_muta
             static PyObject *probe_hash(PyObject *self) {
                 (void)self;
                 if (mode == 1 && hash_relocations == 0) {
-                    if (!relocate_set(&hash_set_root)) return NULL;
+                    if (!stop_pins_set(&hash_set_root)) return NULL;
                     hash_relocations++;
                 }
                 return py_int_from_i64(7);
@@ -746,7 +826,7 @@ def test_backend4_set_add_and_update_survive_callback_relocation_and_source_muta
 
             static void mutate_update_source(void) {
                 if (update_mutations == 0) {
-                    if (!relocate_set(&update_dst_root)) return;
+                    if (!stop_pins_set(&update_dst_root)) return;
                     update_src_root = pcc_gc_load_ptr(
                         NULL, &update_src_root
                     );
@@ -773,7 +853,7 @@ def test_backend4_set_add_and_update_survive_callback_relocation_and_source_muta
                     return Py_NotImplemented;
                 }
                 if (mode == 2 && equality_relocations == 0) {
-                    if (!relocate_set(&eq_set_root)) return NULL;
+                    if (!stop_pins_set(&eq_set_root)) return NULL;
                     equality_relocations++;
                 } else if (mode == 3 && update_mutations == 0) {
                     mutate_update_source();
@@ -906,7 +986,7 @@ def test_backend4_set_add_and_update_survive_callback_relocation_and_source_muta
                 py_decref((PyObject *)hash_class);
                 return 0;
             }
-        ''',
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
@@ -962,8 +1042,8 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
             static int64_t observed_len = -1;
             static int64_t observed_contains = -1;
 
-            extern int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
-            extern int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void);
+/*GC4_STOP_PINS_NAMED_OWNER*/
+            extern int32_t pcc_gc_backend4_remap_owed;
             extern int64_t pcc_capi_dealloc_cext_object(
                 PyObject *obj, int64_t type_tag
             );
@@ -985,14 +1065,10 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
                     return Py_NotImplemented;
                 }
                 if (equality_count == 0) {
-                    PyObject *set = pcc_gc_load_ptr(NULL, &set_root);
-                    pcc_gc_reset_relocation_set();
-                    if (pcc_gc_backend4_relocation_set_add(set) != 1) {
+                    /* py_set_remove's frame still names the set. */
+                    if (!gc4_stop_pins_named_owner(&set_root, 48)) {
                         return NULL;
                     }
-                    PyObject *target = pcc_gc_relocate_copy(set, 48);
-                    if (target == NULL || target == set) return NULL;
-                    py_decref(target);
                 }
                 equality_count++;
                 Py_INCREF(Py_True);
@@ -1023,6 +1099,26 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
                 return (PyObject *)PyObject_New(ProbeKeyObject, &ProbeKeyType);
             }
 
+            /* The set is the only holder of the stored key: build it out of
+             * line and scrub the builder's residue, or a tracing collector's
+             * conservative stack scan would keep the key alive. */
+            __attribute__((noinline)) static int probe_build(void) {
+                set_root = py_set_new();
+                PyObject *stored = new_key();
+                query_key = new_key();
+                if (set_root == NULL || stored == NULL || query_key == NULL) {
+                    return 4;
+                }
+                py_set_add(set_root, stored);
+                Py_DECREF(stored);
+                return 0;
+            }
+
+            __attribute__((noinline)) static void probe_scrub_stack(void) {
+                volatile unsigned char words[65536];
+                for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+            }
+
             int main(void) {
                 if (pcc_gc_set_backend(
                         PCC_GC_KIND_COLORED_RELOCATING
@@ -1035,43 +1131,49 @@ def test_backend4_set_remove_relocates_then_finalizer_observes_committed_absence
                     ) != 1) return 16;
                 if (dealloc_count != 1) return 17;
                 dealloc_count = 0;
-                set_root = py_set_new();
-                PyObject *stored = new_key();
-                query_key = new_key();
-                if (set_root == NULL || stored == NULL || query_key == NULL) {
-                    return 4;
-                }
-                py_set_add(set_root, stored);
-                Py_DECREF(stored);
+                int built = probe_build();
+                if (built != 0) return built;
                 void *set_handle = pcc_gc_scheduler_root_register_handle(
                     &set_root
                 );
-                if (set_handle == NULL) return 5;
+                void *query_handle = pcc_gc_scheduler_root_register_handle(
+                    &query_key
+                );
+                if (set_handle == NULL || query_handle == NULL) return 5;
+                probe_scrub_stack();
                 observe_dealloc = 1;
                 if (py_set_remove(set_root, query_key) != 0) return 6;
                 set_root = pcc_gc_load_ptr(NULL, &set_root);
                 if (py_set_len(set_root) != 0) return 7;
                 if (py_set_contains(set_root, query_key) != 0) return 8;
-                if (equality_count != 2) return 9;
-                pcc_gc_reset_relocation_set();
-                if (pcc_gc_backend4_remap_and_retire_stopped_world() <= 0) {
-                    return 13;
+                /* One comparison: the stop pinned the set, so the lookup
+                 * never sees it move and has nothing to restart. */
+                if (equality_count != 1) {
+                    printf("equality_count=%lld\n", (long long)equality_count);
+                    return 9;
                 }
-                if (pcc_gc_backend4_remap_and_retire_stopped_world() <= 0) {
-                    return 14;
+                /* The callback's stop rewrote what it moved before resuming:
+                 * nothing is owed afterwards. */
+                if (pcc_gc_backend4_remap_owed != 0) return 13;
+                /* The set held the only reference. When the removed key is
+                 * finalized (at once under counting, at the next collection
+                 * that finds it unreachable under tracing), its finalizer
+                 * sees the committed absence. */
+                for (int i = 0; i < 16 && dealloc_count == 0; i++) {
+                    (void)pcc_gc_collect(0);
                 }
-                // The set held the only reference: removal deallocates the key
-                // at once, and its finalizer already sees the committed absence.
                 if (dealloc_count != 1) return 10;
                 if (observed_len != 0 || observed_contains != 0) return 11;
-                if (pcc_gc_scheduler_root_count() != 1) return 12;
-                Py_DECREF(query_key);
+                if (pcc_gc_scheduler_root_count() != 2) return 12;
+                query_key = pcc_gc_load_ptr(NULL, &query_key);
                 set_root = pcc_gc_load_ptr(NULL, &set_root);
+                pcc_gc_scheduler_root_unregister_handle(query_handle);
                 pcc_gc_scheduler_root_unregister_handle(set_handle);
+                Py_DECREF(query_key);
                 py_decref(set_root);
                 return 0;
             }
-        '''),
+        '''.replace("/*GC4_STOP_PINS_NAMED_OWNER*/", GC4_STOP_PINS_NAMED_OWNER_C)),
         extra_include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
     run = subprocess.run(
