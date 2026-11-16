@@ -158,11 +158,11 @@ def encode_semantic_instruction(opcode_id: int, operands: list[CompilerInt4]) ->
     elif mnemonic in ("mrs", "msr"):
         if count != 2:
             raise encoder.EncodeError("typed system register operands are invalid")
-        register = operands[0] if mnemonic == "mrs" else operands[1]
+        system_register = operands[0] if mnemonic == "mrs" else operands[1]
         system = operands[1] if mnemonic == "mrs" else operands[0]
         if system.first != TOKEN_SYSTEM or SYSTEM_NAMES[system.second] != "nzcv":
             raise encoder.EncodeError("typed system register is unsupported")
-        word = (0xD53B4200 if mnemonic == "mrs" else 0xD51B4200) | _gpr(register, allow_zr=True)
+        word = (0xD53B4200 if mnemonic == "mrs" else 0xD51B4200) | _gpr(system_register, allow_zr=True)
     elif mnemonic in ("br", "blr") and count == 1:
         word = (0xD61F0000 if mnemonic == "br" else 0xD63F0000) | (_gpr(operands[0]) << 5)
     elif count == 0 and mnemonic in ("nop", "ret", "paciasp", "autiasp"):
