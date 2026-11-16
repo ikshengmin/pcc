@@ -149,8 +149,12 @@ class _Pass:
         return tokens[index].second
 
     def stack(self, rid, opcode):
+        # op() still validates every operand, even for a nonmatching opcode.
+        # Avoid copying that span unless this stack operation can match.
+        if self.op(rid) != opcode:
+            return None
         t = self.tokens(rid)
-        if self.op(rid) != opcode or len(t) != 4:
+        if len(t) != 4:
             return None
         if (t[0].first != sem.TOKEN_REGISTER or t[1].first != sem.TOKEN_ADDRESS
             or t[1].second != sem.ADDRESS_OFFSET or t[1].third != 2

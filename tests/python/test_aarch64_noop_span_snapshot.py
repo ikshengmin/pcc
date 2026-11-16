@@ -209,6 +209,86 @@ def _nop_owner(count, shape="plain"):
     return owner, owner.semantics, source
 
 
+@pytest.mark.parametrize("opcode", ["stur", "sturb", "ldur", "ldurb"])
+def test_nonmatching_stack_opcode_validates_without_operand_snapshot(monkeypatch, opcode):
+    owner = AArch64EmissionFragments(capture_semantics=True)
+    semantics = owner.semantics
+    source = owner.new_fragment()
+    owner.append_label(source, "_f")
+    sem.append_semantic_event(owner, semantics, source, CompilerInt4(
+        0, EMISSION_RECORD_EMPTY, 0, -1,
+    ))
+    owner.append_move(source, "x9", "x10")
+    matcher = typed._Pass(owner, semantics, source)
+    try:
+        label, empty, rid = _ids(owner, source)
+        reads = []
+        require_header = semantics.require_header
+
+        def validated(record_id):
+            reads.append(record_id)
+            return require_header(record_id)
+
+        def forbidden_snapshot(_record_id):
+            raise AssertionError("nonmatching opcode copied operand values")
+
+        monkeypatch.setattr(semantics, "require_header", validated)
+        monkeypatch.setattr(matcher, "tokens", forbidden_snapshot)
+        assert matcher.stack(rid, opcode) is None
+        assert reads == [rid]
+        assert matcher.stack(label, opcode) is None
+        assert matcher.stack(empty, opcode) is None
+        assert matcher.stack(-1, opcode) is None
+        assert reads == [rid]
+        # A mismatch is not authority to skip the current operand validation.
+        semantics.tokens.set(1, 999)
+        with pytest.raises(enc.EncodeError):
+            matcher.stack(rid, opcode)
+        assert reads == [rid, rid]
+        semantics.close()
+        with pytest.raises(RuntimeError, match="closed"):
+            matcher.stack(rid, opcode)
+    finally:
+        matcher.close()
+        semantics.close()
+        owner.close()
+
+
+@pytest.mark.parametrize("opcode,register", [
+    ("stur", "x9"), ("sturb", "w9"), ("ldur", "x9"), ("ldurb", "w9"),
+])
+def test_matching_stack_opcode_keeps_fresh_operand_snapshot(monkeypatch, opcode, register):
+    owner = AArch64EmissionFragments(capture_semantics=True)
+    semantics = owner.semantics
+    source = owner.new_fragment()
+    owner.append_memory(source, opcode, register, "x29", -8)
+    matcher = typed._Pass(owner, semantics, source)
+    try:
+        rid = _ids(owner, source)[0]
+        snapshots = []
+        original = matcher.tokens
+
+        def snapshot(record_id):
+            snapshots.append(record_id)
+            return original(record_id)
+
+        monkeypatch.setattr(matcher, "tokens", snapshot)
+        expected_offset = sem.semantic_immediate_token(-8)
+        assert matcher.stack(rid, opcode) == (sem.semantic_register_id(register), expected_offset)
+        assert snapshots == [rid]
+        changed_register = register[0] + "13"
+        semantics.tokens.set(1, sem.semantic_register_id(changed_register))
+        assert matcher.stack(rid, opcode) == (sem.semantic_register_id(changed_register), expected_offset)
+        assert snapshots == [rid, rid]
+        semantics.tokens.set(8, sem.TOKEN_IMMEDIATE)
+        with pytest.raises(enc.EncodeError):
+            matcher.stack(rid, opcode)
+    finally:
+        matcher.close()
+        semantics.close()
+        owner.close()
+
+
 def test_frozen_oracle_is_exact_except_for_noop_publication():
     tree = ast.parse(SOURCE.read_text())
     function = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == "_run")
