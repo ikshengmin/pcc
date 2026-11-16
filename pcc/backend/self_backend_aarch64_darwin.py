@@ -400,15 +400,27 @@ class _NativeAArch64Emission:
             return
         raise BackendUnavailable("optimized native instruction lacks typed producer provenance")
 
-    def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges) -> None:
+    def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges, phase_timing=None) -> None:
         from .self_backend_aarch64_typed_peepholes import run_aarch64_typed_peepholes
         from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
         if not self.collecting_optimized or self.fragments.semantics is None:
             raise BackendUnavailable("optimized module capture is not active")
+        if phase_timing is not None:
+            started = phase_timing.begin_backend_finalize("typed_validate")
         require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
         self.fragments.semantics.require_complete(self.fragments.records, len(self.fragments.symbol_names))
-        span = run_aarch64_typed_peepholes(self.fragments, self.fragments.semantics, self.module_span)
-        span = run_aarch64_typed_cfg_passes(self.fragments, self.fragments.semantics, span, metadata_labels, cold_fallthrough_edges)
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("typed_validate", started)
+        span = run_aarch64_typed_peepholes(
+            self.fragments, self.fragments.semantics, self.module_span,
+            phase_timing=phase_timing,
+        )
+        span = run_aarch64_typed_cfg_passes(
+            self.fragments, self.fragments.semantics, span, metadata_labels,
+            cold_fallthrough_edges, phase_timing=phase_timing,
+        )
+        if phase_timing is not None:
+            started = phase_timing.begin_backend_finalize("typed_publish")
         self.collecting_optimized = False
         self.publish_fragment(span)
         require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
@@ -416,6 +428,8 @@ class _NativeAArch64Emission:
         # provenance storage before final layout and PC-based metadata allocate.
         self.fragments.close()
         self.metadata_lines.clear()
+        if phase_timing is not None:
+            phase_timing.complete_backend_finalize("typed_publish", started)
 
     def _publish_directive(self, record: CompilerInt4) -> None:
         kind = record.first
@@ -1154,7 +1168,9 @@ def _emit_prepared_aarch64_darwin_lines_active(
                 for exceptional_block in exceptional_blocks:
                     if exceptional_block:
                         metadata_labels.add(_block_label(func.name, exceptional_block))
-            native_sink.finish_optimized_instructions(metadata_labels, cold_fallthrough_edges)
+            native_sink.finish_optimized_instructions(
+                metadata_labels, cold_fallthrough_edges, phase_timing=phase_timing,
+            )
         if phase_timing is not None:
             phase_timing.complete_backend_finalize("prepare", finalize_phase_start)
             finalize_phase_start = phase_timing.begin_backend_finalize("layout")
