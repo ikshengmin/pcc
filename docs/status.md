@@ -34,10 +34,13 @@ HEAD. `b7e97763` updates 131 of the failures that described retired protocols
 under the tracing collectors, thread-local frame entries, the removed
 single-thread mode, the optimized native route). Open, not changed:
 
-- `gcsubstrate_f` GC3 owner-referent worklist and GC4 owner-wide barrier probes
-  exercise store-buffer promotion that the shared count-free barrier no longer
-  feeds (GC3 objects carry no YOUNG/OLD header flags). Decision needed: remove
-  the probes and the unreachable promotion path, or restore a remembered set.
+- The `gcsubstrate_f` GC3 owner-referent worklist and GC4 owner-wide barrier
+  probes were removed at the user's direction: they exercised store-buffer
+  promotion that the shared count-free barrier no longer feeds (GC3 objects
+  carry no YOUNG/OLD header flags). The promotion path itself is still in the
+  runtime, unreachable from mutator stores; its source-shape test
+  `test_gc_threading_substrate.py::test_generational_owner_referent_promotion_uses_bounded_logical_slot_worklist`
+  (`gcsubstrate_c`) also fails on HEAD and is unchanged.
 - `test_constructor_native_audit` (4 nodes, failing since before `dc684edc`):
   the default passes promote a generator operand's owned flag to SSA phis, and
   the audit only recognizes the alloca/load/store form. The unoptimized IR
