@@ -2324,6 +2324,7 @@ def _fold_zero_test_branch(lines: list[str]) -> list[str]:
                 opcode, branch_reg, target = branch
                 if branch_reg == zero_reg:
                     if opcode == "cbz":
+                        out.append(lines[index])
                         out.append(f"  b {target}")
                     else:
                         out.append(lines[index])

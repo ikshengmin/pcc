@@ -469,6 +469,9 @@ def _run(fragments, semantics, span, mode):
                 zero, branch = p.zero(a), p.branch(b)
                 if zero >= 0 and branch and branch[1] == zero:
                     replacement = p.new_branch("b", branch[2]) if branch[0] == "cbz" else a
+                    # The taken target can still observe the zero definition.
+                    if branch[0] == "cbz":
+                        p.output.append(a)
                     consumed = 2
             elif mode == 12 and d >= 0:
                 cset, store, branch = p.cset(a), p.stack(b, "sturb"), p.branch(d)
