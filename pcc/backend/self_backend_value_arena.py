@@ -888,7 +888,9 @@ class CompilerRecordSpanArena:
         next_root = leaf
         if root.first >= 0:
             next_root = len(self.nodes) // 3
-            self.nodes.append3(root.first, leaf, root.second + 1)
+            # Concat traversal reads only child IDs. Length belongs to the
+            # mutable span header; do not retain duplicate count objects.
+            self.nodes.append3(root.first, leaf, 0)
         self.spans.set2_unchecked(span.first * 2, next_root, root.second + 1)
 
     def extend(self, destination: CompilerInt2, source: CompilerInt2) -> None:
@@ -901,7 +903,7 @@ class CompilerRecordSpanArena:
         next_root = right.first
         if left.first >= 0:
             next_root = len(self.nodes) // 3
-            self.nodes.append3(left.first, right.first, left.second + right.second)
+            self.nodes.append3(left.first, right.first, 0)
         self.spans.set2_unchecked(
             destination.first * 2, next_root, left.second + right.second,
         )
