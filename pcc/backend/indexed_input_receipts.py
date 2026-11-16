@@ -294,6 +294,10 @@ def _write_json(path, value, *, dump_inventory=True):
     raw = (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
     if len(raw) > LIMIT:
         raise ValueError("indexed receipt metadata exceeds limit")
+    # Reject an occupied final name before the inventory follows its target.
+    # This is only an early rejection: keep the serialized check below too.
+    if os.path.exists(path) or os.path.islink(path):
+        raise ValueError("indexed receipt metadata destination already exists")
     directory = os.path.dirname(path)
     if dump_inventory:
         names = _entries(directory)

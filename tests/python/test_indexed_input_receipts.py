@@ -1353,3 +1353,28 @@ def test_capture_global_flags_cannot_hide_oversize_values(
     assert state["stage"] == "codec-preflight"
     assert state["observed_bytes"] > receipts.LIMIT
     assert not path.exists()
+
+
+@pytest.mark.parametrize("target_exists", [False, True])
+def test_metadata_rejects_final_symlink_before_inventory(tmp_path, monkeypatch, target_exists):
+    path = tmp_path / "receipt.json"
+    target = tmp_path / "destination"
+    if target_exists:
+        target.write_bytes(b"unchanged")
+    try:
+        path.symlink_to(target)
+    except (OSError, NotImplementedError):
+        pytest.skip("host cannot create test symlinks")
+
+    def forbidden(directory):
+        raise AssertionError("occupied final destination reached inventory")
+
+    monkeypatch.setattr(receipts, "_entries", forbidden)
+    with pytest.raises(ValueError, match="already exists"):
+        receipts._write_json(str(path), {"writer": 1})
+    assert path.is_symlink()
+    assert not (tmp_path / "receipt.json.partial").exists()
+    if target_exists:
+        assert target.read_bytes() == b"unchanged"
+    else:
+        assert not target.exists()
