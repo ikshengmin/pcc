@@ -48,6 +48,55 @@ The owned phase uses only PCC parsing, semantics, IR and backend. It consumes no
 MIR and launches no rustc process. A caller-created provenance dataclass or the
 legacy boolean cannot substitute for the adapter-minted token.
 
+## Replacing the rustc admission gate with owned checking
+
+PCC depends on no other language's compiler: every Rust program must be
+admitted or rejected by PCC's own analysis, and rustc may appear only as a
+labeled reference comparison in tests. The external check above is a
+transition. Today rustc stands in for owned rules at these gates (messages are
+in the named modules; locate them with
+`rg -n "externally_checked|CheckedRustSource" pcc/frontends/rust`):
+
+| Gate | Where | rustc rule it stands in for | Owned status |
+|---|---|---|---|
+| Any program without a check needs `experimental_rustc_checked=True` (caller attestation) | `compile_rust` | the whole borrow checker | open (stage 2) |
+| Owned moves skipped for generic bodies when checked | `semantics.py`, `function_generics.py` | move checking of generic code | open (stage 2) |
+| Match guards | `semantics.py`, `moves.py` | guard borrows E0505/E0506/E0507/E0510/E0594/E0596 | **owned** (stage 1) |
+| `loop`, `while let`, `if let` admission | `loops.py`, `conditional_patterns.py` | borrow/initialization flow through loops and refutable lets | open (stage 3) |
+| `for` over arrays | `semantics.py` | moves of iterated owned arrays | open (stage 3) |
+| Reference-bearing items, local borrows beyond call arguments, indexed borrows | `__init__.py`, `semantics.py`, `reference_admission.py` | NLL loans, liveness, array-index disjointness | open (stage 4) |
+| `&mut` types and borrows, explicit receivers | `semantics.py` | mutable loans, two-phase borrows | open (stage 5) |
+| Explicit lifetimes, lifetime parameters, outlives bounds, reference parameter reassignment | `semantics.py`, `generics.py` | region inference and outlives constraints | open (stage 6) |
+| Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
+| Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
+
+Design. The owned checker extends the existing flow analysis in `moves.py`
+over `pcc.analysis.ownership` places (`Place`, `Field`, `Index`): move states
+joined at branches and solved at loop back edges, plus loans. Loans gain kinds
+(shared, mutable, shallow "fake" borrows of matched places) and, for
+references, liveness (NLL: a loan is live while a reference derived from it may
+still be used), then two-phase borrows for method receivers, then region
+constraints for signatures (elision, explicit lifetimes, outlives). Each stage
+removes one gate only when the owned rule rejects exactly what rustc rejects
+and accepts what rustc accepts on an executed corpus; a case the model cannot
+yet decide stays an explicit "not implemented" boundary, never a guessed error.
+The rustc comparison stays in tests as a labeled reference.
+
+Migration order:
+1. Match guards (done): `GuardScope` in `moves.py`; verdicts in
+   `tests/rust/test_rust_match_guards.py::GUARD_BORROWS` equal rustc 1.92.0's.
+2. Value-only programs without attestation: definite initialization, moves
+   (including generic bodies in every mode) and mutability are owned, so
+   `experimental_rustc_checked` can be retired for reference-free input.
+3. Control flow: `loop`, `while let`, `if let` and array `for` on the owned
+   fixed point.
+4. Shared references in bodies: loans with liveness, index disjointness.
+5. `&mut`: mutable loans, reborrows and two-phase receivers.
+6. Signatures: lifetime elision, explicit lifetimes and outlives bounds.
+7. Trait gates: default methods, standard markers, bound well-formedness.
+8. Owned lints for the attributes a crate denies, then multi-file crates on the
+   same path (DataSketches Rust stops at `#![deny(missing_docs)]`).
+
 ### Certified crate lint transition
 
 Only crate-root `allow`, `warn`, `deny` and `forbid` lists naming

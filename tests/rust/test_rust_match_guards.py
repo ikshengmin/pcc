@@ -6,10 +6,13 @@ pattern matches, with the arm's bindings in scope. A false guard continues
 with the next arm, so a guarded arm covers nothing for exhaustiveness
 (E0004); a non-bool guard is E0308. Bindings are seen by shared reference in
 the guard and the scrutinee moves into by-value bindings only once the guard
-holds; moving out of a binding (E0507), assigning a borrowed scrutinee
-(E0506) and mutating a binding (E0594) in a guard are borrow-check rules, so
-guards are admitted only after an actual rustc check. `matches!(v, p if g)`
-expands to the same guarded arm. fallible-streaming-iterator's
+holds. PCC owns the guard borrow rules (pcc/frontends/rust/moves.py,
+GuardScope) and needs no rustc to admit or reject a guard: moving out of a
+binding (E0507), assigning (E0594) or mutably borrowing (E0596) one, moving
+(E0505) or assigning (E0506) a place a binding borrows, and assigning the
+matched or a tested place or a prefix of one (E0510) are errors; moving a
+matched place no binding covers, which rustc accepts, is an explicit gap.
+`matches!(v, p if g)` expands to the same guarded arm. fallible-streaming-iterator's
 `Some(x) if x < self.n => Some(x)` (projects/fallible-streaming-iterator-0.1.9,
 MIT/Apache-2.0, lib.rs:841) has this shape; the programs below are original
 and were compared with local rustc 1.92.0.
@@ -24,7 +27,7 @@ from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.semantics import Checker
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.certification_support import certify_source, darwin_check_prerequisite
-from tests.rust.str_execution import run_owned_u64_function, run_rustc_str_function
+from tests.rust.str_execution import UNAVAILABLE, run_owned_u64_function, run_rustc_str_function
 
 PROGRAM = '''pub enum Shape { Dot(u64), Pair(u64, u64), Empty }
 pub struct Inner { v: u64 }
@@ -106,9 +109,73 @@ def test_invalid_guards_are_errors_in_the_checked_model(source, message):
         model(source)
 
 
-def test_without_an_actual_check_guards_are_an_explicit_boundary():
-    with pytest.raises(RustError, match='^1:39: match guard ownership/borrowing admission requires an actual external rustc check$'):
-        compile_rust('pub fn f(v: u64) -> u64 { match v { x if x > 3 => 1, _ => 0 } }', experimental_rustc_checked=True)
+N_E = 'pub struct N { v: u64 } pub enum E { A(N), B } '
+EAT = 'fn eat(_e: E) -> bool { true } '
+# (name, original source, PCC's owned verdict, rustc 1.92.0's verdict): an
+# error code, 'ok', or 'gap' where rustc accepts and PCC stays explicit.
+GUARD_BORROWS = (
+    ('move-binding', N_E + 'pub fn f(e: E) -> u64 { match e { E::A(n) if { let m = n; m.v > 1 } => 1, _ => 0 } }',
+     'E0507', 'E0507'),
+    ('assign-binding', 'pub fn f(v: u64) -> u64 { match v { mut x if { x = 1; x > 0 } => x, _ => 0 } }', 'E0594', 'E0594'),
+    ('compound-binding', 'pub fn f(v: u64) -> u64 { match v { mut x if { x += 1; x > 0 } => x, _ => 0 } }',
+     'E0594', 'E0594'),
+    ('assign-bound-scrutinee', 'pub fn f(mut v: u64) -> u64 { match v { x if { v = 1; x > 0 } => 1, _ => 0 } }',
+     'E0506', 'E0506'),
+    ('compound-bound-scrutinee', 'pub fn f(mut v: u64) -> u64 { match v { x if { v += 1; x > 0 } => 1, _ => 0 } }',
+     'E0506', 'E0506'),
+    ('move-bound-scrutinee', N_E + EAT + 'pub fn f(e: E) -> u64 { match e { E::A(n) if eat(e) => n.v, _ => 0 } }',
+     'E0505', 'E0505'),
+    ('move-bound-scrutinee-after-last-use', N_E + EAT
+     + 'pub fn f(e: E) -> u64 { match e { E::A(n) if { let ok = n.v > 1; eat(e) && ok } => 1, _ => 0 } }',
+     'E0505', 'E0505'),
+    ('assign-matched', 'pub fn f(mut v: u64) -> u64 { match v { 0 if { v = 1; true } => 1, _ => 0 } }', 'E0510', 'E0510'),
+    ('assign-matched-prefix', 'pub struct P { a: u64, b: u64 } '
+     'pub fn f(mut p: P) -> u64 { match p.a { 0 if { p = P { a: 1, b: 1 }; true } => 1, _ => 0 } }', 'E0510', 'E0510'),
+    ('assign-tested', 'pub fn f(mut t: ((u64, u64), u64)) -> u64 { match t.0 { (0, _) if { t.0.0 = 2; true } => 1, _ => 0 } }',
+     'E0510', 'E0510'),
+    ('move-outer-in-two-guards', 'pub struct N { v: u64 } fn eat(n: N) -> bool { n.v > 0 } '
+     'pub fn f(v: u64) -> u64 { let s = N { v: 1 }; match v { 1 if eat(s) => 1, 2 if eat(s) => 2, _ => 0 } }',
+     'E0382', 'E0382'),
+    ('assign-untested', 'pub fn f(mut t: ((u64, u64), u64)) -> u64 { match t.0 { (0, _) if { t.0.1 = 2; true } => 1, _ => t.0.1 } }',
+     'ok', 'ok'),
+    ('assign-sibling', 'pub struct P { a: u64, b: u64 } '
+     'pub fn f(mut p: P) -> u64 { match p.a { 0 if { p.b = 2; true } => 1, _ => p.b } }', 'ok', 'ok'),
+    ('assign-outer', 'pub fn f(v: u64) -> u64 { let mut c = 0; let r = match v { x if { c = 5; x > 3 } => 1, _ => 2 }; r + c }',
+     'ok', 'ok'),
+    ('move-outer', 'pub struct N { v: u64 } fn eat(n: N) -> bool { n.v > 0 } '
+     'pub fn f(v: u64) -> u64 { let s = N { v: 1 }; match v { x if eat(s) && x > 0 => 1, _ => 0 } }', 'ok', 'ok'),
+    ('copy-binding', 'pub fn f(v: u64) -> u64 { match v { x if { let y = x; y > 0 } => 1, _ => 0 } }', 'ok', 'ok'),
+    ('read-matched', 'pub fn f(v: u64) -> u64 { match v { x if v == x => 1, _ => 0 } }', 'ok', 'ok'),
+    ('move-binding-in-arm', N_E + 'pub fn f(e: E) -> u64 { match e { E::A(n) if n.v > 1 => { let m = n; m.v } _ => 0 } }',
+     'ok', 'ok'),
+    ('assign-matched-in-arm', 'pub fn f(mut v: u64) -> u64 { match v { x if x > 0 => { v = 1; v } _ => 0 } }', 'ok', 'ok'),
+    ('move-temporary-scrutinee', N_E + EAT
+     + 'fn mk() -> E { E::B } pub fn f() -> u64 { match mk() { E::A(_) if eat(mk()) => 1, _ => 0 } }', 'ok', 'ok'),
+    ('move-unbound-matched', N_E + EAT + 'pub fn f(e: E) -> u64 { match e { E::A(_) if eat(e) => 1, _ => 0 } }',
+     'gap', 'ok'),
+    ('move-unbound-matched-then-test', N_E + EAT
+     + 'pub fn f(e: E) -> u64 { match e { E::A(_) if eat(e) => 1, E::B => 2, _ => 0 } }', 'gap', 'ok'),
+)
+
+
+@pytest.mark.parametrize('name,source,owned,_', GUARD_BORROWS, ids=[row[0] for row in GUARD_BORROWS])
+def test_guard_borrow_rules_are_decided_without_rustc(name, source, owned, _, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('guard admission ran an external tool'))
+    if owned == 'ok':
+        compile_rust(source, experimental_rustc_checked=True)
+        return
+    expected = {'gap': 'requires decision-tree match lowering, which is not implemented',
+                'E0382': 'use of moved or possibly moved value'}.get(owned, rf'\({owned}\)$')
+    with pytest.raises(RustError, match=expected):
+        compile_rust(source, experimental_rustc_checked=True)
+
+
+def test_closures_in_guards_stay_inside_the_closure_boundary():
+    # Closure captures in a guard would need guard-aware capture rules; every
+    # closure is still rejected before the move checker runs.
+    with pytest.raises(RustError, match='closure expressions require closure types, captures'):
+        compile_rust('pub fn f(v: u64) -> u64 { match v { x if { let c = |y: u64| y > 1; c(x) } => 1, _ => 0 } }',
+                     experimental_rustc_checked=True)
 
 
 # Former boundary rows of test_rust_matches_macro ('matches! guards require
@@ -118,10 +185,15 @@ MOVED_PATTERNS_GUARD = "fn f(x:bool){match x{true if true=>(),_=>()}}"
 
 
 @pytest.mark.parametrize('source', [MOVED_MATCHES_GUARD, MOVED_PATTERNS_GUARD])
-def test_former_guard_rows_reach_the_guard_boundary_and_check(source):
-    with pytest.raises(RustError, match='match guard ownership/borrowing admission requires an actual external rustc check'):
-        compile_rust(source, experimental_rustc_checked=True)
+def test_former_guard_rows_compile_with_owned_guard_checking(source):
+    compile_rust(source, experimental_rustc_checked=True)
     model(source)
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
+def test_program_runs_without_an_actual_rustc_check(tmp_path, monkeypatch):
+    assert run_owned_u64_function(PROGRAM, 'answer', tmp_path, monkeypatch) == EXPECTED
 
 
 DARWIN_LANE = darwin_check_prerequisite() or (
@@ -162,6 +234,7 @@ def test_rustc_gives_the_same_value_and_verdicts(tmp_path):
     output = run_rustc_str_function(PROGRAM, 'answer', tmp_path, output='&{call}.to_le_bytes()')
     assert int.from_bytes(output, 'little') == EXPECTED
     cases = [(source, code) for source, code in BORROW_ERRORS] + [
+        (source, None if verdict == 'ok' else verdict) for _, source, _, verdict in GUARD_BORROWS] + [
         ('pub fn f(v: u64) -> u64 { match v { x if x => 1, _ => 0 } }', 'E0308'),
         ('pub fn f(v: u64) -> u64 { match v { x if x > 3 => 1, 0 => 2 } }', 'E0004'),
         (MOVED_MATCHES_GUARD, None),

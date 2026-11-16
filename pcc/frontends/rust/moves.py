@@ -1,8 +1,18 @@
-"""Place-sensitive moves and bounded direct-call shared loans.
+"""Place-sensitive moves, bounded direct-call shared loans and match-guard borrows.
 
 This is NOT general borrow checking. Borrow patterns, Drop and user-defined Copy are
 still rejected. A state records paths which may have moved on any reachable incoming
 edge; loop backedges reach a finite fixed point rather than assuming one pass.
+
+A match guard is checked with rustc's borrow rules for guards, owned here
+(https://doc.rust-lang.org/reference/expressions/match-expr.html#match-guards):
+the arm's bindings are shared references to the matched parts, so they cannot
+be moved out of (E0507), assigned (E0594) or mutably borrowed (E0596), and the
+places they bind cannot be moved (E0505) or assigned (E0506) during the guard;
+the matched place and every place the pattern tests hold shallow borrows that
+forbid assigning them or a prefix (E0510). Moving a matched place no binding
+covers is accepted by rustc, whose decision tree does not retest it; this
+model re-inspects the scrutinee per arm, so that case stays an explicit gap.
 """
 from __future__ import annotations
 
@@ -18,6 +28,8 @@ from pcc.analysis.ownership import (
     solve_loop,
 )
 
+from dataclasses import dataclass
+
 from .syntax import Expr
 
 
@@ -27,10 +39,46 @@ def structural_place(binding, path) -> Place:
     return Place(binding.serial, tuple(index if isinstance(index, Index) else Field(index) for index in path))
 
 
+@dataclass(frozen=True)
+class GuardScope:
+    """Borrows held while one match guard is evaluated."""
+    bindings: dict      # binding serial -> source name of the arm's bindings
+    root: object        # the matched place's root binding, or None for a temporary
+    bound: tuple        # structural paths the bindings borrow (deeply)
+    shallow: tuple      # the matched path and every tested path (shallowly)
+
+
+def guard_paths(checker, pattern, path, bound, tested):
+    """The paths a pattern binds and tests below `path`, as pattern_access projects them."""
+    kind = pattern.kind
+    if kind == "or":
+        for option in pattern.children:
+            guard_paths(checker, option, path, bound, tested)
+        return
+    if kind in {"binding", "at"}:
+        bound.append(path)
+        if kind == "at":
+            guard_paths(checker, pattern.children[0], path, bound, tested)
+        return
+    if kind in {"wildcard", "unit"}:
+        return
+    if kind == "literal":
+        tested.append(path)
+        return
+    if kind in {"variant", "payload"}:
+        tested.append(path)  # the enum's discriminant
+        if kind == "variant":
+            return
+        path = path + (list(checker.enums[pattern.ty].payloads).index(pattern.variant) + 1,)
+    for index, child in enumerate(pattern.children):
+        guard_paths(checker, child, path + (index,) if kind in {"tuple", "payload"} else path, bound, tested)
+
+
 class MoveChecker:
     def __init__(self, checker):
         self.checker = checker
         self.loops: list[LoopEdges] = []
+        self.guards: list[GuardScope] = []
         # Ephemeral shared loans exist only while evaluating one direct call.
         # No local reference creation/escape or mutable/interior aliasing is
         # admitted. This is a bounded conflict check, NOT general borrowck.
@@ -51,12 +99,53 @@ class MoveChecker:
         state = {binding.serial: set() for binding in self.checker.parameters[function.identity]}
         self.expression(function.body, state)
 
+    def guard_effect(self, binding, path, token, *, write, mutable_borrow=False):
+        """A move (write=False) or write of a place while match guards are evaluated."""
+        place = structural_place(binding, path)
+        for scope in self.guards:
+            name = scope.bindings.get(binding.serial)
+            if name is not None:
+                if mutable_borrow:
+                    raise token.error(f"cannot borrow {name!r} as mutable in a match guard: guard bindings are "
+                                      "shared references (E0596)")
+                if write:
+                    raise token.error(f"cannot assign to {name!r} in a match guard: guard bindings are "
+                                      "immutable (E0594)")
+                raise token.error(f"cannot move out of {name!r} in a match guard: guard bindings are shared "
+                                  "references to the matched value (E0507)")
+            if scope.root is None or binding.serial != scope.root:
+                continue
+            if any(place.overlaps(Place(place.root, item)) for item in scope.bound):
+                code, verb = ("E0506", "assign to") if write else ("E0505", "move")
+                raise token.error(f"cannot {verb} {binding.name!r} in a match guard while the guard's bindings "
+                                  f"borrow it ({code})")
+            if write and any(prefix(place.path, item) for item in scope.shallow):
+                raise token.error(f"cannot assign {binding.name!r} in a match guard: the match inspects it (E0510)")
+            if not write and any(place.overlaps(Place(place.root, item)) for item in scope.shallow):
+                raise token.error(f"moving the matched value {binding.name!r} in a match guard requires "
+                                  "decision-tree match lowering, which is not implemented")
+
+    def guard_scope(self, pattern, place):
+        from .patterns import binding_patterns
+        bound, tested = [], []
+        if place is not None:
+            guard_paths(self.checker, pattern, place[1], bound, tested)
+            root = place[0]
+            structural = lambda path: structural_place(root, path).path
+            return GuardScope({item.binding.serial: item.token.text for item in binding_patterns(pattern)},
+                              root.serial, tuple(map(structural, bound)),
+                              (structural(place[1]),) + tuple(map(structural, tested)))
+        return GuardScope({item.binding.serial: item.token.text for item in binding_patterns(pattern)},
+                          None, (), ())
+
     def access(self, binding, path, ty, token, state, *, consume=False):
         place = structural_place(binding, path)
         moved = state[binding.serial]
         if any(Place(place.root, item).overlaps(place) for item in moved):
             raise token.error(f"use of moved or possibly moved value {binding.name!r}")
         if consume and not self.checker.copy_type(ty):
+            if self.guards:
+                self.guard_effect(binding, path, token, write=False)
             self.conflict(binding, path, token)
             moved.add(place.path)
 
@@ -128,6 +217,8 @@ class MoveChecker:
         if kind in {"integer", "bool", "unit", "variant", "const", "static", "string"}:
             return state
         if kind == "borrow":
+            if expr.value and self.guards and self.checker.place(children[0]) is not None:
+                self.guard_effect(*self.checker.place(children[0]), expr.token, write=True, mutable_borrow=True)
             self.read_place(children[0], state, consume=False)
             # Reborrowing an incoming shared referent does not borrow the local
             # variable which stores that pointer. Rebinding that Copy variable
@@ -199,6 +290,8 @@ class MoveChecker:
             if result is None:
                 return None
             binding, path = self.checker.place(children[0])
+            if self.guards:
+                self.guard_effect(binding, path, expr.token, write=True)
             self.conflict(binding, path, expr.token)
             path = structural_place(binding, path).path
             moved = result[binding.serial]
@@ -231,7 +324,11 @@ class MoveChecker:
                     inspected = clone(current)
                     for binding in pattern_bindings(pattern):
                         inspected[binding.serial] = set()
-                    selected = self.expression(guard, inspected)
+                    self.guards.append(self.guard_scope(pattern, place))
+                    try:
+                        selected = self.expression(guard, inspected)
+                    finally:
+                        self.guards.pop()
                     if selected is None:
                         continue
                     for binding in pattern_bindings(pattern):

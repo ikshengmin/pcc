@@ -1133,12 +1133,8 @@ class Checker:
                 self.scopes.append({})
                 check_pattern(self, pattern, scrutinee_ty, allow_inferred=kind == "match")
                 if arm.kind == "match_guard":
-                    # The guard sees the arm's bindings and must be bool.
-                    # Its borrow rules (bindings by shared reference, no
-                    # moves out of them, no mutation of the scrutinee:
-                    # E0507/E0510) are admitted only by the actual rustc check.
-                    if not self.externally_checked:
-                        raise arm.token.error("match guard ownership/borrowing admission requires an actual external rustc check")
+                    # The guard sees the arm's bindings and must be bool. Its
+                    # borrow rules are owned by the move checker (GuardScope).
                     guard, body = arm.children
                     unify("bool", self.expression(guard), guard.token)
                     arm.ty = self.expression(body)
