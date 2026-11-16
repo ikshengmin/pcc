@@ -397,6 +397,7 @@ def assert_owned_program(
     receipt_path = directory / "ownership-regression.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     dump, ir_attempted, compiler_started = None, False, False
+    compiler_completed = False
     try:
         # Capture the IR consumed by this executable emission, not a second
         # host/native --emit-llvm invocation with merely matching source.
@@ -415,6 +416,7 @@ def assert_owned_program(
                 str(source), str(binary), backend="self", ir_scaffold_mode="on",
                 runtime_archive=str(archive),
             )
+            compiler_completed = True
         if emitted_ir_check is not None:
             ir_attempted = True
             _record_observed_ir_dump(
@@ -423,7 +425,8 @@ def assert_owned_program(
             )
             receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     except Exception as error:
-        receipt["status"] = "COMPILE_FAILED"
+        receipt["status"] = "IR_EVIDENCE_FAILED" if compiler_completed else "COMPILE_FAILED"
+        receipt["compiler_completed"] = compiler_completed
         receipt["error"] = type(error).__name__ + ": " + str(error)
         if emitted_ir_check is not None and compiler_started and dump is not None and not ir_attempted:
             try:
