@@ -15,6 +15,7 @@ from pcc.ir.optimization.foldselect import fold_two_entry_phi_text
 from pcc.ir.optimization.instcombine import instcombine_text
 from pcc.ir.optimization.dce import dce_module_text
 from pcc.ir.optimization.inline import inline_module
+from pcc.ir.optimization.jump_thread import jump_thread_text
 
 from pcc.frontends.python.compiled_default_passes import _has_py_cpy_call, _mem2reg_function, _sroa_function, run_compiled_default_tier
 
@@ -22,6 +23,7 @@ from pcc.frontends.python.compiled_default_passes import _has_py_cpy_call, _mem2
 OWNED_PASS_NAMES = (
     "mem2reg", "sroa", "instsimplify", "simplifycfg", "fold-two-entry-phi",
     "instcombine", "dce", "inline", "inline-defined", "inline-defined-wide",
+    "jump-thread",
 )
 # inline-defined-wide is the runtime archive's definition inliner. Runtime
 # chains (allocation, release, root stores) pass through many small helpers
@@ -94,6 +96,8 @@ def run_owned_passes(text: str, names: list[str]) -> str:
                 current, changed = instcombine_text(current)
             elif name == "dce":
                 current, changed = dce_module_text(current)
+            elif name == "jump-thread":
+                current, changed = jump_thread_text(current)
             elif name == "inline":
                 current, changed = inline_module(current)
             elif name == "inline-defined":

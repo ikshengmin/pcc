@@ -40,7 +40,12 @@ PCC_IR_TO_OBJ ?= $(PYTHON) -m pcc.tools.ir_to_obj
 # inline-defined-wide: runtime helper chains exceed the general 32-instruction
 # definition limit; 96 measured -3% to -7% on GC0 allocation primitives and
 # +1.8% (GC0) to +4.7% handler requests per second.
-PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined-wide,instsimplify,instcombine,dce
+# jump-thread: inlined predicates return short-circuit booleans through
+# phi/zext/icmp chains and empty forwarders; threading the edges whose phi
+# constants decide the branch, and merging the straight-line remains, turns
+# them into direct compare-and-branch chains (pcc_gc_store_root: 295 -> 165
+# blocks, 157 -> 29 unconditional branches).
+PCC_RUNTIME_IR_PASSES ?= mem2reg,sroa,instsimplify,inline-defined-wide,jump-thread,instsimplify,instcombine,dce
 PCC_REPO_ROOT ?= $(abspath ../..)
 
 CFLAGS   ?= -O2 -fPIC -Wall -Wextra -std=c11
