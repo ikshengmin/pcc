@@ -20,6 +20,23 @@ from pcc.backend import indexed_phase_timing as timing
 ROOT = Path(__file__).resolve().parents[2]
 EMITTER = "pcc/backend/self_backend_aarch64_darwin.py"
 PHASES = ("prepare", "layout", "stackmaps", "unwind", "dwarf", "sections")
+TYPED_PHASES = (
+    "typed_validate", "typed_peephole_validate",
+    "typed_forward_adjacent_stack_store_load",
+    "typed_forward_one_intervening_stack_store_load",
+    "typed_fold_zero_store_source", "typed_fold_mov_store_source",
+    "typed_fold_zero_compare_immediate", "typed_fold_mov_compare_source",
+    "typed_fold_mov_zero_branch_source", "typed_fold_mov_arith_self_update",
+    "typed_fold_scratch_def_into_move", "typed_fold_mov_mov_chain",
+    "typed_fold_zero_test_branch", "typed_fold_forwarded_cset_branch",
+    "typed_fold_cset_zero_branch", "typed_drop_dead_cset_branch_stores",
+    "typed_cfg_proofs", "typed_thread_trampoline_branches",
+    "typed_fold_cond_branch_to_fallthrough",
+    "typed_drop_fallthrough_uncond_branches",
+    "typed_drop_unreferenced_empty_local_labels",
+    "typed_elide_dead_tlv_resolver_saves",
+    "typed_pair_adjacent_aarch64_64bit_memory_ops", "typed_publish",
+)
 TARGETS = ("arm64-apple-darwin23.6.0", "aarch64-unknown-linux-gnu")
 
 
@@ -46,6 +63,71 @@ def _rows(text):
     lines = text.splitlines()
     assert all(line.startswith("pcc coarse phase ") for line in lines)
     return [dict(part.split("=", 1) for part in line.split()[3:]) for line in lines]
+
+
+def _expected_finalization_events(*, linux, optimize):
+    events = []
+    for phase in PHASES:
+        if phase == "unwind" and linux:
+            continue
+        events.append((phase, "begin", "backend_finalize"))
+        if phase == "prepare" and optimize:
+            events.extend((child, event, "prepare") for child in TYPED_PHASES
+                          for event in ("begin", "complete"))
+        events.append((phase, "complete", "backend_finalize"))
+    return events
+
+
+def _check_finalization_receipts(rows, *, linux, optimize, module):
+    # Require the complete nested protocol, never filter away child obligations.
+    assert timing._AARCH64_TYPED_PHASES == TYPED_PHASES
+    assert [(row["phase"], row["event"], row["parent"]) for row in rows] == (
+        _expected_finalization_events(linux=linux, optimize=optimize)
+    )
+    for row in rows:
+        assert row["scope"] == "backend_finalize" and row["module"] == module
+        assert row["clock_ok"] == "1"
+        assert ("duration_ns" in row) is (row["event"] == "complete")
+        if row["event"] == "complete":
+            assert int(row["duration_ns"]) >= 0
+
+
+@pytest.mark.parametrize("damage", (
+    "missing_child", "duplicate_child", "reordered_child", "wrong_parent",
+    "wrong_scope", "wrong_module", "failed_clock", "begin_duration",
+    "missing_duration", "unexpected_child",
+))
+def test_finalization_receipt_oracle_rejects_incomplete_or_wrong_children(damage):
+    rows = []
+    for phase, event, parent in _expected_finalization_events(linux=False, optimize=True):
+        row = dict(scope="backend_finalize", phase=phase, event=event,
+                   parent=parent, module="fixture", clock_ok="1")
+        if event == "complete":
+            row["duration_ns"] = "0"
+        rows.append(row)
+    _check_finalization_receipts(rows, linux=False, optimize=True, module="fixture")
+    if damage == "missing_child":
+        del rows[1:3]
+    elif damage == "duplicate_child":
+        rows[1:1] = [dict(row) for row in rows[1:3]]
+    elif damage == "reordered_child":
+        rows[1:5] = rows[3:5] + rows[1:3]
+    elif damage == "wrong_parent":
+        rows[1]["parent"] = "backend_finalize"
+    elif damage == "wrong_scope":
+        rows[1]["scope"] = "assembly"
+    elif damage == "wrong_module":
+        rows[1]["module"] = "other"
+    elif damage == "failed_clock":
+        rows[1]["clock_ok"] = "0"
+    elif damage == "begin_duration":
+        rows[1]["duration_ns"] = "0"
+    elif damage == "missing_duration":
+        del rows[2]["duration_ns"]
+    else:
+        rows[1]["phase"] = "typed_unexpected"
+    with pytest.raises(AssertionError):
+        _check_finalization_receipts(rows, linux=False, optimize=True, module="fixture")
 
 
 def _source_function(name):
@@ -149,6 +231,22 @@ def test_receipt_erasure_restores_exact_legacy_tail_and_never_times_loops():
     body = _tail()
 
     class EraseReceipts(ast.NodeTransformer):
+        def __init__(self):
+            self.timer_forwards = 0
+
+        def visit_Call(self, node):
+            if (isinstance(node.func, ast.Attribute)
+                    and ast.unparse(node.func) == "native_sink.finish_optimized_instructions"):
+                # Only the same timer may cross this diagnostic-only boundary.
+                # Keep the frozen legacy operation/argument oracle untouched.
+                assert len(node.keywords) == 1
+                keyword = node.keywords[0]
+                assert keyword.arg == "phase_timing"
+                assert isinstance(keyword.value, ast.Name) and keyword.value.id == "phase_timing"
+                self.timer_forwards += 1
+                node.keywords = []
+            return self.generic_visit(node)
+
         def visit_Expr(self, node):
             if _receipt_call(node.value):
                 return None
@@ -163,9 +261,30 @@ def test_receipt_erasure_restores_exact_legacy_tail_and_never_times_loops():
             node = self.generic_visit(node)
             return node if node.body else None
 
-    tree = ast.Module(body=copy.deepcopy(body), type_ignores=[])
-    erased = EraseReceipts().visit(tree)
+    def erase(source_body):
+        visitor = EraseReceipts()
+        erased = visitor.visit(ast.Module(body=copy.deepcopy(source_body), type_ignores=[]))
+        assert visitor.timer_forwards == 1
+        return erased
+
+    erased = erase(body)
     assert ast.dump(erased, include_attributes=False) == ast.dump(ast.parse(_LEGACY_TAIL), include_attributes=False)
+    for keywords in ([], "phase_timing=None", "other=phase_timing",
+                     "phase_timing=phase_timing, extra=1"):
+        changed = copy.deepcopy(body)
+        call = next(node for statement in changed for node in ast.walk(statement)
+                    if isinstance(node, ast.Call)
+                    and ast.unparse(node.func) == "native_sink.finish_optimized_instructions")
+        call.keywords = ast.parse("f(" + keywords + ")").body[0].value.keywords if keywords else []
+        with pytest.raises(AssertionError):
+            erase(changed)
+    changed = copy.deepcopy(body)
+    call = next(node for statement in changed for node in ast.walk(statement)
+                if isinstance(node, ast.Call)
+                and ast.unparse(node.func) == "native_sink.finish_optimized_instructions")
+    changed.append(ast.Expr(value=copy.deepcopy(call)))
+    with pytest.raises(AssertionError):
+        erase(changed)
     calls = [node for stmt in body for node in ast.walk(stmt) if _receipt_call(node)]
     assert sorted((node.args[0].value, node.func.attr) for node in calls) == sorted(
         (phase, method) for phase in PHASES
@@ -216,7 +335,8 @@ def _mock_tail(monkeypatch, *, enabled=True, linux=False, optimize=True, tables=
     offsets, section, dwarf, final, undefined = {}, object(), object(), object(), object()
     sections, native_undefined, fallback, counts = [], [], [], []
 
-    def finish_optimized(metadata_labels, cold_edges):
+    def finish_optimized(metadata_labels, cold_edges, *, phase_timing):
+        assert phase_timing is timer
         operation("optimized")
         assert metadata_labels == (set() if empty else {"probe.error"})
         assert cold_edges == []
@@ -396,10 +516,12 @@ def test_real_transport_timing_preserves_encoded_sections(monkeypatch, target, o
         assert transport.fallback_instruction_count == 0
         sections, undefined = transport.assemble_sections()
         outcomes.append((sections, undefined, encode_native_object_from_sections(sections, undefined=undefined)))
-        phases = [phase for phase in PHASES if phase != "unwind" or target == TARGETS[0]]
-        assert [(row["phase"], row["event"]) for row in _rows("".join(sink.lines))] == (
-            [(phase, event) for phase in phases for event in ("begin", "complete")] if enabled else []
-        )
+        rows = _rows("".join(sink.lines))
+        if enabled:
+            _check_finalization_receipts(rows, linux=target == TARGETS[1],
+                                         optimize=optimize, module="fixture.transport")
+        else:
+            assert rows == []
     assert outcomes[0] == outcomes[1]
 
 
@@ -491,10 +613,10 @@ def test_native_aarch64_compile_emits_actual_finalization_receipts(
     assert rows, "compiler route did not execute instrumented native finalization"
     modules = {}
     for row in rows:
-        modules.setdefault(row["module"], []).append((row["phase"], row["event"]))
-    phases = [phase for phase in PHASES if phase != "unwind" or sys.platform == "darwin"]
-    expected = [(phase, event) for phase in phases for event in ("begin", "complete")]
-    assert all(events == expected for events in modules.values())
+        modules.setdefault(row["module"], []).append(row)
+    for module, module_rows in modules.items():
+        _check_finalization_receipts(module_rows, linux=sys.platform != "darwin",
+                                     optimize=True, module=module)
     for backend in range(5):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
