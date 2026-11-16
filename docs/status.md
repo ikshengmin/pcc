@@ -626,6 +626,18 @@ GC0 5,008 → 5,224, GC1 3,672 → 3,868, GC2 3,494 → 3,818, GC3 3,621 → 3,8
 GC4 1,688 → 1,729; aiohttp ~27,000. `py_bytearray_append` returns a new
 object instead of mutating in place (identity and quadratic-copy bug, open).
 
+`55ce5ce2`: runtime library functions poll at their loops, not at every
+entry (the root readers keep theirs). HTTP GET / C512, 5 pairs: GC0 5,341 →
+5,758 QPS (+7.8%, 5/5), GC3 3,826 → 4,010 (+4.8%, 5/5); aiohttp ~27,900.
+GC4's halved QPS is its sweep running in the stopped world on the request
+thread (`_concurrent_sweep_admitted` admits only GC1–GC3; 31% of GC4's
+carrier); deferring to the collector thread waits on the unexplained GC4
+world-running sweep defect. The runtime's own machine code is the next
+systematic cost: short-circuit booleans become phi/zext/icmp chains through
+forwarders that the backend materializes (store_root's GC0 fast path is
+~60–80 instructions); the owned `simplifycfg` subset fails the self verifier
+on runtime IR, so a robust jump-threading pass is needed.
+
 The bytes/bytearray iterator now yields its byte in place (driver GC0 −1.0%
 4/5, GC3 −1.9% 5/5; HTTP not measured separately). `018078f7` skips GC0's
 free-watch thread-local evidence until a watch is armed (driver GC0 −1.6%,
