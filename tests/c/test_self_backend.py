@@ -6867,6 +6867,64 @@ loop:
     assert lines[-1] == "  add sp, sp, #16"
 
 
+@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
+                    reason="native Darwin arm64 execution")
+def test_self_backend_aarch64_float_cycle_after_ready_copies_keeps_direct_records(tmp_path):
+    """An edge whose integer copies are ready before its floating-point swap.
+
+    The copy order used to be chosen while emitting: the ready ``%k <- %i``
+    and ``%i <- %i1`` copies were generated (each recording its direct
+    instruction), then the ``%a``/``%b`` cycle sent the whole edge to the
+    stack-buffer path and the generated lines were dropped, leaving their
+    records behind: "direct call marker does not match record family" at
+    the next call. The order is now planned before any copy is generated.
+    """
+    from pcc.backend.macho_exec import link_executable
+    from pcc.backend.owned_object_emit import emit_owned_object
+
+    ir_text = """target triple = "arm64-apple-darwin"
+define i64 @absval(i64 %x) {
+entry:
+  %neg = icmp slt i64 %x, 0
+  %flip = sub i64 0, %x
+  %r = select i1 %neg, i64 %flip, i64 %x
+  ret i64 %r
+}
+define i32 @main() {
+entry:
+  br label %loop
+loop:
+  %a = phi double [ 1.0, %entry ], [ %b, %loop ]
+  %b = phi double [ 2.0, %entry ], [ %a, %loop ]
+  %i = phi i64 [ 0, %entry ], [ %i1, %loop ]
+  %k = phi i64 [ 7, %entry ], [ %i, %loop ]
+  %i1 = add i64 %i, 1
+  %done = icmp eq i64 %i1, 5
+  br i1 %done, label %exit, label %loop
+exit:
+  %neg = sub i64 0, %k
+  %abs = call i64 @absval(i64 %neg)
+  %ai = fptosi double %a to i64
+  %bi = fptosi double %b to i64
+  %r1 = mul i64 %abs, 100
+  %r2 = mul i64 %ai, 10
+  %r3 = add i64 %r1, %r2
+  %r4 = add i64 %r3, %bi
+  %t = trunc i64 %r4 to i32
+  %m = and i32 %t, 255
+  ret i32 %m
+}
+"""
+    executable = tmp_path / "fp_cycle"
+    executable.write_bytes(link_executable([emit_owned_object(ir_text, "arm64-apple-darwin")],
+                                           entry="_main"))
+    executable.chmod(0o755)
+    ran = subprocess.run([str(executable)], capture_output=True, timeout=30)
+    # Four back-edges before the exit: (a, b) is back to (1, 2) and k holds
+    # the previous i, 3: 3*100 + 1*10 + 2.
+    assert ran.returncode == (300 + 10 + 2) & 255
+
+
 def test_self_backend_aarch64_phi_assignments_support_large_aggregate_literals():
     phi_ir = """
 target triple = "arm64-apple-darwin23.6.0"

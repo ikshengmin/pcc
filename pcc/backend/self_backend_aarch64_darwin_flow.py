@@ -579,52 +579,28 @@ def _emit_phi_assignments_indexed(
     if not phi_ids:
         return []
 
-    pending: list[int] = []
-    index = 0
-    while index < len(phi_ids):
-        if src_keys[index] != dest_keys[index]:
-            pending.append(index)
-        index += 1
+    # Plan the whole copy order before emitting any instruction: direct
+    # instruction capture records each instruction when its helper runs, so a
+    # copy generated and then dropped for the buffered path would leave its
+    # record behind (an FP cycle met after ready copies or an integer park).
+    steps = _phi_copy_schedule(kernel, phi_ids, src_keys, dest_keys)
+    if steps is None:
+        return _emit_phi_assignments_buffered(
+            func,
+            kernel,
+            phi_ids,
+            incoming_refs,
+            temp_offsets,
+            temp_offset,
+            dest_slot_ids,
+            dest_regs,
+            module_symbols,
+        )
     lines: list[str] = []
-    while pending:
-        ready: list[int] = []
-        for candidate in pending:
-            blocked = False
-            for other in pending:
-                if other != candidate and src_keys[other] == dest_keys[candidate]:
-                    blocked = True
-                    break
-            if not blocked:
-                ready.append(candidate)
-        if not ready:
-            victim = pending[0]
+    for step in steps:
+        if step < 0:
+            victim = -1 - step
             victim_phi: CompilerInt4 = kernel.phi_record(phi_ids[victim])
-            victim_header_is_scalar = False
-            if type(kernel) is IndexedFunctionKernel:
-                victim_header_scalar_id = victim_phi.second
-                victim_header_is_scalar = _scalar_window_is_complete(
-                    kernel.type_scalars, victim_header_scalar_id, 12, 0
-                )
-                if victim_header_is_scalar:
-                    victim_header_scalar = kernel.type_scalars.get_unchecked(
-                        victim_header_scalar_id * 12 + 0
-                    )
-                else:
-                    victim_header: CompilerInt4 = kernel.type_header(victim_header_scalar_id)
-            else:
-                victim_header: CompilerInt4 = kernel.type_header(victim_phi.second)
-            if (victim_header_scalar if victim_header_is_scalar else victim_header.first) == TYPE_KIND_FP:
-                return _emit_phi_assignments_buffered(
-                    func,
-                    kernel,
-                    phi_ids,
-                    incoming_refs,
-                    temp_offsets,
-                    temp_offset,
-                    dest_slot_ids,
-                    dest_regs,
-                    module_symbols,
-                )
             lines.extend(
                 _phi_copy_to_register(
                     func,
@@ -637,36 +613,92 @@ def _emit_phi_assignments_indexed(
                 )
             )
             src_regs[victim] = _PHI_CYCLE_REGISTER
-            src_keys[victim] = _PHI_REGISTER_KEY_BASE + _PHI_CYCLE_REGISTER
+            continue
+        candidate = step
+        phi = kernel.phi_record(phi_ids[candidate])
+        if dest_regs[candidate] >= 0:
+            lines.extend(
+                _phi_copy_to_register(
+                    func,
+                    kernel,
+                    phi.second,
+                    dest_regs[candidate],
+                    src_regs[candidate],
+                    incoming_refs[candidate],
+                    module_symbols,
+                )
+            )
+        else:
+            lines.extend(
+                _phi_copy_to_slot(
+                    func,
+                    kernel,
+                    phi.second,
+                    dest_slot_ids[candidate],
+                    src_regs[candidate],
+                    incoming_refs[candidate],
+                    module_symbols,
+                )
+            )
+    return lines
+
+
+def _phi_type_is_fp(kernel: IndexedFunctionKernel, phi_id: int) -> bool:
+    phi: CompilerInt4 = kernel.phi_record(phi_id)
+    if type(kernel) is IndexedFunctionKernel:
+        scalar_id = phi.second
+        if _scalar_window_is_complete(kernel.type_scalars, scalar_id, 12, 0):
+            return kernel.type_scalars.get_unchecked(scalar_id * 12 + 0) == TYPE_KIND_FP
+        header: CompilerInt4 = kernel.type_header(scalar_id)
+        return header.first == TYPE_KIND_FP
+    header = kernel.type_header(phi.second)
+    return header.first == TYPE_KIND_FP
+
+
+def _phi_copy_schedule(
+    kernel: IndexedFunctionKernel,
+    phi_ids: list[int],
+    src_keys: list[int],
+    dest_keys: list[int],
+) -> list[int] | None:
+    """The parallel copy's order: ``i`` copies phi ``i``; ``-1 - i`` parks
+    phi ``i``'s source in the cycle register first.
+
+    A copy is ready once no other pending copy still reads the location it
+    writes. A cycle parks one integer source; ``None`` when a cycle can only
+    be broken through a floating-point copy, which takes the buffered path
+    for the whole edge.
+    """
+    keys: list[int] = []
+    pending: list[int] = []
+    index = 0
+    while index < len(phi_ids):
+        keys.append(src_keys[index])
+        if src_keys[index] != dest_keys[index]:
+            pending.append(index)
+        index += 1
+    steps: list[int] = []
+    while pending:
+        ready: list[int] = []
+        for candidate in pending:
+            blocked = False
+            for other in pending:
+                if other != candidate and keys[other] == dest_keys[candidate]:
+                    blocked = True
+                    break
+            if not blocked:
+                ready.append(candidate)
+        if not ready:
+            victim = pending[0]
+            if _phi_type_is_fp(kernel, phi_ids[victim]):
+                return None
+            steps.append(-1 - victim)
+            keys[victim] = _PHI_REGISTER_KEY_BASE + _PHI_CYCLE_REGISTER
             continue
         for candidate in ready:
-            phi = kernel.phi_record(phi_ids[candidate])
-            if dest_regs[candidate] >= 0:
-                lines.extend(
-                    _phi_copy_to_register(
-                        func,
-                        kernel,
-                        phi.second,
-                        dest_regs[candidate],
-                        src_regs[candidate],
-                        incoming_refs[candidate],
-                        module_symbols,
-                    )
-                )
-            else:
-                lines.extend(
-                    _phi_copy_to_slot(
-                        func,
-                        kernel,
-                        phi.second,
-                        dest_slot_ids[candidate],
-                        src_regs[candidate],
-                        incoming_refs[candidate],
-                        module_symbols,
-                    )
-                )
+            steps.append(candidate)
             pending.remove(candidate)
-    return lines
+    return steps
 
 
 def _emit_phi_assignments_buffered(
