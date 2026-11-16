@@ -60,7 +60,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -131,37 +131,37 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
-    assert sum(gate.HOST_COUNTS) == 3941 and sum(gate.HOST_COUNTS[:85]) == 3881
-    assert sum(gate.HOST_COUNTS[:72]) == 3521
-    assert sum(gate.HOST_COUNTS[:70]) == 3463
-    assert sum(gate.HOST_COUNTS[:65]) == 3210
-    assert sum(gate.HOST_COUNTS[:63]) == 3172
-    assert sum(gate.HOST_COUNTS[:62]) == 3163
-    assert sum(gate.HOST_COUNTS[:61]) == 2931
-    assert sum(gate.HOST_COUNTS[:60]) == 2778
-    assert sum(gate.HOST_COUNTS[:59]) == 2767
-    assert sum(gate.HOST_COUNTS[:58]) == 2650
-    assert sum(gate.HOST_COUNTS[:57]) == 2642
-    assert sum(gate.HOST_COUNTS[:53]) == 2529
-    assert sum(gate.HOST_COUNTS[:52]) == 2504
-    assert sum(gate.HOST_COUNTS[:51]) == 2473
-    assert sum(gate.HOST_COUNTS[:50]) == 2431 and sum(gate.HOST_COUNTS[:49]) == 2385
-    assert sum(gate.HOST_COUNTS[:48]) == 2344
-    assert sum(gate.HOST_COUNTS[:47]) == 2301
-    assert sum(gate.HOST_COUNTS[:43]) == 2209
-    assert sum(gate.HOST_COUNTS[:42]) == 2093
-    assert sum(gate.HOST_COUNTS[:40]) == 2084
-    assert sum(gate.HOST_COUNTS[:38]) == 2074
-    assert sum(gate.HOST_COUNTS[:36]) == 2065
-    assert sum(gate.HOST_COUNTS[:34]) == 2047
-    assert sum(gate.HOST_COUNTS[:32]) == 2012
-    assert sum(gate.HOST_COUNTS[:30]) == 1852
-    assert sum(gate.HOST_COUNTS[:28]) == 1756
-    assert sum(gate.HOST_COUNTS[:27]) == 1701
-    assert sum(gate.HOST_COUNTS[:25]) == 1561
-    assert sum(gate.HOST_COUNTS[:23]) == 1406
-    assert sum(gate.HOST_COUNTS[:22]) == 1390
-    assert sum(gate.HOST_COUNTS[:21]) == 1335
+    assert sum(gate.HOST_COUNTS) == 3957 and sum(gate.HOST_COUNTS[:85]) == 3897
+    assert sum(gate.HOST_COUNTS[:72]) == 3537
+    assert sum(gate.HOST_COUNTS[:70]) == 3479
+    assert sum(gate.HOST_COUNTS[:65]) == 3226
+    assert sum(gate.HOST_COUNTS[:63]) == 3188
+    assert sum(gate.HOST_COUNTS[:62]) == 3179
+    assert sum(gate.HOST_COUNTS[:61]) == 2947
+    assert sum(gate.HOST_COUNTS[:60]) == 2794
+    assert sum(gate.HOST_COUNTS[:59]) == 2783
+    assert sum(gate.HOST_COUNTS[:58]) == 2666
+    assert sum(gate.HOST_COUNTS[:57]) == 2658
+    assert sum(gate.HOST_COUNTS[:53]) == 2545
+    assert sum(gate.HOST_COUNTS[:52]) == 2520
+    assert sum(gate.HOST_COUNTS[:51]) == 2489
+    assert sum(gate.HOST_COUNTS[:50]) == 2447 and sum(gate.HOST_COUNTS[:49]) == 2401
+    assert sum(gate.HOST_COUNTS[:48]) == 2360
+    assert sum(gate.HOST_COUNTS[:47]) == 2317
+    assert sum(gate.HOST_COUNTS[:43]) == 2225
+    assert sum(gate.HOST_COUNTS[:42]) == 2109
+    assert sum(gate.HOST_COUNTS[:40]) == 2100
+    assert sum(gate.HOST_COUNTS[:38]) == 2090
+    assert sum(gate.HOST_COUNTS[:36]) == 2081
+    assert sum(gate.HOST_COUNTS[:34]) == 2063
+    assert sum(gate.HOST_COUNTS[:32]) == 2028
+    assert sum(gate.HOST_COUNTS[:30]) == 1868
+    assert sum(gate.HOST_COUNTS[:28]) == 1767
+    assert sum(gate.HOST_COUNTS[:27]) == 1712
+    assert sum(gate.HOST_COUNTS[:25]) == 1572
+    assert sum(gate.HOST_COUNTS[:23]) == 1417
+    assert sum(gate.HOST_COUNTS[:22]) == 1401
+    assert sum(gate.HOST_COUNTS[:21]) == 1346
     assert sum(gate.HOST_COUNTS[:20]) == 1246
     assert sum(gate.HOST_COUNTS[:18]) == 1209
     assert sum(gate.HOST_COUNTS[:17]) == 1142 and sum(gate.HOST_COUNTS[:16]) == 1081
@@ -193,12 +193,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3941, "selected_passed_count": 3941,
+        "universe_count": 3957, "selected_passed_count": 3957,
         "platform_unrun": [], "worker_witnesses": 6,
     }
     # A complete report cannot pass stale counts or omit the new module. Dropping
     # the added nodes from every witness/report still fails the fixed receipt.
-    for index, old_count in ((2, 291), (12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
+    for index, old_count in ((20, 89), (28, 84), (2, 291), (12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
         old_counts = list(gate.HOST_COUNTS)
         old_counts[index] = old_count
         put(tmp_path, inventory_reports(inventory_nodes))
@@ -223,10 +223,13 @@ def test_default_command_retains_project_xdist(tmp_path):
     capture_moved = list(inventory_nodes)
     capture_moved[capture_moved.index(gate.HOST_FILES[86] + "::test_inventory[26]")] = (
         gate.HOST_FILES[84] + "::test_inventory[13]")
+    scalar_moved = list(inventory_nodes)
+    scalar_moved[scalar_moved.index(gate.HOST_FILES[20] + "::test_inventory[99]")] = (
+        gate.HOST_FILES[28] + "::test_inventory[89]")
     for invalid in (inventory_nodes + [inventory_nodes[-1]],
                     inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[12]"],
                     inventory_nodes + [gate.HOST_FILES[84] + "::test_inventory[13]"],
-                    moved, lambda_moved, capture_moved):
+                    moved, lambda_moved, capture_moved, scalar_moved):
         put(tmp_path, inventory_reports(invalid))
         with pytest.raises(AssertionError):
             gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
@@ -2344,7 +2347,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55, 84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

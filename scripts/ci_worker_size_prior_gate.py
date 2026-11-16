@@ -340,19 +340,18 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3941 ordinary raw nodes.
-# CI at 033a225 reported 3914 prior nodes on all six Linux x86_64/AArch64
-# workers, including 291 in test_ci_worker_size_prior_gate.py. The ordinary
-# x86_64 packet passed all 3914; AArch64 passed 3913 plus the existing text-index
-# owned-linker case recorded as platform-inapplicable UNRUN, not subtracted.
-# Only this module gains 27 Stage1 traceback cases: its count is now 318.
-# The new cases and 3941-node inventory are source-counted; execution is UNRUN.
-# Keep all paths and explicit counts. Reconcile source hashes and actual node
-# identities before updating this receipt; collection is not execution evidence.
+# Expected default-marker inventory: 87 modules, 3957 ordinary raw nodes.
+# Source-matched 87b58370 AArch64 CI collected all 3957: 3956 passed and
+# the existing text-index platform-inapplicable node remained explicit UNRUN.
+# 6e7304e adds 11 scalar projection controls (89 -> 100); 4e01251 adds
+# five worker deadline cases (84 -> 89). No prior node or path is removed.
+# Keep exact per-file counts, six-worker witnesses and all report checks.
+# Reconcile source hashes and node identities before updating this receipt;
+# collection is not execution evidence and UNRUN is never counted as PASS.
 HOST_COUNTS = (
     106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17,
-    4, 5, 61, 67, 24, 13, 89, 55, 16, 136, 19, 117, 23, 55,
-    84, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
+    4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55,
+    89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
     43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84,
     35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
