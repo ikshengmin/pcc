@@ -601,9 +601,9 @@ def drop_dead_cset_branch_stores(
     return _run(fragments, semantics, span, 14)
 
 
-def run_aarch64_typed_peepholes(
+def _run_aarch64_typed_peepholes(
     fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics,
-    span: CompilerInt2, *, phase_timing=None,
+    span: CompilerInt2, *, phase_timing=None, owned_stack_windows: bool = False,
 ) -> CompilerInt2:
     """Apply the original ordered first-fourteen module-stream passes."""
     if phase_timing is not None:
@@ -613,12 +613,12 @@ def run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_peephole_validate", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_forward_adjacent_stack_store_load")
-    span = forward_adjacent_stack_store_load(fragments, semantics, span)
+    span = _run_owned_stack(fragments, semantics, span, 1) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else forward_adjacent_stack_store_load(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_forward_adjacent_stack_store_load", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_forward_one_intervening_stack_store_load")
-    span = forward_one_intervening_stack_store_load(fragments, semantics, span)
+    span = _run_owned_stack(fragments, semantics, span, 2) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else forward_one_intervening_stack_store_load(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_forward_one_intervening_stack_store_load", started)
     if phase_timing is not None:
@@ -682,3 +682,70 @@ def run_aarch64_typed_peepholes(
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_drop_dead_cset_branch_stores", started)
     return span
+
+
+def run_aarch64_typed_peepholes(fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics, span: CompilerInt2, *, phase_timing=None) -> CompilerInt2:
+    return _run_aarch64_typed_peepholes(fragments, semantics, span, phase_timing=phase_timing)
+
+
+def _run_owned_stack(fragments, semantics, span, mode):
+    from .self_backend_aarch64_owned_stack import decide
+    # Only the private driver selects this route. Native arena storage retains
+    # the original implementation until the owned carrier is independently qualified.
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, mode)
+    p = _Pass(fragments, semantics, span)
+    try:
+        view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
+        index = 0
+        changed = False
+        while index < len(p.ids):
+            a = p.rid(index)
+            decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2))
+            if decision[0] != 0:
+                replacement = p.new_move(decision[1], decision[2], decision[3] != 0)
+                if replacement == -2:
+                    raise EncodeError("owned stack decision disagrees with producer")
+                p.output.append(a)
+                if mode == 2:
+                    p.output.append(p.rid(index + 1))
+                if replacement >= 0:
+                    p.output.append(replacement)
+                changed = True
+                index += decision[0]
+            else:
+                p.output.append(a)
+                index += 1
+        if not changed and fragments.spans.length(span) == len(p.ids):
+            result = fragments.new_fragment()
+            fragments.extend_fragment(result, span)
+            return result
+        return p.finish()
+    finally:
+        p.close()
+
+
+def _owned_timer_is_canonical(phase_timing) -> bool:
+    import sys
+    from .indexed_phase_timing import ModulePhaseTiming
+    # The dynamic host check is not part of the native compiler's execution.
+    if sys.implementation.name == "pcc":
+        return False
+    if phase_timing is None:
+        return True
+    if type(phase_timing) is not ModulePhaseTiming:
+        return False
+    if type(phase_timing.failed) is not bool or type(phase_timing.module_name) is not str:
+        return False
+    from types import MethodType
+    begin = phase_timing.begin_backend_finalize
+    complete = phase_timing.complete_backend_finalize
+    start = phase_timing.start
+    if type(begin) is not MethodType or type(complete) is not MethodType or type(start) is not MethodType:
+        return False
+    return (begin.__func__ is ModulePhaseTiming.begin_backend_finalize
+            and complete.__func__ is ModulePhaseTiming.complete_backend_finalize
+            and start.__func__ is ModulePhaseTiming.start
+            and begin.__self__ is phase_timing
+            and complete.__self__ is phase_timing
+            and start.__self__ is phase_timing)

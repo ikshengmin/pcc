@@ -212,7 +212,8 @@ class _NativeAArch64Emission:
     text is retained or parsed on that route; peak memory still needs CI proof.
     """
 
-    def __init__(self, *, optimize: bool = False) -> None:
+    def __init__(self, *, optimize: bool = False, owned_stack_windows: bool = False) -> None:
+        self._owned_stack_windows = owned_stack_windows
         direct_semantics = borrow_direct_instruction_semantics() if optimize else None
         self.symbol_names: list[str] = []
         self.symbol_ids: dict[str, int] = {}
@@ -401,7 +402,7 @@ class _NativeAArch64Emission:
         raise BackendUnavailable("optimized native instruction lacks typed producer provenance")
 
     def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges, phase_timing=None) -> None:
-        from .self_backend_aarch64_typed_peepholes import run_aarch64_typed_peepholes
+        from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes
         from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
         if not self.collecting_optimized or self.fragments.semantics is None:
             raise BackendUnavailable("optimized module capture is not active")
@@ -411,10 +412,16 @@ class _NativeAArch64Emission:
         self.fragments.semantics.require_complete(self.fragments.records, len(self.fragments.symbol_names))
         if phase_timing is not None:
             phase_timing.complete_backend_finalize("typed_validate", started)
-        span = run_aarch64_typed_peepholes(
-            self.fragments, self.fragments.semantics, self.module_span,
-            phase_timing=phase_timing,
-        )
+        if self._owned_stack_windows:
+            span = _run_aarch64_typed_peepholes(
+                self.fragments, self.fragments.semantics, self.module_span,
+                phase_timing=phase_timing, owned_stack_windows=True,
+            )
+        else:
+            span = run_aarch64_typed_peepholes(
+                self.fragments, self.fragments.semantics, self.module_span,
+                phase_timing=phase_timing,
+            )
         span = run_aarch64_typed_cfg_passes(
             self.fragments, self.fragments.semantics, span, metadata_labels,
             cold_fallthrough_edges, phase_timing=phase_timing,
@@ -959,7 +966,8 @@ def _emit_prepared_aarch64_darwin_lines(
             require_direct_instruction_capture_idle()
         try:
             if native_undefined is not None:
-                native_sink = _NativeAArch64Emission(optimize=optimize)
+                from .self_backend_aarch64_typed_peepholes import _owned_timer_is_canonical
+                native_sink = _NativeAArch64Emission(optimize=optimize, owned_stack_windows=_owned_timer_is_canonical(phase_timing))
             return _emit_prepared_aarch64_darwin_lines_active(
                 prepared,
                 optimize,

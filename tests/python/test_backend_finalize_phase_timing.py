@@ -445,6 +445,9 @@ def test_failure_keeps_original_error_cleanup_and_incomplete_receipt(
     wrapper = _source_function("_emit_prepared_aarch64_darwin_lines")
     namespace = dict(run.namespace)
     namespace.update(
+        # Match the production module so its private relative import resolves.
+        __name__="pcc.backend.self_backend_aarch64_darwin",
+        __package__="pcc.backend",
         _AARCH64_EMISSION_ACTIVE=False, has_source_debug=lambda functions: False,
         _NativeAArch64Emission=lambda **kwargs: run.namespace["native_sink"],
         begin_direct_instruction_capture=lambda **kwargs: run.operations.append("capture_begin"),
