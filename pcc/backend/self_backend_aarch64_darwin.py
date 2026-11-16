@@ -1952,6 +1952,21 @@ def _can_drop_zero_mov_after_store(
     return True
 
 
+def _store_address_uses_reg(address: str, reg: str) -> bool:
+    tokens = _tokens_for_reg_scan(address)
+    return any(alias in tokens for alias in _reg_aliases(reg))
+
+
+def _store_replacement_safe(address: str, reg: str) -> bool:
+    if reg in ("sp", "wsp"):
+        return False
+    if address.endswith("!") or "]," in address:
+        tokens = _tokens_for_reg_scan(address)
+        if tokens and tokens[0] in _reg_aliases(reg):
+            return False
+    return True
+
+
 def _fold_zero_store_source(lines: list[str]) -> list[str]:
     out: list[str] = []
     index = 0
@@ -1966,6 +1981,7 @@ def _fold_zero_store_source(lines: list[str]) -> list[str]:
                     replacement_reg is not None
                     and store_reg == zero_reg
                     and _is_aarch64_scratch_reg(zero_reg)
+                    and not _store_address_uses_reg(_addr, zero_reg)
                     and _can_drop_zero_mov_after_store(lines, index + 2, zero_reg)
                 ):
                     out.append(
@@ -2007,6 +2023,8 @@ def _fold_mov_store_source(lines: list[str]) -> list[str]:
                 if (
                     store_reg == dest_reg
                     and _is_aarch64_scratch_reg(dest_reg)
+                    and not _store_address_uses_reg(_addr, dest_reg)
+                    and _store_replacement_safe(_addr, src_reg)
                     and _can_drop_zero_mov_after_store(lines, index + 2, dest_reg)
                 ):
                     out.append(

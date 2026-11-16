@@ -226,6 +226,28 @@ class _Pass:
             return sem.semantic_symbol_uses_register(self.fragments.symbol_names[token.second], reg)
         return False
 
+    def store_address_uses(self, rid, reg):
+        # Removing the preceding definition must not change the store address.
+        # A W definition also changes X, so check the other-width alias too.
+        for token in self.tokens(rid)[1:]:
+            if self.token_uses(token, reg) or self.token_uses(token, _alias(reg)):
+                return True
+        return False
+
+    def store_replacement_safe(self, rid, reg):
+        # Rt encoding 31 means ZR, never SP. Also avoid introducing a new
+        # constrained-unpredictable Rt/Rn overlap on writeback stores.
+        if reg in (sem.REGISTER_SP, sem.REGISTER_WSP):
+            return False
+        tokens = self.tokens(rid)
+        for index in range(1, len(tokens) - 1):
+            token = tokens[index]
+            if token.first == sem.TOKEN_ADDRESS and token.second in (sem.ADDRESS_PREINDEX, sem.ADDRESS_POSTINDEX):
+                base = tokens[index + 1]
+                if self.token_uses(base, reg) or self.token_uses(base, _alias(reg)):
+                    return False
+        return True
+
     def effect(self, rid, reg):
         op = self.op(rid)
         if not op:
@@ -384,7 +406,9 @@ def _run(fragments, semantics, span, mode):
                 zero = p.zero(a)
                 move = p.move(a)
                 old = zero if mode == 3 else (move[0] if move else -1)
-                if old >= 0 and _scratch(old) and p.op(b) in ("stur", "str", "sturb", "strb") and p.register(b, 0) == old and p.dead(index + 2, old):
+                if (old >= 0 and _scratch(old) and p.op(b) in ("stur", "str", "sturb", "strb") and p.register(b, 0) == old and not p.store_address_uses(b, old)
+                    and (mode == 3 or p.store_replacement_safe(b, move[1]))
+                    and p.dead(index + 2, old)):
                     new = (sem.REGISTER_WZR if _class(old) == "w" else sem.REGISTER_XZR) if mode == 3 else move[1]
                     replacement = p.changed_register(b, 0, new, 0)
                     consumed = 2
