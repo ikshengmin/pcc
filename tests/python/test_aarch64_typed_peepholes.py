@@ -13,6 +13,7 @@ from pcc.backend.self_backend_aarch64_fragments import (
     AArch64EmissionFragments, EMISSION_RECORD_LABEL, EMISSION_RECORD_EMPTY,
     EMISSION_RECORD_DIRECTIVE, EMISSION_RECORD_MEMORY_PAIR_BARRIER,
 )
+from pcc.backend.arm64_encode_producer import encode_producer_indirect_branch
 from pcc.backend.self_backend_value_arena import CompilerInt4
 
 
@@ -92,6 +93,18 @@ def _ids(owner, span):
     return result
 
 
+# Exact independently specified words for legal semantic-test inputs outside
+# assemble_text's proven subset. These are not a new text assembler fallback.
+# Arm A64 BR: 0xD61F0000 | (Rn << 5).
+# Arm A64 BFI: BFM Xd, Xn, #(-lsb MOD 64), #(width - 1).
+# https://support.arm.com/documentation/ddi0602/latest/Base-Instructions/BR--Branch-to-register-
+# https://support.arm.com/documentation/ddi0596/2021-03/Base-Instructions/BFI--Bitfield-Insert--an-alias-of-BFM-)
+_FIXTURE_WORDS = {
+    "  br x19": 0xD61F0260,
+    "  bfi x9, x10, #0, #1": 0xB3400149,
+}
+
+
 def _fixture(items):
     f, s = AArch64EmissionFragments(), sem.AArch64InstructionSemantics()
     span = f.new_fragment()
@@ -124,6 +137,13 @@ def _fixture(items):
             word = enc.encode_emitted_branch_base_parts(op, "" if op == "b" or op.startswith("b.") else sem.semantic_register_spelling(tokens[0].second))
         elif op == "bl":
             word, fixup, symbol = 0x94000000, enc.STRUCTURED_FIXUP_CALL, tokens[0].second
+        elif op == "br":
+            word = encode_producer_indirect_branch(
+                op, sem.semantic_register_spelling(tokens[0].second),
+            )
+        elif line == "  bfi x9, x10, #0, #1":
+            # BFM's sf=1, opc=01, N=1, immr=imms=0, Rn=10, Rd=9.
+            word = 0xB3400000 | (10 << 5) | 9
         else:
             result = enc.assemble_text(line)
             assert len(result.code) == 4
@@ -141,7 +161,9 @@ def _differential(monkeypatch, name, items, changed=None):
         # Complete the text oracle before forbidding every text entrypoint.
         expected_words = []
         for line in expected:
-            if line.startswith("  "):
+            if line in _FIXTURE_WORDS:
+                expected_words.append(_FIXTURE_WORDS[line])
+            elif line.startswith("  "):
                 expected_words.append(enc._encode_one(
                     line.strip(), 0, {}, lambda target, width, at: 0,
                     [], set(), lambda target, at: False,
@@ -226,7 +248,74 @@ def test_zero_spelling_is_not_inferred_from_word(monkeypatch, immediate):
 @pytest.mark.parametrize("condition", ["cs", "cc", "hs", "lo", "al", "nv"])
 def test_condition_aliases_preserve_original_inverse_domain(monkeypatch, condition):
     items = [I("cmp", R("w9"), R("w10")), I("cset", R("w9"), C(condition)), I("sturb", R("w9"), A()), I("cbz", R("w9"), S())]
-    _differential(monkeypatch, "fold_cset_zero_branch", items)
+    if condition not in ("al", "nv"):
+        _differential(monkeypatch, "fold_cset_zero_branch", items)
+        return
+
+    # AL/NV are in the provenance vocabulary, but are not encodable CSET
+    # aliases. Preserve this inverse-domain negative case without pretending
+    # that it is an executable instruction. Both existing encoders must reject.
+    line = "  cset w9, " + condition
+    with pytest.raises(enc.EncodeError, match="bad condition code"):
+        enc.assemble_text(line)
+    with pytest.raises(enc.EncodeError, match="bad condition code"):
+        enc.encode_emitted_cset_parts("w9", condition)
+
+    valid_items = list(items)
+    valid_items[1] = I("cset", R("w9"), C("eq"))
+    f, s, source, lines = _fixture(valid_items)
+    try:
+        before = _ids(f, source)
+        header = s.require_header(before[1])
+        # Deliberate invalid-alias provenance injection. The valid EQ word is
+        # merely an opaque preservation sentinel; it is never executed or
+        # presented as an encoding of CSET AL/NV.
+        s.tokens.set((header.third + 1) * 4 + 1, C(condition).second)
+        lines[1] = line
+        assert legacy._fold_cset_zero_branch(lines) == lines
+        records = [f.records.get4_unchecked(rid) for rid in before]
+        tokens = [s.tokens.get4_unchecked(i) for i in range(s.token_count())]
+
+        def forbidden(*args, **kwargs):
+            raise AssertionError("invalid-alias negative case tried to encode")
+
+        with monkeypatch.context() as patch:
+            for target in ("append_emitted_instruction_record", "encode_emitted_unscaled_load_store", "encode_emitted_move", "assemble_text", "assemble_text_lines", "_encode_one"):
+                patch.setattr(enc, target, forbidden)
+            patch.setattr(typed, "encode_emitted_branch_base_parts", forbidden)
+            result = typed.fold_cset_zero_branch(f, s, source)
+        assert _ids(f, source) == before
+        assert _ids(f, result) == before
+        assert [f.records.get4_unchecked(rid) for rid in before] == records
+        assert [s.tokens.get4_unchecked(i) for i in range(s.token_count())] == tokens
+        assert s.operand(before[1], 1) == C(condition)
+        s.require_complete(f.records, len(f.symbol_names))
+        assert f.spans.projection_count == 0
+    finally:
+        s.close()
+        f.close()
+
+
+@pytest.mark.parametrize("item,line,word", [
+    (I("br", R("x19")), "  br x19", 0xD61F0260),
+    (I("bfi", R("x9"), R("x10"), N(0), N(1)),
+     "  bfi x9, x10, #0, #1", 0xB3400149),
+])
+def test_semantic_only_fixture_words_are_exact(item, line, word):
+    # This test repair does not extend the text assembler's proven subset.
+    with pytest.raises(enc.EncodeError, match="not in the proven subset"):
+        enc.assemble_text(line)
+    f, s, source, lines = _fixture([item])
+    try:
+        rid, = _ids(f, source)
+        assert lines == [line]
+        assert f.records.get4_unchecked(rid).first == word
+        assert s.require_header(rid).first == sem.semantic_opcode_id(item[0])
+        assert [s.operand(rid, i) for i in range(s.require_header(rid).fourth)] == item[1]
+        s.require_complete(f.records, len(f.symbol_names))
+    finally:
+        s.close()
+        f.close()
 
 
 def test_missing_provenance_fails_closed():
@@ -237,6 +326,79 @@ def test_missing_provenance_fails_closed():
         with pytest.raises(enc.EncodeError, match="provenance"):
             typed.fold_zero_test_branch(f, s, source)
     finally:
+        s.close()
+        f.close()
+
+
+def test_operand_snapshot_validates_once_per_call(monkeypatch):
+    items = ["_f:", I("stur", R("x9"), A())]
+    f, s, source, _ = _fixture(items)
+    p = typed._Pass(f, s, source)
+    try:
+        ids = _ids(f, source)
+        expected = [R("x9"), *A()]
+        reads = []
+        require_header = s.require_header
+
+        def validated(record_id):
+            reads.append(record_id)
+            return require_header(record_id)
+
+        def repeated_operand_scan(*_args):
+            raise AssertionError("operand snapshot repeated whole-span validation")
+
+        monkeypatch.setattr(s, "require_header", validated)
+        monkeypatch.setattr(s, "operand", repeated_operand_scan)
+        values = p.tokens(ids[1])
+        assert values == expected
+        assert reads == [ids[1]]
+        values.clear()
+        assert p.tokens(ids[1]) == expected
+        assert reads == [ids[1], ids[1]]
+        assert p.tokens(ids[0]) == p.tokens(-1) == []
+        assert reads == [ids[1], ids[1]]
+    finally:
+        p.close()
+        s.close()
+        f.close()
+
+
+@pytest.mark.parametrize("corruption", [
+    "opcode", "form", "span_start", "span_count", "short_headers",
+    "short_tokens", "register", "address_base", "address_span", "closed",
+])
+def test_operand_snapshot_revalidates_changed_provenance(corruption):
+    f, s, source, _ = _fixture([I("stur", R("x9"), A())])
+    p = typed._Pass(f, s, source)
+    try:
+        rid = _ids(f, source)[0]
+        assert p.tokens(rid) == [R("x9"), *A()]
+        # Mutate after construction and a successful read: no earlier pass or
+        # snapshot is authority to skip validation of the current record.
+        if corruption == "opcode":
+            s.headers.set(rid * 4, 0)
+        elif corruption == "form":
+            s.headers.set(rid * 4 + 1, 0)
+        elif corruption == "span_start":
+            s.headers.set(rid * 4 + 2, -1)
+        elif corruption == "span_count":
+            s.headers.set(rid * 4 + 3, 5)
+        elif corruption == "short_headers":
+            s.headers.truncate(len(s.headers) - 1)
+        elif corruption == "short_tokens":
+            s.tokens.truncate(len(s.tokens) - 1)
+        elif corruption == "register":
+            s.tokens.set(1, 999)
+        elif corruption == "address_base":
+            s.tokens.set(8, sem.TOKEN_IMMEDIATE)
+        elif corruption == "address_span":
+            s.headers.set(rid * 4 + 3, 2)
+        else:
+            s.close()
+        with pytest.raises(RuntimeError if corruption == "closed" else enc.EncodeError):
+            p.tokens(rid)
+    finally:
+        p.close()
         s.close()
         f.close()
 

@@ -100,17 +100,20 @@ def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
     index = 0
     while index < len(rewritten):
         label = _local(ctx, rewritten[index])
-        previous = len(out) - 1
-        while previous >= 0 and ctx.is_empty(out[previous]):
-            previous -= 1
-        falls_through = previous < 0 or not (
-            ctx.opcode(out[previous]) in ("b", "br") or ctx.opcode(out[previous]).startswith("ret")
-        )
-        if label is not None and label in trampolines and label not in referenced and not falls_through:
-            index += 1
-            while index < len(rewritten) and not _boundary(ctx, rewritten[index]):
+        if label is not None and label in trampolines and label not in referenced:
+            # Match the text owner's short circuit: only a removable trampoline
+            # needs fallthrough proof, not every retained empty event.
+            previous = len(out) - 1
+            while previous >= 0 and ctx.is_empty(out[previous]):
+                previous -= 1
+            falls_through = previous < 0 or not (
+                ctx.opcode(out[previous]) in ("b", "br") or ctx.opcode(out[previous]).startswith("ret")
+            )
+            if not falls_through:
                 index += 1
-            continue
+                while index < len(rewritten) and not _boundary(ctx, rewritten[index]):
+                    index += 1
+                continue
         out.append(rewritten[index])
         index += 1
     return out
@@ -233,6 +236,7 @@ def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_la
 
 def run_aarch64_typed_cfg_passes(
     fragments, semantics, span, metadata_labels, cold_fallthrough_edges,
+    *, phase_timing=None,
 ):
     """Final six passes in the original order, over the whole module.
 
@@ -242,6 +246,8 @@ def run_aarch64_typed_cfg_passes(
     """
     from .self_backend_aarch64_typed_tlv import elide_dead_tlv_resolver_saves
     from .self_backend_aarch64_typed_pair import pair_adjacent_aarch64_64bit_memory_ops
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_cfg_proofs")
     metadata_ids = set()
     for name in metadata_labels:
         if name in fragments.symbol_ids:
@@ -252,9 +258,36 @@ def run_aarch64_typed_cfg_passes(
         error_id = fragments.symbol_ids[error] if error in fragments.symbol_ids else -1
         success_id = fragments.symbol_ids[success] if success in fragments.symbol_ids else -1
         edges.append((source_id, error_id, success_id))
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_cfg_proofs", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_thread_trampoline_branches")
     result = thread_trampoline_branches(fragments, semantics, span, metadata_ids)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_thread_trampoline_branches", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_cond_branch_to_fallthrough")
     result = fold_cond_branch_to_fallthrough(fragments, semantics, result, edges)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_cond_branch_to_fallthrough", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_drop_fallthrough_uncond_branches")
     result = drop_fallthrough_uncond_branches(fragments, semantics, result)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_drop_fallthrough_uncond_branches", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_drop_unreferenced_empty_local_labels")
     result = drop_unreferenced_empty_local_labels(fragments, semantics, result, metadata_ids)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_drop_unreferenced_empty_local_labels", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_elide_dead_tlv_resolver_saves")
     result = elide_dead_tlv_resolver_saves(fragments, semantics, result)
-    return pair_adjacent_aarch64_64bit_memory_ops(fragments, semantics, result, enabled=True)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_elide_dead_tlv_resolver_saves", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_pair_adjacent_aarch64_64bit_memory_ops")
+    result = pair_adjacent_aarch64_64bit_memory_ops(fragments, semantics, result, enabled=True)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_pair_adjacent_aarch64_64bit_memory_ops", started)
+    return result

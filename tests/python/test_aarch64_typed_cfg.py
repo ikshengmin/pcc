@@ -89,6 +89,36 @@ def test_module_threading_cycles_metadata_and_fallthrough(protect, cycle):
     assert ctx.text(actual) == expected
 
 
+@pytest.mark.parametrize("padding", [0, 1, 16, 256])
+def test_retained_trampoline_empty_run_keeps_linear_probe_count(monkeypatch, padding):
+    ctx = Events()
+    blank = ctx.add("", empty=True)
+    records = [ctx.mark("_f"), ctx.branch("b", "L_trampoline"),
+               ctx.branch("b", "L_end"), ctx.mark("L_trampoline"),
+               ctx.branch("b", "L_target")]
+    records += [blank] * padding
+    records += [ctx.mark("L_target"), ctx.add("  ret", "ret"), ctx.mark("L_end")]
+    original = list(records)
+    metadata = {"L_trampoline"}
+    expected = reference._thread_trampoline_branches(ctx.text(records), metadata)
+    probes = 0
+    is_empty = ctx.is_empty
+
+    def counted_empty(record):
+        nonlocal probes
+        probes += 1
+        return is_empty(record)
+
+    monkeypatch.setattr(ctx, "is_empty", counted_empty)
+    actual = typed.thread_trampoline_branches_records(ctx, records, [ctx.intern("L_trampoline")])
+    assert records == original
+    assert ctx.text(actual) == expected
+    assert "L_trampoline:" in expected and expected.count("") == padding
+    # Structural work bound, not a timing claim. Retained blanks must not each
+    # rescan the entire preceding blank run during trampoline cleanup.
+    assert probes <= 2 * len(records)
+
+
 @pytest.mark.parametrize("opcode", ["cbz", "cbnz", "b.eq", "b.cs", "b.hs", "b.al"])
 @pytest.mark.parametrize("proof", [False, True])
 def test_cold_fallthrough_requires_exact_proof_and_condition_alias(opcode, proof):

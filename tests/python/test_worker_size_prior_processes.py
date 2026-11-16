@@ -111,6 +111,268 @@ def _fixture_failure_evidence(directory):
     return evidence
 
 
+def _fixture_diagnostic_report(text):
+    """Parse the bounded fixture report independently of the runtime reader."""
+    if type(text) is not str or len(text) > 384:
+        raise ValueError("invalid diagnostic report text")
+    fields = text.splitlines()
+    if len(fields) != 6 or fields[0] != policy.RESOURCE_REPORT_SCHEMA:
+        raise ValueError("invalid diagnostic report schema")
+    pid, current, peak = int(fields[1]), int(fields[3]), int(fields[4])
+    phase, token = fields[2], fields[5]
+    if (pid <= 0 or not 0 < current <= peak or max(pid, current, peak) > 9223372036854775807
+            or fields[1] != str(pid) or fields[3] != str(current) or fields[4] != str(peak)
+            or phase not in ("started", "complete") or len(token) != 64
+            or any(char not in "0123456789abcdef" for char in token)):
+        raise ValueError("invalid diagnostic report values")
+    return pid, token, phase, current, peak
+
+
+def _fixture_resource_diagnostics(directory):
+    """Match bounded retained publications, never the overwritten RSS file.
+
+    Raw values are the two boundary results used by that publication, not an
+    independently sampled /proc oracle. Duplicate text with differing raw
+    values is ambiguous. Missing seals, killed children and bounds are visible.
+    Diagnostic work changes fixture RSS/timing and is not performance evidence.
+    """
+    names = ["resource-driver.tsv"]
+    identities = {}
+    child_journals = {}
+    protocol_errors = []
+    for index in range(3):
+        for attempt in (1, 2):
+            marker = directory / ("started." + str(index) + "." + str(attempt))
+            try:
+                with marker.open("rb") as stream:
+                    raw_marker = stream.read(513)
+                fields = raw_marker.decode("utf-8").split("\t")
+                if len(raw_marker) > 512 or len(fields) != 4:
+                    raise ValueError("invalid started marker")
+                pid, token = int(fields[0]), fields[1]
+                if (pid <= 0 or str(pid) != fields[0] or len(token) != 64
+                        or any(char not in "0123456789abcdef" for char in token)
+                        or fields[2] not in ("pcc", "cpython") or fields[3] not in ("0", "1", "2", "3", "4")):
+                    raise ValueError("invalid started identity")
+                name = "resource-child-" + str(index) + "-" + token + ".tsv"
+                if name in names or (pid, token) in identities.values():
+                    raise ValueError("duplicate started identity")
+                names.append(name)
+                child_journals[name] = (pid, token)
+                if attempt == 1:
+                    identities[index] = (pid, token)
+                else:
+                    protocol_errors.append("unexpected width retry")
+            except FileNotFoundError:
+                if attempt == 1:
+                    protocol_errors.append("missing started identity " + str(index))
+            except (OSError, UnicodeError, ValueError):
+                protocol_errors.append("invalid started identity " + str(index))
+    if len({pid for pid, token in identities.values()}) != len(identities):
+        protocol_errors.append("duplicate started PID")
+    if len({token for pid, token in identities.values()}) != len(identities):
+        protocol_errors.append("duplicate started token")
+    journals = {}
+    publications = {}
+    accepted = []
+    observations = []
+    driver_events = []
+    published_phases = set()
+    child_phases = {name: [] for name in child_journals}
+    publication_peaks = {name: 0 for name in child_journals}
+    for name in names:
+        entry = {"complete": False}
+        journals[name] = entry
+        try:
+            with (directory / name).open("rb") as stream:
+                raw = stream.read(262145)
+            entry["physical_bytes_read"] = len(raw)
+            entry["truncated"] = len(raw) > 262144
+            text = raw[:262144].decode("utf-8")
+            entry["text"] = text
+            if entry["truncated"]:
+                entry["reason"] = "limit"
+                continue
+            lines = text.splitlines()
+            physical_lines = raw.splitlines(keepends=True)
+            if (len(lines) > 256 or any(len(line) > 1024 for line in physical_lines)
+                    or b"\r" in raw):
+                entry["reason"] = "limit"
+                continue
+            try:
+                with (directory / (name + ".status")).open("rb") as stream:
+                    status_raw = stream.read(1025)
+                status_text = status_raw.decode("utf-8")
+                if len(status_raw) > 1024 or not status_raw.endswith(b"\n") or b"\r" in status_raw:
+                    entry["reason"] = "status-limit"
+                else:
+                    count, size, incomplete = ast.literal_eval(status_text)
+                    entry["reason"] = incomplete or ""
+                    entry["complete"] = (type(count) is int and type(size) is int
+                                         and type(incomplete) is str and not incomplete
+                                         and count == len(lines)
+                                         and size == len(raw)
+                                         and text.endswith("\n"))
+                    if not entry["complete"] and not entry["reason"]:
+                        entry["reason"] = "count-or-size-mismatch"
+            except (OSError, ValueError, SyntaxError, TypeError):
+                entry["reason"] = "missing-or-invalid-status"
+            for line in lines:
+                row = ast.literal_eval(line)
+                if type(row) is not tuple or len(row) != 2 or type(row[0]) is not str:
+                    raise ValueError("invalid journal record shape")
+                event, payload = row
+                if event == "published" and name in child_journals:
+                    if type(payload) is not tuple or len(payload) not in (4, 5):
+                        raise ValueError("invalid publication shape")
+                    report_text, current, raw_peak, peak = payload[:4]
+                    previous_peak = payload[4] if len(payload) == 5 else 0
+                    identity = _fixture_diagnostic_report(report_text)
+                    if (any(type(value) is not int or not -9223372036854775808 <= value <= 9223372036854775807
+                            for value in payload[1:]) or identity[:2] != child_journals[name]
+                            or identity[3:] != (current, peak)
+                            or max(current, raw_peak, previous_peak) != peak
+                            or (len(payload) == 5 and previous_peak != publication_peaks[name])):
+                        raise ValueError("invalid publication binding")
+                    # Five fields explicitly bind retained high water to this
+                    # child's preceding publication. Four fields remain the
+                    # historical raw-sample format, including old decreases.
+                    publication_peaks[name] = peak
+                    phase_key = identity[:3]
+                    if phase_key in published_phases:
+                        protocol_errors.append("duplicate width publication phase")
+                    published_phases.add(phase_key)
+                    child_phases[name].append(identity[2])
+                    publications.setdefault(report_text, []).append(payload[1:])
+                elif event == "accepted" and name == "resource-driver.tsv":
+                    if (type(payload) is not tuple or len(payload) != 6
+                            or type(payload[0]) is not int or type(payload[1]) is not str
+                            or type(payload[2]) is not str or type(payload[3]) is not int
+                            or type(payload[4]) is not int):
+                        raise ValueError("invalid acceptance shape")
+                    if (_fixture_diagnostic_report(payload[5]) != payload[:5]
+                            or payload[:2] not in identities.values()):
+                        raise ValueError("invalid acceptance binding")
+                    accepted.append(payload)
+                    driver_events.append((event, payload))
+                elif event == "observation" and name == "resource-driver.tsv":
+                    if type(payload) is not tuple or len(payload) != 4:
+                        raise ValueError("invalid observation shape")
+                    observations.append(payload)
+                    driver_events.append((event, payload))
+                else:
+                    raise ValueError("unknown diagnostic event")
+        except (OSError, ValueError, SyntaxError, TypeError):
+            entry["complete"] = False
+            entry["reason"] = "missing-or-invalid-journal"
+    if any(phases != ["started", "complete"] for phases in child_phases.values()):
+        protocol_errors.append("missing/duplicate/out-of-order width publication phases")
+    matches = []
+    for pid, token, phase, current, peak, report_text in accepted:
+        candidates = publications.get(report_text, [])
+        raw = set(candidates)
+        binding = report_text.splitlines()
+        valid = (len(binding) == 6 and binding[0] == policy.RESOURCE_REPORT_SCHEMA
+                 and binding[1] == str(pid) and binding[2] == phase
+                 and binding[3] == str(current) and binding[4] == str(peak)
+                 and binding[5] == token)
+        state = "unmatched" if not candidates else "ambiguous" if len(raw) != 1 else "matched"
+        # Candidate rows entered this table only after the per-child raw and
+        # previous-publication binding above; never infer prior peak here.
+        if not valid or any(row[0] != current or row[2] != peak
+                            for row in candidates):
+            state = "invalid-binding"
+        matches.append({
+            "pid": pid, "token": token, "phase": phase, "current": current, "peak": peak,
+            "report_sha256": hashlib.sha256(report_text.encode("utf-8")).hexdigest(),
+            "state": state, "raw_candidates": sorted(raw), "publications": len(candidates),
+        })
+    # Correlate the actual pool sample to accepted reads and the independent
+    # existing retirement trace. Merely having valid journal seals is not a
+    # verified completion chain. Retain partial evidence on every mismatch.
+    retires = {}
+    starts = {}
+    try:
+        with (directory / "admission.tsv").open("rb") as stream:
+            raw_admission = stream.read(8193)
+        if len(raw_admission) > 8192 or not raw_admission.endswith(b"\n"):
+            raise ValueError("admission limit or partial row")
+        rows = raw_admission.decode("utf-8").splitlines()
+        if len(rows) > 32:
+            raise ValueError("admission row limit")
+        for row in rows:
+            fields = row.split("\t")
+            if len(fields) != 7 or fields[0] not in ("start", "retire"):
+                raise ValueError("unexpected width admission row")
+            index, pid, peak = int(fields[1]), int(fields[2]), int(fields[5])
+            target = starts if fields[0] == "start" else retires
+            if index not in identities or identities[index][0] != pid or index in target:
+                raise ValueError("missing/mismatched/duplicate admission identity")
+            if fields[0] == "start" and peak != 0:
+                raise ValueError("nonzero initial peak")
+            if fields[0] == "retire" and (index not in starts or peak <= 0):
+                raise ValueError("retire before start or invalid peak")
+            target[index] = peak
+        if set(starts) != set(range(3)) or set(retires) != set(range(3)):
+            raise ValueError("missing start or retirement")
+    except (OSError, UnicodeError, ValueError):
+        protocol_errors.append("invalid or incomplete admission trace")
+    by_attempt = {identity: [] for identity in identities.values()}
+    seen_observations = set()
+    verified = []
+    for event, payload in driver_events:
+        if event == "accepted":
+            pid, token, phase, current, peak, report_text = payload
+            key = (pid, token)
+            if (type(pid) is not int or type(token) is not str or key not in by_attempt
+                    or key in seen_observations or phase not in ("started", "complete")
+                    or type(current) is not int or type(peak) is not int or not 0 < current <= peak):
+                protocol_errors.append("invalid accepted attempt or post-retirement acceptance")
+            else:
+                if phase == "started" and any(previous == "complete" for previous, value in by_attempt[key]):
+                    protocol_errors.append("started acceptance after complete")
+                by_attempt[key].append((phase, peak))
+            continue
+        valid = type(payload) is tuple and len(payload) == 4
+        if valid:
+            index, pid, token, sample = payload
+            valid = (type(index) is int and type(pid) is int and type(token) is str
+                     and index in identities and identities[index] == (pid, token)
+                     and type(sample) is tuple and len(sample) == 4)
+        if valid:
+            inputs, peak, binding = sample[1:]
+            valid = (sample[0] == "prior-component:" + str(index)
+                     and type(inputs) is list and len(inputs) == 6
+                     and all(type(value) is int and 0 <= value <= 9223372036854775807 for value in inputs)
+                     and inputs[0] == inputs[1] and inputs[2:] == [0, 0, 0, 1]
+                     and type(peak) is int and peak > 0
+                     and type(binding) is tuple and len(binding) == 2
+                     and binding[0] == "host-export-v1"
+                     and type(binding[1]) is int and 0 < binding[1] <= 9223372036854775807)
+        if not valid:
+            protocol_errors.append("invalid observation shape or attempt identity")
+            continue
+        key = (pid, token)
+        history = by_attempt[key]
+        if (key in seen_observations or not history or history[-1][0] != "complete"
+                or peak != max(value for phase, value in history) or retires.get(index) != peak):
+            protocol_errors.append("duplicate/missing/mismatched observation maximum or retirement")
+        else:
+            verified.append({"index": index, "pid": pid, "token": token,
+                             "accepted_maximum": peak, "retire_peak": retires[index]})
+        seen_observations.add(key)
+    if len(verified) != 3 or seen_observations != set(identities.values()):
+        protocol_errors.append("missing verified retirement-observation chain")
+    return {"scope": "fixture_case_pool_not_observation_scope", "journals": journals,
+            "claim": "complete validates width evidence chain, not the fixture result",
+            "complete": (all(item["complete"] for item in journals.values())
+                         and all(item["state"] == "matched" for item in matches)
+                         and not protocol_errors),
+            "accepted": matches, "observations": observations,
+            "verified_observations": verified, "protocol_errors": protocol_errors,
+            "measurement_effect": "enabled journal allocations and I/O perturb RSS and timing"}
+
+
 def _environment(owner, collector):
     environment = dict(os.environ)
     environment.pop("PCC_TEST_WINDOWS_STAGE1_PHASE", None)
@@ -158,6 +420,14 @@ def _run(prefix, case, directory, owner, collector, compiler_parameter=None):
         "native_execution": owner == "pcc", "pcc1_stage2_dispatch": False,
         "windows_stage1_phase_witness": windows_phase,
     }
+    try:
+        record["resource_diagnostics"] = (
+            _fixture_resource_diagnostics(directory) if case == "width"
+            else {"enabled": False, "scope": "width-only"}
+        )
+    except Exception:
+        # Evidence parsing must never replace the original execution outcome.
+        record["resource_diagnostics"] = {"complete": False, "reason": "receipt-error"}
     if (result.returncode, result.stdout, result.stderr) != (
         0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",
     ):

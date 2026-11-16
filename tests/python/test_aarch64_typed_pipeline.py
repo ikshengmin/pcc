@@ -15,10 +15,12 @@ from pcc.backend.self_backend_aarch64_typed_pass_context import TypedPassContext
 from pcc.backend.self_backend_value_arena import CompilerInt4
 
 
-def test_full_module_typed_pass_order_matches_text_object_without_instruction_parser(monkeypatch):
+@pytest.mark.parametrize("timed", [False, True])
+def test_full_module_typed_pass_order_matches_text_object_without_instruction_parser(monkeypatch, capsys, timed):
     from pcc.backend import arm64_encode as encoder
     from pcc.backend import self_backend_aarch64_darwin as backend
     from pcc.backend import self_backend_aarch64_darwin_mem as producer
+    from pcc.backend import indexed_phase_timing as timing
     from pcc.backend.arm64_asm_driver import assemble_file, measure_text_layout
     from pcc.backend.native_object import NativeObject, encode_native_object
     from pcc.backend.self_backend_aarch64_darwin_tlv import tlv_resolver_lines, elide_dead_tlv_resolver_saves
@@ -104,7 +106,27 @@ def test_full_module_typed_pass_order_matches_text_object_without_instruction_pa
         sink.append(producer.emitted_fixed_instruction_line("ret"))
         sink.append_label("L_g_end")
         sink.release_captured_function()
-        sink.finish_optimized_instructions({"L_trampoline"}, [])
+        timer = timing.ModulePhaseTiming("typed.pipeline") if timed else None
+        sink.finish_optimized_instructions({"L_trampoline"}, [], phase_timing=timer)
+        receipts = [line for line in capsys.readouterr().err.splitlines()
+                    if line.startswith("pcc coarse phase ")]
+        if timed:
+            rows = [dict(field.split("=", 1) for field in line.split()[3:])
+                    for line in receipts]
+            assert [(row["phase"], row["event"]) for row in rows] == [
+                (phase, event) for phase in timing._AARCH64_TYPED_PHASES
+                for event in ("begin", "complete")
+            ]
+            assert all(row["scope"] == "backend_finalize"
+                       and row["parent"] == "prepare"
+                       and row["module"] == "typed.pipeline"
+                       for row in rows)
+            assert all("duration_ns" not in row for row in rows[::2])
+            assert all(row["clock_ok"] == "1" and int(row["duration_ns"]) >= 0
+                       for row in rows[1::2])
+            assert timer.totals_ns == [0] * 16
+        else:
+            assert receipts == []
         assert sink.fragments.closed
         sink.builder.finalize_text_layout()
         assert sink.builder.text_label_offsets() == expected_labels
@@ -276,6 +298,117 @@ def test_real_tlv_rewrites_match_text_words_and_all_page_fixups(monkeypatch, des
     finally:
         semantics.close()
         fragments.close()
+
+
+_TIMED_TYPED_PASSES = (
+    "forward_adjacent_stack_store_load",
+    "forward_one_intervening_stack_store_load",
+    "fold_zero_store_source",
+    "fold_mov_store_source",
+    "fold_zero_compare_immediate",
+    "fold_mov_compare_source",
+    "fold_mov_zero_branch_source",
+    "fold_mov_arith_self_update",
+    "fold_scratch_def_into_move",
+    "fold_mov_mov_chain",
+    "fold_zero_test_branch",
+    "fold_forwarded_cset_branch",
+    "fold_cset_zero_branch",
+    "drop_dead_cset_branch_stores",
+    "thread_trampoline_branches",
+    "fold_cond_branch_to_fallthrough",
+    "drop_fallthrough_uncond_branches",
+    "drop_unreferenced_empty_local_labels",
+    "elide_dead_tlv_resolver_saves",
+    "pair_adjacent_aarch64_64bit_memory_ops",
+)
+
+
+@pytest.mark.parametrize("failed_pass", _TIMED_TYPED_PASSES)
+def test_typed_pass_failure_retains_original_error_and_unclosed_begin(monkeypatch, capsys, failed_pass):
+    from types import SimpleNamespace
+    from pcc.backend import indexed_phase_timing as timing
+    from pcc.backend import self_backend_aarch64_typed_pair as pair
+    from pcc.backend import self_backend_aarch64_typed_peepholes as peepholes
+
+    calls = []
+    original = RuntimeError("original optimizer failure")
+    span = object()
+    fragments = SimpleNamespace(records=[], symbol_names=[], symbol_ids={})
+    semantics = SimpleNamespace(require_complete=lambda *_args: None)
+
+    def operation(name):
+        def run(_fragments, _semantics, incoming, *_args, **_kwargs):
+            assert incoming is span
+            calls.append(name)
+            if name == failed_pass:
+                raise original
+            return incoming
+        return run
+
+    for index, name in enumerate(_TIMED_TYPED_PASSES):
+        owner = peepholes if index < 14 else cfg if index < 18 else tlv if index == 18 else pair
+        monkeypatch.setattr(owner, name, operation(name))
+    timer = timing.ModulePhaseTiming("failed.module")
+    with pytest.raises(RuntimeError) as caught:
+        result = peepholes.run_aarch64_typed_peepholes(
+            fragments, semantics, span, phase_timing=timer,
+        )
+        cfg.run_aarch64_typed_cfg_passes(
+            fragments, semantics, result, set(), [], phase_timing=timer,
+        )
+    assert caught.value is original
+    assert calls == list(_TIMED_TYPED_PASSES[:_TIMED_TYPED_PASSES.index(failed_pass) + 1])
+    rows = [dict(field.split("=", 1) for field in line.split()[3:])
+            for line in capsys.readouterr().err.splitlines()
+            if line.startswith("pcc coarse phase ")]
+    phases = ["typed_peephole_validate"]
+    for index, name in enumerate(calls):
+        if index == 14:
+            phases.append("typed_cfg_proofs")
+        phases.append("typed_" + name)
+    expected = [(phase, event) for phase in phases[:-1] for event in ("begin", "complete")]
+    expected.append((phases[-1], "begin"))
+    assert [(row["phase"], row["event"]) for row in rows] == expected
+    assert "duration_ns" not in rows[-1]
+    assert all(row["parent"] == "prepare" for row in rows)
+    assert timer.totals_ns == [0] * 16
+
+
+@pytest.mark.parametrize("failure", ["clock", "write", "flush"])
+def test_typed_phase_diagnostic_failure_does_not_escape(monkeypatch, failure):
+    from pcc.backend import indexed_phase_timing as timing
+
+    class DiagnosticAbort(BaseException):
+        pass
+
+    class BrokenSink:
+        def write(self, _line):
+            if failure == "write":
+                raise DiagnosticAbort("write")
+
+        def flush(self):
+            if failure == "flush":
+                raise DiagnosticAbort("flush")
+
+    def clock():
+        if failure == "clock":
+            raise DiagnosticAbort("clock")
+        return 100
+
+    monkeypatch.setattr(timing.sys, "stderr", BrokenSink())
+    monkeypatch.setattr(timing.time, "perf_counter_ns", clock)
+    timer = timing.ModulePhaseTiming("sample")
+    original = ValueError("compiler error")
+    with pytest.raises(ValueError) as caught:
+        try:
+            raise original
+        finally:
+            for phase in timing._AARCH64_TYPED_PHASES:
+                timer.complete_backend_finalize(phase, timer.begin_backend_finalize(phase))
+    assert caught.value is original
+    assert timer.failed == (failure == "clock")
+    assert timer.totals_ns == [0] * 16
 
 
 @pytest.mark.parametrize("distance", [199999, 200000, 200001])

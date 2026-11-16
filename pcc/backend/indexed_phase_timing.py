@@ -56,6 +56,35 @@ _BACKEND_FINALIZE_PHASES = (
     "prepare", "layout", "stackmaps", "unwind", "dwarf", "sections",
 )
 
+# Fixed children of prepare, outside every function/instruction loop. These
+# wall-clock receipts overlap prepare and aggregate 7; never add them to either.
+_AARCH64_TYPED_PHASES = (
+    "typed_validate",
+    "typed_peephole_validate",
+    "typed_forward_adjacent_stack_store_load",
+    "typed_forward_one_intervening_stack_store_load",
+    "typed_fold_zero_store_source",
+    "typed_fold_mov_store_source",
+    "typed_fold_zero_compare_immediate",
+    "typed_fold_mov_compare_source",
+    "typed_fold_mov_zero_branch_source",
+    "typed_fold_mov_arith_self_update",
+    "typed_fold_scratch_def_into_move",
+    "typed_fold_mov_mov_chain",
+    "typed_fold_zero_test_branch",
+    "typed_fold_forwarded_cset_branch",
+    "typed_fold_cset_zero_branch",
+    "typed_drop_dead_cset_branch_stores",
+    "typed_cfg_proofs",
+    "typed_thread_trampoline_branches",
+    "typed_fold_cond_branch_to_fallthrough",
+    "typed_drop_fallthrough_uncond_branches",
+    "typed_drop_unreferenced_empty_local_labels",
+    "typed_elide_dead_tlv_resolver_saves",
+    "typed_pair_adjacent_aarch64_64bit_memory_ops",
+    "typed_publish",
+)
+
 
 class ModulePhaseTiming:
     """Sixteen scalar aggregates and bounded assembly/finalization receipts."""
@@ -127,11 +156,14 @@ class ModulePhaseTiming:
     def begin_backend_finalize(self, phase: str) -> int:
         # Fixed coarse boundaries only, never per function or instruction.
         try:
-            if phase not in _BACKEND_FINALIZE_PHASES:
+            parent = "backend_finalize"
+            if phase in _AARCH64_TYPED_PHASES:
+                parent = "prepare"
+            elif phase not in _BACKEND_FINALIZE_PHASES:
                 return 0
             started_ns = self.start()
             _write_event(
-                "backend_finalize", phase, "backend_finalize",
+                "backend_finalize", phase, parent,
                 "begin", not self.failed, 0,
                 _bounded_module_name(self.module_name),
             )
@@ -143,7 +175,10 @@ class ModulePhaseTiming:
         # Children overlap aggregate 7 and include diagnostic overhead. They
         # are wall-clock receipts, not additional totals or pure helper CPU.
         try:
-            if phase not in _BACKEND_FINALIZE_PHASES:
+            parent = "backend_finalize"
+            if phase in _AARCH64_TYPED_PHASES:
+                parent = "prepare"
+            elif phase not in _BACKEND_FINALIZE_PHASES:
                 return
             elapsed_ns = 0
             if not self.failed and started_ns > 0:
@@ -154,7 +189,7 @@ class ModulePhaseTiming:
                 except BaseException:
                     self.failed = True
             _write_event(
-                "backend_finalize", phase, "backend_finalize",
+                "backend_finalize", phase, parent,
                 "complete", not self.failed and started_ns > 0, elapsed_ns,
                 _bounded_module_name(self.module_name),
             )

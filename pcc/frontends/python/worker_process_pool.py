@@ -233,7 +233,7 @@ def _resource_diagnostic(task, event, index, pid, reservation, available, peak, 
 
 
 def run_resource_worker_processes(commands, tasks, width, tree_budget,
-                                 observations=None, trace_path=""):
+                                 observations=None, trace_path="", diagnostics=None):
     """Use one byte-admission loop on CPython and owned native process APIs.
 
     Fresh-process task reports carry measured high-water RSS. The optional
@@ -312,7 +312,11 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
         while pending or active:
             survivors = []
             for index, pid, reservation, exclusive, observed_peak in active:
-                report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                if diagnostics is None:
+                    report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                else:
+                    report = read_worker_resource(str(tasks[index]["report_path"]), pid,
+                                                  attempt_tokens[pid], diagnostics)
                 if report is not None:
                     observed_peak = max(observed_peak, report[2])
                     if not exclusive:
@@ -350,7 +354,11 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                 # The child may publish complete and exit between the earlier
                 # live read and poll. Only a fresh post-success read can bind
                 # completion to this PID and this exact scheduled attempt.
-                report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                if diagnostics is None:
+                    report = read_worker_resource(str(tasks[index]["report_path"]), pid, attempt_tokens[pid])
+                else:
+                    report = read_worker_resource(str(tasks[index]["report_path"]), pid,
+                                                  attempt_tokens[pid], diagnostics)
                 if report is None or report[0] != "complete":
                     _resource_event(trace_path, "unverified-retire", index, pid, reservation, 0, observed_peak)
                     _resource_diagnostic(tasks[index], "unverified-retire", index, pid, reservation, 0, observed_peak,
@@ -369,6 +377,13 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
 
                         retire_sidecar_request(retired_sidecar)
                 observations.append(completed_task_observation(tasks[index], observed_peak))
+                if diagnostics is not None:
+                    from pcc.frontends.python.worker_resource_plan import record_worker_resource_diagnostic
+
+                    record_worker_resource_diagnostic(
+                        diagnostics, "observation",
+                        (index, pid, attempt_tokens[pid], observations[-1]),
+                    )
                 completed_tokens[index] = attempt_tokens[pid]
                 if tasks[index].get("retry_calibration", False):
                     tasks[index]["retry_calibration"] = False

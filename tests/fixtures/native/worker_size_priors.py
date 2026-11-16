@@ -89,7 +89,7 @@ def check_owner():
     assert workers._worker_collector() == int(os.environ["PCC_GC_BACKEND"])
 
 
-def child(root, case, index, growth):
+def child(root, case, index, growth, diagnostics):
     check_owner()
     count = "attempts" + str(index)
     attempt = int(read(root, count)) + 1 if exists(root, count) else 1
@@ -99,7 +99,7 @@ def child(root, case, index, growth):
               + sys.implementation.name + "\t" + str(workers._worker_collector()))
     write(root, "started." + str(index) + "." + str(attempt), record)
     payload = allocate(4 * MIB)
-    policy.publish_worker_resource("started")
+    policy.publish_worker_resource("started", diagnostics)
     if case == "width":
         for peer in range(3):
             wait_file(root, "started." + str(peer) + ".1")
@@ -112,20 +112,20 @@ def child(root, case, index, growth):
         wait_file(root, "started.1.1")
         wait_file(root, "peer-report-ready")
         payload = allocate(growth)
-        policy.publish_worker_resource("leader-grown")
+        policy.publish_worker_resource("leader-grown", diagnostics)
         wait_event(root, "cancel", 1)
     elif index == 1 and attempt == 1:
         write(root, "peer-report-ready", "ready")
         wait_file(root, "this-cancelled-attempt-must-not-complete")
     elif index == 1:
         payload = allocate(growth)
-        policy.publish_worker_resource("retry-grown")
+        policy.publish_worker_resource("retry-grown", diagnostics)
     else:
         # A dependency is released only after exit, a matching final report,
         # and retirement. Reading this trace does not grant readiness.
         wait_event(root, "retire", 1)
     assert payload[0] == 1 and payload[len(payload) - 1] == 123
-    policy.publish_worker_resource("complete")
+    policy.publish_worker_resource("complete", diagnostics)
     with open(os.environ[policy.RESOURCE_REPORT_ENV], "r", encoding="utf-8") as stream:
         final_report = stream.read()
     write(root, "complete." + str(index) + "." + str(attempt), final_report)
@@ -250,7 +250,7 @@ def _windows_stage1_phase(root, boundary):
             stream.write(boundary + "\n")
 
 
-def run_case(root, case):
+def run_case(root, case, diagnostics):
     _windows_stage1_phase(root, "owner")
     check_owner()
     _windows_stage1_phase(root, "model")
@@ -284,7 +284,7 @@ def run_case(root, case):
     observations = []
     pool.run_resource_worker_processes(
         commands, tasks, width, budget, observations=observations,
-        trace_path=root + "/admission.tsv",
+        trace_path=root + "/admission.tsv", diagnostics=diagnostics,
     )
     rows = events(root)
     assert rows and all(len(row) == 7 for row in rows)
@@ -346,10 +346,31 @@ def run_case(root, case):
 
 def main():
     if sys.argv[1] == "child":
-        child(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]))
+        diagnostics = None
+        if sys.argv[3] == "width":
+            diagnostics = policy.worker_resource_diagnostics(
+                sys.argv[2] + "/resource-child-" + sys.argv[4]
+                + "-" + os.environ[policy.RESOURCE_TOKEN_ENV] + ".tsv",
+            )
+        failed = True
+        try:
+            child(sys.argv[2], sys.argv[3], int(sys.argv[4]), int(sys.argv[5]), diagnostics)
+            failed = False
+        finally:
+            if diagnostics is not None:
+                policy.finish_worker_resource_diagnostics(diagnostics, preserve_error=failed)
     else:
         assert sys.argv[1] in ("width", "growth")
-        run_case(sys.argv[2], sys.argv[1])
+        diagnostics = None
+        if sys.argv[1] == "width":
+            diagnostics = policy.worker_resource_diagnostics(sys.argv[2] + "/resource-driver.tsv")
+        failed = True
+        try:
+            run_case(sys.argv[2], sys.argv[1], diagnostics)
+            failed = False
+        finally:
+            if diagnostics is not None:
+                policy.finish_worker_resource_diagnostics(diagnostics, preserve_error=failed)
 
 
 main()

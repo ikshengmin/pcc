@@ -133,10 +133,14 @@ class _Pass:
         return sem.OPCODE_NAMES[self.semantics.require_header(rid).first]
 
     def tokens(self, rid):
-        if not self.op(rid):
+        if rid < 0 or self.code(rid).second < 0:
             return []
         header = self.semantics.require_header(rid)
-        return [self.semantics.operand(rid, i) for i in range(header.fourth)]
+        # require_header validates the whole span, including address children.
+        # Copy its values once; operand() would revalidate that entire span for
+        # every token. Keep validation per call, never cache across mutations.
+        return [self.semantics.tokens.get4_unchecked(header.third + i)
+                for i in range(header.fourth)]
 
     def register(self, rid, index):
         tokens = self.tokens(rid)
@@ -145,8 +149,12 @@ class _Pass:
         return tokens[index].second
 
     def stack(self, rid, opcode):
+        # op() still validates every operand, even for a nonmatching opcode.
+        # Avoid copying that span unless this stack operation can match.
+        if self.op(rid) != opcode:
+            return None
         t = self.tokens(rid)
-        if self.op(rid) != opcode or len(t) != 4:
+        if len(t) != 4:
             return None
         if (t[0].first != sem.TOKEN_REGISTER or t[1].first != sem.TOKEN_ADDRESS
             or t[1].second != sem.ADDRESS_OFFSET or t[1].third != 2
@@ -579,21 +587,82 @@ def drop_dead_cset_branch_stores(
 
 def run_aarch64_typed_peepholes(
     fragments: AArch64EmissionFragments, semantics: sem.AArch64InstructionSemantics,
-    span: CompilerInt2,
+    span: CompilerInt2, *, phase_timing=None,
 ) -> CompilerInt2:
     """Apply the original ordered first-fourteen module-stream passes."""
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_peephole_validate")
     semantics.require_complete(fragments.records, len(fragments.symbol_names))
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_peephole_validate", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_forward_adjacent_stack_store_load")
     span = forward_adjacent_stack_store_load(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_forward_adjacent_stack_store_load", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_forward_one_intervening_stack_store_load")
     span = forward_one_intervening_stack_store_load(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_forward_one_intervening_stack_store_load", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_zero_store_source")
     span = fold_zero_store_source(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_zero_store_source", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_mov_store_source")
     span = fold_mov_store_source(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_mov_store_source", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_zero_compare_immediate")
     span = fold_zero_compare_immediate(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_zero_compare_immediate", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_mov_compare_source")
     span = fold_mov_compare_source(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_mov_compare_source", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_mov_zero_branch_source")
     span = fold_mov_zero_branch_source(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_mov_zero_branch_source", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_mov_arith_self_update")
     span = fold_mov_arith_self_update(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_mov_arith_self_update", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_scratch_def_into_move")
     span = fold_scratch_def_into_move(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_scratch_def_into_move", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_mov_mov_chain")
     span = fold_mov_mov_chain(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_mov_mov_chain", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_zero_test_branch")
     span = fold_zero_test_branch(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_zero_test_branch", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_forwarded_cset_branch")
     span = fold_forwarded_cset_branch(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_forwarded_cset_branch", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_fold_cset_zero_branch")
     span = fold_cset_zero_branch(fragments, semantics, span)
-    return drop_dead_cset_branch_stores(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_fold_cset_zero_branch", started)
+    if phase_timing is not None:
+        started = phase_timing.begin_backend_finalize("typed_drop_dead_cset_branch_stores")
+    span = drop_dead_cset_branch_stores(fragments, semantics, span)
+    if phase_timing is not None:
+        phase_timing.complete_backend_finalize("typed_drop_dead_cset_branch_stores", started)
+    return span
