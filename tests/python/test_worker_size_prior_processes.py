@@ -179,6 +179,7 @@ def _fixture_resource_diagnostics(directory):
     driver_events = []
     published_phases = set()
     child_phases = {name: [] for name in child_journals}
+    publication_peaks = {name: 0 for name in child_journals}
     for name in names:
         entry = {"complete": False}
         journals[name] = entry
@@ -222,20 +223,27 @@ def _fixture_resource_diagnostics(directory):
                     raise ValueError("invalid journal record shape")
                 event, payload = row
                 if event == "published" and name in child_journals:
-                    if type(payload) is not tuple or len(payload) != 4:
+                    if type(payload) is not tuple or len(payload) not in (4, 5):
                         raise ValueError("invalid publication shape")
-                    report_text, current, raw_peak, peak = payload
+                    report_text, current, raw_peak, peak = payload[:4]
+                    previous_peak = payload[4] if len(payload) == 5 else 0
                     identity = _fixture_diagnostic_report(report_text)
                     if (any(type(value) is not int or not -9223372036854775808 <= value <= 9223372036854775807
                             for value in payload[1:]) or identity[:2] != child_journals[name]
-                            or identity[3:] != (current, peak) or max(current, raw_peak) != peak):
+                            or identity[3:] != (current, peak)
+                            or max(current, raw_peak, previous_peak) != peak
+                            or (len(payload) == 5 and previous_peak != publication_peaks[name])):
                         raise ValueError("invalid publication binding")
+                    # Five fields explicitly bind retained high water to this
+                    # child's preceding publication. Four fields remain the
+                    # historical raw-sample format, including old decreases.
+                    publication_peaks[name] = peak
                     phase_key = identity[:3]
                     if phase_key in published_phases:
                         protocol_errors.append("duplicate width publication phase")
                     published_phases.add(phase_key)
                     child_phases[name].append(identity[2])
-                    publications.setdefault(report_text, []).append((current, raw_peak, peak))
+                    publications.setdefault(report_text, []).append(payload[1:])
                 elif event == "accepted" and name == "resource-driver.tsv":
                     if (type(payload) is not tuple or len(payload) != 6
                             or type(payload[0]) is not int or type(payload[1]) is not str
@@ -269,7 +277,9 @@ def _fixture_resource_diagnostics(directory):
                  and binding[3] == str(current) and binding[4] == str(peak)
                  and binding[5] == token)
         state = "unmatched" if not candidates else "ambiguous" if len(raw) != 1 else "matched"
-        if not valid or any(row[0] != current or row[2] != peak or max(row[0], row[1]) != peak
+        # Candidate rows entered this table only after the per-child raw and
+        # previous-publication binding above; never infer prior peak here.
+        if not valid or any(row[0] != current or row[2] != peak
                             for row in candidates):
             state = "invalid-binding"
         matches.append({

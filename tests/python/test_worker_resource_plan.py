@@ -1742,7 +1742,7 @@ def test_resource_diagnostics_bind_actual_publication_and_single_accepted_read(t
     policy.publish_worker_resource("started", published)
     text = report.read_text()
     rows = [ast.literal_eval(line) for line in (tmp_path / "published.tsv").read_text().splitlines()]
-    assert rows == [("published", (text, 120, 110, 120))]
+    assert rows == [("published", (text, 120, 110, 120, 0))]
     assert calls == ["current", "peak"]
     reads = []
 

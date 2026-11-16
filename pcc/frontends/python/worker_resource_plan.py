@@ -623,7 +623,7 @@ def _diagnostic_payload_fits(event, payload):
     if type(event) is not str or type(payload) is not tuple:
         return False
     if event == "published":
-        return (len(payload) == 4 and _diagnostic_text(payload[0], 384)
+        return (len(payload) in (4, 5) and _diagnostic_text(payload[0], 384)
                 and all(_diagnostic_integer(value) for value in payload[1:]))
     if event == "accepted":
         return (len(payload) == 6 and _diagnostic_integer(payload[0])
@@ -944,6 +944,34 @@ def _replace_worker_resource(temporary: str, path: str) -> None:
     del result
 
 
+def _previous_worker_resource_peak(path: str, expected_pid: int, expected_token: str) -> int:
+    # Each attempt has one writer. The coordinator removes the old report
+    # before spawning a new attempt, and readers only observe atomic snapshots.
+    # Retain committed high water, not uncommitted samples or another attempt.
+    # Do not use the public reader: its tolerant None would hide an unreadable
+    # or damaged previous publication and allow this attempt's peak to fall.
+    try:
+        stream = _open_worker_resource(path)
+    except OSError as error:
+        if error.errno == 2:
+            return 0
+        raise
+    with stream:
+        report_text = stream.read()
+    rows = report_text.splitlines()
+    if not report_text.endswith("\n") or len(rows) != 6 or rows[0] != RESOURCE_REPORT_SCHEMA:
+        raise WorkerMemoryError("previous worker RSS publication is malformed")
+    try:
+        pid, current, peak = int(rows[1]), int(rows[3]), int(rows[4])
+    except ValueError:
+        raise WorkerMemoryError("previous worker RSS publication is malformed")
+    if pid <= 0 or current <= 0 or peak < current:
+        raise WorkerMemoryError("previous worker RSS publication is malformed")
+    if pid != expected_pid or rows[5] != expected_token:
+        return 0
+    return peak
+
+
 def publish_worker_resource(phase: str, diagnostics=None) -> None:
     """Publish self high-water RSS at existing worker phase boundaries."""
     path = str(os.environ.get(RESOURCE_REPORT_ENV, "") or "")
@@ -961,19 +989,23 @@ def publish_worker_resource(phase: str, diagnostics=None) -> None:
         peak = max(current, raw_peak)
     if current <= 0 or peak <= 0:
         raise WorkerMemoryError("worker RSS observation is unavailable")
+    pid = os.getpid()
+    token = str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "")
+    previous_peak = _previous_worker_resource_peak(path, pid, token)
+    peak = max(peak, previous_peak)
     temporary = path + ".tmp"
     with open(temporary, "w", encoding="utf-8") as stream:
         if diagnostics is None:
             stream.write(
-                RESOURCE_REPORT_SCHEMA + "\n" + str(os.getpid()) + "\n" + phase
+                RESOURCE_REPORT_SCHEMA + "\n" + str(pid) + "\n" + phase
                 + "\n" + str(current) + "\n" + str(peak)
-                + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
+                + "\n" + token + "\n"
             )
         else:
             report_text = (
-                RESOURCE_REPORT_SCHEMA + "\n" + str(os.getpid()) + "\n" + phase
+                RESOURCE_REPORT_SCHEMA + "\n" + str(pid) + "\n" + phase
                 + "\n" + str(current) + "\n" + str(peak)
-                + "\n" + str(os.environ.get(RESOURCE_TOKEN_ENV, "") or "") + "\n"
+                + "\n" + token + "\n"
             )
             stream.write(report_text)
     # CPython's Windows reader can deny delete sharing while reading the old
@@ -1012,5 +1044,5 @@ def publish_worker_resource(phase: str, diagnostics=None) -> None:
         raise
     if diagnostics is not None:
         record_worker_resource_diagnostic(
-            diagnostics, "published", (report_text, current, raw_peak, peak),
+            diagnostics, "published", (report_text, current, raw_peak, peak, previous_peak),
         )
