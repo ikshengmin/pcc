@@ -668,7 +668,7 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_fold_zero_test_branch", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_forwarded_cset_branch")
-    span = fold_forwarded_cset_branch(fragments, semantics, span)
+    span = _run_owned_cset(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_forwarded_cset_branch(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_forwarded_cset_branch", started)
     if phase_timing is not None:
@@ -749,3 +749,37 @@ def _owned_timer_is_canonical(phase_timing) -> bool:
             and begin.__self__ is phase_timing
             and complete.__self__ is phase_timing
             and start.__self__ is phase_timing)
+
+
+def _run_owned_cset(fragments, semantics, span):
+    from .self_backend_aarch64_owned_cset import decide
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, 12)
+    p = _Pass(fragments, semantics, span)
+    try:
+        view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
+        index = 0
+        changed = False
+        while index < len(p.ids):
+            a = p.rid(index)
+            b = p.rid(index + 1)
+            decision = decide(view, a, b, p.rid(index + 2), p.rid(index + 3))
+            if decision[0] != 0:
+                symbol = CompilerInt4(decision[3], decision[4], decision[5], decision[6])
+                p.output.append(a)
+                p.output.append(b)
+                replacement = p.new_branch(sem.OPCODE_NAMES[decision[2]], symbol, decision[1])
+                if replacement >= 0:
+                    p.output.append(replacement)
+                changed = True
+                index += decision[0]
+            else:
+                p.output.append(a)
+                index += 1
+        if not changed and fragments.spans.length(span) == len(p.ids):
+            result = fragments.new_fragment()
+            fragments.extend_fragment(result, span)
+            return result
+        return p.finish()
+    finally:
+        p.close()
