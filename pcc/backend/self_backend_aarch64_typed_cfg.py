@@ -100,17 +100,20 @@ def thread_trampoline_branches_records(ctx, records, metadata_labels=()):
     index = 0
     while index < len(rewritten):
         label = _local(ctx, rewritten[index])
-        previous = len(out) - 1
-        while previous >= 0 and ctx.is_empty(out[previous]):
-            previous -= 1
-        falls_through = previous < 0 or not (
-            ctx.opcode(out[previous]) in ("b", "br") or ctx.opcode(out[previous]).startswith("ret")
-        )
-        if label is not None and label in trampolines and label not in referenced and not falls_through:
-            index += 1
-            while index < len(rewritten) and not _boundary(ctx, rewritten[index]):
+        if label is not None and label in trampolines and label not in referenced:
+            # Match the text owner's short circuit: only a removable trampoline
+            # needs fallthrough proof, not every retained empty event.
+            previous = len(out) - 1
+            while previous >= 0 and ctx.is_empty(out[previous]):
+                previous -= 1
+            falls_through = previous < 0 or not (
+                ctx.opcode(out[previous]) in ("b", "br") or ctx.opcode(out[previous]).startswith("ret")
+            )
+            if not falls_through:
                 index += 1
-            continue
+                while index < len(rewritten) and not _boundary(ctx, rewritten[index]):
+                    index += 1
+                continue
         out.append(rewritten[index])
         index += 1
     return out
