@@ -2071,6 +2071,7 @@ def _fold_zero_compare_immediate(lines: list[str]) -> list[str]:
                 if (
                     rhs == zero_reg
                     and lhs != zero_reg
+                    and lhs not in ("xzr", "wzr")
                     and _can_drop_zero_mov_after_store(lines, index + 2, zero_reg)
                 ):
                     out.append(f"  cmp {lhs}, #0")
