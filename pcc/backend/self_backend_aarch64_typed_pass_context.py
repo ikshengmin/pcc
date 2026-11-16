@@ -47,12 +47,16 @@ class TypedPassContext:
         return record
 
     def opcode(self, record_id):
-        if self.record(record_id).second < 0:
+        record: CompilerInt4 = self.record(record_id)
+        if record.second < 0:
             return ""
-        return OPCODE_NAMES[self.semantics.require_header(record_id).first]
+        names = OPCODE_NAMES
+        header: CompilerInt4 = self.semantics.require_header(record_id)
+        return names[header.first]
 
     def operands(self, record_id):
-        if self.record(record_id).second < 0:
+        record: CompilerInt4 = self.record(record_id)
+        if record.second < 0:
             return []
         header = self.semantics.require_header(record_id)
         tokens = []
@@ -74,10 +78,12 @@ class TypedPassContext:
         return None
 
     def is_empty(self, record_id):
-        return self.record(record_id).second == EMISSION_RECORD_EMPTY
+        record: CompilerInt4 = self.record(record_id)
+        return record.second == EMISSION_RECORD_EMPTY
 
     def is_directive(self, record_id):
-        return self.record(record_id).second in (EMISSION_RECORD_DIRECTIVE, EMISSION_RECORD_MEMORY_PAIR_BARRIER)
+        record: CompilerInt4 = self.record(record_id)
+        return record.second in (EMISSION_RECORD_DIRECTIVE, EMISSION_RECORD_MEMORY_PAIR_BARRIER)
 
     def directive_kind(self, record_id):
         record = self.record(record_id)

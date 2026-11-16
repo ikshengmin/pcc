@@ -459,3 +459,215 @@ def test_first_fourteen_pipeline_matches_ordered_legacy(monkeypatch):
     monkeypatch.setattr(legacy, "_run_aarch64_typed_peepholes", reference, raising=False)
     items = ["_one:", I("cmp", R("w9"), R("w10")), I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("ldurb", R("w10"), A()), I("cbz", R("w10"), S()), I("ret"), "L_end:", I("ret")]
     _differential(monkeypatch, "run_aarch64_typed_peepholes", items, True)
+
+
+def _aggregate_lane_pass(method, mode, fail_at=None):
+    from types import SimpleNamespace
+
+    calls = []
+    error = ValueError("aggregate getter failure")
+    owner = object.__new__(typed._Pass)
+    count = 0
+
+    def code(rid):
+        nonlocal count
+        count += 1
+        calls.append(("code", rid))
+        if fail_at == "code" or (fail_at == "second_code" and count == 2):
+            raise error
+        if mode == "event":
+            return CompilerInt4(0, EMISSION_RECORD_EMPTY, 0, -1)
+        if method == "function_label":
+            # Distinct values make collapsing the two old getter calls wrong.
+            return CompilerInt4(count - 1, EMISSION_RECORD_LABEL, 0, -1)
+        return CompilerInt4(0, 0, 0, -1)
+
+    def header(rid):
+        calls.append(("header", rid))
+        if fail_at == "header":
+            raise error
+        return CompilerInt4(sem.semantic_opcode_id("mov"), sem.FORM_CANONICAL, 3, 1)
+
+    def token(index):
+        calls.append(("token", index))
+        return R("x9")
+
+    owner.code = code
+    owner.fragments = SimpleNamespace(symbol_names=["L_not_function", "_function"])
+    owner.semantics = SimpleNamespace(
+        require_header=header, tokens=SimpleNamespace(get4_unchecked=token),
+    )
+    return owner, calls, error
+
+
+@pytest.mark.parametrize("method", ["op", "tokens", "function_label"])
+@pytest.mark.parametrize("mode", ["negative", "event", "instruction"])
+def test_bound_pass_aggregate_preserves_short_circuit_and_order(method, mode):
+    owner, calls, _ = _aggregate_lane_pass(method, mode)
+    rid = -1 if mode == "negative" else 7
+    result = getattr(owner, method)(rid)
+    empty = {"op": "", "tokens": [], "function_label": False}
+    if mode == "negative":
+        assert result == empty[method]
+        assert calls == []
+    elif mode == "event":
+        assert result == empty[method]
+        assert calls == [("code", 7)]
+    elif method == "function_label":
+        assert result is True
+        assert calls == [("code", 7), ("code", 7)]
+    else:
+        assert result == ("mov" if method == "op" else [R("x9")])
+        assert calls == [("code", 7), ("header", 7)] + ([] if method == "op" else [("token", 3)])
+
+
+@pytest.mark.parametrize("method,fail_at,expected_calls", [
+    ("op", "code", [("code", 7)]),
+    ("tokens", "code", [("code", 7)]),
+    ("function_label", "code", [("code", 7)]),
+    ("op", "header", [("code", 7), ("header", 7)]),
+    ("tokens", "header", [("code", 7), ("header", 7)]),
+    ("function_label", "second_code", [("code", 7), ("code", 7)]),
+])
+def test_bound_pass_aggregate_keeps_original_exception(method, fail_at, expected_calls):
+    owner, calls, error = _aggregate_lane_pass(method, "instruction", fail_at)
+    with pytest.raises(ValueError) as caught:
+        getattr(owner, method)(7)
+    assert caught.value is error
+    assert calls == expected_calls
+
+
+@pytest.mark.parametrize("ending", ["empty", "b", "ret", "add"])
+@pytest.mark.parametrize("fail_at", [None, "code", "op", "second_op"])
+def test_bound_false_path_preserves_traversal_and_short_circuit(ending, fail_at):
+    calls = []
+    error = ValueError("false path getter failure")
+    owner = object.__new__(typed._Pass)
+
+    class Ids:
+        def __len__(self):
+            calls.append("len")
+            return 1 if ending == "empty" else 2
+
+    def rid(index):
+        calls.append(("rid", index))
+        return 10 + index
+
+    def code(record_id):
+        calls.append(("code", record_id))
+        if fail_at == "code":
+            raise error
+        family = EMISSION_RECORD_EMPTY if record_id == 10 else 0
+        return CompilerInt4(0, family, 0, -1)
+
+    op_calls = 0
+
+    def op(record_id):
+        nonlocal op_calls
+        op_calls += 1
+        calls.append(("op", record_id))
+        if fail_at == "op" or (fail_at == "second_op" and op_calls == 2):
+            raise error
+        return ending
+
+    owner.ids, owner.rid, owner.code, owner.op = Ids(), rid, code, op
+    expected = ["len", ("rid", 0), ("code", 10)]
+    if fail_at == "code":
+        with pytest.raises(ValueError) as caught:
+            owner.false_path(0)
+        assert caught.value is error
+    else:
+        expected += ["len"]
+        if ending == "empty":
+            expected += ["len"]
+            assert owner.false_path(0) is True
+        else:
+            expected += [("rid", 1), ("code", 11), "len", ("rid", 1), ("op", 11)]
+            if fail_at == "op":
+                with pytest.raises(ValueError) as caught:
+                    owner.false_path(0)
+                assert caught.value is error
+            else:
+                if ending != "b":
+                    expected += [("rid", 1), ("op", 11)]
+                if fail_at == "second_op" and ending != "b":
+                    with pytest.raises(ValueError) as caught:
+                        owner.false_path(0)
+                    assert caught.value is error
+                else:
+                    assert owner.false_path(0) is (ending in ("b", "ret"))
+    assert calls == expected
+
+
+def test_bound_pass_opcode_snapshots_names_before_header(monkeypatch):
+    from types import SimpleNamespace
+
+    owner, calls, _ = _aggregate_lane_pass("op", "instruction")
+    opcode_id = sem.semantic_opcode_id("mov")
+    original_names = list(sem.OPCODE_NAMES)
+    replacement_names = list(original_names)
+    original_names[opcode_id] = "original"
+    replacement_names[opcode_id] = "replacement"
+    namespace = SimpleNamespace(OPCODE_NAMES=original_names)
+    monkeypatch.setattr(typed, "sem", namespace)
+    header = owner.semantics.require_header
+
+    def replace_names(rid):
+        namespace.OPCODE_NAMES = replacement_names
+        return header(rid)
+
+    owner.semantics.require_header = replace_names
+    assert owner.op(7) == "original"
+    assert namespace.OPCODE_NAMES is replacement_names
+    assert calls == [("code", 7), ("header", 7)]
+
+
+def test_bound_pass_opcode_names_failure_precedes_header(monkeypatch):
+    owner, calls, error = _aggregate_lane_pass("op", "instruction")
+
+    class BrokenNames:
+        @property
+        def OPCODE_NAMES(self):
+            calls.append("names")
+            raise error
+
+    monkeypatch.setattr(typed, "sem", BrokenNames())
+    with pytest.raises(ValueError) as caught:
+        owner.op(7)
+    assert caught.value is error
+    assert calls == [("code", 7), "names"]
+
+
+def test_bound_function_label_snapshots_names_before_second_code():
+    owner, calls, _ = _aggregate_lane_pass("function_label", "instruction")
+    original_names = ["L_first", "_original"]
+    replacement_names = ["L_first", "L_not_function"]
+    owner.fragments.symbol_names = original_names
+    code = owner.code
+
+    def replace_names(rid):
+        result = code(rid)
+        if calls.count(("code", rid)) == 2:
+            owner.fragments.symbol_names = replacement_names
+        return result
+
+    owner.code = replace_names
+    assert owner.function_label(7) is True
+    assert owner.fragments.symbol_names is replacement_names
+    assert calls == [("code", 7), ("code", 7)]
+
+
+def test_bound_function_label_names_failure_precedes_second_code():
+    owner, calls, error = _aggregate_lane_pass("function_label", "instruction")
+
+    class BrokenNames:
+        @property
+        def symbol_names(self):
+            calls.append("names")
+            raise error
+
+    owner.fragments = BrokenNames()
+    with pytest.raises(ValueError) as caught:
+        owner.function_label(7)
+    assert caught.value is error
+    assert calls == [("code", 7), "names"]

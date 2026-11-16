@@ -128,12 +128,20 @@ class _Pass:
         return self.fragments.records.get4_unchecked(rid)
 
     def op(self, rid):
-        if rid < 0 or self.code(rid).second < 0:
+        if rid < 0:
             return ""
-        return sem.OPCODE_NAMES[self.semantics.require_header(rid).first]
+        code: CompilerInt4 = self.code(rid)
+        if code.second < 0:
+            return ""
+        names = sem.OPCODE_NAMES
+        header: CompilerInt4 = self.semantics.require_header(rid)
+        return names[header.first]
 
     def tokens(self, rid):
-        if rid < 0 or self.code(rid).second < 0:
+        if rid < 0:
+            return []
+        code: CompilerInt4 = self.code(rid)
+        if code.second < 0:
             return []
         header = self.semantics.require_header(rid)
         # require_header validates the whole span, including address children.
@@ -243,9 +251,14 @@ class _Pass:
         return 2 if defines else 0
 
     def function_label(self, rid):
-        if rid < 0 or self.code(rid).second != EMISSION_RECORD_LABEL:
+        if rid < 0:
             return False
-        name = self.fragments.symbol_names[self.code(rid).first]
+        code: CompilerInt4 = self.code(rid)
+        if code.second != EMISSION_RECORD_LABEL:
+            return False
+        names = self.fragments.symbol_names
+        label_code: CompilerInt4 = self.code(rid)
+        name = names[label_code.first]
         return bool(name) and not name.startswith((" ", ".", "L_"))
 
     def boundary(self, rid):
@@ -273,7 +286,10 @@ class _Pass:
         return True
 
     def false_path(self, start):
-        while start < len(self.ids) and self.code(self.rid(start)).second == EMISSION_RECORD_EMPTY:
+        while start < len(self.ids):
+            code: CompilerInt4 = self.code(self.rid(start))
+            if code.second != EMISSION_RECORD_EMPTY:
+                break
             start += 1
         return start == len(self.ids) or self.op(self.rid(start)) == "b" or self.op(self.rid(start)).startswith("ret")
 

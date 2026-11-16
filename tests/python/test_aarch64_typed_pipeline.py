@@ -548,3 +548,110 @@ def test_full_twenty_passes_preserve_new_adapter_shapes(monkeypatch, opcode):
     finally:
         semantics.close()
         fragments.close()
+
+
+def _aggregate_lane_context(family, fail_at=None):
+    from types import SimpleNamespace
+
+    calls = []
+    error = ValueError("aggregate getter failure")
+    ctx = object.__new__(TypedPassContext)
+
+    def record(rid):
+        calls.append(("record", rid))
+        if fail_at == "record":
+            raise error
+        return CompilerInt4(0, family, 0, -1)
+
+    def header(rid):
+        calls.append(("header", rid))
+        if fail_at == "header":
+            raise error
+        return CompilerInt4(sem.semantic_opcode_id("mov"), sem.FORM_CANONICAL, 3, 1)
+
+    def token(index):
+        calls.append(("token", index))
+        return CompilerInt4(sem.TOKEN_REGISTER, 9, 0, 0)
+
+    ctx.record = record
+    ctx.semantics = SimpleNamespace(
+        require_header=header, tokens=SimpleNamespace(get4_unchecked=token),
+    )
+    return ctx, calls, error
+
+
+@pytest.mark.parametrize("method,family,expected,after_record", [
+    ("opcode", 0, "mov", [("header", 7)]),
+    ("opcode", EMISSION_RECORD_EMPTY, "", []),
+    ("operands", 0, [(sem.TOKEN_REGISTER, 9, 0, 0)], [("header", 7), ("token", 3)]),
+    ("operands", EMISSION_RECORD_EMPTY, [], []),
+    ("is_empty", EMISSION_RECORD_EMPTY, True, []),
+    ("is_empty", 0, False, []),
+])
+def test_bound_context_aggregate_preserves_getter_order(method, family, expected, after_record):
+    ctx, calls, _ = _aggregate_lane_context(family)
+    assert getattr(ctx, method)(7) == expected
+    assert calls == [("record", 7), *after_record]
+
+
+@pytest.mark.parametrize("kind,expected", [
+    ("directive", True), ("barrier", True), ("empty", False),
+])
+def test_bound_context_directive_aggregate_preserves_getter_order(kind, expected):
+    from pcc.backend.self_backend_aarch64_fragments import (
+        EMISSION_RECORD_DIRECTIVE, EMISSION_RECORD_MEMORY_PAIR_BARRIER,
+    )
+    family = {"directive": EMISSION_RECORD_DIRECTIVE,
+              "barrier": EMISSION_RECORD_MEMORY_PAIR_BARRIER,
+              "empty": EMISSION_RECORD_EMPTY}[kind]
+    ctx, calls, _ = _aggregate_lane_context(family)
+    assert ctx.is_directive(7) is expected
+    assert calls == [("record", 7)]
+
+
+@pytest.mark.parametrize("method,fail_at,expected_calls", [
+    ("opcode", "record", [("record", 7)]),
+    ("operands", "record", [("record", 7)]),
+    ("is_empty", "record", [("record", 7)]),
+    ("is_directive", "record", [("record", 7)]),
+    ("opcode", "header", [("record", 7), ("header", 7)]),
+    ("operands", "header", [("record", 7), ("header", 7)]),
+])
+def test_bound_context_aggregate_keeps_original_exception(method, fail_at, expected_calls):
+    ctx, calls, error = _aggregate_lane_context(0, fail_at)
+    with pytest.raises(ValueError) as caught:
+        getattr(ctx, method)(7)
+    assert caught.value is error
+    assert calls == expected_calls
+
+
+def test_bound_context_opcode_snapshots_names_before_header(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_pass_context as context_module
+
+    ctx, calls, _ = _aggregate_lane_context(0)
+    opcode_id = sem.semantic_opcode_id("mov")
+    original_names = list(context_module.OPCODE_NAMES)
+    replacement_names = list(original_names)
+    original_names[opcode_id] = "original"
+    replacement_names[opcode_id] = "replacement"
+    monkeypatch.setattr(context_module, "OPCODE_NAMES", original_names)
+    header = ctx.semantics.require_header
+
+    def replace_names(rid):
+        monkeypatch.setattr(context_module, "OPCODE_NAMES", replacement_names)
+        return header(rid)
+
+    ctx.semantics.require_header = replace_names
+    assert ctx.opcode(7) == "original"
+    assert context_module.OPCODE_NAMES is replacement_names
+    assert calls == [("record", 7), ("header", 7)]
+
+
+def test_bound_context_opcode_missing_names_precedes_header(monkeypatch):
+    from pcc.backend import self_backend_aarch64_typed_pass_context as context_module
+
+    ctx, calls, _ = _aggregate_lane_context(0)
+    monkeypatch.delattr(context_module, "OPCODE_NAMES")
+    with pytest.raises(NameError, match="OPCODE_NAMES"):
+        ctx.opcode(7)
+    assert calls == [("record", 7)]
