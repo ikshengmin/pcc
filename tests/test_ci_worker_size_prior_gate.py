@@ -2663,7 +2663,7 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
     assert "_pcc_py_module_top_pcc_backend_x86_64_encode" in strings
     assert "_X87_FIXED" in strings and "_X87_STACK" in strings
     assert any("py_dict_new" in value for value in strings)
-    assert any("py_bytes_new" in value for value in strings)
+    assert "require_x87_static_tables(source.read_text(), section, initialization)" in calls
     assert any("py_module_attr_set" in value for value in strings)
     assert "required.append(initializer)" in calls
     from tests.integration import test_worker_size_prior_closed_world as control
@@ -2688,14 +2688,15 @@ def test_strict_closure_explicitly_compiles_the_changed_regalloc_module():
         scope = {"name": "pcc.backend.x86_64_encode", "section": section,
                  "required": [], "definition_bodies": control._index_definition_bodies(section),
                  "require_definition": control.require_definition,
-                 "_DEFINITION_BODY": control._DEFINITION_BODY, "re": re}
+                 "_DEFINITION_BODY": control._DEFINITION_BODY, "re": re,
+                 "source": ROOT / "pcc/backend/x86_64_encode.py",
+                 "require_x87_static_tables": control.require_x87_static_tables}
         code = compile(ast.Module(body=[changed], type_ignores=[]), "<fake-x87-module-init-text>", "exec")
-        if index == 0:
+        # Even the former positive counted unrelated constructors and stored
+        # null to both tables. It must no longer satisfy the semantic oracle.
+        with pytest.raises(AssertionError):
             exec(code, scope)
-            assert scope["required"] == [initializer]
-        else:
-            with pytest.raises(AssertionError):
-                exec(code, scope)
+
 
 
 def test_elf_input_sources_strict_modules_and_workflow_are_bound():

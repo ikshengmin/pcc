@@ -12,6 +12,7 @@ import time
 import pytest
 
 from tests.strict_exception_oracle import require_no_notimplemented_stub
+from tests.x87_static_table_oracle import require_x87_static_tables
 from tests.tar_attribute_strict_oracle import (
     TAR_COMPILER_MODULES, CONSTANT_ONLY_MODULE, require_tar_attribute_module,
 )
@@ -342,7 +343,7 @@ def test_worker_size_prior_modules_strict_target_emission(tmp_path, monkeypatch)
                                      section, re.M), symbol
                     assert symbol in initialization, symbol
                 assert len(re.findall(r'\bcall\b[^\n]*@"?py_dict_new(?:_presized)?"?\(', initialization)) >= 2
-                assert len(re.findall(r'\bcall\b[^\n]*@"?py_bytes_new"?\(', initialization)) >= 16
+                require_x87_static_tables(source.read_text(), section, initialization)
                 assert re.search(r'\bcall\b[^\n]*@"?py_module_attr_set"?\(', initialization)
                 del matches, initialization
             for symbol in required:
