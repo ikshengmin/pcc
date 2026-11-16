@@ -43,6 +43,8 @@ def decide(view: tuple[list[int], list[int], list[int]], a: int, b: int, c: int,
         or tokens[ct + 8] != TOKEN_IMMEDIATE or tokens[ct + 9] != 255
         or tokens[ct + 10] != 16 or tokens[ct + 11] != IMMEDIATE_HASH):
         return (0, 0, 0, 0, 0, 0, 0)
+    if tokens[ct + 1] != tokens[ct + 5]:
+        return (0, 0, 0, 0, 0, 0, 0)
     if store[0] != tokens[ct + 5] or tokens[ct + 5] != tokens[at + 1] or tokens[dt + 1] != tokens[ct + 1]:
         return (0, 0, 0, 0, 0, 0, 0)
     return (4, tokens[at + 1], op, tokens[dt + 4], tokens[dt + 5], tokens[dt + 6], tokens[dt + 7])

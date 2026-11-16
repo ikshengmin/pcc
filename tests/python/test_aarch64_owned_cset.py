@@ -9,7 +9,7 @@ from tests.python import test_aarch64_typed_peepholes as oracle
 NAME = 'fold_forwarded_cset_branch'
 
 
-def window(op='cbz', condition='eq', same=False, variant='normal'):
+def window(op='cbz', condition='eq', same=True, variant='normal'):
     dst = 'w9' if same else 'w10'
     source = 'x9' if variant == 'cset_x' else 'w9'
     cset = 'csetm' if variant == 'csetm' else 'cset'
@@ -23,7 +23,7 @@ def window(op='cbz', condition='eq', same=False, variant='normal'):
     src = 'w11' if variant == 'and_src' else 'w9'
     if variant == 'and_x':
         dst, src = 'x10', 'x9'
-    branch_reg = 'x10' if variant == 'branch_alias' else ('w11' if variant == 'branch_reg' else dst)
+    branch_reg = ('x' + dst[1:]) if variant == 'branch_alias' else ('w11' if variant == 'branch_reg' else dst)
     immediate = oracle.N(127 if variant == 'value' else 255,
                          10 if variant == 'radix' else 16,
                          sem.IMMEDIATE_HASH | (sem.IMMEDIATE_HEX_UPPER if variant == 'upper' else 0))
@@ -51,7 +51,7 @@ def differential(monkeypatch, sequence):
 @pytest.mark.parametrize('op', ('cbz', 'cbnz'))
 @pytest.mark.parametrize('condition', ('eq', 'ne'))
 @pytest.mark.parametrize('same', (False, True))
-def test_owned_cset_matches_legacy_positive(monkeypatch, op, condition, same):
+def test_owned_cset_matches_legacy_same_and_distinct_destination(monkeypatch, op, condition, same):
     differential(monkeypatch, window(op, condition, same))
 
 

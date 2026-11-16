@@ -1602,6 +1602,7 @@ def _forward_one_intervening_stack_store_load(lines: list[str]) -> list[str]:
                     if (
                         store_offset == load_offset
                         and middle_offset != store_offset
+                        and middle_reg not in ("x29", "w29", "fp")
                         and _register_alias_key(middle_reg)
                         != _register_alias_key(store_reg)
                         and move is not None
@@ -1687,6 +1688,7 @@ def _fold_forwarded_cset_branch(lines: list[str]) -> list[str]:
                 if (
                     store_reg == cset_reg
                     and forwarded_src == cset_reg
+                    and forwarded_reg == cset_reg
                     and branch_reg == forwarded_reg
                 ):
                     out.append(lines[index])

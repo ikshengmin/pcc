@@ -13,6 +13,7 @@ from .self_backend_aarch64_semantics import (
     TOKEN_ADDRESS,
     TOKEN_IMMEDIATE,
     TOKEN_REGISTER,
+    REGISTER_FP,
     semantic_opcode_id,
 )
 
@@ -113,6 +114,7 @@ def decide(
             continue
         if mode == 2 and (
             middle[1] == 0
+            or middle[0] in (29, 61, REGISTER_FP)
             or (
                 middle[1] == store[1] and middle[2] == store[2]
                 and middle[3] == store[3] and middle[4] == store[4]

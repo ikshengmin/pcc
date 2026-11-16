@@ -397,7 +397,7 @@ def _run(fragments, semantics, span, mode):
                         store, load = p.stack(a, store_op), p.stack(last, load_op)
                         if store is None or load is None or not _same(store[1], load[1]):
                             continue
-                        if mode == 2 and (middle is None or _same(middle[1], store[1]) or _forward_alias(middle[0]) == _forward_alias(store[0])):
+                        if mode == 2 and (middle is None or middle[0] in (29, 61, sem.REGISTER_FP) or _same(middle[1], store[1]) or _forward_alias(middle[0]) == _forward_alias(store[0])):
                             continue
                         replacement = p.new_move(load[0], store[0], load_op == "ldurb")
                         if replacement != -2:
@@ -482,7 +482,7 @@ def _run(fragments, semantics, span, mode):
                 if (cset and store and branch and p.op(c) == "and" and len(t) == 3
                     and dst >= 0 and src >= 0 and _class(dst) == _class(src) == "w"
                     and _same(t[2], CompilerInt4(sem.TOKEN_IMMEDIATE, 255, 16, sem.IMMEDIATE_HASH))
-                    and store[0] == src == cset[0] and branch[1] == dst):
+                    and store[0] == src == cset[0] and branch[1] == dst and dst == src):
                     p.output.append(a)
                     p.output.append(b)
                     replacement = p.new_branch(branch[0], branch[2], cset[0])

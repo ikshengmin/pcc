@@ -212,7 +212,7 @@ CASES = [
     ("fold_scratch_def_into_move", [I("movz", R("x9"), N(7)), I("mov", R("x10"), R("x9")), I("mov", R("x19"), R("x10")), I("ret")]),
     ("fold_mov_mov_chain", [I("mov", R("x9"), R("x19")), I("mov", R("x20"), R("x9")), I("ret")]),
     ("fold_zero_test_branch", [I("movz", R("w9"), N(0)), I("cbz", R("w9"), S())]),
-    ("fold_forwarded_cset_branch", [I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("and", R("w10"), R("w9"), N(255,16)), I("cbz", R("w10"), S())]),
+    ("fold_forwarded_cset_branch", [I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("and", R("w9"), R("w9"), N(255,16)), I("cbz", R("w9"), S())]),
     ("fold_cset_zero_branch", [I("cmp", R("w9"), R("w10")), I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("cbz", R("w9"), S())]),
     ("drop_dead_cset_branch_stores", ["_fn:", I("cmp", R("w9"), R("w10")), I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("b.ne", S())]),
 ]
