@@ -1507,6 +1507,9 @@ def _parse_stack_transfer(line: str, opcode: str) -> tuple[str, str] | None:
 
 
 def _forward_move(dest_reg: str, src_reg: str) -> str | None:
+    # No MOV encoding transfers directly between WSP and WZR.
+    if (dest_reg == "wsp" and src_reg == "wzr") or (dest_reg == "wzr" and src_reg == "wsp"):
+        return None
     # W writes zero-extend into X even when the low 32 bits are unchanged.
     if dest_reg == src_reg and not dest_reg.startswith("w"):
         return ""
