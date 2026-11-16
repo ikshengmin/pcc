@@ -1,0 +1,99 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package internal
+
+type family struct {
+	Id          int
+	MaxPreLongs int
+}
+
+type families struct {
+	HLL              family
+	Frequency        family
+	Kll              family
+	CPC              family
+	CountMinSketch   family
+	BloomFilter      family
+	Tuple            family
+	Theta            family
+	TDigest          family
+	ReservoirItems   family
+	VarOptItems      family
+	ReservoirUnion   family
+	VarOptItemsUnion family
+	REQ              family
+}
+
+var FamilyEnum = &families{
+	HLL: family{
+		Id:          7,
+		MaxPreLongs: 1,
+	},
+	Frequency: family{
+		Id:          10,
+		MaxPreLongs: 4,
+	},
+	Kll: family{
+		Id:          15,
+		MaxPreLongs: 2,
+	},
+	CPC: family{
+		Id:          16,
+		MaxPreLongs: 5,
+	},
+	CountMinSketch: family{
+		Id:          18,
+		MaxPreLongs: 3,
+	},
+	BloomFilter: family{
+		Id:          21,
+		MaxPreLongs: 4,
+	},
+	Tuple: family{
+		Id:          9,
+		MaxPreLongs: 3,
+	},
+	Theta: family{
+		Id:          3,
+		MaxPreLongs: 3,
+	},
+	TDigest: family{
+		Id:          20,
+		MaxPreLongs: 2,
+	},
+	ReservoirItems: family{
+		Id:          11,
+		MaxPreLongs: 2,
+	},
+	VarOptItems: family{
+		Id:          13,
+		MaxPreLongs: 4,
+	},
+	ReservoirUnion: family{
+		Id:          12,
+		MaxPreLongs: 1,
+	},
+	VarOptItemsUnion: family{
+		Id:          14,
+		MaxPreLongs: 4,
+	},
+	REQ: family{
+		Id:          17,
+		MaxPreLongs: 2,
+	},
+}

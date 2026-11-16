@@ -1,0 +1,702 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::hash::Hash;
+use std::hash::Hasher;
+
+use crate::codec::SketchBytes;
+use crate::codec::SketchSlice;
+use crate::codec::assert::ensure_preamble_longs_in;
+use crate::codec::assert::ensure_serial_version_is;
+use crate::codec::assert::insufficient_data;
+use crate::codec::family::Family;
+use crate::countmin::CountMinValue;
+use crate::countmin::UnsignedCountMinValue;
+use crate::countmin::serialization::FLAGS_IS_EMPTY;
+use crate::countmin::serialization::LONG_SIZE_BYTES;
+use crate::countmin::serialization::PREAMBLE_LONGS_SHORT;
+use crate::countmin::serialization::SERIAL_VERSION;
+use crate::error::Error;
+use crate::error::ErrorKind;
+use crate::hash::DEFAULT_UPDATE_SEED;
+use crate::hash::MurmurHash3X64128;
+use crate::hash::check_seed_hash;
+use crate::hash::compute_seed_hash;
+
+const MAX_TABLE_ENTRIES: usize = 1 << 30;
+
+/// CountMin sketch for estimating item frequencies.
+///
+/// The sketch provides upper and lower bounds on estimated item frequencies
+/// with configurable relative error and confidence.
+#[derive(Debug, Clone, PartialEq)]
+pub struct CountMinSketch<T: CountMinValue> {
+    num_hashes: u8,
+    buckets: BucketCount,
+    seed: u64,
+    seed_hash: u16,
+    // Every bucket satisfies |count| <= total_weight, so a checked total also bounds bucket
+    // additions during update/merge: |a + b| <= |a| + |b|. Deserialization validates this
+    // invariant; unsigned halving and decay preserve it.
+    total_weight: T,
+    counts: Vec<T>,
+    hash_seeds: Vec<u64>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+struct BucketCount {
+    count: u32,
+    multiplier: u128,
+}
+
+impl BucketCount {
+    fn new(count: u32) -> Self {
+        Self {
+            count,
+            multiplier: u128::MAX / u128::from(count) + 1,
+        }
+    }
+
+    #[inline]
+    fn index(&self, hash: u64) -> usize {
+        if self.count.is_power_of_two() {
+            // Same result as `%` for a power-of-two divisor.
+            (hash & (u64::from(self.count) - 1)) as usize
+        } else {
+            self.remainder(hash) as usize
+        }
+    }
+
+    /// Returns `a % self.count` without a hardware division, using Lemire's direct remainder
+    /// ("Faster Remainder by Direct Computation", 2019).
+    ///
+    /// Exact for every `u64` input and every `self.count >= 2`.
+    #[inline]
+    fn remainder(&self, a: u64) -> u64 {
+        let low_bits = self.multiplier.wrapping_mul(u128::from(a));
+        // High 64 bits of the 192-bit product `low_bits * d`.
+        let d = u128::from(self.count);
+        let lo = u128::from(low_bits as u64) * d;
+        let hi = (low_bits >> 64) * d;
+        ((hi + (lo >> 64)) >> 64) as u64
+    }
+}
+
+impl<T: CountMinValue> CountMinSketch<T> {
+    /// Creates a new CountMin sketch with the default seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `num_hashes` is `0`, `num_buckets` is less than `3`, or the total table
+    /// size exceeds the supported limit.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let sketch = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// assert_eq!(sketch.num_buckets(), 128);
+    /// ```
+    pub fn new(num_hashes: u8, num_buckets: u32) -> Result<Self, Error> {
+        Self::with_seed(num_hashes, num_buckets, DEFAULT_UPDATE_SEED)
+    }
+
+    /// Creates a new CountMin sketch with the provided seed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if any of:
+    /// * `num_hashes` is `0`.
+    /// * `num_buckets` is less than `3`.
+    /// * The total table size exceeds the supported limit.
+    /// * The computed seed hash is zero.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let sketch = CountMinSketch::<i64>::with_seed(4, 64, 42).unwrap();
+    /// assert_eq!(sketch.seed(), 42);
+    /// ```
+    pub fn with_seed(num_hashes: u8, num_buckets: u32, seed: u64) -> Result<Self, Error> {
+        let entries = entries_for_config(num_hashes, num_buckets)?;
+        let seed_hash = compute_seed_hash(seed, ErrorKind::InvalidArgument)?;
+        Ok(Self::make(
+            num_hashes,
+            num_buckets,
+            seed,
+            seed_hash,
+            entries,
+        ))
+    }
+
+    /// Returns the number of hash functions used by the sketch.
+    pub fn num_hashes(&self) -> u8 {
+        self.num_hashes
+    }
+
+    /// Returns the number of buckets per hash function.
+    pub fn num_buckets(&self) -> u32 {
+        self.buckets.count
+    }
+
+    /// Returns the seed used by the sketch.
+    pub fn seed(&self) -> u64 {
+        self.seed
+    }
+
+    /// Returns the sum of absolute update weights, scaled by any halving or decay.
+    pub fn total_weight(&self) -> T {
+        self.total_weight
+    }
+
+    /// Returns the relative error (epsilon) implied by the number of buckets.
+    pub fn relative_error(&self) -> f64 {
+        std::f64::consts::E / self.buckets.count as f64
+    }
+
+    /// Returns `true` if the total weight is zero.
+    pub fn is_empty(&self) -> bool {
+        self.total_weight == T::ZERO
+    }
+
+    /// Suggests the number of buckets to achieve the given relative error.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `relative_error` is not finite, is not greater than zero, or would
+    /// require more buckets than the sketch supports.
+    pub fn suggest_num_buckets(relative_error: f64) -> Result<u32, Error> {
+        if !relative_error.is_finite() || relative_error <= 0.0 {
+            return Err(Error::invalid_argument(
+                "relative_error must be finite and greater than 0",
+            ));
+        }
+
+        let num_buckets = (std::f64::consts::E / relative_error).ceil();
+        if num_buckets >= MAX_TABLE_ENTRIES as f64 {
+            return Err(Error::invalid_argument(format!(
+                "relative_error requires {num_buckets} buckets, but fewer than {MAX_TABLE_ENTRIES} are supported"
+            )));
+        }
+
+        Ok((num_buckets as u32).max(3))
+    }
+
+    /// Suggests the number of hashes to achieve the given confidence.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if `confidence` is not in `[0, 1]`.
+    pub fn suggest_num_hashes(confidence: f64) -> Result<u8, Error> {
+        if !(0.0..=1.0).contains(&confidence) {
+            return Err(Error::invalid_argument(
+                "confidence must be between 0 and 1.0 (inclusive)",
+            ));
+        }
+        if confidence == 1.0 {
+            return Ok(127);
+        }
+        let hashes = (1.0 / (1.0 - confidence)).ln().ceil();
+        Ok(hashes.clamp(1.0, 127.0) as u8)
+    }
+
+    /// Updates the sketch with a single occurrence of the item.
+    ///
+    /// # Panics
+    ///
+    /// Panics without modifying the sketch if the total absolute weight would exceed `T::MAX`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// sketch.update("apple");
+    /// assert!(sketch.estimate("apple") >= 1);
+    /// ```
+    pub fn update<I: Hash>(&mut self, item: I) {
+        self.update_with_weight(item, T::ONE);
+    }
+
+    /// Updates the sketch with the given item and weight.
+    ///
+    /// # Panics
+    ///
+    /// Panics without modifying the sketch if the absolute weight or the total absolute weight
+    /// cannot be represented by `T`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// sketch.update_with_weight("banana", 3);
+    /// assert!(sketch.estimate("banana") >= 3);
+    /// ```
+    pub fn update_with_weight<I: Hash>(&mut self, item: I, weight: T) {
+        if weight == T::ZERO {
+            return;
+        }
+        self.total_weight = weight
+            .checked_abs()
+            .and_then(|weight| self.total_weight.checked_add(weight))
+            .expect("total absolute weight overflow");
+        let num_buckets = self.buckets.count as usize;
+        for (row, seed) in self.hash_seeds.iter().enumerate() {
+            let bucket = self.bucket_index(&item, *seed);
+            let index = row * num_buckets + bucket;
+            self.counts[index] = self.counts[index] + weight;
+        }
+    }
+
+    /// Returns the estimated frequency of the given item.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// sketch.update_with_weight("pear", 2);
+    /// assert!(sketch.estimate("pear") >= 2);
+    /// ```
+    pub fn estimate<I: Hash>(&self, item: I) -> T {
+        let num_buckets = self.buckets.count as usize;
+        let mut min = T::MAX;
+        for (row, seed) in self.hash_seeds.iter().enumerate() {
+            let bucket = self.bucket_index(&item, *seed);
+            let index = row * num_buckets + bucket;
+            let value = self.counts[index];
+            if value < min {
+                min = value;
+            }
+        }
+        min
+    }
+
+    /// Returns the lower bound on the true frequency of the given item.
+    pub fn lower_bound<I: Hash>(&self, item: I) -> T {
+        self.estimate(item)
+    }
+
+    /// Returns the upper bound on the true frequency of the given item.
+    pub fn upper_bound<I: Hash>(&self, item: I) -> T {
+        let estimate = self.estimate(item);
+        let error = self.total_weight.scale_nonnegative(self.relative_error());
+        estimate.checked_add(error).unwrap_or(T::MAX)
+    }
+
+    /// Merges another sketch into this one.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error without modifying the sketch if the sketches have different numbers of
+    /// hashes, bucket counts, or seeds, or their combined total absolute weight exceeds `T::MAX`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut left = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// let mut right = CountMinSketch::<i64>::new(4, 128).unwrap();
+    ///
+    /// left.update("apple");
+    /// right.update_with_weight("banana", 2);
+    ///
+    /// left.merge(&right).unwrap();
+    /// assert!(left.estimate("banana") >= 2);
+    /// ```
+    pub fn merge(&mut self, other: &CountMinSketch<T>) -> Result<(), Error> {
+        if self.num_hashes != other.num_hashes
+            || self.buckets.count != other.buckets.count
+            || self.seed != other.seed
+        {
+            return Err(Error::invalid_argument(
+                "Count-Min sketches must have matching numbers of hashes, bucket counts, and seeds",
+            ));
+        }
+        self.total_weight = self
+            .total_weight
+            .checked_add(other.total_weight)
+            .ok_or_else(|| Error::invalid_argument("total absolute weight overflow"))?;
+        for (count, other_count) in self.counts.iter_mut().zip(&other.counts) {
+            *count = *count + *other_count;
+        }
+        Ok(())
+    }
+
+    /// Serializes this sketch into the Count-Min binary format.
+    ///
+    /// DataSketches C++ can read the serialized data, but item queries and updates there are
+    /// unreliable because the two implementations map items to counters differently.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::new(4, 128).unwrap();
+    /// sketch.update("apple");
+    /// let bytes = sketch.serialize();
+    /// let decoded = CountMinSketch::<i64>::deserialize(&bytes).unwrap();
+    /// assert!(decoded.estimate("apple") >= 1);
+    /// ```
+    pub fn serialize(&self) -> Vec<u8> {
+        let header_size = PREAMBLE_LONGS_SHORT as usize * LONG_SIZE_BYTES;
+        let value_size = LONG_SIZE_BYTES;
+        let payload_size = if self.is_empty() {
+            0
+        } else {
+            value_size + (self.counts.len() * value_size)
+        };
+        let mut bytes = SketchBytes::with_capacity(header_size + payload_size);
+
+        bytes.write_u8(PREAMBLE_LONGS_SHORT);
+        bytes.write_u8(SERIAL_VERSION);
+        bytes.write_u8(Family::COUNTMIN.id);
+        bytes.write_u8(if self.is_empty() { FLAGS_IS_EMPTY } else { 0 });
+        bytes.write_u32_le(0); // unused
+
+        bytes.write_u32_le(self.buckets.count);
+        bytes.write_u8(self.num_hashes);
+        debug_assert_eq!(
+            self.seed_hash,
+            compute_seed_hash(self.seed, ErrorKind::InvalidArgument).unwrap()
+        );
+        bytes.write_u16_le(self.seed_hash);
+        bytes.write_u8(0);
+
+        if self.is_empty() {
+            return bytes.into_bytes();
+        }
+
+        bytes.write(&self.total_weight.to_bytes());
+        for count in &self.counts {
+            bytes.write(&count.to_bytes());
+        }
+        bytes.into_bytes()
+    }
+
+    /// Deserializes a sketch from bytes using the default seed.
+    ///
+    /// Can read sketches serialized by DataSketches C++.
+    /// Item queries and updates on those sketches are unreliable because the two
+    /// implementations map items to counters differently.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidData` if the image is malformed or its seed hash does not match the default
+    /// seed.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::new(4, 64).unwrap();
+    /// sketch.update("apple");
+    /// let bytes = sketch.serialize();
+    /// let decoded = CountMinSketch::<i64>::deserialize(&bytes).unwrap();
+    /// assert!(decoded.estimate("apple") >= 1);
+    /// ```
+    pub fn deserialize(bytes: &[u8]) -> Result<Self, Error> {
+        Self::deserialize_with_seed(bytes, DEFAULT_UPDATE_SEED)
+    }
+
+    /// Deserializes a sketch from bytes using the provided seed.
+    ///
+    /// Can read sketches serialized by DataSketches C++.
+    /// Item queries and updates on those sketches are unreliable because the two
+    /// implementations map items to counters differently.
+    ///
+    /// # Errors
+    ///
+    /// Returns `InvalidData` if the image is malformed, its seed hash does not match `seed`, or
+    /// `seed` itself computes to the reserved zero seed hash.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<i64>::with_seed(4, 64, 7).unwrap();
+    /// sketch.update("apple");
+    /// let bytes = sketch.serialize();
+    /// let decoded = CountMinSketch::<i64>::deserialize_with_seed(&bytes, 7).unwrap();
+    /// assert!(decoded.estimate("apple") >= 1);
+    /// ```
+    pub fn deserialize_with_seed(bytes: &[u8], seed: u64) -> Result<Self, Error> {
+        fn read_value<T: CountMinValue>(
+            cursor: &mut SketchSlice<'_>,
+            tag: &'static str,
+        ) -> Result<T, Error> {
+            let mut bs = [0u8; 8];
+            cursor.read_exact(&mut bs).map_err(insufficient_data(tag))?;
+            T::try_from_bytes(bs)
+        }
+
+        let mut cursor = SketchSlice::new(bytes);
+        let preamble_longs = cursor
+            .read_u8()
+            .map_err(insufficient_data("preamble_longs"))?;
+        let serial_version = cursor
+            .read_u8()
+            .map_err(insufficient_data("serial_version"))?;
+        let family_id = cursor.read_u8().map_err(insufficient_data("family_id"))?;
+        let flags = cursor.read_u8().map_err(insufficient_data("flags"))?;
+        cursor
+            .read_u32_le()
+            .map_err(insufficient_data("<unused>"))?;
+
+        Family::COUNTMIN.validate_id(family_id)?;
+        ensure_serial_version_is(SERIAL_VERSION, serial_version)?;
+        ensure_preamble_longs_in(&[PREAMBLE_LONGS_SHORT], preamble_longs)?;
+
+        let num_buckets = cursor
+            .read_u32_le()
+            .map_err(insufficient_data("num_buckets"))?;
+        let num_hashes = cursor.read_u8().map_err(insufficient_data("num_hashes"))?;
+        let seed_hash = cursor
+            .read_u16_le()
+            .map_err(insufficient_data("seed_hash"))?;
+        cursor.read_u8().map_err(insufficient_data("unused8"))?;
+
+        let expected_seed_hash = compute_seed_hash(seed, ErrorKind::InvalidData)?;
+        check_seed_hash(
+            expected_seed_hash,
+            seed_hash,
+            "deserialized CountMinSketch",
+            ErrorKind::InvalidData,
+        )?;
+
+        let entries = entries_for_config_checked(num_hashes, num_buckets)?;
+        let is_empty = (flags & FLAGS_IS_EMPTY) != 0;
+        if !is_empty {
+            let payload_values = entries
+                .checked_add(1)
+                .ok_or_else(|| Error::deserial("CountMin payload value count overflows"))?;
+            let payload_bytes = payload_values
+                .checked_mul(LONG_SIZE_BYTES)
+                .ok_or_else(|| Error::deserial("CountMin payload size overflows"))?;
+            let available_bytes = cursor.remaining().len();
+            if available_bytes < payload_bytes {
+                return Err(Error::insufficient_data_of(
+                    "CountMin payload",
+                    format_args!("expected {payload_bytes} bytes, got {available_bytes}"),
+                ));
+            }
+        }
+
+        let mut sketch = Self::make(num_hashes, num_buckets, seed, expected_seed_hash, entries);
+        if is_empty {
+            return Ok(sketch);
+        }
+
+        sketch.total_weight = read_value(&mut cursor, "total_weight")?;
+        if sketch.total_weight < T::ZERO {
+            return Err(Error::deserial(
+                "total absolute weight must be non-negative",
+            ));
+        }
+        for count in &mut sketch.counts {
+            *count = read_value(&mut cursor, "counts")?;
+            if count
+                .checked_abs()
+                .is_none_or(|weight| weight > sketch.total_weight)
+            {
+                return Err(Error::deserial(
+                    "counter magnitude exceeds total absolute weight",
+                ));
+            }
+        }
+        Ok(sketch)
+    }
+
+    /// Returns an estimate of the sketch's memory usage in bytes.
+    pub fn estimated_size(&self) -> usize {
+        self.counts.capacity() * size_of::<T>() + self.hash_seeds.capacity() * size_of::<u64>()
+    }
+
+    fn make(num_hashes: u8, num_buckets: u32, seed: u64, seed_hash: u16, entries: usize) -> Self {
+        let counts = vec![T::ZERO; entries];
+        let hash_seeds = make_hash_seeds(seed, num_hashes);
+        CountMinSketch {
+            num_hashes,
+            buckets: BucketCount::new(num_buckets),
+            seed,
+            seed_hash,
+            total_weight: T::ZERO,
+            counts,
+            hash_seeds,
+        }
+    }
+
+    fn bucket_index<I: Hash>(&self, item: &I, seed: u64) -> usize {
+        let mut hasher = MurmurHash3X64128::with_seed(seed);
+        item.hash(&mut hasher);
+        let (h1, _) = hasher.finish128();
+        self.buckets.index(h1)
+    }
+}
+
+impl<T: UnsignedCountMinValue> CountMinSketch<T> {
+    /// Halves all counters and the total weight, rounding down.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<u64>::new(4, 128).unwrap();
+    /// sketch.update_with_weight("apple", 3);
+    /// sketch.halve();
+    /// assert!(sketch.estimate("apple") >= 1);
+    /// ```
+    pub fn halve(&mut self) {
+        for c in &mut self.counts {
+            *c = c.halve()
+        }
+        self.total_weight = self.total_weight.halve();
+    }
+
+    /// Scales all counters and the total weight by `decay`, rounding down.
+    ///
+    /// Rounding uses the actual `f64` value of the factor, so `decay(0.99)` changes a
+    /// count of `100` to `98`.
+    ///
+    /// A factor of `1.0` leaves the sketch unchanged; `0.5` is equivalent to [`Self::halve`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `decay` is not finite or is outside `(0, 1]`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use datasketches::countmin::CountMinSketch;
+    ///
+    /// let mut sketch = CountMinSketch::<u64>::new(4, 128).unwrap();
+    /// sketch.update_with_weight("apple", 3);
+    /// sketch.decay(0.5);
+    /// assert!(sketch.estimate("apple") >= 1);
+    /// ```
+    pub fn decay(&mut self, decay: f64) {
+        assert!(decay > 0.0 && decay <= 1.0, "decay must be within (0, 1]");
+        if decay == 1.0 {
+            return;
+        }
+        if decay == 0.5 {
+            self.halve();
+            return;
+        }
+        for c in &mut self.counts {
+            *c = c.scale_nonnegative(decay)
+        }
+        self.total_weight = self.total_weight.scale_nonnegative(decay);
+    }
+}
+
+fn entries_for_config(num_hashes: u8, num_buckets: u32) -> Result<usize, Error> {
+    if num_hashes == 0 {
+        return Err(Error::invalid_argument("num_hashes must be at least 1"));
+    }
+    if num_buckets < 3 {
+        return Err(Error::invalid_argument("num_buckets must be at least 3"));
+    }
+    let entries = (num_hashes as usize)
+        .checked_mul(num_buckets as usize)
+        .ok_or_else(|| Error::invalid_argument("num_hashes * num_buckets overflows usize"))?;
+    if entries >= MAX_TABLE_ENTRIES {
+        return Err(Error::invalid_argument(format!(
+            "num_hashes * num_buckets must be < {MAX_TABLE_ENTRIES}"
+        )));
+    }
+    Ok(entries)
+}
+
+fn entries_for_config_checked(num_hashes: u8, num_buckets: u32) -> Result<usize, Error> {
+    if num_hashes == 0 {
+        return Err(Error::deserial("num_hashes must be at least 1"));
+    }
+    if num_buckets < 3 {
+        return Err(Error::deserial("num_buckets must be at least 3"));
+    }
+    let entries = (num_hashes as usize)
+        .checked_mul(num_buckets as usize)
+        .ok_or_else(|| Error::deserial("num_hashes * num_buckets overflows usize"))?;
+    if entries >= MAX_TABLE_ENTRIES {
+        return Err(Error::deserial(format!(
+            "num_hashes * num_buckets must be < {MAX_TABLE_ENTRIES}",
+        )));
+    }
+    Ok(entries)
+}
+
+fn make_hash_seeds(seed: u64, num_hashes: u8) -> Vec<u64> {
+    let mut seeds = Vec::with_capacity(num_hashes as usize);
+    for i in 0..num_hashes {
+        // Derive per-row hash seeds deterministically from the sketch seed.
+        let mut hasher = MurmurHash3X64128::with_seed(seed);
+        hasher.write(&u64::from(i).to_le_bytes());
+        let (h1, _) = hasher.finish128();
+        seeds.push(h1);
+    }
+    seeds
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_fast_remainder_matches_remainder() {
+        let mut x = 0x9E37_79B9_7F4A_7C15u64;
+        let check = |d: u32, a: u64| {
+            let buckets = BucketCount::new(d);
+            assert_eq!(buckets.remainder(a), a % u64::from(d), "a={a} d={d}");
+        };
+        for d in [3, 5, 7, 1000, 20_000, 65_537, u32::MAX - 1, u32::MAX] {
+            for a in [
+                0,
+                1,
+                u64::MAX,
+                u64::MAX - 1,
+                1 << 63,
+                (1 << 32) - 1,
+                1 << 32,
+            ] {
+                check(d, a);
+            }
+            for _ in 0..1_000_000 {
+                x ^= x << 13;
+                x ^= x >> 7;
+                x ^= x << 17;
+                check(d, x);
+            }
+        }
+        for d in (3..u32::MAX).step_by(1_000_003) {
+            check(d, u64::MAX);
+            check(d, u64::from(d) * 12_345 + 7);
+        }
+    }
+}

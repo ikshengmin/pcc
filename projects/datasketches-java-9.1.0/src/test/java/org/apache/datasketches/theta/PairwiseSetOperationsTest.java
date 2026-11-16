@@ -1,0 +1,410 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.datasketches.theta;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.fail;
+
+import org.apache.datasketches.common.SketchesArgumentException;
+import org.testng.annotations.Test;
+
+public class PairwiseSetOperationsTest {
+
+  // ThetaIntersection
+
+  @Test
+  public void checkIntersectionNoOverlap() {
+    int lgK = 9;
+    int k = 1<<lgK;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+
+    for (int i=0; i<k; i++) { //<k so est is exact
+      usk1.update(i);
+      usk2.update(i + k);
+    }
+
+    CompactThetaSketch csk1 = usk1.compact(true, null);
+    CompactThetaSketch csk2 = usk2.compact(true, null);
+    ThetaIntersection inter = ThetaSetOperation.builder().buildIntersection();
+    ThetaSketch rsk = inter.intersect(csk1, csk2);
+    assertEquals(rsk.getEstimate(), 0.0);
+  }
+
+  @Test
+  public void checkIntersectionFullOverlap() {
+    int lgK = 9;
+    int k = 1<<lgK;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    ThetaIntersection inter = ThetaSetOperation.builder().buildIntersection();
+
+    for (int i=0; i<k; i++) { //<k so est is exact
+      usk1.update(i);
+      usk2.update(i);
+    }
+
+    CompactThetaSketch csk1 = usk1.compact(true, null);
+    CompactThetaSketch csk2 = usk2.compact(true, null);
+
+    ThetaSketch rsk = inter.intersect(csk1, csk2);
+    assertEquals(rsk.getEstimate(), k, 0.0);
+  }
+
+  @Test
+  public void checkIntersectionEarlyStop() {
+    int lgK = 10;
+    int k = 1<<lgK;
+    int u = 4*k;
+    long v = 0;
+    int trials = 10;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    ThetaIntersection inter = ThetaSetOperation.builder().buildIntersection();
+
+    for (int t = 0; t < trials; t++) {
+      for (int i=0; i<u; i++) {
+        usk1.update(i + v);
+        usk2.update(i + v + (u/2));
+      }
+      v += u + (u/2);
+
+      CompactThetaSketch csk1 = usk1.compact(true, null);
+      CompactThetaSketch csk2 = usk2.compact(true, null);
+      ThetaSketch rsk = inter.intersect(csk1, csk2);
+      double result1 = rsk.getEstimate();
+
+      inter.intersect(csk1);
+      inter.intersect(csk2);
+      CompactThetaSketch csk3 = inter.getResult(true, null);
+      double result2 = csk3.getEstimate();
+
+      assertEquals(result1, result2, 0.0);
+
+      usk1.reset();
+      usk2.reset();
+      inter.reset();
+    }
+  }
+
+// Theta A and not B
+
+  @Test
+  public void checkAnotBNoOverlap() {
+    int lgK = 9;
+    int k = 1<<lgK;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    ThetaAnotB anotb = ThetaSetOperation.builder().buildANotB();
+
+    for (int i=0; i<k; i++) {
+      usk1.update(i);
+      usk2.update(i + k);
+    }
+
+    CompactThetaSketch csk1 = usk1.compact(true, null);
+    CompactThetaSketch csk2 = usk2.compact(true, null);
+
+    ThetaSketch rsk = anotb.aNotB(csk1, csk2);
+    assertEquals(rsk.getEstimate(), k, 0.0);
+  }
+
+  @Test
+  public void checkAnotBFullOverlap() {
+    int lgK = 9;
+    int k = 1<<lgK;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    ThetaAnotB anotb = ThetaSetOperation.builder().buildANotB();
+
+    for (int i=0; i<k; i++) {
+      usk1.update(i);
+      usk2.update(i);
+    }
+
+    CompactThetaSketch csk1 = usk1.compact(true, null);
+    CompactThetaSketch csk2 = usk2.compact(true, null);
+
+    ThetaSketch rsk = anotb.aNotB(csk1, csk2);
+    assertEquals(rsk.getEstimate(), 0.0, 0.0);
+  }
+
+  @Test
+  public void checkAnotBEarlyStop() {
+    int lgK = 10;
+    int k = 1<<lgK;
+    int u = 4*k;
+    long v = 0;
+    int trials = 10;
+
+    UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+    ThetaAnotB aNotB = ThetaSetOperation.builder().buildANotB();
+
+    for (int t = 0; t < trials; t++) {
+      for (int i=0; i<u; i++) {
+        usk1.update(i + v);
+        usk2.update(i + v + (u/2));
+      }
+      v += u + (u/2);
+
+      CompactThetaSketch csk1 = usk1.compact(true, null);
+      CompactThetaSketch csk2 = usk2.compact(true, null);
+
+      ThetaSketch rsk = aNotB.aNotB(csk1, csk2);
+      double result1 = rsk.getEstimate();
+
+      CompactThetaSketch csk3 = aNotB.aNotB(csk1, csk2);
+      double result2 = csk3.getEstimate();
+
+      assertEquals(result1, result2, 0.0);
+
+      usk1.reset();
+      usk2.reset();
+    }
+  }
+
+//ThetaUnion
+
+ @Test
+ public void checkUnionNoOverlap() {
+   int lgK = 9;
+   int k = 1<<lgK;
+
+   UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   ThetaUnion union = ThetaSetOperation.builder().setNominalEntries(k).buildUnion();
+
+   for (int i=0; i<k; i++) {
+     usk1.update(i);
+     usk2.update(i + k);
+   }
+
+   CompactThetaSketch csk1 = usk1.compact(true, null);
+   CompactThetaSketch csk2 = usk2.compact(true, null);
+
+   union.union(csk1);
+   union.union(csk2);
+   ThetaSketch stdSk = union.getResult(true, null);
+
+   ThetaSketch rsk = union.union(csk1, csk2);
+
+   assertEquals(rsk.getEstimate(), stdSk.getEstimate(), 0.0);
+ }
+
+ @Test
+ public void checkUnionFullOverlap() {
+   int lgK = 9;
+   int k = 1<<lgK;
+
+   UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   ThetaUnion union = ThetaSetOperation.builder().setNominalEntries(k).buildUnion();
+
+   for (int i=0; i<k; i++) {
+     usk1.update(i);
+     usk2.update(i);
+   }
+
+   CompactThetaSketch csk1 = usk1.compact(true, null);
+   CompactThetaSketch csk2 = usk2.compact(true, null);
+
+   ThetaSketch rsk = union.union(csk1, csk2);
+   assertEquals(rsk.getEstimate(), k, 0.0);
+ }
+
+ @Test
+ public void checkUnionEarlyStop() {
+   int lgK = 10;
+   int k = 1<<lgK;
+   int u = 4*k;
+   long v = 0;
+   int trials = 10;
+
+   UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   ThetaUnion union = ThetaSetOperation.builder().setNominalEntries(2 * k).buildUnion();
+
+   for (int t = 0; t < trials; t++) {
+     for (int i=0; i<u; i++) {
+       usk1.update(i + v);
+       usk2.update(i + v + (u/2));
+     }
+     v += u + (u/2);
+
+     CompactThetaSketch csk1 = usk1.compact(true, null);
+     CompactThetaSketch csk2 = usk2.compact(true, null);
+
+     ThetaSketch pwSk = union.union(csk1, csk2);
+     double pwEst = pwSk.getEstimate();
+
+     union.union(csk1);
+     union.union(csk2);
+     CompactThetaSketch stdSk = union.getResult(true, null);
+     double stdEst = stdSk.getEstimate();
+
+     assertEquals(pwEst, stdEst, 0.0);
+
+     usk1.reset();
+     usk2.reset();
+     union.reset();
+   }
+ }
+
+ @Test
+ public void checkUnionCutbackToK() {
+   int lgK = 10;
+   int k = 1<<lgK;
+   int u = (3 * k);
+
+   UpdatableThetaSketch usk1 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   UpdatableThetaSketch usk2 = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   ThetaUnion union = ThetaSetOperation.builder().setNominalEntries(k).buildUnion();
+
+   for (int i=0; i < u; i++) {
+     usk1.update(i);
+     usk2.update(i + (2 * u));
+   }
+
+   CompactThetaSketch csk1 = usk1.compact(true, null);
+   CompactThetaSketch csk2 = usk2.compact(true, null);
+
+   ThetaSketch pwSk = union.union(csk1, csk2);
+   double pwEst = pwSk.getEstimate();
+
+   union.union(csk1);
+   union.union(csk2);
+   CompactThetaSketch stdSk = union.getResult(true, null);
+   double stdEst = stdSk.getEstimate();
+
+   assertEquals(pwEst, stdEst, stdEst * .06);
+
+   usk1.reset();
+   usk2.reset();
+   union.reset();
+
+ }
+
+ @Test
+ public void checkNullRules() {
+   int k = 16;
+   UpdatableThetaSketch uskA = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   CompactThetaSketch cskAempty = uskA.compact();
+   CompactThetaSketch cskAnull = null;
+
+   ThetaAnotB aNotB = ThetaSetOperation.builder().buildANotB();
+   ThetaIntersection inter = ThetaSetOperation.builder().buildIntersection();
+
+   try {
+     checkIntersection(inter, cskAnull, cskAempty);
+     fail();
+   } catch (SketchesArgumentException e) { }
+   try {
+     checkIntersection(inter, cskAempty, cskAnull);
+     fail();
+   } catch (SketchesArgumentException e) { }
+   try {
+     checkIntersection(inter, cskAnull, cskAnull);
+     fail();
+   } catch (SketchesArgumentException e) { }
+
+   try {
+     checkAnotB(aNotB, cskAnull, cskAempty);
+     fail();
+   } catch (SketchesArgumentException e) { }
+   try {
+     checkAnotB(aNotB, cskAempty, cskAnull);
+     fail();
+   } catch (SketchesArgumentException e) { }
+   try {
+     checkAnotB(aNotB, cskAnull, cskAnull);
+     fail();
+   } catch (SketchesArgumentException e) { }
+
+ }
+
+ @Test
+ public void checkEmptyValidRules() {
+   int k = 16;
+   UpdatableThetaSketch uskA = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   UpdatableThetaSketch uskB = UpdatableThetaSketch.builder().setNominalEntries(k).build();
+   CompactThetaSketch cskAempty = uskA.compact();
+   CompactThetaSketch cskBempty = uskB.compact();
+   uskA.update(1);
+   CompactThetaSketch cskA1 = uskA.compact();
+
+   ThetaUnion union = ThetaSetOperation.builder().setNominalEntries(k).buildUnion();
+   ThetaAnotB aNotB = ThetaSetOperation.builder().buildANotB();
+   ThetaIntersection inter = ThetaSetOperation.builder().buildIntersection();
+
+   checkSetOps(union, inter, aNotB, cskAempty, cskBempty); //Empty, Empty
+   checkSetOps(union, inter, aNotB, cskA1, cskBempty);     //NotEmpty, Empty
+   checkSetOps(union, inter, aNotB, cskAempty, cskA1);     //Empty, NotEmpty
+ }
+
+ private static void checkSetOps(ThetaUnion union, ThetaIntersection inter, ThetaAnotB aNotB,
+     CompactThetaSketch cskA, CompactThetaSketch cskB) {
+   checkUnion(union, cskA, cskB);
+   checkIntersection(inter, cskA, cskB);
+   checkAnotB(aNotB, cskA, cskB);
+ }
+
+ private static void checkUnion(ThetaUnion union, CompactThetaSketch cskA, CompactThetaSketch cskB) {
+   union.union(cskA);
+   union.union(cskB);
+   CompactThetaSketch cskU = union.getResult();
+   CompactThetaSketch cskP = union.union(cskA, cskB);
+   assertEquals(cskU.isEmpty(), cskP.isEmpty());
+   union.reset();
+ }
+
+ private static void checkIntersection(ThetaIntersection inter, CompactThetaSketch cskA, CompactThetaSketch cskB) {
+   inter.intersect(cskA);
+   inter.intersect(cskB);
+   CompactThetaSketch cskI = inter.getResult();
+   CompactThetaSketch cskP = inter.intersect(cskA, cskB);
+   assertEquals(cskI.isEmpty(), cskP.isEmpty());
+   inter.reset();
+ }
+
+ private static void checkAnotB(ThetaAnotB aNotB, CompactThetaSketch cskA, CompactThetaSketch cskB) {
+   CompactThetaSketch cskD = aNotB.aNotB(cskA, cskB);
+   CompactThetaSketch cskP = aNotB.aNotB(cskA, cskB);
+   assertEquals(cskD.isEmpty(), cskP.isEmpty());
+ }
+
+  @Test
+  public void printlnTest() {
+    println("PRINTING: "+this.getClass().getName());
+  }
+
+  /**
+   * @param s value to print
+   */
+  static void println(String s) {
+    //System.out.println(s); //disable here
+  }
+
+}

@@ -1,0 +1,52 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+//! CountMin sketch implementation for frequency estimation.
+//!
+//! The CountMin sketch provides approximate frequency counts for streaming data
+//! with configurable relative error and confidence bounds.
+//!
+//! # Usage
+//!
+//! ```
+//! use datasketches::countmin::CountMinSketch;
+//!
+//! let mut sketch = CountMinSketch::<i64>::new(5, 256).unwrap();
+//! sketch.update("apple");
+//! sketch.update_with_weight("banana", 3);
+//! assert!(sketch.estimate("banana") >= 3);
+//! ```
+//!
+//! # Configuration Helpers
+//!
+//! ```
+//! use datasketches::countmin::CountMinSketch;
+//!
+//! let buckets = CountMinSketch::<i64>::suggest_num_buckets(0.01).unwrap();
+//! let hashes = CountMinSketch::<i64>::suggest_num_hashes(0.99).unwrap();
+//! let sketch = CountMinSketch::<i64>::new(hashes, buckets).unwrap();
+//! assert_eq!(sketch.estimate("apple"), 0);
+//! ```
+
+mod serialization;
+
+mod sketch;
+pub use self::sketch::CountMinSketch;
+
+mod value;
+pub use self::value::CountMinValue;
+pub use self::value::UnsignedCountMinValue;

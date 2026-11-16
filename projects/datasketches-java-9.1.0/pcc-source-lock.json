@@ -1,0 +1,4074 @@
+{
+  "schema_version": 1,
+  "project": "datasketches-java",
+  "version": "9.1.0",
+  "repository": "https://github.com/apache/datasketches-java",
+  "tag": "9.1.0",
+  "tag_object": null,
+  "revision": "d47c992b55c63d16c050711b3b9a0ac51b627031",
+  "license": "Apache-2.0",
+  "license_files": [
+    "LICENSE",
+    "NOTICE"
+  ],
+  "archive": {
+    "url": "https://codeload.github.com/apache/datasketches-java/tar.gz/refs/tags/9.1.0",
+    "size": 1511623,
+    "sha256": "e5af8603272dfd637cb5070dd7f9f9f9b7b2350598ee46d4d858129ee46c18d5"
+  },
+  "selection": "Every member of the release tag archive, unchanged (symbolic links kept as links); each Git blob ID was checked against the release commit tree. Paths upstream marks export-ignore are absent from archives and listed in export_ignored, not fetched.",
+  "export_ignored": [
+    ".asf.yaml",
+    ".gitattributes",
+    ".github/workflows/auto-jdk-os-matrix.yml",
+    ".github/workflows/codeql-analysis.yml",
+    ".github/workflows/javadoc.yml",
+    ".github/workflows/serde-compat.yml",
+    ".gitignore"
+  ],
+  "complete_build_closure": false,
+  "dependencies": {
+    "language": "Java 25 (pom.xml java.version); java.lang.foreign memory segments",
+    "runtime": [
+      {
+        "name": "JDK 25 API sources (java.lang.foreign and the java.* types imported)",
+        "license": "GPL-2.0-only WITH Classpath-exception-2.0",
+        "source_closure_present": false,
+        "reference_tool_present": false
+      }
+    ],
+    "test": [
+      {
+        "name": "org.testng:testng",
+        "license": "Apache-2.0",
+        "declared_in": "pom.xml",
+        "source_closure_present": false,
+        "reference_tool_present": false
+      },
+      {
+        "name": "org.slf4j:slf4j-simple",
+        "license": "MIT",
+        "declared_in": "pom.xml",
+        "source_closure_present": false,
+        "reference_tool_present": false
+      }
+    ],
+    "build": [
+      {
+        "name": "Maven",
+        "note": "not used; sources are supplied directly"
+      }
+    ]
+  },
+  "total_bytes": 7308672,
+  "files": [
+    {
+      "path": ".mvn/maven.config",
+      "size": 546,
+      "sha256": "f25d52f978c6593ff5b5cf909d38bc0f0bdd9685df7f499007d3e1cc4a7326ac",
+      "git_blob": "e300459256913c90ace0aea1a2283592e89bc62a"
+    },
+    {
+      "path": "LICENSE",
+      "size": 12660,
+      "sha256": "253e82e26eb76b93d62b35a4ab912145aaf3c2dfbd2a577b685036d57b0bce28",
+      "git_blob": "0372fc3a655c79e0c8149aab0199c8099c1e0e13"
+    },
+    {
+      "path": "NOTICE",
+      "size": 384,
+      "sha256": "bd27e9bf0c8d83313ea5dbaff7f3f3b422347c30ca34502fb4029fed7bb6fc9c",
+      "git_blob": "e367c88ea211a55f37f4e3b4a221e728a4d8e8f2"
+    },
+    {
+      "path": "README.md",
+      "size": 5034,
+      "sha256": "6750c08055529ed012aa561a06b8788f911624e01dc89c879480a4e1253d199b",
+      "git_blob": "676deee9713efffe7fa5d57415a087c0c767be9d"
+    },
+    {
+      "path": "SECURITY.md",
+      "size": 5493,
+      "sha256": "c52ad145b37bfae8532355c46ef0fd876761dd178d40b361e95a62d591f5724d",
+      "git_blob": "fc10637b80918f48c4c0c16da2eb1882838f0994"
+    },
+    {
+      "path": "pom.xml",
+      "size": 35943,
+      "sha256": "3cefa1033165ded25bd5c660480d8901382846b993ed7782b4dfe0173b62c8c3",
+      "git_blob": "bbc11301f5b800fab591f2a8fca08d6bcf0dfe5e"
+    },
+    {
+      "path": "src/assembly/source-release.xml",
+      "size": 2110,
+      "sha256": "a47167efb7d86d2c78c5b78ce666035f3f55e52480f45fdd793931c755746e20",
+      "git_blob": "fe3e857a85974b7bfea4b2da321313b77946c918"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/PackageDocumentation.java",
+      "size": 1015,
+      "sha256": "1a0b504c1b5ed9f51bd9bdacfb3581dd1919a683dcb4c4be3febed6c5fd51ae0",
+      "git_blob": "8b4d678e2c57f4db29b402066f3dfd7bdb4aecfc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfBooleansSerDe.java",
+      "size": 4314,
+      "sha256": "eeceaeacef6d053011bbf29d1f2a3d9aafa27d59ac90a8dafcdc7c51e768d0c4",
+      "git_blob": "ac72836526e5d22d72c0b712a6381d7e2076182b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfDoublesSerDe.java",
+      "size": 3541,
+      "sha256": "a6266c86d4f8c9b91051529dcdb9ca4df337f00906adb129f6df0fd402c7d341",
+      "git_blob": "87f8412a9a2152d40aaabae7952640984b437a6b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfItemsSerDe.java",
+      "size": 4419,
+      "sha256": "e59b5a9d3e6728db5290c7fa6750fe046c97e32a39542a2f1f0c6a6d16d6d3a8",
+      "git_blob": "81f2d157c67c7f88a397869fe2fd554e214a2914"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfLongsSerDe.java",
+      "size": 3480,
+      "sha256": "e07ddc0e5e659b694fb80b5fa82412c653a36be9ce40669e8880b4969e97e4b3",
+      "git_blob": "118901b8989603bc10d29db999a952b08b6abafe"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfNumbersSerDe.java",
+      "size": 9873,
+      "sha256": "abdb124299b5957168bbadd6ee0ffa1b1bfcbd0f9d1ce39eff1c106f1e30d808",
+      "git_blob": "d04fb61677b523aec88e95f54c358168d60b4ffb"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfStringsSerDe.java",
+      "size": 5209,
+      "sha256": "a50a28fc41cf7c28ee6ebb1ca21dc5f0ef7994d3f6675d161a71cef409a82353",
+      "git_blob": "918b6538ce499e2281aaf81dcb3f37f30e7b5e89"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ArrayOfUtf16StringsSerDe.java",
+      "size": 5099,
+      "sha256": "8b4364cc11eedd4b46a4a7276103021e4a38badcce03014eb8e00cf44caa00fd",
+      "git_blob": "e6a42abac53ecaad8ecbf8f2cf8cd10a842c4e56"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/BoundsOnBinomialProportions.java",
+      "size": 12295,
+      "sha256": "f69c8e7bb06c8e40d64a87008ff008ba3932f77cac0c8555f30ea03e0c79b3b9",
+      "git_blob": "af69a1c83c5594df4fb72d884a0e8b18d3330b67"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/BoundsOnRatiosInSampledSets.java",
+      "size": 5075,
+      "sha256": "ce62b0918bae7995eec798ecebb684764706dd2199320f149c7beaa5a659b1c0",
+      "git_blob": "acb4f63c734e532a88df905f7507cbfa53b7f9cc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ByteArrayUtil.java",
+      "size": 11975,
+      "sha256": "22ec42e3ec48a51aba4a275dc44a7ef786d1a22c5a344061abec8f6fecee6f8f",
+      "git_blob": "abf16eeded109fcb8dd9726baed96a6518f16a04"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/Family.java",
+      "size": 8448,
+      "sha256": "987d1ae412d89c83ee6a98cdcd8b76372010e830acf51c2e7396ce799ed273a5",
+      "git_blob": "fef730d2aeaa854af6fe0e7d97472e7ac41bd689"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/MemorySegmentRequest.java",
+      "size": 2505,
+      "sha256": "9a0c60737078746442d16b0f05151b724186f3736e497c668c244f338770a682",
+      "git_blob": "8a10f277acaa5bf18e5aef2bedf23c7f859e8f68"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/MemorySegmentRequestExample.java",
+      "size": 2973,
+      "sha256": "e688c3d96006af60cb3ea2f3ccba3dbc7f3e43a8af6f01a24b11b8ac98a92ba0",
+      "git_blob": "3a45bb85bb4e6d43d490d771db833daedb3d22a3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/MemorySegmentStatus.java",
+      "size": 3376,
+      "sha256": "7c81b8100833e3106ba471fc0dd02d8075655a81af9fe8dbe3459dae7b1820c5",
+      "git_blob": "7e4ebcd3847b41dcc74f8fd78077a45ae5e725a9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/QuickSelect.java",
+      "size": 9416,
+      "sha256": "f7098a07bad1dc0953728b7d0379476b71d3034f7a7937bdffa73660929c0993",
+      "git_blob": "1a52e3ef06f37bb0c01fd6aa3b20f7adcb357be7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/ResizeFactor.java",
+      "size": 2138,
+      "sha256": "db9033d26b4d953fc2ba1edeb9216a7626118c4a75c09aa393af2885feb67c8a",
+      "git_blob": "5dfc8addc71222b133db140d2a6de95fe62d9d3c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SketchesArgumentException.java",
+      "size": 1541,
+      "sha256": "a3f1104f04e3e07a88345a3a0b8e4bd08bb6239cae3c502c5e6152de3452aab4",
+      "git_blob": "4644f595b16a9853f6dfdd465d0803e55f17ad36"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SketchesException.java",
+      "size": 2176,
+      "sha256": "58fa39e1bfff40db05fe2409f498f3d46331ed693706d8afa496b00ef7ce48a8",
+      "git_blob": "83f427cb0c99c6b2d52df23af90a46593436aad7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SketchesNotSupportedException.java",
+      "size": 1740,
+      "sha256": "4cb0e50aa1c606895f9f0af44be8359e1c8760993c2f71d54111536f6e56a98c",
+      "git_blob": "e22cc16373e2a6f43f080894b907284afe5d1079"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SketchesReadOnlyException.java",
+      "size": 1909,
+      "sha256": "2afd98d2989fb4455bd2fc6b9c6a17a72cfcbb39730b3194d3eb62ad6c9d3c93",
+      "git_blob": "59cf7a47cd7a8b7fcdc19b3cdb07ec7a951d459d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SketchesStateException.java",
+      "size": 1531,
+      "sha256": "f891a511fd96f0e09cac4d4cd16cc367b6c52d56dd14f972718e93d4c27f3800",
+      "git_blob": "b3d3df90ef3769459228ecb61a0bfe5cd075b675"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SpecialValueLayouts.java",
+      "size": 4031,
+      "sha256": "993b37d6de06554bd21e84833287395b7d8290156d33816a807eb003d90baee5",
+      "git_blob": "292d5617f863288bbeb8ff6008b817a04eb72bcd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/SuppressFBWarnings.java",
+      "size": 1469,
+      "sha256": "27456a34144bda427a66a8b997eae8528c961f8aff1afa671982600bc1aa3d4e",
+      "git_blob": "c804211820c6f8804a2b422b8d5f2930c96c1fa8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/Util.java",
+      "size": 44417,
+      "sha256": "0c180cb8311a38895fc2daad1d2709896d445d8eea84fa59bdcca3483b5e3212",
+      "git_blob": "0d867bc446051e91984f1ddab5313fbc18be3a7f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/package-info.java",
+      "size": 944,
+      "sha256": "7b4736636cace233fdeaa6b3c4ad2c5296a0ae1283c3ec20dcca8ac2153ac859",
+      "git_blob": "0fbaab76d89613ee0d81a9e281b0422174e7d95a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/PositionInvariantsException.java",
+      "size": 1367,
+      "sha256": "934109b9ad9b7f1262e2b3bf359ef7c83d4c1c39c7149349c87d280d11615805",
+      "git_blob": "ef327a564a41d00b052451e655fef23acff6a802"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/Positional.java",
+      "size": 3858,
+      "sha256": "125d0c611de679bde2b6d368b3357d825f264310548490b30be3d7692a1f6c26",
+      "git_blob": "4cbb163b47cd47ab5f385ad6b5d2e1563f783bd2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/PositionalImpl.java",
+      "size": 4102,
+      "sha256": "ea08911d9c8e3f12eb45cbf2ac9b23de80e42e2d79a8ffdf131d04988fb65596",
+      "git_blob": "01e89eb23612c74d07f38eb874633bd352102e59"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/PositionalSegment.java",
+      "size": 14694,
+      "sha256": "590f15a3af5b7f2ca513f2f3dc46579b8f38ccaf0c283acddc9d41ee9f88af8b",
+      "git_blob": "192b56271bad7238e0775dce711ea2a23cb18390"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/PositionalSegmentImpl.java",
+      "size": 10607,
+      "sha256": "1e1b1c950f198efc153e502d3c100ee9022c06fc9491de1f7d6d0606f2b406f7",
+      "git_blob": "380f0bb2045885ab49428baa00e29dd07c0307e5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/common/positional/package-info.java",
+      "size": 1047,
+      "sha256": "54b97d49384dc4ebdb794a79c7f2cbb29e3331d77d849c68c8af14a7bf45f687",
+      "git_blob": "9049e3573c95fa1cd974ff8b052043be2c184bb8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/count/CountMinSketch.java",
+      "size": 16431,
+      "sha256": "09f5a88eaa05a2f2a7796bd89662dd2b20bb767aca63f477c6b4546285c840d9",
+      "git_blob": "5354eb702c5a275f1979a6eec38baae1bf88d80a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/count/package-info.java",
+      "size": 2340,
+      "sha256": "2937218a8322664c3da5a587b214085472b75347dd9163559032775f5f550d0e",
+      "git_blob": "c363f1d4af45a38dbc90242712f30390ebc6aa11"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/BitMatrix.java",
+      "size": 3195,
+      "sha256": "a04d67b2e23090f6fe476b88f8434f29899edad8a96d61b69f06f86bb8f3e75b",
+      "git_blob": "ecf27b70ff5d641713e5c90cc234dd6c7941a967"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CompressedState.java",
+      "size": 13516,
+      "sha256": "248e639084235f978ddd86cc5f10a26a507856e966fd1e1cb8ce6a4b15d461d3",
+      "git_blob": "cde401d7c5c0c215936155568e5077f47573fe2f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CompressionCharacterization.java",
+      "size": 12075,
+      "sha256": "cdbf2ffa1dd671fe481e94d6bf8f964428f611195fd74230c7af88231751153d",
+      "git_blob": "32c52ef28bfbf5f06f5da82ee13a26f0621fa03e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CompressionData.java",
+      "size": 245300,
+      "sha256": "fe7ad941beeadacf29108eae94545b38f34edcba847fb94081132386913c6520",
+      "git_blob": "aa1c73a4de4d7966f28a76e9780e3147e7183626"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcCompression.java",
+      "size": 31971,
+      "sha256": "9e3ec9f3a458fa9a1c732dcf13087db57c095c0350daae28950a78f39e5b6e49",
+      "git_blob": "e9510b02b4012030e620000df2e822291e6d14d7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcConfidence.java",
+      "size": 5808,
+      "sha256": "91ad81b16ad4e3ea715c918533a643e0a1e838b3e3c3e9aeaad709afd6c5f08e",
+      "git_blob": "d948678b6e0713068adfa178bc3da517987dee8c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcSketch.java",
+      "size": 29596,
+      "sha256": "4090b8707c8f060119338996570b987fa3f2fe5573acf87425a87db38eba7a95",
+      "git_blob": "d5e17388a73df467b18a80b2afc523ac2c9ec7b6"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcUnion.java",
+      "size": 20294,
+      "sha256": "ae6e7c58fde2d78b692d0993c3d1425080afdb772ff5f875aafbfe319cb5a2ba",
+      "git_blob": "5106862ddbe07cc18ab29172f3c18e2727d36ee1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcUtil.java",
+      "size": 4396,
+      "sha256": "6492808c9f893a352637dc5fa9e33ff8f328c36c8053b396f49dc661c4765c86",
+      "git_blob": "da7cba086fca018a66ab6ce2e4b07ec37dbeab16"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/CpcWrapper.java",
+      "size": 4998,
+      "sha256": "a1288a923c191ad7b86aeebcb8581a6cc5fe449874c0adec0a1968731c8659ba",
+      "git_blob": "ed78e2392b65e8dc582d7383da4860e1a4434baf"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/Flavor.java",
+      "size": 1587,
+      "sha256": "67095ed753bf63d92586eb687d48ed1bb67d3ec8c037d17d374feee90a207a30",
+      "git_blob": "52cd66cd6f7c465efb916e824758ffeb0ef880b9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/Format.java",
+      "size": 1565,
+      "sha256": "a6f5b129fa1019c687706b08bd16823eed18183f7a866e4b422e6f13e204cf34",
+      "git_blob": "20004517016c37d2fb1f9b702aa285041f1b1c53"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/IconEstimator.java",
+      "size": 3914,
+      "sha256": "550e66ccd875ce5bb13658e842439f269aa69472ed0a30581d0a8b9c6d439e8e",
+      "git_blob": "cc5382fdc69b9725095279d6e548237b155df205"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/IconPolynomialCoefficients.java",
+      "size": 12929,
+      "sha256": "719477b0038ee187bde52b4ce4d64bb5976e17ba6f20d21c621197889e687cc7",
+      "git_blob": "6c08528f91ebf7ededeb2a0cb9a092311828564e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/MergingValidation.java",
+      "size": 7674,
+      "sha256": "06c54fe699e26a2f77c85acae5de5912c45174b82e2be15b735c104298f4b498",
+      "git_blob": "213e65d30afe3c27132fcf63709d3567a7c28261"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/PairTable.java",
+      "size": 13686,
+      "sha256": "a945de9ff2cccc3796bb3a0e501ab29a59c8a48575ef77bd4604c5067332cae5",
+      "git_blob": "87258ec5c0eb5bd3e1f9e81f6ad3009b632dc4b7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/PreambleUtil.java",
+      "size": 36935,
+      "sha256": "16ba1a3cfce9dd9fca8a9b901ac4510811d4371d1f9de6b7e4ac5284a37004d6",
+      "git_blob": "89cb71acaf0c3f12475d0a5e7056c0eed9ecc068"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/QuickMergingValidation.java",
+      "size": 6144,
+      "sha256": "9ca85dfc6bd1c571e931c36ccbcdbb6bfbff4117d50d975640bf5389f5039841",
+      "git_blob": "e2bb8605fef27187155501b2c69cc7241da7dddd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/RuntimeAsserts.java",
+      "size": 4682,
+      "sha256": "e887636f9ff8eba4ca26d487ec2c4e05f4ff75d6b7d3255407efa6cace1a1aff",
+      "git_blob": "17e716e3a976047e000cdc837ab9fec703fba6d9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/StreamingValidation.java",
+      "size": 5525,
+      "sha256": "1e8b41863651706d44341235c16606c837c5cbaaac3eb614ea54b57f7b4bb2fa",
+      "git_blob": "aab6e5e6fbeea681d7e589fb1416fba008f7b0fc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/TestUtil.java",
+      "size": 3526,
+      "sha256": "b7afc025a253fbf97dfe88b20d743e2c2490e84a4399039eacc7861bef06e051",
+      "git_blob": "f555dae67aac19dbb5ce201dbc37fe8c7693dfc9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/cpc/package-info.java",
+      "size": 906,
+      "sha256": "94bb0a7fa79f786a3ac39a36d7d5e8911208dde0d2171640789f25af21946b07",
+      "git_blob": "d946436e36e1345ce85274862eae27eff6495c1b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/fdt/FdtSketch.java",
+      "size": 6874,
+      "sha256": "6a4bcaee59228ee4268cb3fcfb4d90ff440bb9a6ef096e35724301341d9a49fb",
+      "git_blob": "f33267fef57b2e7b8cfa954a1d0364c750f38096"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/fdt/Group.java",
+      "size": 4081,
+      "sha256": "9991cef2d30ee2e456deca0e8f085a20986e59dc7966b8c342c86c45a24cb125",
+      "git_blob": "e22ee2398c3140b868aabefd652dd58633cbd9a5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/fdt/PostProcessor.java",
+      "size": 6981,
+      "sha256": "dad3780c9670428f16e2fa04fed754fa551fe750031e02e2e25fa23eada936ba",
+      "git_blob": "4d4df39a24970b4468f21128af7bc660d5e3e42a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/fdt/package-info.java",
+      "size": 889,
+      "sha256": "c8bd33c83f1aaab92682edc08540b4c43447d1303fb1d846250bf499ce17cd7d",
+      "git_blob": "7853c862696b836e8afbac6fa9326fc3fa2b1fce"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/PackageDocumentation.java",
+      "size": 1023,
+      "sha256": "0f92603f51779c59d53a26dba7c21d67677053e9fd03af2ffcdd778b7de30566",
+      "git_blob": "04d6e254423b3dbf95d562df51424ae731cb5822"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/BitArray.java",
+      "size": 4920,
+      "sha256": "8a6d0624dded0f0cd8629668f41cbfd8eb98916a2fa944d3382a7fd2b7d0f716",
+      "git_blob": "6af85e0e36687dbf6e333258aa5588f0172dbed3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/BloomFilter.java",
+      "size": 36905,
+      "sha256": "75ebc1bb3d41acfdcdf3cd643c1839e087007fa978971927fac4d4f314e48465",
+      "git_blob": "a5466689e40a9581e39788d9e47b9a88f434bce1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/BloomFilterBuilder.java",
+      "size": 12922,
+      "sha256": "0cd6a636114e263bb578d61bc3a0934925b0ddbe7c3d202fac3163e839116dbf",
+      "git_blob": "78098878f9862556de939e9aeb89655315c9729f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/DirectBitArray.java",
+      "size": 7756,
+      "sha256": "b69a32893640ffe4847c6f9fc40976c3255aaad590b68a2cdb172fe041aa9724",
+      "git_blob": "e20b1a1e6cae85567e027cd551e136b1145569f2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/DirectBitArrayR.java",
+      "size": 5360,
+      "sha256": "666fc76e9d84891e4e72ad6e30168b610906ea0f057c7e4808ec8e61472020d1",
+      "git_blob": "6845f27fc570da21273ad6a988ebf4028e4b4688"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/HeapBitArray.java",
+      "size": 7338,
+      "sha256": "19b2b787d4645980d6ae34db1ae2a24ccd21914c99fd75f6002d2ca6502b5f8c",
+      "git_blob": "0abd43f43a1e4e03f67495c2bee929aceb1f8f0f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/bloomfilter/package-info.java",
+      "size": 893,
+      "sha256": "b81172b98a899d3690b868392d5dad4eebead7f4c82b5065b54ae069c45ba6d9",
+      "git_blob": "4823fcca7858f54e3345fc644caed49db4ab83fe"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/package-info.java",
+      "size": 1182,
+      "sha256": "28252e27d0b27cf1779072b8607316ea0a904a9f69d9ad7744a5887e7d3bde58",
+      "git_blob": "93410e1c5387717773e2c02da16fde2f5eb8789a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/xorfilter/XorFilter.java",
+      "size": 29924,
+      "sha256": "168c8af7a465c1681790785f7757f33df51c33b07dddaefd05b218300b0b12e3",
+      "git_blob": "be42915504c87c4f9f8305f42d0750ea89d9ace3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/xorfilter/XorFilterBuilder.java",
+      "size": 9973,
+      "sha256": "08be1122daa609fdc13604f6bc70e13d9b229e53d9dab679f6e463dd344da3c8",
+      "git_blob": "25f62ce4cf4ae0a21287cfd7043972a3e24523c4"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/filters/xorfilter/package-info.java",
+      "size": 889,
+      "sha256": "67b3122b3b6148ae803ef9af4cae208d92abbfa946bd378dbedcf46cc13ed742",
+      "git_blob": "d6f58bddd09ed81aa0e1cbaf57748b96be99b404"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/ErrorType.java",
+      "size": 1767,
+      "sha256": "ac414b3e6b610676c60abd5c5c6fc8bd68e25aa42830b9d45f5c62dd65d552c6",
+      "git_blob": "050462acd995354ce7fde900e2bb6dd54e2b70f9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/FrequentItemsSketch.java",
+      "size": 30452,
+      "sha256": "9e17fbc827e2a63358b8059e68ef761eee7a6046f1dcfdb0d70b127dc7affe46",
+      "git_blob": "a662a9e1031b9c4851119891f86fe325e5a2f02c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/FrequentLongsSketch.java",
+      "size": 35254,
+      "sha256": "d3f61eb2fe3f47187629716dcf46f0590357ebe1aecd18b2c3df3611dc37f1b8",
+      "git_blob": "81da5c8b997d31fe574ddf3fc165b78082a2a994"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/PreambleUtil.java",
+      "size": 11271,
+      "sha256": "ca7bcd4d71f6f61db36e5b6fcd1810eb38a81db4b3554844cc6a469b7391eee9",
+      "git_blob": "bd70855ce256be1143bc74f2934a9b5c2747f46c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/ReversePurgeItemHashMap.java",
+      "size": 12006,
+      "sha256": "b539951d264a9b6e8c665830e57d0be69b8743443f88ef0827f0873d58a70fd0",
+      "git_blob": "7f998f50565d0b5376177a46e82fe819b1fa00da"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/ReversePurgeLongHashMap.java",
+      "size": 13077,
+      "sha256": "fa8d803b900d65717d52b4c3529dca35cccb180f276c03454d40a8c5ec73a8fa",
+      "git_blob": "269ca870634eebd6e9dfd23524d8337bf4f17c7f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/Util.java",
+      "size": 4155,
+      "sha256": "8c4386258574943787acedcc2534fd6836816f95a58c67e693230fe14523fb32",
+      "git_blob": "bbdadd59aeeab9b0cc733164b9e4a9dd110f8827"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/frequencies/package-info.java",
+      "size": 1001,
+      "sha256": "e1895f6f610f2f873201c4ef50de81787a9410b0895d244f12e8efb120528c2c",
+      "git_blob": "d7ab9b7ac6d8875c2237f31ced36cf0d68b3b3f2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hash/MurmurHash3.java",
+      "size": 20134,
+      "sha256": "988eb01f055115a0416dd34ab7158f7390a2b5ead020ac9823bc3990aff633c8",
+      "git_blob": "d0a46db926da452ae79c3fb30dcdd14249d8eb9b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hash/MurmurHash3FFM.java",
+      "size": 11824,
+      "sha256": "ce360c4d9950c7daaa87aa934b8faa02ae75d043c35e9211f890c40e15cebb5f",
+      "git_blob": "722aba8bbdd54f018f44bde70863c89b1669e390"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hash/XxHash.java",
+      "size": 6824,
+      "sha256": "b7c17f1a134be31cf9a1ff95843dbb87fd784c7afcb48238d169c0182314dba3",
+      "git_blob": "cb3f6e0df6bd4d32fe17c62a70592d5f886ab550"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hash/XxHash64.java",
+      "size": 10685,
+      "sha256": "e726fe173f0c8be46756f1e13d6a51710ee6b6578973271cf22c10a868889c2f",
+      "git_blob": "a908b6aafd60ac426f26abf384136abb4d2d0b49"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hash/package-info.java",
+      "size": 1342,
+      "sha256": "fd6faaf56636b7454285d1b463e0f090618352bb89578e1233ac502360e55945",
+      "git_blob": "5744b27767710cebce62089266a08ad20c07034c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/AbstractCoupons.java",
+      "size": 5077,
+      "sha256": "8fb9122a7072fe30d795f9fceffd7b8fc7ff75227562fd27bd7ec59f1354fe51",
+      "git_blob": "4e060e2b148e8b4bdbf57d3538416b1837d5922e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/AbstractHllArray.java",
+      "size": 8594,
+      "sha256": "dd3aabd6094406209e0631aac235b419cfb8b6d2c3bdf265ed807e5a06a8ca62",
+      "git_blob": "589f32c8ebaebf28e04a26a556e854d2fab88940"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/AuxHashMap.java",
+      "size": 2271,
+      "sha256": "475443f82d9463564ba36ceab54ef3b5d5c8526eca1c2be4c40a01f523f7edcc",
+      "git_blob": "f255b0fd6043d09df3360b1cb9b1d19c631a3675"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/BaseHllSketch.java",
+      "size": 16334,
+      "sha256": "1af3b9acbe6c01c6d6ad1977f1f46b190256db22781670a98188efb451619261",
+      "git_blob": "99107220ebcff775fae062ae4c9ae4fe3af5bf13"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CompositeInterpolationXTable.java",
+      "size": 73367,
+      "sha256": "440a360b0a67c4730b07a0c52a4796e23225ff43538d5d0b819495fd00c4112a",
+      "git_blob": "030a3cf940ca3f1123d637622f5e51543bdc635d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/Conversions.java",
+      "size": 5151,
+      "sha256": "e5baedc068b06f8fac7f0b1503268f9b8f32d371ccaa29a2d8d842fc18e70a73",
+      "git_blob": "a5e8ce4f0423366c41989d4509c6ea611421a396"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CouponHashSet.java",
+      "size": 5778,
+      "sha256": "914cac32819743bc29f323ff9329e1c7eb93fe200a573cf82dd9482c2f5e7434",
+      "git_blob": "4ba67c26500071666859a456785da24ea4a6f539"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CouponList.java",
+      "size": 6843,
+      "sha256": "ec041d20cd5f8c344400dc8060a00fc330e4dec3fe869007e0fa3760bbbebcb9",
+      "git_blob": "bd70dd3eab1eee6a0d07019350d3a22f2b811631"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CouponMapping.java",
+      "size": 2772,
+      "sha256": "cb5142c31d2cc44f2d85ed0dbf3e9d4a7f4c68e1edf2892c1103389a6756cd65",
+      "git_blob": "25d92767906fa70c2b4c789fdb0192c99b40d5ec"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CubicInterpolation.java",
+      "size": 6212,
+      "sha256": "c0a24e15071697e1b50eec0dce92090ee647ede2d3c4d1c843479120ad429834",
+      "git_blob": "4bca1a02e0c446b15911c14d54e2bb9ac8b2c031"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/CurMode.java",
+      "size": 1332,
+      "sha256": "a15e1095f2644e2d17e00be9d551bd555c09a09059c3d2eae8ca68341ae47e65",
+      "git_blob": "a31266ce4cbb01f5262216ff01bcdb7c7c56fa7d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectAuxHashMap.java",
+      "size": 7760,
+      "sha256": "467da4974606da188106f82f8eed6123df0d429ac24756ae2970522752ad4f0e",
+      "git_blob": "0f18aa24a2c7c2294878fa4f98df9cce2c438159"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectCouponHashSet.java",
+      "size": 6503,
+      "sha256": "f72cbc38b02d26081b66d4e39ddeb3d2b923f469b2dcd218c76c98d711fd4d7a",
+      "git_blob": "e00d4a888093d41f6886638d645c82f42e804769"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectCouponList.java",
+      "size": 12025,
+      "sha256": "1ae6bc72f8ba79fcc8eceefc33f3cfa9c5651f3b3fe1fe66803eaf35d2eb9b52",
+      "git_blob": "90a19a6f7dbe89b31e9c4af2c3ea1f27f4331af0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectHll4Array.java",
+      "size": 7195,
+      "sha256": "428bea2df0d263b87e4d50b0e2ceed206147acbb3e8446e12dcc4bb982314191",
+      "git_blob": "03eefdc01833daa73544d5787883c38c92772f33"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectHll6Array.java",
+      "size": 4706,
+      "sha256": "5d4405604987930289dc3ec29398efb5ee4885b4599f72a6811b2a135a637b6e",
+      "git_blob": "4d35be674f85fefa1ec36d372a3452fc027f2553"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectHll8Array.java",
+      "size": 3837,
+      "sha256": "902fb7f900a4f9b38218e2a726b376b18a95efa0ce6383e45247f3039df64e12",
+      "git_blob": "34714fb75ce5f66e3732417e70b6297e63328649"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/DirectHllArray.java",
+      "size": 9319,
+      "sha256": "d18a9d43bce32e8d22e7343b6639724fde65bea2f4bf31667f5b3097e576f6f8",
+      "git_blob": "204b50e3adb71678c012002cc8b96137048e5d5a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HarmonicNumbers.java",
+      "size": 3331,
+      "sha256": "e9d723f915ae5c52a3c1de8f2f417844490dd9b9e4d2e74f1f3719a8770a397a",
+      "git_blob": "1d236d2f60c53c107f9a930771d15bf68154521e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HeapAuxHashMap.java",
+      "size": 7334,
+      "sha256": "03a4bc789d73eda5f897dfefe0b27b8110cf65dbc6cdd4e9f0fcd4e7677ef5f7",
+      "git_blob": "3a1600676115ac7b510c10ac1aeaa32493b3bac9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/Hll4Array.java",
+      "size": 5321,
+      "sha256": "9027461143ee364ff17771cd80352223eb0b099c2ee8c5bde12371c80e6e460d",
+      "git_blob": "f6295fa78093fb5c59bff252723555790906ef1e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/Hll4Update.java",
+      "size": 8961,
+      "sha256": "dcd46642a516e34d63154bf62e36f67a94de9d69e998311e0b428c6a025e969e",
+      "git_blob": "a1b67275b45d92f2176c779d3e961d9056e15b7f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/Hll6Array.java",
+      "size": 4718,
+      "sha256": "8015dd3ae91586d60d04146458f2840d86268818835d61de51f393a03af93a5f",
+      "git_blob": "a0ddcbf594b20b956141819902be74716df3bf01"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/Hll8Array.java",
+      "size": 3906,
+      "sha256": "bacf3201c4df58489c18281f9ec189d4cdae06f73fe663da3739e587531531a6",
+      "git_blob": "423cebfee83440be2c1b015a3fcfd897e4c28fa5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllArray.java",
+      "size": 7077,
+      "sha256": "1ad059b7e33e510c5bd7080a921adfcdaab023bd41117d7890330d49315c82ba",
+      "git_blob": "cfbade17b0ce1e334c45445f25309fef1a03511a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllEstimators.java",
+      "size": 6549,
+      "sha256": "7cf1ea3bfe7aae41e9d5b450164a92b895e65cad283f18451698cf462038b721",
+      "git_blob": "21bbd42491d5c2316f52300f3ea399346e2932db"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllPairIterator.java",
+      "size": 2264,
+      "sha256": "416fda3c3cce98f5f49b3c714f5570caa37e34e02bcc916f888b76af4209f94e",
+      "git_blob": "6b9f2f07879be5a0e1c679ea526277e73ccd1b8f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllSketch.java",
+      "size": 21356,
+      "sha256": "62c80b777732ab602d5ca90d66ed7eceb630ecad8b787fd33899b546c0aa301b",
+      "git_blob": "b49474464f69f3a23093094f543c90d590f732d0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllSketchImpl.java",
+      "size": 3012,
+      "sha256": "4f9980917cea76ebd8ccec542dd5294f07e30852ff69a621ec7fdea2011983bb",
+      "git_blob": "bcc74d2557114b951ae003a7a87ec5c4e386194d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllUnion.java",
+      "size": 35643,
+      "sha256": "31fa8864d103164b98dded14e76c45d911166d5e9afdd28d3f5be85b18b836a6",
+      "git_blob": "674f79e297ac29881d53fc982bf7e0c0dc0c2048"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/HllUtil.java",
+      "size": 6842,
+      "sha256": "cf854871d45616b6f7d9fca253f31844a98f53c0528b805c5e1202ae310c00d3",
+      "git_blob": "7213822009df97a0089bfa964909f8bb42378315"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/IntArrayPairIterator.java",
+      "size": 2171,
+      "sha256": "bf8ca9e939597a27a165ebc9b6ab7634cc4e364e4a51a778c8b0742ca5e9dad2",
+      "git_blob": "85603773c22fdf7a8a2f6054a4438f56962feaa7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/IntMemorySegmentPairIterator.java",
+      "size": 2676,
+      "sha256": "3d3aa4316bf1a5318b31ebe2ef688b470066d44295f417c1e8f56eabda665067",
+      "git_blob": "7f510de1808a04c6996320a4c1f6a1246ac516cc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/PairIterator.java",
+      "size": 3253,
+      "sha256": "eecff49e5993f8d7845dcc5ca532e202787ebd578e411a9d15ed07cfeaee45e0",
+      "git_blob": "1e56ec7f874b26d7a92fca26b2e27a7e44b3d3f6"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/PreambleUtil.java",
+      "size": 18267,
+      "sha256": "6daec42a78a075ed15b5b198ddb4b3686a1f103d44e8cd157c079143ff7ac74c",
+      "git_blob": "b86b65fc6e5b8eb73885458e317caddd6e751604"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/RelativeErrorTables.java",
+      "size": 4274,
+      "sha256": "7d84a567cd8617c16d5db1e7c21aa662a0a8c6894e25271f307b0363f7a981ac",
+      "git_blob": "5a167f9966b2c526930e5198b4830e717fbff33a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/TgtHllType.java",
+      "size": 3052,
+      "sha256": "67b518645999a456d0327af49c4d3e3a296c5c4636f523b2d5facd9dcecc420a",
+      "git_blob": "78aaafd1b1a1b253c1a4c1023ea79ea07b4535e1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/ToByteArrayImpl.java",
+      "size": 10251,
+      "sha256": "23be9df6f24e3f4c3e7032bac79b56656e98421442850730cddf3a1053be2970",
+      "git_blob": "4b0c6a96e4203e26af2c9222f15bb276ca98f35f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/doc-files/HLL_HIP_K12T20U20.png",
+      "size": 155358,
+      "sha256": "5fe597736ecc2b7ae595f796a991e0c4597ac173e414fa61de15353a4013f108",
+      "git_blob": "7d3c8348f330e3e8c988ff0a7dfe4e2285f2a7b2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/doc-files/HLL_UnionTime4_6_8_Java_CPP.png",
+      "size": 321106,
+      "sha256": "c2ec1c46cc9fb8fe8fa316f47df71c6d2e9a9f4bb63e942911fa5c6fcfd38c61",
+      "git_blob": "23225887be64946a16ca56eab5a92fd1f28fd78b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hll/package-info.java",
+      "size": 9497,
+      "sha256": "a1adb3bb338ae914821fc950a9f5a7f256c91a6f0a340eceb0162961c0a77d24",
+      "git_blob": "ad2f22fa9ed354e36d8f85581c7ec88214da2c4b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/CouponHashMap.java",
+      "size": 11500,
+      "sha256": "842813876a83fd0c02fc3b3efb02ee345474ed61817be1ac95c4ed5ba695da31",
+      "git_blob": "d69d65e7cf54cb8245fbe37d0e55a7d716a58a6d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/CouponTraverseMap.java",
+      "size": 9981,
+      "sha256": "825f826a9ba3fedc68c2fd5c6a61f401d754491031e0bde4c17a443f4636d436",
+      "git_blob": "ae5e0a5232a7600e3bd1ee118435b4ef48527496"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/CouponsIterator.java",
+      "size": 1760,
+      "sha256": "04b4c130138728f499e19173a96749e3ee807fcd373ea2eea4d6258729cd3eb1",
+      "git_blob": "81f2d75c7e8cfaa7b2db2acf04bb451f6e64ecf8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/HllMap.java",
+      "size": 12406,
+      "sha256": "625228e4074ed22e0ac3dfd2ac521bd638ca737d520c867c7575f4ca18cf66bd",
+      "git_blob": "36d9b7c1e31ef3003fb71e4fa34a6e7b2ed364be"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/Map.java",
+      "size": 9530,
+      "sha256": "2f05129ac8b760acc0017197f828ebb4bc4279d9b65f73f16264d0a7dfcab256",
+      "git_blob": "df730e3d4d0caed2ff45499f0a2de2cab6e6aa0e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/SingleCouponMap.java",
+      "size": 8475,
+      "sha256": "9744626146be83f7eaaa01ae14f0f905d1f406c652b599ec04ac428b79af92cf",
+      "git_blob": "4f96b120d9a949aa747e94de4db98e4a394b1ef2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/UniqueCountMap.java",
+      "size": 14865,
+      "sha256": "6b815ffd1260a7d6930f55197b0c845faa821568229225fdd81cd6d4a620e8b4",
+      "git_blob": "28274f6480056916c2538b8b57745cc2a6a5f17b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/hllmap/package-info.java",
+      "size": 1889,
+      "sha256": "b738835c1955ed738eb6ed37f4d9ec0e209fa555f7338c9be80f23aeb6dfc75e",
+      "git_blob": "20428b04f422cad5784752df15d33a8bb3ed1eff"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDirectCompactItemsSketch.java",
+      "size": 10120,
+      "sha256": "5077fa7c2a805eee660929a84f80315333a31a85e531b4686cd53a8527fd6e87",
+      "git_blob": "477a7fc5ebad1e6404b025a87f228bb7a3b83b4a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDirectDoublesSketch.java",
+      "size": 15768,
+      "sha256": "55efadcfaaed67b7420d1e4cb894f4c708cf80b7c16c14c414400beeab94946e",
+      "git_blob": "6638007b655abe13e5af1f6e45f576a96495489a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDirectFloatsSketch.java",
+      "size": 15687,
+      "sha256": "7c3930a95f49fa00412d13e8172b5f55e342cdc553f0f9531e13f0df5491c821",
+      "git_blob": "552df0ffb33fa394d02254d5da532afc2840f4af"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDirectLongsSketch.java",
+      "size": 15630,
+      "sha256": "b95149cff5b91612252e5dd8a7e67692b4c2b8130b68ce2019094d9b9c360ea5",
+      "git_blob": "d4c89322bc055c088d2fd0996187e660c37e05f0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDoublesHelper.java",
+      "size": 20406,
+      "sha256": "3544405a6f8f473cfb3b37de01e592c64e48e76e0f3e4b19538c1cfe392a0bf6",
+      "git_blob": "93b4ec007f8d260c8a1ac191f4cc1ca02d3e41ae"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDoublesSketch.java",
+      "size": 25143,
+      "sha256": "dc8138b6c3b73640df5df84bbbb664eaf9be45de448eb3cdd1f25b8529657a4e",
+      "git_blob": "2981d3628cd4193b0c0c92dd82830cb46ed886d8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllDoublesSketchIterator.java",
+      "size": 1402,
+      "sha256": "2c767230d07b1bc97f1d069789ba7c87a78f2ca08b2dc353bc2f8fbdbf8029f6",
+      "git_blob": "9c7e4bd13bca6e822d71438e48718661bdaa440a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllFloatsHelper.java",
+      "size": 20242,
+      "sha256": "5923eb8620f09a9d989fe9ab62d740d55c889048e9bd636ab846d7f99b67d076",
+      "git_blob": "7038e1b2fdf36864cda76c5c38d54800f45af829"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllFloatsSketch.java",
+      "size": 25000,
+      "sha256": "af3e1de5169aafe3c23d2f2492cee47816481d8b55997a168f9019528639d691",
+      "git_blob": "b2741047c74f8faab4fdfefd20ac23a1ece98980"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllFloatsSketchIterator.java",
+      "size": 1388,
+      "sha256": "12fab32cd0aaec1cebb0569d5b5f06c1314a3f8286b148d4eff73391c1747d4a",
+      "git_blob": "accf039de3d41d54b4e6b5bf3dc46b0f3064c04e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllHeapDoublesSketch.java",
+      "size": 10710,
+      "sha256": "e4c44baa1a8b0fa8eb183751936ea521a92f55121410b0af3f47cbf15faf8ae7",
+      "git_blob": "c6de1a5d8c29a33512e8eb6e0c8017844f09d5fc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllHeapFloatsSketch.java",
+      "size": 10559,
+      "sha256": "5e9abb91ad0c4453d8e3b858169cc12d5f91621e09b435e64101c6ae0297173f",
+      "git_blob": "55b990d3cb09d31747d0cb29af2f337dae4a18dd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllHeapItemsSketch.java",
+      "size": 9658,
+      "sha256": "e12e393de70b25fb2b138530bd5b68cf322d59b4ac418add662c27fa84321d4d",
+      "git_blob": "74640e90262c8565706d013ea7d24946d93b6ccf"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllHeapLongsSketch.java",
+      "size": 10442,
+      "sha256": "b31736c2b4aea8217174605357d359cd1805bcc3da451adfb04df09b1a422fda",
+      "git_blob": "21851b8b89e0fa94699c69946ac8bfcdc4ab4a62"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllHelper.java",
+      "size": 33234,
+      "sha256": "220ac5568c6ad8786c19b56427787588c4900e2edda00775cd783fb8c89cbefc",
+      "git_blob": "4b6256cde35fcdcc868bd77f690b3235717ce496"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllItemsHelper.java",
+      "size": 21593,
+      "sha256": "da5b4ba07081e929c41dd9f1238a77cccb2b9708717cfac6d145322912365797",
+      "git_blob": "a066bf536ae8723a8e50a9f534d170f1e0ccb6bc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllItemsSketch.java",
+      "size": 21012,
+      "sha256": "83a383f8675dc96c510e74985bdbe025af172430f5f893b109f7d42164375d35",
+      "git_blob": "d71c75a85095cbf19581ac2cc1bcdc90fe005957"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllItemsSketchIterator.java",
+      "size": 1467,
+      "sha256": "c86ca19f58a48ea961856d509881ad10d87335e08ea496cc66730adde6d5a4cd",
+      "git_blob": "0e39c2c69482d39cf6bd56cfcb4942b8c1b74148"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllLongsHelper.java",
+      "size": 20236,
+      "sha256": "7afab39ea2af252d9753e8ee7c9a04a89c72396f13eccf190551acac2960cec2",
+      "git_blob": "94638b0474ad482196bc66d9e8fd948c8cff7e39"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllLongsSketch.java",
+      "size": 24067,
+      "sha256": "5cd8d955466fc171cac646f0aa77f4414ac586db4cc20c29dc1b6a08dc3aaff6",
+      "git_blob": "4826d8392fed5264f359b7bcb881a9880a9e5a4e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllLongsSketchIterator.java",
+      "size": 1380,
+      "sha256": "c7a7820fa574825043f4844bf7841940fb18cd13c002dc7801b22a87390432f3",
+      "git_blob": "8922ec70e549c0dd333c08cab41873278709cfe3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllMemorySegmentValidate.java",
+      "size": 9323,
+      "sha256": "2ba80f0bd2479de58e85703fc7f518d1c877d022697376f99a7c84e814e2d2aa",
+      "git_blob": "33f6904ec0ba3b54b582d6263a1780fffc09b5fa"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllPreambleUtil.java",
+      "size": 23939,
+      "sha256": "d386bb5d48876dc8e760687e44e16e4a60d0c1fb9edfc34e54cb767762c1afc2",
+      "git_blob": "dc658626d0cb1c512067a00703cd1e2ddbaec8ad"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllSketch.java",
+      "size": 21810,
+      "sha256": "70301e657e627b11ef2badd791e9bdae16c3cf312d8f3f30e77d3b8c125c0de0",
+      "git_blob": "2a3f992dd6e75780eccd12d0e6cd93cb323e64f7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/KllSketchIterator.java",
+      "size": 2290,
+      "sha256": "9494f3b2ed62962602fde01ac5b3fc8fa1517b85c5648b9307cf08322aa17d41",
+      "git_blob": "3e16fbc1199de92b3cbf08b7eae1f2667923a57e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/kll/package-info.java",
+      "size": 1060,
+      "sha256": "2bad81d260a29b488ba6b2686122c0b34610138867862bbe3f6b3a1fee98b19a",
+      "git_blob": "6da3c26dd53b077c9427de5c0557d1f13a454697"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/package-info.java",
+      "size": 960,
+      "sha256": "e251b85ca0547aaf83a418c230eb1936bfe239110485695a059ccb6d3e8926c7",
+      "git_blob": "3683a35433dc154163b8fee1b97c51a9fa93fffd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/partitions/BoundsRule.java",
+      "size": 1335,
+      "sha256": "301a55b36085de23f4e71528aa516c9632b9e9c0af4a3663e783be3bdb38d327",
+      "git_blob": "3cd38996b0a195978d47f0c886c7eec2604cf875"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/partitions/Partitioner.java",
+      "size": 10222,
+      "sha256": "0dd74da0fc47fc0a6102fc1815e01bca650de92279a1b071803cd71a827919b9",
+      "git_blob": "dd69f1ec2e20c871e669ec1caec128d32e70521d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/partitions/SketchFillRequest.java",
+      "size": 1979,
+      "sha256": "a480c52bdc92f33a5d76be02da5be84eb64b66d4b7bf54459493d9d4b61a6a96",
+      "git_blob": "76e9d74544ad074f6b0b2a42ad91afecac553f67"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/partitions/package-info.java",
+      "size": 993,
+      "sha256": "e3421a6620233cb25cf28b51fe8a5a4d02bccc56ae5a7c2e606f61080e1b5f56",
+      "git_blob": "58bd126b3e0fdf9beb3a718488facacdd6167a2b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/ClassicUtil.java",
+      "size": 12552,
+      "sha256": "7466f548c39a74d3075b6fb6fd3124210558b25fbc56307488452a7b000d08e0",
+      "git_blob": "d86a0f487cd9bc8bfe3eb4f85ca7851b344c748d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/CompactQuantilesDoublesSketch.java",
+      "size": 1565,
+      "sha256": "0e53375fd52d49f36ba249c78fe6ec7e3650db734e041a505ec3e139917c6121",
+      "git_blob": "f7d304fc0c2af994e75d0584f4809bda74d6d456"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DirectCompactDoublesSketch.java",
+      "size": 10271,
+      "sha256": "d4fdec73f3b9d4e1dd3423842baf6ff7942ee1622034ccb7b8ee0f9b1a2a8171",
+      "git_blob": "baf03736a33a110d9d6fddd1c3b8680980306cc7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DirectDoublesSketchAccessor.java",
+      "size": 3201,
+      "sha256": "04835b0e017f95b1d8722667e46e36601f1597e48d5d903c80175382e1364b53",
+      "git_blob": "4452645b28eb5fab39a93e825cb3265c84734033"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DirectUpdateDoublesSketch.java",
+      "size": 16147,
+      "sha256": "f79383408f25654a071fbd8f08a17665dae4c1125e7ac6b7a322f29309e88ee3",
+      "git_blob": "a3b717beb26b8cc1cd1bc7cdb91f050f4319c7c4"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesArrayAccessor.java",
+      "size": 2106,
+      "sha256": "6dd699757bdc3fbe11cac71227eefb56191885eb0ca69e7442c4290b80c176fa",
+      "git_blob": "7fcf38a2df70bd9bb28aea5d9d752984389af032"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesBufferAccessor.java",
+      "size": 1312,
+      "sha256": "60a60843c1f2717a211fce3c4ab5316a38b731dc492d665000c75e8f87c369fd",
+      "git_blob": "fecc96d56b2a0f4066b79abe33a4df5f0ddd3653"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesByteArrayImpl.java",
+      "size": 6273,
+      "sha256": "38d9a9aa4675803f5f1f05fd737ce8dd6ce0787c971027cb13b5b0f2444cd5d9",
+      "git_blob": "0deea1d9bda2bba2e1a8d5b279224ae02549a741"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesMergeImpl.java",
+      "size": 9323,
+      "sha256": "61fcccad2d6b0e17b08d4e707e3606f8d6973b3644025434d743f4cda7a8a5c4",
+      "git_blob": "c8ae7de0a24e247aed8672e0e6a7ee025f49a03f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesSketchAccessor.java",
+      "size": 6174,
+      "sha256": "b06be655d5deef77db8fff3e339d845e1060e4ab2965bc8bc80c9dd6a8ef4b82",
+      "git_blob": "4c4bdd5cd2f4b2d3486adceb8ef9fbb4f8b31084"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesUpdateImpl.java",
+      "size": 7157,
+      "sha256": "31833508c484c00794d365e0136e65315440f43321ff6b54128d75965ee092f8",
+      "git_blob": "f76ddebad29273d7c434fec15aea084c009c097d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/DoublesUtil.java",
+      "size": 10567,
+      "sha256": "e5dca4dc2c855b51c5f9ab7fe276725b35343a089d1de1a811c00b1ecc7be3de",
+      "git_blob": "4be15d55ff26e93e8b11f44bacc4981cada6c77d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/HeapCompactDoublesSketch.java",
+      "size": 10655,
+      "sha256": "3cb8e03f79268021512e54c727e82ec86596dfbbe966b5dceea4c52b809d6ab8",
+      "git_blob": "f4b45fc5456f2f47208d0fa95bfee1b3d0e6deb9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/HeapDoublesSketchAccessor.java",
+      "size": 2553,
+      "sha256": "a8a439eaacc101e387ee1f3db7e6e3a302a39fa54d5c03f475c79ad315aa948e",
+      "git_blob": "66585d070d0f4807e39119769e12ea38000f2229"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/HeapUpdateDoublesSketch.java",
+      "size": 16665,
+      "sha256": "ef47ebf0c1af8ae5476c33646c87e3cb1d441f4eacc0c0cbcc3c4d7f8716783f",
+      "git_blob": "144e94fb708ac733e3dd9d4c382bb595287591ba"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/ItemsByteArrayImpl.java",
+      "size": 5135,
+      "sha256": "b1678f8f31f60639d52d4b174aeeb889fdf55b89020024d114003ac72c654263",
+      "git_blob": "9c78268d4e22b239010a1f1e88c414c8b7f5a2f3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/ItemsMergeImpl.java",
+      "size": 14083,
+      "sha256": "a53f938bcfaa0af5429abc1dbd140a0035f337e063ed434ad5f7a9afcdf2a3ef",
+      "git_blob": "84d62dee6c1bb24497fa41f3ea8d27c373c09fdc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/ItemsUpdateImpl.java",
+      "size": 4934,
+      "sha256": "d9cbbdcf1902a43552cb65418c135a243da54acd7fb266a549672f9a75410d32",
+      "git_blob": "9a978b1c9743d9a40243bbad4580bc90121db2a5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/ItemsUtil.java",
+      "size": 8741,
+      "sha256": "f2db298aa90c8f9119f835edbc520cdc8ef70c97a411fb0ce101dbfc3e599126",
+      "git_blob": "7ae7cec2f790eac94dc4e10bf5962cb129faf72a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/PreambleUtil.java",
+      "size": 10370,
+      "sha256": "8c1f96c05cc91272240d6ad5d68bd8d3b967a4693478855e5cf6c9559c37eac5",
+      "git_blob": "1ba160c4130f247cedf66d36f9d9185f6604df3e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesSketch.java",
+      "size": 33937,
+      "sha256": "56e8d6c1441fbb0398959e0d72020ab2bf485d2396b284b653856f08fb668fa0",
+      "git_blob": "85bf957d770b3ef1ecafb62aa11f2a7f71bbcf75"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesSketchBuilder.java",
+      "size": 3856,
+      "sha256": "fef5fec96bc79338847b6a64c578f6d30bce43a079b728616631dc5e66d72039",
+      "git_blob": "6155b5803bdbfce2a9aab90af88c89f4dec31729"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesSketchIterator.java",
+      "size": 2411,
+      "sha256": "6f064db47783c6ce8bb6276300d9428a3a46b70eee0d804fc95f760414d36099",
+      "git_blob": "5b1d9bfbbf18139ebaa34a57da6c2452f3cccbcd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesUnion.java",
+      "size": 7867,
+      "sha256": "f48501aae8f7eee9e6621fc5094a4ac0c53692740ce9812e1df0eb9b246aeb31",
+      "git_blob": "707513c6562d3e9d7ebb1b90a904a3d678fd3eeb"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesUnionBuilder.java",
+      "size": 2953,
+      "sha256": "860cc3c8a53d5bd8239fbd897ab6620be2cf6d15e2f37ad810fefe230836d7c9",
+      "git_blob": "555b2660a8d0d6c7300751b869e2c288c96c4c0a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesDoublesUnionImpl.java",
+      "size": 13409,
+      "sha256": "2bdf44c5057022f2b8cadf45a6e15eb10b1e1c449c4036816a994467a94455bb",
+      "git_blob": "8cd4552a32731642defb9c367f518756dd8929cd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesItemsSketch.java",
+      "size": 27061,
+      "sha256": "7ab33d60a398e2444d5521c8385d87ad6ff3d12f6c9d99c9eb61ad4dd3d74c8f",
+      "git_blob": "f007ac392d5338c79ecd7a1aa3a16cf9dbaac1d5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesItemsSketchIterator.java",
+      "size": 2584,
+      "sha256": "0396f05b25f7d0c9a1c00845c0b693ae5b6d093fa71a91f0a655c3eed06831cb",
+      "git_blob": "58bbc8c4e9c02c1973609a28f13705b58d60bfff"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/QuantilesItemsUnion.java",
+      "size": 13167,
+      "sha256": "c796f3e67a84f659349ff5204cbb5a17da38c90311b2719dac52f61b051e92e7",
+      "git_blob": "9e1ce9bc81b29f59ba232d0671680da3b210063a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/UpdatableQuantilesDoublesSketch.java",
+      "size": 6672,
+      "sha256": "55812f17c71870e429d9ee1b8acdab10f6f8f931b1bb4eb2dab61d802dead464",
+      "git_blob": "1294d0de013cbea7044bfbd4038336922b259570"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantiles/package-info.java",
+      "size": 1139,
+      "sha256": "2e3711d36b06a372c2f351358f68276a655ce961afbc7a71cda31e881f66f813",
+      "git_blob": "7ff0dcdb3e3894e8f41811427543fd407cbc9fe2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/BinarySearch.java",
+      "size": 3586,
+      "sha256": "8196542ebf89ecd1ffccfa5cb1a78ecaacecc98e062eb5dab73a6a12cd2f3f46",
+      "git_blob": "9a5bd759226d08b68b5aa660c4390d6e37eda6a5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/DoublesSketchSortedView.java",
+      "size": 4736,
+      "sha256": "0342282eaf1500d4e317db204382263279caadd305f1b8efeec330b56aae7dbd",
+      "git_blob": "42b19d983a2964b404d4a26cf3e3a6bef90172d8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/DoublesSortedView.java",
+      "size": 7654,
+      "sha256": "d75c203cefc5e1ccd7b37c6173c0479aaee18d9f359c7fd44000f468fe52dbcf",
+      "git_blob": "80bbcdbcdb4e331724d6434d1e361d44788a7348"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/DoublesSortedViewIterator.java",
+      "size": 1858,
+      "sha256": "9d83dee86c337354bf047e277107ec493e7da6e7f98a008ceaff09c278d54203",
+      "git_blob": "85bf96b68100db14108dc86133dd57d2d92f9916"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/FloatsSketchSortedView.java",
+      "size": 4660,
+      "sha256": "bb9201e10770ad5054b82585b1496116b24a527473bafd536be2988ae6ec3595",
+      "git_blob": "0260d1b3b4f324026d154e1340e5bdd9c0b4e8ec"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/FloatsSortedView.java",
+      "size": 7714,
+      "sha256": "8e796e94921c81dfc72857a5dc25cd7b9258581baa290a8269a88bb1117b22fd",
+      "git_blob": "81e4c9cc2e02eaba555d7d5a3a43f025159a1512"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/FloatsSortedViewIterator.java",
+      "size": 1852,
+      "sha256": "c5b2d52b74ebeeb7c26e5aeefcfd85ada837289b68b7b26ebd4d152cb7cdb446",
+      "git_blob": "09b45da01dabf24b7c429dcb2c73a4433fe25946"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/GenericInequalitySearch.java",
+      "size": 10028,
+      "sha256": "76fcd4d14b7eab77461c0cdfcae4f6b42f3b5eed6f14b5674b54849289c72934",
+      "git_blob": "460ef6b7ba39d684a81761da2f495bbd53e51d34"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/GenericPartitionBoundaries.java",
+      "size": 7231,
+      "sha256": "7fca7d640bbbb3cc5a415e5d2f78c0834baa9c0f945f963f7e3eab5e71f1d66f",
+      "git_blob": "f01d136a62340a49492dd1dc6c1bcd51871039ed"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/GenericSortedView.java",
+      "size": 9144,
+      "sha256": "26fed22eb8f477ee5ad995f2508e3533da4864cb417f566c0e06bd1ed251f142",
+      "git_blob": "294d60c9f0e6fd24107702acbac395617e8da2fe"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/GenericSortedViewIterator.java",
+      "size": 2784,
+      "sha256": "e1c7c57b3b4b03c1d061a3e681afae76e25870c3d5833d7d1019bb88afb13871",
+      "git_blob": "062c462da2071319f6dedf5afd9b4187f91e6b1c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/IncludeMinMax.java",
+      "size": 11030,
+      "sha256": "10976e17df585d817ae5027a7597213d64ec31651046f6128d02e61b053d14ed",
+      "git_blob": "f3648cec66eae053c4cd28b6c3298108e6dc9cc1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/InequalitySearch.java",
+      "size": 40102,
+      "sha256": "7d62450a958f7b0ba70815909da3d4e647d6b9a8ed3069a62e83034349fcc1e9",
+      "git_blob": "21af2b53142efa3f4916eddc6d61cf8668a6a1eb"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/ItemsSketchSortedView.java",
+      "size": 9274,
+      "sha256": "1e0757eaa5b4b599b2063888b4a3726717af64031baca666ef3a79405378cfdb",
+      "git_blob": "4b0f8dd24192dbc52b68c15e0672e7417440ac87"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/KolmogorovSmirnov.java",
+      "size": 7143,
+      "sha256": "3f05c5618091c2dd794a76bac437fdb953238f6ab016f9bfa5bd25f382312219",
+      "git_blob": "5ed11347b1fbacf6851b4b9fb6dc1f01a34fa093"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/LongsSketchSortedView.java",
+      "size": 4633,
+      "sha256": "cda8667bc9c7e172c5fc30d80fdf35b542adcd25dd859792c7a6027f9760d40b",
+      "git_blob": "32735938dd3acef91985de5f38c5b23592d4bdc9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/LongsSortedView.java",
+      "size": 7621,
+      "sha256": "9b1ef4c5d12fff232e34c21774a5cb1f2b85ae00bc0b883dc8cc19cb00f71824",
+      "git_blob": "59819b851e038284255654057411305e132fbf6b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/LongsSortedViewIterator.java",
+      "size": 1846,
+      "sha256": "a19c278a9c889f7e8036a22021b3e946135c5af4b3e2492f991ca8e9186a1178",
+      "git_blob": "77510cd5a79edf2105ed71ace53948048b84e4ce"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/PartitioningFeature.java",
+      "size": 6796,
+      "sha256": "24b407d45da0cf04253cf768b5a4e765772a35a6725d023abcba9c6c886498a1",
+      "git_blob": "75f6fb546c39e51b29b5e13289415248d3c67f9e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantileSearchCriteria.java",
+      "size": 2342,
+      "sha256": "88b397e43bc2a90fb1547961658d2c5ee7b523bd8e908f9bc17dcc37ffe06632",
+      "git_blob": "e7b9e6ef6b46bec6dbd90beba29b3eb9e8a59e89"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesAPI.java",
+      "size": 15288,
+      "sha256": "bb73a7ec728d621fcfd562e12545c04ba3b52415b0551f2ffb1852df3e1c8c4d",
+      "git_blob": "1ad4213dd012702f61a07ff45ab99870fb27897f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesDoublesAPI.java",
+      "size": 15097,
+      "sha256": "181684ff087979c4bf06e5b211f31c30cbbfa14d9a7583c8ba2cf5121044e856",
+      "git_blob": "3b48c2fbe2a4972ab6a38e4dddc481939946076b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesDoublesSketchIteratorAPI.java",
+      "size": 1340,
+      "sha256": "aefd6ba7fd10c4bc7aa8482570e6410a91551cab9670e338c46bb0adda7c9267",
+      "git_blob": "87131f3fbbf36f587d9bbbf0408466bac408c6f7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesFloatsAPI.java",
+      "size": 14857,
+      "sha256": "9e0b626811c8a621bc12ba2f0d781ced94842675fc3b24256af1923478311bd9",
+      "git_blob": "3b8db77d2a5ada49b9e5b2b4c8924ad64949f8c8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesFloatsSketchIterator.java",
+      "size": 1332,
+      "sha256": "4808f15b3e9465e0cba2b1de64d0a24039926b523490917da8444d341f122d31",
+      "git_blob": "176cffcea3ea40f8a865917dc8729ed0594334cb"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesGenericAPI.java",
+      "size": 15067,
+      "sha256": "c2addae66dd4fbf6a178b951519301e94df0d23a5f7dff1962928ece93acb5f4",
+      "git_blob": "3efd04b9a485b39cecbdf17869482bd88006c77a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesGenericSketchIteratorAPI.java",
+      "size": 1372,
+      "sha256": "2dcbb4d413fe636024d4a35eadfcb16998b221920475fdee784ddb4cd8d39403",
+      "git_blob": "d2c50c4501be106ba02706b573327d016a087c0b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesLongsAPI.java",
+      "size": 13207,
+      "sha256": "26e17f48ca193c84a854dd0dcf849d80743aa6df99c9dc3bc0c45ad3ea9f099d",
+      "git_blob": "8edc4bc5502fb28eb71980aa3e76fa8ce011c3de"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesLongsSketchIterator.java",
+      "size": 1327,
+      "sha256": "9090381e8a1b2f5e209a8d5aad408ca07a6894deba2ba95c4bd2347591ee1d8a",
+      "git_blob": "5e2912e8534be3d6a242284c60cf0646403d645f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesSketchIteratorAPI.java",
+      "size": 1772,
+      "sha256": "246f174f2c6dedbed24da250b01ff2965ac16d2ae61b3f94a6bdd48efc239bbe",
+      "git_blob": "4358bd9eca6b7fed4341e7bebcd4d653ab834f76"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/QuantilesUtil.java",
+      "size": 10338,
+      "sha256": "b7139b9c05263cadfede2295bd168b3910a8ee0f40c925b624a31588fca34e8f",
+      "git_blob": "529fd386d3d171486f3dc5199b4cdf45559eb909"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/SketchPartitionLimits.java",
+      "size": 2018,
+      "sha256": "80dd3b64224040ed852345842ae19e2bb5472d30ec31d0598b604e83a5d25636",
+      "git_blob": "624ec21caca5826ec57615e843109be3212ba54d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/SortedView.java",
+      "size": 2533,
+      "sha256": "88239859d634d2afcaaec1d416340cc17b294918d75a481147bc2713bae76bb8",
+      "git_blob": "f789bfc5cf3d4889cf89bd598c12f4dd99ddfcc8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/SortedViewIterator.java",
+      "size": 5176,
+      "sha256": "fc565b649196bc1273cee2042164837c2df2379d37f7852dbefc0da7357033d1",
+      "git_blob": "01af51eabce7e318bccc27d2e5c36ace3ad2218d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/quantilescommon/package-info.java",
+      "size": 981,
+      "sha256": "a9b67835ec5b1867805e997037ed9e183b7325321e7c6be4b1ddc200821673f4",
+      "git_blob": "483636d9314178fbfcd1b1cd33f79c5749c87390"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/BaseReqSketch.java",
+      "size": 8254,
+      "sha256": "18eb8f67874cd9917eac70803072f6d0dcf392e88054e9209ba7dc8a8429d204",
+      "git_blob": "fd44a12df9cf462d29fad5a36e34f912e7ccd538"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/FloatBuffer.java",
+      "size": 15244,
+      "sha256": "c9d83fb4e16cc3c471efa1e500210323f986f11d028e2649af2cd7df9ba026ab",
+      "git_blob": "1c63906b97c6ba84ba624cf26ee55b99954780cb"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqCompactor.java",
+      "size": 10921,
+      "sha256": "bc63b2919b812f4a7b7e6e4c41337f30805ed01e58d4acb660c1ee7d1eeef142",
+      "git_blob": "151cd8ff387c62eaaf5d4ab5b9a81bd5dc7882de"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqDebug.java",
+      "size": 2556,
+      "sha256": "b56ffcc424059142de2e4262b8dae626af4385e8c579aee07589fab9f9bd7ef4",
+      "git_blob": "e0a72698d3d837de318cc52eed4605cce2910854"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqSerDe.java",
+      "size": 14072,
+      "sha256": "917172a5ff511ea10b622b17945d64287a1f2ee563cfaf1d4a0fd1a48dc976d7",
+      "git_blob": "89a65e345c34f56e46dfe18459ef377dd1ecabd1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqSketch.java",
+      "size": 22280,
+      "sha256": "900539d706818688b2911866cb96ba1c83c10ebc566550520015afe4bc2c6c20",
+      "git_blob": "eda33acd217a070f528d5cb3a5895c4768844832"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqSketchBuilder.java",
+      "size": 3194,
+      "sha256": "184b5a2702fc7ebc3b9f847795a6f4b38b375d390da147ed5c1a0ae2bb3f83e7",
+      "git_blob": "6ed9ce279f1268c70bf4f302964a0e9d04295195"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/ReqSketchIterator.java",
+      "size": 2059,
+      "sha256": "2ac6456fd57d8aab28201aecdf5ea60e779e47e09852621e93188a8644b3bb04",
+      "git_blob": "8fc69d32dd2ebb610a291236190cf31d9c7ae7bd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/req/package-info.java",
+      "size": 992,
+      "sha256": "ae45e8ef542377d5fecc6368c1071ca2389aba85b176855fa1a1d0b95ae2d851",
+      "git_blob": "cee899473417820d9d544dcdc7a7cba0b2948ed9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/EbppsItemsSample.java",
+      "size": 9498,
+      "sha256": "ff1fbd5569d91efc08756e5f07d2254a6f9fc2f703c4b5ae3d651f61fffe8257",
+      "git_blob": "3e13b6bf9216dc4294003a3935a1bc184480c136"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/EbppsItemsSketch.java",
+      "size": 20883,
+      "sha256": "24ccce1d7ae8ce7d2c15d656bf15412ca20200259496f7093e749f6583153453",
+      "git_blob": "d1d1470217fdf70a631c52d6ba0ed3c8de776975"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/PreambleUtil.java",
+      "size": 21854,
+      "sha256": "b718db82d60707974446c2c8eb49ff79cf5fcd0089ae66e2fc287ff874e96242",
+      "git_blob": "8215625fb0ec2716008a59c088ffc808301daead"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/ReservoirItemsSketch.java",
+      "size": 25073,
+      "sha256": "a26820eb2ed1c22cc365b3191d117dc8d0d20ac61057ac997476ef086913395e",
+      "git_blob": "e8ad5f23bcd164a69a74b35f9cc329f814a25ce8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/ReservoirItemsUnion.java",
+      "size": 17184,
+      "sha256": "dcd88b15a2702e8a0e71af6c3141d1575eab0ae3a202daf65335bea936936702",
+      "git_blob": "3905cb3682e7b14420d8bdb084a98d58d900f805"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/ReservoirLongsSketch.java",
+      "size": 21990,
+      "sha256": "44c9ca36be7983cf34605f8a64bb5a33c47fabd2d9b9900e357e647cd187262b",
+      "git_blob": "a73210f56a6238c722e07099906bd7eadd0b5c96"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/ReservoirLongsUnion.java",
+      "size": 14826,
+      "sha256": "5f3db3e40a6da9cbf347b230319e1efe2baa7cf948b43b0f1b3383c197384a84",
+      "git_blob": "9c4d03233515057e187c1f8ef63d74f6dee4f44c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/ReservoirSize.java",
+      "size": 4766,
+      "sha256": "d66f8dab8f887f95554390f56982f6613875498a9f511945946d5c61a69b2a73",
+      "git_blob": "e12d31aa985f8a2b27199ca543e02109605cb3c4"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/SampleSubsetSummary.java",
+      "size": 2071,
+      "sha256": "c66819c8f57271cfc05eb447351e6cc41233ad44885c21b14dedfc81f07c7538",
+      "git_blob": "1504542f7210c3ccc90acaec26783adabbe4dd52"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/SamplingUtil.java",
+      "size": 2940,
+      "sha256": "fc575d7913c819ca922c61430061a4be6015f501dfa81f2cbe4a4a47c59d2e69",
+      "git_blob": "4fa96c7bcb330fe6d89191bcd1baa1899ce47b15"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/VarOptItemsSamples.java",
+      "size": 8927,
+      "sha256": "751c0933e7a14b40658d9e8575b394ac19b6c89f368a913cc40a09f2f674ffa2",
+      "git_blob": "15d84512b1e1d09d2169a8c58c2a0a6fac02456e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/VarOptItemsSketch.java",
+      "size": 48380,
+      "sha256": "22cdb49ce7e84151cf51386ad18d310da6c3ffcd16bc558e026e3b5ed7e6a87c",
+      "git_blob": "1f3c05a9b6c9f81854c90c11991e685ace740853"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/VarOptItemsUnion.java",
+      "size": 23885,
+      "sha256": "adc6716562288da552f1141749807f5a0c23b9c80f13a8c64ba99aaaa410bb71",
+      "git_blob": "40d573f3f72c9451e75e07b8933c4aab3a81427c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/sampling/package-info.java",
+      "size": 1295,
+      "sha256": "4b4561934fd32289a098b4c12778d50ecb8d3eb2ac5698309be62da1e542f266",
+      "git_blob": "bbe4469141820a0262a6c2ee640e4d539dbbebce"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tdigest/BinarySearch.java",
+      "size": 3526,
+      "sha256": "8c6e73c7866bfae929af67648b40cba4e6730788599c30efd261f63f06335cd7",
+      "git_blob": "209d1727ef0ba21d0c1fcd1182971b4313ba1a5a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tdigest/Sort.java",
+      "size": 5954,
+      "sha256": "5b47df569cd0a3dda2f3d6078695712887f4290b8b2e6eccd4a510ff5d1b95be",
+      "git_blob": "21170e9f50e556bc91354878bd4234c80e55f0b0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tdigest/TDigestDouble.java",
+      "size": 33926,
+      "sha256": "36858e72318b35211194663a12c1238c20ab2d6d1ee2a3eb58a476dd69eae0f9",
+      "git_blob": "145c5a151029f10d65436253c2ddbd5bb16cfce3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tdigest/package-info.java",
+      "size": 906,
+      "sha256": "c78cc4d5907a3fdc843dc8deffafb14ae8ce8e0defb9ed89cb10944722385d9a",
+      "git_blob": "e0fa8e5831c43f0452c5690238715da19b65b57f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/BitPacking.java",
+      "size": 274361,
+      "sha256": "9dee75fcf4f6196bd0f5ab90688b20beb9538a4d491493e208060f18d7746d0a",
+      "git_blob": "fb8aa061960fec5efdf0dacc113a2995cf0127af"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/BytesCompactCompressedHashIterator.java",
+      "size": 2524,
+      "sha256": "675dc2807169651d14653d134d503667c31298c2985bbf243ec9ca98b6347b4b",
+      "git_blob": "5b8e97be70a776bfa45f5444e0887fc91b767879"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/BytesCompactHashIterator.java",
+      "size": 1554,
+      "sha256": "b398e013f88837deb3d5ad1c4b829faa0b7bc55726f33a1e897930ea385bf877",
+      "git_blob": "cd880de17f216be35e8feba2931416b378ece164"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/CompactOperations.java",
+      "size": 17658,
+      "sha256": "325be453d17579b655b5461d7b010c3a425b3293da7179d5f66bab5d6b5a61ff",
+      "git_blob": "a09d80cac6725054c4fb3fde20c88f1402e5b320"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/CompactThetaSketch.java",
+      "size": 18673,
+      "sha256": "0ea4e02fb759cdc1224e313c9ad93d71441946de305817e1f28587c5f3e68149",
+      "git_blob": "94461dfda0aecf3f13141e278c2859ec3499dfc3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentBackgroundThetaPropagation.java",
+      "size": 4382,
+      "sha256": "31a00fe13317cf01936f7047366512fe8b4fe6a0c9b57478d9f4e230523f53bb",
+      "git_blob": "c12f8aa4e4c03e6ba4a02113b85289e85664295c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentDirectQuickSelectSketch.java",
+      "size": 9261,
+      "sha256": "eddfea175b93bc640ba198e225d69a37860ed1a948cd00818a4d2df3c2f13a2b",
+      "git_blob": "5a0bbf22f58be67eb43a0a18cd4f0a96a5fd73aa"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentHeapQuickSelectSketch.java",
+      "size": 8701,
+      "sha256": "cbbdae94a1614c9d84abb86b3489aa33fb5c41ec9e445d7178251776d75c6680",
+      "git_blob": "bc7876f10449e63869ab020ae5d79c4ba7240aa9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentHeapThetaBuffer.java",
+      "size": 8263,
+      "sha256": "f0040abf9b8fe35223812b81955309ed023171ec402a01830579a51e6a339711",
+      "git_blob": "ffe831020cbadd2ce487b2f68c4752967cc811b7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentPropagationService.java",
+      "size": 2586,
+      "sha256": "ac9195838ba524a528fb19b94d587d82438c1c70ae0c4af422dba44b2d461ac2",
+      "git_blob": "aa422d2c5a86b49a120154c645f4eba37252d8f4"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ConcurrentSharedThetaSketch.java",
+      "size": 5254,
+      "sha256": "5c1f59e30148294295f33c6137ecc9aad9e2ebb69e20edc2a515dbfa45b72d8a",
+      "git_blob": "eeb207d3c9c9ec74d7116c6ebde05269a8cc3cba"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/DirectCompactCompressedSketch.java",
+      "size": 5297,
+      "sha256": "2e8be1ee8a19bbcdb202979e656636c1de1427a61e5537a6354968d8ce6480db",
+      "git_blob": "b3c7577096c1ce85b7781e421c7e83c2370b234c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/DirectCompactSketch.java",
+      "size": 6168,
+      "sha256": "8c0eb1c4581670246cf03c92d375d3a06ee6fc368f86e3837ab5bc14803cf9b9",
+      "git_blob": "9a28383a60d5a27f52bc13e9551da5f9dfc23182"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/DirectQuickSelectSketch.java",
+      "size": 16310,
+      "sha256": "2da87d26416d2650f7233f0f08c70b2357dd3c95ac3455226671c3cb190cecec",
+      "git_blob": "2172a1f65d40dbf357054af51a76328dd091ee02"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/DirectQuickSelectSketchR.java",
+      "size": 10408,
+      "sha256": "97f47809e64e8e3eed87fdfa0613b98fb1c1e54740d5d7f1fa390480e278e34a",
+      "git_blob": "8a68c34a9af32db8958c4e298c019398e9952238"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/EmptyCompactSketch.java",
+      "size": 6045,
+      "sha256": "7e044a85b47f323a365d60ff2500eba4173f700b0f8a16c9c6cfba07fd8ac3d4",
+      "git_blob": "f381b6b0bfb58a9a13e2686161ac1f55d679bbb1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HashIterator.java",
+      "size": 1248,
+      "sha256": "3e152ae20049ae1810cede7972d309d494614eb3e5418fd161d177e7d855c924",
+      "git_blob": "d7dce41837882a0712b02304af40c72aaf0864d0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapAlphaSketch.java",
+      "size": 23561,
+      "sha256": "a006cb883213f215942c7dbfa573e762e65ecf160e55455fafdb34117954013d",
+      "git_blob": "8b64b177f3cbc9b90fe9b9c416ed6ad79a702c52"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapCompactHashIterator.java",
+      "size": 1194,
+      "sha256": "15110ce03b35fa20935ae381ef3d94b980397ec3eadde7d89e4762087024cda3",
+      "git_blob": "e8e5d830546798306bcabc3fbad8552c6172a829"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapCompactSketch.java",
+      "size": 5318,
+      "sha256": "fbf1990f5591243c01c112b256eb72632d455b7aa640ba60f5caf2b09d7685c1",
+      "git_blob": "dd25f85b76146abd7a7b4852cac4ca369a0d2b89"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapHashIterator.java",
+      "size": 1446,
+      "sha256": "0746bc977826686dd5690da2251fc820128a3cab52d68f4ae229c74b72bef8b4",
+      "git_blob": "d689b912e9e6fc119df019a7b49d33d59631c441"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapQuickSelectSketch.java",
+      "size": 11510,
+      "sha256": "4535a6f2784c84551f7f4a4f39b07a21f46f6ca3154ca92cd4cebc5c0cd170ad",
+      "git_blob": "a44ac97640a79dddf9dce625d4af5dfcd7c120bf"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/HeapUpdateSketch.java",
+      "size": 5101,
+      "sha256": "5b4f420646e16015f23b3ee40b1bc094b60b024ecff7e5615752624c94e22335",
+      "git_blob": "dfb85b47f992e12629f48e2c1e0cdf4b774b2b5c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/JaccardSimilarity.java",
+      "size": 12159,
+      "sha256": "43fdbf581f99cd1a56c831297d1659b87c4fe9d9b98d43cc08098044362c42b0",
+      "git_blob": "7aa41cb8db9a430f7e8e1bc385a0b6b7b8a20a68"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/MemorySegmentCompactCompressedHashIterator.java",
+      "size": 3571,
+      "sha256": "b6253182bd416bdfd907ff29e867620b80c002e8f883aa1de4f9673e5fb7a747",
+      "git_blob": "5a474e49e6e9606196333d86447c56390668459b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/MemorySegmentHashIterator.java",
+      "size": 1786,
+      "sha256": "0220b8c1d4a7be826ab8d4e6b7a0f5f485be2702e373621f50c61375cb63b2e7",
+      "git_blob": "89d6b19f297f5ad5ef5b1af546fd78db9d81c7c9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/PreambleUtil.java",
+      "size": 26808,
+      "sha256": "dc9e0cd5e211b7e72b0e8ff3033b592cd0acaa8621053fd36c1d6d10de63af56",
+      "git_blob": "c135cd9525e65c1f335e33568c4e6deb3993194c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/Rebuilder.java",
+      "size": 8417,
+      "sha256": "3a1480b0fbd1833dbe41cad30e22b3b90faa2caafda9d830e9baeb84815c66d2",
+      "git_blob": "54b1e190b919add2fd7ec56326ee9557aa3e6476"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/SingleItemSketch.java",
+      "size": 15172,
+      "sha256": "f4b1b6e37e8989599d85fcd1ef5d64e93436b1607c51db691fe291191854544c",
+      "git_blob": "64c064f520afe5fe089c5ed44e0440a58324d056"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaAnotB.java",
+      "size": 9554,
+      "sha256": "d3bb132ad1503bbf71aa464c1e5c25be071e41f671cd5292d9e591d145c5345a",
+      "git_blob": "afac16dee0382e3d9d248a537f1158affa8c3114"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaAnotBimpl.java",
+      "size": 7636,
+      "sha256": "3d45daf5940971cb832cf0d4addbf8970d2d18249f40d28e989173cf924962cd",
+      "git_blob": "5fcefdad0708a09255cd390c1bffd989b09946b2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaIntersection.java",
+      "size": 6608,
+      "sha256": "71b70f77b6c03f4aa7164fc783ba67eec575164d1ba851be524d2d9c756a757f",
+      "git_blob": "e72aa62fff4548b86721e1128e5392f9d4c07a66"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaIntersectionImpl.java",
+      "size": 27065,
+      "sha256": "c29609343e8a5b3a4bc216254b8a9f373221c4d5ed07c8267b8fcf1f308cf05b",
+      "git_blob": "df3a77f716409cd818f5f25b75941f6af3be52b5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaSetOperation.java",
+      "size": 9237,
+      "sha256": "c7f0dd24747c48582150ce4a14bba3ad6e74b2e838fcf4c2108db5190960453e",
+      "git_blob": "4361b794e04f8b81b223d6c05ff251f3376d397d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaSetOperationBuilder.java",
+      "size": 9920,
+      "sha256": "86c38dd7b1dd792cec5699781c528da393cfe84071d8510e21bee87735da4337",
+      "git_blob": "eee40ba914f4f211b7f31461e6ff400fdf3bfd90"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaSketch.java",
+      "size": 27993,
+      "sha256": "b8e9491003cd2f8f1d52dd0809c2cfedc94f8e9039976b5ee9528f967475b197",
+      "git_blob": "48062e8d94726110b1f358bc118b7a7bec820ae6"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaUnion.java",
+      "size": 11113,
+      "sha256": "1116ac5c43638b3e81fa8658188da4599da2686334fe2f2173d76497451ad91b",
+      "git_blob": "5ba80d14ca6acf035d90f3ff1ecb2a57e21bc12b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/ThetaUnionImpl.java",
+      "size": 14988,
+      "sha256": "38e592ccbda1d43800f3e208ecb05948e1ead327b716acc1906699a7f9d1e8f3",
+      "git_blob": "f4f3dd6551c22cf800de23858735230d70f2efd7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/UpdatableThetaSketch.java",
+      "size": 25639,
+      "sha256": "304577de0b60f4c5ba177ab6034d4bf2a44b17af07a9d1bdfc03fc9e8c568856",
+      "git_blob": "cc6bfd322f1c1a4ef0ec9871c503e8870135440f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/UpdatableThetaSketchBuilder.java",
+      "size": 20383,
+      "sha256": "19e2e2321748ceeabd2b8c6367361f445e32918dd24da8b9b17e3dfb388b3ff8",
+      "git_blob": "fb2e95615038597324d7aedee8607a04a79a4272"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/UpdateReturnState.java",
+      "size": 2680,
+      "sha256": "fdeb6fffb12e4d04d3377f990f5ec25caca62489d04f8a2d4f4aab60f193df91",
+      "git_blob": "b929cfb7d66869dda5fc366e85c7c85b313232d6"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/WrappedCompactCompressedSketch.java",
+      "size": 4387,
+      "sha256": "9cd8f694bd7015e45c7b17f789b80c0fa93bbed92f474e997a9b94cdbfb0942c",
+      "git_blob": "bcf752690cedb37a9b43fb9f5d5e58caf7f4f191"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/WrappedCompactSketch.java",
+      "size": 4768,
+      "sha256": "1f71eea97ff3b0118722c71c9808974b09765930fba5ab5bbc5264b7ea091f7a",
+      "git_blob": "4697f1ce268415f99fa4315f359fe8f1a449b188"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/theta/package-info.java",
+      "size": 1240,
+      "sha256": "71a099881e1a7819d7c48ae20464772192773514d5d85a11e7e13cc5b657d670",
+      "git_blob": "6da1a6a62d609cf0eca1b1ae13bff0cd0207f4c9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/BinomialBoundsN.java",
+      "size": 11942,
+      "sha256": "0a7c8878eec1ee84245e4b6c0f5d8dc5a72abcae517c97e5d6b80a73a66ebcb3",
+      "git_blob": "767a43e925ae55cfb0b2fd2524f007e867e95c85"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/BoundsOnRatiosInThetaSketchedSets.java",
+      "size": 4950,
+      "sha256": "bf229b932b13fe99b6f71460246ba522f77b6ee080afc8f6da6a1d1d81db756f",
+      "git_blob": "edfa3edb4e194ee5299b17792ae8a8aa5027c27b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/BoundsOnRatiosInTupleSketchedSets.java",
+      "size": 12785,
+      "sha256": "d59b7e9ea1f705dae5c8c53408d3281e941feb384ac25107546178c56dc3548f",
+      "git_blob": "962d34312290ae2e56719c71a4df842495522f97"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/EquivTables.java",
+      "size": 20138,
+      "sha256": "4be6781b6053442e42d07d104a24ece05a56bc6efaa9760133c349706cc467f5",
+      "git_blob": "36453329031c7931be46aad7a3e7d7c7c60d7a7a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/HashOperations.java",
+      "size": 17437,
+      "sha256": "0fe9ccc5be6cc206e9312aee8420da0521794b6b4159481ba1d2192906fdeae7",
+      "git_blob": "7cf22bb3bef20ff95120ff397687f8bbd2d07bd8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/SetOperationCornerCases.java",
+      "size": 10318,
+      "sha256": "c2c8ac48f4c039786355f6efdefd32f74ec858500583fa0e265993faf5af1da6",
+      "git_blob": "d77496bc2b2f66ecc15b242614dc421db1ff538d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/ThetaUtil.java",
+      "size": 3492,
+      "sha256": "bf531c299e4defa1ab864368b3b1678f0de979132929bd68160fb16d09cdbd49",
+      "git_blob": "778dc02f27ee9a3f0582351376edfffd31da58e8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/thetacommon/package-info.java",
+      "size": 991,
+      "sha256": "70b3fd323ee2bd6329865fcbebb8ad2749c94703aa82d3b19e9fa45ba96a7d85",
+      "git_blob": "52cc8dc453ff7738fbc349952b2b3198ae7a465a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/CompactTupleSketch.java",
+      "size": 11623,
+      "sha256": "703890f1e6acd6451a410a36a015fa07781dc2a9ae42e34ef4f3ee7d13a72b25",
+      "git_blob": "f02da0a219110511b22651436f4fdd216fdf215c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/DeserializeResult.java",
+      "size": 1627,
+      "sha256": "2edec8e20043fdeeb49a9a62ec743b845374431e326698f97bdb8abf423eef7d",
+      "git_blob": "db8ad682bb5123b7a563ffba8aaca505801f47e3"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/Filter.java",
+      "size": 3103,
+      "sha256": "c626db17b8fa50aa6a8f00e2a9683b5b456c81bf4d56e9a3f286d6fa1e331dd3",
+      "git_blob": "aaab7977ac88c689202dae343d95a6723d34cdc7"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/HashTables.java",
+      "size": 6280,
+      "sha256": "366f712370c0cb349d7152357a1c9b7aea23e20354c735f5e9dc1fc8d68decdb",
+      "git_blob": "877ce3d557123ed8f3e09dc218e088ebc7e6a6ab"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/JaccardSimilarity.java",
+      "size": 29737,
+      "sha256": "6b11113bc09b2c75fcedba450f36a0e5eaec2d815c53c7dac6539b92ce4982fb",
+      "git_blob": "0f4a3d0a8fa2013860f7d535a373a88f08f75bea"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/PreambleUtil.java",
+      "size": 8940,
+      "sha256": "29fc619f8724d92c6e501b1ea5dc958cc006e8d096da6e430d764ef938eede9d",
+      "git_blob": "412afb9366925086fabb185b9b00bf6991249e6c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/QuickSelectSketch.java",
+      "size": 25708,
+      "sha256": "0b45167086406944a1ee621382348d4882663f62824a1de2f04c8f40549ba76e",
+      "git_blob": "ce62e817ec39c386f64bd4e5560a559fa049d07b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/SerializerDeserializer.java",
+      "size": 3699,
+      "sha256": "413a492e7f8bb54273fcfb8d4426d166d067fad98ddb041324cd5835dd36e65a",
+      "git_blob": "1a8eb96afcf528376be97e37b379975e3b054278"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/Summary.java",
+      "size": 1472,
+      "sha256": "1df4f87171e065230c95dd1ace9a5e71d16faa46a724bc2236130b37b9c8aa90",
+      "git_blob": "46e78a97a1f8075623e3514122924808f7379370"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/SummaryDeserializer.java",
+      "size": 1773,
+      "sha256": "78cdbf28f87e51d06c09c135cb5dccd987d30c488a606287682413deba2e761c",
+      "git_blob": "6393019b1a92b27fabdc2bd4110dfda742c85284"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/SummaryFactory.java",
+      "size": 1100,
+      "sha256": "ccca1577af168e5d8b51ccafaaa86d6c313638f6b9d42cbdb5a24ca75227b77d",
+      "git_blob": "5c5648f9dfea8dfad3ffb3016dda6d158f869560"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/SummarySetOperations.java",
+      "size": 2214,
+      "sha256": "d9e9896d8a241eb8a1b0c107edae3acb94e07d33a8707d719761ab8c63d38c20",
+      "git_blob": "eac86a19631372f8d0641307b1a531c79d5fcd77"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/TupleAnotB.java",
+      "size": 29050,
+      "sha256": "22c48acedae97207868044bff350bb534a65adada674a7402ceb302ccaf36363",
+      "git_blob": "2f5776c8214f1dd6e223b52f983bf93a080ea5ea"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/TupleIntersection.java",
+      "size": 9749,
+      "sha256": "e70255253940ec37fc4635c413a87e637e88ca372c413d998dbd476c229ede05",
+      "git_blob": "5aa61b81d3400eedd3b60aa5723a0e3e6a00239c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/TupleSketch.java",
+      "size": 12570,
+      "sha256": "1a9cca277977eae9f7a6086f6106ebb2ebe710fce0277aad4e4807e925957537",
+      "git_blob": "06d701edc777508fec43c0dbbf1ec7d0a22382b5"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/TupleSketchIterator.java",
+      "size": 2453,
+      "sha256": "4655cd666008e3cb29d79f839f97e78aa7074e002e39fb5627ebe6f40499d8c8",
+      "git_blob": "db49c8630ac1897f94b10b091d6b9a561859a509"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/TupleUnion.java",
+      "size": 10132,
+      "sha256": "acbfd13683c8cf1c47e90d929c6b3eb912b56047fdb29086d80ace884b0fbe23",
+      "git_blob": "549ec8c135fbb8d23c15da1e4eecfde1afec64ca"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/UpdatableSummary.java",
+      "size": 1194,
+      "sha256": "181b65fd152cc9bfef44ba5a8b6649abc7fd9180bd0717765d9f6bfb55eec008",
+      "git_blob": "4ddb71d1b820ee9c6b3a22a4cd331703fd162597"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/UpdatableTupleSketch.java",
+      "size": 9288,
+      "sha256": "963bd67f9548d27389019883c1ec185119d6b62d91994a89fa6a632fe51dc8cb",
+      "git_blob": "373925a97255938c78ac2174e610fdfbcf0c961c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/UpdatableTupleSketchBuilder.java",
+      "size": 4481,
+      "sha256": "2a51d0c9107658160526450fb20d7f8b4e2403163ae49e90a950eb688f12b7c1",
+      "git_blob": "63a2f1ec1e544c9997525f3711d78b73e958dcc1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/Util.java",
+      "size": 6464,
+      "sha256": "cdd0989aeb72ff5b739ca1858b7f91cc3a1b54295ca7a9c5123def3d2baba8a7",
+      "git_blob": "6051c9431acc6cd12ee18989ba8288e93f6b1b3f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/DoubleSummary.java",
+      "size": 4512,
+      "sha256": "5b60ccd171a371ef20c048e191562295a91b41c7a05aa4574658ba5bbc9beebb",
+      "git_blob": "e0922ff1f881bb993fc0f42eb5c7e2bb1d16614f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/DoubleSummaryDeserializer.java",
+      "size": 1422,
+      "sha256": "38025c9c3fa87413b367f1af8267a7af87d9aa367791523dc7c761ca7a85f0a7",
+      "git_blob": "3027a377758e9ddfc1a7df6c06fc2549e0a4983f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/DoubleSummaryFactory.java",
+      "size": 1432,
+      "sha256": "7b19a3db51885882e794913d8ae0393ae51de5740040772979bc6e8277cba17a",
+      "git_blob": "f97e835fc4312ae09ca31164fac2427ad6ffc225"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/DoubleSummarySetOperations.java",
+      "size": 3021,
+      "sha256": "ede291959774c9d297f68707fb3b7a742fd7e67e173a064ae62c324ea28a979f",
+      "git_blob": "115706cdd0dd4adfdfec419a43c53d37a177774e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/DoubleTupleSketch.java",
+      "size": 4110,
+      "sha256": "331801fe8dafcf0f8d2cb3f60cec787f928e89fb73900f7e665ea54ebb6c3663",
+      "git_blob": "2337a535dc20a257213d84f3952c9b06f5f5263f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/adouble/package-info.java",
+      "size": 957,
+      "sha256": "f084604610bbfd86d2b358b02a1c99fb451f2a1b3ac95a4eb0cda91f8c18ca06",
+      "git_blob": "8abbf2a0100763cf55c5ec221134593bf8674915"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/IntegerSummary.java",
+      "size": 4532,
+      "sha256": "859790e9e0d4eb2e0949e3f1e95c46c825ba72941f4b3cd61ddd8a6a4fb44617",
+      "git_blob": "60b3221d652c11c65805a367455c5f2e79a6d208"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/IntegerSummaryDeserializer.java",
+      "size": 1430,
+      "sha256": "571224c8d93a87df8a4eca959d903a2121ec6094907ddeff4d0cd04d3e909fc2",
+      "git_blob": "0fb8f55a5eb44ea5f3f1200beefe82c3d12ca24a"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/IntegerSummaryFactory.java",
+      "size": 1437,
+      "sha256": "d9b375214af5e46627e09e604512f4d5fb7494e7e408240238071526063193ce",
+      "git_blob": "0ebb729d518376fcd7103aafcc87f1e7e6cb41ab"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/IntegerSummarySetOperations.java",
+      "size": 2392,
+      "sha256": "9964e27ab68d599f3eea8a56a9d5bc27c5c13bfbb8a128c83d553b7c8dfeb46a",
+      "git_blob": "b7c59ad01e888e0f52192707040dcb7076ebb541"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/IntegerTupleSketch.java",
+      "size": 4137,
+      "sha256": "e5be5d4673a09295ec41795e88859f260226eb8ff03072ccd82f6723133b8e2d",
+      "git_blob": "d3268eb645d151dad284d31abdda12b58799ddcf"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/aninteger/package-info.java",
+      "size": 960,
+      "sha256": "50da73638887297400bf9f7a8488ef4c8da6922f2992c47f333c443aeb3d8ebf",
+      "git_blob": "f9c52a96fc1da1b559674ed3ca0056270a08723c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesAnotB.java",
+      "size": 2179,
+      "sha256": "5b8b7af0c41308c32cf252edecad4fd57f5e1dbfa7abd8320adf10d4f067f8b1",
+      "git_blob": "670038c01a312ac33385c8dc68038af39d417563"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesAnotBImpl.java",
+      "size": 8641,
+      "sha256": "0e21a62b137a69e132e3ec2036f6e229d03ce7af3b19f4bde8efe5d990a021d0",
+      "git_blob": "3067fc3f475973b3352cb5bf3b393ff449a4e31e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesCombiner.java",
+      "size": 1204,
+      "sha256": "dddfc4262c1b4584aafde5e85322033c82eae726aa8bb28941c9f3a0cb9b4915",
+      "git_blob": "6ababc5a5cbf1c5d2e8519bc0403317507a521a8"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesCompactSketch.java",
+      "size": 3794,
+      "sha256": "72fd5b1e03418ac2e3707c86a7164c07207c0d00da1d234115f748e317a1400e",
+      "git_blob": "fb217a7c2fa2762003e8721e7dc94c3489f9904c"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesIntersection.java",
+      "size": 6454,
+      "sha256": "88647b91310a30febd24fe062e2b491d47bb5c2e897a30e0bf1d328a6a29245b",
+      "git_blob": "74db1165247fc50690a8cfa0abf9be0060179677"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesQuickSelectSketch.java",
+      "size": 7894,
+      "sha256": "4d0a487dd7ede7aaf55ead2d79a6c96024a1b8ce6469b033ef4fe3fae1c73358",
+      "git_blob": "61febdbcbb8aefa326cd0ba01629c7b3109dd076"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesSetOperationBuilder.java",
+      "size": 4615,
+      "sha256": "3e408757d18c202dd991f5a72ed8c15c866c901d87882936b9a206444d7444e1",
+      "git_blob": "14177b499c3f930141d350053b5dd5482905606b"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesSketch.java",
+      "size": 15913,
+      "sha256": "63d229a9e5882ed85d0340df97200c7a5ba347e61835bb6f6830163e307df35a",
+      "git_blob": "6fb1aacaafa2f9fbbc86d65e371be553e23bb3d0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesSketchIterator.java",
+      "size": 1910,
+      "sha256": "09711514c5accfd2806e0ac65ea07b9085b8ebaf8930eec8e92adb1da2c5b52d",
+      "git_blob": "86b9543a10c521a6fe8e6ca9a960e9652eb65f24"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesUnion.java",
+      "size": 8222,
+      "sha256": "33151de5ba441b837eaf12c7423671278701e12492fd7188e3833306b68224c8",
+      "git_blob": "221abf976bf30d126f1069b58afe913d774212c9"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesUpdatableSketch.java",
+      "size": 7521,
+      "sha256": "9d6afe6ca06a42c864a9ac6c463aa904d44cb6043a9ccc359272f906e8df15bd",
+      "git_blob": "591c67f1f9bbee955a6e2fa8d444527a8316b548"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesUpdatableSketchBuilder.java",
+      "size": 4656,
+      "sha256": "77562469a7c273af024e8c7e0e218c2ce51501a3446a80c6c2e03bf1dc000dc5",
+      "git_blob": "c15bb6d3ea32dbabdc2747be05173a683d708357"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesCompactSketch.java",
+      "size": 11626,
+      "sha256": "256a329a4844d6c822bedd239fdb73cadb89abfb033c9c0233a2acbd5ddc8cad",
+      "git_blob": "6342ba7170c919c669c9a33a76595e2efa8d1d03"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesIntersection.java",
+      "size": 2055,
+      "sha256": "91d64a955381b5e2b5726562f880238d5702e087cfc32706d98716e339c529db",
+      "git_blob": "74fd2abec91ef7714115cf7275b11b5657c76385"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesQuickSelectSketch.java",
+      "size": 15667,
+      "sha256": "fd26c16ca4b257c677327654fcb6972f647ac516daa079598d2df37dbe7f0a08",
+      "git_blob": "1a7e6585fca4f4d5b41e3a1d70de425aed43cfd6"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesQuickSelectSketchR.java",
+      "size": 1391,
+      "sha256": "75cae058582af6a94666853b0737512cc7110ad06d870353ce0c9ded2f545d3c",
+      "git_blob": "3ff1a260ccb6a11ff00053c353acd324a3f91882"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesSketchIterator.java",
+      "size": 2889,
+      "sha256": "2b60d666f26f50b689ac353424d0f18d99de8038b9039625bbb0a788c5374144",
+      "git_blob": "35f172c3fc4c2572258abf13b69487358ffab796"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesUnion.java",
+      "size": 4288,
+      "sha256": "ebbd2a391476cd66c41c99694ad536c405004262d15524858bddcb54bc0efc19",
+      "git_blob": "5e00b991055018fa1bbfe3b51fc4397b672d4cd1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesUnionR.java",
+      "size": 1535,
+      "sha256": "279962e473f7b3a1c24bb186e5d6309803cfca9df005778e50f064f1435319ed",
+      "git_blob": "164526c9664bb26460e0d2b2958467988a767f56"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HashTables.java",
+      "size": 4503,
+      "sha256": "64369923d83fb32af701435b0460eef8eb6e56242be4fbe70788c8328e03051a",
+      "git_blob": "0b93316b3586589431dc4b0ccc5a1d49e7748211"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesCompactSketch.java",
+      "size": 8507,
+      "sha256": "ed4e67b6188dc23d73b904393ee99e2d87f8f9cde6bef724c9163806dee0fc0f",
+      "git_blob": "c52b34cb72c2349b4488ed26f76d6f0fa15a8f56"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesIntersection.java",
+      "size": 1639,
+      "sha256": "ddd7c2ab3eaa39a6eb11ea36fc1a67113b84b7f8740fc9d0489e728d90306a51",
+      "git_blob": "a87b349bbf0e95f8a79a1e7e1334249a3a4830f1"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesQuickSelectSketch.java",
+      "size": 13720,
+      "sha256": "db43acba5c7ce48a7965f995da6cdac96aa5a1e2caa893786f4314a787079c73",
+      "git_blob": "4108201b287caf2c08cd72ce35b0e8c9e71f78d0"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesSketchIterator.java",
+      "size": 1820,
+      "sha256": "33b3e608f77b2e25a6dea06c4b5a802186dc005621c4d4fc4e7cad85e25b5748",
+      "git_blob": "a684d4f254f7eebfedeb47ddaa0d716f61039eac"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesUnion.java",
+      "size": 3199,
+      "sha256": "f9f1091bb96b756aff31a87fc63ed1ca4b7104353d11bafc57db2e9ccf2efd0a",
+      "git_blob": "b3f93c60e2e9dc47770e45a66cb2d728ddcca87d"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/arrayofdoubles/package-info.java",
+      "size": 972,
+      "sha256": "8d5de9eb5f154973bba4676a468ae2a1777b3889e67acc634c452da7d5e32b6a",
+      "git_blob": "42a34373a586866c5e861e74471513a250c7fd6f"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/package-info.java",
+      "size": 1053,
+      "sha256": "e2a42b14e7cf0162db6938cd5f20c97bed1439d37110844a447734f69d968042",
+      "git_blob": "4a6be921064f041e94717751404724c485d77755"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummary.java",
+      "size": 5983,
+      "sha256": "f7e3fe01bcf2f8d120081cb69a519a4b9699c5703116fbf48c7a3f7bb99a2fba",
+      "git_blob": "5008fecd5fdfe01e0e93edae7f6198b6e81c97dd"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummaryDeserializer.java",
+      "size": 1938,
+      "sha256": "29c1cf8f3df480a6a70cd21f83d78a46768b6328a592a79d5168f0cd4f022ba9",
+      "git_blob": "dffe91983b1d46a81552928f9be70aea85d44358"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummaryFactory.java",
+      "size": 1285,
+      "sha256": "a1e0d06f17dbcac13a651f05cabe61ae80b94dea735ddaff27a84b3c81d11b0d",
+      "git_blob": "8ca2a6a1adbb23b9c33b62b21c23d6c5f1a598cc"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummarySetOperations.java",
+      "size": 1497,
+      "sha256": "1ac58aa551c1adea9a8a0323bfad982b0082030938da9ee8a86b7a96ff05070d",
+      "git_blob": "270acbe3cc0e3f0d21604b46816c0b77560d8e0e"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/ArrayOfStringsTupleSketch.java",
+      "size": 4408,
+      "sha256": "ccb05b59c4262d0dce69d5d2aac7f1906e034c35bbc9d8394bd2dbff4a6a015b",
+      "git_blob": "7032b4e65c168c74a07b7edc9400c280ed5d59f2"
+    },
+    {
+      "path": "src/main/java/org/apache/datasketches/tuple/strings/package-info.java",
+      "size": 952,
+      "sha256": "344eda64b869053b88ac2ba9e6e493a6364251ee3067c6368bbf6083e2a85dfe",
+      "git_blob": "aef98afa1449ee5ab04c48f13af8bd91c4293e80"
+    },
+    {
+      "path": "src/main/javadoc/overview.html",
+      "size": 1619,
+      "sha256": "d43fe6dde21f52e47a947c100f6e56e3d36f0001e2f6c9525b755169050cb457",
+      "git_blob": "536f0f16a98cb4e105c46a8c60fb1d7ec76e8bbd"
+    },
+    {
+      "path": "src/main/javadoc/resources/dictionary.html",
+      "size": 17801,
+      "sha256": "fc7b16d34ec7a8b77e42d63e7b0763d53886b97f102c999a3a8f04279c2c5681",
+      "git_blob": "60a400ea489bd5b3c58bdc56cb84a56cad2b8a79"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/A_BeforeSuite.java",
+      "size": 2674,
+      "sha256": "13fa34072f289701a7d94c0f15521c67a7eca5e8940b9ed169bb05c7e0c4e626",
+      "git_blob": "c6c3f12b8f88a715ff902c10a03878462de847dc"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/AllocationTracker.java",
+      "size": 1859,
+      "sha256": "95aaa49418da1ede4b648651127bdaf25350c6ff800e49cb26de02f878ff980d",
+      "git_blob": "7dd8f1b44fff7f52a52cc807f441b392d2a1e85d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/ArrayOfNumbersSerDeBoundsTest.java",
+      "size": 1891,
+      "sha256": "abea2e97393ab5a47d5f27fc0e26ce75ae259bd93f826b3beae1d25586842f49",
+      "git_blob": "90ba3368622d23753c867fa4dedf84ba5fff92ba"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/ArrayOfXSerDeTest.java",
+      "size": 10236,
+      "sha256": "c03e0a433332b72deb5e3c03552f40c169a83d1fe02755cc9cd321a4b6222216",
+      "git_blob": "efd33365bd0b1eb2ea690f759400275ccfd2cca8"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/BoundsOnBinomialProportionsTest.java",
+      "size": 5771,
+      "sha256": "ef5472e47b5d53a971a39e08a6337cd603c09777e6e9f1a1d38ad1a223524c16",
+      "git_blob": "210e7b3cfa6da76dbc31cacfcac3f8b73f760837"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/BoundsOnRatiosInSampledSetsTest.java",
+      "size": 2496,
+      "sha256": "18135212aa86c88e8b5bbb4208f9b53a93906999d169e8d6e4e1f41eca308f88",
+      "git_blob": "c0ef1245530a6e6b007b803a3f82d96be726b12f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/ByteArrayUtilTest.java",
+      "size": 6144,
+      "sha256": "064c56c738ce7a0294e72a61791d99b0d582ae00365f877c6d69f41ca415a49f",
+      "git_blob": "31b990c4065b54a95b9420e65f2388dc3769cde0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/FamilyTest.java",
+      "size": 2662,
+      "sha256": "1c641cc738ff311a81ba107ffeee5798b84c1610705cac7928dffc271755e86c",
+      "git_blob": "1c7c1a71f5ad4c3babce3091dc079ea5966ef2da"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/Shuffle.java",
+      "size": 5091,
+      "sha256": "74ade13c2fa36d7e6aa2d41e1d51168306408f6d466ac35d70440bf6c915703e",
+      "git_blob": "af6c4f8b76e72f58bfd81a91dc557b58885dc65d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/ShuffleTest.java",
+      "size": 2338,
+      "sha256": "fc946adad41d91f1049dc3657d000ea787e2bb52311ebc40920d53d72c884f33",
+      "git_blob": "2b133a5abfb4bc1c14fd144d22b2ba48e17fee5d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/SketchesExceptionTest.java",
+      "size": 1750,
+      "sha256": "95f9db01c07fd61d03a2c62c8a2f938ebe9aaa6d0d6e8e5b0e4b467a1b40ac2d",
+      "git_blob": "a7bc841666b7a711176c53d5b7a03dd42f07223e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/StringSerDeBoundsTest.java",
+      "size": 3758,
+      "sha256": "cc2fba41370595f5a9da81f49cf5ee4e1fb7255adb47036b0fe1610e23fedc89",
+      "git_blob": "f3df2309c3e6dc11f7263998b64ddebf46e6934e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/UtilTest.java",
+      "size": 17528,
+      "sha256": "d6d030747c478b2f8f6685a82fc372b8b5ca46474463f6164f169f590926cf6f",
+      "git_blob": "950ef7565b2c1380233e311737e7a5b00affc05f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/UtilityIO.java",
+      "size": 11099,
+      "sha256": "4b76c793e206ddd135e9e5532a2f907b39b8570fb389e4a550b0a2d916752d8f",
+      "git_blob": "f74f58824ed3e458df009ae9f5bff24bdf626992"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/UtilityIOTest.java",
+      "size": 3302,
+      "sha256": "350db78498a2cfc3f3546e68e8cf9664f1186c51258fffca8e9e2dd5a5dff7da",
+      "git_blob": "32d25a1a7f5fa03447d0ff11604e3533649044eb"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/positional/PositionalSegmentTest.java",
+      "size": 8302,
+      "sha256": "a2142ce3d7a37f65a99dabce596e017fd62263d3f3396e1442529ba2db6a2805",
+      "git_blob": "4e66878a0e7ffb14e51e7a4a3cfe53969d6f05d5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/common/positional/PositionalTest.java",
+      "size": 2207,
+      "sha256": "c37696dd059ee9cbfe167a4accda78f9e287293bed35e436c0ee1f3d52070425",
+      "git_blob": "72af9423fb0e707d2f3abd75aa8ad6606f0a0a5b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/count/CountMinSketchTest.java",
+      "size": 10386,
+      "sha256": "76781611647472e0c1a615c6c9d640fc689f66a7ba4eb00e63c33fd215b426f3",
+      "git_blob": "59590d9a67120a45b1afa5fd92a6a11bfe40c94c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CompressedStateTest.java",
+      "size": 4053,
+      "sha256": "4364a2932201c15778c96a9d74d8489b236bf4c2033ac24fc512ed4a300c41ea",
+      "git_blob": "f9b85cef0a8b73711eb906574494b695c7ba257b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CompressionDataTest.java",
+      "size": 1702,
+      "sha256": "3ac7bf04b4eb7ded4381365f77f240c5aab6d4f3b48fca7405c837907740bfb0",
+      "git_blob": "ae706e7e8e92a35877b617b170926514597b1342"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcCompressionTest.java",
+      "size": 7020,
+      "sha256": "8a1a71d5657105fd03586782b757574392911f864844d5bcd3871f18c664f35e",
+      "git_blob": "c5ec1239984b83edc307807a71b6f57c587f45af"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcCorruptImageTest.java",
+      "size": 3319,
+      "sha256": "bd42ad44fffa365f8a656983ebb3f9a3c7600cc82ad26b709a0cf9ab17f27deb",
+      "git_blob": "9dca351a8879a7969e56380cff731dbee43f0e89"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcSketchCrossLanguageTest.java",
+      "size": 4262,
+      "sha256": "511c21ebc0e88e61f9ed708ea8d2caa484530b30424c1fa4511304548ec2ee0c",
+      "git_blob": "340ec55ee2bbc40b2a9168f6c0b52d33f3d23cfd"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcSketchTest.java",
+      "size": 6811,
+      "sha256": "959a6c65fb344c842e7dcac309e5e9e16f56ff73cacd5154921ad75c18c89e82",
+      "git_blob": "1f8ae715fdc9372cc060e38487ed40c9763c24a2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcUnionSegmentUpdateTest.java",
+      "size": 6717,
+      "sha256": "49dd87e09b0731adc3cb5f53aecf452e56306866634f1598a33f80b563ec3e7f",
+      "git_blob": "b06448e486cec6219e2d0162a5ff84d14adcc0fd"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcUnionTest.java",
+      "size": 2646,
+      "sha256": "d20b631fbd249c20a9930665351333d2aed2b8e85a5d8957722b5e22f1fe60b2",
+      "git_blob": "f3a87d68f520eed6f38530dcd7763c735fd80128"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcWrapperEquivalenceTest.java",
+      "size": 4469,
+      "sha256": "409f6c5dd59163f46af9aff1c89c243cbbe8c6a1ba333943a0a1dcaee3b42016",
+      "git_blob": "4ae1a52133e15b9fe66af7fd6ec3c02be213061a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/CpcWrapperTest.java",
+      "size": 3632,
+      "sha256": "aa2edddd102d0b487e55ad21c68e8f9da19dcbb80a7be71d7a7a269b60bad054",
+      "git_blob": "4e184fa57e8a3821899600f66c85b5387f0a6dcc"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/IconEstimatorTest.java",
+      "size": 5708,
+      "sha256": "ec04143946246410449dc1cef71fc4731836dc59c4c41476c3b01036df5e9c81",
+      "git_blob": "9c5a7aaa88b630813798d2cbc79df1fb6a3e34a3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/PairTableTest.java",
+      "size": 3583,
+      "sha256": "e9aa8f61ba580030c2c0b7e2d1f65ca5c482e09547fe3caeb77355f2d81d8133",
+      "git_blob": "404f9b1c9ea1dee7de573b2b58827026dec5d354"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/PreambleUtilTest.java",
+      "size": 10801,
+      "sha256": "60416ed73572f3daba156b32fcee2e8dd0426d4c4fbdb07e9f1c1a7684351215",
+      "git_blob": "c8891d2ca35c554e3f23543dc7d2ef7b33aa15b4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/RuntimeAssertsTest.java",
+      "size": 5607,
+      "sha256": "a4dd033b6634afbcb668128977f40de7a7bd0635faed4eb82a1845f9cde4325c",
+      "git_blob": "1c00688917070201b8c453aae0cfc8b71f5d0c2e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/cpc/TestAllTest.java",
+      "size": 3585,
+      "sha256": "1d35b2a95e989769001df9d67934abf70e157d594981aa4c6659837060ad7d98",
+      "git_blob": "4f94fce472c9f8e98ab3a7a53fb2894752ab4a27"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/fdt/FdtSketchTest.java",
+      "size": 5478,
+      "sha256": "063989875d278af0ae2951ea1ce0a9226ec0bdf6a8a9992d5758957db720a1c5",
+      "git_blob": "33d9acfc411087cb2913319b95e46ba92e3b0f6b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/fdt/GroupTest.java",
+      "size": 1917,
+      "sha256": "0f7629b8e914e85a1a571d6e37079aeabf209661cc0fc99ba92395d4fcf54327",
+      "git_blob": "21427fb0b47010f9b53d64d4de5cf73d7b2bc778"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/BloomFilterBuilderTest.java",
+      "size": 8027,
+      "sha256": "31efd582f19b11bdbea17b65131719e0c4aa6f8d9ca36bf239f70e2e69d1a7c1",
+      "git_blob": "2d6cfdbfed7da6a0ac2fda3d0bbea8e49372d751"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/BloomFilterCorruptImageTest.java",
+      "size": 2859,
+      "sha256": "77b53e575927546652c254ad7fa5693631f0d73cb01bd97dab004ce9e6a9473c",
+      "git_blob": "14250be1f79c4cd04865217eca30f354bec1193e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/BloomFilterCrossLanguageTest.java",
+      "size": 3699,
+      "sha256": "475342f3fae74d45919287d6e27223f2d482dfd1a700938a094117bdfe9ab0f7",
+      "git_blob": "db056aff4f035e1d98ae02103f11e568b91218d5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/BloomFilterTest.java",
+      "size": 21176,
+      "sha256": "49b5cc09eb3567c84c1b2bceefa68949457e2f094a4bceb72a4869cd7f0f291e",
+      "git_blob": "4b234202c0fcf88467dd7819bbcf910a00e241e4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/DirectBitArrayRTest.java",
+      "size": 6519,
+      "sha256": "c89fbfa5be6be9dc40137a042eaad04d59379f54e796d03b28b6f807eebef97e",
+      "git_blob": "a43bb03c32948730df1d5ac5583346e5209f5c73"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/DirectBitArrayTest.java",
+      "size": 9722,
+      "sha256": "138b1c33784eb80dbcfbed3e46fd5f36f7798187a3155bc96bb08b471465f1e7",
+      "git_blob": "c414b8c7247a810ebd8f2f4b85ae1138f3cf4138"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/bloomfilter/HeapBitArrayTest.java",
+      "size": 6958,
+      "sha256": "217e37a38e998bbfd87cc6d832d43dc246066ef967979657df200cd1b85974a0",
+      "git_blob": "23b7555e592559c7f9dd955ab3e00e76ea3202fb"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/xorfilter/XorFilterBenchmark.java",
+      "size": 4096,
+      "sha256": "334625f0590d4863926bd886f42b3824ab4451b92216b39c9bc7a33f6170ee80",
+      "git_blob": "1846d744c65e83a7d01bf98fb73e52f0d20668f7"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/filters/xorfilter/XorFilterTest.java",
+      "size": 18842,
+      "sha256": "603f57301a21be9e48988b4d8d9120501ab2dcd7e4f37186e932ffe8d625bb04",
+      "git_blob": "7e690ef2064513dc9431fad153ee595fc0f894db"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/DistTest.java",
+      "size": 2932,
+      "sha256": "5bda01f3a5142b09f09fc166c9bca7162cb109a13c15b1fde65d3a2aae12e955",
+      "git_blob": "d6d56da1a750d884c0c00a39fd1e07331a55dca1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/FrequentItemsSketchCrossLanguageTest.java",
+      "size": 10723,
+      "sha256": "fc85701355dd53eda0ea97bb688a9cfbe6fbd5183c909ed09bed6affb62fd66d",
+      "git_blob": "46fb7336c6ed45c86cd2936393dc50c623b57a30"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/HashMapStressTest.java",
+      "size": 2489,
+      "sha256": "6ae081cfd9c304b9a3aba47dfeee89a264de014c030776d913448884d27eb445",
+      "git_blob": "50001d13adc9762428039086491985bc7c264ea9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/ItemsSketchTest.java",
+      "size": 21077,
+      "sha256": "7a600842ac188199b996d657bb05c6458e03d49322677bde6f94a26700bfde87",
+      "git_blob": "d0507f768e0d58d7d0b92c9692145cdd15bef5e4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/LongsSketchTest.java",
+      "size": 32379,
+      "sha256": "b72acac3dbbb91ecc1a33d0ece1ee76e88b6e6617348d5df5bd0fbc8a7905655",
+      "git_blob": "6326f499e731993ba59ad35946bdef711a172a45"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/ReversePurgeLongHashMapTest.java",
+      "size": 1390,
+      "sha256": "2cc75a51c97c93cde178b44ad76a6a00f4a53f56a747151ba2753681e652ea14",
+      "git_blob": "0be99b1018977931cc0d276d3f8bad3e8f6ebc03"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/frequencies/SerDeCompatibilityTest.java",
+      "size": 2813,
+      "sha256": "c1ebd872b3cb5165a0081ed9d255a5e67c680eb7359b83a2ce425f27c6b6e82c",
+      "git_blob": "b632988f800f65901ef4d40a08c4626a9582ce80"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hash/MurmurHash3FFMTest.java",
+      "size": 12705,
+      "sha256": "b3b7b580ed4f93d70dce4678f09473a019b57970e34918bbfd474d0793c6bb07",
+      "git_blob": "b1f79468efcfab3145b12aa59c633fd7aa3c0b28"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hash/MurmurHash3FFMbTest.java",
+      "size": 13757,
+      "sha256": "f6ccad3b2310c1ff8a07a9fe2022e3f702df70c7b50df2f9a069164e3aa87385",
+      "git_blob": "ab61a33a2d8899aebc456d1fcc12a1610b1ef475"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hash/MurmurHash3Test.java",
+      "size": 12531,
+      "sha256": "295657adf58e294f4199f5e8c659efd3bd5e47ec5945f30993aa02b1a4c8f750",
+      "git_blob": "b16b34629df4daa7ffcc1d9feeeeccced6b47bef"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hash/XxHash64LoopingTest.java",
+      "size": 29163,
+      "sha256": "a1efe13fbd4e8c1901568674831da5a611f66e691bd52f9964a204c9b65b09b4",
+      "git_blob": "d0998e0c2968c274a35fd939ba284f17838cc45d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hash/XxHash64Test.java",
+      "size": 6050,
+      "sha256": "913da308825ce6fc89d19bffaf7291b059895bbbb8fa6c30d7c110d688a81c69",
+      "git_blob": "b005aaf6c23e784308b4173790e4f9754d017f5f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/AuxHashMapTest.java",
+      "size": 2822,
+      "sha256": "69ea6517b2681bee95a0d0bb5645254202b227cd2d1660915631f32694c4d3d2",
+      "git_blob": "9addfb3cdfb167e5198c4d7641331561e5dab76f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/BaseHllSketchTest.java",
+      "size": 3510,
+      "sha256": "dc1ec66f6ea8f15ab5a22cabb34874f8fb3dfdc28e1d06364fb9899b46971ee1",
+      "git_blob": "54177c5d0e72829c256c774ab815b8e55f99f22f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/CouponListTest.java",
+      "size": 5145,
+      "sha256": "b04862693c389af8d3af0f79b265c1864a7942691032be3970cd8d57c05a684f",
+      "git_blob": "b119109d86588f4502e25ac814455c251984420e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/CrossCountingTest.java",
+      "size": 4384,
+      "sha256": "d574564009838acf20befc26bbd94556705fccafdc4fb115b49c3b2d30fdd93c",
+      "git_blob": "7bad7e18e8955041e73002bded24d379e4cb76ed"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/DirectAuxHashMapTest.java",
+      "size": 13052,
+      "sha256": "d6317e79e6e126455a97edbef1cc9a94e9089e45e5a761784b991ea10a73a8a1",
+      "git_blob": "50f413a6b0576b455c9a162bf6ae32e6cc843cfe"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/DirectCouponListTest.java",
+      "size": 9355,
+      "sha256": "9315d047a9d6445bed89b140726f7e1ca1effe45cc796015e4c3bcc0151acf9c",
+      "git_blob": "044535d45459514165617183e4906a9fa3741ca5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/DirectHllSketchTest.java",
+      "size": 6304,
+      "sha256": "997c6c43486ac5c17b156099c7fbb43b99d3fd37a4306740659ec457eec0e0f6",
+      "git_blob": "117cc5a11cbe2358b7d75658ded5871ed502a1ac"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/DirectUnionTest.java",
+      "size": 15004,
+      "sha256": "1757bdc8694b8e41f15aeac7726ea07fe94c8a057ef0d9bf9534899757789b67",
+      "git_blob": "d788913c3d8bc788c929416d46200da106741e6c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllArrayTest.java",
+      "size": 8161,
+      "sha256": "168ae963256235fce7ddb43bb1d01eb4f857d3d775df3dbf7be273a1492a2297",
+      "git_blob": "b7409b6fc8aff45eca7c55534e5e0efe2d401ce2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllCorruptImageTest.java",
+      "size": 4312,
+      "sha256": "04efbeb6666865687e8eb5103ef207d863aaa43194c62700a1787c1543e2e511",
+      "git_blob": "6f32b3d8f51d1f59caf3bd5407002e5b997ba713"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllKxqRebuildTest.java",
+      "size": 6085,
+      "sha256": "4ebed5e3ee6ab996d7c31577723e21579746d4ff9e8eb0c17ec7b30e8dba0d28",
+      "git_blob": "7b81e79043d1fbfcfe9b78905f4f6b427180ab48"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllSketchCrossLanguageTest.java",
+      "size": 11454,
+      "sha256": "49d8ddaa14479f7ca03acf113f732d7565429f1f8ed7ad7cfdf16b62fabe880d",
+      "git_blob": "6a02d6a17043944ebe73290bc3853f3fca0e6376"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllSketchMergeOrderTest.java",
+      "size": 5296,
+      "sha256": "9dcc4cb43da126244fee5d04f8c9125728a21772a5ed027d0736b4395de18638",
+      "git_blob": "fb8b7dcb11be304060a2d70fa09d7b17d32d7ad2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/HllSketchTest.java",
+      "size": 17786,
+      "sha256": "35aac6eef2534f2c5c00f9e28d811dab45df1a7bda5a92360c07b6a5fe735dbe",
+      "git_blob": "5b9e239e1567cd225ec67c6162818c03a4d55471"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/IsomorphicTest.java",
+      "size": 16511,
+      "sha256": "148752ca50d42853fa9c32cfcf7fc5b3873cd47c4c8edab1c7e3a414b392fae0",
+      "git_blob": "6665350f1ed00ae80c2223128dec9b431c42b1c9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/PreambleUtilTest.java",
+      "size": 6856,
+      "sha256": "c31a6085ac9936ae3e9d6bceb1009f2b6375e8b92847380f34fa542a4d51204c",
+      "git_blob": "dfd5899d8702a684f6bf8c4d447c7202a30d99c2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/SizeAndModeTransitions.java",
+      "size": 4286,
+      "sha256": "e71d23e43ddc8ed252e837e3577ce1bd7eec51ec80a2c5240a06b1f736f2c1ea",
+      "git_blob": "c00398b6e4f5f04eace68a2d750060c846cc745b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/TablesTest.java",
+      "size": 2109,
+      "sha256": "95a5d428fd0cf45ab258796c76f87b32835f5774ca6d7aca8aaad6e852e9a67a",
+      "git_blob": "cb249f81152201ce6c34b6498e31e0bb7240b021"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/ToFromByteArrayTest.java",
+      "size": 5073,
+      "sha256": "db9f85cecd6dd6ce45603e2410799d332c88c3725ada07146b76f0294cb52699",
+      "git_blob": "c0d3f0432b618a92929126e931150cbff70479ac"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/UnionCaseTest.java",
+      "size": 16197,
+      "sha256": "4229fd65f9deec413cfd5c626d650bf504f24bfab6a2cfbb7b057f5ece7a20ff",
+      "git_blob": "3279e5ec9dc525f1d1441b7c30d7721d00e7f901"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hll/UnionTest.java",
+      "size": 17721,
+      "sha256": "dbf4412e82e15effa688dd798bee4e87aedf43901d6884e795f52ca65c4a2c95",
+      "git_blob": "23c3732074d08ee544c6afd52a8d50ca8c55bd58"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hllmap/CouponHashMapTest.java",
+      "size": 3810,
+      "sha256": "9cebe383149365649990a05502a60241bb75304dd5fbb197fb12a012a8f5a55d",
+      "git_blob": "955f9c42ac32475e7efc8271b9530a46fb19da86"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hllmap/CouponTraverseMapTest.java",
+      "size": 3219,
+      "sha256": "b585e000aed41948bedc36e521dfd94262f5427ae138e5c273f77ec2c40a9d71",
+      "git_blob": "4bc0277f44e8e301f61779a59a4dcd0253e4576f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hllmap/HllMapTest.java",
+      "size": 4712,
+      "sha256": "bdbfe9f712de62305b465d02374fe36ec8f5203af81eba1b649c3ed1b0e35f89",
+      "git_blob": "0d52c2f00d352f6af1653ce755dc7270b7b3178a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hllmap/SingleCouponMapTest.java",
+      "size": 3909,
+      "sha256": "5fd3487001ee31ec8cae33e421ded18274237f67b4df3fffda567d9ce767ceb0",
+      "git_blob": "401e6e491d17b31a64374c077e51dd771e26a93d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/hllmap/UniqueCountMapTest.java",
+      "size": 6591,
+      "sha256": "2b70d870692e7eefa85d51b71175955f9970d447b371ea00ab14dc8d4bfbf3d7",
+      "git_blob": "370bbefaed02922e54283f29964cafc47bdc1e86"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllCrossLanguageTest.java",
+      "size": 11228,
+      "sha256": "2c799f6f3eaf5d18e017b5df933a7793075b807c23197846bf380eda311a6550",
+      "git_blob": "cfee0d4f30ca97bde07da9728b92b253959101ad"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectCompactDoublesSketchTest.java",
+      "size": 8514,
+      "sha256": "c67fafb137c5e68ecf1aad830785829132068b81c90fa239eeb03274222a6863",
+      "git_blob": "de4d9ba19e9a30d7b0deeb3a1386bebc71150124"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectCompactFloatsSketchTest.java",
+      "size": 8471,
+      "sha256": "945c53e6827b28a151b30442cb18938befe184612167a4eec19324cec3519fbc",
+      "git_blob": "bf5bd077a6efae7a240800b30c3f5a76d1f87f6c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectCompactItemsSketchIteratorTest.java",
+      "size": 6291,
+      "sha256": "347a91c90e27046f54d9adccb38b213b3cfa4938ff46fe84a328df2929eb1398",
+      "git_blob": "a41eb321ec504b14354f740c8a5aeff1c38fa5d3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectCompactItemsSketchTest.java",
+      "size": 8836,
+      "sha256": "24eaf24275a4212e338c9a094d6185ce83ac380962e06ec7ec1e87fc377ddf15",
+      "git_blob": "ef3dcdabd76f439ee1259d64c776473ea704941e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectCompactLongsSketchTest.java",
+      "size": 8709,
+      "sha256": "bb5790889e52dbc259b54fe50b30c29c82e1b6e6a6d6f66ce89e1139f9b3a7e5",
+      "git_blob": "c47113105141d94b6abd39753baf4c57aac1a447"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectDoublesSketchIteratorTest.java",
+      "size": 2529,
+      "sha256": "9b69c74e2b4045942a545efb23a161743291906ce67e0d1195244d917347bb4b",
+      "git_blob": "6d77496387da895cbb71adae068168666aba51de"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectDoublesSketchTest.java",
+      "size": 28628,
+      "sha256": "70b132b93b82d3bbe155eb563dca2e6c860d974b2436828303c77e022a9af0ea",
+      "git_blob": "8db7857f54942f950d96e05c143850387468a5f6"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectFloatsSketchIteratorTest.java",
+      "size": 2506,
+      "sha256": "991a88297c5a33cfacadc8dcde1618c667ec97640a7aaac16352ebea89cf2eb5",
+      "git_blob": "ff7c4ac9e25077905cfe6b731424c2fa12f2cc23"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectFloatsSketchTest.java",
+      "size": 28498,
+      "sha256": "3ccba0220f972d90814189a9f2a52ca727b18ce9f4d3228b4569dde3dac1a41b",
+      "git_blob": "39798ae93c07a399b8d6bcc7be83230950bee6b2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectLongsSketchIteratorTest.java",
+      "size": 2492,
+      "sha256": "8e07f2534ce5600c0ba630d5b0d4a15709acc5d4916036003f64e50064dd4a61",
+      "git_blob": "2904d6ffb49f2878aaf18eac243fbf27462bc5d1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDirectLongsSketchTest.java",
+      "size": 27904,
+      "sha256": "35311d2cc741a8314b6498838caddd3dab653bfd0fbee0c7e73ddff52237079d",
+      "git_blob": "277c3a403ebdc343cc379b28bae1039f1bd89052"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDoublesSketchIteratorTest.java",
+      "size": 3820,
+      "sha256": "9d96c2418d3ade7659af5645d3d9f05e5d931dba4c3c8c2ea082d83d734cddca",
+      "git_blob": "6afe392a75814c724581c64c4f30bb8cc89d0137"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDoublesSketchSerDeTest.java",
+      "size": 5785,
+      "sha256": "b681675ccf8b017ec299f14c4890839f91c45dead8ddac5c291b3c2ffac0a17b",
+      "git_blob": "5721f8b12a9ef6c1e20187fe715991cab6528e97"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDoublesSketchTest.java",
+      "size": 27436,
+      "sha256": "89e8d9d4530b1ced50399d35661527c0a72df5062d5f3bb0ce6f98c4b7702561",
+      "git_blob": "09167afc39bd6bf8c1fc92a6da53dcf06e500a6a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllDoublesValidationTest.java",
+      "size": 11565,
+      "sha256": "9c55938af9170e0f7b5abc87a537480da695da6a4a067a3a8f8ed2e7388b54f5",
+      "git_blob": "6f19c040557df3eedb8bce55fa6d0b28c8a427a9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllFloatsSketchIteratorTest.java",
+      "size": 3792,
+      "sha256": "a22296464577b5f219fec8aa3f57deff10d5eca70f4d0151857abc788b97f417",
+      "git_blob": "88003b8362e871b47b4381f828a34895c8f05d2e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllFloatsSketchSerDeTest.java",
+      "size": 5769,
+      "sha256": "6771f5267332e3234b0cc9013f204f0b883a28575c94169ab3b0356f93639875",
+      "git_blob": "ed9954f7779b099a44ab6ab97c8f73d552ccca10"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllFloatsSketchTest.java",
+      "size": 27381,
+      "sha256": "5eeed7fc6aa97b10abbdb2c34f16bbfd88323b42c49134e9fc82983848a33607",
+      "git_blob": "f5b533051962ab938bb09bc468f58bca27580706"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllFloatsValidationTest.java",
+      "size": 11555,
+      "sha256": "74affd7fdc345565f57732af8252c59723e5ebb7cc20190518ad5d01a5e99e62",
+      "git_blob": "beeb0d57083e9d447820ca60237b1c83970d9bb1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllHelperTest.java",
+      "size": 11550,
+      "sha256": "0034fef0a020d611142652aa1a651ad13d1ff971aa957aa2b08db55f37972a7d",
+      "git_blob": "d7771a11f17d00b7d22c96b8833fb97feaf1c254"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllItemsSketchSerDeTest.java",
+      "size": 9485,
+      "sha256": "7611ea1da8206021e09d3e1e0c49a837793adc00134cba0fcb8163b144b64bdc",
+      "git_blob": "e8a04ea308194baea9a3beeffa4a7251f5882e53"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllItemsSketchTest.java",
+      "size": 36772,
+      "sha256": "ffc4245a196240bc18658319e1486a0c37d3f42ec9603d6e6f34f7e0c9b5c1bd",
+      "git_blob": "d9e822b6a59dab1446e42e87bec0009bb4f8f2f0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllItemsSketchiteratorTest.java",
+      "size": 4377,
+      "sha256": "4a48b1cf9b17a9a604167bbf7bb6d50f635f8f343fb08eb3c05cddf9dff46ee6",
+      "git_blob": "d42d132b5a06de722a085ebc792118568f1da2aa"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllLongsSketchIteratorTest.java",
+      "size": 3764,
+      "sha256": "01e100682951d4a64bb02e8f9ce146b71c5793d66321976d2be6e9a004c5a8ad",
+      "git_blob": "983ea16ef906d5da1f45c616e0498c8ebefd8a0e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllLongsSketchSerDeTest.java",
+      "size": 5736,
+      "sha256": "75db067b9c246ddc78a6216bcf30271b9f047e32659f4b98c504a0e3fefa779c",
+      "git_blob": "42f62fdcf79180ca3f6b57af264fa4852533c8d2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllLongsSketchTest.java",
+      "size": 26806,
+      "sha256": "3817bba7182ecc97b8c954c147c69652a79da6ac47cfe3864b5526f318dccef9",
+      "git_blob": "5362380833935bfa3d35f28a6f7701de41e1aa09"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMemorySegmentRequestApp.java",
+      "size": 2853,
+      "sha256": "31989aab908883429038ddd0f7eaf1b8e13cfc17b4249f0ba2e66593aeb95fae",
+      "git_blob": "24915dde9b4aa5406b4238155d27b8a3b519e6a0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMemoryValidateTest.java",
+      "size": 7033,
+      "sha256": "3e2ca1c165166cdb2b74934a4f2361f2f841f431bded947d2092f5b98bc15c65",
+      "git_blob": "581dc4108026ee3a5325b15b46138f45cfe0574d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscDirectDoublesTest.java",
+      "size": 17176,
+      "sha256": "44c8fc8bfdb152d8a59c472da36a239caf7334650c5a494e37ab06f2ae69765f",
+      "git_blob": "80146234030b3517ac0cbe6b4e6b16419c1d0a27"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscDirectFloatsTest.java",
+      "size": 17075,
+      "sha256": "b9ffd058e77fb9bcfc8b734e1271c4443f32a0bc3ea5cf70e212f209739c6b45",
+      "git_blob": "f4166d65281d7b28c394d0af842be0711e06876b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscDirectLongsTest.java",
+      "size": 16943,
+      "sha256": "0c979f4e8718db1d193acd4799396f85cc56515c98281112c282ad8d9a255c1f",
+      "git_blob": "5f19b3460630e2d0f0b0cfee8778d9ecab678041"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscDoublesTest.java",
+      "size": 31550,
+      "sha256": "55c76e764eb8d668946ef14c6e9911f66528d4307fb64b1d5635ae80a9436df8",
+      "git_blob": "642e3171a6297b04b7611627e310ba64b7df8eba"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscFloatsTest.java",
+      "size": 31261,
+      "sha256": "1b42eccf4f88cd3ff6e8c3f85eed8533a28ce2586906542664383f5ce742e9fb",
+      "git_blob": "b5f2fd822fb4ec68e611412ebaba080c1bc87123"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscItemsTest.java",
+      "size": 25543,
+      "sha256": "eb3e47f5507fb19930cdeec282d6ea7dc59143dd7b3a899883aad94cd3820b4a",
+      "git_blob": "2555b64c23b6073a691586038d3e0e923702d4c1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllMiscLongsTest.java",
+      "size": 31049,
+      "sha256": "ea90e7681dff621123c0e9eca3dc3605e70239abd045256037cef1f53f78221c",
+      "git_blob": "4914656ffb0f88107060f2fef2e40ef4d0962e68"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/kll/KllSketchTest.java",
+      "size": 2166,
+      "sha256": "2a5ddd4c9b469a97f55c9f87968b3b66f35dfed282dfe45b2315cb6029b6a648",
+      "git_blob": "131d080b58950a16e1dc0188c547c764951935d4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/partitions/ClassicPartitionsTest.java",
+      "size": 5389,
+      "sha256": "7539d1340e848cec227724d6c0f688ea8e1090bf573b7bbf483b594f3b8d85fb",
+      "git_blob": "5175ecab084c43080259d753be4392f5811ba6c1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/partitions/ItemsSketchFillRequestLongAsString.java",
+      "size": 3417,
+      "sha256": "93db71a77cefab7a64d2af044e72ee88e1276ddc84d69664c6fed2b0d7f27aba",
+      "git_blob": "8e39ba55f259304189a5b4951e98175f5675735b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/partitions/KllItemsSketchFillRequestLongAsString.java",
+      "size": 3478,
+      "sha256": "a40e39b994a3875b777de18aa20328a283d44e570c93a5b4b22ef29032d27b72",
+      "git_blob": "5acf3a31b2dad20eb97813293dc7bb61d0dfa647"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/partitions/KllPartitionsTest.java",
+      "size": 5351,
+      "sha256": "0489ab6359b020322cb86c9354ae322c47a3b0ba28e2d91ae5b003fd6f398fbe",
+      "git_blob": "1833adddd0e9630e133016c6ee81814aa9cdda87"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/partitions/PartitionResults.java",
+      "size": 4618,
+      "sha256": "b0f8ef91fa0b6f3b8d4a16c1c06d1c06c836e235ae690e0b3b67eb4c92c26040",
+      "git_blob": "65d8a2ba85155d8a6f2131c120b58f17c0f11b0c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/AccuracyTest.java",
+      "size": 2582,
+      "sha256": "fb1f3ef17567eb2da5845ede607ba7e5082a88fec2097beb57d153aacad5454f",
+      "git_blob": "2fed90dc8e3cea7ba3c85fa23dc075a4bc54552f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/ClassicQuantilesMemorySegmentRequestApp.java",
+      "size": 2890,
+      "sha256": "b405041a0070e94eb360f2ba22b494169f66e66369f2651413c1c8b96f4c10cd",
+      "git_blob": "6e96578cac9ae4e80e67b31a29041410bf4dad5f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/CustomQuantilesTest.java",
+      "size": 6606,
+      "sha256": "e8ec77387b675f0e7eab9791d43357e62ddd37cc3b2ca111bccbdb0be7d19fa7",
+      "git_blob": "d0816c4dc34cedc3deca6b1634f0f03cfa4caea5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DebugUnionTest.java",
+      "size": 4508,
+      "sha256": "835ddff7533527b17b61a8775e1601d5463168c226f160aaa4833007661de7d4",
+      "git_blob": "cdc1f7a93d9b8643254d0be78140485b7b314986"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DirectCompactDoublesSketchTest.java",
+      "size": 6156,
+      "sha256": "638e734c962ba5dee186a03c960c17be414c8ebdd34a6fb1b2b426a8160a2bce",
+      "git_blob": "ca4633be94d983ba378cb43c2107fa8a53c7faaa"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DirectQuantilesMemoryRequestTest.java",
+      "size": 7032,
+      "sha256": "170fc3bf42eca684be8e8f2de021b96c589b32fe1bdbe9419c0dbb41aa44b1ca",
+      "git_blob": "2b37b00a485a0d5f47d8326d878ca4c4f724d391"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DirectUpdateDoublesSketchTest.java",
+      "size": 11457,
+      "sha256": "ea8d72ca364f02e770448bf4d5f28a6507b260757081a91464be159bf0c238d6",
+      "git_blob": "6470c5351241f07fc066a35570382651a27a9087"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesMiscTest.java",
+      "size": 8862,
+      "sha256": "812991824fb7ad55d459cff59798ba7c6366c2a852b8675be2ace8cfc2a44157",
+      "git_blob": "19409b424f504c2585196ca97e321427b65b8b17"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesSketchBuilderTest.java",
+      "size": 2035,
+      "sha256": "b5fa5dbd2f88b009da2ce1c737f8c719661b15fce36ffbbcb1cb68329d947fc4",
+      "git_blob": "c6759ac03f4f344a9971a87a281cda4e0392227a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesSketchIteratorTest.java",
+      "size": 2187,
+      "sha256": "3df158db139f8ae8c2cbc9282cf93258aca4226f9899b69fa04b03cea495cebc",
+      "git_blob": "a84c0f068f081a3274465cc19b296bfa6351e10f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesSketchTest.java",
+      "size": 10229,
+      "sha256": "df86a3b07ec7c802250181e65c873fec083ccbcfd35b6893dffc37147ecbb8ec",
+      "git_blob": "48d361ed8dc5b6bb74f09669e7777189bd9510f9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesUnionBuilderTest.java",
+      "size": 3597,
+      "sha256": "c20deac72c758bf38e035cdad4b1b67aa256b2c52e17c1430a0a10dcf3bfab7b",
+      "git_blob": "d41d790518693b797772226ec65857ed78b78879"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesUnionImplTest.java",
+      "size": 29323,
+      "sha256": "b29b32a8c73c55d478db3b310b67d5aecfda09d91ae3c5ea17c28ceff00a1876",
+      "git_blob": "3c64cd87a483b151420d8b5ede506c314bc79b36"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/DoublesUtilTest.java",
+      "size": 3892,
+      "sha256": "93039f0e00864803e07b59d6303716d57376a13c4469e20d49c29c192a5e7671",
+      "git_blob": "24fb53a8e5e34d218d96f45bd310c31814dad76f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/HeapCompactDoublesSketchTest.java",
+      "size": 6148,
+      "sha256": "c9cc788030b75a8ee5d87aad99d116912c6a4e0aedfff340199fef34fa75991b",
+      "git_blob": "9fe37355c811207a4fd95f48fd9f28b96ec616af"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/HeapUpdateDoublesSketchTest.java",
+      "size": 38683,
+      "sha256": "1a4c2b63e98fec88eb28cf8fcd1598dec379f2bbd1de2af3e076ab92de311e0c",
+      "git_blob": "e9d72d1fa857f94eaac6d5a393dc1df6470c23d2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/ItemsSketchIteratorTest.java",
+      "size": 2377,
+      "sha256": "d36c3162fba405c61bf086d29b144820feeecbff37b9261a604049bbeb0b9b6b",
+      "git_blob": "912d6237e99971b0806f12dfb696e5109f6fd394"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/ItemsSketchTest.java",
+      "size": 28387,
+      "sha256": "d6cd9d7234b8e1625eb8c22bebf06cbbce93ab95e3fb660ba27c0845943a6f08",
+      "git_blob": "d557868b9b0de050216c237dcec54e64f9d9d904"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/ItemsUnionTest.java",
+      "size": 18421,
+      "sha256": "07e16266a0a7e185094d6e30f91a102c8172dc4cffba1270b9ee6377f1445a6e",
+      "git_blob": "27b3f7083aae997b19b8dcfd10edc7adffc08637"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/PreambleUtilTest.java",
+      "size": 6105,
+      "sha256": "76b3ccb308ab04da92854ff9c2f36e9308bd91e4b4d557aa5ad33d8e700e3c91",
+      "git_blob": "4ea915c75c89e4056687891f893a214f0a5e9035"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/QuantilesItemsCorruptImageTest.java",
+      "size": 2944,
+      "sha256": "bfa5c7d6c638e0be59915983795d5b7bee7e8fafa05c15bd1751b852b77f6868",
+      "git_blob": "9335a5115afbe0a94c3985788502e6f1da516d8d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/QuantilesSketchCrossLanguageTest.java",
+      "size": 10913,
+      "sha256": "0ec75b5ccee0ccf6297f9cae4cb0a30d1b7e726d95a0fc1f8f078087dd8f8927",
+      "git_blob": "1c03fb03b641736d75bce16d7e6e36db020c2f2d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/SerDeCompatibilityTest.java",
+      "size": 3168,
+      "sha256": "0a70e492113229691755762cc85e2e5b3a0407e7ab572939d0de48250240571f",
+      "git_blob": "7788c1a7be4474bd2e2843f6fca07dd089950680"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantiles/UtilTest.java",
+      "size": 7520,
+      "sha256": "969f6323acfeee35382640e909af7dc6ef247be81f3353dd5996b5d180f5680a",
+      "git_blob": "3181a26195ef33a7a043e008d2cad76a1f5284e1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/CrossCheckQuantilesTest.java",
+      "size": 16088,
+      "sha256": "4bfb7d2927e8c2f3cb82fe444969a4f94837b40a2c1adebd9d134b9dac06b0e0",
+      "git_blob": "06b011ea3da54fe34ebaac48f4ceb036e8c12ab7"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/GenericInequalitySearchTest.java",
+      "size": 10933,
+      "sha256": "3c6330b61e360c623eb7cdd5808f736b38f7474481dbeb111c0e50d7cc11704d",
+      "git_blob": "6d6cdd4090d10d701caecc6d45f0ac16a0f53c8a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/IncludeMinMaxTest.java",
+      "size": 8209,
+      "sha256": "db531511a3dd05f599226f634b57e079b30272770fbe51fa65e82e98e525e794",
+      "git_blob": "cfcebce10b9d2f3379b4d13acfd9418ce0d17812"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/InequalitySearchTest.java",
+      "size": 17339,
+      "sha256": "89e943db520172208bf7832572efe8d0fce409042132a6d12b9371d72a94545f",
+      "git_blob": "640d7d59c31a66f63f278a6b011db68a55f9acbe"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/KolmogorovSmirnovTest.java",
+      "size": 13120,
+      "sha256": "65f99c28b9a0f433193f4d2e3cf64d57d76a8b9d08e93123a78106adaa2febb6",
+      "git_blob": "e80d61cd06db9d69e21915aec6f1575d36d24148"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/LinearRanksAndQuantiles.java",
+      "size": 14582,
+      "sha256": "a911b58ca22a2249e2c13e0484f7149cccb4725b068131020fdd09bfbfa8d7fb",
+      "git_blob": "fd8885c6f213b30cda905a56775cfbb61ac11dd4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/LongsAsOrderableStrings.java",
+      "size": 2598,
+      "sha256": "64bb826f4e04bd8628ee101264bcd45463008f4f597934b0333b885354e630a2",
+      "git_blob": "10d5c9073fdf37e917539b5444c534e14f985b78"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/PartitionBoundariesTest.java",
+      "size": 12298,
+      "sha256": "42922e2c0c56a5795d8d0754dd785a02c4c30ac9d83cfbd71dcfb3339a812426",
+      "git_blob": "2785020414acc986782ce1bbba5e19d99f019f48"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/QuantilesUtilTest.java",
+      "size": 3732,
+      "sha256": "9a2c22d1cb86d1915fbc60008e5b8581d8e36a0d29db081e609342a330b8d1a9",
+      "git_blob": "24c653203992fe51dcb91d0eb73f883ed3faf34e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/quantilescommon/SortedViewEmptyAccessorTest.java",
+      "size": 2713,
+      "sha256": "daac671e18d224ae870712a4abe118d8749e2775934f5a6d65633d35acc92ac0",
+      "git_blob": "5f2abfbd8510badedaec9b092fded547b064e097"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqCompactorTest.java",
+      "size": 6214,
+      "sha256": "191baa7150807d9d19355acc6ca85b14de2b2668de6bc2e4c2e3135b92a867f7",
+      "git_blob": "59e874272ce146dac785d55e333d082a4bc3578e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqCorruptImageTest.java",
+      "size": 3498,
+      "sha256": "dc6f7e63e13248ebd08f7705c73c448126abd031d419d1b02c09a1f2693004a1",
+      "git_blob": "c8f7ca939078410cd8867110b93cc25341c531a0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqDebugImplTest.java",
+      "size": 7253,
+      "sha256": "dfe57c6cb11d623c5ab87712be90d9e27b0b9bda58518e29fa993a397e33b1dc",
+      "git_blob": "5e757ce0f2731e0492b1e17784d500e06f9bedfb"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqFloatBufferTest.java",
+      "size": 10212,
+      "sha256": "666749509b0d3acac5e7e31bc385c54f253bcbbb499d85e4f4695a35c4f8baea",
+      "git_blob": "82f958d0eaa854297d0bed8d6fa7e430e001fbe1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSerDeTest.java",
+      "size": 2956,
+      "sha256": "77c4d0f61ec6eb6092cc965e7c8199fc88ff4db264f5a4d2fd3fe9305a028797",
+      "git_blob": "dbf48fb23be76f7bcae709a00b28489c547279d0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSketchBuilderTest.java",
+      "size": 1622,
+      "sha256": "56041d86295053e398587d3cc51f5024327ea038011a322062b6b7d6e1e2c3a8",
+      "git_blob": "8e33b03e2c5834226b5c6356ca3c5121f61748ee"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSketchCrossLanguageTest.java",
+      "size": 6875,
+      "sha256": "3d784e195f3afc2c3cde18277159118322cc7bb19c535e2b83671826945ba6a5",
+      "git_blob": "cc2f6633f0fda6db1adb494af599740d9641c1c5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSketchOtherTest.java",
+      "size": 8040,
+      "sha256": "f12e000f440126e6230046d51e7562d16eb286f63d4480f667eefc9730ad78ce",
+      "git_blob": "4a54c7c690bd03ca57b11de6245586d1489802ec"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSketchSortedViewTest.java",
+      "size": 5703,
+      "sha256": "73c506c85e1acab40fb6f8cb75efd512be58def29b442910a2e24f529ab1f600",
+      "git_blob": "e3e4f799235725987af884c70ed317f37a01269b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/req/ReqSketchTest.java",
+      "size": 14225,
+      "sha256": "3a53e9f19b82aab8f335efe0c1b0a4fe38f607a3ef94b6929311e33b354972a2",
+      "git_blob": "afd2d0c3e26b9e6255db5be6c60539dc22bb8e63"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/EbppsItemsSampleTest.java",
+      "size": 5238,
+      "sha256": "155d6bd9d93a8cdce7290fd440e00d533c70bab286a2fd81a0495572a1618e7c",
+      "git_blob": "0241278e23842198a189060be9d7f0c19ee209d5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/EbppsItemsSketchTest.java",
+      "size": 12365,
+      "sha256": "41c9a182d4e41b5243521abd82287ab75598bbd178dea260282fc34e2fec07a1",
+      "git_blob": "97fdc1601b36e160f2dcfb037a8054f8964cde7d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirCrossLanguageTest.java",
+      "size": 35791,
+      "sha256": "017e190bb576a1d3f5f71e44158d6075f19d989c7b19b1a38422b999f4f21baf",
+      "git_blob": "37b1d91d4f125b65cd38bb8d13eca42b9191026f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirItemsSketchTest.java",
+      "size": 21072,
+      "sha256": "3270a12421767432547cbde84aec3d8a05eab185f208734ca8e96c2b76ca9692",
+      "git_blob": "4dd987b32127044e9ad8114b53bbbe15c434588a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirItemsUnionTest.java",
+      "size": 18146,
+      "sha256": "59a40785abe270a64fcaba3f6ffa335e15e78ee6a655c43394d9ed70f5bcd0a8",
+      "git_blob": "702cc97e23e92d3226bcc17dd6212ad887fa985c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirLongsSketchTest.java",
+      "size": 16030,
+      "sha256": "09cbea971d94f6883ea6747c155aaff2216c3c464a8fb9724fc492d521dcf083",
+      "git_blob": "07cc44c7afea5a5413691ffeec00b19b0385aa0c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirLongsUnionTest.java",
+      "size": 14805,
+      "sha256": "a3b1ce811f86cafd745d48581a298d48b3e30ff9a0303ddd50ebdbfd9f196da4",
+      "git_blob": "b0a4c0866bbbe9b63b7e40d19353da1858a6aafc"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/ReservoirSizeTest.java",
+      "size": 4130,
+      "sha256": "706a9ed8da894020f5e4c287910f12ca446a3b5e6a1fb5f6b7793b4a57283b5b",
+      "git_blob": "98dfb8e5e6ec8d82bb0dd5a2d43a21bbeb382bcc"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/VarOptCorruptImageTest.java",
+      "size": 3977,
+      "sha256": "f05c597ef579d03df66084830327ff0fe4d3e3afb49209678729a280aeb87837",
+      "git_blob": "706b58d8523a48bf3db1d74a8d45844c9ad10f87"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/VarOptCrossLanguageTest.java",
+      "size": 8355,
+      "sha256": "f519bc30510afb45fb3af4bc34bc8e4c17479ff0dd7257c43cb253e2a477a890",
+      "git_blob": "06bece134b71deab5564677b664ca70360a77b0f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/VarOptItemsSamplesTest.java",
+      "size": 5729,
+      "sha256": "b19a947b14aed6fa0415266e89e7e538f4593581c5bd4464234395090949522f",
+      "git_blob": "036179ff5f4753c3cc33a6c787aa5c7c5bdb7354"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/VarOptItemsSketchTest.java",
+      "size": 25012,
+      "sha256": "b549865a52946418271ecec9d6f5453ca2d2974cb5fbf0d2ed5a8ffde826f72b",
+      "git_blob": "ddc229b0cb05b82a08b266b464608b9f9fa05ae5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/sampling/VarOptItemsUnionTest.java",
+      "size": 15885,
+      "sha256": "cbfbfbd21e2e2a826fa0431793c3aa2d04f93190ec6b03e2a11ee1d6e2b1dae0",
+      "git_blob": "e91b7959a12f0485944cee6a25756fa3f746476f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tdigest/SortTest.java",
+      "size": 4960,
+      "sha256": "6dd472e34f8327a1d0950b7eb3ad9742fb1af1e1f85cc5245112185a62db10af",
+      "git_blob": "f21ae861081d03f2722e13401813245dc523bffd"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tdigest/TDigestCrossLanguageTest.java",
+      "size": 5143,
+      "sha256": "5090b1c042cf3dd7084f029133ee120e90d168ae0615beb7db8c762935346675",
+      "git_blob": "65526ba969f08f5a15e4955f0084f15e974e7be0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tdigest/TDigestDoubleSerializationTest.java",
+      "size": 14754,
+      "sha256": "72e5e620b9af10292f1f06a2d4831f5a5f4b4a8ee7df9690cbb12efe3ef86b18",
+      "git_blob": "6d64d06a3c0cfaaf2ed2e197cacc5971650da9ff"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tdigest/TDigestDoubleTest.java",
+      "size": 15654,
+      "sha256": "6d0149cd18924bac314b7ed4473b972b597bd366656d83db87ef10d2a8f4ae4b",
+      "git_blob": "7d1d5937ab5049ead84e828f64e40395e9e87173"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/AnotBimplTest.java",
+      "size": 12073,
+      "sha256": "ec27df50291ca61b7b39376b4a7d9db68ce323a4d28c76c5ae7cb867000d75d8",
+      "git_blob": "41430828075d189e5111c9540f2e2242fef799b4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/BitPackingTest.java",
+      "size": 5243,
+      "sha256": "30dd5d9eba7f6e9b10d822dfe9df3a83b1f4dc2fc55653675ad86ca3f319a279",
+      "git_blob": "c155bef77ae6510a340eca14db770a77f584b716"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/CompactSketchTest.java",
+      "size": 26561,
+      "sha256": "0c3fc339b882c4d98d64aa5092e26dc9764b9a3027f7d8dd24e83dee44b77175",
+      "git_blob": "23a3d5e0d8f05371723a2b2b5aecb20218300709"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/CompactTrimTest.java",
+      "size": 8255,
+      "sha256": "a9efc39dfca551bed731e5a2e702af02edf616b84d27a8544cce8f7cb47a159e",
+      "git_blob": "6e9cfac3d1391aab4ed60af7c0d22b0ca477cc62"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ConcurrentDirectQuickSelectSketchTest.java",
+      "size": 25814,
+      "sha256": "3aa652a037b508b915dcfe796f9f3ba54cb99b4065a7e8205804b6681daf71c2",
+      "git_blob": "2cd474d81054efaff0561d9aed284a48eaa79ca1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ConcurrentHeapQuickSelectSketchTest.java",
+      "size": 25831,
+      "sha256": "811603de850bac5260e74318b95491ad57393c3762508075e81daf867aac1474",
+      "git_blob": "392e05d7958b7cec49d96398d57415e68a864460"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/CornerCaseThetaSetOperationsTest.java",
+      "size": 20664,
+      "sha256": "9d3209e5a1eac89c6d3a02136dc158f39c16b0a1722485d3608957a9e96ef4f4",
+      "git_blob": "29fba0ec9b84818ec6d8b4f21d43b4bc3cf35be6"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/DirectIntersectionTest.java",
+      "size": 25845,
+      "sha256": "a2a4b173fb57ad88a894857406e62d8b3409bea360f25a24bc46235e03ca928d",
+      "git_blob": "8347385ce1ba814b0b5ff3fd9500b8fda8ea7622"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/DirectQuickSelectSketchTest.java",
+      "size": 34781,
+      "sha256": "cb1eed32597bd4bd67951804167bc32d03f46dc97e14d50d11bd22531c3dd8ad",
+      "git_blob": "b01a996be412c94980dfc4f9d3631331116aa646"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/DirectUnionTest.java",
+      "size": 25953,
+      "sha256": "bc442658ee2ca944cf05e8487ed82669b2f2cc6a0d4daf929731c0c648463c7e",
+      "git_blob": "ec4a692003af8b38fba1b273d0a0d78313b12786"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/EmptyTest.java",
+      "size": 8472,
+      "sha256": "18b7befce489408316be724d1cd77438f34463a675c92aeae0071052ee86267a",
+      "git_blob": "f44bef9bb4cb0d0618241016380a81aea597f557"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ExamplesTest.java",
+      "size": 3762,
+      "sha256": "1b142ff0a1e2d746d37962e6e2eb4242b6279a77fa6d8489184c9e3da9203445",
+      "git_blob": "f621e84486e7909e5bd15837bbe5c1f8bbfa2d56"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/HeapAlphaSketchTest.java",
+      "size": 23715,
+      "sha256": "8d1fe412ab9352636b40b13227ed39e03a872cc2e6744b88509b3de20da889f2",
+      "git_blob": "08a833b2d1db9f663170b475b868e237ab325b38"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/HeapIntersectionTest.java",
+      "size": 18170,
+      "sha256": "8b3be626b6f12c5c851a1c4db5e8178e5aeff4ef121164c90ca9d93e937c7d9f",
+      "git_blob": "f1368b543782e24aa68c15a623b7df547fb25e0c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/HeapQuickSelectSketchTest.java",
+      "size": 23436,
+      "sha256": "1ffb7340e11fee952fb1d63bb6ed9e38ef0658b367982ea81ec65f1c0dd0bc42",
+      "git_blob": "5bf75c8aebe9492548a3f140b2b0b0a36eea3417"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/HeapUnionTest.java",
+      "size": 19604,
+      "sha256": "490ad324b34971e0b4078d70dda5bb42fc656ac2f249bb2be9a1790f71c644f5",
+      "git_blob": "f6effb255bf4bb71fc9f2f58fb551d835013c6b9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/HeapifyWrapSerVer3Test.java",
+      "size": 7790,
+      "sha256": "02dc25226dfc21da4dce999cb22b44cc66c49cd145c760fcacb1ae2149101eaa",
+      "git_blob": "4d7a5aa1c54edff870d98f37dd9df978904b730f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/IteratorTest.java",
+      "size": 3938,
+      "sha256": "155a43f0d9a617b8804dacbb509c2959a0069b6ec1618482e57d2e09667c2a39",
+      "git_blob": "9d9427c7832b16fb50d3510773f1a1480877be5e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/JaccardSimilarityTest.java",
+      "size": 9625,
+      "sha256": "40eb5ba4322d0cb8d6329b59df5585e75f5e3fe6a5b8a34c586d8eaa21646013",
+      "git_blob": "93272e7040875b12bc93c554b8e26af76ffb5486"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/PairwiseSetOperationsTest.java",
+      "size": 12460,
+      "sha256": "316b084fefc04a18f32fbe85748d8be9a29114e6d40fa669c656aaa58ade9ac9",
+      "git_blob": "06733d3fbb74ea19ce597b8ac0adabf28ffa04c2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/PreambleUtilTest.java",
+      "size": 8544,
+      "sha256": "d439c61e3c5fca57e9b62ec502ef955c91842ed1ccfcaa43a55dbbcb32f65f84",
+      "git_blob": "973c15438019d54169b10fac6e2520e42d850b0c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ReadOnlyMemorySegmentTest.java",
+      "size": 7517,
+      "sha256": "9acba4cdba8a3017f3d14edf7103431a404e6435833eaba0ae771308fac0818e",
+      "git_blob": "396d0f0cfb79b3c8a8cefe8ec22a6d029906b8e9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/SetOperationTest.java",
+      "size": 17536,
+      "sha256": "9c99576b5af9c95ac3536f61110cb5e5f735b9970096becfb6194e4148a9e8bf",
+      "git_blob": "8e09d77f0290e97953cae925a55e2f449952b89d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/SetOpsCornerCasesTest.java",
+      "size": 19878,
+      "sha256": "d162c9e37a1ced521913bc12f05cb1f0ace2da35a8b8fcea3ea94c72757ecef1",
+      "git_blob": "06bbd4dd758427ceaf5ba47bcb8c90683aac1ff3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/SingleItemSketchTest.java",
+      "size": 13784,
+      "sha256": "b14ec60c39504900a16803b023d5ffc503e693145464b9739d7a46b1ef03d8de",
+      "git_blob": "09a536274ddbfc41273f698cde58b061ac36e2e3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/SketchMiscTest.java",
+      "size": 5784,
+      "sha256": "e275d9dec9d9f3439b7bc4d4458216200445b435d7c742c2bae91b9a1c089e80",
+      "git_blob": "7665da7e0c8d83774495a3a449b7050c0b7e2d4a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/SketchTest.java",
+      "size": 16236,
+      "sha256": "95f615208b569e5222f73db37942aeea323a489071fb36e7be090a03df3ddde8",
+      "git_blob": "4917a374e14b2145238a76d98ceaac2e22ec43ad"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ThetaCorruptImageTest.java",
+      "size": 6289,
+      "sha256": "7d887171b4c1626599a9d6e2e9ac3fd9326175f2b4651f4913b6989bd74ab14d",
+      "git_blob": "e9374c1821b47530d8facfbff0d712747e5d9347"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ThetaSketchCrossLanguageTest.java",
+      "size": 10471,
+      "sha256": "377110c9e6fa27a6b643b8abad3b912db15fcd039a1d799c1b72e210c39a250b",
+      "git_blob": "8617cd6b914f112f35d6e1a506d4b4a9c7331283"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/ThetaUnionGetResultNonDestructiveTest.java",
+      "size": 4309,
+      "sha256": "f090e6fd15ae080f8afa1460f53a9b7da9c64b57cadeca7af29f935a994872e0",
+      "git_blob": "afef581f574c51b405333fb1a6d9c22d9182383a"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/UnionImplTest.java",
+      "size": 11833,
+      "sha256": "a1d1b75af867b76b424101ef0efb01ea0563a5f17257e5aa2100704a2d06618b",
+      "git_blob": "9187f6e4d7c846851783cff0ee650cb3aba524a0"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/theta/UpdateSketchTest.java",
+      "size": 8789,
+      "sha256": "7330dc2ae97f5c2dfbee94c55092632e317c695e580da72c7877383a5bf6a61e",
+      "git_blob": "7944e5c10a1b4bcfa217f7d7460bfcd619e87681"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/BinomialBoundsNTest.java",
+      "size": 6533,
+      "sha256": "05aadbf553f6c275aab2b55c126d4b0f9c3a0e4eb54581bcc95dbcf882bbe558",
+      "git_blob": "d3596922f3167da507cfd75c0e2b35720df8d4eb"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/BoundsOnRatiosInThetaSketchedSetsTest.java",
+      "size": 3789,
+      "sha256": "d54c07b6f81878e78f9227be005aaa0e0334c42a0c9ba537ff5e2afc281bebde",
+      "git_blob": "0ed9dcb14e2976ff51df55adf76a80fb3c5ac4f4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/BoundsOnRatiosInTupleSketchedSetsTest.java",
+      "size": 9187,
+      "sha256": "66ca8f0861a7e8ab36b602f1a9b1b02e564f2a415a475234bf788b22d65da8c9",
+      "git_blob": "3e50032dd3f81abd8a71293a497d568d64780301"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/HashOperationsTest.java",
+      "size": 6690,
+      "sha256": "c2a013b9614fa8b56f568cb45c9a34fb86bbac8db4e943bdb347c397968a7ce7",
+      "git_blob": "e13a0b498816fccfa1b7ff6caadd3c52adaf79d8"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/QuickSelectTest.java",
+      "size": 16322,
+      "sha256": "f38ca8e493534daa27da9417febc4642ee13d4e7165b45a168a44f05b5226b5c",
+      "git_blob": "f2d73b1e9ac70fb825b80ca2bfc712f7854a900d"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/thetacommon/ThetaUtilTest.java",
+      "size": 1470,
+      "sha256": "b303bd6c603547d34d6bd282c9991c779390e8c6e82206e17de703c0db3af435",
+      "git_blob": "3a4ed9574f536d69c85ef4258c32fed07ec58d53"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/CompactSketchWithDoubleSummaryTest.java",
+      "size": 7734,
+      "sha256": "30c18683a23cbb0c0505c8b46f6fda84f59bbb1fffe80f8867b45c5fbdec996e",
+      "git_blob": "5e9aaa911565b32a0d3c85b2f74da877ef85a998"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/IntegerSummary.java",
+      "size": 2492,
+      "sha256": "073670a4fca328209128ff63055882739f1cf2708fd5cb332dbb60b31b2b5f76",
+      "git_blob": "b9b6be2c488dfcd726d3b1f007c7896923e2144e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/IntegerSummaryDeserializer.java",
+      "size": 1134,
+      "sha256": "673df6a9656e5560e45dbf932dd8b47734b1f180caac24e4afe9bfa5743b8781",
+      "git_blob": "e4ec77dab181a14bb4b9d657404596e01b909440"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/IntegerSummaryFactory.java",
+      "size": 1060,
+      "sha256": "b1d7a1c62f545a5c04ba768033fa28f2c94244c6858674f3adedf8a872f0c35b",
+      "git_blob": "cc21ffffde8391fb2c81e1ae1cf57f0e6cd6b652"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/JaccardSimilarityTest.java",
+      "size": 17715,
+      "sha256": "13e95eb35791364c510856ff1260834894e342f2f76c0497c498ce07250cf69b",
+      "git_blob": "8c3739488288e3fd6bbb642a2d8ef75fb6fef867"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/MiscTest.java",
+      "size": 3193,
+      "sha256": "95e05a853c87ebb78f331baa53818c2e13914929d032b3f7d123cd7ae0287bae",
+      "git_blob": "8fb24edca56c958f88fb8d0146778c0e7ee5544b"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/ReadOnlyMemorySegmentTest.java",
+      "size": 4985,
+      "sha256": "60b61e9c376c24a8ad505061ffd94190edaea16dd222fc9d72f2db40908cc7f7",
+      "git_blob": "557133b23787f067257f763bba6ac00d25b92601"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/SerializerDeserializerTest.java",
+      "size": 2292,
+      "sha256": "97638e83083d873c327a290a375d1a649f26f8cce5b5652717d0876498d92866",
+      "git_blob": "251d622a7f3d8ffcd08dcee461a7472fc24effcc"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/ThetaSeedHashTest.java",
+      "size": 3721,
+      "sha256": "14187972f272d6a5e69d3ea82fff6787743faebdf1c08c23e98687c0017b1e45",
+      "git_blob": "956079f0700aa99a4d9efa83a1afb741ad7e7782"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/TupleCorruptImageTest.java",
+      "size": 6198,
+      "sha256": "d60a490f2bd21894499eb1b05d9f36079fbceb497efd47351725894a037bc6cd",
+      "git_blob": "853a001f52fbd5fa4cd212ac2bafce368931775f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/TupleCrossLanguageTest.java",
+      "size": 5641,
+      "sha256": "8f738e566d65402125ba563e23e0afb676ab48cc3ad1b2e1f7a6ca4eb4b3acd1",
+      "git_blob": "895213499f0f0edb2d8e45a2ed398da8af322c74"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/TupleCustomSeedTest.java",
+      "size": 12508,
+      "sha256": "07913f38f7dc4ca72c779aa8d2a3f2ce65df1f847225f2765d0ee56c0cad93ab",
+      "git_blob": "03fb2f48ceb00650204aa7ec6dc3bff7c931f19c"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/TupleExamples2Test.java",
+      "size": 11324,
+      "sha256": "5dff0ef1718d84ccd9346daf173a4a1afbbbc189976deeb88c8faa137274a6bd",
+      "git_blob": "8d8151187c695c760a2a0810e4a6ab3b76271262"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/TupleExamplesTest.java",
+      "size": 7202,
+      "sha256": "c737d2cab8ff551269d879bfb93b47a87616b686eb5630ab5f029021b7828fcb",
+      "git_blob": "72668362684cb3305da58a27d9dcb477865c85d5"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/adouble/AdoubleAnotBTest.java",
+      "size": 10511,
+      "sha256": "4e3b039a79c7f3c1f4476ca420d2ddb940601bd99c7adcd4a5c6e5360bcc42c4",
+      "git_blob": "1c4f8d310ee54cceffbceb489237255c45c4bbd1"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/adouble/AdoubleIntersectionTest.java",
+      "size": 12861,
+      "sha256": "16f341c208a645c40f77c57949c8fe31622a8349989f4c2a357079e8916e9d5f",
+      "git_blob": "c05263ddd5d5d0d005bb7b5e6f42d71ccf269348"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/adouble/AdoubleTest.java",
+      "size": 16209,
+      "sha256": "b65db279b956bf4744a188572ef77725ca92e94b457e1893056ccdb56f904ffe",
+      "git_blob": "6637d404368357ac18e80336b7bad6bfe37cd256"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/adouble/AdoubleUnionTest.java",
+      "size": 6968,
+      "sha256": "e6408755ce4b8eb8a870467deed5542baaa41fdd928ac73511a1793324cb2c62",
+      "git_blob": "daf6187f9c627435663e4c38ea38c554e24784ad"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/adouble/FilterTest.java",
+      "size": 6449,
+      "sha256": "9253a90b63131c9214a361559476de1808be3cf89c5573b750fd350ae6191ae8",
+      "git_blob": "c6939e16b59916178d07566558ded6c82419cc40"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/aninteger/CornerCaseTupleSetOperationsTest.java",
+      "size": 27758,
+      "sha256": "e6cbed7940a4e2bf219e99b9577c3292e93391cc89aab4b63cf381c74259ea05",
+      "git_blob": "56dd735955178160601ac823fa1bdae17f0fecf3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/aninteger/EngagementTest.java",
+      "size": 5661,
+      "sha256": "a171256972c372cb5fcb221f3b9917b0732783cc94dd974f9113724fc1ebde12",
+      "git_blob": "1afb00f67ffa28ac19c15d018bb9c68f72753639"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/aninteger/IntegerSketchTest.java",
+      "size": 4677,
+      "sha256": "d4ce39412e31d159ed91a6b62eb347529b02e8bfef0bd3872d31b61030587138",
+      "git_blob": "d5b23d5cce0bc94e11df6f9c87e14489a0101d02"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/aninteger/MikhailsBugTupleTest.java",
+      "size": 3265,
+      "sha256": "964b877cd70d310d81593c1a0e79c6017ed17d1be208b5cd8f38754bad39e5cf",
+      "git_blob": "060d8f3782f9b0757e18a9edb7064cf29b0d0824"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/aninteger/ParameterLeakageTest.java",
+      "size": 5995,
+      "sha256": "19c6014f676a9dad3b090e9708d0dd5527336e94ce8cb8f2ad6d95a138e0169c",
+      "git_blob": "85ca496ee2dfe74fd2b7c4625972c98bfadf1064"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/AodCorruptImageTest.java",
+      "size": 7317,
+      "sha256": "a090169e33642c7c7d7dfd2061e3ceadca34341534aab6abe79825d150e1db69",
+      "git_blob": "9dfa9b6210e195eb79435cf738465e448c6ce6cb"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/AodSketchCrossLanguageTest.java",
+      "size": 7406,
+      "sha256": "4e874dee261f4dd7820d7ab0e1282723af9a255320c1fb9661a7ed56cf3d81bb",
+      "git_blob": "deb5f5045aa5f3da7180cfe3d1fc65b760a73663"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesAnotBTest.java",
+      "size": 13928,
+      "sha256": "e9fe0e68ef30d8fda9d293914f7bdc44ea39c2b274cbc720ef4da306a7fd849c",
+      "git_blob": "734c413f7a44b68afec68459abd0b80809c21a2f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesCompactSketchTest.java",
+      "size": 5879,
+      "sha256": "b31794f5dc6bdcaca547cc965a5f5eadc28060c4db71e7294022e2b6fc1f311e",
+      "git_blob": "bfde5099b124e8355bd06a1077c3997e1f87ef5f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesIntersectionTest.java",
+      "size": 13687,
+      "sha256": "a4e5bebbf637cdcd36aead878456e88b95c53a328a356c31be3dd1b133bfd78e",
+      "git_blob": "3871bbc8799574fd2da8fef905e555a3bc5084d9"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesQuickSelectSketchTest.java",
+      "size": 6090,
+      "sha256": "871bbbc76b774c135195cd1d855723324739f6a0ae9c77fbfc00c66507af8f59",
+      "git_blob": "1f13c9ee0880394b831bb4dc4b0fb22c60bbc387"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/ArrayOfDoublesUnionTest.java",
+      "size": 21863,
+      "sha256": "1c8b80205484ce5ce009fe1ff9e87f67de94e9cb865591e55d899edff07e9f6e",
+      "git_blob": "ef961aa81ef804be4a019e33bc3c458c30f3588f"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/CornerCaseArrayOfDoublesSetOperationsTest.java",
+      "size": 23893,
+      "sha256": "6aa7ba35e7417e781a183c3f9066c7d08340c433d6dde6f0c7157ae048837343",
+      "git_blob": "02c56fd96f529ef1bb8914b15a914ad4bc2b3998"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesCompactSketchTest.java",
+      "size": 6005,
+      "sha256": "4827cb580db798b50d7289f9bd1e4d5f3a2f5e63708a48679a5e00704f4a09c2",
+      "git_blob": "19b45edd4e2e2d5bdfa9b5b0517ac57374ce009e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/DirectArrayOfDoublesQuickSelectSketchTest.java",
+      "size": 11447,
+      "sha256": "ae18409681d7031eede0822a37b3492cf7052c697eda50da6dfd7b8725bdbc73",
+      "git_blob": "f9783a58bf8e91b60dc1a6f2cf5377070eee0be4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesCompactSketchTest.java",
+      "size": 9398,
+      "sha256": "a1c9a26b6af260c6858902b92e2ae37fc43164c43786fc96a612efd7221fa3b7",
+      "git_blob": "f01577b86ea5665ddad86cedcb1c86dca90d92a4"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/arrayofdoubles/HeapArrayOfDoublesQuickSelectSketchTest.java",
+      "size": 10083,
+      "sha256": "5aa9a6848a8bcd89b4098caf0a9044227f2f0c278cd3852524ebed27d2e7b66a",
+      "git_blob": "9c31e88e74cbbbc22b8eec6633834a78e8afd9a2"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/strings/AosSketchCrossLanguageTest.java",
+      "size": 12477,
+      "sha256": "a6cc1ff5e6b1bca92641dd6dac0812949ca826415cd9f72f5682798043f25da5",
+      "git_blob": "40bfe057dd8fb8bf5db54e55849b84aa73f6bfec"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSketchTest.java",
+      "size": 4844,
+      "sha256": "8b71320a6ef152275d284a71e7aaba87c70f3782697f883066c8675e4bb031e3",
+      "git_blob": "e2f4b794060f0bdf18e009c7aabfaa41f2013fd3"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummaryTest.java",
+      "size": 3112,
+      "sha256": "fd99aaad90d13beaddcd03356f947b4805d671dfd5ec30c65c8d8a4008a19e0b",
+      "git_blob": "65ca2f085e0f58ac80ce8d71d505d52055bc417e"
+    },
+    {
+      "path": "src/test/java/org/apache/datasketches/tuple/strings/ArrayOfStringsSummary_Issue699.java",
+      "size": 2915,
+      "sha256": "803b7719cfdb6cc532554aea173abd4b098dcb02bb9b9f9807bf0badb17cc69a",
+      "git_blob": "7e68fc1defbc1f0ae4e41da7e0507ce549fba815"
+    },
+    {
+      "path": "src/test/resources/ArrayOfDoublesUnion_v0.9.1.sk",
+      "size": 131104,
+      "sha256": "ef6ef8bf1c853a645fb787e0cdfa024a6ca72370fb84fe2fc03d222b75e71702",
+      "git_blob": "b8e3d5812b046d0391fe3f70bc502e90ec3ad488"
+    },
+    {
+      "path": "src/test/resources/CompactSketchWithDoubleSummary4K_serialVersion1.sk",
+      "size": 69688,
+      "sha256": "4681341c63cada11211ca7675970a42f512b04d97440d4cdf06749429531e40d",
+      "git_blob": "de5fa5e5f1e95a807b0fc54661fee7e525cabb6c"
+    },
+    {
+      "path": "src/test/resources/GettysburgAddress.txt",
+      "size": 1541,
+      "sha256": "e89f7c1340a7f8222fd67cdb16a49daf71bebfb49b2e6ccdb5ab409c4651c4ef",
+      "git_blob": "3969d176608390d29de78f380e892cc675b76804"
+    },
+    {
+      "path": "src/test/resources/Qk128_n1000_v0.3.0.sk",
+      "size": 4136,
+      "sha256": "e03da078f2d4ed00203ab2ec7808efce454f50fdbe41c1865cddfd54a5650967",
+      "git_blob": "72db1047bfe938214d439ca9e0478a983be7288b"
+    },
+    {
+      "path": "src/test/resources/Qk128_n1000_v0.6.0.sk",
+      "size": 3936,
+      "sha256": "85e357d9eb73186a71d3c26f512e294dd4f089d0e01e05bc26502d4482013276",
+      "git_blob": "dd6e72d06ea09cf3905b94b987e3e07ad3a3939e"
+    },
+    {
+      "path": "src/test/resources/Qk128_n1000_v0.8.0.sk",
+      "size": 3936,
+      "sha256": "2059dab32e56f40285c651d4ab8e2c20f845f0df0a378ea929c3889fb38717e0",
+      "git_blob": "f9166bbcf2cb79ab9b05a30166465dddfaae0380"
+    },
+    {
+      "path": "src/test/resources/Qk128_n1000_v0.8.3.sk",
+      "size": 3936,
+      "sha256": "60b7219130cfc24bacb5c1afb05caeb01529a4011ce5d00632705ac1e1a7b399",
+      "git_blob": "6cadb2d5b0e593d2739b3d872af2ddf5f910f38d"
+    },
+    {
+      "path": "src/test/resources/Qk128_n50_v0.3.0.sk",
+      "size": 552,
+      "sha256": "48b0265672f6691ce921cedd83a58bdb1bc06707f0c5d322bd1c2f72cf82af4c",
+      "git_blob": "4667596fa05b36e56ceb25625d3222b084ee31d1"
+    },
+    {
+      "path": "src/test/resources/Qk128_n50_v0.6.0.sk",
+      "size": 432,
+      "sha256": "003d493d5f68a8f58ba470122ddc6bad1bb7b8b9ccd775e55870dc38ce1f3378",
+      "git_blob": "a2334e40d9e8d3515e2179c0d17ccde6487d49fb"
+    },
+    {
+      "path": "src/test/resources/Qk128_n50_v0.8.0.sk",
+      "size": 432,
+      "sha256": "b3b33e8ce4fa257fedc04a0d610d225d5dc21bad27312ae29004c08f6505bde7",
+      "git_blob": "83cc21dd1922e4fba420daf258586590982d20cc"
+    },
+    {
+      "path": "src/test/resources/Qk128_n50_v0.8.3.sk",
+      "size": 432,
+      "sha256": "9a61f654acc358adf9af63a90150f1df438254f6a4f59c234dfb48a0ccde131e",
+      "git_blob": "597cd60d76515ddcc40877875e1f38fe0323be52"
+    },
+    {
+      "path": "src/test/resources/TupleWithTestIntegerSummary4kTrimmedSerVer2.sk",
+      "size": 49169,
+      "sha256": "81411c89a944d8453a8c04086e7b52eeb7a6aa048bf9ef5aa556bab7557f83f7",
+      "git_blob": "41374f74b026661e994cb56386be1e91b7360243"
+    },
+    {
+      "path": "src/test/resources/kll_sketch_double_one_item_v1.sk",
+      "size": 48,
+      "sha256": "ab7bce4b26da5f07fb8c5de46e7c708fcb251e6ed8ad37f4d848bf4b40e32ae8",
+      "git_blob": "358b60384bb7c2e5867348bb67e973869e67582d"
+    },
+    {
+      "path": "src/test/resources/kll_sketch_float_one_item_v1.sk",
+      "size": 36,
+      "sha256": "d7dd461561ef6b18f9059b3c08715cbb5cf911f74e5d206246bc9240922ccd89",
+      "git_blob": "45077025356cbd77aec929f2ab6a426d1f4cc4d6"
+    },
+    {
+      "path": "src/test/resources/tdigest_ref_k100_n10000_double.sk",
+      "size": 976,
+      "sha256": "bfcd56977acab886cbe1ff42ef6beda2f0be0e67bf720909b1531532bc83e817",
+      "git_blob": "f6f4510ed714e80d76af612ce028222e703068cb"
+    },
+    {
+      "path": "src/test/resources/tdigest_ref_k100_n10000_float.sk",
+      "size": 502,
+      "sha256": "dc8914f722680602eaefa47d9afe3cf4f1b6445ca87573d8542ce4c73a761477",
+      "git_blob": "16d798111318e3bcd42b4fe5fc5f308ba3928a14"
+    },
+    {
+      "path": "src/test/resources/testng.xml",
+      "size": 2149,
+      "sha256": "08d3faaacad0b411d3835f9a6c712914aee03d7f30b6e9dfd28415703e2a24c7",
+      "git_blob": "480a3cedee295030c3524243984b312f27aa7567"
+    },
+    {
+      "path": "tools/ManualJavadocsDeploy.sh",
+      "size": 1529,
+      "sha256": "ebb07548b60c92350f65980aefb824350bfbd9449590e2aeabff57bbfb53be88",
+      "git_blob": "0d7898a1e2f896f1be9a33478d0d45cdef553c68"
+    },
+    {
+      "path": "tools/download_serialization_test_data.sh",
+      "size": 4359,
+      "sha256": "ceb84995149ef12d5a587148562d49ebf0af610074e58c92ef48dcac2cf53d8b",
+      "git_blob": "caa8f4239fd712bfbdc9f599fad96d793604a92a"
+    },
+    {
+      "path": "tools/mvn_clean_install_or_deploy.sh",
+      "size": 1586,
+      "sha256": "f52159c744e14b385c8e2e347ed4665df056c088055ada16c7e1a51b716f66fa",
+      "git_blob": "f311acea4f9d2d2e4bb7a3074c8b5198a830becf"
+    }
+  ]
+}

@@ -1,0 +1,45 @@
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#    http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+
+FROM golang:1.24.11-alpine
+ENV CGO_ENABLED=0
+RUN apk add --no-cache bash curl make tar
+
+WORKDIR /github.com/apache/datasketches-go/
+COPY go.mod .
+COPY go.sum .
+COPY Makefile .
+COPY scripts ./scripts
+COPY common ./common
+COPY count ./count
+COPY cpc ./cpc
+COPY examples ./examples
+COPY filters ./filters
+COPY frequencies ./frequencies
+COPY hll ./hll
+COPY internal ./internal
+COPY kll ./kll
+COPY req ./req
+COPY sampling ./sampling
+COPY tdigest ./tdigest
+COPY theta ./theta
+COPY tuple ./tuple
+
+RUN go mod download
+RUN go build -v ./...
+RUN make download-snapshots
+
+CMD ["make", "test"]

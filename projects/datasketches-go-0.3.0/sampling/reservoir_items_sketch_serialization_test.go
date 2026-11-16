@@ -1,0 +1,380 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package sampling
+
+import (
+	"encoding/binary"
+	"fmt"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/apache/datasketches-go/common"
+	"github.com/apache/datasketches-go/internal"
+	"github.com/apache/datasketches-go/internal/testutil"
+)
+
+// Note: Go only has generic ReservoirItemsSketch[T], no separate ReservoirLongsSketch.
+// See https://github.com/apache/datasketches-go/issues/90 for context.
+func TestGenerateGoSnapshots(t *testing.T) {
+	if len(os.Getenv(internal.DSketchTestGenerateGo)) == 0 {
+		t.Skipf("%s not set", internal.DSketchTestGenerateGo)
+	}
+
+	err := os.MkdirAll(internal.GoPath, os.ModePerm)
+	assert.NoError(t, err)
+
+	exactNValues := []int{1, 10, 32, 100, 128}
+	samplingKValues := []int{32, 64, 128}
+
+	// ========== ReservoirItemsSketch<Long> (9 files) ==========
+	t.Run("items_long", func(t *testing.T) {
+		// Empty
+		t.Run("empty_k128", func(t *testing.T) {
+			sketch, _ := NewReservoirItemsSketch[int64](128)
+			data, _ := sketch.ToSlice(common.ItemSketchLongSerDe{})
+			assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_long_empty_k128_go.sk", internal.GoPath), data, 0644))
+		})
+		// Exact
+		for _, n := range exactNValues {
+			n := n
+			t.Run(fmt.Sprintf("exact_n%d_k128", n), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[int64](128)
+				for i := int64(0); i < int64(n); i++ {
+					assert.NoError(t, sketch.Update(i))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchLongSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_long_exact_n%d_k128_go.sk", internal.GoPath, n), data, 0644))
+			})
+		}
+		// Sampling
+		for _, k := range samplingKValues {
+			k := k
+			t.Run(fmt.Sprintf("sampling_n1000_k%d", k), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[int64](k)
+				for i := int64(0); i < 1000; i++ {
+					assert.NoError(t, sketch.Update(i))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchLongSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_long_sampling_n1000_k%d_go.sk", internal.GoPath, k), data, 0644))
+			})
+		}
+	})
+
+	// ========== ReservoirItemsSketch<Double> (9 files) ==========
+	t.Run("items_double", func(t *testing.T) {
+		// Empty
+		t.Run("empty_k128", func(t *testing.T) {
+			sketch, _ := NewReservoirItemsSketch[float64](128)
+			data, _ := sketch.ToSlice(common.ItemSketchDoubleSerDe{})
+			assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_double_empty_k128_go.sk", internal.GoPath), data, 0644))
+		})
+		// Exact
+		for _, n := range exactNValues {
+			n := n
+			t.Run(fmt.Sprintf("exact_n%d_k128", n), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[float64](128)
+				for i := 0; i < n; i++ {
+					assert.NoError(t, sketch.Update(float64(i)))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchDoubleSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_double_exact_n%d_k128_go.sk", internal.GoPath, n), data, 0644))
+			})
+		}
+		// Sampling
+		for _, k := range samplingKValues {
+			k := k
+			t.Run(fmt.Sprintf("sampling_n1000_k%d", k), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[float64](k)
+				for i := 0; i < 1000; i++ {
+					assert.NoError(t, sketch.Update(float64(i)))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchDoubleSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_double_sampling_n1000_k%d_go.sk", internal.GoPath, k), data, 0644))
+			})
+		}
+	})
+
+	// ========== ReservoirItemsSketch<String> (9 files) ==========
+	t.Run("items_string", func(t *testing.T) {
+		// Empty
+		t.Run("empty_k128", func(t *testing.T) {
+			sketch, _ := NewReservoirItemsSketch[string](128)
+			data, _ := sketch.ToSlice(common.ItemSketchStringSerDe{})
+			assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_string_empty_k128_go.sk", internal.GoPath), data, 0644))
+		})
+		// Exact
+		for _, n := range exactNValues {
+			n := n
+			t.Run(fmt.Sprintf("exact_n%d_k128", n), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[string](128)
+				for i := 0; i < n; i++ {
+					assert.NoError(t, sketch.Update(fmt.Sprintf("item%d", i)))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchStringSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_string_exact_n%d_k128_go.sk", internal.GoPath, n), data, 0644))
+			})
+		}
+		// Sampling
+		for _, k := range samplingKValues {
+			k := k
+			t.Run(fmt.Sprintf("sampling_n1000_k%d", k), func(t *testing.T) {
+				sketch, _ := NewReservoirItemsSketch[string](k)
+				for i := 0; i < 1000; i++ {
+					assert.NoError(t, sketch.Update(fmt.Sprintf("item%d", i)))
+				}
+				data, _ := sketch.ToSlice(common.ItemSketchStringSerDe{})
+				assert.NoError(t, os.WriteFile(fmt.Sprintf("%s/reservoir_items_string_sampling_n1000_k%d_go.sk", internal.GoPath, k), data, 0644))
+			})
+		}
+	})
+}
+
+// TestSerializationCompatibilityEmpty tests deserialization of an empty sketch.
+func TestSerializationCompatibilityEmpty(t *testing.T) {
+	filename := filepath.Join(internal.GoPath, "reservoir_items_long_empty_k128_go.sk")
+	data := testutil.ReadSnapshot(t, filename)
+
+	sketch, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+	assert.NoError(t, err)
+	assert.True(t, sketch.isEmpty())
+	assert.Equal(t, 128, sketch.K())
+	assert.Equal(t, int64(0), sketch.N())
+}
+
+// TestSerializationCompatibilityExact tests deserialization of sketches in exact mode.
+func TestSerializationCompatibilityExact(t *testing.T) {
+	testCases := []struct {
+		filename string
+		k        int
+		n        int64
+	}{
+		{"reservoir_items_long_exact_n1_k128_go.sk", 128, 1},
+		{"reservoir_items_long_exact_n10_k128_go.sk", 128, 10},
+		{"reservoir_items_long_exact_n32_k128_go.sk", 128, 32},
+		{"reservoir_items_long_exact_n100_k128_go.sk", 128, 100},
+		{"reservoir_items_long_exact_n128_k128_go.sk", 128, 128},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.filename, func(t *testing.T) {
+			filename := filepath.Join(internal.GoPath, tc.filename)
+			data := testutil.ReadSnapshot(t, filename)
+
+			sketch, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.k, sketch.K())
+			assert.Equal(t, tc.n, sketch.N())
+			assert.Equal(t, int(tc.n), sketch.NumSamples())
+		})
+	}
+}
+
+// TestSerializationCompatibilityWithSampling tests deserialization of sketches in sampling mode.
+func TestSerializationCompatibilityWithSampling(t *testing.T) {
+	testCases := []struct {
+		filename string
+		k        int
+		n        int64
+	}{
+		{"reservoir_items_long_sampling_n1000_k32_go.sk", 32, 1000},
+		{"reservoir_items_long_sampling_n1000_k64_go.sk", 64, 1000},
+		{"reservoir_items_long_sampling_n1000_k128_go.sk", 128, 1000},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.filename, func(t *testing.T) {
+			filename := filepath.Join(internal.GoPath, tc.filename)
+			data := testutil.ReadSnapshot(t, filename)
+
+			sketch, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+			assert.NoError(t, err)
+			assert.Equal(t, tc.k, sketch.K())
+			assert.Equal(t, tc.n, sketch.N())
+			assert.Equal(t, tc.k, sketch.NumSamples()) // Only k items kept after sampling
+		})
+	}
+}
+
+// TestSerializationRoundTrip tests serialization and deserialization round-trip.
+func TestSerializationRoundTrip(t *testing.T) {
+	// Create sketch and add items
+	sketch, _ := NewReservoirItemsSketch[int64](10)
+	for i := int64(1); i <= 5; i++ {
+		assert.NoError(t, sketch.Update(i))
+	}
+
+	// Serialize
+	data, err := sketch.ToSlice(common.ItemSketchLongSerDe{})
+	assert.NoError(t, err)
+
+	// Verify preamble structure (Java-compatible format)
+	// Byte 0: 0xC0 (ResizeFactor X8) | 0x02 (preamble_longs) = 0xC2
+	assert.Equal(t, byte(0xC2), data[0])                                  // preamble_longs = 2 for non-empty + ResizeFactor bits
+	assert.Equal(t, byte(2), data[1])                                     // serVer = 2
+	assert.Equal(t, byte(internal.FamilyEnum.ReservoirItems.Id), data[2]) // familyID
+
+	// Deserialize and verify
+	restored, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+	assert.NoError(t, err)
+	assert.Equal(t, sketch.K(), restored.K())
+	assert.Equal(t, sketch.N(), restored.N())
+	assert.Equal(t, sketch.Samples(), restored.Samples())
+}
+
+// TestReservoirItemsSketch_JavaCompat tests deserialization of Java-generated reservoir sketch files.
+// These tests verify cross-language compatibility with files generated by datasketches-java.
+func TestReservoirItemsSketch_JavaCompat(t *testing.T) {
+	// Test cases based on Java PR #714: ReservoirCrossLanguageTest.java (36 total files)
+	testCases := []struct {
+		name     string
+		filename string
+		k        int
+		n        int64
+		isEmpty  bool
+	}{
+		// ReservoirItemsSketch<Long> - Empty (1)
+		{"items_long_empty_k128", "reservoir_items_long_empty_k128_java.sk", 128, 0, true},
+
+		// ReservoirItemsSketch<Long> - Exact (5)
+		{"items_long_exact_n1_k128", "reservoir_items_long_exact_n1_k128_java.sk", 128, 1, false},
+		{"items_long_exact_n10_k128", "reservoir_items_long_exact_n10_k128_java.sk", 128, 10, false},
+		{"items_long_exact_n32_k128", "reservoir_items_long_exact_n32_k128_java.sk", 128, 32, false},
+		{"items_long_exact_n100_k128", "reservoir_items_long_exact_n100_k128_java.sk", 128, 100, false},
+		{"items_long_exact_n128_k128", "reservoir_items_long_exact_n128_k128_java.sk", 128, 128, false},
+
+		// ReservoirItemsSketch<Long> - Sampling (3)
+		{"items_long_sampling_n1000_k32", "reservoir_items_long_sampling_n1000_k32_java.sk", 32, 1000, false},
+		{"items_long_sampling_n1000_k64", "reservoir_items_long_sampling_n1000_k64_java.sk", 64, 1000, false},
+		{"items_long_sampling_n1000_k128", "reservoir_items_long_sampling_n1000_k128_java.sk", 128, 1000, false},
+
+		// ReservoirItemsSketch<Double> - Empty (1)
+		{"items_double_empty_k128", "reservoir_items_double_empty_k128_java.sk", 128, 0, true},
+
+		// ReservoirItemsSketch<Double> - Exact (5)
+		{"items_double_exact_n1_k128", "reservoir_items_double_exact_n1_k128_java.sk", 128, 1, false},
+		{"items_double_exact_n10_k128", "reservoir_items_double_exact_n10_k128_java.sk", 128, 10, false},
+		{"items_double_exact_n32_k128", "reservoir_items_double_exact_n32_k128_java.sk", 128, 32, false},
+		{"items_double_exact_n100_k128", "reservoir_items_double_exact_n100_k128_java.sk", 128, 100, false},
+		{"items_double_exact_n128_k128", "reservoir_items_double_exact_n128_k128_java.sk", 128, 128, false},
+
+		// ReservoirItemsSketch<Double> - Sampling (3)
+		{"items_double_sampling_n1000_k32", "reservoir_items_double_sampling_n1000_k32_java.sk", 32, 1000, false},
+		{"items_double_sampling_n1000_k64", "reservoir_items_double_sampling_n1000_k64_java.sk", 64, 1000, false},
+		{"items_double_sampling_n1000_k128", "reservoir_items_double_sampling_n1000_k128_java.sk", 128, 1000, false},
+
+		// ReservoirItemsSketch<String> - Empty (1)
+		{"items_string_empty_k128", "reservoir_items_string_empty_k128_java.sk", 128, 0, true},
+
+		// ReservoirItemsSketch<String> - Exact (5)
+		{"items_string_exact_n1_k128", "reservoir_items_string_exact_n1_k128_java.sk", 128, 1, false},
+		{"items_string_exact_n10_k128", "reservoir_items_string_exact_n10_k128_java.sk", 128, 10, false},
+		{"items_string_exact_n32_k128", "reservoir_items_string_exact_n32_k128_java.sk", 128, 32, false},
+		{"items_string_exact_n100_k128", "reservoir_items_string_exact_n100_k128_java.sk", 128, 100, false},
+		{"items_string_exact_n128_k128", "reservoir_items_string_exact_n128_k128_java.sk", 128, 128, false},
+
+		// ReservoirItemsSketch<String> - Sampling (3)
+		{"items_string_sampling_n1000_k32", "reservoir_items_string_sampling_n1000_k32_java.sk", 32, 1000, false},
+		{"items_string_sampling_n1000_k64", "reservoir_items_string_sampling_n1000_k64_java.sk", 64, 1000, false},
+		{"items_string_sampling_n1000_k128", "reservoir_items_string_sampling_n1000_k128_java.sk", 128, 1000, false},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			filepath := filepath.Join(internal.JavaPath, tc.filename)
+
+			data := testutil.ReadSnapshot(t, filepath)
+
+			sketch, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+			assert.NoError(t, err)
+
+			assert.Equal(t, tc.k, sketch.K(), "k mismatch")
+			assert.Equal(t, tc.n, sketch.N(), "n mismatch")
+			assert.Equal(t, tc.isEmpty, sketch.isEmpty(), "isEmpty mismatch")
+
+			if !tc.isEmpty {
+				samples := sketch.Samples()
+				if tc.n <= int64(tc.k) {
+					// Exact mode: should have exactly n samples
+					assert.Equal(t, int(tc.n), len(samples), "sample count mismatch in exact mode")
+				} else {
+					// Sampling mode: should have exactly k samples
+					assert.Equal(t, tc.k, len(samples), "sample count mismatch in sampling mode")
+				}
+			}
+		})
+	}
+}
+
+func TestReservoirItemsSketchLegacySerVerEmpty(t *testing.T) {
+	data := make([]byte, 8)
+	data[0] = 0xC0 | preambleIntsEmpty
+	data[1] = 1 // legacy serVer
+	data[2] = byte(internal.FamilyEnum.ReservoirItems.Id)
+	data[3] = flagEmpty
+	binary.LittleEndian.PutUint16(data[4:], 0x5000) // p=10, i=0 => k=1024
+
+	sketch, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+	assert.NoError(t, err)
+	assert.True(t, sketch.isEmpty())
+	assert.Equal(t, 1024, sketch.K())
+	assert.Equal(t, ResizeX8, sketch.rf)
+}
+
+func TestReservoirItemsSketchDeserializationErrors(t *testing.T) {
+	t.Run("BadSerVer", func(t *testing.T) {
+		data := make([]byte, 8)
+		data[0] = 0xC0 | preambleIntsEmpty
+		data[1] = 99 // invalid ser ver
+		data[2] = byte(internal.FamilyEnum.ReservoirItems.Id)
+		data[3] = flagEmpty
+		binary.LittleEndian.PutUint32(data[4:], 100)
+
+		_, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "version")
+	})
+
+	t.Run("BadFamily", func(t *testing.T) {
+		data := make([]byte, 8)
+		data[0] = 0xC0 | preambleIntsEmpty
+		data[1] = reservoirItemsSketchSerialVersion
+		data[2] = 99 // invalid family ID
+		data[3] = flagEmpty
+		binary.LittleEndian.PutUint32(data[4:], 100)
+
+		_, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "family")
+	})
+
+	t.Run("BadPreLongs", func(t *testing.T) {
+		data := make([]byte, 8)
+		data[0] = 0xC0 | 5 // invalid preamble longs
+		data[1] = reservoirItemsSketchSerialVersion
+		data[2] = byte(internal.FamilyEnum.ReservoirItems.Id)
+		data[3] = flagEmpty
+		binary.LittleEndian.PutUint32(data[4:], 100)
+
+		_, err := NewReservoirItemsSketchFromSlice[int64](data, common.ItemSketchLongSerDe{})
+		assert.Error(t, err)
+		assert.Contains(t, err.Error(), "preamble")
+	})
+}

@@ -1,0 +1,901 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+Licensed to the Apache Software Foundation (ASF) under one
+or more contributor license agreements.  See the NOTICE file
+distributed with this work for additional information
+regarding copyright ownership.  The ASF licenses this file
+to you under the Apache License, Version 2.0 (the
+"License"); you may not use this file except in compliance
+with the License.  You may obtain a copy of the License at
+
+  http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing,
+software distributed under the License is distributed on an
+"AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+KIND, either express or implied.  See the License for the
+specific language governing permissions and limitations
+under the License.
+-->
+
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+                             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+
+  <modelVersion>4.0.0</modelVersion>
+
+  <groupId>org.apache.datasketches</groupId>
+  <artifactId>datasketches-java</artifactId>
+  <version>9.1.0</version>
+  <packaging>jar</packaging>
+
+  <name>${project.artifactId}</name>
+  <description>Core sketch algorithms used alone and by other Java repositories in the Apache DataSketches Project.</description>
+  <url>https://datasketches.apache.org/</url>
+  <inceptionYear>2015</inceptionYear>
+
+  <licenses>
+    <license>
+      <name>Apache-2.0</name>
+      <url>https://www.apache.org/licenses/LICENSE-2.0.txt</url>
+      <distribution>repo</distribution>
+    </license>
+  </licenses>
+
+  <mailingLists>
+    <mailingList>
+      <name>DataSketches Developers</name>
+      <subscribe>dev-subscribe@datasketches.apache.org</subscribe>
+      <unsubscribe>dev-unsubscribe@datasketches.apache.org</unsubscribe>
+      <post>dev@datasketches.apache.org</post>
+      <archive>https://mail-archives.apache.org/mod_mbox/datasketches-dev</archive>
+    </mailingList>
+    <mailingList>
+      <name>DataSketches Users</name>
+      <subscribe>users-subscribe@datasketches.apache.org</subscribe>
+      <unsubscribe>users-unsubscribe@datasketches.apache.org</unsubscribe>
+      <post>users@datasketches.apache.org</post>
+      <archive>https://mail-archives.apache.org/mod_mbox/datasketches-user</archive>
+    </mailingList>
+  </mailingLists>
+
+  <scm>
+    <connection>scm:git:ssh://git@github.com/apache/${project.artifactId}.git</connection>
+    <developerConnection>scm:git:ssh://git@github.com/apache/${project.artifactId}.git</developerConnection>
+    <url>https://github.com/apache/${project.artifactId}</url>
+    <tag>HEAD</tag>
+  </scm>
+
+  <distributionManagement>
+    <repository>
+      <id>apache.releases.https</id>
+      <name>Apache Release Distribution Repository</name>
+      <url>https://repository.apache.org/service/local/staging/deploy/maven2</url>
+    </repository>
+    <snapshotRepository>
+      <id>apache.snapshots.https</id>
+      <name>Apache Development Snapshot Repository</name>
+      <url>https://repository.apache.org/content/repositories/snapshots</url>
+    </snapshotRepository>
+  </distributionManagement>
+
+  <issueManagement>
+    <system>GitHub</system>
+    <url>https://github.com/apache/${project.artifactId}/issues</url>
+  </issueManagement>
+
+  <developers>
+    <developer>
+      <name>The Apache DataSketches Team</name>
+      <email>dev@datasketches.apache.org</email>
+      <url>https://datasketches.apache.org</url>
+      <organization>Apache Software Foundation</organization>
+      <organizationUrl>http://www.apache.org</organizationUrl>
+    </developer>
+  </developers>
+
+  <repositories>
+    <repository>
+      <id>apache.snapshots</id>
+      <name>Apache Snapshot Repository</name>
+      <url>https://repository.apache.org/content/groups/snapshots</url>
+      <releases>
+        <enabled>false</enabled>
+      </releases>
+      <snapshots>
+        <enabled>true</enabled>
+      </snapshots>
+    </repository>
+    <repository>
+      <id>apache</id>
+      <name>Apache Releases Repository</name>
+      <url>https://repository.apache.org/content/groups/public</url>
+      <releases>
+        <enabled>true</enabled>
+      </releases>
+      <snapshots>
+        <enabled>false</enabled>
+      </snapshots>
+    </repository>
+  </repositories>
+
+  <properties>
+    <!-- Maven properties -->
+    <maven.version>3.9.12</maven.version>
+    <project.build.outputTimestamp>2026-01-01T00:00:00Z</project.build.outputTimestamp>
+    <maven.build.timestamp.format>yyyy-MM-dd'T'HH-mm-ss'Z'</maven.build.timestamp.format>
+
+    <!-- Compiler properties -->
+    <java.version>25</java.version>
+    <maven.compiler.release>${java.version}</maven.compiler.release>
+    <maven.compiler.showWarnings>true</maven.compiler.showWarnings>
+
+    <!-- Test Code Dependencies -->
+    <testng.version>7.12.0</testng.version>
+    <org-slf4j.version>2.0.12</org-slf4j.version> <!-- used by TestNG -->
+    <!-- these are TestNG groups used for excluding / including groups of tests. See profiles section. -->
+    <testng.generate_java_files>generate_java_files</testng.generate_java_files>
+    <testng.check_java_files>check_java_files</testng.check_java_files>
+    <testng.check_cpp_files>check_cpp_files</testng.check_cpp_files>
+    <testng.check_go_files>check_go_files</testng.check_go_files>
+    <testng.check_rust_files>check_rust_files</testng.check_rust_files>
+    <!-- special groups -->
+    <testng.check_CL_binaries>check_CL_binary_files</testng.check_CL_binaries>
+    <testng.check_cpp_historicals>check_cpp_historical_files</testng.check_cpp_historicals>
+    <!-- Language Groups -->
+    <testng.check_java_cpp>${testng.generate_java_files},${testng.check_java_files},${testng.check_cpp_files}</testng.check_java_cpp>
+    <testng.check_go_rust>${testng.check_go_files},${testng.check_rust_files}</testng.check_go_rust>
+    <testng.check_specials>${testng.check_CL_binaries},${testng.check_cpp_historicals}</testng.check_specials>
+    <!-- All Languages & types -->
+    <testng.all_groups>${testng.check_java_cpp},${testng.check_go_rust},${testng.check_specials}</testng.all_groups>
+    
+    <test.data.root>${project.basedir}</test.data.root>
+    <print>false</print> <!-- diagnostic printing of file names read/written/not-found in UtilityIO; override with -Dprint=true -->
+
+    <!-- JVM arguments -->
+    <jvm.mem>-Xmx4g</jvm.mem>
+    <jvm.locale.language>-Duser.language=en</jvm.locale.language>
+    <jvm.locale.country>-Duser.country=US</jvm.locale.country>
+    <jvm.locale.encoding>-Dfile.encoding=UTF-8</jvm.locale.encoding>
+    <jvm.args>${jvm.mem} ${jvm.locale.language} ${jvm.locale.country} ${jvm.locale.encoding}</jvm.args>
+    <argLine></argLine>
+
+    <!-- Encoding & Reporting properties -->
+    <charset.encoding>UTF-8</charset.encoding>
+    <project.build.sourceEncoding>${charset.encoding}</project.build.sourceEncoding>
+    <project.build.resourceEncoding>${charset.encoding}</project.build.resourceEncoding>
+    <project.reporting.inputEncoding>${charset.encoding}</project.reporting.inputEncoding>
+    <project.reporting.outputEncoding>${charset.encoding}</project.reporting.outputEncoding>
+    <project.reporting.outputDirectory>${project.build.directory}/site</project.reporting.outputDirectory>
+
+    <!--  org.apache.maven plugins -->
+    <maven-assembly-plugin.version>3.8.0</maven-assembly-plugin.version>
+    <maven-clean-plugin.version>3.5.0</maven-clean-plugin.version>
+    <maven-compiler-plugin.version>3.15.0</maven-compiler-plugin.version>
+    <maven-deploy-plugin.version>3.1.4</maven-deploy-plugin.version>
+    <maven-enforcer-plugin.version>3.6.2</maven-enforcer-plugin.version>
+    <maven-gpg-plugin.version>3.2.8</maven-gpg-plugin.version>
+    <maven-install-plugin.version>3.1.4</maven-install-plugin.version>
+    <maven-jar-plugin.version>3.4.2</maven-jar-plugin.version>
+    <maven-javadoc-plugin.version>3.12.0</maven-javadoc-plugin.version>
+    <maven-release-plugin.version>3.3.1</maven-release-plugin.version>
+    <maven-resources-plugin.version>3.5.0</maven-resources-plugin.version>
+    <maven-source-plugin.version>3.4.0</maven-source-plugin.version>
+    <maven-surefire-failsafe-plugins.version>3.5.4</maven-surefire-failsafe-plugins.version> <!-- surefire, failsafe, surefire-report -->
+    <maven-toolchains-plugin.version>3.2.0</maven-toolchains-plugin.version>
+
+    <!-- non-org.apache.maven plugins -->
+
+    <!-- com.github.hazendaz.maven plugins -->
+    <coveralls-repo-token></coveralls-repo-token>
+    <coveralls-maven-plugin.version>5.0.0</coveralls-maven-plugin.version>
+
+    <!-- io.github.git-commit-id plugins-->
+    <git-commit-id-maven-plugin.version>10.0.0</git-commit-id-maven-plugin.version>
+
+    <!-- org.apache plugins -->
+    <apache-rat-plugin.version>0.18</apache-rat-plugin.version>
+    <apache-source-release-assembly-descriptor.version>1.8</apache-source-release-assembly-descriptor.version>
+
+    <!-- org.jacoco plugins -->
+    <jacoco-maven-plugin.version>0.8.14</jacoco-maven-plugin.version>
+
+    <!-- org.sonatype.plugins -->
+    <nexus-staging-maven-plugin.version>1.7.0</nexus-staging-maven-plugin.version>
+
+  </properties>
+
+  <dependencies>
+    <dependency>
+      <groupId>org.testng</groupId>
+      <artifactId>testng</artifactId>
+      <version>${testng.version}</version>
+      <scope>test</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.slf4j</groupId>
+      <artifactId>slf4j-simple</artifactId>
+      <version>${org-slf4j.version}</version>
+      <scope>test</scope>
+    </dependency>
+  </dependencies>
+
+  <build>
+    <pluginManagement>
+      <plugins>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-assembly-plugin</artifactId>
+          <version>${maven-assembly-plugin.version}</version>
+          <inherited>false</inherited>
+          <executions>
+            <execution>
+              <id>source-release-assembly</id>
+              <phase>package</phase>
+              <goals>
+                <goal>single</goal>
+              </goals>
+              <configuration>
+                <runOnlyAtExecutionRoot>true</runOnlyAtExecutionRoot>
+                <descriptors>
+                  <descriptor>src/assembly/source-release.xml</descriptor>
+                </descriptors>
+                <tarLongFileMode>posix</tarLongFileMode>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-clean-plugin</artifactId>
+          <version>${maven-clean-plugin.version}</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-compiler-plugin</artifactId>
+          <version>${maven-compiler-plugin.version}</version>
+          <configuration>
+            <fork>true</fork> <!-- required if Maven is using a different JVM -->
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-deploy-plugin</artifactId>
+          <version>${maven-deploy-plugin.version}</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-enforcer-plugin</artifactId>
+          <version>${maven-enforcer-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>enforce-banned-dependencies</id>
+              <goals>
+                <goal>enforce</goal>
+              </goals>
+              <configuration>
+                <rules>
+                  <!-- The Java enforcer rule is not toolchain aware
+                  and it only checks the compiler used by the Maven runtime.
+                  In the context of toolchains this rule is useless.
+                  See: https://github.com/paulmoloney/maven-enforcer-toolchain-rules
+                  <requireJavaVersion> </requireJavaVersion>
+                  -->
+                  <requireMavenVersion>
+                    <version>[${maven.version},4.0.0)</version>
+                  </requireMavenVersion>
+                  <bannedDependencies>
+                    <excludes>
+                      <!--LGPL licensed library-->
+                      <exclude>com.google.code.findbugs:annotations</exclude>
+                    </excludes>
+                  </bannedDependencies>
+                </rules>
+                <fail>true</fail>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-gpg-plugin</artifactId>
+          <version>${maven-gpg-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>sign-artifacts</id>
+              <phase>verify</phase>
+              <goals><goal>sign</goal></goals>
+            </execution>
+          </executions>
+          <configuration>
+            <gpgArguments>
+              <arg>--verbose</arg>
+              <arg>--personal-digest-preferences=SHA512</arg>
+            </gpgArguments>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-install-plugin</artifactId>
+          <version>${maven-install-plugin.version}</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-jar-plugin</artifactId>
+          <version>${maven-jar-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>default-jar</id>
+              <phase>package</phase>
+              <goals><goal>jar</goal></goals>
+              <configuration>
+                <skipIfEmpty>true</skipIfEmpty>
+                <archive>
+                  <manifestEntries>
+                    <Automatic-Module-Name>org.apache.datasketches_java</Automatic-Module-Name>
+                  </manifestEntries>
+                </archive>
+              </configuration>
+            </execution>
+            <execution>
+              <id>default-test-jar</id>
+              <phase>package</phase>
+              <goals><goal>test-jar</goal></goals>
+              <configuration>
+                <skipIfEmpty>true</skipIfEmpty>
+                <archive>
+                  <manifestEntries>
+                    <Automatic-Module-Name>org.apache.datasketches_java.tests</Automatic-Module-Name>
+                  </manifestEntries>
+                </archive>
+              </configuration>
+            </execution>
+          </executions>
+          <configuration>
+            <archive>
+              <!-- WARNING: MANIFEST SYNC REQUIRED. If you modify these manifest entries here you must
+                   make sure that all of these entries are identical across the maven-jar-plugin,
+                   maven-javadoc-plugin and maven-source-plugin with the sole exception of the
+                   Automatic-Module-Name, which only belongs in this plugin. -->
+              <manifestEntries>
+                <Build-Jdk-Spec>${java.runtime.version}</Build-Jdk-Spec>
+                <Build-OS>${os.name} ${os.arch} ${os.version}</Build-OS>
+                <Implementation-Vendor>The Apache Software Foundation</Implementation-Vendor>
+                <Group-ArtifactId>${project.groupId}:${project.artifactId}</Group-ArtifactId>
+                <git-branch>${git.branch}</git-branch>
+                <git-commit-id>${git.commit.id.full}</git-commit-id>
+                <git-commit-time>${git.commit.time}</git-commit-time>
+                <git-commit-user-email>${git.build.user.email}</git-commit-user-email>
+              </manifestEntries>
+            </archive>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-javadoc-plugin</artifactId>
+          <version>${maven-javadoc-plugin.version}</version>
+          <configuration>
+            <locale>en_US</locale>
+            <overview>${project.basedir}/src/main/javadoc/overview.html</overview>
+            <outputDirectory>${project.reporting.outputDirectory}</outputDirectory>
+            <docfilessubdirs>true</docfilessubdirs>
+            <show>public</show>
+            <!-- Checkstyle's own Java grammar lags real JDK releases (e.g. it cannot parse
+                 JEP 513 flexible constructor bodies, standard since Java 25), so Javadoc
+                 correctness is enforced here instead, via doclint, which ships inside javac/javadoc
+                 itself and is always in sync with whatever JDK this project targets.
+                 Combined with <show>public</show> above, this execution (attach-javadocs, below)
+                 both publishes and fully validates (including completeness) only the public API
+                 surface that actually appears in the published Javadoc jar.
+                 A second execution (validate-internal-javadoc, below) separately checks every
+                 protected/package/private member too, for correctness (only doclint's "missing"
+                 category is dropped there), without publishing or requiring documentation on them. -->
+            <doclint>all</doclint>
+            <quiet>true</quiet>
+            <additionalJOptions>
+              <additionalJOption>-J${jvm.mem}</additionalJOption>
+              <additionalJOption>-J${jvm.locale.language}</additionalJOption>
+              <additionalJOption>-J${jvm.locale.country}</additionalJOption>
+              <additionalJOption>-J${jvm.locale.encoding}</additionalJOption>
+            </additionalJOptions>
+            <archive>
+              <!-- WARNING: MANIFEST SYNC REQUIRED. If you modify these manifest entries here you must
+                   make sure that all of these entries are identical across the maven-jar-plugin,
+                   maven-javadoc-plugin and maven-source-plugin. -->
+              <manifestEntries>
+                <Build-Jdk-Spec>${java.runtime.version}</Build-Jdk-Spec>
+                <Build-OS>${os.name} ${os.arch} ${os.version}</Build-OS>
+                <Implementation-Vendor>The Apache Software Foundation</Implementation-Vendor>
+                <Group-ArtifactId>${project.groupId}:${project.artifactId}</Group-ArtifactId>
+                <git-branch>${git.branch}</git-branch>
+                <git-commit-id>${git.commit.id.full}</git-commit-id>
+                <git-commit-time>${git.commit.time}</git-commit-time>
+                <git-commit-user-email>${git.build.user.email}</git-commit-user-email>
+              </manifestEntries>
+            </archive>
+            <bottom>
+              <![CDATA[
+                Copyright &#169; {inceptionYear}&#8211;{currentYear} The Apache Software Foundation. 
+                All rights reserved. (Commit Time: ${git.commit.time}, Commit: ${git.commit.id.abbrev})
+              ]]>
+            </bottom>
+          </configuration>
+          <executions>
+            <execution>
+              <id>attach-javadocs</id>
+              <phase>package</phase>
+              <goals><goal>jar</goal></goals>
+            </execution>
+            <execution>
+              <!-- Validates Javadoc correctness (broken HTML, bad @param references, etc.) on
+                   protected/package/private members too, which <show>public</show> above never
+                   sees. Deliberately drops doclint's "missing" category so it never demands
+                   documentation exist on non-public members; it only requires that whatever
+                   documentation IS there is well-formed. Output is thrown away; nothing here
+                   is published. -->
+              <id>validate-internal-javadoc</id>
+              <phase>verify</phase>
+              <goals><goal>javadoc</goal></goals>
+              <configuration>
+                <show>private</show>
+                <doclint>all,-missing</doclint>
+                <outputDirectory>${project.build.directory}/javadoc-internal-check</outputDirectory>
+              </configuration>
+            </execution>
+          </executions>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-release-plugin</artifactId>
+          <version>${maven-release-plugin.version}</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-resources-plugin</artifactId>
+          <version>${maven-resources-plugin.version}</version>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-source-plugin</artifactId>
+          <version>${maven-source-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>attach-sources</id>
+              <phase>package</phase>
+              <goals><goal>jar-no-fork</goal></goals>
+            </execution>
+            <execution>
+              <id>attach-test-sources</id>
+              <phase>package</phase>
+              <goals><goal>test-jar-no-fork</goal></goals>
+            </execution>
+          </executions>
+          <configuration>
+            <archive>
+              <!-- WARNING: MANIFEST SYNC REQUIRED. If you modify these manifest entries here you must
+                   make sure that all of these entries are identical across the maven-jar-plugin,
+                   maven-javadoc-plugin and maven-source-plugin. -->
+              <manifestEntries>
+                <Build-Jdk-Spec>${java.runtime.version}</Build-Jdk-Spec>
+                <Build-OS>${os.name} ${os.arch} ${os.version}</Build-OS>
+                <Implementation-Vendor>The Apache Software Foundation</Implementation-Vendor>
+                <Group-ArtifactId>${project.groupId}:${project.artifactId}</Group-ArtifactId>
+                <git-branch>${git.branch}</git-branch>
+                <git-commit-id>${git.commit.id.full}</git-commit-id>
+                <git-commit-time>${git.commit.time}</git-commit-time>
+                <git-commit-user-email>${git.build.user.email}</git-commit-user-email>
+              </manifestEntries>
+            </archive>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-surefire-plugin</artifactId>
+          <version>${maven-surefire-failsafe-plugins.version}</version>
+          <configuration>
+            <argLine>@{argLine} ${jvm.args} -Dorg.slf4j.simpleLogger.log.org.testng=warn</argLine>
+            <trimStackTrace>false</trimStackTrace>
+            <useFile>true</useFile>
+            <useManifestOnlyJar>false</useManifestOnlyJar>
+            <redirectTestOutputToFile>false</redirectTestOutputToFile>
+            <reportsDirectory>${project.build.directory}/test-output/${maven.build.timestamp}</reportsDirectory>
+            <perCoreThreadCount>false</perCoreThreadCount>
+            <suiteXmlFiles>
+              <suiteXmlFile>${project.basedir}/src/test/resources/testng.xml</suiteXmlFile>
+            </suiteXmlFiles>
+            <excludedGroups>${testng.all_groups}</excludedGroups>
+            <properties>
+              <property>
+                <name>verbose</name><value>0</value>
+              </property>
+            </properties>
+            <systemPropertyVariables>
+              <test.data.root>${test.data.root}</test.data.root>
+              <print>${print}</print>
+            </systemPropertyVariables>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.maven.plugins</groupId>
+          <artifactId>maven-toolchains-plugin</artifactId>
+          <version>${maven-toolchains-plugin.version}</version>
+          <executions>
+            <execution>
+              <goals><goal>toolchain</goal></goals>
+            </execution>
+          </executions>
+          <configuration>
+            <toolchains>
+              <jdk>
+                <version>${java.version}</version>
+              </jdk>
+            </toolchains>
+          </configuration>
+        </plugin>
+
+        <!-- non-org-apache-maven plugins -->
+
+        <plugin>
+          <!-- Submit code coverage report to Coveralls.io. -->
+          <groupId>com.github.hazendaz.maven</groupId>
+          <artifactId>coveralls-maven-plugin</artifactId>
+          <version>${coveralls-maven-plugin.version}</version>
+          <configuration>
+            <repoToken>${coveralls-repo-token}</repoToken>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>io.github.git-commit-id</groupId>
+          <artifactId>git-commit-id-maven-plugin</artifactId>
+          <version>${git-commit-id-maven-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>get-the-git-infos</id>
+              <goals>
+                <goal>revision</goal>
+              </goals>
+              <phase>initialize</phase>
+            </execution>
+          </executions>
+          <configuration>
+            <!-- Maven commands are sometimes run on the release artifact directly, which is not a Git repository -->
+            <failOnNoGitDirectory>false</failOnNoGitDirectory>
+            <generateGitPropertiesFile>true</generateGitPropertiesFile>
+            <generateGitPropertiesFilename>${project.basedir}/git.properties</generateGitPropertiesFilename>
+            <includeOnlyProperties>
+              <includeOnlyProperty>^git\.branch$</includeOnlyProperty>
+              <includeOnlyProperty>^git\.commit\.id$</includeOnlyProperty>
+              <includeOnlyProperty>^git\.commit\.time$</includeOnlyProperty>
+              <includeOnlyProperty>^git\.build\.user\.email$</includeOnlyProperty>
+            </includeOnlyProperties>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <groupId>org.apache.rat</groupId>
+          <artifactId>apache-rat-plugin</artifactId>
+          <version>${apache-rat-plugin.version}</version>
+          <inherited>true</inherited> <!-- Inherits the configuration to sub modules -->
+          <executions>
+            <execution>
+              <phase>verify</phase>
+              <goals><goal>check</goal></goals>
+            </execution>
+          </executions>
+          <configuration>
+            <excludeSubProjects>false</excludeSubProjects> <!-- examine the whole project from the root -->
+            <outputDirectory>${project.build.directory}/rat</outputDirectory>
+            <consoleOutput>true</consoleOutput>
+            <inputExcludes>
+              <inputExclude>StandardCollection</inputExclude>
+              <inputExclude>**/*.yaml</inputExclude>
+              <inputExclude>**/*.yml</inputExclude>
+              <inputExclude>**/.*</inputExclude>
+              <inputExclude>**/test-output/**/*</inputExclude>
+              <inputExclude>**/git.properties</inputExclude>
+              <inputExclude>**/doc/**</inputExclude>
+              <inputExclude>**/docs/**</inputExclude>
+              <inputExclude>**/*.sk</inputExclude>
+              <inputExclude>LICENSE</inputExclude>
+              <inputExclude>NOTICE</inputExclude>
+              <inputExclude>**/*.code-workspace</inputExclude>
+              <inputExclude>**/*.txt</inputExclude>
+              <inputExclude>**/*.html</inputExclude>
+              <inputExclude>**/api-links.bin</inputExclude>
+            </inputExcludes>
+          </configuration>
+        </plugin>
+
+        <plugin>
+          <!-- Generates code coverage report banner for website. -->
+          <groupId>org.jacoco</groupId>
+          <artifactId>jacoco-maven-plugin</artifactId>
+          <version>${jacoco-maven-plugin.version}</version>
+          <executions>
+            <execution>
+              <id>default-prepare-agent</id>
+              <goals>
+                <goal>prepare-agent</goal>
+              </goals>
+            </execution>
+            <execution>
+              <id>default-report</id>
+              <phase>test</phase>
+              <goals>
+                <goal>report</goal>
+              </goals>
+            </execution>
+          </executions>
+        </plugin>
+
+        <plugin>
+          <groupId>org.sonatype.plugins</groupId>
+          <artifactId>nexus-staging-maven-plugin</artifactId>
+          <version>${nexus-staging-maven-plugin.version}</version>
+          <configuration>
+            <serverId>apache.releases.https</serverId>
+            <nexusUrl>https://repository.apache.org/</nexusUrl>
+            <autoReleaseAfterClose>false</autoReleaseAfterClose> 
+          </configuration>
+        </plugin>
+      </plugins>
+    </pluginManagement>
+
+    <plugins>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-assembly-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-clean-plugin</artifactId>
+      </plugin>
+
+      <!-- compiler plugin is automatic and not required here -->
+
+      <!-- deploy plugin is automatic and not required here -->
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-enforcer-plugin</artifactId>
+      </plugin>
+
+      <!-- gpg plugin activated in nexus-jars profile -->
+
+      <!-- install plugin is automatic and not required here -->
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-jar-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-javadoc-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-release-plugin</artifactId>
+      </plugin>
+
+      <!-- resources plugin not required here -->
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-source-plugin</artifactId>
+      </plugin>
+
+      <!-- surefire plugin not required here -->
+
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId>
+        <artifactId>maven-toolchains-plugin</artifactId>
+      </plugin>
+
+      <!-- non-maven plugins -->
+
+      <plugin>
+        <groupId>com.github.hazendaz.maven</groupId>
+        <artifactId>coveralls-maven-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>io.github.git-commit-id</groupId>
+        <artifactId>git-commit-id-maven-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.apache.rat</groupId>
+        <artifactId>apache-rat-plugin</artifactId>
+      </plugin>
+
+      <plugin>
+        <groupId>org.jacoco</groupId>
+        <artifactId>jacoco-maven-plugin</artifactId>
+      </plugin>
+
+      <!-- org.sonatype / nexus-staging only activated in nexus-jars profile -->
+
+    </plugins>
+  </build>
+
+  <profiles>
+
+    <!--  This profile is used to release signed jars to the Apache Nexus repository.
+          This must be executed from a git repository set at the proper Release branch (e.g., 1.1.X)
+          and at a Release Candidate tag (e.g., 1.1.0-RC1).
+          The pom version in the release branch must be properly set to something like: "1.1.0".
+          The pom version in the master would be set to something like: "1.2.0-SNAPSHOT".
+          Test Command: mvn clean verify -Pnexus-jars -DskipTests=true
+          Command: mvn clean deploy -Pnexus-jars -DskipTests=true
+          Verify Command (from terminal): gpg -v &#45;&#45;verify $ASC $FILE # dashdashverify
+    -->
+    <profile>
+      <id>nexus-jars</id>
+      <build>
+        <plugins>
+          <!-- Activates GPG signing during verify -->
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-gpg-plugin</artifactId>
+          </plugin>
+          <!-- Activates Nexus staging deployment -->
+          <plugin>
+            <groupId>org.sonatype.plugins</groupId>
+            <artifactId>nexus-staging-maven-plugin</artifactId>
+            <extensions>true</extensions>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>generate_java_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.generate_java_files}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_all_language_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.all_groups}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_java_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.generate_java_files},${testng.check_java_files}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_cpp_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.check_cpp_files}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_go_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.check_go_files}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_rust_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.check_rust_files}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_CL_binary_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.check_CL_binaries}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+    <profile>
+      <id>check_cpp_historical_files</id>
+      <build>
+        <plugins>
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-surefire-plugin</artifactId>
+            <configuration>
+              <groups>${testng.check_cpp_historicals}</groups>
+              <excludedGroups combine.self="override"></excludedGroups>
+            </configuration>
+          </plugin>
+        </plugins>
+      </build>
+    </profile>
+
+  </profiles>
+
+</project>

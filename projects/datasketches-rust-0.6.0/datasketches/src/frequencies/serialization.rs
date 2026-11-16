@@ -1,0 +1,97 @@
+// Licensed to the Apache Software Foundation (ASF) under one
+// or more contributor license agreements.  See the NOTICE file
+// distributed with this work for additional information
+// regarding copyright ownership.  The ASF licenses this file
+// to you under the Apache License, Version 2.0 (the
+// "License"); you may not use this file except in compliance
+// with the License.  You may obtain a copy of the License at
+//
+//   http://www.apache.org/licenses/LICENSE-2.0
+//
+// Unless required by applicable law or agreed to in writing,
+// software distributed under the License is distributed on an
+// "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+// KIND, either express or implied.  See the License for the
+// specific language governing permissions and limitations
+// under the License.
+
+use std::hash::Hash;
+
+use crate::codec::SketchBytes;
+use crate::codec::SketchSlice;
+use crate::codec::assert::insufficient_data;
+use crate::error::Error;
+
+/// Serialization version.
+pub const SERIAL_VERSION: u8 = 1;
+
+/// Preamble longs for a sketch with zero stream weight.
+pub const PREAMBLE_LONGS_EMPTY: u8 = 1;
+/// Preamble longs for a sketch with positive stream weight, even if it retains no items.
+pub const PREAMBLE_LONGS_NONEMPTY: u8 = 4;
+
+/// Empty flag mask (both bits for compatibility).
+pub const EMPTY_FLAG_MASK: u8 = 5;
+
+/// Trait for serializing and deserializing frequent item values.
+pub trait FrequentItemValue: Sized + Eq + Hash {
+    /// Returns the size in bytes required to serialize the given item.
+    fn serialize_size(item: &Self) -> usize;
+    /// Serializes the item into the given byte buffer.
+    fn serialize_value(&self, bytes: &mut SketchBytes);
+    /// Deserializes an item from the given byte cursor.
+    fn deserialize_value(cursor: &mut SketchSlice<'_>) -> Result<Self, Error>;
+}
+
+impl FrequentItemValue for String {
+    fn serialize_size(item: &Self) -> usize {
+        size_of::<u32>() + item.len()
+    }
+
+    fn serialize_value(&self, bytes: &mut SketchBytes) {
+        let bs = self.as_bytes();
+        bytes.write_u32_le(bs.len() as u32);
+        bytes.write(bs);
+    }
+
+    fn deserialize_value(cursor: &mut SketchSlice<'_>) -> Result<Self, Error> {
+        let len = cursor
+            .read_u32_le()
+            .map_err(insufficient_data("string item length"))? as usize;
+        let available_bytes = cursor.remaining().len();
+        if available_bytes < len {
+            return Err(Error::insufficient_data_of(
+                "string item payload",
+                format_args!("expected {len} bytes, got {available_bytes}"),
+            ));
+        }
+        let value = std::str::from_utf8(&cursor.remaining()[..len])
+            .map(str::to_owned)
+            .map_err(|_| Error::deserial("invalid UTF-8 string payload"))?;
+        cursor.advance(len as u64);
+        Ok(value)
+    }
+}
+
+macro_rules! impl_primitive {
+    ($name:ty, $read:ident, $write:ident) => {
+        impl FrequentItemValue for $name {
+            fn serialize_size(_item: &Self) -> usize {
+                size_of::<$name>()
+            }
+
+            fn serialize_value(&self, bytes: &mut SketchBytes) {
+                bytes.$write(*self);
+            }
+
+            fn deserialize_value(cursor: &mut SketchSlice<'_>) -> Result<Self, Error> {
+                cursor
+                    .$read()
+                    .map_err(insufficient_data(concat!(stringify!($name), " item")))
+            }
+        }
+    };
+}
+
+impl_primitive!(i64, read_i64_le, write_i64_le);
+impl_primitive!(u64, read_u64_le, write_u64_le);

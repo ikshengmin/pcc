@@ -1,0 +1,202 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.datasketches.sampling;
+
+import static org.apache.datasketches.common.UtilityIO.CHECK_CPP_FILES;
+import static org.apache.datasketches.common.UtilityIO.CHECK_GO_FILES;
+import static org.apache.datasketches.common.UtilityIO.CHECK_JAVA_FILES;
+import static org.apache.datasketches.common.UtilityIO.GENERATE_JAVA_FILES;
+import static org.apache.datasketches.common.UtilityIO.getFileBytes;
+import static org.apache.datasketches.common.UtilityIO.putBytesToJavaPath;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+
+import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+
+import org.apache.datasketches.common.ArrayOfDoublesSerDe;
+import org.apache.datasketches.common.ArrayOfLongsSerDe;
+import org.apache.datasketches.common.ArrayOfStringsSerDe;
+import org.apache.datasketches.common.UtilityIO.GroupLanguage;
+import org.testng.annotations.Test;
+
+/**
+ * Serialize binary sketches to be tested by C++ code.
+ * Test deserialization of binary sketches serialized by C++ code.
+ */
+public class VarOptCrossLanguageTest {
+  static final double EPS = 1e-13;
+
+  @Test(groups = {GENERATE_JAVA_FILES}, priority = 0)
+  public void generateSketchesLong() throws IOException {
+    final int[] nArr = {0, 1, 10, 100, 1000, 10_000, 100_000, 1_000_000};
+    for (final int n: nArr) {
+      final VarOptItemsSketch<Long> sk = VarOptItemsSketch.newInstance(32);
+      for (int i = 1; i <= n; i++) {
+        sk.update(Long.valueOf(i), 1.0);
+      }
+      putBytesToJavaPath("varopt_sketch_long_n" + n + "_java.sk",  sk.toByteArray(new ArrayOfLongsSerDe()));
+    }
+  }
+
+  @Test(groups = {GENERATE_JAVA_FILES}, priority = 0)
+  public void generateSketchStringExact() throws IOException {
+    final VarOptItemsSketch<String> sketch = VarOptItemsSketch.newInstance(1024);
+    for (int i = 1; i <= 200; ++i) {
+      sketch.update(Integer.toString(i), 1000.0 / i);
+    }
+    putBytesToJavaPath("varopt_sketch_string_exact_java.sk",  sketch.toByteArray(new ArrayOfStringsSerDe()));
+  }
+
+  @Test(groups = {GENERATE_JAVA_FILES}, priority = 0)
+  public void generateSketchLongSampling() throws IOException {
+    final VarOptItemsSketch<Long> sketch = VarOptItemsSketch.newInstance(1024);
+    for (long i = 0; i < 2000; ++i) {
+      sketch.update(i, 1.0);
+    }
+    // negative heavy items to allow a simple predicate to filter
+    sketch.update(-1L, 100000.0);
+    sketch.update(-2L, 110000.0);
+    sketch.update(-3L, 120000.0);
+    putBytesToJavaPath("varopt_sketch_long_sampling_java.sk",  sketch.toByteArray(new ArrayOfLongsSerDe()));
+  }
+
+  @Test(groups = {GENERATE_JAVA_FILES}, priority = 0)
+  public void generateUnionDoubleSampling() throws IOException {
+    final int kSmall = 16;
+    final int n1 = 32;
+    final int n2 = 64;
+    final int kMax = 128;
+
+    // small k sketch, but sampling
+    VarOptItemsSketch<Double> sketch = VarOptItemsSketch.newInstance(kSmall);
+    for (int i = 0; i < n1; ++i) {
+      sketch.update(1.0 * i, 1.0);
+    }
+    sketch.update(-1.0, n1 * n1); // negative heavy item to allow a simple predicate to filter
+
+
+    final VarOptItemsUnion<Double> union = VarOptItemsUnion.newInstance(kMax);
+    union.update(sketch);
+
+    // another one, but different n to get a different per-item weight
+    sketch = VarOptItemsSketch.newInstance(kSmall);
+    for (int i = 0; i < n2; ++i) {
+      sketch.update(1.0 * i, 1.0);
+    }
+    union.update(sketch);
+    putBytesToJavaPath("varopt_union_double_sampling_java.sk",  union.toByteArray(new ArrayOfDoublesSerDe()));
+  }
+
+  @Test(groups = {CHECK_JAVA_FILES}, priority = 1)
+  public void checkJava() {
+    deserializeSketchLongs(GroupLanguage.JAVA);
+    deserializeSketchStringsExact(GroupLanguage.JAVA);
+    deserializeSketdhLongsSampling(GroupLanguage.JAVA);
+    deserializeUnionDoubleSampling(GroupLanguage.JAVA);
+  }
+
+  @Test(groups = {CHECK_CPP_FILES})
+  public void checkCpp() {
+    deserializeSketchLongs(GroupLanguage.CPP);
+    deserializeSketchStringsExact(GroupLanguage.CPP);
+    deserializeSketdhLongsSampling(GroupLanguage.CPP);
+    deserializeUnionDoubleSampling(GroupLanguage.CPP);
+  }
+
+  @Test(groups = {CHECK_GO_FILES})
+  public void checkGo() {
+    deserializeSketchLongs(GroupLanguage.GO);
+    deserializeSketchStringsExact(GroupLanguage.GO);
+    deserializeSketdhLongsSampling(GroupLanguage.GO);
+    deserializeUnionDoubleSampling(GroupLanguage.GO);
+  }
+
+  private static void deserializeSketchLongs(final GroupLanguage lang) {
+    final int[] nArr = {0, 1, 10, 100, 1000, 10000, 100000, 1000000};
+    for (final int n: nArr) {
+      final String fileName = "varopt_sketch_long_n" + n + lang.sfx + ".sk";
+      final byte[] bytes = getFileBytes(lang.pth, fileName);
+      if (bytes.length == 0) { continue; }
+      //System.out.println(fileName);
+      final VarOptItemsSketch<Long> sk = VarOptItemsSketch.heapify(MemorySegment.ofArray(bytes), new ArrayOfLongsSerDe());
+      assertEquals(sk.getK(), 32);
+      assertEquals(sk.getN(), n);
+      assertEquals(sk.getNumSamples(), n > 10 ? 32 : n);
+    }
+  }
+
+  @SuppressWarnings("unused")
+  private static void deserializeSketchStringsExact(final GroupLanguage lang) {
+    final String fileName = "varopt_sketch_string_exact" + lang.sfx + ".sk";
+    final byte[] bytes = getFileBytes(lang.pth, fileName);
+    if (bytes.length == 0) { return; }
+    //System.out.println(fileName);
+    final VarOptItemsSketch<String> sk = VarOptItemsSketch.heapify(MemorySegment.ofArray(bytes), new ArrayOfStringsSerDe());
+    assertEquals(sk.getK(), 1024);
+    assertEquals(sk.getN(), 200);
+    assertEquals(sk.getNumSamples(), 200);
+    final SampleSubsetSummary ss = sk.estimateSubsetSum(item -> true);
+    double weight = 0;
+    for (int i = 1; i <= 200; ++i) {
+      weight += 1000.0 / i;
+    }
+    assertEquals(ss.getTotalSketchWeight(), weight, EPS);
+  }
+
+  @SuppressWarnings("unused")
+  private static void deserializeSketdhLongsSampling(final GroupLanguage lang) {
+    String fileName = "varopt_sketch_long_sampling" + lang.sfx + ".sk";
+    final byte[] bytes = getFileBytes(lang.pth, fileName);
+    if (bytes.length == 0) { return; }
+    //System.out.println(fileName);
+    final VarOptItemsSketch<Long> sk = VarOptItemsSketch.heapify(MemorySegment.ofArray(bytes), new ArrayOfLongsSerDe());
+    assertEquals(sk.getK(), 1024);
+    assertEquals(sk.getN(), 2003);
+    assertEquals(sk.getNumSamples(), 1024);
+    SampleSubsetSummary ss = sk.estimateSubsetSum(item -> true);
+    assertEquals(ss.getTotalSketchWeight(), 332000.0, EPS);
+
+    ss = sk.estimateSubsetSum(item -> item < 0);
+    assertEquals(ss.getEstimate(), 330000.0); // heavy item, weight is exact
+
+    ss = sk.estimateSubsetSum(item -> item >= 0);
+    assertEquals(ss.getEstimate(), 2000.0, EPS);
+  }
+
+  private static void deserializeUnionDoubleSampling(final GroupLanguage lang) {
+    final String fileName = "varopt_union_double_sampling" + lang.sfx + ".sk";
+    final byte[] bytes = getFileBytes(lang.pth, fileName);
+    if (bytes.length == 0) { return; }
+    //System.out.println(fileName);
+    final VarOptItemsUnion<Double> u = VarOptItemsUnion.heapify(MemorySegment.ofArray(bytes), new ArrayOfDoublesSerDe());
+
+    // must reduce k in the process
+    final VarOptItemsSketch<Double> sk = u.getResult();
+    assertTrue(sk.getK() < 128);
+    assertEquals(sk.getN(), 97);
+
+    // light items, ignoring the heavy one
+    final SampleSubsetSummary ss = sk.estimateSubsetSum(item -> item >= 0);
+    assertEquals(ss.getEstimate(), 96.0, EPS);
+    assertEquals(ss.getTotalSketchWeight(), 96.0 + 1024.0, EPS);
+  }
+
+}

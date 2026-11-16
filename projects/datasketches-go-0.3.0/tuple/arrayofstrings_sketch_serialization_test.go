@@ -1,0 +1,332 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one or more
+ * contributor license agreements.  See the NOTICE file distributed with
+ * this work for additional information regarding copyright ownership.
+ * The ASF licenses this file to You under the Apache License, Version 2.0
+ * (the "License"); you may not use this file except in compliance with
+ * the License.  You may obtain a copy of the License at
+ *
+ *     http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing, software
+ * distributed under the License is distributed on an "AS IS" BASIS,
+ * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ * See the License for the specific language governing permissions and
+ * limitations under the License.
+ */
+
+package tuple
+
+import (
+	"bytes"
+	"encoding/binary"
+	"fmt"
+	"os"
+	"strconv"
+	"strings"
+	"testing"
+
+	"github.com/stretchr/testify/assert"
+
+	"github.com/apache/datasketches-go/internal"
+	"github.com/apache/datasketches-go/internal/testutil"
+
+	"github.com/apache/datasketches-go/theta"
+)
+
+type arrayOfStringsSnapshotCase struct {
+	name    string
+	opts    []UpdateSketchOptionFunc
+	updates func(update func(key, values []string))
+}
+
+func arrayOfStringsSnapshotCases() []arrayOfStringsSnapshotCase {
+	var cases []arrayOfStringsSnapshotCase
+	for _, n := range []int{0, 1, 10, 100, 1000, 10000, 100000, 1000000} {
+		cases = append(cases,
+			arrayOfStringsSnapshotCase{
+				name: fmt.Sprintf("aos_1_n%d", n),
+				updates: func(update func(key, values []string)) {
+					for i := 0; i < n; i++ {
+						update([]string{strconv.Itoa(i)}, []string{"value" + strconv.Itoa(i)})
+					}
+				},
+			},
+			arrayOfStringsSnapshotCase{
+				name: fmt.Sprintf("aos_3_n%d", n),
+				updates: func(update func(key, values []string)) {
+					for i := 0; i < n; i++ {
+						s := strconv.Itoa(i)
+						update([]string{s}, []string{"a" + s, "b" + s, "c" + s})
+					}
+				},
+			},
+			arrayOfStringsSnapshotCase{
+				name: fmt.Sprintf("aos_multikey_n%d", n),
+				updates: func(update func(key, values []string)) {
+					for i := 0; i < n; i++ {
+						update(
+							[]string{"key" + strconv.Itoa(i), "subkey" + strconv.Itoa(i%10)},
+							[]string{"value" + strconv.Itoa(i)},
+						)
+					}
+				},
+			},
+		)
+	}
+
+	return append(cases,
+		arrayOfStringsSnapshotCase{
+			name: "aos_1_non_empty_no_entries",
+			opts: []UpdateSketchOptionFunc{WithUpdateSketchP(0.01)},
+			updates: func(update func(key, values []string)) {
+				update([]string{"key1"}, []string{"value1"})
+			},
+		},
+		arrayOfStringsSnapshotCase{
+			name: "aos_unicode",
+			updates: func(update func(key, values []string)) {
+				update([]string{"키", "열쇠"}, []string{"밸류", "값"})
+				// "🗝️" is U+1F5DD followed by the variation selector U+FE0F, as in Java.
+				update([]string{"🔑", "🗝️"}, []string{"📦", "🎁"})
+				update([]string{"ключ1", "ключ2"}, []string{"ценить1", "ценить2"})
+			},
+		},
+		arrayOfStringsSnapshotCase{
+			name: "aos_empty_strings",
+			updates: func(update func(key, values []string)) {
+				update([]string{""}, []string{"empty_key_value"})
+				update([]string{"empty_value_key"}, []string{""})
+				update([]string{"", ""}, []string{"", ""})
+			},
+		},
+	)
+}
+
+func newArrayOfStringsSnapshotSketch(t *testing.T, c arrayOfStringsSnapshotCase) *CompactSketch[*ArrayOfStringsSummary] {
+	t.Helper()
+
+	sketch, err := NewUpdateSketch[*ArrayOfStringsSummary, []string](NewArrayOfStringsSummaryFunc, c.opts...)
+	assert.NoError(t, err)
+	c.updates(func(key, values []string) {
+		assertUpdate(t, sketch.UpdateUint64(GenerateHashKeyFromStrings(key), values))
+	})
+
+	compactSketch, err := sketch.Compact(false)
+	assert.NoError(t, err)
+	return compactSketch
+}
+
+func TestGenerateGoSnapshots_ArrayOfStringsSketch(t *testing.T) {
+	if len(os.Getenv(internal.DSketchTestGenerateGo)) == 0 {
+		t.Skipf("%s not set", internal.DSketchTestGenerateGo)
+	}
+
+	err := os.MkdirAll(internal.GoPath, os.ModePerm)
+	assert.NoError(t, err)
+
+	for _, c := range arrayOfStringsSnapshotCases() {
+		t.Run(c.name, func(t *testing.T) {
+			compactSketch := newArrayOfStringsSnapshotSketch(t, c)
+
+			var buf bytes.Buffer
+			encoder := NewEncoder[*ArrayOfStringsSummary](&buf, ArrayOfStringsSummaryWriter)
+			err := encoder.Encode(compactSketch)
+			assert.NoError(t, err)
+
+			err = os.WriteFile(fmt.Sprintf("%s/%s_go.sk", internal.GoPath, c.name), buf.Bytes(), 0644)
+			assert.NoError(t, err)
+		})
+	}
+}
+
+func assertArrayOfStringsSnapshots(t *testing.T, dir, sfx string) {
+	t.Helper()
+
+	t.Run("one value", func(t *testing.T) {
+		ns := []int{0, 1, 10, 100, 1000, 10000, 100000, 1000000}
+		for _, n := range ns {
+			filename := fmt.Sprintf("%s/aos_1_n%d%s.sk", dir, n, sfx)
+			b := testutil.ReadSnapshot(t, filename)
+
+			sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+			assert.NoError(t, err)
+
+			assert.Equal(t, n == 0, sketch.IsEmpty())
+			assert.Equal(t, n > 1000, sketch.IsEstimationMode())
+			assert.InDelta(t, n, sketch.Estimate(), float64(n)*0.03)
+			for hash, summary := range sketch.All() {
+				assert.Less(t, hash, sketch.Theta64())
+				assert.Len(t, summary.values, 1)
+				assert.True(t, strings.HasPrefix(summary.values[0], "value"))
+			}
+		}
+	})
+
+	t.Run("three values", func(t *testing.T) {
+		ns := []int{0, 1, 10, 100, 1000, 10000, 100000, 1000000}
+		for _, n := range ns {
+			filename := fmt.Sprintf("%s/aos_3_n%d%s.sk", dir, n, sfx)
+			b := testutil.ReadSnapshot(t, filename)
+
+			sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+			assert.NoError(t, err)
+
+			assert.Equal(t, n == 0, sketch.IsEmpty())
+			assert.Equal(t, n > 1000, sketch.IsEstimationMode())
+			assert.InDelta(t, n, sketch.Estimate(), float64(n)*0.03)
+			for hash, summary := range sketch.All() {
+				assert.Less(t, hash, sketch.Theta64())
+				assert.Len(t, summary.values, 3)
+				assert.True(t, strings.HasPrefix(summary.values[0], "a"))
+				assert.True(t, strings.HasPrefix(summary.values[1], "b"))
+				assert.True(t, strings.HasPrefix(summary.values[2], "c"))
+				assert.Equal(t, summary.values[0][1:], summary.values[1][1:])
+				assert.Equal(t, summary.values[0][1:], summary.values[2][1:])
+			}
+		}
+	})
+
+	t.Run("multi key", func(t *testing.T) {
+		ns := []int{0, 1, 10, 100, 1000, 10000, 100000, 1000000}
+		for _, n := range ns {
+			filename := fmt.Sprintf("%s/aos_multikey_n%d%s.sk", dir, n, sfx)
+			b := testutil.ReadSnapshot(t, filename)
+
+			sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+			assert.NoError(t, err)
+
+			assert.Equal(t, n == 0, sketch.IsEmpty())
+			assert.Equal(t, n > 1000, sketch.IsEstimationMode())
+			assert.InDelta(t, n, sketch.Estimate(), float64(n)*0.03)
+			for hash, summary := range sketch.All() {
+				assert.Less(t, hash, sketch.Theta64())
+				assert.Len(t, summary.values, 1)
+				assert.True(t, strings.HasPrefix(summary.values[0], "value"))
+			}
+		}
+	})
+
+	t.Run("non empty no entries", func(t *testing.T) {
+		filename := fmt.Sprintf("%s/aos_1_non_empty_no_entries%s.sk", dir, sfx)
+		b := testutil.ReadSnapshot(t, filename)
+
+		sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+		assert.NoError(t, err)
+
+		assert.False(t, sketch.IsEmpty())
+		assert.Equal(t, uint32(0), sketch.NumRetained())
+	})
+
+	t.Run("unicode strings", func(t *testing.T) {
+		filename := fmt.Sprintf("%s/aos_unicode%s.sk", dir, sfx)
+		b := testutil.ReadSnapshot(t, filename)
+
+		sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+		assert.NoError(t, err)
+
+		assert.False(t, sketch.IsEmpty())
+		assert.Equal(t, uint32(3), sketch.NumRetained())
+
+		actual := make(map[string]struct{})
+		for hash, summary := range sketch.All() {
+			assert.Less(t, hash, sketch.Theta64())
+			actual[fmt.Sprintf("%q", summary.values)] = struct{}{}
+		}
+
+		expected := map[string]struct{}{
+			fmt.Sprintf("%q", []string{"밸류", "값"}):            {},
+			fmt.Sprintf("%q", []string{"📦", "🎁"}):             {},
+			fmt.Sprintf("%q", []string{"ценить1", "ценить2"}): {},
+		}
+		assert.Equal(t, expected, actual)
+	})
+
+	t.Run("empty strings", func(t *testing.T) {
+		filename := fmt.Sprintf("%s/aos_empty_strings%s.sk", dir, sfx)
+		b := testutil.ReadSnapshot(t, filename)
+
+		sketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+		assert.NoError(t, err)
+
+		assert.False(t, sketch.IsEmpty())
+		assert.Equal(t, uint32(3), sketch.NumRetained())
+
+		actual := make(map[string]struct{})
+		for hash, summary := range sketch.All() {
+			assert.Less(t, hash, sketch.Theta64())
+			actual[fmt.Sprintf("%q", summary.values)] = struct{}{}
+		}
+
+		expected := map[string]struct{}{
+			fmt.Sprintf("%q", []string{"empty_key_value"}): {},
+			fmt.Sprintf("%q", []string{""}):                {},
+			fmt.Sprintf("%q", []string{"", ""}):            {},
+		}
+		assert.Equal(t, expected, actual)
+	})
+}
+
+func TestArrayOfStringsSketch_GoSnapshots(t *testing.T) {
+	assertArrayOfStringsSnapshots(t, internal.GoPath, "_go")
+}
+
+func TestArrayOfStringsSketch_JavaCompat(t *testing.T) {
+	assertArrayOfStringsSnapshots(t, internal.JavaPath, "_java")
+}
+
+// NOTE: See https://github.com/apache/datasketches-go/issues/191
+func TestArrayOfStringsSketch_JavaHashCompat(t *testing.T) {
+	for _, c := range arrayOfStringsSnapshotCases() {
+		t.Run(c.name, func(t *testing.T) {
+			b := testutil.ReadSnapshot(t, fmt.Sprintf("%s/%s_java.sk", internal.JavaPath, c.name))
+			javaSketch, err := Decode[*ArrayOfStringsSummary](b, theta.DefaultSeed, ArrayOfStringsSummaryReader)
+			if !assert.NoError(t, err) {
+				return
+			}
+
+			goSketch := newArrayOfStringsSnapshotSketch(t, c)
+
+			assert.Equal(t, javaSketch.Theta64(), goSketch.Theta64())
+			if !assert.Equal(t, javaSketch.NumRetained(), goSketch.NumRetained()) {
+				return
+			}
+
+			goEntries := make(map[uint64][]string, goSketch.NumRetained())
+			for hash, summary := range goSketch.All() {
+				goEntries[hash] = summary.values
+			}
+			for hash, summary := range javaSketch.All() {
+				values, ok := goEntries[hash]
+				if !assert.Truef(t, ok, "hash %d of the Java snapshot is not retained by Go", hash) {
+					return
+				}
+				assert.Equal(t, summary.values, values)
+			}
+		})
+	}
+}
+
+func TestArrayOfStringsSummaryWriter_ErrTooManyStrings(t *testing.T) {
+	summary := &ArrayOfStringsSummary{
+		values: make([]string, maxStringSliceLength+1),
+	}
+
+	var buf bytes.Buffer
+	err := ArrayOfStringsSummaryWriter(&buf, summary)
+	assert.ErrorIs(t, err, ErrTooManyStrings)
+}
+
+func TestArrayOfStringsSummaryReader_ErrTooManyStrings(t *testing.T) {
+	var buf bytes.Buffer
+
+	err := binary.Write(&buf, binary.LittleEndian, uint32(0))
+	assert.NoError(t, err)
+
+	err = binary.Write(&buf, binary.LittleEndian, uint8(maxStringSliceLength+1))
+	assert.NoError(t, err)
+
+	summary, err := ArrayOfStringsSummaryReader(&buf)
+	assert.Nil(t, summary)
+	assert.ErrorIs(t, err, ErrTooManyStrings)
+}

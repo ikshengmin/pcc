@@ -1,0 +1,850 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.datasketches.frequencies;
+
+import static java.lang.foreign.ValueLayout.JAVA_BYTE;
+import static java.lang.foreign.ValueLayout.JAVA_LONG_UNALIGNED;
+import static org.apache.datasketches.common.Util.LS;
+import static org.apache.datasketches.frequencies.DistTest.randomGeometricDist;
+import static org.apache.datasketches.frequencies.PreambleUtil.FAMILY_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.FLAGS_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.LG_CUR_MAP_SIZE_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.LG_MAX_MAP_SIZE_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.PREAMBLE_LONGS_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.SER_VER_BYTE;
+import static org.apache.datasketches.frequencies.PreambleUtil.STREAMLENGTH_LONG;
+import static org.apache.datasketches.frequencies.Util.LG_MIN_MAP_SIZE;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertFalse;
+import static org.testng.Assert.assertNotNull;
+import static org.testng.Assert.assertTrue;
+import static org.testng.Assert.fail;
+
+import java.lang.foreign.MemorySegment;
+
+import org.apache.datasketches.common.SketchesArgumentException;
+import org.apache.datasketches.common.Util;
+import org.apache.datasketches.frequencies.FrequentLongsSketch.Row;
+import org.testng.Assert;
+import org.testng.annotations.Test;
+
+public class LongsSketchTest {
+
+  @Test
+  public void hashMapSerialTest() {
+    final ReversePurgeLongHashMap map = new ReversePurgeLongHashMap(8);
+    map.adjustOrPutValue(10, 15);
+    map.adjustOrPutValue(10, 5);
+    map.adjustOrPutValue(1, 1);
+    map.adjustOrPutValue(2, 3);
+    final String string = map.serializeToString();
+    //println(string);
+    //println(map.toString());
+    final ReversePurgeLongHashMap new_map =
+        ReversePurgeLongHashMap.getInstance(string);
+    final String new_string = new_map.serializeToString();
+    Assert.assertTrue(string.equals(new_string));
+  }
+
+  @Test
+  public void frequentItemsStringSerialTest() {
+    final FrequentLongsSketch sketch = new FrequentLongsSketch(8);
+    final FrequentLongsSketch sketch2 = new FrequentLongsSketch(128);
+    sketch.update(10, 100);
+    sketch.update(10, 100);
+    sketch.update(15, 3443);
+    sketch.update(1000001, 1010230);
+    sketch.update(1000002, 1010230);
+
+    final String string0 = sketch.serializeToString();
+    final FrequentLongsSketch new_sketch0 = FrequentLongsSketch.getInstance(string0);
+    final String new_string0 = new_sketch0.serializeToString();
+    Assert.assertTrue(string0.equals(new_string0));
+    Assert.assertTrue(new_sketch0.getMaximumMapCapacity() == sketch.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch0.getCurrentMapCapacity() == sketch.getCurrentMapCapacity());
+
+    sketch2.update(190, 12902390);
+    sketch2.update(191, 12902390);
+    sketch2.update(192, 12902390);
+    sketch2.update(193, 12902390);
+    sketch2.update(194, 12902390);
+    sketch2.update(195, 12902390);
+    sketch2.update(196, 12902390);
+    sketch2.update(197, 12902390);
+    sketch2.update(198, 12902390);
+    sketch2.update(199, 12902390);
+    sketch2.update(200, 12902390);
+    sketch2.update(201, 12902390);
+    sketch2.update(202, 12902390);
+    sketch2.update(203, 12902390);
+    sketch2.update(204, 12902390);
+    sketch2.update(205, 12902390);
+    sketch2.update(206, 12902390);
+    sketch2.update(207, 12902390);
+    sketch2.update(208, 12902390);
+
+    final String string2 = sketch2.serializeToString();
+    final FrequentLongsSketch new_sketch2 = FrequentLongsSketch.getInstance(string2);
+    final String new_string2 = new_sketch2.serializeToString();
+    Assert.assertTrue(string2.equals(new_string2));
+    Assert.assertTrue(new_sketch2.getMaximumMapCapacity() == sketch2.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch2.getCurrentMapCapacity() == sketch2.getCurrentMapCapacity());
+    Assert.assertTrue(new_sketch2.getStreamLength() == sketch2.getStreamLength());
+
+    final FrequentLongsSketch merged_sketch = sketch.merge(sketch2);
+
+    final String string = merged_sketch.serializeToString();
+    final FrequentLongsSketch new_sketch = FrequentLongsSketch.getInstance(string);
+    final String new_string = new_sketch.serializeToString();
+    Assert.assertTrue(string.equals(new_string));
+    Assert.assertTrue(new_sketch.getMaximumMapCapacity() == merged_sketch.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch.getCurrentMapCapacity() == merged_sketch.getCurrentMapCapacity());
+    Assert.assertTrue(new_sketch.getStreamLength() == merged_sketch.getStreamLength());
+  }
+
+  @Test
+  public void frequentItemsByteSerialTest() {
+    //Empty Sketch
+    final FrequentLongsSketch sketch = new FrequentLongsSketch(16);
+    final byte[] bytearray0 = sketch.toByteArray();
+    final MemorySegment seg0 = MemorySegment.ofArray(bytearray0);
+    final FrequentLongsSketch new_sketch0 = FrequentLongsSketch.getInstance(seg0);
+    final String str0 = FrequentLongsSketch.toString(seg0);
+    println(str0);
+    final String string0 = sketch.serializeToString();
+    final String new_string0 = new_sketch0.serializeToString();
+    Assert.assertTrue(string0.equals(new_string0));
+
+    final FrequentLongsSketch sketch2 = new FrequentLongsSketch(128);
+    sketch.update(10, 100);
+    sketch.update(10, 100);
+    sketch.update(15, 3443);
+    sketch.update(1000001, 1010230);
+    sketch.update(1000002, 1010230);
+
+    final byte[] bytearray1 = sketch.toByteArray();
+    final MemorySegment seg1 = MemorySegment.ofArray(bytearray1);
+    final FrequentLongsSketch new_sketch1 = FrequentLongsSketch.getInstance(seg1);
+    final String str1 = FrequentLongsSketch.toString(bytearray1);
+    println(str1);
+    final String string1 = sketch.serializeToString();
+    final String new_string1 = new_sketch1.serializeToString();
+    Assert.assertTrue(string1.equals(new_string1));
+    Assert.assertTrue(new_sketch1.getMaximumMapCapacity() == sketch.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch1.getCurrentMapCapacity() == sketch.getCurrentMapCapacity());
+
+    sketch2.update(190, 12902390);
+    sketch2.update(191, 12902390);
+    sketch2.update(192, 12902390);
+    sketch2.update(193, 12902390);
+    sketch2.update(194, 12902390);
+    sketch2.update(195, 12902390);
+    sketch2.update(196, 12902390);
+    sketch2.update(197, 12902390);
+    sketch2.update(198, 12902390);
+    sketch2.update(199, 12902390);
+    sketch2.update(200, 12902390);
+    sketch2.update(201, 12902390);
+    sketch2.update(202, 12902390);
+    sketch2.update(203, 12902390);
+    sketch2.update(204, 12902390);
+    sketch2.update(205, 12902390);
+    sketch2.update(206, 12902390);
+    sketch2.update(207, 12902390);
+    sketch2.update(208, 12902390);
+
+    final byte[] bytearray2 = sketch2.toByteArray();
+    final MemorySegment seg2 = MemorySegment.ofArray(bytearray2);
+    final FrequentLongsSketch new_sketch2 = FrequentLongsSketch.getInstance(seg2);
+
+    final String string2 = sketch2.serializeToString();
+    final String new_string2 = new_sketch2.serializeToString();
+
+    Assert.assertTrue(string2.equals(new_string2));
+    Assert.assertTrue(new_sketch2.getMaximumMapCapacity() == sketch2.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch2.getCurrentMapCapacity() == sketch2.getCurrentMapCapacity());
+    Assert.assertTrue(new_sketch2.getStreamLength() == sketch2.getStreamLength());
+
+    final FrequentLongsSketch merged_sketch = sketch.merge(sketch2);
+
+    final byte[] bytearray = sketch.toByteArray();
+    final MemorySegment seg = MemorySegment.ofArray(bytearray);
+    final FrequentLongsSketch new_sketch = FrequentLongsSketch.getInstance(seg);
+
+    final String string = sketch.serializeToString();
+    final String new_string = new_sketch.serializeToString();
+
+    Assert.assertTrue(string.equals(new_string));
+    Assert.assertTrue(new_sketch.getMaximumMapCapacity() == merged_sketch.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch.getCurrentMapCapacity() == merged_sketch.getCurrentMapCapacity());
+    Assert.assertTrue(new_sketch.getStreamLength() == merged_sketch.getStreamLength());
+  }
+
+  @Test
+  public void frequentItemsByteResetAndEmptySerialTest() {
+    final FrequentLongsSketch sketch = new FrequentLongsSketch(16);
+    sketch.update(10, 100);
+    sketch.update(10, 100);
+    sketch.update(15, 3443);
+    sketch.update(1000001, 1010230);
+    sketch.update(1000002, 1010230);
+    sketch.reset();
+
+    final byte[] bytearray0 = sketch.toByteArray();
+    final MemorySegment seg0 = MemorySegment.ofArray(bytearray0);
+    final FrequentLongsSketch new_sketch0 = FrequentLongsSketch.getInstance(seg0);
+
+    final String string0 = sketch.serializeToString();
+    final String new_string0 = new_sketch0.serializeToString();
+    Assert.assertTrue(string0.equals(new_string0));
+    Assert.assertTrue(new_sketch0.getMaximumMapCapacity() == sketch.getMaximumMapCapacity());
+    Assert.assertTrue(new_sketch0.getCurrentMapCapacity() == sketch.getCurrentMapCapacity());
+  }
+
+  @Test
+  public void checkFreqLongsSegSerDe() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch sk1 = new FrequentLongsSketch(minSize);
+    sk1.update(10, 100);
+    sk1.update(10, 100);
+    sk1.update(15, 3443); println(sk1.toString());
+    sk1.update(1000001, 1010230); println(sk1.toString());
+    sk1.update(1000002, 1010230); println(sk1.toString());
+
+    final byte[] bytearray0 = sk1.toByteArray();
+    final MemorySegment seg0 = MemorySegment.ofArray(bytearray0);
+    final FrequentLongsSketch sk2 = FrequentLongsSketch.getInstance(seg0);
+
+    checkEquality(sk1, sk2);
+  }
+
+  @Test
+  public void checkFreqLongsStringSerDe() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch sk1 = new FrequentLongsSketch(minSize);
+    sk1.update(10, 100);
+    sk1.update(10, 100);
+    sk1.update(15, 3443);
+    sk1.update(1000001, 1010230);
+    sk1.update(1000002, 1010230);
+
+    final String string1 = sk1.serializeToString();
+    final FrequentLongsSketch sk2 = FrequentLongsSketch.getInstance(string1);
+
+    checkEquality(sk1, sk2);
+  }
+
+  private static void checkEquality(final FrequentLongsSketch sk1, final FrequentLongsSketch sk2) {
+    assertEquals(sk1.getNumActiveItems(), sk2.getNumActiveItems());
+    assertEquals(sk1.getCurrentMapCapacity(), sk2.getCurrentMapCapacity());
+    assertEquals(sk1.getMaximumError(), sk2.getMaximumError());
+    assertEquals(sk1.getMaximumMapCapacity(), sk2.getMaximumMapCapacity());
+    assertEquals(sk1.getStorageBytes(), sk2.getStorageBytes());
+    assertEquals(sk1.getStreamLength(), sk2.getStreamLength());
+    assertEquals(sk1.isEmpty(), sk2.isEmpty());
+
+    final ErrorType NFN = ErrorType.NO_FALSE_NEGATIVES;
+    final ErrorType NFP = ErrorType.NO_FALSE_POSITIVES;
+    Row[] rowArr1 = sk1.getFrequentItems(NFN);
+    Row[] rowArr2 = sk2.getFrequentItems(NFN);
+    assertEquals(sk1.getFrequentItems(NFN).length, sk2.getFrequentItems(NFN).length);
+    for (int i=0; i<rowArr1.length; i++) {
+      final String s1 = rowArr1[i].toString();
+      final String s2 = rowArr2[i].toString();
+      assertEquals(s1, s2);
+    }
+    rowArr1 = sk1.getFrequentItems(NFP);
+    rowArr2 = sk2.getFrequentItems(NFP);
+    assertEquals(sk1.getFrequentItems(NFP).length, sk2.getFrequentItems(NFP).length);
+    for (int i=0; i<rowArr1.length; i++) {
+      final String s1 = rowArr1[i].toString();
+      final String s2 = rowArr2[i].toString();
+      assertEquals(s1, s2);
+    }
+  }
+
+  @Test
+  public void checkFreqLongsSegDeSerExceptions() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch sk1 = new FrequentLongsSketch(minSize);
+    sk1.update(1L);
+
+    final byte[] bytearray0 = sk1.toByteArray();
+    final MemorySegment seg = MemorySegment.ofArray(bytearray0);
+    final long pre0 = seg.get(JAVA_LONG_UNALIGNED, 0);
+
+    tryBadSeg(seg, PREAMBLE_LONGS_BYTE, 2); //Corrupt
+    seg.set(JAVA_LONG_UNALIGNED, 0, pre0); //restore
+
+    tryBadSeg(seg, SER_VER_BYTE, 2); //Corrupt
+    seg.set(JAVA_LONG_UNALIGNED, 0, pre0); //restore
+
+    tryBadSeg(seg, FAMILY_BYTE, 2); //Corrupt
+    seg.set(JAVA_LONG_UNALIGNED, 0, pre0); //restore
+
+    tryBadSeg(seg, FLAGS_BYTE, 4); //Corrupt to true
+    seg.set(JAVA_LONG_UNALIGNED, 0, pre0); //restore
+  }
+
+  private static void tryBadSeg(final MemorySegment seg, final int byteOffset, final int byteValue) {
+    try {
+      seg.set(JAVA_BYTE, byteOffset, (byte) byteValue); //Corrupt
+      FrequentLongsSketch.getInstance(seg);
+      fail();
+    } catch (final SketchesArgumentException e) {
+      //expected
+    }
+  }
+
+  @Test
+  public void checkFreqLongsStringDeSerExceptions() {
+    //FrequentLongsSketch sk1 = new FrequentLongsSketch(8);
+    //String str1 = sk1.serializeToString();
+    //String correct   = "1,10,2,4,0,0,0,4,";
+
+    tryBadString("2,10,2,4,0,0,0,4,"); //bad SerVer of 2
+    tryBadString("1,10,2,0,0,0,0,4,"); //bad empty of 0
+    tryBadString(  "1,10,2,4,0,0,0,4,0,"); //one extra
+  }
+
+  private static void tryBadString(final String badString) {
+    try {
+      FrequentLongsSketch.getInstance(badString);
+      fail("Should have thrown SketchesArgumentException");
+    } catch (final SketchesArgumentException e) {
+      //expected
+    }
+  }
+
+  @Test
+  public void checkFreqLongs(){
+    final int numSketches = 1;
+    final int n = 2222;
+    final double error_tolerance = 1.0/100;
+
+    final FrequentLongsSketch[] sketches = new FrequentLongsSketch[numSketches];
+    for (int h = 0; h < numSketches; h++) {
+      sketches[h] = newFrequencySketch(error_tolerance);
+    }
+
+    long item;
+    final double prob = .001;
+    for (int i = 0; i < n; i++) {
+      item = randomGeometricDist(prob) + 1;
+      for (int h = 0; h < numSketches; h++) {
+        sketches[h].update(item);
+      }
+    }
+
+    for (int h = 0; h < numSketches; h++) {
+      final long threshold = sketches[h].getMaximumError();
+      Row[] rows = sketches[h].getFrequentItems(ErrorType.NO_FALSE_NEGATIVES);
+      for (int i = 0; i < rows.length; i++) {
+        Assert.assertTrue(rows[i].getUpperBound() > threshold);
+      }
+
+      rows = sketches[h].getFrequentItems(ErrorType.NO_FALSE_POSITIVES);
+      for (int i = 0; i < rows.length; i++) {
+        Assert.assertTrue(rows[i].getLowerBound() > threshold);
+      }
+
+      rows = sketches[h].getFrequentItems(Long.MAX_VALUE, ErrorType.NO_FALSE_POSITIVES);
+      Assert.assertEquals(rows.length, 0);
+    }
+  }
+
+  @Test
+  public void updateOneTime() {
+    final int size = 100;
+    final double error_tolerance = 1.0 / size;
+    //double delta = .01;
+    final int numSketches = 1;
+    for (int h = 0; h < numSketches; h++) {
+      final FrequentLongsSketch sketch = newFrequencySketch(error_tolerance);
+      Assert.assertEquals(sketch.getUpperBound(13L), 0);
+      Assert.assertEquals(sketch.getLowerBound(13L), 0);
+      Assert.assertEquals(sketch.getMaximumError(), 0);
+      Assert.assertEquals(sketch.getEstimate(13L), 0);
+      sketch.update(13L);
+      // Assert.assertEquals(sketch.getEstimate(13L), 1);
+    }
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkGetInstanceMemorySegment() {
+    final MemorySegment seg = MemorySegment.ofArray(new byte[4]);
+    FrequentLongsSketch.getInstance(seg);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkGetInstanceString() {
+    final String s = "";
+    FrequentLongsSketch.getInstance(s);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkUpdateNegative() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch fls = new FrequentLongsSketch(minSize);
+    fls.update(1, 0);
+    fls.update(1, -1);
+  }
+
+  @SuppressWarnings("unlikely-arg-type")
+  @Test
+  public void checkGetFrequentItems1() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch fis = new FrequentLongsSketch(minSize);
+    fis.update(1);
+    final Row[] rowArr = fis.getFrequentItems(ErrorType.NO_FALSE_POSITIVES);
+    final Row row = rowArr[0];
+    assertTrue(row.hashCode() != 0);
+    assertTrue(row.equals(row));
+    assertFalse(row.equals(fis));
+    assertNotNull(row);
+    assertEquals(row.est, 1L);
+    assertEquals(row.item, 1L);
+    assertEquals(row.lb, 1L);
+    assertEquals(row.ub, 1L);
+    Row newRow = new Row(row.item, row.est+1, row.ub, row.lb);
+    assertFalse(row.equals(newRow));
+    newRow = new Row(row.item, row.est, row.ub, row.lb);
+    assertTrue(row.equals(newRow));
+
+  }
+
+  @Test
+  public void checkGetStorageBytes() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch fls = new FrequentLongsSketch(minSize);
+    assertEquals(fls.toByteArray().length, fls.getStorageBytes());
+    fls.update(1);
+    assertEquals(fls.toByteArray().length, fls.getStorageBytes());
+  }
+
+  @Test
+  public void checkDeSerFromStringArray() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch fls = new FrequentLongsSketch(minSize);
+    String ser = fls.serializeToString();
+    println(ser);
+    fls.update(1);
+    ser = fls.serializeToString();
+    println(ser);
+  }
+
+  @Test
+  public void checkMerge() {
+    final int minSize = 1 << LG_MIN_MAP_SIZE;
+    final FrequentLongsSketch fls1 = new FrequentLongsSketch(minSize);
+    FrequentLongsSketch fls2 = null;
+    FrequentLongsSketch fle = fls1.merge(fls2);
+    assertTrue(fle.isEmpty());
+
+    fls2 = new FrequentLongsSketch(minSize);
+    fle = fls1.merge(fls2);
+    assertTrue(fle.isEmpty());
+  }
+
+  @Test
+  public void checkSortItems() {
+    final int numSketches = 1;
+    final int n = 2222;
+    final double error_tolerance = 1.0/100;
+    final int sketchSize = Util.ceilingPowerOf2((int) (1.0 /(error_tolerance*ReversePurgeLongHashMap.getLoadFactor())));
+    //println("sketchSize: "+sketchSize);
+
+    final FrequentLongsSketch[] sketches = new FrequentLongsSketch[numSketches];
+    for (int h = 0; h < numSketches; h++) {
+      sketches[h] = new FrequentLongsSketch(sketchSize);
+    }
+
+    long item;
+    final double prob = .001;
+    for (int i = 0; i < n; i++) {
+      item = randomGeometricDist(prob) + 1;
+      for (int h = 0; h < numSketches; h++) {
+        sketches[h].update(item);
+      }
+    }
+
+    for(int h=0; h<numSketches; h++) {
+      final long threshold = sketches[h].getMaximumError();
+      final Row[] rows = sketches[h].getFrequentItems(ErrorType.NO_FALSE_NEGATIVES);
+      //println("ROWS: "+rows.length);
+      for (int i = 0; i < rows.length; i++) {
+        Assert.assertTrue(rows[i].ub > threshold);
+      }
+      final Row first = rows[0];
+      final long anItem = first.getItem();
+      final long anEst  = first.getEstimate();
+      final long aLB    = first.getLowerBound();
+      final String s = first.toString();
+      println(s);
+      assertTrue(anEst >= 0);
+      assertTrue(aLB >= 0);
+      assertEquals(anItem, anItem); //dummy test
+    }
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkGetAndCheckPreLongs() {
+    final byte[] byteArr = new byte[8];
+    byteArr[0] = (byte) 2;
+    PreambleUtil.checkPreambleSize(MemorySegment.ofArray(byteArr));
+  }
+
+  @Test
+  public void checkToString1() {
+    final int size = 1 << LG_MIN_MAP_SIZE;
+    printSketch(size, new long[] {1, 1, 1, 1, 1, 1, 1, 2, 3, 4, 5});
+    printSketch(size, new long[] {5, 4, 3, 2, 1, 1, 1, 1, 1, 1, 1});
+  }
+
+  @Test
+  public void checkStringDeserEmptyNotCorrupt() {
+    final int size = 1 << LG_MIN_MAP_SIZE;
+    final int thresh = (size * 3) / 4;
+    final String fmt = "%6d%10s%s";
+    final FrequentLongsSketch fls = new FrequentLongsSketch(size);
+    println("Sketch Size: " + size);
+    String s = null;
+    int i = 0;
+    for ( ; i <= thresh; i++) {
+      fls.update(i+1, 1);
+      s = fls.serializeToString();
+      println(String.format("SER   " + fmt, (i + 1), fls.isEmpty() + " : ", s ));
+      final FrequentLongsSketch fls2 = FrequentLongsSketch.getInstance(s);
+      println(String.format("DESER " + fmt, (i + 1), fls2.isEmpty() + " : ", s ));
+    }
+  }
+
+  @Test
+  public void checkStringDeserNonEmptyNoItems() {
+    final String s = "1,"  //serVer
+             + "10," //FamID
+             + "3,"  //lgMaxMapSz
+             + "0,"  //Empty Flag = false
+             + "7,"  //stream Len so far
+             + "1,"  //error offset
+             + "0,"  //numActive: a purge removed all items
+             + "8,"; //curMapLen
+    final FrequentLongsSketch sk = FrequentLongsSketch.getInstance(s);
+    assertFalse(sk.isEmpty());
+    assertEquals(sk.getNumActiveItems(), 0);
+    assertEquals(sk.getStreamLength(), 7);
+    assertEquals(sk.getMaximumError(), 1);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkStringDeserEmptyFlagMissing() {
+    final String s = "1,"  //serVer
+             + "10," //FamID
+             + "3,"  //lgMaxMapSz
+             + "0,"  //Empty Flag = false ... corrupted, should be true
+             + "0,"  //stream Len: empty
+             + "0,"  //error offset
+             + "0,"  //numActive
+             + "8,"; //curMapLen
+    FrequentLongsSketch.getInstance(s);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkStringDeserEmptyFlagWithStreamLength() {
+    final String s = "1,"  //serVer
+             + "10," //FamID
+             + "3,"  //lgMaxMapSz
+             + "5,"  //Empty Flag = true ... corrupted, should be false
+             + "7,"  //stream Len so far
+             + "1,"  //error offset
+             + "0,"  //numActive
+             + "8,"; //curMapLen
+    FrequentLongsSketch.getInstance(s);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class, timeOut = 5000)
+  public void checkStringDeserMapLengthTooSmall() {
+    final String s = "1,"  //serVer
+             + "10," //FamID
+             + "3,"  //lgMaxMapSz
+             + "5,"  //Empty Flag
+             + "0,"  //stream Len: empty
+             + "0,"  //error offset
+             + "0,"  //numActive
+             + "2,"; //curMapLen ... corrupted, below the minimum of 8
+    final FrequentLongsSketch fls = FrequentLongsSketch.getInstance(s);
+    fls.update(1);
+    fls.update(2);
+    fls.update(3);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class, timeOut = 5000)
+  public void checkStringDeserNumActiveExceedsMapCapacity() {
+    final StringBuilder sb = new StringBuilder();
+    sb.append("1,")  //serVer
+      .append("10,") //FamID
+      .append("3,")  //lgMaxMapSz
+      .append("0,")  //Empty Flag = false
+      .append("9,")  //stream Len
+      .append("0,")  //error offset
+      .append("9,")  //numActive ... corrupted, more than the map can hold
+      .append("8,"); //curMapLen
+    for (int i = 1; i <= 9; i++) { sb.append(i).append(",1,"); }
+    FrequentLongsSketch.getInstance(sb.toString());
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class, timeOut = 5000)
+  public void checkStringDeserMapLengthExceedsMax() {
+    final String s = "1,"  //serVer
+             + "10," //FamID
+             + "3,"  //lgMaxMapSz
+             + "5,"  //Empty Flag
+             + "0,"  //stream Len: empty
+             + "0,"  //error offset
+             + "0,"  //numActive
+             + "16,"; //curMapLen ... corrupted, above the max of 8
+    FrequentLongsSketch.getInstance(s);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class, timeOut = 5000)
+  public void checkSegDeserLgCurMapSizeTooSmall() {
+    final FrequentLongsSketch sk = new FrequentLongsSketch(1 << 8);
+    sk.update(1);
+    final byte[] bytes = sk.toByteArray();
+    bytes[LG_CUR_MAP_SIZE_BYTE] = (byte) (LG_MIN_MAP_SIZE - 1); //corrupted, below the minimum
+    FrequentLongsSketch.getInstance(MemorySegment.ofArray(bytes));
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class, timeOut = 5000)
+  public void checkSegDeserLgCurMapSizeExceedsLgMax() {
+    final FrequentLongsSketch sk = new FrequentLongsSketch(1 << 8);
+    sk.update(1);
+    final byte[] bytes = sk.toByteArray();
+    bytes[LG_CUR_MAP_SIZE_BYTE] = (byte) (bytes[LG_MAX_MAP_SIZE_BYTE] + 1); //corrupted, above max
+    FrequentLongsSketch.getInstance(MemorySegment.ofArray(bytes));
+  }
+
+  @Test
+  public void checkGetEpsilon() {
+    assertEquals(FrequentLongsSketch.getEpsilon(1024), 3.5 / 1024, 0.0);
+    try {
+      FrequentLongsSketch.getEpsilon(1000);
+    } catch (final SketchesArgumentException e) { }
+  }
+
+  @Test
+  public void checkGetAprioriError() {
+    final double eps = 3.5 / 1024;
+    assertEquals(FrequentLongsSketch.getAprioriError(1024, 10_000), eps * 10_000);
+  }
+
+  @Test
+  public void printlnTest() {
+    println("PRINTING: " + this.getClass().getName());
+  }
+
+  //Restricted methods
+
+  public void printSketch(final int size, final long[] freqArr) {
+    final FrequentLongsSketch fls = new FrequentLongsSketch(size);
+    final StringBuilder sb = new StringBuilder();
+    for (int i = 0; i<freqArr.length; i++) {
+      fls.update(i+1, freqArr[i]);
+    }
+    sb.append("Sketch Size: "+size).append(LS);
+    final String s = fls.toString();
+    sb.append(s);
+    println(sb.toString());
+    printRows(fls, ErrorType.NO_FALSE_NEGATIVES);
+    println("");
+    printRows(fls, ErrorType.NO_FALSE_POSITIVES);
+    println("");
+  }
+
+  private static void printRows(final FrequentLongsSketch fls, final ErrorType eType) {
+    final Row[] rows = fls.getFrequentItems(eType);
+    final String s1 = eType.toString();
+    println(s1);
+    final String hdr = Row.getRowHeader();
+    println(hdr);
+    for (int i=0; i<rows.length; i++) {
+      final Row row = rows[i];
+      final String s2 = row.toString();
+      println(s2);
+    }
+    if (rows.length > 0) { //check equals null case
+      final Row nullRow = null;
+      assertFalse(rows[0].equals(nullRow));
+    }
+  }
+
+  // lgMaxMapSize=8 -> capacity 192; the 193rd distinct item triggers a purge whose
+  // median (1) removes every counter: not empty, no retained items
+  private static FrequentLongsSketch purgedToZero() {
+    final FrequentLongsSketch sk = new FrequentLongsSketch(1 << 8);
+    for (long i = 0; i < 193; i++) { sk.update(i); }
+    return sk;
+  }
+
+  @Test
+  public void checkPurgedToZeroIsNotEmpty() {
+    final FrequentLongsSketch sk = purgedToZero();
+    assertEquals(sk.getNumActiveItems(), 0);
+    assertFalse(sk.isEmpty());
+    assertEquals(sk.getStreamLength(), 193);
+    assertEquals(sk.getMaximumError(), 1);
+
+    final byte[] bytes = sk.toByteArray();
+    assertEquals(bytes.length, 32);
+    assertEquals(bytes[PREAMBLE_LONGS_BYTE], 4);
+    assertEquals(bytes[FLAGS_BYTE], 0);
+    assertEquals(sk.getStorageBytes(), 32);
+
+    final FrequentLongsSketch sk2 = FrequentLongsSketch.getInstance(MemorySegment.ofArray(bytes));
+    assertFalse(sk2.isEmpty());
+    assertEquals(sk2.getNumActiveItems(), 0);
+    assertEquals(sk2.getStreamLength(), 193);
+    assertEquals(sk2.getMaximumError(), 1);
+
+    final FrequentLongsSketch sk3 = FrequentLongsSketch.getInstance(sk.serializeToString());
+    assertFalse(sk3.isEmpty());
+    assertEquals(sk3.getStreamLength(), 193);
+    assertEquals(sk3.getMaximumError(), 1);
+    assertEquals(sk3.serializeToString(), sk.serializeToString());
+
+    final FrequentLongsSketch sk4 = new FrequentLongsSketch(1 << 8);
+    sk4.update(999_999);
+    sk4.merge(sk);
+    assertEquals(sk4.getStreamLength(), 194);
+    assertEquals(sk4.getMaximumError(), 1);
+  }
+
+  @Test
+  public void checkResetAfterPurge() {
+    final FrequentLongsSketch sk = purgedToZero();
+    sk.reset();
+    assertTrue(sk.isEmpty());
+    assertEquals(sk.getStreamLength(), 0);
+    assertEquals(sk.getMaximumError(), 0);
+    assertEquals(sk.toByteArray().length, 8);
+  }
+
+  @Test
+  public void checkEmptyWithEitherLegacyFlag() {
+    final byte[] bytes = new FrequentLongsSketch(1 << 8).toByteArray();
+    assertEquals(bytes.length, 8);
+    assertEquals(bytes[FLAGS_BYTE], 5);
+    for (final int flags : new int[] {1, 4, 5}) {
+      bytes[FLAGS_BYTE] = (byte) flags;
+      assertTrue(FrequentLongsSketch.getInstance(MemorySegment.ofArray(bytes)).isEmpty());
+    }
+  }
+
+  @Test
+  public void checkCorruptEmptyPreamble() {
+    final byte[] empty = new FrequentLongsSketch(1 << 8).toByteArray();
+    empty[FLAGS_BYTE] = 0; //preLongs 1 without empty flag
+    tryBadBytes(empty);
+
+    final FrequentLongsSketch sk = new FrequentLongsSketch(1 << 8);
+    sk.update(1);
+    final byte[] flagged = sk.toByteArray();
+    flagged[FLAGS_BYTE] = 5; //preLongs 4 with empty flag
+    tryBadBytes(flagged);
+
+    final byte[] zeroWeight = sk.toByteArray();
+    MemorySegment.ofArray(zeroWeight).set(JAVA_LONG_UNALIGNED, STREAMLENGTH_LONG, 0L);
+    tryBadBytes(zeroWeight);
+  }
+
+  private static void tryBadBytes(final byte[] bytes) {
+    try {
+      FrequentLongsSketch.getInstance(MemorySegment.ofArray(bytes));
+      fail();
+    } catch (final SketchesArgumentException e) {
+      //expected
+    }
+  }
+
+  /**
+   * @param s value to print
+   */
+  static void println(final String s) {
+    //System.err.println(s); //disable here
+  }
+
+  private static FrequentLongsSketch newFrequencySketch(final double eps) {
+    final double loadFactor = ReversePurgeLongHashMap.getLoadFactor();
+    final int maxMapSize = Util.ceilingPowerOf2((int) (1.0 /(eps*loadFactor)));
+    return new FrequentLongsSketch(maxMapSize);
+  }
+
+
+  private static byte[] longsImage() {
+    final FrequentLongsSketch fls = new FrequentLongsSketch(1 << 10);
+    for (int i = 0; i < 5; i++) { fls.update(i, i + 1); }
+    return fls.toByteArray();
+  }
+
+  @Test
+  public void checkBinaryDeserLargeDeclaredMapDoesNotAllocate() {
+    final byte[] bytes = longsImage();
+    bytes[PreambleUtil.LG_MAX_MAP_SIZE_BYTE] = 30;
+    bytes[PreambleUtil.LG_CUR_MAP_SIZE_BYTE] = 30;
+    final MemorySegment seg = MemorySegment.ofArray(bytes);
+    final long allocated = org.apache.datasketches.common.AllocationTracker.allocatedBytes(
+        () -> FrequentLongsSketch.getInstance(seg));
+    assertTrue(allocated < (1 << 20), "allocated " + allocated);
+    final FrequentLongsSketch fls = FrequentLongsSketch.getInstance(seg);
+    assertEquals(fls.getNumActiveItems(), 5);
+    assertEquals(fls.getEstimate(4), 5);
+  }
+
+  @Test
+  public void checkBinaryDeserInconsistentSizes() {
+    final byte[] curTooBig = longsImage();
+    curTooBig[PreambleUtil.LG_CUR_MAP_SIZE_BYTE] = (byte) (curTooBig[PreambleUtil.LG_MAX_MAP_SIZE_BYTE] + 1);
+    final byte[] curTooSmall = longsImage();
+    curTooSmall[PreambleUtil.LG_CUR_MAP_SIZE_BYTE] = 2;
+    final byte[] tooManyActive = longsImage();
+    org.apache.datasketches.common.ByteArrayUtil.putIntLE(tooManyActive, 8, 1 << 20);
+    final byte[] negActive = longsImage();
+    org.apache.datasketches.common.ByteArrayUtil.putIntLE(negActive, 8, -1);
+    for (final byte[] b : new byte[][] {curTooBig, curTooSmall, tooManyActive, negActive}) {
+      try { FrequentLongsSketch.getInstance(MemorySegment.ofArray(b)); fail(); }
+      catch (final SketchesArgumentException e) { }
+    }
+  }
+
+  @Test
+  public void checkBinaryDeserActiveItemsBeyondImage() {
+    final byte[] bytes = longsImage();
+    bytes[PreambleUtil.LG_MAX_MAP_SIZE_BYTE] = 30;
+    bytes[PreambleUtil.LG_CUR_MAP_SIZE_BYTE] = 30;
+    org.apache.datasketches.common.ByteArrayUtil.putIntLE(bytes, 8, 1 << 28); //more items than the image holds
+    final MemorySegment seg = MemorySegment.ofArray(bytes);
+    final long allocated = org.apache.datasketches.common.AllocationTracker.allocatedBytes(
+        () -> FrequentLongsSketch.getInstance(seg));
+    assertTrue(allocated < (1 << 20), "allocated " + allocated);
+    try { FrequentLongsSketch.getInstance(seg); fail(); }
+    catch (final SketchesArgumentException e) { }
+  }
+
+}

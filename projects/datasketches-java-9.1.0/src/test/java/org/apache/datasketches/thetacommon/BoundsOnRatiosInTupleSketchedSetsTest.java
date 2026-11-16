@@ -1,0 +1,208 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.datasketches.thetacommon;
+
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+
+import org.apache.datasketches.common.SketchesArgumentException;
+import org.apache.datasketches.theta.UpdatableThetaSketch;
+import org.apache.datasketches.theta.UpdatableThetaSketchBuilder;
+import org.apache.datasketches.tuple.TupleIntersection;
+import org.apache.datasketches.tuple.TupleSketch;
+import org.apache.datasketches.tuple.UpdatableTupleSketch;
+import org.apache.datasketches.tuple.UpdatableTupleSketchBuilder;
+import org.apache.datasketches.tuple.adouble.DoubleSummary;
+import org.apache.datasketches.tuple.adouble.DoubleSummaryFactory;
+import org.apache.datasketches.tuple.adouble.DoubleSummarySetOperations;
+import org.testng.annotations.Test;
+
+/**
+ * @author Lee Rhodes
+ * @author David Cromberge
+ */
+public class BoundsOnRatiosInTupleSketchedSetsTest {
+
+  private final DoubleSummary.Mode umode = DoubleSummary.Mode.Sum;
+  private final DoubleSummarySetOperations dsso = new DoubleSummarySetOperations();
+  private final DoubleSummaryFactory factory = new DoubleSummaryFactory(umode);
+  private final UpdatableThetaSketchBuilder thetaBldr = UpdatableThetaSketch.builder();
+  private final UpdatableTupleSketchBuilder<Double, DoubleSummary> tupleBldr = new UpdatableTupleSketchBuilder<>(factory);
+  private final Double constSummary = 1.0;
+
+  @Test
+  public void checkNormalReturns1() { // tuple, tuple
+    final UpdatableTupleSketch<Double, DoubleSummary> skA = tupleBldr.build(); //4K
+    final UpdatableTupleSketch<Double, DoubleSummary> skC = tupleBldr.build();
+    final int uA = 10000;
+    final int uC = 100000;
+    for (int i = 0; i < uA; i++) { skA.update(i, constSummary); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2), constSummary); }
+    final TupleIntersection<DoubleSummary> inter = new TupleIntersection<>(dsso);
+    inter.intersect(skA);
+    inter.intersect(skC);
+    final TupleSketch<DoubleSummary> skB = inter.getResult();
+
+    double est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    double lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    double ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    assertTrue(ub > est);
+    assertTrue(est > lb);
+    assertEquals(est, 0.5, .03);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skA.reset(); //skA is now empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skC.reset(); //Now both are empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skC);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skC);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+  }
+
+  @Test
+  public void checkNormalReturns2() { // tuple, theta
+    final UpdatableTupleSketch<Double, DoubleSummary> skA = tupleBldr.build(); //4K
+    final UpdatableThetaSketch skC = thetaBldr.build();
+    final int uA = 10000;
+    final int uC = 100000;
+    for (int i = 0; i < uA; i++) { skA.update(i, constSummary); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2)); }
+    final TupleIntersection<DoubleSummary> inter = new TupleIntersection<>(dsso);
+    inter.intersect(skA);
+    inter.intersect(skC, factory.newSummary());
+    final TupleSketch<DoubleSummary> skB = inter.getResult();
+
+    double est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    double lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    double ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    assertTrue(ub > est);
+    assertTrue(est > lb);
+    assertEquals(est, 0.5, .03);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skA.reset(); //skA is now empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skC.reset(); //Now both are empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skC);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skC);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+  }
+
+  @Test
+  public void checkNormalReturns3() { // theta, tuple
+    final UpdatableThetaSketch skA = thetaBldr.build();
+    final UpdatableTupleSketch<Double, DoubleSummary> skC = tupleBldr.build(); //4K
+    final int uA = 10000;
+    final int uC = 100000;
+    for (int i = 0; i < uA; i++) { skA.update(i); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2), constSummary); }
+    final TupleIntersection<DoubleSummary> inter = new TupleIntersection<>(dsso);
+    inter.intersect(skA, factory.newSummary());
+    inter.intersect(skC);
+    final TupleSketch<DoubleSummary> skB = inter.getResult();
+
+    double est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    double lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    double ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    assertTrue(ub > est);
+    assertTrue(est > lb);
+    assertEquals(est, 0.5, .03);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skA.reset(); //skA is now empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skB);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skB);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skB);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+    skC.reset(); //Now both are empty
+    est = BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+    lb = BoundsOnRatiosInTupleSketchedSets.getLowerBoundForBoverA(skA, skC);
+    ub = BoundsOnRatiosInTupleSketchedSets.getUpperBoundForBoverA(skA, skC);
+    println("ub : " + ub);
+    println("est: " + est);
+    println("lb : " + lb);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkAbnormalReturns1() { // tuple, tuple
+    final UpdatableTupleSketch<Double, DoubleSummary> skA = tupleBldr.build(); //4K
+    final UpdatableTupleSketch<Double, DoubleSummary> skC = tupleBldr.build();
+    final int uA = 100000;
+    final int uC = 10000;
+    for (int i = 0; i < uA; i++) { skA.update(i, constSummary); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2), constSummary); }
+    BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkAbnormalReturns2() { // tuple, theta
+    final UpdatableTupleSketch<Double, DoubleSummary> skA = tupleBldr.build(); //4K
+    final UpdatableThetaSketch skC = thetaBldr.build();
+    final int uA = 100000;
+    final int uC = 10000;
+    for (int i = 0; i < uA; i++) { skA.update(i, constSummary); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2)); }
+    BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+  }
+
+  @Test(expectedExceptions = SketchesArgumentException.class)
+  public void checkAbnormalReturns3() { // theta, tuple
+    final UpdatableThetaSketch skA = thetaBldr.build();
+    final UpdatableTupleSketch<Double, DoubleSummary> skC = tupleBldr.build(); //4K
+    final int uA = 100000;
+    final int uC = 10000;
+    for (int i = 0; i < uA; i++) { skA.update(i); }
+    for (int i = 0; i < uC; i++) { skC.update(i + (uA / 2), constSummary); }
+    BoundsOnRatiosInTupleSketchedSets.getEstimateOfBoverA(skA, skC);
+  }
+
+  @Test
+  public void printlnTest() {
+    println("PRINTING: " + this.getClass().getName());
+  }
+
+  /**
+   * @param s value to print
+   */
+  static void println(final String s) {
+    //System.out.println(s); //disable here
+  }
+}

@@ -1,0 +1,3 @@
+# Preserve pinned upstream DataSketches bytes (CRLF and trailing whitespace included);
+# upstream text is not ours to rewrite.
+datasketches-*/** -text -whitespace

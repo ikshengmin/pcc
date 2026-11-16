@@ -1,0 +1,131 @@
+/*
+ * Licensed to the Apache Software Foundation (ASF) under one
+ * or more contributor license agreements.  See the NOTICE file
+ * distributed with this work for additional information
+ * regarding copyright ownership.  The ASF licenses this file
+ * to you under the Apache License, Version 2.0 (the
+ * "License"); you may not use this file except in compliance
+ * with the License.  You may obtain a copy of the License at
+ *
+ *   http://www.apache.org/licenses/LICENSE-2.0
+ *
+ * Unless required by applicable law or agreed to in writing,
+ * software distributed under the License is distributed on an
+ * "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+ * KIND, either express or implied.  See the License for the
+ * specific language governing permissions and limitations
+ * under the License.
+ */
+
+package org.apache.datasketches.tuple;
+
+import static org.apache.datasketches.common.UtilityIO.CHECK_CPP_FILES;
+import static org.apache.datasketches.common.UtilityIO.CHECK_CPP_HISTORICAL_FILES;
+import static org.apache.datasketches.common.UtilityIO.CHECK_GO_FILES;
+import static org.apache.datasketches.common.UtilityIO.CHECK_JAVA_FILES;
+import static org.apache.datasketches.common.UtilityIO.GENERATE_JAVA_FILES;
+import static org.apache.datasketches.common.UtilityIO.getFileBytes;
+import static org.apache.datasketches.common.UtilityIO.putBytesToJavaPath;
+import static org.testng.Assert.assertEquals;
+import static org.testng.Assert.assertTrue;
+
+import java.io.IOException;
+import java.lang.foreign.MemorySegment;
+
+import org.apache.datasketches.common.UtilityIO;
+import org.apache.datasketches.common.UtilityIO.GroupLanguage;
+import org.apache.datasketches.tuple.adouble.DoubleSummary;
+import org.apache.datasketches.tuple.adouble.DoubleSummaryDeserializer;
+import org.testng.Assert;
+import org.testng.annotations.Test;
+
+public class TupleCrossLanguageTest {
+
+  @Test(groups = {GENERATE_JAVA_FILES}, priority = 0)
+  public void generateForCppIntegerSummary() throws IOException {
+    final int[] nArr = {0, 1, 10, 100, 1000, 10_000, 100_000, 1_000_000};
+    for (int n: nArr) {
+      final UpdatableTupleSketch<Integer, IntegerSummary> sk =
+          new UpdatableTupleSketchBuilder<>(new IntegerSummaryFactory()).build();
+      for (int i = 0; i < n; i++) {
+        sk.update(i, i);
+      }
+      putBytesToJavaPath("tuple_int_n" + n + "_java.sk", sk.compact().toByteArray());
+    }
+  }
+
+  @Test(groups = {CHECK_JAVA_FILES}, priority = 1)
+  public void checkJava() {
+    deserializeTupleIntegerSummary(GroupLanguage.JAVA);
+  }
+
+  @Test(groups = {CHECK_CPP_FILES})
+  public void checkCpp() {
+    deserializeTupleIntegerSummary(GroupLanguage.CPP);
+  }
+
+  @Test(groups = {CHECK_GO_FILES})
+  public void checkGo() {
+    deserializeTupleIntegerSummary(GroupLanguage.GO);
+  }
+
+  private static void deserializeTupleIntegerSummary(final GroupLanguage lang) {
+    final int[] nArr = {0, 1, 10, 100, 1000, 10_000, 100_000, 1_000_000};
+    for (int n: nArr) {
+      final String fileName = "tuple_int_n" + n + lang.sfx + ".sk";
+      final byte[] bytes = getFileBytes(lang.pth, fileName);
+      if (bytes.length == 0) { continue;}
+      //System.out.println(fileName);
+      final TupleSketch<IntegerSummary> sketch =
+          TupleSketch.heapifySketch(MemorySegment.ofArray(bytes), new IntegerSummaryDeserializer());
+      assertTrue(n == 0 ? sketch.isEmpty() : !sketch.isEmpty());
+      assertTrue(n > 1000 ? sketch.isEstimationMode() : !sketch.isEstimationMode());
+      assertEquals(sketch.getEstimate(), n, n * 0.03);
+      final TupleSketchIterator<IntegerSummary> it = sketch.iterator();
+      while (it.next()) {
+        assertTrue(it.getHash() < sketch.getThetaLong());
+        assertTrue(it.getSummary().getValue() < n);
+      }
+    }
+  }
+
+  @Test(groups = {CHECK_CPP_HISTORICAL_FILES})
+  public void serialVersion1Compatibility() {
+    final byte[] byteArr = UtilityIO.getTestResourceBytes("CompactSketchWithDoubleSummary4K_serialVersion1.sk");
+    TupleSketch<DoubleSummary> sketch = TupleSketch.heapifySketch(MemorySegment.ofArray(byteArr), new DoubleSummaryDeserializer());
+    Assert.assertTrue(sketch.isEstimationMode());
+    Assert.assertEquals(sketch.getEstimate(), 8192, 8192 * 0.99);
+    Assert.assertEquals(sketch.getRetainedEntries(), 4096);
+    int count = 0;
+    TupleSketchIterator<DoubleSummary> it = sketch.iterator();
+    while (it.next()) {
+      Assert.assertEquals(it.getSummary().getValue(), 1.0);
+      count++;
+    }
+    Assert.assertEquals(count, 4096);
+  }
+
+  @Test(groups = {CHECK_CPP_HISTORICAL_FILES})
+  public void version2Compatibility() {
+    final byte[] byteArr = UtilityIO.getTestResourceBytes("TupleWithTestIntegerSummary4kTrimmedSerVer2.sk");
+    TupleSketch<IntegerSummary> sketch1 = TupleSketch.heapifySketch(MemorySegment.ofArray(byteArr), new IntegerSummaryDeserializer());
+
+    // construct the same way
+    final int lgK = 12;
+    final int K = 1 << lgK;
+    final UpdatableTupleSketchBuilder<Integer, IntegerSummary> builder =
+            new UpdatableTupleSketchBuilder<>(new IntegerSummaryFactory());
+    final UpdatableTupleSketch<Integer, IntegerSummary> updatableSketch = builder.build();
+    for (int i = 0; i < 2 * K; i++) {
+      updatableSketch.update(i, 1);
+    }
+    updatableSketch.trim();
+    TupleSketch<IntegerSummary> sketch2 = updatableSketch.compact();
+
+    Assert.assertEquals(sketch1.getRetainedEntries(), sketch2.getRetainedEntries());
+    Assert.assertEquals(sketch1.getThetaLong(), sketch2.getThetaLong());
+    Assert.assertEquals(sketch1.isEmpty(), sketch2.isEmpty());
+    Assert.assertEquals(sketch1.isEstimationMode(), sketch2.isEstimationMode());
+  }
+
+}
