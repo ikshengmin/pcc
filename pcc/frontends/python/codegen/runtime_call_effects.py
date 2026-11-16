@@ -8,6 +8,9 @@ from pcc.frontends.python.codegen.errors import L1CodegenError
 
 
 NO_SAFEPOINT_RUNTIME_FUNCTIONS = frozenset({"py_tuple_len"})
+# Runtime port functions poll at loops only; these root readers keep the
+# function-entry poll (test_freestanding_root_reads).
+ENTRY_POLL_RUNTIME_FUNCTIONS = frozenset({"pcc_gc_load_ptr", "pcc_gc_load_borrowed_ptr"})
 _BOUNDED_LEAF_OPS = frozenset({
     "alloca", "load", "store", "getelementptr", "ptrtoint", "inttoptr",
     "bitcast", "icmp", "fcmp", "select", "phi", "trunc", "zext", "sext",

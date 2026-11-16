@@ -10,6 +10,7 @@ from pcc.ir.compat import ir
 from pcc.ir.optimization.inline import SAFEPOINT_POLL_LOAD_ORDERING
 from pcc.frontends.python.symbol_names import identifier_symbol
 from pcc.frontends.python.codegen.runtime_call_effects import (
+    ENTRY_POLL_RUNTIME_FUNCTIONS as _ENTRY_POLL_RUNTIME_FUNCTIONS,
     NO_SAFEPOINT_RUNTIME_FUNCTIONS,
     verify_no_safepoint_runtime_function,
 )
@@ -1611,7 +1612,14 @@ class UserFunctionLoweringMixin:
                 self._current_global_names,
             )
             prepare_local_boundness(self, fd)
-            self._emit_application_safepoint()
+            # A runtime port's function polls at its loop back-edges and its
+            # explicit pcc_thread_safepoint calls, not at every entry: the
+            # entry poll was a fixed cost on each of the thousands of runtime
+            # calls a request makes. The root readers keep theirs
+            # (test_freestanding_root_reads). Program code always polls.
+            if (not getattr(self, "_runtime_port_module", False)
+                    or self.current_function.name in _ENTRY_POLL_RUNTIME_FUNCTIONS):
+                self._emit_application_safepoint()
 
             # Emit body.
             # A leading string expression is function metadata, not an
