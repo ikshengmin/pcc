@@ -868,6 +868,124 @@ def _close_private_value_columns(
         pass
 
 
+def _close_private_decoded_kernel(kernel: IndexedFunctionKernel) -> None:
+    # Only complete kernels privately owned by this decoder reach this rollback.
+    # Current fields cover seed aliases and fresh kernel tables exactly once.
+    # Do not revisit historical seeds or construct a kernel while handling errors.
+    try:
+        kernel.block_name_index.close()
+    except BaseException:
+        pass
+    try:
+        kernel.block_facts.close()
+    except BaseException:
+        pass
+    try:
+        kernel.call_arg_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.call_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_facts.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_kind_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_metadata.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_record_dest_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_record_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.gep_index_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.gep_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.type_field_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.type_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.terminator_case_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.terminator_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.block_phi_facts.close()
+    except BaseException:
+        pass
+    try:
+        kernel.phi_incoming_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.phi_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.error_edge_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.error_edge_spans.close()
+    except BaseException:
+        pass
+    try:
+        kernel.error_landing_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.value_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.definition_positions.close()
+    except BaseException:
+        pass
+    try:
+        kernel.used_value_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.slot_scalars.close()
+    except BaseException:
+        pass
+    try:
+        kernel.block_layout_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.instruction_overflow_use_ids.close()
+    except BaseException:
+        pass
+    try:
+        kernel.value_name_index.close()
+    except BaseException:
+        pass
+
+
 def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule:
     """Read and fully validate one v1 direct indexed module sidecar."""
 
@@ -1039,36 +1157,46 @@ def decode_indexed_module_file(path: str, *, max_bytes: int = 0) -> ParsedModule
             raise BackendUnavailable("indexed module changed during read")
         if not native and stream.read(1):
             raise BackendUnavailable("indexed module has trailing bytes")
-    bodies = header.get("named_type_bodies", {})
-    if not isinstance(bodies, dict):
-        raise BackendUnavailable("indexed module named type declarations are invalid")
-    declarations = []
-    for name, body in bodies.items():
-        name = _wire_str(name, "named type name")
-        body = _wire_str(body, "named type body")
-        if not name.startswith("%") or "\n" in name or "\n" in body:
-            raise BackendUnavailable("indexed module named type declaration is invalid")
-        declarations.append(name + " = type " + body)
-    from .self_backend_parse import _parse_named_types
-    triple = _wire_str(header.get("triple", ""), "target triple")
-    type_context = _parse_named_types("\n".join(declarations))
-    type_context.target_triple = triple
-    if "source_debug" in header:
-        from .self_backend_debug_codec import debug_from_wire
-        from . import BackendUnavailable as DebugUnavailable
-        try:
-            type_context.debug_info = debug_from_wire(header["source_debug"], tuple(functions))
-        except DebugUnavailable as error:
-            raise BackendUnavailable(str(error)) from error
-    for function in functions:
-        function.type_context = type_context
-    globals_ = tuple(_global_from_wire(row, type_context) for row in global_rows)
-    return ParsedModule(
-        triple=triple,
-        globals_=globals_,
-        functions=tuple(functions),
-        type_context=type_context,
-    )
+    try:
+        bodies = header.get("named_type_bodies", {})
+        if not isinstance(bodies, dict):
+            raise BackendUnavailable("indexed module named type declarations are invalid")
+        declarations = []
+        for name, body in bodies.items():
+            name = _wire_str(name, "named type name")
+            body = _wire_str(body, "named type body")
+            if not name.startswith("%") or "\n" in name or "\n" in body:
+                raise BackendUnavailable("indexed module named type declaration is invalid")
+            declarations.append(name + " = type " + body)
+        from .self_backend_parse import _parse_named_types
+        triple = _wire_str(header.get("triple", ""), "target triple")
+        type_context = _parse_named_types("\n".join(declarations))
+        type_context.target_triple = triple
+        if "source_debug" in header:
+            from .self_backend_debug_codec import debug_from_wire
+            from . import BackendUnavailable as DebugUnavailable
+            try:
+                type_context.debug_info = debug_from_wire(header["source_debug"], tuple(functions))
+            except DebugUnavailable as error:
+                raise BackendUnavailable(str(error)) from error
+        for function in functions:
+            function.type_context = type_context
+        globals_ = tuple(_global_from_wire(row, type_context) for row in global_rows)
+        return ParsedModule(
+            triple=triple,
+            globals_=globals_,
+            functions=tuple(functions),
+            type_context=type_context,
+        )
+    except BaseException:
+        # All functions have completed private kernel adoption, but no module
+        # has been returned. Earlier acquisition rollback contracts stay local.
+        for function in functions:
+            kernel = function.indexed_kernel
+            if isinstance(kernel, IndexedFunctionKernel):
+                _close_private_decoded_kernel(kernel)
+        raise
+
 
 
 __all__ = ["encode_indexed_module_file", "decode_indexed_module_file"]
