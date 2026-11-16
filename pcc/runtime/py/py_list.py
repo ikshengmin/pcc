@@ -2866,40 +2866,38 @@ def _native_body_py_list_remove(_native_inputs) -> None:
         if compared == 0:
             index = index + 1
             continue
-        # The equal candidate is still retained. Delete it only if it is
-        # still at index: an insert or delete by another mutator during the
-        # comparison shifts the list, and the scan then starts over.
-        matched: int = 0
+        # The comparison is true: delete the slice [index:index+1] as
+        # CPython's listremove does (list_ass_slice), whatever element is at
+        # index now. A callback that inserted before it or shortened the list
+        # changes what is deleted, never whether remove returns: rescanning
+        # instead compared again forever while the callback kept inserting.
         locked = load_ptr(list_slot, 0)
         _list_lock(locked)
         lst = load_ptr(list_slot, 0)
         length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
         candidate = pcc_gc_load_ptr(null(), candidate_slot)
-        if index >= 0 and index < length:
+        removed = null()
+        if index < length:
             items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-            if ptr_eq(pcc_gc_load_ptr(lst, ptr_add(items, index * 8)), candidate) != 0:
-                matched = 1
-                store_ptr(items, index * 8, null())
-                if index < length - 1:
-                    memmove(
-                        ptr_add(items, index * 8),
-                        ptr_add(items, (index + 1) * 8),
-                        (length - index - 1) * 8,
-                    )
-                store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
-        if matched == 0:
-            store_ptr(candidate_slot, 0, null())
+            removed = pcc_gc_load_ptr(lst, ptr_add(items, index * 8))
+            store_ptr(items, index * 8, null())
+            if index < length - 1:
+                memmove(
+                    ptr_add(items, index * 8),
+                    ptr_add(items, (index + 1) * 8),
+                    (length - index - 1) * 8,
+                )
+            store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length - 1)
+        # The root keeps the list's former reference to the removed element
+        # (none when the list shrank below index) until the teardown below.
+        store_ptr(candidate_slot, 0, removed)
         _list_unlock(locked)
-        # Drop the comparison's reference. After a removal the root keeps
-        # the list's former reference through the root teardown below.
+        # Drop the comparison's reference.
         py_decref(candidate)
-        if matched != 0:
-            pcc_gc_native_root_unbind(candidate_handle)
-            removed = load_ptr(candidate_slot, 0)
-            if ptr_is_null(removed) == 0:
-                py_decref(removed)
-            return
-        index = 0
+        pcc_gc_native_root_unbind(candidate_handle)
+        if ptr_is_null(removed) == 0:
+            py_decref(removed)
+        return
     pcc_gc_native_root_unbind(candidate_handle)
     # Not found: raise ValueError (private exception-table tag 2; 12 is
     # ArithmeticError) with CPython's message.
