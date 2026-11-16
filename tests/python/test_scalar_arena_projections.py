@@ -21,6 +21,55 @@ KERNEL = "pcc/backend/self_backend_kernel.py"
 REFERENCE = ROOT / "tests/scalar_arena_projection_reference.json"
 REFERENCE_SHA256 = "c3909b4240049c84b01cbf3ba0dc2a92148f1b919c5a2de64f8af25acd1c77d0"
 SITES = json.loads(REFERENCE.read_text())["sites"]
+_PHI_FLOW = "pcc/backend/self_backend_aarch64_darwin_flow.py"
+_PHI_SITE = next(site for site in SITES if site["path"] == _PHI_FLOW
+                 and site["owner"] == "_emit_phi_assignments_indexed")
+_PHI_HELPER = "_phi_type_is_fp"
+
+
+def _assert_phi_projection(function):
+    # c9743fd moved this frozen site's read into a helper while planning the
+    # entire parallel copy before emission. Keep its scalar AND snapshot
+    # paths, including the first value-bearing local's aggregate annotation.
+    expected = ast.parse('''
+phi: CompilerInt4 = kernel.phi_record(phi_id)
+if type(kernel) is IndexedFunctionKernel:
+    scalar_id = phi.second
+    if _scalar_window_is_complete(kernel.type_scalars, scalar_id, 12, 0):
+        return kernel.type_scalars.get_unchecked(scalar_id * 12 + 0) == TYPE_KIND_FP
+    header: CompilerInt4 = kernel.type_header(scalar_id)
+    return header.first == TYPE_KIND_FP
+header = kernel.type_header(phi.second)
+return header.first == TYPE_KIND_FP
+''').body
+    assert [ast.dump(node) for node in function.body] == [ast.dump(node) for node in expected]
+
+
+def _assert_phi_projection_route(emitter, schedule):
+    # The moved site must remain used. A helper passing in isolation cannot
+    # hide a bypass or emission before the whole-edge buffered decision.
+    assignment = next(node for node in emitter.body if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == "steps"
+                              for target in node.targets))
+    assert ast.unparse(assignment) == "steps = _phi_copy_schedule(kernel, phi_ids, src_keys, dest_keys)"
+    position = emitter.body.index(assignment)
+    assert ast.unparse(emitter.body[position + 1]) == ast.unparse(ast.parse('''
+if steps is None:
+    return _emit_phi_assignments_buffered(func, kernel, phi_ids, incoming_refs,
+                                         temp_offsets, temp_offset, dest_slot_ids,
+                                         dest_regs, module_symbols)
+''').body[0])
+    for statement in emitter.body[:position + 1]:
+        assert not any(isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                       and node.func.id in {"_phi_copy_to_register", "_phi_copy_to_slot"}
+                       for node in ast.walk(statement))
+    calls = [node for node in ast.walk(schedule) if isinstance(node, ast.Call)
+             and isinstance(node.func, ast.Name) and node.func.id == _PHI_HELPER]
+    assert len(calls) == 1
+    assert ast.unparse(calls[0]) == "_phi_type_is_fp(kernel, phi_ids[victim])"
+    branch = next(node for node in ast.walk(schedule) if isinstance(node, ast.If)
+                  and node.test is calls[0])
+    assert ast.unparse(branch) == "if _phi_type_is_fp(kernel, phi_ids[victim]):\n    return None"
 _CENTRAL = (
     "instruction_payload_id_by_id", "value_slot_id", "value_slot_offset",
     "value_slot_type_id", "alloca_offset", "alloca_type_id", "value_register",
@@ -165,6 +214,14 @@ def _probe(site, namespace, *, original=False):
         statement.value.args = [ast.Name(id="record_id", ctx=ast.Load())]
         statement.value.func.value = ast.Name(id="kernel", ctx=ast.Load())
         body = [statement, ast.parse("return " + variable + "." + site["field"]).body[0]]
+    elif site == _PHI_SITE:
+        # Supply the original type-id expression, as all other site probes do.
+        # Execute the actual moved helper's complete body, not a replacement
+        # scalar expression. Actual phi_record routing is checked separately.
+        function = _function(_PHI_FLOW, _PHI_HELPER)
+        _assert_phi_projection(function)
+        body = function.body
+        body[0].value = ast.parse("CompilerInt4(0, record_id, 0, 0)", mode="eval").body
     else:
         guards = sorted((node for node in ast.walk(function) if isinstance(node, ast.If)
                          and ast.unparse(node.test) in ("type(kernel) is IndexedFunctionKernel",
@@ -187,6 +244,11 @@ def _probe(site, namespace, *, original=False):
         guard = Receiver().visit(guard)
         expression = variable + "_scalar if " + flag + " else " + variable + "." + site["field"]
         body = [ast.parse(flag + " = False").body[0], guard, ast.parse("return " + expression).body[0]]
+    if original and site == _PHI_SITE:
+        # The new helper returns the consuming comparison, rather than a raw
+        # header kind. Retain the frozen statement and compare its result too.
+        body[-1].value = ast.Compare(left=body[-1].value, ops=[ast.Eq()],
+                                    comparators=[ast.Name(id="TYPE_KIND_FP", ctx=ast.Load())])
     probe = ast.FunctionDef(name="probe", args=ast.arguments(posonlyargs=[],
              args=[ast.arg(arg="kernel"), ast.arg(arg="record_id")], kwonlyargs=[],
              kw_defaults=[], defaults=[]), body=body, decorator_list=[], type_params=[])
@@ -213,6 +275,14 @@ def _assert_scalar_snapshot_inventory(functions):
         "    return raw.first if header.first == TYPE_KIND_INT else -1\n"
     ).body[0]
     for (path, owner), function in functions.items():
+        if (path, owner) == (_PHI_FLOW, _PHI_HELPER):
+            _assert_phi_projection(function)
+            projections += sum(isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                               and node.func.attr == "get_unchecked" for node in ast.walk(function))
+            bindings += sum(isinstance(node, (ast.Assign, ast.AnnAssign))
+                            and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Attribute)
+                            and node.value.func.attr == "type_header" for node in ast.walk(function))
+            continue
         atomic_snapshot = None
         if (path, owner) == (
             "pcc/backend/self_backend_aarch64_darwin_regalloc.py",
@@ -248,7 +318,9 @@ def _assert_scalar_snapshot_inventory(functions):
                         atomic_bindings += 1
                     else:
                         bindings += 1
-    assert (len(functions), projections, bindings) == (35, 55, 111)
+    # The frozen 35 owners plus the explicit moved helper still cover all 55
+    # projections and 111 snapshot bindings. No site or fallback is dropped.
+    assert (len(functions), projections, bindings) == (36, 55, 111)
     assert atomic_bindings == 1
 
 
@@ -267,8 +339,11 @@ def test_frozen_source_oracle_and_complete_site_inventory():
         assert site["window_offset"] in (0, 4)
         assert site["window_offset"] <= site["cell_offset"] <= site["window_offset"] + 3
     owners = {(site["path"], site["owner"]) for site in SITES}
-    functions = {key: _function(*key) for key in owners}
+    assert len(owners) == 35
+    functions = {key: _function(*key) for key in owners | {(_PHI_FLOW, _PHI_HELPER)}}
     _assert_scalar_snapshot_inventory(functions)
+    _assert_phi_projection_route(functions[(_PHI_FLOW, "_emit_phi_assignments_indexed")],
+                                 _function(_PHI_FLOW, "_phi_copy_schedule"))
 
     # Mutations exercise the inventory guard itself without importing or
     # executing production compiler code, and without changing node counts.
@@ -346,6 +421,87 @@ def test_every_projection_reads_one_cell_and_preserves_all_fallbacks(site):
         setattr(right, site["arena"], _arena(new, values, subclass=arena_subclass, closed=closed))
         assert _result(actual, right, 0) == _result(expected, left, 0)
         assert getattr(right, site["arena"])._values.reads == getattr(left, site["arena"])._values.reads
+
+
+def test_moved_phi_helper_reads_actual_phi_once_and_preserves_custom_fallback():
+    namespace = _namespace()
+    _execute_nodes([_function(_PHI_FLOW, _PHI_HELPER)], namespace)
+    helper = namespace[_PHI_HELPER]
+    events = []
+    kernel = _kernel(namespace)
+
+    def phi_record(phi_id):
+        events.append(("phi", phi_id))
+        return namespace["CompilerInt4"](999, 1, 0, 0)
+
+    kernel.phi_record = phi_record
+    for kind in (namespace["TYPE_KIND_FP"], namespace["TYPE_KIND_INT"]):
+        kernel.type_scalars.set_unchecked(12, kind)
+        assert helper(kernel, 7) == (kind == namespace["TYPE_KIND_FP"])
+    assert events == [("phi", 7), ("phi", 7)]
+    assert kernel.type_scalars._values.reads == [12, 12]
+
+    class Phi:
+        @property
+        def second(self):
+            events.append("second")
+            return 1
+
+    class Header:
+        @property
+        def first(self):
+            events.append("first")
+            return namespace["TYPE_KIND_FP"]
+
+    class CustomKernel:
+        @property
+        def type_scalars(self):
+            raise AssertionError("custom arena evaluated")
+
+        def phi_record(self, phi_id):
+            events.append(("phi", phi_id))
+            return Phi()
+
+        def type_header(self, type_id):
+            events.append(("header", type_id))
+            return Header()
+
+    events.clear()
+    assert helper(CustomKernel(), 9)
+    assert events == [("phi", 9), "second", ("header", 1), "first"]
+
+
+@pytest.mark.parametrize("old,new", (
+    ("type(kernel) is IndexedFunctionKernel", "True"),
+    ("scalar_id, 12, 0", "scalar_id, 12, 4"),
+    ("scalar_id * 12 + 0", "scalar_id * 12 + 1"),
+    ("== TYPE_KIND_FP", "== TYPE_KIND_INT"),
+    ("header: CompilerInt4 = kernel.type_header(scalar_id)", "header: CompilerInt4 = None"),
+    ("header: CompilerInt4", "header: object"),
+    ("header = kernel.type_header(phi.second)", "header = kernel.value_header(phi.second)"),
+))
+def test_moved_phi_projection_shape_mutants_are_rejected(old, new):
+    source = ast.unparse(_function(_PHI_FLOW, _PHI_HELPER))
+    assert old in source
+    mutated = ast.parse(source.replace(old, new, 1)).body[0]
+    with pytest.raises(AssertionError):
+        _assert_phi_projection(mutated)
+
+
+@pytest.mark.parametrize("mutation", ("helper-bypassed", "no-buffer-fallback", "emit-before-plan"))
+def test_phi_projection_routing_mutants_are_rejected(mutation):
+    emitter = _function(_PHI_FLOW, "_emit_phi_assignments_indexed")
+    schedule = _function(_PHI_FLOW, "_phi_copy_schedule")
+    if mutation == "emit-before-plan":
+        emitter.body.insert(0, ast.parse("_phi_copy_to_register()\n").body[0])
+    else:
+        source = ast.unparse(schedule)
+        old, new = (("_phi_type_is_fp(kernel, phi_ids[victim])", "False")
+                    if mutation == "helper-bypassed" else ("return None", "return []"))
+        assert old in source
+        schedule = ast.parse(source.replace(old, new, 1)).body[0]
+    with pytest.raises(AssertionError):
+        _assert_phi_projection_route(emitter, schedule)
 
 
 @pytest.mark.parametrize("method", _CENTRAL)
