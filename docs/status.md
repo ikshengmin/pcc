@@ -7,6 +7,54 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Runtime jump threading; protocol-stale tests (local Mac, 2026-11-16)
+
+`80927cec` adds the owned `jump-thread` pass (`pcc/ir/optimization/jump_thread.py`)
+after `inline-defined-wide` in the runtime pass list: it merges straight-line
+blocks, folds phi-only forwarders and sends an edge whose phi constants decide
+its branch to that successor, so inlined short-circuit predicates become direct
+compare-and-branch chains (`pcc_gc_store_root`: 295 -> 165 blocks, 157 -> 29
+unconditional branches; the gateway binary is ~130 KB smaller). Same-session
+A/B, `b4c06a54` -> `b7e97763`, built with the same command: HTTP GET / C512, 5
+pairs, GC0 5,662 -> 6,182 QPS (+9.2%, 5/5), GC3 3,973 -> 4,167 (+4.9%, 5/5),
+aiohttp control 27,475 / 27,754 (first/second half medians); HTTP/1 parser
+driver GC0 819 -> 731 ms (-10.7%, 5/5), GC3 1,243 -> 1,148 ms (-7.7%, 5/5).
+The B arm also carries `c9743fd5` and `a1fb95cb`, which the request path does
+not reach. `c9743fd5` fixes the AArch64 phi parallel copy that emitted ready
+copies before switching an FP cycle to the stack-buffer path, leaving direct
+instruction records behind (the pass produced the first such edge).
+`a1fb95cb` makes `list.remove` delete the slice at the compared index as
+CPython does; it rescanned forever when `__eq__` kept inserting before itself.
+
+Test baseline on the 172-file runtime-affected list (`enum_list` = the files
+the runtime archive reaches, plus the touched ones): `59323caf` 521 failed /
+5,779 passed; with these commits 390 / 5,934, no node failing that passed on
+HEAD. `b7e97763` updates 131 of the failures that described retired protocols
+(GC4 relocation outside a stop, immediate finalization and exact refcounts
+under the tracing collectors, thread-local frame entries, the removed
+single-thread mode, the optimized native route). Open, not changed:
+
+- `gcsubstrate_f` GC3 owner-referent worklist and GC4 owner-wide barrier probes
+  exercise store-buffer promotion that the shared count-free barrier no longer
+  feeds (GC3 objects carry no YOUNG/OLD header flags). Decision needed: remove
+  the probes and the unreachable promotion path, or restore a remembered set.
+- `test_constructor_native_audit` (4 nodes, failing since before `dc684edc`):
+  the default passes promote a generator operand's owned flag to SSA phis, and
+  the audit only recognizes the alloca/load/store form. The unoptimized IR
+  passes the audit; the audit needs a dataflow form of the flag.
+- When a tracing collector finalizes a removed or cleared object (at the next
+  collection, not at once) is the user's open GC1-4 finalization decision; the
+  updated probes assert what the finalizer observes, not when it runs.
+- The other 386 failures on the list were failing on HEAD; the largest groups
+  are `test_static_singleton_address_leases` / `test_immediate_address_leases`
+  (75 each), `test_tuple_protocol_consumers` (37), `test_tracing_late_weakref_batch`
+  (36), `test_memoryview_owned_buffer_lifetime` and
+  `test_format_compatibility_result_roots` (26 each).
+
+Repro: `uv run pytest -x --maxfail=0 -v <enum_list>` on a `git archive` snapshot
+(`UV_NO_SYNC=1 PYTHONPATH=<snapshot>`, with `scripts/` for the codegen
+checksum) and on the tree; compare `FAILED` node ids.
+
 ## Imported property mutation (finite CI qualification)
 
 The linked pcc-js, pcc-node and pcc-web consumers compile at `6ae154bac`,
