@@ -237,24 +237,77 @@ class PackedPlannedSafepoints:
     )
 
     def __init__(self, capacity: int = 0, block_names=()) -> None:
-        self.scalars = CompilerIntArena(max(1, capacity * 4))
-        self.spans = CompilerIntArena(max(1, capacity * 4))
-        self.labels: list[str] = []
-        self.exceptional_blocks: list[str] = []
-        self.location_scalars = CompilerIntArena(max(1, capacity * 2))
-        self.location_group_spans = CompilerIntArena(max(1, capacity * 2))
-        self.location_group_keys: list[str] = []
-        self.reload_scalars = CompilerIntArena(max(1, capacity * 3))
-        self.block_names = block_names
-        self.entry_routes = CompilerIntArena()
-        self.suffix_routes = CompilerIntArena()
-        self.terminator_routes = CompilerIntArena()
-        self.entry_route_spans = CompilerIntArena()
-        self.suffix_route_spans = CompilerIntArena()
-        self.terminator_route_spans = CompilerIntArena()
-        self.location_identity_index: dict[int, tuple] = {}
-        self.location_content_index: dict[str, int] = {}
-        self.diagnostic_projections = 0
+        allocated: list[CompilerIntArena] = []
+        pending: CompilerIntArena | None = None
+        try:
+            pending = CompilerIntArena(max(1, capacity * 4))
+            allocated.append(pending)
+            self.scalars = pending
+            pending = None
+            pending = CompilerIntArena(max(1, capacity * 4))
+            allocated.append(pending)
+            self.spans = pending
+            pending = None
+            self.labels: list[str] = []
+            self.exceptional_blocks: list[str] = []
+            pending = CompilerIntArena(max(1, capacity * 2))
+            allocated.append(pending)
+            self.location_scalars = pending
+            pending = None
+            pending = CompilerIntArena(max(1, capacity * 2))
+            allocated.append(pending)
+            self.location_group_spans = pending
+            pending = None
+            self.location_group_keys: list[str] = []
+            pending = CompilerIntArena(max(1, capacity * 3))
+            allocated.append(pending)
+            self.reload_scalars = pending
+            pending = None
+            self.block_names = block_names
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.entry_routes = pending
+            pending = None
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.suffix_routes = pending
+            pending = None
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.terminator_routes = pending
+            pending = None
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.entry_route_spans = pending
+            pending = None
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.suffix_route_spans = pending
+            pending = None
+            pending = CompilerIntArena()
+            allocated.append(pending)
+            self.terminator_route_spans = pending
+            pending = None
+            self.location_identity_index: dict[int, tuple] = {}
+            self.location_content_index: dict[str, int] = {}
+            self.diagnostic_projections = 0
+        except BaseException:
+            # A failed list append may leave its new owner only in pending.
+            # Never call self.close() on a partially initialized instance.
+            if pending is not None:
+                try:
+                    if not allocated or allocated[-1] is not pending:
+                        pending.close()
+                except BaseException:
+                    pass
+            arena_index = 0
+            while arena_index < len(allocated):
+                try:
+                    allocated[arena_index].close()
+                except BaseException:
+                    pass
+                arena_index += 1
+            raise
 
     def __len__(self) -> int:
         return len(self.labels)
