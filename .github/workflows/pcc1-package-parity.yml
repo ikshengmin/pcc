@@ -645,7 +645,11 @@ jobs:
       - uses: actions/checkout@v5
         with:
           ref: ${{ github.sha }}
+          # Preserve all commit/tree history for successful-base ancestry and
+          # cumulative name-status selection, but do not transfer project blobs.
+          # checkout v5 uses blob:none when sparse-checkout is supplied.
           fetch-depth: 0
+          sparse-checkout: scripts
           persist-credentials: false
       - uses: actions/setup-python@v6
         with:
