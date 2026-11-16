@@ -421,7 +421,7 @@ def _run(fragments, semantics, span, mode):
                     if mode == 5 and zero >= 0 and rhs == zero and lhs != zero and lhs not in (sem.REGISTER_XZR, sem.REGISTER_WZR) and p.dead(index + 2, zero):
                         replacement = p.new("cmp", [_reg(lhs), CompilerInt4(sem.TOKEN_IMMEDIATE, 0, 10, sem.IMMEDIATE_HASH)], encode_emitted_compare_immediate_parts(_spelling(lhs), 0))
                         consumed = 2
-                    if mode == 6 and move and _scratch(move[0]) and move[0] in (lhs, rhs) and p.dead(index + 2, move[0]):
+                    if mode == 6 and move and _scratch(move[0]) and move[0] in (lhs, rhs) and not (rhs == move[0] and move[1] == sem.REGISTER_WSP) and p.dead(index + 2, move[0]):
                         lhs = move[1] if lhs == move[0] else lhs
                         rhs = move[1] if rhs == move[0] else rhs
                         replacement = p.new("cmp", [_reg(lhs), _reg(rhs)], encode_emitted_compare_register_parts(_spelling(lhs), _spelling(rhs)))

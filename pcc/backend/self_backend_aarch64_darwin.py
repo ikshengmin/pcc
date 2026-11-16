@@ -2095,6 +2095,7 @@ def _fold_mov_compare_source(lines: list[str]) -> list[str]:
                 if (
                     _is_aarch64_scratch_reg(dest_reg)
                     and (lhs == dest_reg or rhs == dest_reg)
+                    and not (rhs == dest_reg and src_reg == "wsp")
                     and _can_drop_zero_mov_after_store(lines, index + 2, dest_reg)
                 ):
                     if lhs == dest_reg:
