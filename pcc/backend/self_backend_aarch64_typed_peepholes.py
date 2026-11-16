@@ -648,7 +648,7 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_fold_mov_zero_branch_source", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_mov_arith_self_update")
-    span = fold_mov_arith_self_update(fragments, semantics, span)
+    span = _run_owned_arith(fragments, semantics, span) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_arith_self_update(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_mov_arith_self_update", started)
     if phase_timing is not None:
@@ -773,6 +773,37 @@ def _run_owned_cset(fragments, semantics, span):
                     p.output.append(replacement)
                 changed = True
                 index += decision[0]
+            else:
+                p.output.append(a)
+                index += 1
+        if not changed and fragments.spans.length(span) == len(p.ids):
+            result = fragments.new_fragment()
+            fragments.extend_fragment(result, span)
+            return result
+        return p.finish()
+    finally:
+        p.close()
+
+
+def _run_owned_arith(fragments, semantics, span):
+    from .self_backend_aarch64_owned_arith import decide
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, 8)
+    p = _Pass(fragments, semantics, span)
+    try:
+        view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
+        index = 0
+        changed = False
+        while index < len(p.ids):
+            a = p.rid(index)
+            b = p.rid(index + 1)
+            decision = decide(view, a, b)
+            if decision[0] >= 0 and not any(p.token_uses(token, decision[0]) for token in p.tokens(b)[2:]):
+                replacement = p.changed_register(b, 1, decision[1], 5)
+                if replacement >= 0:
+                    p.output.append(replacement)
+                changed = True
+                index += 2
             else:
                 p.output.append(a)
                 index += 1
