@@ -8,6 +8,8 @@ phase names required by the roadmap without forcing a flag-day rewrite of
 from __future__ import annotations
 
 import gc
+import os
+import sys
 import time
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
@@ -99,9 +101,23 @@ def profile_counters(profile):
     return counters
 
 
+def _stream_timing_enabled() -> bool:
+    try:
+        return str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower() in (
+            "1", "true", "yes", "on",
+        )
+    except BaseException:
+        return False
+
+
 def profile_begin(profile) -> int:
     if profile is None:
-        return 0
+        if not _stream_timing_enabled():
+            return 0
+        try:
+            return profile_now_ms()
+        except BaseException:
+            return 0
     return profile_now_ms()
 
 
@@ -111,9 +127,34 @@ def profile_end(
     start_ms: int,
     detail: Optional[str] = None,
 ) -> None:
+    stream_timing = _stream_timing_enabled()
+    if profile is None:
+        if not stream_timing or start_ms == 0:
+            return
+        try:
+            end_ms = profile_now_ms()
+        except BaseException:
+            return
+    else:
+        end_ms = profile_now_ms()
+    elapsed = end_ms - start_ms
+    if stream_timing:
+        try:
+            # Stream completed phases even when no final profile is requested:
+            # a deadline may terminate native compilation before JSON is saved.
+            # PID and absolute monotonic bounds distinguish parent/worker and
+            # nested inclusive phases. Do not sum overlapping durations.
+            print(
+                "pcc pipeline phase pid=" + str(os.getpid())
+                + " name=" + name + " start_ms=" + str(start_ms)
+                + " end_ms=" + str(end_ms) + " elapsed_ms=" + str(elapsed),
+                file=sys.stderr, flush=True,
+            )
+        except BaseException:
+            # Optional diagnostics never replace compilation results/errors.
+            pass
     if profile is None:
         return
-    elapsed = profile_now_ms() - start_ms
     events = profile_events(profile)
     if events is not None:
         event = {"name": name, "ms": elapsed}

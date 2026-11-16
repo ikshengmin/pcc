@@ -169,7 +169,9 @@ def _prepare_multi_source_compile_closure(
     seen = {
         mod_name: src_path for src_path, mod_name in zip(src_paths, module_names)
     }
+    t = _profile_begin(profile)
     _expand_required_native_builtin_providers(src_paths, module_names, seen)
+    _profile_end(profile, "expand_required_native_builtin_providers", t)
 
     if recursive_stdlib:
         t = _profile_begin(profile)

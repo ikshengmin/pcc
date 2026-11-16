@@ -10,6 +10,7 @@ import time
 from typing import Optional
 
 from pcc.frontends.python import module_action_dag as _module_action_dag
+from pcc.frontends.python.pipeline_profile import profile_begin as _phase_begin, profile_end as _phase_end
 from pcc.frontends.python.pipeline_frontend_workers import (
     read_worker_error as _read_worker_error,
 )
@@ -459,6 +460,7 @@ def build_shared_exports(
     profile_counter,
     pipeline_error,
 ) -> str:
+    manifest_started = _phase_begin(profile)
     export_dir = os.path.join(tmp, "exports")
     os.makedirs(export_dir, exist_ok=True)
     result_paths: list[str] = []
@@ -496,6 +498,7 @@ def build_shared_exports(
             worker_env_prefix() + " " + join_strings(command_parts, " ")
         )
 
+    _phase_end(profile, "multi_frontend_export_manifests", manifest_started)
     if oversized_chunk_count:
         run_worker_commands(
             commands[:oversized_chunk_count],
@@ -524,6 +527,7 @@ def build_shared_exports(
         allocations_owned_by_current_process=False,
     )
 
+    results_started = _phase_begin(profile)
     native_exports = {}
     reexport_edges = []
     worker_module_dependencies = {}
@@ -581,6 +585,8 @@ def build_shared_exports(
                 if worker_ms > export_worker_max_ms:
                     export_worker_max_ms = worker_ms
 
+    _phase_end(profile, "multi_frontend_export_results_read", results_started)
+    merge_started = _phase_begin(profile)
     merge_reexport_edges(module_names, native_exports, reexport_edges)
     flatten_class_export_fields(native_exports)
     repair_default_global_owners(native_exports)
@@ -592,6 +598,7 @@ def build_shared_exports(
             visible_exports,
         )
     apply_function_object_uses(native_exports, function_object_uses)
+    _phase_end(profile, "multi_frontend_export_graph_merge", merge_started)
 
     # Export workers initially see only their own shard.  Recompute the
     # virtual-thread effect closure after the public re-export graph has
@@ -611,6 +618,7 @@ def build_shared_exports(
             parsed_modules.append(read_ast_wire(ast_path))
         annotate_vthread_effects(parsed_modules, module_names, native_exports)
     else:
+        summary_prepare_started = _phase_begin(profile)
         pre_effect_exports_path = os.path.join(
             tmp,
             "native_exports_pre_effect.json",
@@ -626,6 +634,8 @@ def build_shared_exports(
             {},
         )
         worker_exports = None
+        _phase_end(profile, "multi_frontend_summary_prepare", summary_prepare_started)
+        summary_workers_started = _phase_begin(profile)
         summary_paths, summary_parallel = _build_vthread_effect_summaries(
             tmp,
             src_paths,
@@ -646,9 +656,12 @@ def build_shared_exports(
             run_worker_commands=run_worker_commands,
             pipeline_error=pipeline_error,
         )
+        _phase_end(profile, "multi_frontend_summary_workers", summary_workers_started)
+        summary_merge_started = _phase_begin(profile)
         summary_count, node_count, edge_count = (
             annotate_vthread_effect_summaries(summary_paths, native_exports)
         )
+        _phase_end(profile, "multi_frontend_summary_merge", summary_merge_started)
         profile_counter(
             profile,
             "multi_frontend_summary_worker_jobs",
@@ -683,7 +696,9 @@ def build_shared_exports(
         allocations_owned_by_current_process=True,
     )
 
+    class_map_started = _phase_begin(profile)
     class_map = derived_class_map(native_exports)
+    _phase_end(profile, "multi_frontend_derived_class_map", class_map_started)
     exports_path = os.path.join(tmp, "native_exports.json")
     unique_class_preload_index = None
     contextual_modules = []
@@ -705,6 +720,7 @@ def build_shared_exports(
             raise pipeline_error(
                 "indexed native exports require a class preload builder"
             )
+        preload_phase_started = _phase_begin(profile)
         preload_started = time.monotonic()
         unique_class_preload_index = build_unique_class_preload_index(
             native_exports, tmp
@@ -714,6 +730,8 @@ def build_shared_exports(
             "multi_frontend_unique_class_preload_ms",
             int((time.monotonic() - preload_started) * 1000),
         )
+        _phase_end(profile, "multi_frontend_unique_class_preload", preload_phase_started)
+        contextual_started = _phase_begin(profile)
         if (
             contextual_host_for_module is None
             or build_contextual_host_export_surface is None
@@ -730,6 +748,8 @@ def build_shared_exports(
             )
         else:
             contextual_host_exports = {}
+        _phase_end(profile, "multi_frontend_contextual_exports", contextual_started)
+    publication_started = _phase_begin(profile)
     write_native_exports_wire(
         exports_path,
         native_exports,
@@ -739,6 +759,7 @@ def build_shared_exports(
         contextual_modules=tuple(contextual_modules),
         contextual_host_exports=contextual_host_exports,
     )
+    _phase_end(profile, "multi_frontend_indexed_export_publish", publication_started)
     profile_counter(
         profile,
         "multi_frontend_export_worker_sum_ms",
@@ -1402,6 +1423,7 @@ def compile_parallel_uncached(
             "multi_frontend_action_plan_actions",
             len(action_plan.actions) if action_plan is not None else len(src_paths) * 5,
         )
+        codegen_manifests_started = profile_begin(profile)
         result_paths: list[str] = []
         manifest_paths: list[str] = []
         commands: list[str] = []
@@ -1475,6 +1497,7 @@ def compile_parallel_uncached(
                 command_environment + " " + join_strings(command_parts, " ")
             )
 
+        profile_end(profile, "multi_frontend_codegen_manifests", codegen_manifests_started)
         if deferred_codegen_plan and native_owned_lanes:
             output_path = str(
                 os.environ.get("PCC_DEFER_FRONTEND_OUTPUT", "") or ""

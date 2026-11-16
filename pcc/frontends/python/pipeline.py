@@ -2344,7 +2344,9 @@ def _prepare_single_source_compile_closure(
     if should_auto_close:
         # Runtime providers must be admitted before choosing the single-file
         # path, or a module would compile without its owned implementation.
+        t = _profile_begin(profile)
         _expand_required_native_builtin_providers(auto_srcs, auto_mods, auto_seen)
+        _profile_end(profile, "expand_required_native_builtin_providers", t)
     t = _profile_begin(profile)
     _validate_package_site_native_abi(auto_srcs)
     _profile_end(profile, "validate_package_site_abi", t)
@@ -3835,6 +3837,7 @@ def compile_python_multi(
         closed_young_typed_module_denial,
     )
 
+    closed_young_started = _profile_begin(profile)
     closed_young_proof = None
     closed_young_denial = closed_young_terminal_request_denial(
         emit_llvm_only, False, _normalize_native_backend_name(backend), "none",
@@ -3854,6 +3857,7 @@ def compile_python_multi(
         closed_young_proof, closed_young_denial = prepare_closed_young_closure(
             src_paths, module_names, entry_module,
         )
+    _profile_end(profile, "prepare_closed_young_closure", closed_young_started)
     _profile_counter(profile, "gc3_closed_young_domain_admitted", int(closed_young_proof is not None))
     if closed_young_denial:
         _log(verbose, "GC3 closed young domain denied: " + closed_young_denial)
