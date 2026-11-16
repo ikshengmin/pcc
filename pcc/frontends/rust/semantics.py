@@ -638,7 +638,8 @@ class Checker:
         for fn in declarations:
             if fn.type_parameters:
                 self.check_body(fn, self.function_generics.scope(fn), abstract=True)
-                if not self.externally_checked:
+                from .reference_admission import contains_references
+                if not self.externally_checked or not contains_references(fn):
                     MoveChecker(self).check_function(fn)
         for fn in declarations:
             if not fn.type_parameters:

@@ -23,11 +23,13 @@ def compile_source(source: str):
     return compile_rust(source, experimental_rustc_checked=True)
 
 
-def test_value_only_experimental_opt_in_is_required_and_is_not_a_borrow_check():
-    with pytest.raises(RustError, match="no borrow checker"):
-        compile_rust("fn answer() -> i32 { 42 }")
+def test_reference_free_input_needs_no_attestation_and_the_legacy_flag_stays_boolean():
+    # Formerly the opt-in was required ("no borrow checker"); reference-free
+    # input is now admitted by PCC's owned checks, with or without the flag.
+    assert compile_rust("fn answer() -> i32 { 42 }").externally_checked is False
+    assert compile_rust("fn answer() -> i32 { 42 }", experimental_rustc_checked=True).externally_checked is False
     for value in (1, "true", None):
-        with pytest.raises(RustError, match="no borrow checker"):
+        with pytest.raises(RustError, match="legacy boolean"):
             compile_rust("fn answer() -> i32 { 42 }", experimental_rustc_checked=value)
 
 

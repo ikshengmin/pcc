@@ -160,7 +160,8 @@ class GenericFunctions:
         def build(entry):
             function = entry.value
             self.checker.check_body(function, self.scope(function, function.instance_arguments))
-            if not self.checker.externally_checked:
+            from .reference_admission import contains_references
+            if not self.checker.externally_checked or not contains_references(function):
                 MoveChecker(self.checker).check_function(function)
             return function
         # A body can request itself or another specialization. The shared

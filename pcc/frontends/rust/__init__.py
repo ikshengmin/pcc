@@ -80,8 +80,12 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     (a CompileEnvironment or a str->str mapping); the host environment is
     never consulted.
 
-    The legacy opt-in is caller attestation for value-only experimental input,
-    never authorization for any reference-bearing program. The rustc_check path
+    Reference-free input is admitted by PCC's owned checks alone (types,
+    mutability, moves, match-guard borrows, exhaustiveness and the
+    arithmetic_overflow lint); `experimental_rustc_checked` is accepted for
+    compatibility and has no effect. Reference-bearing input and the other
+    features listed in README "Replacing the rustc admission gate" still need
+    an actual CheckedRustSource during that transition. The rustc_check path
     accepts only an adapter-minted CheckedRustSource after the explicit external
     check_rust_source phase. Ordinary provenance records do not authorize this
     path. This owned phase invokes no rustc process and never consumes MIR.
@@ -94,8 +98,8 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     edition = require_edition(edition)
     if rustc_check is not None and type(rustc_check) is not CheckedRustSource:
         raise RustError("a caller-constructed external record is not proof of checking; use check_rust_source or compile_rust_checked")
-    if experimental_rustc_checked is not True and rustc_check is None:
-        raise RustError("experimental Rust frontend has no borrow checker; value-only inputs need experimental_rustc_checked=True, while every reference-bearing input requires an actual CheckedRustSource")
+    if type(experimental_rustc_checked) is not bool:
+        raise RustError("experimental_rustc_checked is a legacy boolean and has no effect")
     if overflow_checks is not False:
         raise RustError("Rust overflow checks require owned panic support, which is not implemented; only overflow_checks=False is supported")
     if type(module_name) is not str:
@@ -141,12 +145,21 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
     checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)
     checker.check()
+    # rustc's build-time arithmetic_overflow lint, owned in every admission
+    # mode (a metadata check never runs it).
+    from .known_panics import KnownPanics
+    KnownPanics(checker).check(functions)
     marker_context = checker.standard_markers.checked_context(rustc_check, source, target.triple, overflow_checks)
     if rustc_check is None:
         # Fail closed if a future semantic transformation synthesizes a
         # reference not represented in the original syntax. This is presence
         # checking only; actual checked input never uses partial borrow legality.
         _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
+    from .reference_admission import contains_references
+    if rustc_check is None or not contains_references(functions, records, enums, parser.implementations,
+                                                      parser.traits):
+        # Owned moves decide every reference-free program, checked or not;
+        # reference-bearing checked input awaits owned loans (stage 4).
         MoveChecker(checker).check()
     from .lowering import Lowerer
 

@@ -2515,6 +2515,20 @@
       "status": "missing"
     },
     {
+      "id": "rust.admission.owned-reference-free",
+      "title": "Owned admission of reference-free Rust and the arithmetic_overflow lint",
+      "chapter_ids": [
+        "rust.ref.8.2.4"
+      ],
+      "scope": "Qualification missing, not implementation missing: reference-free input compiles with no rustc and no caller attestation (stage 2 of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\"); experimental_rustc_checked is a legacy boolean with no effect. Owned moves now decide every reference-free program in every admission mode, generic bodies and instances included. known_panics.py owns rustc's deny-by-default arithmetic_overflow lint, which a real build applies and a metadata check never runs: locals assigned once stay known, locals assigned more than once are known within one basic block (calls, indexing, branches, loops, short-circuits and division end one), tuple/struct fields, casts and match bindings propagate, and known conditions prune unreachable branches and arms. 36 original programs get a rustc 1.92.0 -O build's verdict (21 rejected, 15 accepted) without rustc running. uv-version's root now compiles with no attestation. Reference-bearing input and the other listed gates still need the actual check. Local Mac; the Linux-target actual-check lane is unrun here (no Linux std in the local receipt).",
+      "tests": [
+        "tests/rust/test_rust_known_panics.py"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "status": "missing"
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

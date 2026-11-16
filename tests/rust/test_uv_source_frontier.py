@@ -30,11 +30,11 @@ FRONTIER = (
     # gap); line 121 is `format!(..)`.
     ("crates/uv/src/lib.rs", "121:36: macro invocations require macro-by-example expansion"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
-    # `&'static str` "0.13.7" and the disabled test module is skipped. What
-    # remains is the gate on every input: PCC has no owned borrow checker,
-    # so compiling needs an actual rustc check or the caller's attestation
-    # (test_uv_version_compiles_and_runs_natively below).
-    ("crates/uv-version/src/lib.rs", "experimental Rust frontend has no borrow checker"),
+    # `&'static str` "0.13.7" and the disabled test module is skipped.
+    # Formerly stopped at the gate on every input ("experimental Rust
+    # frontend has no borrow checker"); reference-free input is now admitted
+    # by PCC's owned checks, so this root compiles with no rustc at all.
+    ("crates/uv-version/src/lib.rs", None),
     # Grouped uses, `pub use`, `pub(crate)`, `#[cfg(test)]` (off), the const
     # item and `#[derive(Debug, thiserror::Error)]` parse (the thiserror derive
     # is a semantic gap), its retained helper attributes, the struct-like
@@ -114,9 +114,10 @@ def test_uv_rust_root_stops_at_its_recorded_first_blocker(name, blocker):
         compile_rust(source, module_name="uv_root", target_triple=TARGET, overflow_checks=False,
                      edition=2024, cfg=cfg, env=environment)
     except RustError as error:
-        assert blocker in str(error)
+        assert blocker is not None and blocker in str(error), str(error)
     else:
-        pytest.fail(name + " passed its recorded blocker; record the next one")
+        if blocker is not None:
+            pytest.fail(name + " passed its recorded blocker; record the next one")
 
 
 @pytest.mark.xdist_group(name="rust-native-reference")

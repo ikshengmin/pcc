@@ -126,10 +126,11 @@ def test_invalid_editions_fail_before_parser_tool_inspection_or_evidence_write(e
 def test_edition_is_not_an_admission_waiver(edition, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
 
-    monkeypatch.setattr(Lowerer, 'lower', forbidden)
     monkeypatch.setattr(subprocess, 'Popen', forbidden)
-    with pytest.raises(RustError, match='has no borrow checker'):
-        compile_rust(ORIGINAL, edition=edition)
+    # Formerly 'has no borrow checker': reference-free input is now admitted by
+    # PCC's owned checks in every edition, still with no external compiler.
+    assert compile_rust(ORIGINAL, edition=edition).edition == edition
+    monkeypatch.setattr(Lowerer, 'lower', forbidden)
     with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
         compile_rust('fn f(x:&mut u64){*x=42;}', edition=edition,
                      experimental_rustc_checked=True)

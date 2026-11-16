@@ -59,8 +59,9 @@ in the named modules; locate them with
 
 | Gate | Where | rustc rule it stands in for | Owned status |
 |---|---|---|---|
-| Any program without a check needs `experimental_rustc_checked=True` (caller attestation) | `compile_rust` | the whole borrow checker | open (stage 2) |
-| Owned moves skipped for generic bodies when checked | `semantics.py`, `function_generics.py` | move checking of generic code | open (stage 2) |
+| Any program without a check needs `experimental_rustc_checked=True` (caller attestation) | `compile_rust` | the whole borrow checker | **owned for reference-free input** (stage 2); the flag has no effect |
+| Owned moves skipped for checked programs and generic bodies | `__init__.py`, `semantics.py`, `function_generics.py` | move checking | **owned for reference-free programs** (stage 2); reference-bearing checked input awaits stage 4 |
+| Build-time `arithmetic_overflow` lint (never run by a metadata check) | `known_panics.py` | rustc's KnownPanicsLint | **owned** (stage 2) |
 | Match guards | `semantics.py`, `moves.py` | guard borrows E0505/E0506/E0507/E0510/E0594/E0596 | **owned** (stage 1) |
 | `loop`, `while let`, `if let` admission | `loops.py`, `conditional_patterns.py` | borrow/initialization flow through loops and refutable lets | open (stage 3) |
 | `for` over arrays | `semantics.py` | moves of iterated owned arrays | open (stage 3) |
@@ -85,9 +86,13 @@ The rustc comparison stays in tests as a labeled reference.
 Migration order:
 1. Match guards (done): `GuardScope` in `moves.py`; verdicts in
    `tests/rust/test_rust_match_guards.py::GUARD_BORROWS` equal rustc 1.92.0's.
-2. Value-only programs without attestation: definite initialization, moves
-   (including generic bodies in every mode) and mutability are owned, so
-   `experimental_rustc_checked` can be retired for reference-free input.
+2. Reference-free programs without attestation (done): owned moves in every
+   mode (generic bodies and instances included), mutability, and rustc's
+   build-time `arithmetic_overflow` lint (`known_panics.py`, verdicts in
+   `tests/rust/test_rust_known_panics.py` equal a rustc 1.92.0 `-O` build's).
+   `let x;` without an initializer, shifts and `u8`/`i8` are still rejected by
+   the parser, so definite initialization and shift overflow need owning when
+   those land.
 3. Control flow: `loop`, `while let`, `if let` and array `for` on the owned
    fixed point.
 4. Shared references in bodies: loans with liveness, index disjointness.
