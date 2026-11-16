@@ -241,6 +241,79 @@ def test_missing_provenance_fails_closed():
         f.close()
 
 
+def test_operand_snapshot_validates_once_per_call(monkeypatch):
+    items = ["_f:", I("stur", R("x9"), A())]
+    f, s, source, _ = _fixture(items)
+    p = typed._Pass(f, s, source)
+    try:
+        ids = _ids(f, source)
+        expected = [R("x9"), *A()]
+        reads = []
+        require_header = s.require_header
+
+        def validated(record_id):
+            reads.append(record_id)
+            return require_header(record_id)
+
+        def repeated_operand_scan(*_args):
+            raise AssertionError("operand snapshot repeated whole-span validation")
+
+        monkeypatch.setattr(s, "require_header", validated)
+        monkeypatch.setattr(s, "operand", repeated_operand_scan)
+        values = p.tokens(ids[1])
+        assert values == expected
+        assert reads == [ids[1]]
+        values.clear()
+        assert p.tokens(ids[1]) == expected
+        assert reads == [ids[1], ids[1]]
+        assert p.tokens(ids[0]) == p.tokens(-1) == []
+        assert reads == [ids[1], ids[1]]
+    finally:
+        p.close()
+        s.close()
+        f.close()
+
+
+@pytest.mark.parametrize("corruption", [
+    "opcode", "form", "span_start", "span_count", "short_headers",
+    "short_tokens", "register", "address_base", "address_span", "closed",
+])
+def test_operand_snapshot_revalidates_changed_provenance(corruption):
+    f, s, source, _ = _fixture([I("stur", R("x9"), A())])
+    p = typed._Pass(f, s, source)
+    try:
+        rid = _ids(f, source)[0]
+        assert p.tokens(rid) == [R("x9"), *A()]
+        # Mutate after construction and a successful read: no earlier pass or
+        # snapshot is authority to skip validation of the current record.
+        if corruption == "opcode":
+            s.headers.set(rid * 4, 0)
+        elif corruption == "form":
+            s.headers.set(rid * 4 + 1, 0)
+        elif corruption == "span_start":
+            s.headers.set(rid * 4 + 2, -1)
+        elif corruption == "span_count":
+            s.headers.set(rid * 4 + 3, 5)
+        elif corruption == "short_headers":
+            s.headers.truncate(len(s.headers) - 1)
+        elif corruption == "short_tokens":
+            s.tokens.truncate(len(s.tokens) - 1)
+        elif corruption == "register":
+            s.tokens.set(1, 999)
+        elif corruption == "address_base":
+            s.tokens.set(8, sem.TOKEN_IMMEDIATE)
+        elif corruption == "address_span":
+            s.headers.set(rid * 4 + 3, 2)
+        else:
+            s.close()
+        with pytest.raises(RuntimeError if corruption == "closed" else enc.EncodeError):
+            p.tokens(rid)
+    finally:
+        p.close()
+        s.close()
+        f.close()
+
+
 @pytest.mark.parametrize("register", ["w9", "x9", "s9", "d9"])
 def test_same_register_forwarding_deletes_only_nonbyte_load(monkeypatch, register):
     _differential(monkeypatch, "forward_adjacent_stack_store_load", [I("stur", R(register), A()), I("ldur", R(register), A())], True)

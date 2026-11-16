@@ -133,10 +133,14 @@ class _Pass:
         return sem.OPCODE_NAMES[self.semantics.require_header(rid).first]
 
     def tokens(self, rid):
-        if not self.op(rid):
+        if rid < 0 or self.code(rid).second < 0:
             return []
         header = self.semantics.require_header(rid)
-        return [self.semantics.operand(rid, i) for i in range(header.fourth)]
+        # require_header validates the whole span, including address children.
+        # Copy its values once; operand() would revalidate that entire span for
+        # every token. Keep validation per call, never cache across mutations.
+        return [self.semantics.tokens.get4_unchecked(header.third + i)
+                for i in range(header.fourth)]
 
     def register(self, rid, index):
         tokens = self.tokens(rid)
