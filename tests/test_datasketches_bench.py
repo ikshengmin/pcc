@@ -7,6 +7,7 @@ sources and run the workload with a small N, requiring identical HLL and
 Theta estimates across the two languages (the same hashing and work).
 """
 import json
+import math
 import shutil
 import sys
 
@@ -39,14 +40,22 @@ def test_summary_reports_medians_and_pair_wins_against_the_first_arm():
     assert summary['b']['hll8_lg12']['wins_against_a'] == 2 and 'wins_against_a' not in summary['a']['hll8_lg12']
 
 
-@pytest.mark.parametrize('arm', sorted(bench.PCC_FRONTIERS) + ['java-ref', 'python-ref'])
-def test_unavailable_arms_are_unrun_with_their_reason(arm):
+@pytest.mark.parametrize('arm', sorted(bench.PCC_FRONTIERS))
+def test_pcc_arms_are_unrun_at_their_first_blocker(arm):
     with pytest.raises(bench.Unrun) as caught:
         bench.unavailable_reference(arm)
-    assert str(caught.value)
+    assert str(caught.value) == bench.PCC_FRONTIERS[arm]
 
 
-def test_main_records_unrun_arms_without_timing_them(tmp_path, capsys):
+@pytest.mark.parametrize('arm', ['go-ref', 'java-ref', 'python-ref'])
+def test_reference_arms_without_installed_toolchains_are_unrun(arm, tmp_path, monkeypatch):
+    monkeypatch.setattr(bench, 'load_receipt', lambda: None)
+    with pytest.raises(bench.Unrun, match='reference toolchains are not installed'):
+        bench.BUILDERS[arm](tmp_path)
+
+
+def test_main_records_unrun_arms_without_timing_them(tmp_path, capsys, monkeypatch):
+    monkeypatch.setattr(bench, 'load_receipt', lambda: None)
     assert bench.main(['--out', str(tmp_path / 'out'), '--n', '10', '--rounds', '1',
                        '--arms', 'java-pcc,python-ref']) == 0
     result = json.loads((tmp_path / 'out' / 'results.json').read_text())
@@ -70,3 +79,24 @@ def test_cpp_and_rust_reference_arms_do_equal_work(tmp_path):
     for family in bench.FAMILIES:
         assert result['summary']['rust-ref'][family]['wins_against_cpp-ref'] in (0, 1, 2)
     assert sys.platform != 'darwin' or result['identity']['arms']['cpp-ref']['flags'] == '-std=c++17 -O2'
+
+
+INSTALLED = None if bench.load_receipt() else 'run scripts/datasketches_reference_toolchains.py first'
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group(name='datasketches-reference')
+@pytest.mark.pcc_gate(unavailable=REFERENCES or INSTALLED)
+def test_all_five_reference_arms_do_equal_work(tmp_path):
+    """Go, Java and the Python package join C++ and Rust with identical HLL/Theta estimates."""
+    out = tmp_path / 'out'
+    arms = 'cpp-ref,rust-ref,go-ref,java-ref,python-ref'
+    assert bench.main(['--out', str(out), '--n', '20000', '--rounds', '1', '--arms', arms]) == 0
+    result = json.loads((out / 'results.json').read_text())
+    assert set(result['summary']) == set(arms.split(','))
+    assert len({summary['hll8_lg12']['result'] for summary in result['summary'].values()}) == 1
+    # Same retained hashes and theta in every arm; Java evaluates the final
+    # estimate with a different floating expression and can differ by an ulp
+    # (at N=20000 it does; at N=10^7 all five agree bit for bit).
+    estimates = [summary['theta_lg12']['result'] for summary in result['summary'].values()]
+    assert all(math.isclose(value, estimates[0], rel_tol=4 * sys.float_info.epsilon) for value in estimates)

@@ -6,9 +6,12 @@ One workload (benchmarks/datasketches/workload.*: HLL_8 lg_k 12, Theta lg_k
 12 and KLL<double> k 200 over the keys 0..N-1, each timing only its update
 loop) runs against the pinned DataSketches sources of every language
 (scripts/datasketches_sources.py). Reference arms build with that language's
-own toolchain; PCC arms build with the owned frontends. An arm whose toolchain
-or owned frontend cannot build it is reported UNRUN with the reason, never
-timed or substituted. Builds and runs hold build/.pcc-performance.lock; arms
+own toolchain (scripts/datasketches_reference_toolchains.py) and are labeled
+baselines only. PCC arms depend on no other compiler: each is compiled,
+assembled and linked by PCC alone -- the Python package's C++ extension and
+nanobind included -- and no reference tool may build, check or certify one.
+An arm that cannot be built is reported UNRUN with the reason, never timed
+or substituted. Builds and runs hold build/.pcc-performance.lock; arms
 alternate with a rotating start order for --rounds rounds (five or more for a
 result; fewer is a screen), and each process's maximum RSS is checked against
 --rss-cap. DIR receives the binaries, raw rounds, identities and results.json.
@@ -30,6 +33,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from scripts.datasketches_reference_toolchains import load_receipt  # noqa: E402
 from scripts.datasketches_sources import LOCK_SHA256, PROJECTS, ROOT as PROJECT_ROOT, load_project  # noqa: E402
 from scripts.file_lock import exclusive_file_lock  # noqa: E402
 
@@ -104,22 +108,113 @@ def build_rust_reference(build):
     return binary, {"compiler": tool_version(["rustc", "--version"]), "flags": "-C opt-level=3, all sketch features"}
 
 
+def receipt():
+    """The installed reference toolchains (scripts/datasketches_reference_toolchains.py)."""
+    installed = load_receipt()
+    if installed is None:
+        raise Unrun("reference toolchains are not installed; run scripts/datasketches_reference_toolchains.py")
+    return installed
+
+
+def go_environment(installed, build):
+    # GOROOT is explicit: a version manager's exported GOROOT must not win.
+    environment = dict(os.environ, GOROOT=installed["go_root"], GOTOOLCHAIN="local", GOENV="off",
+                       GOFLAGS="-mod=mod", CGO_ENABLED="0",
+                       GOMODCACHE=installed["gomodcache"], GOPATH=str(Path(installed["gomodcache"]).parent / "gopath"),
+                       GOCACHE=str(build / "gocache"))
+    environment["PATH"] = str(Path(installed["go_root"]) / "bin") + os.pathsep + environment["PATH"]
+    return environment
+
+
+def build_go_reference(build):
+    installed = receipt()
+    go = str(Path(installed["go_root"]) / "bin/go")
+    module = build / "go"
+    module.mkdir()
+    pinned = PROJECT_ROOT / "projects" / PROJECTS["go"]
+    # The pinned module is used in place (replace); its go.sum verifies the
+    # murmur3, xxhash and x/exp downloads into the receipt's module cache.
+    (module / "go.mod").write_text("module pcc.local/datasketchesbench\n\ngo 1.24.11\n\n"
+                                   "require github.com/apache/datasketches-go v0.3.0\n\n"
+                                   f"replace github.com/apache/datasketches-go => {pinned}\n")
+    shutil.copyfile(pinned / "go.sum", module / "go.sum")
+    shutil.copyfile(WORKLOAD / "workload.go", module / "workload.go")
+    environment = go_environment(installed, build)
+    completed = subprocess.run([go, "build", "-trimpath", "-o", str(build / "go-ref"), "."], cwd=module,
+                               env=environment, capture_output=True, text=True, timeout=1800, start_new_session=True)
+    if completed.returncode:
+        raise RuntimeError("go build failed:\n" + completed.stderr[-4000:])
+    return build / "go-ref", {"compiler": installed["versions"]["go"], "flags": "go build -trimpath (default -O)",
+                              "go_sum_sha256": sha256(module / "go.sum")}
+
+
+def build_java_reference(build):
+    installed = receipt()
+    java_home = Path(installed["java_home"])
+    root = PROJECT_ROOT / "projects" / PROJECTS["java"] / "src/main/java"
+    classes = build / "java-classes"
+    classes.mkdir()
+    sources = sorted(str(path) for path in root.rglob("*.java")) + [str(WORKLOAD / "Workload.java")]
+    arguments = build / "javac-sources.txt"
+    arguments.write_text("\n".join(sources) + "\n")
+    run([str(java_home / "bin/javac"), "--release", "25", "-nowarn", "-d", str(classes), f"@{arguments}"], timeout=1800)
+    launcher = build / "java-ref"
+    launcher.write_text("#!/bin/sh\nexec " + str(java_home / "bin/java") + " -cp " + str(classes) + ' Workload "$@"\n')
+    launcher.chmod(0o755)
+    return launcher, {"compiler": installed["versions"]["java"], "flags": "javac --release 25; default JVM flags"}
+
+
+def build_python_reference(build):
+    """The unchanged package built by its own setup.py/CMake with the receipt's tools.
+
+    Only the build copy's ExternalProject is redirected: its C++ core comes
+    from the pinned datasketches-cpp copy instead of a git clone, and it
+    installs below the build directory instead of upstream's fixed
+    /tmp/datasketches. No C++ or binding source changes.
+    """
+    installed = receipt()
+    python = Path(installed["python"])
+    source = build / "python-src"
+    shutil.copytree(PROJECT_ROOT / "projects" / PROJECTS["python"], source, symlinks=True)
+    core = build / "cpp-src"
+    shutil.copytree(PROJECT_ROOT / "projects" / PROJECTS["cpp"], core, symlinks=True)
+    cmake = source / "CMakeLists.txt"
+    text = cmake.read_text()
+    original = ("  GIT_REPOSITORY https://github.com/apache/datasketches-cpp.git\n  GIT_TAG 5.2.0\n"
+                "  GIT_SHALLOW true\n  GIT_SUBMODULES \"\"\n")
+    if text.count(original) != 1 or text.count("/tmp/datasketches") != 2:
+        raise RuntimeError("datasketches-python CMakeLists.txt no longer has the expected ExternalProject")
+    text = text.replace(original, f"  SOURCE_DIR {core}\n").replace("/tmp/datasketches", str(build / "cpp-install"))
+    cmake.write_text(text)
+    environment = dict(os.environ)
+    environment["PATH"] = str(python.parent) + os.pathsep + environment["PATH"]
+    if sys.platform == "darwin":
+        sdk = run(["xcrun", "--show-sdk-path"], timeout=60).strip()
+        environment["CXXFLAGS"] = f"-nostdinc++ -isystem {sdk}/usr/include/c++/v1"
+    wheels = build / "python-wheel"
+    uv = shutil.which("uv")
+    completed = subprocess.run([uv, "build", "--wheel", "--no-build-isolation", "--python", str(python),
+                                "--out-dir", str(wheels), str(source)], env=environment, capture_output=True,
+                               text=True, timeout=3600, start_new_session=True)
+    if completed.returncode:
+        raise RuntimeError("python package build failed:\n" + (completed.stdout + completed.stderr)[-4000:])
+    wheel, = wheels.glob("*.whl")
+    site = build / "python-site"
+    run([uv, "pip", "install", "--python", str(python), "--no-deps", "--target", str(site), str(wheel)], timeout=600)
+    launcher = build / "python-ref"
+    launcher.write_text(f"#!/bin/sh\nPYTHONPATH={site} exec {python} {WORKLOAD / 'workload.py'} \"$@\"\n")
+    launcher.chmod(0o755)
+    return launcher, {"compiler": installed["versions"]["python"] + ", " + ", ".join(installed["python_requirements"]),
+                      "flags": "upstream setup.py/CMake Release; ExternalProject redirected to the pinned C++ copy",
+                      "wheel": wheel.name, "wheel_sha256": sha256(wheel)}
+
+
 def unavailable_reference(arm):
-    if arm == "go-ref":
-        version = tool_version(["go", "version"]) if shutil.which("go") else None
-        found = re.search(r"go(\d+)\.(\d+)(?:\.(\d+))?", version or "")
-        if found is None or tuple(int(part or 0) for part in found.groups()) < (1, 24, 11):
-            raise Unrun(f"datasketches-go needs Go >= 1.24.11 (found {version or 'none'}) and unpinned "
-                        "murmur3/xxhash/x/exp module sources")
-        raise Unrun("unpinned murmur3/xxhash/x/exp module sources")
-    if arm == "java-ref":
-        raise Unrun("datasketches-java 9.1.0 needs a JDK 25 (java.lang.foreign); none is selected")
-    if arm == "python-ref":
-        raise Unrun("the _datasketches extension needs nanobind and CMake, which are not installed")
     raise Unrun(PCC_FRONTIERS[arm])
 
 
-BUILDERS = {"cpp-ref": build_cpp_reference, "rust-ref": build_rust_reference}
+BUILDERS = {"cpp-ref": build_cpp_reference, "rust-ref": build_rust_reference, "go-ref": build_go_reference,
+            "java-ref": build_java_reference, "python-ref": build_python_reference}
 
 
 def parse_output(text, n):
