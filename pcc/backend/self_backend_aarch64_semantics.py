@@ -389,6 +389,14 @@ class AArch64InstructionSemantics:
         return header
 
     def _validate_tokens(self, first: int, count: int) -> None:
+        if (type(self) is AArch64InstructionSemantics
+                and type(first) is int and type(count) is int
+                and type(self.tokens) is CompilerIntArena
+                and type(self.tokens._address) is int
+                and self.tokens._address == 0
+                and type(self.tokens._values) is list):
+            self._validate_tokens_host(first, count)
+            return
         index = first
         end = first + count
         while index < end:
@@ -423,6 +431,59 @@ class AArch64InstructionSemantics:
                 while child_index <= index + children:
                     child: CompilerInt4 = self.tokens.get4_unchecked(child_index)
                     if child.first not in (TOKEN_REGISTER, TOKEN_IMMEDIATE, TOKEN_WIDE_IMMEDIATE, TOKEN_SYMBOL, TOKEN_SHIFT):
+                        raise EncodeError("AArch64 semantic address operand is unsupported")
+                    child_index += 1
+            index += 1
+
+    def _host_token_parts(self, index: int) -> tuple[int, int, int, int]:
+        # Each read reacquires the current owner. Validation is allowed to
+        # reject or expose later writes; this is not a token/header cache.
+        tokens: CompilerIntArena = self.tokens
+        if (type(tokens) is CompilerIntArena and type(index) is int
+                and type(tokens._address) is int and tokens._address == 0
+                and type(tokens._values) is list):
+            offset = index * 4
+            values = tokens._values
+            return (values[offset], values[offset + 1],
+                    values[offset + 2], values[offset + 3])
+        token: CompilerInt4 = tokens.get4_unchecked(index)
+        return token.first, token.second, token.third, token.fourth
+
+    def _validate_tokens_host(self, first: int, count: int) -> None:
+        index = first
+        end = first + count
+        while index < end:
+            (token_first, token_second, token_third, token_fourth) = self._host_token_parts(index)
+            validate_semantic_token(token_first, token_second, token_third, token_fourth)
+            if token_first == TOKEN_ADDRESS:
+                children = token_third
+                if index + children >= end:
+                    raise EncodeError("AArch64 semantic address is truncated")
+                (base_first, base_second, base_third, base_fourth) = self._host_token_parts(index + 1)
+                if base_first != TOKEN_REGISTER or not (
+                    0 <= base_second <= 30 or base_second in (REGISTER_SP, REGISTER_FP, REGISTER_LR)
+                ):
+                    raise EncodeError("AArch64 semantic address base is not an X/SP register")
+                if children >= 2:
+                    (offset_first, offset_second, offset_third, offset_fourth) = self._host_token_parts(index + 2)
+                    if token_second == ADDRESS_REGISTER:
+                        if offset_first != TOKEN_REGISTER or not (
+                            0 <= offset_second <= 30 or 32 <= offset_second <= 62
+                            or offset_second in (REGISTER_XZR, REGISTER_WZR, REGISTER_FP, REGISTER_LR)
+                        ):
+                            raise EncodeError("AArch64 semantic address index is invalid")
+                    elif offset_first not in (TOKEN_IMMEDIATE, TOKEN_WIDE_IMMEDIATE) and not (
+                        token_second == ADDRESS_OFFSET and offset_first == TOKEN_SYMBOL
+                    ):
+                        raise EncodeError("AArch64 semantic address offset is invalid")
+                if children == 3:
+                    (shift_first, shift_second, shift_third, shift_fourth) = self._host_token_parts(index + 3)
+                    if shift_first != TOKEN_SHIFT:
+                        raise EncodeError("AArch64 semantic address shift is invalid")
+                child_index = index + 1
+                while child_index <= index + children:
+                    (child_first, child_second, child_third, child_fourth) = self._host_token_parts(child_index)
+                    if child_first not in (TOKEN_REGISTER, TOKEN_IMMEDIATE, TOKEN_WIDE_IMMEDIATE, TOKEN_SYMBOL, TOKEN_SHIFT):
                         raise EncodeError("AArch64 semantic address operand is unsupported")
                     child_index += 1
             index += 1
