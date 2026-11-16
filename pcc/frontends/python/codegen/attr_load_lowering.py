@@ -1792,6 +1792,13 @@ class AttrLoadLoweringMixin:
             and isinstance(expr.obj, Name)
             and expr.obj.ident == "self"
         ):
+            self_slot = self.env.get("self")
+            if self_slot is not None and isinstance(self_slot[2], DynType):
+                # A lambda capture/parameter has no proven instance layout.
+                # Its lexical class can be a mixin with different indices
+                # from the actual receiver, or a shadowed unrelated object.
+                self_value = self.builder.load(self_slot[0], name=self._fresh("self"))
+                return self._emit_runtime_attr_read(expr, self_value, runtime_attr_name)
             receiver_class_name = self._self_receiver_class_name()
             receiver_info = None
             if receiver_class_name is not None:
