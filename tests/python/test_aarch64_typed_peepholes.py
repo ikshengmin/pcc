@@ -220,7 +220,8 @@ CASES = [
 
 @pytest.mark.parametrize("name,items", CASES, ids=[case[0] for case in CASES])
 def test_each_pass_matches_legacy_without_text(monkeypatch, name, items):
-    _differential(monkeypatch, name, items, True)
+    # The stack-store deletion stays disabled until alias-safe deadness exists.
+    _differential(monkeypatch, name, items, name != "drop_dead_cset_branch_stores")
 
 
 @pytest.mark.parametrize("boundary", ["", "L_stop:", ".p2align 2", ".pcc_memory_pair_barrier_begin"])
@@ -445,9 +446,9 @@ def test_lse_roles_preserve_use_before_def(monkeypatch, opcode, first, second, c
     _differential(monkeypatch, "fold_mov_store_source", [I("mov", R("w9"), R("w19")), I("sturb", R("w9"), A()), I(opcode, R(first), R(second), address)], changed)
 
 
-def test_dead_cset_loads_are_function_scoped_and_prefix_is_untouched(monkeypatch):
+def test_cset_stores_remain_across_functions_and_prefix_is_untouched(monkeypatch):
     shape = [I("cmp", R("w9"), R("w10")), I("cset", R("w9"), C("eq")), I("sturb", R("w9"), A()), I("b.ne", S())]
-    _differential(monkeypatch, "drop_dead_cset_branch_stores", shape + ["_one:"] + shape + ["_two:", I("ldurb", R("w10"), A())] + shape, True)
+    _differential(monkeypatch, "drop_dead_cset_branch_stores", shape + ["_one:"] + shape + ["_two:", I("ldurb", R("w10"), A())] + shape, False)
 
 
 def test_first_fourteen_pipeline_matches_ordered_legacy(monkeypatch):

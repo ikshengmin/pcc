@@ -432,8 +432,10 @@ def _run(fragments, semantics, span, mode):
                         consumed = 2
             elif mode == 7 and b >= 0:
                 move, branch = p.move(a), p.branch(b)
-                if move and branch and move[0] == branch[1] and _class(move[0]) == "w" and _class(move[1]) == "w" and _scratch(move[0]) and p.false_path(index + 2):
+                if move and branch and move[0] == branch[1] and _class(move[0]) == "w" and _class(move[1]) == "w" and move[1] != sem.REGISTER_WSP and _scratch(move[0]) and p.false_path(index + 2):
                     replacement = p.new_branch(branch[0], branch[2], move[1])
+                    # The taken target may observe the scratch definition.
+                    p.output.append(a)
                     consumed = 2
             elif mode == 8 and b >= 0:
                 move = p.move(a)
@@ -512,6 +514,10 @@ def _run(fragments, semantics, span, mode):
                     cset, store = p.cset(b), p.stack(c, "sturb")
                     if cset and store and p.op(d).startswith("b.") and store[0] == cset[0] and not any(_same(store[1], offset) for offset in loaded):
                         p.output.append(a)
+                        # Register liveness and aliased stack loads are not
+                        # proved by the textual-offset load inventory.
+                        p.output.append(b)
+                        p.output.append(c)
                         replacement = d
                         consumed = 4
             if consumed:

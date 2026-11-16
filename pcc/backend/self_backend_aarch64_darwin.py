@@ -2137,9 +2137,11 @@ def _fold_mov_zero_branch_source(lines: list[str]) -> list[str]:
                     branch_reg == dest_reg
                     and dest_reg.startswith("w")
                     and src_reg.startswith("w")
+                    and src_reg != "wsp"
                     and _is_aarch64_scratch_reg(dest_reg)
                     and _branch_false_path_does_not_use_reg(lines, index + 2)
                 ):
+                    out.append(lines[index])
                     out.append(f"  {opcode} {src_reg}, {target}")
                     index += 2
                     continue
@@ -2463,6 +2465,8 @@ def _drop_dead_cset_branch_stores_in_function(lines: list[str]) -> list[str]:
                 store_reg, store_offset = store
                 if store_reg == cset_reg and store_offset not in loaded_offsets:
                     out.append(lines[index])
+                    out.append(lines[index + 1])
+                    out.append(lines[index + 2])
                     out.append(lines[index + 3])
                     index += 4
                     continue
