@@ -81,7 +81,8 @@ def test_missing_worker_stays_outside_and_cannot_authorize_continuation(tmp_path
 
 def _run_mock_pool(tmp_path, monkeypatch, *, budget, owner_peak, owner_current,
                    worker_peak, worker_current, outside=32 * MIB, peer=False,
-                   with_state=True):
+                   with_state=True, guard_deadline=None, missing_until=None,
+                   finish_after=None):
     """Run the real policy/report parsers; replace only time and processes."""
     owner_pid = os.getpid()
     tree = tmp_path / "tree"
@@ -111,6 +112,8 @@ def _run_mock_pool(tmp_path, monkeypatch, *, budget, owner_peak, owner_current,
         rows = [f"{owner_pid + 500}\t0\t{outside}",
                 f"{owner_pid}\t{owner_pid + 500}\t{owner_current}"]
         for pid, item in live.items():
+            if missing_until is not None and clock.now < missing_until:
+                continue
             current = worker_current if item["index"] == 0 else 16 * MIB
             rows.append(f"{pid}\t{owner_pid}\t{current}")
         tree.write_text(policy.TREE_STATE_SCHEMA + "\n" + str(clock.now) + "\n"
@@ -139,7 +142,8 @@ def _run_mock_pool(tmp_path, monkeypatch, *, budget, owner_peak, owner_current,
     def poll(pid):
         item = all_workers[pid]
         item["polls"] += 1
-        if item["polls"] < 3:
+        if ((finish_after is None and item["polls"] < 3)
+                or (finish_after is not None and clock.now < 100.0 + finish_after)):
             return pool._WORKER_RUNNING
         report(item, "complete")
         return 0
@@ -165,6 +169,9 @@ def _run_mock_pool(tmp_path, monkeypatch, *, budget, owner_peak, owner_current,
         monkeypatch.setenv(policy.TREE_STATE_ENV, str(tree))
     else:
         monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    if guard_deadline is not None:
+        monkeypatch.setenv(policy.TREE_RECOVERY_ENV,
+                           "pcc.worker-tree-recovery.v1\t1.0,3.0\t4.0\t" + str(guard_deadline))
     write_tree()
     failure = None
     try:
@@ -728,7 +735,9 @@ def test_configured_recovery_requires_complete_in_window_inventory(
     assert not live
     assert bool(failure) == fails, (case, failure)
     if fails:
-        if case != "failure-during-outage":
+        if case in ("original-deadline-wins", "original-deadline-already-passed"):
+            assert failure.startswith("worker process guard deadline exceeded; historical_last_rejected_snapshot=")
+        elif case != "failure-during-outage":
             assert "worker tree RSS state is missing, stale, or incompatible" in failure
         assert [index for index, _ in starts] == ([] if deadline == "99" else [0])
         assert not remaining
@@ -783,3 +792,36 @@ def test_unproven_recovery_guard_keeps_host_dependency(change):
     else:
         source = "import sys as execution_runtime\n" + source.replace("    import sys as execution_runtime\n", "")
     assert marker in scan._without_inactive_runtime_imports(source)
+
+
+@pytest.mark.parametrize("deadline,missing_until,finish_after,expected,stops", [
+    (100.0, None, 10.0, "deadline", 0),
+    (100.5, None, 10.0, "deadline", 1),
+    (100.5, 100.1, 10.0, "deadline", 1),
+    (110.0, 109.0, 10.0, "outage", 1),
+    (101.0, 100.1, 0.2, "complete", 0),
+])
+def test_guard_deadline_is_not_reported_as_historical_snapshot_failure(
+    tmp_path, monkeypatch, deadline, missing_until, finish_after, expected, stops,
+):
+    failure, observations, events, stopped, reaped, tasks = _run_mock_pool(
+        tmp_path, monkeypatch, budget=640 * MIB, owner_peak=64 * MIB,
+        owner_current=64 * MIB, worker_peak=16 * MIB, worker_current=16 * MIB,
+        guard_deadline=deadline, missing_until=missing_until, finish_after=finish_after,
+    )
+    assert len(stopped) == stops
+    if expected == "complete":
+        assert failure is None and len(observations) == 1 and len(reaped) == 1
+        assert policy.time.now < deadline
+    else:
+        assert not observations and not reaped
+        if expected == "deadline":
+            assert failure.startswith("worker process guard deadline exceeded; historical_last_rejected_snapshot=")
+            assert deadline <= policy.time.now < deadline + 0.03
+            if missing_until is not None:
+                assert "active_missing" in failure
+                assert policy.time.now > missing_until
+        else:
+            assert failure.startswith("worker tree RSS state is missing, stale, or incompatible; last_rejected_snapshot=")
+            assert "active_missing" in failure
+            assert 104.0 <= policy.time.now < 104.03 < deadline

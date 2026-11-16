@@ -418,9 +418,14 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                         or (outage_expiry >= 0.0 and now >= outage_expiry)))
                         or (not configured_recovery and state is None
                             and now - unavailable_since > STATE_MAX_AGE_SECONDS)):
+                    # The fixed guard deadline also applies to a currently
+                    # valid snapshot. A previous rejection may have recovered;
+                    # keep it as history, not the cause of deadline expiry.
+                    failure_context = "worker tree RSS state is missing, stale, or incompatible; last_rejected_snapshot="
+                    if configured_recovery and now >= guard_deadline:
+                        failure_context = "worker process guard deadline exceeded; historical_last_rejected_snapshot="
                     raise WorkerMemoryError(
-                        "worker tree RSS state is missing, stale, or incompatible"
-                        + "; last_rejected_snapshot=" + repr(state_diagnostic)
+                        failure_context + repr(state_diagnostic)
                         + "; active_tasks=" + repr([(item[0], item[1]) for item in active[:16]])
                     )
                 if state is None:
