@@ -10,6 +10,7 @@ import time
 from typing import Optional
 
 from pcc.frontends.python import module_action_dag as _module_action_dag
+from pcc.frontends.python.pipeline_memory import coordinator_memory_phase
 from pcc.frontends.python.pipeline_profile import profile_begin as _phase_begin, profile_end as _phase_end
 from pcc.frontends.python.pipeline_frontend_workers import (
     read_worker_error as _read_worker_error,
@@ -1228,6 +1229,7 @@ def compile_parallel_uncached(
             "multi_frontend_ast_wire_requested",
             1 if ast_wire_requested else 0,
         )
+        coordinator_memory_phase("exports-before")
         started = profile_begin(profile)
         exports_path = build_shared_exports_callback(
             tmp,
@@ -1247,6 +1249,7 @@ def compile_parallel_uncached(
             module_dependency_map=module_dependency_map,
         )
         profile_end(profile, "multi_frontend_export_parallel", started)
+        coordinator_memory_phase("exports-returned")
 
         action_state = None
         action_root = ""
@@ -1498,6 +1501,7 @@ def compile_parallel_uncached(
             )
 
         profile_end(profile, "multi_frontend_codegen_manifests", codegen_manifests_started)
+        coordinator_memory_phase("manifests-ready")
         if deferred_codegen_plan and native_owned_lanes:
             output_path = str(
                 os.environ.get("PCC_DEFER_FRONTEND_OUTPUT", "") or ""
