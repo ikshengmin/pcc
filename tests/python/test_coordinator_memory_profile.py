@@ -20,7 +20,7 @@ def test_disabled_does_not_read_counters(monkeypatch, capsys, flag):
     assert capsys.readouterr().err == ''
 
 
-@pytest.mark.parametrize('phase', ['exports-before', 'exports-returned', 'manifests-ready'])
+@pytest.mark.parametrize('phase', ['closure-before', 'closure-single-returned', 'closure-single-admitted', 'closure-multi-returned', 'init-order-returned', 'exports-before', 'exports-returned', 'manifests-ready'])
 def test_only_four_read_only_counters_in_order(monkeypatch, capsys, phase):
     monkeypatch.setenv('PCC_PROFILE_COORDINATOR_MEMORY', '1')
     calls = []
@@ -127,3 +127,66 @@ def test_cancellation_always_propagates(monkeypatch, cancel, active_error):
         else:
             memory.coordinator_memory_phase('exports-returned')
     assert caught.value is cancel
+
+
+@pytest.mark.parametrize('fail_at, expected', [
+    ('collect', ['closure-before']),
+    ('filter', ['closure-before', 'closure-single-returned']),
+    (None, ['closure-before', 'closure-single-returned', 'closure-single-admitted']),
+])
+def test_single_closure_observation_order(monkeypatch, fail_at, expected):
+    from pcc.frontends.python import pipeline as pipeline
+    observations = []
+    original = ValueError('original closure error')
+    sources, modules = ['entry.py'], ['entry']
+    def collect(*args, **kwargs):
+        if fail_at == 'collect':
+            raise original
+        return sources, modules
+    def filter_closure(*args, **kwargs):
+        if fail_at == 'filter':
+            raise original
+        return sources, modules
+    monkeypatch.setattr(pipeline, '_coordinator_memory_phase', observations.append)
+    monkeypatch.setattr(pipeline, '_collect_relative_module_closure', collect)
+    monkeypatch.setattr(pipeline, '_filter_ir_scaffold_closure', filter_closure)
+    for name in ('_expand_native_extension_module_object_ports',
+                 '_expand_required_native_builtin_providers', '_validate_package_site_native_abi'):
+        monkeypatch.setattr(pipeline, name, lambda *args, **kwargs: None)
+    monkeypatch.setattr(pipeline, '_sources_use_native_stdlib', lambda sources: False)
+    def run():
+        return pipeline._prepare_single_source_compile_closure(
+            'entry.py', 'entry', emit_llvm_only=False, ir_scaffold_mode='on',
+            recursive_stdlib=False, python_library=False)
+    if fail_at:
+        with pytest.raises(ValueError) as caught:
+            run()
+        assert caught.value is original
+    else:
+        result = run()
+        assert result[0] is sources and result[1] is modules and result[2] is False
+    assert observations == expected
+
+
+@pytest.mark.parametrize('fail', [False, True])
+def test_multi_closure_observation_only_after_success(monkeypatch, fail):
+    from pcc.frontends.python import pipeline_dependency_closure as closure
+    observations = []
+    original = ValueError('original provider error')
+    sources, modules = ['entry.py'], ['entry']
+    monkeypatch.setattr(closure, 'coordinator_memory_phase', observations.append)
+    monkeypatch.setattr(closure, '_collect_multi_source_relative_closure', lambda *a, **kw: (sources, modules))
+    monkeypatch.setattr(closure, '_filter_ir_scaffold_closure', lambda *a, **kw: (sources, modules))
+    def expand(*args, **kwargs):
+        if fail:
+            raise original
+    monkeypatch.setattr(closure, '_expand_required_native_builtin_providers', expand)
+    if fail:
+        with pytest.raises(ValueError) as caught:
+            closure._prepare_multi_source_compile_closure(sources, modules, recursive_stdlib=False, ir_scaffold_mode='on')
+        assert caught.value is original
+        assert observations == []
+    else:
+        result = closure._prepare_multi_source_compile_closure(sources, modules, recursive_stdlib=False, ir_scaffold_mode='on')
+        assert result[0] is sources and result[1] is modules
+        assert observations == ['closure-multi-returned']

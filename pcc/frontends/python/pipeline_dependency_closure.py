@@ -17,6 +17,7 @@ from pcc.frontends.python.pipeline_unsafe_imports import (
 )
 from pcc.driver import paths as _pipeline_paths
 from pcc.frontends.python.pipeline_modes import PyPipelineError
+from pcc.frontends.python.pipeline_memory import coordinator_memory_phase
 from pcc.frontends.python.pipeline_profile import profile_begin as _profile_begin, profile_end as _profile_end
 
 _module_name_from_src = _pipeline_paths.module_name_from_src
@@ -184,6 +185,7 @@ def _prepare_multi_source_compile_closure(
             seen,
         )
         _profile_end(profile, "expand_recursive_stdlib", t)
+    coordinator_memory_phase("closure-multi-returned")
     return src_paths, module_names
 
 

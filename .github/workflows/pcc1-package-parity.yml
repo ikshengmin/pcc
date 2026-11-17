@@ -1442,6 +1442,7 @@ jobs:
       - name: Build Stage1 and run the five-collector native canary
         id: platform_qualification
         env:
+          PCC_PROFILE_COORDINATOR_MEMORY: "1"
           # Explicit marker opts in only this push commit and Linux ARM Stage1.
           # PRs and later unmarked commits stay off. These times include
           # deterministic profiling overhead, never baseline timings.
@@ -1560,6 +1561,8 @@ jobs:
       - name: Stage2 to Stage3 / five original bootstrap owners
         id: bootstrap_owner
         if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.stage1_export.outcome == 'success' && !inputs.full_chain && inputs.pytest_selection != 'not integration' }}
+        env:
+          PCC_PROFILE_COORDINATOR_MEMORY: "1"
         run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration --partition bootstrap --in-place --platform ${{ matrix.platform }} --bundle build/stage1-native-export --out build/bootstrap-owner
 
       - name: Preserve platform-local bootstrap owner and consumed budget
@@ -1809,6 +1812,7 @@ jobs:
       - name: Build current pcc1
         id: mac_stage1
         env:
+          PCC_PROFILE_COORDINATOR_MEMORY: "1"
           # Opt in only this Stage1 build; the bridge gate runs independently.
           PCC_HOST_INDEXED_PROCESS_SPLIT: "1"
           PCC_MACHO_LINK_PHASE_EVENTS: "1"
@@ -1837,6 +1841,8 @@ jobs:
       - name: Stage2 to Stage3 / five original bootstrap owners
         id: bootstrap_owner
         if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' && (inputs.full_chain || inputs.pytest_selection != 'not integration') }}
+        env:
+          PCC_PROFILE_COORDINATOR_MEMORY: "1"
         run: uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration --partition bootstrap --in-place --platform macos-arm64 --bundle build/stage1-native-export --out build/bootstrap-owner
 
       - name: Preserve platform-local bootstrap owner and consumed budget

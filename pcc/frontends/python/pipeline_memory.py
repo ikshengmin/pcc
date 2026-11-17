@@ -21,7 +21,11 @@ def coordinator_memory_phase(phase: str) -> None:
     try:
         if os.environ.get("PCC_PROFILE_COORDINATOR_MEMORY", "") != "1":
             return
-        if phase not in ("exports-before", "exports-returned", "manifests-ready"):
+        if phase not in (
+            "closure-before", "closure-single-returned", "closure-single-admitted",
+            "closure-multi-returned", "init-order-returned",
+            "exports-before", "exports-returned", "manifests-ready",
+        ):
             return
         try:
             requested = _live_requested()

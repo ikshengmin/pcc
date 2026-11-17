@@ -15,6 +15,10 @@ contract.
 
 from __future__ import annotations
 
+from pcc.frontends.python.pipeline_memory import (
+    coordinator_memory_phase as _coordinator_memory_phase,
+)
+
 import gc
 import os
 import importlib
@@ -2323,6 +2327,7 @@ def _prepare_single_source_compile_closure(
     ``_prepare_multi_source_compile_closure`` at the multi-compile boundary.
     Callers supply the same resolved modes used by ``compile_python``.
     """
+    _coordinator_memory_phase("closure-before")
     should_auto_close = (not emit_llvm_only) or module_name.endswith(".__main__")
     t = _profile_begin(profile)
     auto_srcs, auto_mods = (
@@ -2335,6 +2340,7 @@ def _prepare_single_source_compile_closure(
         else ([str(os.path.abspath(src_path))], [module_name])
     )
     _profile_end(profile, "collect_relative_module_closure", t)
+    _coordinator_memory_phase("closure-single-returned")
     t = _profile_begin(profile)
     auto_srcs, auto_mods = _filter_ir_scaffold_closure(
         auto_srcs,
@@ -2374,6 +2380,7 @@ def _prepare_single_source_compile_closure(
         and _sources_use_native_stdlib(auto_srcs)
     ):
         effective_recursive_stdlib = True
+    _coordinator_memory_phase("closure-single-admitted")
     return auto_srcs, auto_mods, effective_recursive_stdlib
 
 
@@ -3882,6 +3889,7 @@ def compile_python_multi(
     t = _profile_begin(profile)
     sibling_inits = _order_module_inits(src_paths, module_names, entry_module)
     _profile_end(profile, "order_module_inits", t)
+    _coordinator_memory_phase("init-order-returned")
     _profile_counter(profile, "before_build_closed_world_context", len(src_paths))
 
     total_ir_bytes_before_passes = 0
