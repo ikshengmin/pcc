@@ -27,6 +27,7 @@ def stack(
     view: tuple[list[int], list[int], list[int]],
     rid: int,
     opcode: int,
+    compact_records: bool = False,
 ) -> tuple[int, int, int, int, int]:
     """Return (register, immediate-kind, value, radix, flags), or a sentinel.
 
@@ -36,7 +37,7 @@ def stack(
     records: list[int] = view[0]
     headers: list[int] = view[1]
     tokens: list[int] = view[2]
-    if rid < 0 or records[rid * 4 + 1] < 0:
+    if rid < 0 or records[rid if compact_records else rid * 4 + 1] < 0:
         return (-1, 0, 0, 0, 0)
     h: int = rid * 4
     if headers[h] != opcode or headers[h + 3] != 4:
@@ -93,6 +94,7 @@ def decide(
     a: int,
     b: int,
     c: int,
+    compact_records: bool = False,
 ) -> tuple[int, int, int, int]:
     """Return (consumed, destination, source, byte), or four zeroes."""
     last: int = b if mode == 1 else c
@@ -100,12 +102,12 @@ def decide(
         return (0, 0, 0, 0)
     middle: tuple[int, int, int, int, int] = (-1, 0, 0, 0, 0)
     if mode == 2:
-        middle = stack(view, b, LDUR)
+        middle = stack(view, b, LDUR, compact_records)
         if middle[1] == 0:
-            middle = stack(view, b, LDURB)
+            middle = stack(view, b, LDURB, compact_records)
     for store_op, load_op in ((STUR, LDUR), (STURB, LDURB)):
-        store: tuple[int, int, int, int, int] = stack(view, a, store_op)
-        load: tuple[int, int, int, int, int] = stack(view, last, load_op)
+        store: tuple[int, int, int, int, int] = stack(view, a, store_op, compact_records)
+        load: tuple[int, int, int, int, int] = stack(view, last, load_op, compact_records)
         if (
             store[1] == 0 or load[1] == 0
             or store[1] != load[1] or store[2] != load[2]

@@ -805,6 +805,23 @@ def run_aarch64_typed_peepholes(fragments: AArch64EmissionFragments, semantics: 
     return _run_aarch64_typed_peepholes(fragments, semantics, span, phase_timing=phase_timing)
 
 
+def _compact_stack_record_snapshot(records) -> bool:
+    # Only this fresh local copy is changed. Exact ints have no user finalizers
+    # or coercion/comparison hooks; preserve the old layout for all other data.
+    if type(records) is not type([]) or len(records) % 4:
+        return False
+    for value in records:
+        if type(value) is not int:
+            return False
+    count = len(records) // 4
+    index = 0
+    while index < count:
+        records[index] = records[index * 4 + 1]
+        index += 1
+    del records[count:]
+    return True
+
+
 def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTransfer | None = None):
     from .self_backend_aarch64_owned_stack import decide
     # Only the private driver selects this route. Native arena storage retains
@@ -829,12 +846,14 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
         raise
     try:
         try:
-            view = (list(fragments.records._values), list(semantics.headers._values), list(semantics.tokens._values))
+            record_snapshot = list(fragments.records._values)
+            compact_records = mode == 2 and _compact_stack_record_snapshot(record_snapshot)
+            view = (record_snapshot, list(semantics.headers._values), list(semantics.tokens._values))
             index = 0
             changed = False
             while index < len(p.ids):
                 a = p.rid(index)
-                decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2))
+                decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2), compact_records)
                 if decision[0] != 0:
                     replacement = p.new_move(decision[1], decision[2], decision[3] != 0)
                     if replacement == -2:
