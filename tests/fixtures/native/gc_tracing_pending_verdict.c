@@ -274,6 +274,16 @@ static int inspect_live(int index, int callback_live) {
     return same && weak_matches(index, callback_live) && plain_matches(index, 1);
 }
 
+static int inspect_callback_keeper(void) {
+    /* Inspect only AFTER collection; a watch on the C stack before the
+     * collection would itself conservatively root the target. */
+    if (py_list_len(roots[KEEPER]) != 1) return 0;
+    PyObject *kept = py_list_get(roots[KEEPER], 0);
+    int same = kept == watched[0];
+    if (kept != 0) py_decref(kept);
+    return same;
+}
+
 static void report_live_verdict_failure(int status, int expected_finalizers,
                                        int expected_weak_callbacks,
                                        int64_t collected, int known_first,
@@ -283,12 +293,12 @@ static void report_live_verdict_failure(int status, int expected_finalizers,
     printf("sweep-verdict:detail status=%d phase=%d mode=%d effective_backend=%lld "
            "finalizers=%d expected_finalizers=%d "
            "weak_callbacks=%d expected_weak_callbacks=%d "
-           "collected=%lld expected_collected=0 "
+           "collected=%lld expected_collected=%s "
            "known_first=%d expected_known_first=1 "
            "known_second=%d gc_callbacks=%d callback_error=%d\n",
            status, phase, mode, (long long)pcc_gc_backend(),
            finalizers, expected_finalizers, weak_callbacks, expected_weak_callbacks,
-           (long long)collected,
+           (long long)collected, mode == 5 ? "nonnegative-whole-heap" : "0",
            known_first, known_second, gc_callbacks, callback_error);
 }
 
@@ -322,13 +332,16 @@ static int run_mode(void) {
         failure_check = 1;
         return 142;
     }
+    /* Mode 5 uses full-heap gc.collect(), which may reclaim callback temporaries and
+     * the disconnected INTERIOR list, not a watched-target-only sweep.
+     * Its rescue oracle is the target graph, weak refs and keeper below. */
     if (mode == 1 || mode == 5 || mode == 6) {
-        if (finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1) {
+        if (finalizers != 0 || weak_callbacks != 0 || collected < 0 || (mode != 5 && collected != 0) || known_first != 1) {
             report_live_verdict_failure(143, 0, 0, collected, known_first, known_second);
             return 143;
         }
         if (!inspect_live(0, 1)) return 144;
-        if (mode == 5 && gc_callbacks != 2) return 145;
+        if (mode == 5 && (gc_callbacks != 2 || !inspect_callback_keeper())) return 145;
     } else if (mode == 2) {
         if (finalizers != 1 || weak_callbacks != 1 || collected != 1 || known_first != 0) {
             failure_check = 3;
