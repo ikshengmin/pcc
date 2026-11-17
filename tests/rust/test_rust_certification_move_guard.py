@@ -53,3 +53,21 @@ def test_mixed_source_still_forbids_reference_function_moves(monkeypatch):
     forbid_moves_for_references(monkeypatch, MIXED, forbidden)
     with pytest.raises(AssertionError, match='reference-bearing move admission'):
         MoveChecker(checker).check_function(reference_function)
+
+
+def test_legacy_shared_generic_preserves_reference_free_method_moves(monkeypatch):
+    # This is semantic guard coverage, not a minted external check or execution
+    # claim. The public checked test separately requires real rustc evidence.
+    from pathlib import Path
+    source = Path(__file__).with_name('programs').joinpath('shared_generic.rs').read_text()
+    calls = []
+    original = MoveChecker.check_function
+
+    def observe(self, function):
+        calls.append((function.token.text, function.instance_arguments is not None))
+        return original(self, function)
+
+    monkeypatch.setattr(MoveChecker, 'check_function', observe)
+    forbid_moves_for_references(monkeypatch, source, forbidden)
+    checker_for(source).check()
+    assert calls == [('into', False), ('into', True)]

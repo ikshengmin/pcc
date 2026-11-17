@@ -83,9 +83,11 @@ def test_value_bitwise_and_multiplication_are_not_reference_token_heuristics():
 def test_checked_legacy_readonly_originals_bypass_partial_move_admission(name,tmp_path,monkeypatch):
     path=Path(__file__).with_name('programs')/(name+'.rs');original=path.read_bytes()
     checked=certify(path,tmp_path/'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
-    monkeypatch.setattr(MoveChecker,'check',lambda *a:pytest.fail('checked source used partial borrow gate'))
-    monkeypatch.setattr(MoveChecker,'check_function',lambda *a:pytest.fail('checked generic body used partial borrow gate'))
+    from tests.rust.certification_support import forbid_moves_for_references
+    forbid_moves_for_references(
+        monkeypatch, original.decode(),
+        lambda *a: pytest.fail('checked reference body used partial borrow gate'),
+    )
     result=compile_rust(original.decode(),rustc_check=checked)
     assert result.externally_checked and result.emit_object().startswith(b'\x7fELF')
     assert path.read_bytes()==original
