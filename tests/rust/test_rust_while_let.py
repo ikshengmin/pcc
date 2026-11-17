@@ -18,7 +18,11 @@ from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.attribute_metadata import offset
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -89,19 +93,21 @@ def test_scrutinee_uses_outer_name_while_body_uses_fresh_pattern_binding():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_every_new_while_let_original_needs_actual_check_before_ir(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked while let reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_while_let_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+    # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
+    # moves through while-let pattern bindings and backedges are decided by the owned move checker's fixed
+    # point, so reference-free originals need no rustc and no attestation.
+    from tests.rust.certification_support import source_has_references
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
+    if source_has_references(source(name)):
+        with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
+            compile_rust(source(name))
+    else:
+        assert not compile_rust(source(name)).externally_checked
 
 
-def test_unused_while_let_is_not_authorized_by_value_only_attestation(monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unused unchecked pattern loop reached IR'))
-    with pytest.raises(RustError, match='while let control-flow admission'):
-        compile_rust('fn unused(){while let false=true{}}fn answer()->u64{42}',
-                     experimental_rustc_checked=True)
+def test_former_unused_while_let_gate_row_compiles_without_attestation():
+    assert compile_rust('fn unused(){while let false=true{}}fn answer()->u64{42}').symbols['answer']
 
 
 INVALID = (
@@ -144,7 +150,6 @@ def test_remaining_while_let_domains_fail_explicitly(name, text, message):
 def test_actual_same_input_while_let_check_precedes_owned_object(name, tmp_path, monkeypatch):
     text = source(name)
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     from pcc.frontends.rust.lowering import Lowerer
     continue_edges, active_continue = [], []
     original_expression, original_finish = Lowerer.expression, Lowerer.finish_iteration_scopes
@@ -167,8 +172,7 @@ def test_actual_same_input_while_let_check_precedes_owned_object(name, tmp_path,
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         if name == 'while_let_nested_iteration':
             patch.setattr(Lowerer, 'expression', observe_expression)
             patch.setattr(Lowerer, 'finish_iteration_scopes', observe_finish)

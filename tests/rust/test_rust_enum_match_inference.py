@@ -21,6 +21,7 @@ from pcc.frontends.rust.semantics import Checker
 from pcc.frontends.rust.syntax import Parser
 from pcc.frontends.rust.types import TypeApplication
 from tests.rust.certification_support import actual_check_prerequisite
+from tests.rust.str_execution import UNAVAILABLE, run_owned_u64_function
 
 
 PROGRAMS = ('enum_match_result', 'enum_match_patterns',
@@ -102,10 +103,20 @@ def test_inferred_enum_matches_do_not_widen_other_boundaries(text, message, monk
         compile_rust(text, experimental_rustc_checked=True)
 
 
-def test_loop_bearing_replay_original_still_requires_certification():
-    text = 'enum E<T>{Some(T),None}\nfn wrap<U>(x:U)->E<U>{E::<_>::Some(x)}\nfn identity<U>(x:U)->U{match wrap(x){E::Some(y)=>y,E::None=>loop{}}}\nfn empty<U>()->E<U>{E::<_>::None}\nfn zero()->u64{match empty(){E::Some(x)=>x,E::None=>0}}\npub fn answer()->u64{\n    if identity(true) && identity(9u32)==9u32 && zero()==0{\n        identity(0xfedcba9876543210)\n    }else{0}\n}\n'
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text, experimental_rustc_checked=True)
+LOOP_REPLAY = 'enum E<T>{Some(T),None}\nfn wrap<U>(x:U)->E<U>{E::<_>::Some(x)}\nfn identity<U>(x:U)->U{match wrap(x){E::Some(y)=>y,E::None=>loop{}}}\nfn empty<U>()->E<U>{E::<_>::None}\nfn zero()->u64{match empty(){E::Some(x)=>x,E::None=>0}}\npub fn answer()->u64{\n    if identity(true) && identity(9u32)==9u32 && zero()==0{\n        identity(0xfedcba9876543210)\n    }else{0}\n}\n'
+
+
+def test_loop_bearing_replay_original_compiles_with_owned_admission():
+    # Formerly gated on certification; owned loop moves (README stage 3) admit it.
+    assert not compile_rust(LOOP_REPLAY).externally_checked
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
+def test_loop_bearing_replay_original_runs_with_owned_compile_and_link(tmp_path, monkeypatch):
+    # rustc 1.92.0 builds the same source and returns the same sentinel.
+    assert run_owned_u64_function(LOOP_REPLAY, 'answer', tmp_path, monkeypatch,
+                                  experimental_rustc_checked=False) == 0xfedcba9876543210
 
 
 @pytest.mark.parametrize('name', PROGRAMS)

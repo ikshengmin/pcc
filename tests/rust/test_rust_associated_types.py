@@ -20,7 +20,11 @@ from pcc.frontends.rust.attribute_metadata import offset
 from pcc.frontends.rust.standard_markers import COPY, CLONE, SIZED
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -237,13 +241,11 @@ def test_remaining_projection_and_layout_domains_are_explicit(name, text, messag
 @pytest.mark.parametrize('text', POSITIVE_ORIGINALS)
 def test_actual_same_input_associated_check_precedes_owned_object_phase(text, tmp_path, monkeypatch):
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial borrow admission in owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.externally_checked and not result.borrow_checked_by_pcc

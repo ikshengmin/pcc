@@ -78,7 +78,9 @@ def test_invalid_wildcard_originals_fail_before_lowering(name, text, message, co
 
 
 @pytest.mark.parametrize('text,message', [
-    ('fn f(){let _=loop{};}', 'actual source/options-bound CheckedRustSource'),
+    # The loop gate is gone (owned loop moves, README stage 3); the diverging
+    # initializer stays an explicit owned gap.
+    ('fn f(){let _=loop{};}', 'diverging let initializers are not implemented'),
     ('fn f(){let [x]=[1];}', 'array destructuring'),
     # `fn f(){let (x,y)=(1,2);}` moved to test_rust_let_patterns (now supported).
     ('fn f(p:&u64){let _=p;}', 'actual source/options-bound CheckedRustSource'),

@@ -15,7 +15,11 @@ import pytest
 from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.standard_markers import COPY, SIZED
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 PROGRAMS = ('method_marker_receivers', 'method_marker_owner_prefix',
             'method_marker_forward_result', 'method_marker_shadow', 'method_marker_explicit_sized')
@@ -59,9 +63,7 @@ def test_method_bounds_do_not_turn_public_flag_into_admission(name,monkeypatch):
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_exact_previous_capability_original_now_has_actual_checked_positive(tmp_path,monkeypatch):
     checked = certify_source(PRIOR_CAPABILITY, tmp_path / 'check')
-    from pcc.frontends.rust.moves import MoveChecker
-    monkeypatch.setattr(MoveChecker, 'check', lambda *a: pytest.fail('partial move gate used'))
-    monkeypatch.setattr(MoveChecker, 'check_function', lambda *a: pytest.fail('partial abstract move gate used'))
+    forbid_moves_for_references(monkeypatch, PRIOR_CAPABILITY, lambda *a: pytest.fail('partial move gate used'))
     result = compile_rust(PRIOR_CAPABILITY, rustc_check=checked)
     assert result.externally_checked and result.standard_marker_contract is not None
     assert (tmp_path / 'check/original.rs').read_text() == PRIOR_CAPABILITY

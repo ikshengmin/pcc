@@ -2529,6 +2529,21 @@
       "status": "missing"
     },
     {
+      "id": "rust.admission.owned-control-flow",
+      "title": "Owned move checking through loop, while let, if let and array for",
+      "chapter_ids": [
+        "rust.ref.8.2.13",
+        "rust.ref.8.2.15"
+      ],
+      "scope": "Qualification missing, not implementation missing: stage 3 of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". Reference-free loop, while, while let, if let and concrete owned-array for are admitted with no rustc and no attestation. The move checker's may-move dataflow joins each loop header with every backedge until a fixed point and each exit with every break; for moves or copies its array once and binds a fresh element per iteration; if let is a normalized match. 73 original programs get a rustc 1.92.0 -O build's verdict (E0382 moves in previous iterations, through continue/break edges, partial and whole places, while-let payloads, generic bodies and match guards in loops; E0384) without rustc running, and the 34 reference-free loop/while-let/if-let/array-for programs run with owned compile, assemble and link and match rustc builds. Before this stage the move checker had no for case and failed with KeyError on checked for bodies that read their element. Reference-bearing loops keep the reference gate (stage 4). Local Mac; the Linux-target actual-check lane is unrun here (no Linux std in the local receipt), its stale move-checker expectations were updated by source review and checked by an aarch64-apple-darwin certified compile of the same 79 inputs.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_owned_loop_moves.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [
@@ -2899,7 +2914,7 @@
         "rust.ref.10.1.7",
         "rust.ref.10.9"
       ],
-      "scope": "Concrete owned fixed arrays only, with recursive no-Drop proof independent of Copy. Standard iterator identity cannot be captured by source names; source evaluates once, Copy snapshots/non-Copy moves, cursor advances before body, and per-iteration binding/temporary scopes are retired across break/continue/return. Actual source/options-bound external checking is mandatory; PCC does not extend its legacy partial borrow checker. Fifteen unchanged authored originals pass actual rustc1.91.1 and full8-byte owned/reference process comparisons in the final complete987-selected gate (11 additional Darwin-target cases explicitly unrun). Unknown generic element destruction, arbitrary traits/ranges/borrowed iterators/destructuring, Drop, dynamic panic and original core/alloc remain outside scope; existing division/bounds guards stay enforced. Linux x86-64 runtime only, no Mac certification claim.",
+      "scope": "Concrete owned fixed arrays only, with recursive no-Drop proof independent of Copy. Standard iterator identity cannot be captured by source names; source evaluates once, Copy snapshots/non-Copy moves, cursor advances before body, and per-iteration binding/temporary scopes are retired across break/continue/return. Its recorded evidence is of the actually checked route; since stage 3 of the owned admission migration, reference-free for loops are admitted by the owned move checker's loop fixed point without an external check (rust.admission.owned-control-flow). Fifteen unchanged authored originals pass actual rustc1.91.1 and full8-byte owned/reference process comparisons in the final complete987-selected gate (11 additional Darwin-target cases explicitly unrun). Unknown generic element destruction, arbitrary traits/ranges/borrowed iterators/destructuring, Drop, dynamic panic and original core/alloc remain outside scope; existing division/bounds guards stay enforced. Linux x86-64 runtime only, no Mac certification claim.",
       "tests": [
         "tests/rust/test_rust_array_for.py::test_standard_array_identity_and_binding_scopes_do_not_use_source_names",
         "tests/rust/test_rust_array_for.py::test_original_for_programs_have_actual_checked_full_width_native_pairs@rust-native-reference"

@@ -22,7 +22,7 @@ from pcc.frontends.rust import (
     compile_rust,
     compile_rust_checked,
 )
-from tests.rust.certification_support import actual_check_prerequisite
+from tests.rust.certification_support import actual_check_prerequisite, forbid_moves_for_references
 from tests.rust.test_rust_certified_references import toolchain
 
 
@@ -53,11 +53,9 @@ def test_actual_token_binds_selected_edition_and_compile_owned_retains_it(editio
     observations = json.loads((tmp_path / 'check' / 'processes.json').read_text())
     assert observations[-1]['command'] == list(checked.provenance.command)
     assert observations[-1]['exit_code'] == 0
-    from pcc.frontends.rust.moves import MoveChecker
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, original.decode(), forbidden)
         result = checked.compile_owned(module_name='selected_edition')
         direct = compile_rust(original.decode(), rustc_check=checked, edition=edition)
         assert result.edition == direct.edition == edition
@@ -88,11 +86,9 @@ def test_actual_2024_token_reaches_marker_trait_and_module_revalidation(name, tm
     original = path.read_bytes()
     checked = check_rust_source(original.decode(), edition=2024, toolchain=toolchain(),
                                 evidence_directory=tmp_path / 'check')
-    from pcc.frontends.rust.moves import MoveChecker
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, original.decode(), forbidden)
         result = compile_rust(original.decode(), rustc_check=checked, edition=2024)
         assert result.edition == 2024 and result.externally_checked
         assert not result.borrow_checked_by_pcc

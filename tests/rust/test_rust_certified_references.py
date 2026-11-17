@@ -66,9 +66,9 @@ def certify(path, directory):
 def test_actual_external_check_removes_partial_owned_loan_barrier(name, tmp_path, monkeypatch):
     source = Path(__file__).with_name('programs') / (name + '.rs')
     check = certify(source, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
-    monkeypatch.setattr(MoveChecker, 'check', lambda *a: pytest.fail('owned borrow/move admission was executed'))
-    monkeypatch.setattr(MoveChecker, 'check_function', lambda *a: pytest.fail('owned abstract move admission was executed'))
+    from tests.rust.certification_support import forbid_moves_for_references
+    forbid_moves_for_references(monkeypatch, source.read_text(),
+                                lambda *a: pytest.fail('owned borrow/move admission was executed'))
     result = compile_rust(source.read_text(), rustc_check=check)
     assert result.externally_checked and not result.borrow_checked_by_pcc
     assert 'ptr' in result.ir_text or '*' in result.ir_text

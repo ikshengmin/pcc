@@ -16,7 +16,11 @@ import pytest
 from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.standard_markers import COPY, CLONE, SIZED
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 PROGRAMS = ('trait_weaker_identity', 'trait_weaker_sized', 'trait_weaker_receivers')
 PRIOR_CAPABILITIES = (
@@ -66,15 +70,13 @@ def test_public_weaker_contract_still_needs_actual_token(name, monkeypatch):
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 @pytest.mark.parametrize('name,text', PRIOR_CAPABILITIES)
 def test_exact_former_weaker_controls_are_checked_positive(name, text, tmp_path, monkeypatch):
-    from pcc.frontends.rust.moves import MoveChecker
     import subprocess
     checked = certify_source(text, tmp_path / 'check')
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial borrow admission in owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.externally_checked and result.standard_marker_contract is not None

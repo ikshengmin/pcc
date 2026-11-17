@@ -23,6 +23,7 @@ from tests.rust.certification_support import (
     actual_check_prerequisite,
     certify_source,
     darwin_check_prerequisite,
+    forbid_moves_for_references,
 )
 
 UNUSED_GENERIC_ORIGINAL = 'fn id<T>(x:T)->T{x}fn outer<U>(x:U)->U{id::<_>(x)}'
@@ -192,7 +193,6 @@ def test_placeholder_inference_never_mints_reference_certification(name, monkeyp
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_genuine_check_precedes_owned_phase_without_partial_borrow_admission(name, tmp_path, monkeypatch):
     import subprocess
-    from pcc.frontends.rust.moves import MoveChecker
     text = source(name)
     checked = certify_source(text, tmp_path / 'check')
 
@@ -201,8 +201,7 @@ def test_genuine_check_precedes_owned_phase_without_partial_borrow_admission(nam
 
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.externally_checked and not result.borrow_checked_by_pcc

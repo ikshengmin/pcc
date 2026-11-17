@@ -16,7 +16,11 @@ import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 PROGRAMS = ('local_bound_dispatch', 'local_bound_mutable', 'local_bound_supertraits',
             'local_bound_method_inference', 'local_bound_marker_shadow', 'local_bound_qualified')
@@ -98,13 +102,11 @@ def test_unused_value_only_local_bound_is_gated_before_scheduling(monkeypatch):
 
 def checked_owned(text, directory, monkeypatch):
     checked = certify_source(text, directory)
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial borrow admission in the owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.externally_checked and not result.borrow_checked_by_pcc

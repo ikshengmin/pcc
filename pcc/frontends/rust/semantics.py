@@ -1144,8 +1144,9 @@ class Checker:
                     ty = unify(ty, self.expression(arm), arm.token)
                 self.scopes.pop()
         elif kind == "for":
-            if not self.externally_checked:
-                raise expr.token.error("for ownership/borrowing admission requires an actual external rustc check")
+            # Moves of the array and across iterations are owned by the move
+            # checker's loop fixed point; reference-bearing loops keep the
+            # reference admission gate.
             from .call_inference import partial
             source = partial(self.expression(children[0]))
             if not isinstance(source, FixedArrayType):

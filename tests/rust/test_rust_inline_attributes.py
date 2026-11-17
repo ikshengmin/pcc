@@ -19,7 +19,11 @@ from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.inline_attributes import collect_inline_hints
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -210,13 +214,11 @@ def test_other_codegen_forms_remain_explicit_gaps(name, text, message):
        for index, (_, spelling) in enumerate(HINT_FORMS)])
 def test_actual_same_input_inline_check_precedes_owned_object(name, text, tmp_path, monkeypatch):
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     hints = result.function_inline_hints

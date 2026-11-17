@@ -20,7 +20,11 @@ from pcc.frontends.rust.standard_markers import CLONE, COPY, SIZED
 from pcc.frontends.rust.syntax import Parser
 from pcc.support.instantiation import InstanceState
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -264,13 +268,11 @@ def test_unimplemented_default_body_contracts_still_fail_explicitly(name, text, 
 def test_actual_same_input_default_check_precedes_owned_object(name, tmp_path, monkeypatch):
     text = source(name)
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.externally_checked and not result.borrow_checked_by_pcc
@@ -281,13 +283,11 @@ def test_actual_same_input_default_check_precedes_owned_object(name, tmp_path, m
 @pytest.mark.pcc_gate(unavailable=actual_check_prerequisite())
 def test_exact_former_inline_default_gap_is_retained_as_an_actual_checked_positive(tmp_path, monkeypatch):
     checked = certify_source(FORMER_INLINE_GAP, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, FORMER_INLINE_GAP, forbidden)
         result = compile_rust(FORMER_INLINE_GAP, rustc_check=checked)
     hint, = result.function_inline_hints
     assert hint.selected_hint == 'hint' and hint.ignored_reason is None

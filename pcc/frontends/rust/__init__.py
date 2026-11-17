@@ -81,8 +81,9 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     never consulted.
 
     Reference-free input is admitted by PCC's owned checks alone (types,
-    mutability, moves, match-guard borrows, exhaustiveness and the
-    arithmetic_overflow lint); `experimental_rustc_checked` is accepted for
+    mutability, moves through branches, loops, while let, if let and array
+    for, match-guard borrows, exhaustiveness and the arithmetic_overflow
+    lint); `experimental_rustc_checked` is accepted for
     compatibility and has no effect. Reference-bearing input and the other
     features listed in README "Replacing the rustc admission gate" still need
     an actual CheckedRustSource during that transition. The rustc_check path
@@ -132,10 +133,6 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
         from .default_methods import reject_uncertified_defaults
         reject_uncertified_defaults(parser.traits)
-        from .loops import reject_uncertified_loops
-        reject_uncertified_loops(functions)
-        from .conditional_patterns import reject_uncertified_if_let
-        reject_uncertified_if_let(functions)
         if inline_hints:
             raise inline_hints[0].attributes[0].token.error(
                 'inline attribute admission requires an actual source/options-bound '

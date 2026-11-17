@@ -105,17 +105,19 @@ def test_former_range_iterator_gaps_are_integer_range_loops(source):
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_legacy_attestation_does_not_authorize_new_iterator_ownership(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked for reached IR'))
-    source = Path(__file__).with_name('programs').joinpath(name + '.rs').read_text()
+def test_for_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+    # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
+    # the array move and moves across iterations are decided by the owned move
+    # checker's loop fixed point; the reference gate still precedes the model.
+    import subprocess
     from tests.rust.certification_support import source_has_references
-    # The public reference-presence gate precedes even the iterator type model.
-    message = ('reference-bearing Rust source requires an actual'
-               if source_has_references(source) else
-               'for ownership/borrowing admission requires an actual external rustc check')
-    with pytest.raises(RustError, match=message):
-        compile_rust(source, experimental_rustc_checked=True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
+    source = Path(__file__).with_name('programs').joinpath(name + '.rs').read_text()
+    if source_has_references(source):
+        with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
+            compile_rust(source)
+    else:
+        assert not compile_rust(source).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')
@@ -169,15 +171,15 @@ def test_original_for_programs_have_actual_checked_full_width_native_pairs(tmp_p
     from tests.rust import test_rust_certified_references as certification
     from tests.rust import test_rust_method_reference as reference
     from tests.rust import test_rust_patterns as owned
-    from pcc.frontends.rust.moves import MoveChecker
+    from tests.rust.certification_support import forbid_moves_for_references
     for name in PROGRAMS:
         directory = tmp_path / name
         directory.mkdir()
         path = Path(__file__).with_name('programs') / (name + '.rs')
         checked = certification.certify(path, directory / 'certifier')
         with monkeypatch.context() as patch:
-            patch.setattr(MoveChecker, 'check', lambda *a: pytest.fail('new for used legacy move admission'))
-            patch.setattr(MoveChecker, 'check_function', lambda *a: pytest.fail('new for used legacy abstract admission'))
+            forbid_moves_for_references(patch, path.read_text(),
+                                        lambda *a: pytest.fail('reference-bearing for used partial move admission'))
             patch.setattr(reference, 'PROGRAMS', (name,))
             patch.setattr(owned, 'compile_source', lambda source, **options: compile_rust(source, rustc_check=checked))
             reference.test_unchanged_inherent_programs_match_actual_rustc_native_execution(directory, patch)

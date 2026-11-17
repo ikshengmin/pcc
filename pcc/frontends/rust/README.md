@@ -63,8 +63,8 @@ in the named modules; locate them with
 | Owned moves skipped for checked programs and generic bodies | `__init__.py`, `semantics.py`, `function_generics.py` | move checking | **owned for reference-free programs** (stage 2); reference-bearing checked input awaits stage 4 |
 | Build-time `arithmetic_overflow` lint (never run by a metadata check) | `known_panics.py` | rustc's KnownPanicsLint | **owned** (stage 2) |
 | Match guards | `semantics.py`, `moves.py` | guard borrows E0505/E0506/E0507/E0510/E0594/E0596 | **owned** (stage 1) |
-| `loop`, `while let`, `if let` admission | `loops.py`, `conditional_patterns.py` | borrow/initialization flow through loops and refutable lets | open (stage 3) |
-| `for` over arrays | `semantics.py` | moves of iterated owned arrays | open (stage 3) |
+| `loop`, `while let`, `if let` admission | `moves.py` (loop fixed point; `if let` is a normalized match) | move flow through loops and refutable lets | **owned for reference-free input** (stage 3) |
+| `for` over arrays | `moves.py` | moves of iterated owned arrays and across iterations | **owned for reference-free input** (stage 3) |
 | Reference-bearing items, local borrows beyond call arguments, indexed borrows | `__init__.py`, `semantics.py`, `reference_admission.py` | NLL loans, liveness, array-index disjointness | open (stage 4) |
 | `&mut` types and borrows, explicit receivers | `semantics.py` | mutable loans, two-phase borrows | open (stage 5) |
 | Explicit lifetimes, lifetime parameters, outlives bounds, reference parameter reassignment | `semantics.py`, `generics.py` | region inference and outlives constraints | open (stage 6) |
@@ -93,8 +93,17 @@ Migration order:
    `let x;` without an initializer, shifts and `u8`/`i8` are still rejected by
    the parser, so definite initialization and shift overflow need owning when
    those land.
-3. Control flow: `loop`, `while let`, `if let` and array `for` on the owned
-   fixed point.
+3. Control flow (done): `loop`, `while`, `while let`, `if let` and array
+   `for` on the owned fixed point. `for` moves or copies its array once and
+   binds a fresh element per iteration; a value moved in one iteration is
+   moved at the next (E0382), exits join every `break`. Verdicts in
+   `tests/rust/test_rust_owned_loop_moves.py::CORPUS` (73 original programs)
+   equal a rustc 1.92.0 `-O` build's, and the 34 reference-free loop, while-let,
+   if-let and array-for programs run with owned compile/assemble/link and
+   match rustc's results. Before this stage the move checker had no `for`
+   case; since stage 2 runs it on checked reference-free input, a checked `for`
+   whose body read its element failed with an internal `KeyError` (found here;
+   the Linux checked lane that would show it does not run locally).
 4. Shared references in bodies: loans with liveness, index disjointness.
 5. `&mut`: mutable loans, reborrows and two-phase receivers.
 6. Signatures: lifetime elision, explicit lifetimes and outlives bounds.

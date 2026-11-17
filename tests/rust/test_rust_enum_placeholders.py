@@ -103,7 +103,6 @@ def test_invalid_enum_holes_fail_before_lowering(name, text, message, code, monk
     ('enum E<T>{Some(T)}fn f(){E::<u64>::Some::<_>(1);}', 'constructor segments'),
     ('enum E<T>{Some(T)}impl<T>E<T>{fn wrap(x:T)->Self{Self::Some(x)}}fn f()->E<u64>{E::<_>::wrap(1)}', "unsupported Rust type '_'"),
     ('enum E<T>{Some(T)}fn f(p:&u64){E::<_>::Some(p);}', 'actual source/options-bound CheckedRustSource'),
-    ('enum E<T>{None,Some(T)}fn f()->bool{let x:E<u64>=E::<_>::None;if let E::None=x{true}else{false}}', 'actual source/options-bound CheckedRustSource'),
     ('mod m {} fn f<T>() { T::<u64>::missing(); }', 'generic arguments require'),
 ])
 def test_enum_holes_preserve_other_capability_boundaries(text, message, monkeypatch):
@@ -111,6 +110,13 @@ def test_enum_holes_preserve_other_capability_boundaries(text, message, monkeypa
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unsupported enum path reached IR'))
     with pytest.raises(RustError, match=message):
         compile_rust(text, experimental_rustc_checked=True)
+
+
+def test_former_if_let_gate_row_compiles_with_owned_admission():
+    # Formerly a boundary row above; owned if-let moves (README stage 3) admit it
+    # without rustc, as a rustc 1.92.0 build does.
+    text = 'enum E<T>{None,Some(T)}fn f()->bool{let x:E<u64>=E::<_>::None;if let E::None=x{true}else{false}}'
+    assert not compile_rust(text).externally_checked
 
 
 def test_array_payload_matching_remains_an_explicit_gap():

@@ -19,7 +19,11 @@ from pcc.frontends.rust.attribute_metadata import offset
 from pcc.frontends.rust.semantics import NEVER
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -111,19 +115,21 @@ def test_move_fixed_point_has_no_reachable_exit_without_an_associated_break():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_every_new_loop_original_requires_actual_check_before_ir(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified loop reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_loop_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+    # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
+    # moves through loop backedges, breaks and continues are decided by the owned move checker's fixed
+    # point, so reference-free originals need no rustc and no attestation.
+    from tests.rust.certification_support import source_has_references
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
+    if source_has_references(source(name)):
+        with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
+            compile_rust(source(name))
+    else:
+        assert not compile_rust(source(name)).externally_checked
 
 
-def test_even_an_unused_loop_cannot_enter_through_caller_attestation(monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked unused loop reached IR'))
-    with pytest.raises(RustError, match='loop control-flow admission'):
-        compile_rust('fn unused()->u64{loop{}}fn answer()->u64{42}',
-                     experimental_rustc_checked=True)
+def test_former_unused_loop_gate_row_compiles_without_attestation():
+    assert compile_rust('fn unused()->u64{loop{}}fn answer()->u64{42}').symbols['answer']
 
 
 INVALID = (
@@ -164,7 +170,6 @@ def test_value_break_labels_and_diverging_bindings_remain_explicit(name, text, m
 def test_actual_same_input_loop_check_precedes_owned_object_phase(name, tmp_path, monkeypatch):
     text = source(name)
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     from pcc.frontends.rust.lowering import Lowerer
     continue_edges, active_continue = [], []
     original_expression = Lowerer.expression
@@ -191,8 +196,7 @@ def test_actual_same_input_loop_check_precedes_owned_object_phase(name, tmp_path
         pytest.fail('external process or partial move/loan admission in owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         if name == 'loop_array_continue':
             patch.setattr(Lowerer, 'expression', observe_expression)
             patch.setattr(Lowerer, 'finish_iteration_scopes', observe_finish)

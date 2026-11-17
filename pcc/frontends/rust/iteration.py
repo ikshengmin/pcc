@@ -1,7 +1,8 @@
 """Owned standard-array iteration contracts, not user-name trait dispatch.
 
-Only externally checked, concrete arrays with recursively empty destruction
-are admitted. The proof is independent of Copy: a non-Copy record still moves.
+Only concrete arrays with recursively empty destruction are admitted; the
+move checker's loop fixed point decides moves of the array and across
+iterations. The proof is independent of Copy: a non-Copy record still moves.
 Unknown generic destruction, custom iterators and Drop are not erased here.
 """
 from dataclasses import dataclass

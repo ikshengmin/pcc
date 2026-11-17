@@ -2,7 +2,9 @@
 
 This is NOT general borrow checking. Borrow patterns, Drop and user-defined Copy are
 still rejected. A state records paths which may have moved on any reachable incoming
-edge; loop backedges reach a finite fixed point rather than assuming one pass.
+edge; loop backedges reach a finite fixed point rather than assuming one pass. This
+covers loop, while, while let and array for (which moves or copies its array once and
+binds a fresh element per iteration); if let is a normalized match.
 
 A match guard is checked with rustc's borrow rules for guards, owned here
 (https://doc.rust-lang.org/reference/expressions/match-expr.html#match-guards):
@@ -398,6 +400,29 @@ class MoveChecker:
                 self.loops.append(edges)
                 body = self.expression(children[2], entry)
                 self.loops.pop()
+                backs = edges.continues + ([edges.outer(body)] if body is not None else [])
+                return backs, edges.breaks + [edges.outer(header)]
+
+            return solve_loop(current, transfer)
+        if kind == "for":
+            # `for x in array` moves (or copies) the array into its IntoIter
+            # once; each iteration binds a fresh element, so a body that moves
+            # an outer value without reinitializing it fails on the backedge.
+            current = self.expression(children[0], state)
+            if current is None:
+                return None
+            visible = set(current)
+
+            def transfer(header):
+                entry = clone(header)
+                if expr.binding is not None:
+                    entry[expr.binding.serial] = set()
+                edges = LoopEdges(visible)
+                self.loops.append(edges)
+                try:
+                    body = self.expression(children[1], entry)
+                finally:
+                    self.loops.pop()
                 backs = edges.continues + ([edges.outer(body)] if body is not None else [])
                 return backs, edges.breaks + [edges.outer(header)]
 

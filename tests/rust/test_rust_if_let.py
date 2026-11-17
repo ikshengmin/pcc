@@ -20,7 +20,11 @@ from pcc.frontends.rust.attribute_metadata import offset
 from pcc.frontends.rust.conditional_patterns import normalize_if_let
 from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 
 PROGRAMS = (
@@ -128,11 +132,17 @@ def test_generic_replay_starts_from_original_if_let_and_uses_distinct_bindings()
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_each_original_requires_actual_same_input_check_before_ir(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified if let reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_if_let_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+    # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
+    # moves through if-let arms (the shared match machinery) are decided by the owned move checker's fixed
+    # point, so reference-free originals need no rustc and no attestation.
+    from tests.rust.certification_support import source_has_references
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
+    if source_has_references(source(name)):
+        with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
+            compile_rust(source(name))
+    else:
+        assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.parametrize('text', [
@@ -141,11 +151,8 @@ def test_each_original_requires_actual_same_input_check_before_ir(name, monkeypa
     'mod m{pub fn unused(){if let false=true{}}}pub fn answer()->u64{42}',
     'fn unused(){if false{if let false=true{}}}',
 ])
-def test_unused_or_nested_if_let_cannot_hide_from_original_source_admission(text, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unused uncertified source reached IR'))
-    with pytest.raises(RustError, match='if let control-flow admission'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_former_unused_or_nested_if_let_gate_rows_compile_without_attestation(text):
+    compile_rust(text)
 
 
 INVALID = (
@@ -205,7 +212,6 @@ def test_excluded_ungrouped_conditions_do_not_silently_become_scrutinees(text):
 def test_actual_same_input_if_let_check_precedes_owned_object(name, tmp_path, monkeypatch):
     text = source(name)
     checked = certify_source(text, tmp_path / 'certifier')
-    from pcc.frontends.rust.moves import MoveChecker
     from pcc.frontends.rust.lowering import Lowerer
     exits = []
     original = Lowerer.expression
@@ -219,8 +225,7 @@ def test_actual_same_input_if_let_check_precedes_owned_object(name, tmp_path, mo
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         patch.setattr(Lowerer, 'expression', observe_expression)
         result = compile_rust(text, rustc_check=checked)
         assert 'match.arm' in result.ir_text and 'match.end' in result.ir_text
@@ -250,7 +255,6 @@ def test_if_let_token_cannot_authorize_changed_source_or_edition(tmp_path, monke
 def test_each_admitted_edition_requires_its_own_actual_source_check(edition, tmp_path, monkeypatch):
     from pcc.frontends.rust import check_rust_source
     from tests.rust.test_rust_certified_references import toolchain
-    from pcc.frontends.rust.moves import MoveChecker
     text = source('if_let_payloads')
     checked = check_rust_source(text, toolchain=toolchain(),
         evidence_directory=tmp_path / 'certifier', edition=edition)
@@ -258,8 +262,7 @@ def test_each_admitted_edition_requires_its_own_actual_source_check(edition, tmp
         pytest.fail('external process or partial move/loan proof entered owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked, edition=edition)
         assert result.emit_object().startswith(b'\x7fELF')
     assert result.edition == edition and result.externally_checked

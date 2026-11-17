@@ -42,3 +42,17 @@ def darwin_check_prerequisite():
         return ('aarch64-apple-darwin rustc core/std prerequisite unavailable; '
                 'Linux check cannot authorize Darwin reference lowering')
     return None
+
+
+def forbid_moves_for_references(patch, source, forbidden):
+    """Forbid the owned move checker only where the actual check still owns moves.
+
+    Owned moves decide reference-free input in every admission mode
+    (pcc/frontends/rust/README.md, "Replacing the rustc admission gate", stage
+    2); reference-bearing checked input takes its loans and moves from the
+    actual check until owned loans exist (stage 4).
+    """
+    from pcc.frontends.rust.moves import MoveChecker
+    if source_has_references(source):
+        patch.setattr(MoveChecker, 'check', forbidden)
+        patch.setattr(MoveChecker, 'check_function', forbidden)

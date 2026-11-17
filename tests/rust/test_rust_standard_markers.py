@@ -17,7 +17,11 @@ import pytest
 from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.standard_markers import COPY, CLONE, SIZED, CONTRACT_VERSION
 from tests.rust.analysis_only import analyze_source
-from tests.rust.certification_support import actual_check_prerequisite, certify_source
+from tests.rust.certification_support import (
+    actual_check_prerequisite,
+    certify_source,
+    forbid_moves_for_references,
+)
 
 PROGRAMS = ('standard_copy_values', 'standard_copy_forwarding', 'standard_marker_shadow',
             'standard_marker_reference', 'standard_marker_module')
@@ -142,13 +146,11 @@ def test_excluded_contexts_and_local_names_never_activate_builtin_contract(name,
 def test_actual_same_input_marker_check_precedes_owned_phase(name,tmp_path,monkeypatch):
     text = source(name)
     checked = certify_source(text, tmp_path / 'check')
-    from pcc.frontends.rust.moves import MoveChecker
     def forbidden(*args, **kwargs):
         pytest.fail('external process/partial borrow admission in owned phase')
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', forbidden)
-        patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        forbid_moves_for_references(patch, text, forbidden)
         result = compile_rust(text, rustc_check=checked)
         assert result.emit_object().startswith(b'\x7fELF')
     context = result.standard_marker_contract
