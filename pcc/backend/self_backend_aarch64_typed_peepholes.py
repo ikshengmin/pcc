@@ -383,7 +383,34 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
         function_end = 0
         in_function = False
         loaded = []
+        sparse_positions: list[int] = []
+        sparse_cursor: int = 0
+        if owned_matcher_only and mode == 4:
+            # Phase-local necessary-opcode superset after full live validation.
+            mov_opcode: int = sem.semantic_opcode_id("mov")
+            stur_opcode: int = sem.semantic_opcode_id("stur")
+            str_opcode: int = sem.semantic_opcode_id("str")
+            sturb_opcode: int = sem.semantic_opcode_id("sturb")
+            strb_opcode: int = sem.semantic_opcode_id("strb")
+            scan: int = 0
+            while scan + 1 < len(p.ids):
+                first_id: int = p.ids._values[scan]
+                second_id: int = p.ids._values[scan + 1]
+                if (fragments.records._values[first_id * 4 + 1] >= 0
+                    and semantics.headers._values[first_id * 4] == mov_opcode
+                    and fragments.records._values[second_id * 4 + 1] >= 0):
+                    next_opcode: int = semantics.headers._values[second_id * 4]
+                    if next_opcode in (stur_opcode, str_opcode, sturb_opcode, strb_opcode):
+                        sparse_positions.append(scan)
+                scan += 1
         while index < len(p.ids):
+            if owned_matcher_only and mode == 4:
+                while sparse_cursor < len(sparse_positions) and sparse_positions[sparse_cursor] < index:
+                    sparse_cursor += 1
+                if sparse_cursor >= len(sparse_positions) or sparse_positions[sparse_cursor] != index:
+                    p.output.append(p.rid(index))
+                    index += 1
+                    continue
             a, b, c, d = (p.rid(index + n) for n in range(4))
             replacement = -2
             consumed = 0
