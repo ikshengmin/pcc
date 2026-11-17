@@ -53,7 +53,7 @@ def test_mode7_only_none_move_skips_branch(monkeypatch,kind):
         before=o._ids(f,span)
         out=p._run_owned_move_matchers(f,s,span,7)
         assert o._ids(f,out)==before
-        assert events==(['move'] if kind=='no_move' else ['move','branch'])
+        assert events==([] if kind=='no_move' else ['move','branch'])
     finally:s.close();f.close()
 
 

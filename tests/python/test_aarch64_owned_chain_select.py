@@ -34,7 +34,7 @@ def test_reads_second_except_private_first_none(monkeypatch,private,kind):
         ids=o._ids(f,span)
         out=p._run_owned_move_matchers(f,s,span,10) if private else p.fold_mov_mov_chain(f,s,span)
         assert o._ids(f,out)==ids
-        assert events==(ids[:1] if private and kind=='none' else ids), 'second matcher oracle'
+        assert events==([] if private and kind=='none' else ids), 'second matcher oracle'
     finally:s.close();f.close()
 
 

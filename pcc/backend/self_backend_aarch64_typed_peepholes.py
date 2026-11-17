@@ -385,10 +385,12 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
         loaded = []
         sparse_positions: list[int] = []
         sparse_cursor: int = 0
-        if owned_matcher_only and mode in (3, 4, 6):
+        if owned_matcher_only and mode in (3, 4, 6, 7, 10):
             # Phase-local necessary-opcode superset after full live validation.
             mov_opcode: int = sem.semantic_opcode_id("movz" if mode == 3 else "mov")
             cmp_opcode: int = sem.semantic_opcode_id("cmp")
+            cbz_opcode: int = sem.semantic_opcode_id("cbz")
+            cbnz_opcode: int = sem.semantic_opcode_id("cbnz")
             stur_opcode: int = sem.semantic_opcode_id("stur")
             str_opcode: int = sem.semantic_opcode_id("str")
             sturb_opcode: int = sem.semantic_opcode_id("sturb")
@@ -401,11 +403,14 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
                     and semantics.headers._values[first_id * 4] == mov_opcode
                     and fragments.records._values[second_id * 4 + 1] >= 0):
                     next_opcode: int = semantics.headers._values[second_id * 4]
-                    if (mode == 6 and next_opcode == cmp_opcode) or (mode != 6 and next_opcode in (stur_opcode, str_opcode, sturb_opcode, strb_opcode)):
+                    if ((mode == 6 and next_opcode == cmp_opcode)
+                        or (mode == 7 and next_opcode in (cbz_opcode, cbnz_opcode))
+                        or (mode == 10 and next_opcode == mov_opcode)
+                        or (mode in (3, 4) and next_opcode in (stur_opcode, str_opcode, sturb_opcode, strb_opcode))):
                         sparse_positions.append(scan)
                 scan += 1
         while index < len(p.ids):
-            if owned_matcher_only and mode in (3, 4, 6):
+            if owned_matcher_only and mode in (3, 4, 6, 7, 10):
                 while sparse_cursor < len(sparse_positions) and sparse_positions[sparse_cursor] < index:
                     sparse_cursor += 1
                 if sparse_cursor >= len(sparse_positions) or sparse_positions[sparse_cursor] != index:
