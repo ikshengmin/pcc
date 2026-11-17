@@ -240,7 +240,9 @@ __attribute__((noinline)) static int relocate_probe(int32_t backend) {
     /* The caller owns the stop. Do not load source_holder into a stack or
      * register alias until selection has captured and pinned thread roots. */
     pcc_gc_reset_relocation_set();
-    if (pcc_gc_select_relocation_set(1) != 1)
+    /* Selection is ordered by slab sparsity, not by source identity.
+     * Cover this bounded fixture, then require the source below. */
+    if (pcc_gc_select_relocation_set(64) <= 0)
         /* Size was not requested on this path; -1 means not evaluated. */
         return fail_relocation_state(13, "select", source_holder, 0, -1);
     PyObject *source = source_holder;
@@ -469,7 +471,7 @@ def test_probe_relocation_obeys_stopped_world_and_stack_lifetime() -> None:
     relocation = PROBE_SOURCE.split("static int relocate_probe(", 1)[1].split(
         "static int verify_live_copy(", 1,
     )[0]
-    assert relocation.index("pcc_gc_select_relocation_set(1)") < relocation.index(
+    assert relocation.index("pcc_gc_select_relocation_set(64)") < relocation.index(
         "PyObject *source = source_holder;"
     ) < relocation.index("pcc_gc_relocation_set_contains(source)") < relocation.index(
         "pcc_gc_relocate_copy("
