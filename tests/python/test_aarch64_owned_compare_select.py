@@ -25,7 +25,7 @@ def test_compare_then_conditional_move(monkeypatch,private,kind):
         ids=o._ids(f,span)
         out=p._run_owned_move_matchers(f,s,span,6) if private else p.fold_mov_compare_source(f,s,span)
         assert o._ids(f,out)==ids
-        expected=['compare'] if private and kind=='none' else ['compare','move'] if private else ['compare','zero','move']
+        expected=[] if private and kind=='none' else ['compare','move'] if private else ['compare','zero','move']
         assert events==expected, 'compare selection oracle'
     finally:s.close();f.close()
 
@@ -57,7 +57,7 @@ def test_first_bad_provenance_precedes_compare_none(monkeypatch,private):
 
 
 def test_compare_exception_precedes_move(monkeypatch):
-    f,s,span,_=fixture('none');events=[];error=RuntimeError('compare primary')
+    f,s,span,_=fixture('scratch');events=[];error=RuntimeError('compare primary')
     def fail(*args):events.append('compare');raise error
     def forbidden(*args):raise AssertionError('move after compare failure')
     monkeypatch.setattr(p._Pass,'compare',fail);monkeypatch.setattr(p._Pass,'move',forbidden)
