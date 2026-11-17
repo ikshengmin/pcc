@@ -217,6 +217,7 @@ def test_cargo_sets_the_same_crate_environment(tmp_path):
     assert {name: value.strip('"') for name, value in observed.items()} == EXPECTED
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.parametrize("failure", ("exit", "timeout"))
 @pytest.mark.parametrize("captured", ((b"out\xff", b"err\xfe"), ("out", "err"), (None, None)))
 def test_env_reference_retains_original_subprocess_failure(monkeypatch, failure, captured):
@@ -252,6 +253,7 @@ def test_env_reference_retains_original_subprocess_failure(monkeypatch, failure,
         + "stdout=" + repr(stdout) + "\n" + "stderr=" + repr(stderr)]
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 def test_env_reference_preserves_success_and_unchecked_rejection(monkeypatch):
     command = ["rustc", "main.rs"]
     for code in (0, 1):
