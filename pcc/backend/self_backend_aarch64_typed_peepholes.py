@@ -501,6 +501,9 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
                         p.output.append(c)
                         replacement = p.new_branch("b." + cond, branch[2])
                         consumed = 4
+            elif mode == 14 and owned_matcher_only:
+                # The suspended rewrite is an identity; retain event-name checks.
+                p.function_label(a)
             elif mode == 14:
                 # The original pass preserves the prefix before the first
                 # function and partitions at function labels, not sections.
@@ -719,7 +722,7 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_fold_cset_zero_branch", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_drop_dead_cset_branch_stores")
-    span = drop_dead_cset_branch_stores(fragments, semantics, span)
+    span = _run_owned_move_matchers(fragments, semantics, span, 14) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else drop_dead_cset_branch_stores(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_drop_dead_cset_branch_stores", started)
     return span
