@@ -202,6 +202,31 @@ _MODULE_SYMBOLS = PreparedModuleSymbols(
 )
 
 
+def _owned_publish_semantics_can_retire(sink, phase_timing) -> bool:
+    # The production driver consumes this private sink even when publication
+    # fails. Public sinks and observable timing callbacks keep their owners.
+    from .self_backend_aarch64_typed_peepholes import _owned_timer_is_canonical
+    from .self_backend_aarch64_semantics import AArch64InstructionSemantics
+    if not _owned_timer_is_canonical(phase_timing):
+        return False
+    if type(sink) is not _NativeAArch64Emission or type(sink.builder) is not AArch64ModuleBuilder:
+        return False
+    if type(sink.fragments) is not AArch64EmissionFragments:
+        return False
+    semantics = sink.fragments.semantics
+    if type(semantics) is not AArch64InstructionSemantics:
+        return False
+    for arena in (semantics.headers, semantics.tokens):
+        if type(arena) is not CompilerIntArena or arena._address != 0 or type(arena._values) is not list:
+            return False
+        # Releasing user-defined integer subclasses can run finalizers. This
+        # bounded host-only scan excludes that observable lifecycle change.
+        for value in arena._values:
+            if type(value) is not int:
+                return False
+    return True
+
+
 class _NativeAArch64Emission:
     """One module emission scope over the canonical incremental assembler.
 
@@ -429,6 +454,8 @@ class _NativeAArch64Emission:
         if phase_timing is not None:
             started = phase_timing.begin_backend_finalize("typed_publish")
         self.collecting_optimized = False
+        if self._owned_stack_windows and _owned_publish_semantics_can_retire(self, phase_timing):
+            self.fragments.semantics.close()
         self.publish_fragment(span)
         require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
         # The builder now owns words, fixups and symbols. Retire module
