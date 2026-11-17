@@ -15,6 +15,7 @@ The full CLI can adopt the same wrapper around its C and Python paths.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import os
 from typing import Any, Callable, Optional
 
@@ -140,7 +141,15 @@ def observed_compile(
             span=span,
         )
         bag = DiagnosticBag([diagnostic])
-        formatted = emit_diagnostics(bag, fmt=options.diagnostic_format)
+        try:
+            formatted = emit_diagnostics(bag, fmt=options.diagnostic_format)
+        except Exception as formatting_error:
+            # Reporting must not replace the compiler's failure. This boundary
+            # owns an error diagnostic, so its severity need not be recovered
+            # from the possibly broken Enum/descriptor formatting path.
+            formatted = _format_reporting_failure(
+                diagnostic, formatting_error, options.diagnostic_format,
+            )
         raise ObservedCompileError(formatted, bag) from exc
     finally:
         if options.profile_json:
@@ -148,6 +157,71 @@ def observed_compile(
             if parent:
                 os.makedirs(parent, exist_ok=True)
             write_profile_json(options.profile_json, recorder)
+
+
+def _format_reporting_failure(diagnostic, formatting_error, fmt: str) -> str:
+    note = "diagnostic formatting failed: " + type(formatting_error).__name__
+    message = diagnostic.message
+    code = diagnostic.code
+    phase = diagnostic.phase
+    notes = list(diagnostic.notes) + [note]
+    span = diagnostic.span
+    entry = {
+        "code": code, "severity": "error", "phase": phase,
+        "message": message, "notes": notes,
+        "metadata": dict(diagnostic.metadata),
+    }
+    if span is not None:
+        entry["span"] = span.to_json()
+    if diagnostic.suggested_fix is not None:
+        entry["suggested_fix"] = diagnostic.suggested_fix
+    if diagnostic.fallback_reason is not None:
+        entry["fallback_reason"] = diagnostic.fallback_reason
+    if diagnostic.docs is not None:
+        entry["docs"] = diagnostic.docs
+    if fmt == "json":
+        return json.dumps({
+            "schema": "pcc.diagnostics.v1", "diagnostics": [entry],
+            "has_errors": True,
+        }, sort_keys=True)
+    if fmt == "sarif":
+        result = {
+            "ruleId": code, "level": "error", "message": {"text": message},
+            "properties": entry,
+        }
+        if span is not None:
+            result["locations"] = [{"physicalLocation": {
+                "artifactLocation": {"uri": span.file},
+                "region": {
+                    "startLine": max(1, span.line),
+                    "startColumn": max(1, span.col),
+                    "endLine": max(max(1, span.line), span.end_line or span.line),
+                    "endColumn": max(1, span.end_col or span.col),
+                },
+            }}]
+        return json.dumps({
+            "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+            "version": "2.1.0", "runs": [{
+                "tool": {"driver": {"name": "pcc", "rules": [{
+                    "id": code, "shortDescription": {"text": code},
+                    "fullDescription": {"text": message},
+                }]}},
+                "results": [result],
+            }],
+        }, sort_keys=True)
+    location = ""
+    if span is not None:
+        location = str(span.file) + ":" + str(span.line) + ":" + str(span.col) + ": "
+    lines = [location + "error: " + code + ": [" + phase + "] " + message]
+    for item in notes:
+        lines.append("  note: " + item)
+    if diagnostic.fallback_reason:
+        lines.append("  fallback: " + diagnostic.fallback_reason)
+    if diagnostic.suggested_fix:
+        lines.append("  fix: " + diagnostic.suggested_fix)
+    if diagnostic.docs:
+        lines.append("  docs: " + diagnostic.docs)
+    return "\n".join(lines)
 
 
 def _compile_metadata(args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
