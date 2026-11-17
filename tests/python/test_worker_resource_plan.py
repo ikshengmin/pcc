@@ -18,6 +18,7 @@ from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
 from tests.python.owned_regression_support import explicit_owned_runtime
 from tests.python.process_timeout import run_process_group_timeout
+from tests.python.process_liveness import require_process_running
 from tests.python.resource_worker_fixture import (
     live_forecast_pressure_plan,
     start_resource_worker_and_wait,
@@ -625,9 +626,10 @@ def test_failure_retires_running_peers_and_does_not_launch_tail(tmp_path, monkey
         pool.run_resource_worker_processes(
             [command(child_code(slow, delay=20, write_pid=True)),
              command("import os,time;from pathlib import Path;"
+                     + "from tests.python.process_liveness import require_process_running;"
                      + "deadline=time.monotonic()+3\n"
                      + "while not Path(" + repr(str(slow)) + ").exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
-                     + "peer=int(Path(" + repr(str(slow)) + ").read_text());os.kill(peer,0)\n"
+                     + "peer=int(Path(" + repr(str(slow)) + ").read_text());require_process_running(peer)\n"
                      + "Path(" + repr(str(overlap)) + ").write_text(str(peer)+' '+str(os.getpid()))\n"
                      + "raise SystemExit(7)"),
              command(child_code(tail))], tasks, 2,
@@ -640,7 +642,7 @@ def test_failure_retires_running_peers_and_does_not_launch_tail(tmp_path, monkey
     assert overlap.exists()
     for pid in (int(value) for value in overlap.read_text().split()):
         with pytest.raises(ProcessLookupError):
-            os.kill(pid, 0)
+            require_process_running(pid)
     assert pool._HOST_WORKERS == {}
 
 
@@ -678,7 +680,7 @@ def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path
     original_start = rows[second_starts[0]]
     assert float(cancelled[0][6]) > float(original_start[6])
     with pytest.raises(ProcessLookupError):
-        os.kill(int(cancelled[0][2]), 0)
+        require_process_running(int(cancelled[0][2]))
     assert pool._HOST_WORKERS == {}
 
 
@@ -1405,7 +1407,7 @@ def _execute_resource_driver(prefix, case, directory, owner, collector):
         fields = path.read_text().split("\t")
         assert fields[1:3] == [owner, str(collector)], (path, fields)
         with pytest.raises(ProcessLookupError):
-            os.kill(int(fields[0]), 0)
+            require_process_running(int(fields[0]))
     if case in ("oversized", "spawn_failure"):
         assert starts == []
     elif case == "calibration":
