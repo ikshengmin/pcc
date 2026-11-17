@@ -926,7 +926,7 @@ def _multi_file_counts(srcs, mods, *, ir_scaffold_mode: str):
                 f"{module_count} modules",
                 flush=True,
             )
-        multi_ok, ir_text, _ = probe_mod._try_full_multi_compile(srcs, mods)
+        multi_ok, ir_text, multi_error = probe_mod._try_full_multi_compile(srcs, mods)
     finally:
         if saved is None:
             os.environ.pop("PCC_IR_SCAFFOLD", None)
@@ -945,6 +945,7 @@ def _multi_file_counts(srcs, mods, *, ir_scaffold_mode: str):
         print(f"[fallback:{ir_scaffold_mode}] multi-file complete", flush=True)
     return {
         "multi_ok": multi_ok,
+        "multi_error": multi_error,
         "total_fallbacks": split["total"],
         "bridge_calls": split["bridge"],
         "non_bridge_fallbacks": split["non_bridge"],
@@ -964,7 +965,7 @@ class _ClosureCompileResults(dict):
     def __missing__(self, key):
         if key in ("per_module_ok", "per_module", "per_module_actions", "per_module_plumbing"):
             phase = _per_module_counts(self._srcs, self._mods, ir_scaffold_mode=self._mode)
-        elif key in ("multi_ok", "total_fallbacks", "bridge_calls", "non_bridge_fallbacks", "ir_lines"):
+        elif key in ("multi_ok", "multi_error", "total_fallbacks", "bridge_calls", "non_bridge_fallbacks", "ir_lines"):
             phase = _multi_file_counts(self._srcs, self._mods, ir_scaffold_mode=self._mode)
         elif key == "contextual_per_module":
             live_progress = os.environ.get("PCC_TEST_LIVE_PROGRESS") == "1"
@@ -1025,7 +1026,8 @@ def test_closure_multi_file_compile_succeeds(closure_compile):
     """The closure must still combine into one IR module."""
     assert closure_compile[
         "multi_ok"
-    ], "multi-file compile regressed; closure no longer assembles"
+    ], ("multi-file compile regressed; closure no longer assembles\n"
+        + closure_compile["multi_error"])
 
 
 def test_total_fallbacks_under_ratchet(closure_compile):
