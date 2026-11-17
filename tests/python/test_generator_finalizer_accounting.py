@@ -11,6 +11,7 @@ import subprocess
 import pytest
 
 from tests.python.runtime_body_model import load_functions
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
 
 ROOT = Path(os.environ.get('PCC_FINALIZER_MODEL_SOURCE_ROOT',
                            str(Path(__file__).resolve().parents[2])))
@@ -43,6 +44,7 @@ class Finalization:
         self.rescued = []
         self.active = True
         self.next_slot = 10000
+        self.scratch_arrays = set()
         constants = ast.parse((ROOT / 'pcc/runtime/py/py_abi_constants.py').read_text())
         self.ns = {}
         for node in constants.body:
@@ -59,6 +61,9 @@ class Finalization:
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             atomic_rmw_i64=self.add, atomic_rmw_i32=self.bits,
             cstr=str, null=lambda: 0, stack_alloc=self.stack,
+            malloc=self.allocate_scratch_array, free=self.free_scratch_array,
+            pcc_thread_world_release_held=self.unexpected_world_release,
+            pcc_thread_world_reacquire_held=self.reacquire_world,
             py_incref=lambda value: self.ref(value, 1),
             py_decref=lambda value: self.ref(value, -1),
             pcc_gc_pin=lambda value: self.pin(value, True),
@@ -81,7 +86,10 @@ class Finalization:
             pcc_gc_object_node_is_address_pinned=self.node_is_address_pinned,
             pcc_gc_forwarding_index_find=lambda value: 0,
             pcc_gc_tracing_recheck_reachability_after_finalizers=self.recheck,
-            py_weakref_invalidate_tracing_candidates=lambda: 0,
+            # This accounting boundary has no queued refs unless a test
+            # explicitly supplies both queue and run sides of the callback.
+            py_weakref_queue_tracing_candidates=lambda pending: 0,
+            py_weakref_run_queued_callbacks=self.unexpected_queued_callbacks,
             # No late weakrefs are created by this accounting-only boundary.
             py_weakref_clear_tracing_candidates=lambda: 0,
             pcc_gc_tracing_clear_unpinned=lambda value: self.events.append(('clear',)),
@@ -89,17 +97,33 @@ class Finalization:
             pcc_gc_tracing_finalize_unpinned=self.free_unpinned,
             pcc_platform_monotonic_us=lambda: 100,
             _record_sweep_phase=lambda *args: self.phase_observations.append(args),
-            abi_constant=lambda name: {
-                'object.type.class': self.ns['PY_TYPE_CLASS'],
-                'object.type.gen': self.ns['PY_TYPE_GEN'],
-            }[name],
+            abi_constant=ABI_CONSTANTS.__getitem__,
         )
         _bodies('py_gen.py', {
             'py_gen_finalize', 'py_gen_finalize_tracing_candidate',
+            'py_gen_finalize_pending',
         }, self.ns)
-        _bodies('py_dunder.py', {'py_user_del_dispatch'}, self.ns)
+        _bodies('py_dunder.py', {'py_user_del_dispatch', 'py_user_del_pending'}, self.ns)
         _bodies('freestanding_gc_tracing_sweep_collector.py',
                 {'pcc_gc_tracing_sweep_unreachable'}, self.ns)
+
+    def allocate_scratch_array(self, size):
+        pointer = self.stack(size)
+        self.scratch_arrays.add(pointer)
+        return pointer
+
+    def free_scratch_array(self, pointer):
+        assert pointer in self.scratch_arrays
+        self.scratch_arrays.remove(pointer)
+
+    def unexpected_world_release(self):
+        raise AssertionError("backend 4 keeps its finalizer window stopped")
+
+    def reacquire_world(self, depth):
+        assert depth == 0  # The real GC4 window releases no stop depth.
+
+    def unexpected_queued_callbacks(self, pending, gc0):
+        raise AssertionError("this accounting boundary queued no callbacks")
 
     def load(self, base, offset):
         return self.memory.get((base, offset), 0)
@@ -322,6 +346,7 @@ def test_production_sweep_rechecks_only_for_real_generator_finalization(shape, e
                          flags=1024 | 8 | (4 if shape == 'finalized' else 0), count_free=count_free)
     assert model.ns['pcc_gc_tracing_sweep_unreachable'](1) == 1
     assert model.count() == expected
+    assert not model.scratch_arrays
     assert model.events.count(('recheck',)) == expected
     assert model.close_count == expected
     assert model.events.count(('weak', 1)) == (expected if not count_free else 0)
@@ -332,19 +357,33 @@ def test_generator_resurrection_still_triggers_recheck_before_clear():
     model.close_hook = lambda: model.rescued.append(1000)
     assert model.ns['pcc_gc_tracing_sweep_unreachable'](1) == 0
     assert model.count() == 1 and model.events.count(('recheck',)) == 1
+    assert not model.scratch_arrays
     assert ('clear',) not in model.events and ('free',) not in model.events
 
 
 def test_completed_generator_weak_callback_keeps_its_independent_recheck():
     model = Finalization(done=1, flags=1024 | 8, count_free=True)
 
-    def invalidate_candidates():
-        model.rescued.append(1000)
+    callback_events = []
+
+    def queue_candidates(pending):
+        assert not model.rescued
+        callback_events.append('queue')
+        model.store(pending, 0, 1000)
         return 1
 
-    model.ns['py_weakref_invalidate_tracing_candidates'] = invalidate_candidates
+    def run_callbacks(pending, gc0):
+        assert gc0 == 0 and callback_events == ['queue']
+        assert model.load(pending, 0) == 1000
+        model.store(pending, 0, 0)
+        model.rescued.append(1000)
+        callback_events.append('run')
+
+    model.ns['py_weakref_queue_tracing_candidates'] = queue_candidates
+    model.ns['py_weakref_run_queued_callbacks'] = run_callbacks
     assert model.ns['pcc_gc_tracing_sweep_unreachable'](1) == 0
     assert model.count() == model.close_count == 0
+    assert callback_events == ['queue', 'run']
     assert model.events.count(('recheck',)) == 1
     assert ('clear',) not in model.events and ('free',) not in model.events
 
