@@ -641,6 +641,53 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     held: i64 = pcc_thread_world_stop_epoch_held()
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+    # Keep phase-local object aliases out of the coordinator's live frame.
+    # This is not a root filter: every phase still uses the full root scanner.
+    weak_callbacks: i64 = _sweep_weak_callbacks(count_free)
+    if weak_callbacks != 0:
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+    finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    selected_backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    # Named output cells preserve the original pre-finalizer list snapshot.
+    # They contain only metadata and an unmanaged candidate-array address.
+    listed_slot = stack_alloc(8)
+    listed_nodes_slot = stack_alloc(8)
+    listed_count_slot = stack_alloc(8)
+    listed_commit_slot = stack_alloc(8)
+    _sweep_finalizers(count_free, selected_backend, finalizer_runs,
+                      listed_slot, listed_nodes_slot, listed_count_slot,
+                      listed_commit_slot)
+    # Finalizers can resurrect candidates and create new weakrefs. Preserve
+    # those of resurrected targets, then silently clear the remaining refs as
+    # CPython 3.15 does before tp_clear. Late callbacks must not be delivered.
+    # Refs without callbacks kept their targets through finalizers on the
+    # early pass's late list; the late clear visits only that list.
+    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+    if count_free != 0:
+        py_weakref_clear_tracing_candidates()
+
+    # No user code ran since the weak refs to candidates were settled (no
+    # weak callback, finalizer or generator close): none can have gained a
+    # weak ref, so clearing skips each one's walk of the weak-ref lists.
+    weak_settled: i64 = 0
+    if (
+        count_free != 0
+        and weak_callbacks == 0
+        and (selected_backend == 1 or selected_backend == 2 or selected_backend == 3)
+        and load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) == finalizer_runs
+    ):
+        weak_settled = 1
+
+    return _sweep_clear_and_reclaim(
+        budget, count_free, weak_settled, load_i64(listed_slot, 0),
+        load_ptr(listed_nodes_slot, 0), load_i64(listed_count_slot, 0),
+        load_i64(listed_commit_slot, 0),
+    )
+
+
+@c_abi_export("pcc_gc_tracing_sweep_weak_callbacks")
+def _sweep_weak_callbacks(count_free: i64) -> i64:
     window = stack_alloc(16)
     weak_callbacks: i64 = 0
     if count_free != 0:
@@ -653,15 +700,17 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             _user_code_window_open(window)
             py_weakref_run_queued_callbacks(pending_cell, 0)
             _user_code_window_close(window)
-        if weak_callbacks != 0:
-            # Weak callbacks can resurrect other candidates. Their new roots
-            # must be visible before any candidate's finalizer can run.
-            pcc_gc_tracing_recheck_reachability_after_finalizers()
-    finalizer_runs: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    return weak_callbacks
+
+
+@c_abi_export("pcc_gc_tracing_sweep_finalizers")
+def _sweep_finalizers(count_free: i64, selected_backend: i64, finalizer_runs: i64,
+                      listed_slot, listed_nodes_slot, listed_count_slot,
+                      listed_commit_slot) -> None:
+    window = stack_alloc(16)
     # The nonmoving count-free collectors visit their finish's candidate
     # list (pcc_gc_tracing_candidates_note) instead of every object.
     listed: i64 = 0
-    selected_backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
         count_free != 0
         and (selected_backend == 1 or selected_backend == 2 or selected_backend == 3)
@@ -679,6 +728,11 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         listed_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
         listed_count = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
         listed_commit = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+
+    store_i64(listed_slot, 0, listed)
+    store_ptr(listed_nodes_slot, 0, listed_nodes)
+    store_i64(listed_count_slot, 0, listed_count)
+    store_i64(listed_commit_slot, 0, listed_commit)
 
     # PASS 0: finalizers see intact fields.  C-extension tags are excluded
     # because their lifecycle is owned by the C-API bridge. The stopped
@@ -746,28 +800,12 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     _record_sweep_phase(1, started, pcc_platform_monotonic_us(), visited,
                         load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) - finalizer_runs)
 
-    # Finalizers can resurrect candidates and create new weakrefs. Preserve
-    # those of resurrected targets, then silently clear the remaining refs as
-    # CPython 3.15 does before tp_clear. Late callbacks must not be delivered.
-    # Refs without callbacks kept their targets through finalizers on the
-    # early pass's late list; the late clear visits only that list.
-    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:
-        pcc_gc_tracing_recheck_reachability_after_finalizers()
-    if count_free != 0:
-        py_weakref_clear_tracing_candidates()
 
-    # No user code ran since the weak refs to candidates were settled (no
-    # weak callback, finalizer or generator close): none can have gained a
-    # weak ref, so clearing skips each one's walk of the weak-ref lists.
-    weak_settled: i64 = 0
-    if (
-        count_free != 0
-        and weak_callbacks == 0
-        and (selected_backend == 1 or selected_backend == 2 or selected_backend == 3)
-        and load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) == finalizer_runs
-    ):
-        weak_settled = 1
 
+@c_abi_export("pcc_gc_tracing_sweep_clear_and_reclaim")
+def _sweep_clear_and_reclaim(budget: i64, count_free: i64, weak_settled: i64,
+                             listed: i64, listed_nodes, listed_count: i64,
+                             listed_commit: i64) -> i64:
     # PASS 1: clear at most budget candidates without freeing any sibling.
     # A sweep that ran no user code since its weak refs settled, has no
     # budget and may defer, leaves its eligible candidates uncleared: the
@@ -792,13 +830,13 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     kept: i64 = 0
     if defer_uncleared != 0 and listed != 0 and listed_count > 0:
         early = malloc(listed_count * 8)
-    started = pcc_platform_monotonic_us()
-    visited = 0
+    started: i64 = pcc_platform_monotonic_us()
+    visited: i64 = 0
     cleared: i64 = 0
     cleared_nonclasses: i64 = 0
     # The phase's work: the candidates this stopped world cleared itself.
     cleared_here: i64 = 0
-    cursor = 0
+    cursor: i64 = 0
     node = pcc_gc_object_walk_first() if listed == 0 else (
         load_ptr(listed_nodes, 0) if listed_count > 0 else null())
     while ptr_is_null(node) == 0 and cleared < budget and (
@@ -817,7 +855,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
             node = nxt
             continue
         obj = load_ptr(node, 0)
-        flags = load_i32(obj, 12)
+        flags: i64 = load_i32(obj, 12)
         recorded: i64 = 0
         # Re-evaluate eligibility after callback-capable finalizers.
         if (

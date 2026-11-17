@@ -38,6 +38,9 @@ OWNED_SYMBOLS = {
     "pcc_gc_tracing_has_sweep_candidate",
     "pcc_gc_tracing_recheck_reachability_after_finalizers",
     "pcc_gc_tracing_sweep_unreachable",
+    "pcc_gc_tracing_sweep_weak_callbacks",
+    "pcc_gc_tracing_sweep_finalizers",
+    "pcc_gc_tracing_sweep_clear_and_reclaim",
     # A count-free mark's finish lists its candidates; the sweep visits them.
     "pcc_gc_tracing_candidates_reset",
     "pcc_gc_tracing_candidates_note",
@@ -199,41 +202,78 @@ def test_tracing_sweep_collector_has_one_strict_source_owner():
 
 def test_tracing_sweep_preserves_pep442_and_two_pass_order():
     strict = STRICT_SOURCE.read_text(encoding="utf-8")
-    sweep = strict.split(
-        '@c_abi_export("pcc_gc_tracing_sweep_unreachable")', 1
-    )[1]
+    functions = {
+        node.name: ast.get_source_segment(strict, node)
+        for node in ast.parse(strict).body
+        if isinstance(node, ast.FunctionDef)
+    }
+    sweep = functions["pcc_gc_tracing_sweep_unreachable"]
+    weak = functions["_sweep_weak_callbacks"]
+    finalizers = functions["_sweep_finalizers"]
+    clear = functions["_sweep_clear_and_reclaim"]
 
     recheck = "pcc_gc_tracing_recheck_reachability_after_finalizers()"
-    # Initial verdict, early callbacks, finalizers, then a silent late clear.
+    # Each phase must return before its coordinator's refresh. The same
+    # three refreshes remain; none moves into a phase's object-local frame.
     assert sweep.count(recheck) == 3
-    # Callback refs are cleared and their callbacks queued in one batch.
+    assert all(recheck not in phase for phase in (weak, finalizers, clear))
+    weak_call = "_sweep_weak_callbacks(count_free)"
+    finalizer_call = "_sweep_finalizers("
+    clear_call = "_sweep_clear_and_reclaim("
+    assert all(sweep.count(call) == 1 for call in (weak_call, finalizer_call, clear_call))
+    assert sweep.index("if budget <= 0:") < sweep.index(recheck)
+    assert sweep.index(recheck) < sweep.index(weak_call) < sweep.index(finalizer_call)
+    assert sweep.index(finalizer_call) < sweep.rindex(recheck) < sweep.index(clear_call)
+    post_weak = sweep.split(weak_call, 1)[1].split(finalizer_call, 1)[0]
+    assert post_weak.count(recheck) == 1
+    assert "if weak_callbacks != 0:" in post_weak
+
+    # Callback refs are cleared and queued in one batch; the full queue is
+    # run in the user window before returning for the pre-finalizer refresh.
     batch = "py_weakref_queue_tracing_candidates(pending_cell)"
+    run = "py_weakref_run_queued_callbacks(pending_cell, 0)"
+    assert weak.count(batch) == 1 and weak.count(run) == 1
+    assert weak.index(batch) < weak.index("_user_code_window_open(window)")
+    assert weak.index("_user_code_window_open(window)") < weak.index(run)
+    assert weak.index(run) < weak.index("_user_code_window_close(window)")
+    assert all(batch not in phase for phase in (sweep, finalizers, clear))
+
     silent = "py_weakref_clear_tracing_candidates()"
-    assert sweep.count(batch) == 1
     assert sweep.count(silent) == 1
+    assert all(silent not in phase for phase in (weak, finalizers, clear))
     post_finalizer = sweep.split(
         'if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizer_runs:',
         1,
-    )[1].split("# PASS 1:", 1)[0]
+    )[1]
     assert post_finalizer.count(recheck) == 1
     assert batch not in post_finalizer
     assert post_finalizer.index(recheck) < post_finalizer.index(silent)
-    assert sweep.index("if budget <= 0:") < sweep.index(recheck)
-    assert sweep.index(recheck) < sweep.index("py_user_del_dispatch(target)")
-    assert sweep.index("py_user_del_dispatch(target)") < sweep.rindex(recheck)
-    assert sweep.rindex(recheck) < sweep.index(
-        "pcc_gc_tracing_clear_unpinned(obj)"
-    )
-    assert sweep.index("pcc_gc_tracing_clear_unpinned(obj)") < sweep.index(
+    assert sweep.index(silent) < sweep.index(clear_call)
+
+    # PASS0 still selects the complete target array before any finalizer,
+    # then closes the user window before returning for PEP 442 rechecking.
+    pending_call = "py_user_del_pending(obj) != 0"
+    dispatch = "py_user_del_dispatch(target)"
+    assert finalizers.index(pending_call) < finalizers.index("_finalizer_targets_append(targets, obj)")
+    assert finalizers.index("_finalizer_targets_append(targets, obj)") < finalizers.index("_user_code_window_open(window)")
+    assert finalizers.index("_user_code_window_open(window)") < finalizers.index(dispatch)
+    assert finalizers.index(dispatch) < finalizers.index("_user_code_window_close(window)")
+    assert clear.index("pcc_gc_tracing_clear_unpinned(obj)") < clear.index(
         "pcc_gc_tracing_finalize_unpinned(obj)"
     )
-    assert (
-        "(flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0"
-        in sweep
-    )
-    # PASS0 selects user-code finalizers with py_user_del_pending, which
-    # leaves C-extension objects to the C-API bridge.
-    assert "py_user_del_pending(obj) != 0" in sweep
+    guard = "(flags & 16384) == 0 and pcc_gc_object_node_is_address_pinned(node, obj) == 0"
+    assert guard in finalizers and guard in clear
+    # The list selected before finalizers is the list consumed by clearing,
+    # not a replacement snapshot taken after user code has run.
+    for slot, store, load in (
+        ("listed_slot", "store_i64", "load_i64"),
+        ("listed_nodes_slot", "store_ptr", "load_ptr"),
+        ("listed_count_slot", "store_i64", "load_i64"),
+        ("listed_commit_slot", "store_i64", "load_i64"),
+    ):
+        assert finalizers.index(f"{store}({slot}, 0,") < finalizers.index(dispatch)
+        assert f"{load}({slot}, 0)" in sweep.split(clear_call, 1)[1]
+    # PASS0's predicate still leaves C-extension lifecycle to the bridge.
     dunder = (STRICT_SOURCE.parent / "py_dunder.py").read_text(encoding="utf-8")
     pending = dunder.split("def py_user_del_pending(", 1)[1].split("\ndef ", 1)[0]
     assert "pcc_capi_is_cext_type_tag(tag) != 0" in pending

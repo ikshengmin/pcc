@@ -206,7 +206,7 @@ def test_actual_sweep_pin_guard_keeps_page_owner_count(protection):
     assert runtime.ns['pcc_gc_object_is_address_pinned'](owner) == 1
     # Run the actual PASS-2 skip/clear verdict, not a duplicate predicate.
     tree = ast.parse((RUNTIME/'freestanding_gc_tracing_sweep_collector.py').read_text())
-    sweep = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'pcc_gc_tracing_sweep_unreachable')
+    sweep = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == '_sweep_clear_and_reclaim')
     guards = [n for n in ast.walk(sweep) if isinstance(n, ast.If)
               and isinstance(n.test, ast.BoolOp) and isinstance(n.test.op, ast.Or)
               and any(isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
