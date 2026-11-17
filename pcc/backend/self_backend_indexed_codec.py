@@ -459,7 +459,30 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         kernel = function.indexed_kernel
         if not isinstance(kernel, IndexedFunctionKernel):
             raise BackendUnavailable("indexed module function has no published indexed kernel")
-        charge(4096)
+        # Ordinary records have plain fields/slots. Subclasses keep the old
+        # reservation and must not gain observable metadata attribute reads.
+        # 1536 bounds all fixed JSON keys, punctuation, boolean flags, optional
+        # external_odr linkage and the 22 arena name/length rows (len <=
+        # sys.maxsize). Variable payloads and both unbounded metadata integers
+        # are charged separately. Keep the final actual-wire gate unchanged.
+        if type(function) is ParsedFunction and type(kernel) is IndexedFunctionKernel:
+            is_global = getattr(function, "is_global", None)
+            is_vararg = getattr(function, "is_vararg", None)
+            linkage = getattr(function, "definition_linkage", None)
+            duplicate_id = getattr(kernel, "first_duplicate_definition_value_id", None)
+            use_total = getattr(kernel, "instruction_use_total", None)
+            if (type(is_global) is bool and type(is_vararg) is bool
+                    and type(duplicate_id) is int and type(use_total) is int
+                    and type(linkage) is str):
+                charge(1536)
+                type_integer(duplicate_id)
+                type_integer(use_total)
+            else:
+                charge(4096)
+            # Do not retain unusual fallback metadata across cold callbacks.
+            del is_global, is_vararg, duplicate_id, use_total, linkage
+        else:
+            charge(4096)
         for _wire_name, arena in _kernel_arenas(kernel):
             charge(len(arena) * 8)
         cold(function.name)
