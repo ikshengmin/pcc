@@ -375,7 +375,7 @@ class _Pass:
         return result
 
 
-def _run(fragments, semantics, span, mode):
+def _run(fragments, semantics, span, mode, owned_store_only: bool = False):
     p = _Pass(fragments, semantics, span)
     try:
         changed = False
@@ -407,8 +407,8 @@ def _run(fragments, semantics, span, mode):
                             consumed = mode + 1
                             break
             elif mode in (3, 4) and b >= 0:
-                zero = p.zero(a)
-                move = p.move(a)
+                zero = p.zero(a) if not owned_store_only or mode == 3 else -1
+                move = p.move(a) if not owned_store_only or mode == 4 else None
                 old = zero if mode == 3 else (move[0] if move else -1)
                 if (old >= 0 and _scratch(old) and p.op(b) in ("stur", "str", "sturb", "strb") and p.register(b, 0) == old and not p.store_address_uses(b, old)
                     and (mode == 3 or p.store_replacement_safe(b, move[1]))
@@ -660,12 +660,12 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_forward_one_intervening_stack_store_load", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_zero_store_source")
-    span = fold_zero_store_source(fragments, semantics, span)
+    span = _run_owned_store(fragments, semantics, span, 3) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_zero_store_source(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_zero_store_source", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_mov_store_source")
-    span = fold_mov_store_source(fragments, semantics, span)
+    span = _run_owned_store(fragments, semantics, span, 4) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_store_source(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_mov_store_source", started)
     if phase_timing is not None:
@@ -916,3 +916,9 @@ def _run_owned_zero_branch(fragments, semantics, span):
         return p.finish()
     finally:
         p.close()
+
+
+def _run_owned_store(fragments, semantics, span, mode):
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, mode)
+    return _run(fragments, semantics, span, mode, True)
