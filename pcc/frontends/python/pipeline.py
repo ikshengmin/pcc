@@ -618,6 +618,15 @@ _build_closed_world_vthread_effect_summary = (
 _closed_world_vthread_effect_export_surface = (
     _build_context_owner.closed_world_vthread_effect_export_surface
 )
+_OWNED_VTHREAD_EFFECT_EXPORT_SURFACE = _closed_world_vthread_effect_export_surface
+_OWNED_VTHREAD_EFFECT_EXPORT_WRITER = _write_native_exports_wire
+
+
+def _summary_worker_export_surface(native_exports):
+    return _OWNED_VTHREAD_EFFECT_EXPORT_SURFACE(
+        native_exports, compact_redundant_names=True,
+    )
+
 _write_closed_world_vthread_effect_summary = (
     _build_context_owner.write_closed_world_vthread_effect_summary
 )
@@ -3337,7 +3346,13 @@ def _build_python_frontend_shared_exports_parallel(
             _annotate_closed_world_vthread_effect_summaries
         ),
         vthread_effect_export_surface=(
-            _closed_world_vthread_effect_export_surface
+            _summary_worker_export_surface
+            if (
+                _closed_world_vthread_effect_export_surface
+                is _OWNED_VTHREAD_EFFECT_EXPORT_SURFACE
+                and _write_native_exports_wire is _OWNED_VTHREAD_EFFECT_EXPORT_WRITER
+            )
+            else _closed_world_vthread_effect_export_surface
         ),
         derived_class_map=_closed_world_derived_class_map,
         write_native_exports_wire=_write_native_exports_wire,

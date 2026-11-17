@@ -1668,7 +1668,9 @@ def build_closed_world_vthread_effect_summary(
     return summary
 
 
-def closed_world_vthread_effect_export_surface(native_exports: dict) -> dict:
+def closed_world_vthread_effect_export_surface(
+    native_exports: dict, *, compact_redundant_names: bool = False,
+) -> dict:
     """Project only metadata read by per-module vthread summary workers."""
     result = {}
     for module_name, exports in native_exports.items():
@@ -1708,6 +1710,26 @@ def closed_world_vthread_effect_export_surface(native_exports: dict) -> dict:
                 "methods": tuple(methods),
             }
         result[module_name] = module_result
+    if compact_redundant_names:
+        # Only the private summary projection may elide default names. Finish
+        # normalization first, preserving user getter/string/error ordering.
+        # Plain-string guards avoid invoking custom equality on caller keys.
+        for projected_module_name, projected_exports in result.items():
+            for projected_export_name, projected_info in projected_exports.items():
+                projected_owner = projected_info["owning_module"]
+                if (
+                    type(projected_module_name) is str
+                    and type(projected_owner) is str
+                    and projected_owner == projected_module_name
+                ):
+                    del projected_info["owning_module"]
+                projected_name = projected_info["export_name"]
+                if (
+                    type(projected_export_name) is str
+                    and type(projected_name) is str
+                    and projected_name == projected_export_name
+                ):
+                    del projected_info["export_name"]
     return result
 
 
