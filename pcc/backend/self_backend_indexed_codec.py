@@ -404,14 +404,15 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         for field in value.fields:
             type_record(field)
 
-    def cold(value):
+    def cold(value, raw_type=False):
         # Exact strings and integers are immutable, untagged JSON scalars.
         # Integer bit_length()+1 still bounds decimal/sign bytes. Keep eight
         # spare bytes per scalar for enclosing separators and pair rows.
         # bool and scalar subclasses retain the old reserve, callback order,
         # and failures; no new conversion or payload copy is introduced.
         value_type = type(value)
-        charge(8 if value_type is str or value_type is int else 32)
+        charge(8 if value_type is str or value_type is int
+               or (raw_type and value_type is TypeDesc) else 32)
         if isinstance(value, str):
             string(value)
         elif isinstance(value, TypeDesc):
@@ -446,7 +447,7 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         # than reserving 512 bytes per global, retaining each cold allowance.
         charge(20)
         cold(item.name)
-        cold(item.type)
+        cold(item.type, True)
         cold(item.initializer)
         cold(item.is_constant)
         cold(item.is_internal)
@@ -462,16 +463,24 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         for _wire_name, arena in _kernel_arenas(kernel):
             charge(len(arena) * 8)
         cold(function.name)
-        cold(function.ret_type)
+        cold(function.ret_type, True)
         for arg in function.args:
             cold(arg.name)
-            cold(arg.type)
+            cold(arg.type, True)
         cold(kernel.block_names)
         cold(kernel.value_names)
         cold(kernel.instruction_arithmetic_flag_values)
         cold(kernel.cold_instruction_data)
         cold(kernel.call_texts)
-        cold(kernel.types)
+        types = kernel.types
+        if type(types) is tuple:
+            # This wire field is a raw type array, not a tagged cold tuple.
+            # Retain the original tuple reserve and iteration order.
+            charge(32)
+            for item in types:
+                cold(item, True)
+        else:
+            cold(types)
 
 
 def encode_indexed_module_file(

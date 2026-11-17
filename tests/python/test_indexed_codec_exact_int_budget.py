@@ -13,7 +13,7 @@ def _probe(previous=False, cold_only=True):
     node = ast.parse(inspect.getsource(codec._bounded_capture_budget)).body[0]
     cold = next(n for n in node.body if isinstance(n, ast.FunctionDef) and n.name == 'cold')
     first = next(n for n in cold.body if isinstance(n, ast.Expr) and isinstance(n.value, ast.Call))
-    assert ast.unparse(first.value) == 'charge(8 if value_type is str or value_type is int else 32)'
+    assert ast.unparse(first.value) == 'charge(8 if value_type is str or value_type is int or (raw_type and value_type is TypeDesc) else 32)'
     if previous:
         first.value.args = [ast.parse('8 if value_type is str else 32', mode='eval').body]
     if cold_only:
