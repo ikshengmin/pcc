@@ -405,8 +405,13 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
             type_record(field)
 
     def cold(value):
-        # Retain the conservative outer cold-cell/tag/separator allowance.
-        charge(32)
+        # Exact strings are immutable, untagged JSON scalars. Subclasses
+        # retain the old reserve and side-effect/exception ordering. Eight bytes per occurrence
+        # cover enclosing array separators (2), argument row syntax (6),
+        # and dictionary pair syntax (6 per two children). Container nodes
+        # retain their 32-byte tag/bracket allowance. Escape bytes are still
+        # charged exactly by string(), before any wire materialization.
+        charge(8 if type(value) is str else 32)
         if isinstance(value, str):
             string(value)
         elif isinstance(value, TypeDesc):
