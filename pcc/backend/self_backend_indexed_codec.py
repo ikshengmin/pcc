@@ -432,6 +432,23 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         else:
             raise BackendUnavailable("unsupported diagnostic cold payload")
 
+    def raw_strings(values):
+        # These function fields serialize as raw JSON arrays, not tagged cold
+        # containers. Exact containers/strings cannot run custom callbacks.
+        # Keep the old outer reserve; each raw string needs at most a two-byte
+        # comma/space separator in addition to its exact JSON representation.
+        # Unusual containers and elements retain the old cold walk unchanged.
+        if type(values) is tuple or type(values) is list:
+            charge(32)
+            for value in values:
+                if type(value) is str:
+                    charge(2)
+                    string(value)
+                else:
+                    cold(value)
+        else:
+            cold(values)
+
     if max_bytes <= 0:
         raise BackendUnavailable("indexed diagnostic byte bound must be positive")
     charge(4096)
@@ -490,11 +507,11 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
         for arg in function.args:
             cold(arg.name)
             cold(arg.type, True)
-        cold(kernel.block_names)
-        cold(kernel.value_names)
+        raw_strings(kernel.block_names)
+        raw_strings(kernel.value_names)
         cold(kernel.instruction_arithmetic_flag_values)
         cold(kernel.cold_instruction_data)
-        cold(kernel.call_texts)
+        raw_strings(kernel.call_texts)
         types = kernel.types
         if type(types) is tuple:
             # This wire field is a raw type array, not a tagged cold tuple.
