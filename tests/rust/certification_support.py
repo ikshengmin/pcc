@@ -49,10 +49,20 @@ def forbid_moves_for_references(patch, source, forbidden):
 
     Owned moves decide reference-free input in every admission mode
     (pcc/frontends/rust/README.md, "Replacing the rustc admission gate", stage
-    2); reference-bearing checked input takes its loans and moves from the
-    actual check until owned loans exist (stage 4).
+    2). Whole-program checks of reference-bearing certified input still use
+    the actual check. Generic declarations are checked separately: a
+    reference-free declaration must retain owned move checking even when
+    another declaration in the same source contains references.
     """
     from pcc.frontends.rust.moves import MoveChecker
     if source_has_references(source):
         patch.setattr(MoveChecker, 'check', forbidden)
-        patch.setattr(MoveChecker, 'check_function', forbidden)
+        check_function = MoveChecker.check_function
+
+        def check_reference_free_function(self, function):
+            if contains_references(function):
+                return forbidden(self, function)
+            return check_function(self, function)
+
+        patch.setattr(MoveChecker, 'check_function', check_reference_free_function)
+
