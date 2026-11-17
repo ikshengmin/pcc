@@ -89,7 +89,7 @@ def run_reference_go_function(units, function, tmp_path):
         (directory / name).write_text(text)
     (directory / 'observer_main.go').write_text(REFERENCE_MAIN.format(function=function))
     env = dict(os.environ, GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off', GOWORK='off',
-               GO111MODULE='off', CGO_ENABLED='0', GOCACHE=str(tmp_path / 'cache'))
+               GO111MODULE='off', CGO_ENABLED='0', GOCACHE=os.environ.get('PCC_GO_REFERENCE_CACHE') or str(tmp_path / 'cache'))
     names = [name for name, _ in units] + ['observer_main.go']
     subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *names],
                    cwd=directory, env=env, check=True, capture_output=True, timeout=120)
@@ -105,7 +105,7 @@ def reference_rejection(units, tmp_path):
     for name, text in units:
         (directory / name).write_text(text)
     env = dict(os.environ, GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off', GOWORK='off',
-               GO111MODULE='off', CGO_ENABLED='0', GOCACHE=str(tmp_path / 'cache'))
+               GO111MODULE='off', CGO_ENABLED='0', GOCACHE=os.environ.get('PCC_GO_REFERENCE_CACHE') or str(tmp_path / 'cache'))
     run = subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *[name for name, _ in units]],
                          cwd=directory, env=env, capture_output=True, timeout=120)
     return run.returncode, run.stderr.decode('utf-8', 'replace')
