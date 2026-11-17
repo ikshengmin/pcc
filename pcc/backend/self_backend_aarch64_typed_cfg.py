@@ -5,9 +5,6 @@ Event indices, including blanks and directives, intentionally define the old
 """
 from __future__ import annotations
 
-from .self_backend_value_arena import CompilerInt2, CompilerRecordSpanArena
-from .self_backend_aarch64_fragments import AArch64EmissionFragments
-
 from .self_backend_aarch64_semantics import (
     TOKEN_REGISTER, TOKEN_SYMBOL,
     REGISTER_WSP, REGISTER_XZR, REGISTER_WZR,
@@ -215,47 +212,17 @@ def drop_unreferenced_empty_local_labels_records(ctx, records, metadata_labels=(
 def thread_trampoline_branches(fragments, semantics, span, metadata_labels=()):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
-    if (type(fragments) is not AArch64EmissionFragments
-            or type(fragments.spans) is not CompilerRecordSpanArena):
-        return ctx.write_span(thread_trampoline_branches_records(ctx, ctx.read_span(span), metadata_labels))
-    original_spans: CompilerRecordSpanArena = fragments.spans
-    original_root: CompilerInt2 = original_spans._root(span)
-    records = ctx.read_span(span)
-    output = thread_trampoline_branches_records(ctx, records, metadata_labels)
-    if (output == records and fragments.spans is original_spans
-            and span.second == original_spans.generation):
-        current_root: CompilerInt2 = fragments.spans._root(span)
-        if (original_root.first == current_root.first
-                and original_root.second == current_root.second
-                and current_root.second == len(records)):
-            # Preserve a distinct mutable root and snapshot the unchanged tree.
-            result = fragments.new_fragment()
-            fragments.extend_fragment(result, span)
-            return result
-    return ctx.write_span(output)
+    # Public proof and owner callbacks can mutate the original span's nodes
+    # without changing its root identity. Rebuild from the captured output IDs.
+    return ctx.write_span(thread_trampoline_branches_records(ctx, ctx.read_span(span), metadata_labels))
 
 
 def fold_cond_branch_to_fallthrough(fragments, semantics, span, eligible_edges):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
-    if (type(fragments) is not AArch64EmissionFragments
-            or type(fragments.spans) is not CompilerRecordSpanArena):
-        return ctx.write_span(fold_cond_branch_to_fallthrough_records(ctx, ctx.read_span(span), eligible_edges))
-    original_spans: CompilerRecordSpanArena = fragments.spans
-    original_root: CompilerInt2 = original_spans._root(span)
-    records = ctx.read_span(span)
-    output = fold_cond_branch_to_fallthrough_records(ctx, records, eligible_edges)
-    if (output == records and fragments.spans is original_spans
-            and span.second == original_spans.generation):
-        current_root: CompilerInt2 = fragments.spans._root(span)
-        if (original_root.first == current_root.first
-                and original_root.second == current_root.second
-                and current_root.second == len(records)):
-            # Preserve a distinct mutable root and snapshot the unchanged tree.
-            result = fragments.new_fragment()
-            fragments.extend_fragment(result, span)
-            return result
-    return ctx.write_span(output)
+    # Public proof and owner callbacks can mutate the original span's nodes
+    # without changing its root identity. Rebuild from the captured output IDs.
+    return ctx.write_span(fold_cond_branch_to_fallthrough_records(ctx, ctx.read_span(span), eligible_edges))
 
 
 def drop_fallthrough_uncond_branches(fragments, semantics, span):
@@ -268,24 +235,9 @@ def drop_fallthrough_uncond_branches(fragments, semantics, span):
 def drop_unreferenced_empty_local_labels(fragments, semantics, span, metadata_labels=()):
     from .self_backend_aarch64_typed_pass_context import TypedPassContext
     ctx = TypedPassContext(fragments, semantics)
-    if (type(fragments) is not AArch64EmissionFragments
-            or type(fragments.spans) is not CompilerRecordSpanArena):
-        return ctx.write_span(drop_unreferenced_empty_local_labels_records(ctx, ctx.read_span(span), metadata_labels))
-    original_spans: CompilerRecordSpanArena = fragments.spans
-    original_root: CompilerInt2 = original_spans._root(span)
-    records = ctx.read_span(span)
-    output = drop_unreferenced_empty_local_labels_records(ctx, records, metadata_labels)
-    if (output == records and fragments.spans is original_spans
-            and span.second == original_spans.generation):
-        current_root: CompilerInt2 = fragments.spans._root(span)
-        if (original_root.first == current_root.first
-                and original_root.second == current_root.second
-                and current_root.second == len(records)):
-            # Preserve a distinct mutable root and snapshot the unchanged tree.
-            result = fragments.new_fragment()
-            fragments.extend_fragment(result, span)
-            return result
-    return ctx.write_span(output)
+    # Public proof and owner callbacks can mutate the original span's nodes
+    # without changing its root identity. Rebuild from the captured output IDs.
+    return ctx.write_span(drop_unreferenced_empty_local_labels_records(ctx, ctx.read_span(span), metadata_labels))
 
 
 def run_aarch64_typed_cfg_passes(

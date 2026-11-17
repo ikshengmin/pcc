@@ -1,7 +1,7 @@
-"""Real-owner sequence contracts for unchanged CFG root snapshots.
+"""Captured CFG output must not alias mutable source nodes or roots.
 
-Semantic tests also apply to the old write-span implementation; only the
-explicit zero-node-growth witnesses require the optimized implementation.
+Public proof and owner callbacks may mutate the source after record capture.
+The returned root must preserve the algorithm's captured output sequence.
 """
 import pytest
 
@@ -49,7 +49,7 @@ def fixture(owner_class=AArch64EmissionFragments, span_class=None):
 
 
 @pytest.mark.parametrize("kind", PASSES)
-def test_unchanged_snapshot_has_no_new_nodes_and_fresh_root(kind):
+def test_unchanged_output_has_independent_rebuilt_root(kind):
     owner, span = fixture()
     try:
         expected = ids(owner, span)
@@ -57,8 +57,8 @@ def test_unchanged_snapshot_has_no_new_nodes_and_fresh_root(kind):
         result = invoke(kind, owner, span)
         assert result != span
         assert ids(owner, result) == expected
-        assert len(owner.spans.nodes) == nodes  # optimization reachability witness
-        assert owner.spans._root(result) == owner.spans._root(span)
+        assert len(owner.spans.nodes) > nodes  # public mutable callbacks require a rebuild
+        assert owner.spans._root(result) != owner.spans._root(span)
     finally:
         owner.close()
 
@@ -266,4 +266,46 @@ def test_real_conditional_fold_is_not_treated_as_unchanged():
         assert ctx.opcode(after[1]) == "b.ne"
         assert ctx.operands(after[1])[-1][1] == owner.symbol_ids["L_error"]
     finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("kind", PASSES)
+def test_proof_in_place_leaf_mutation_keeps_captured_output(kind):
+    owner, span = fixture()
+    try:
+        expected = ids(owner, span)
+        original_root = owner.spans._root(span)
+        proof = Once(lambda: owner.spans.nodes.set(1, expected[-1]))
+        result = invoke(kind, owner, span, proof)
+        assert proof.called
+        assert owner.spans._root(span) == original_root
+        assert ids(owner, span) != expected
+        assert ids(owner, result) == expected
+    finally:
+        owner.close()
+
+
+@pytest.mark.parametrize("kind", PASSES)
+def test_output_root_creation_callback_keeps_captured_output(kind):
+    owner, span = fixture()
+    original_new = owner.new_fragment
+    calls = 0
+    try:
+        expected = ids(owner, span)
+
+        def new_fragment():
+            nonlocal calls
+            calls += 1
+            result = original_new()
+            if calls == 2:
+                owner.spans.append(span, expected[0])
+            return result
+
+        owner.new_fragment = new_fragment
+        result = invoke(kind, owner, span)
+        assert calls == 2
+        assert ids(owner, span) == expected + expected[:1]
+        assert ids(owner, result) == expected
+    finally:
+        owner.new_fragment = original_new
         owner.close()
