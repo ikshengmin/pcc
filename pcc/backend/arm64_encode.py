@@ -1659,7 +1659,7 @@ def append_emitted_instruction_record(
         if register_end < 0:
             return EMITTED_INSTRUCTION_FALLBACK
         register = _emitted_register_code_span(line, register_start, register_end)
-        if register < 0 or register >> 6 not in (_EMITTED_REG_X, _EMITTED_REG_W):
+        if line[register_start:register_end] in ("sp", "wsp") or register < 0 or register >> 6 not in (_EMITTED_REG_X, _EMITTED_REG_W):
             return EMITTED_INSTRUCTION_FALLBACK
         target = line[target_start:]
         if label_offsets is None:
@@ -2883,6 +2883,8 @@ def _inverted_skip_word(line: str) -> int:
         return 0x54000000 | (2 << 5) | (_cond(mnemonic[2:]) ^ 1)
     operands = _split_operands(parts[1] if len(parts) > 1 else "")
     register, wide = _reg(operands[0])
+    if operands[0].strip().lower().rstrip(",") in ("sp", "wsp"):
+        raise EncodeError("bad emitted zero-branch register")
     word = (0x34000000 if mnemonic == "cbnz" else 0x35000000) | (2 << 5) | register
     if wide:
         word |= 0x80000000
@@ -3577,6 +3579,8 @@ def _encode_one(line, at, labels, resolve_branch, relocations, undefined,
 
     if mn in ("cbz", "cbnz"):
         rt, t64 = _reg(ops[0])
+        if ops[0].strip().lower().rstrip(",") in ("sp", "wsp"):
+            raise EncodeError("bad emitted zero-branch register")
         base = 0x35000000 if mn == "cbnz" else 0x34000000
         word = base | (resolve_branch(ops[1], 19, at) << 5) | rt
         if t64:
