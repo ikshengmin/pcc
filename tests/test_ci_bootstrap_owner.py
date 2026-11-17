@@ -157,7 +157,10 @@ def test_actual_six_worker_partition_runs_five_bodies_once_then_remainder(tmp_pa
         out.mkdir()
         env = dict(os.environ, PYTHONPATH=str(gate.ROOT), PCC_MARKER_REPORT_DIR=str(out), PCC_MARKER_PARTITION=scope)
         env.pop("PYTEST_ADDOPTS", None)
-        result = subprocess.run(gate.marker_command(out, "integration", scope), cwd=corpus,
+        # CI basetemp may be inside the repository. Pin this finite corpus
+        # root for every xdist worker; never relax exact bootstrap node IDs.
+        result = subprocess.run(gate.marker_command(out, "integration", scope)
+                                + ["--rootdir", str(corpus)], cwd=corpus,
                                 env=env, capture_output=True, text=True, timeout=45)
         assert result.returncode == 0, result.stdout + result.stderr
         assert "created: 6/6 workers" in result.stdout and "LoadGroupScheduling" in result.stdout
