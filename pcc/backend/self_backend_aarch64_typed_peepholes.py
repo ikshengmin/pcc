@@ -375,7 +375,7 @@ class _Pass:
         return result
 
 
-def _run(fragments, semantics, span, mode, owned_store_only: bool = False):
+def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
     p = _Pass(fragments, semantics, span)
     try:
         changed = False
@@ -407,8 +407,8 @@ def _run(fragments, semantics, span, mode, owned_store_only: bool = False):
                             consumed = mode + 1
                             break
             elif mode in (3, 4) and b >= 0:
-                zero = p.zero(a) if not owned_store_only or mode == 3 else -1
-                move = p.move(a) if not owned_store_only or mode == 4 else None
+                zero = p.zero(a) if not owned_matcher_only or mode == 3 else -1
+                move = p.move(a) if not owned_matcher_only or mode == 4 else None
                 old = zero if mode == 3 else (move[0] if move else -1)
                 if (old >= 0 and _scratch(old) and p.op(b) in ("stur", "str", "sturb", "strb") and p.register(b, 0) == old and not p.store_address_uses(b, old)
                     and (mode == 3 or p.store_replacement_safe(b, move[1]))
@@ -418,7 +418,7 @@ def _run(fragments, semantics, span, mode, owned_store_only: bool = False):
                     consumed = 2
             elif mode in (5, 6) and b >= 0:
                 compare = p.compare(b)
-                zero = p.zero(a)
+                zero = p.zero(a) if not owned_matcher_only or mode == 5 else -1
                 move = p.move(a)
                 if compare is not None:
                     lhs, rhs = compare
@@ -431,7 +431,11 @@ def _run(fragments, semantics, span, mode, owned_store_only: bool = False):
                         replacement = p.new("cmp", [_reg(lhs), _reg(rhs)], encode_emitted_compare_register_parts(_spelling(lhs), _spelling(rhs)))
                         consumed = 2
             elif mode == 7 and b >= 0:
-                move, branch = p.move(a), p.branch(b)
+                if owned_matcher_only:
+                    move = p.move(a)
+                    branch = p.branch(b) if move is not None else None
+                else:
+                    move, branch = p.move(a), p.branch(b)
                 if move and branch and move[0] == branch[1] and _class(move[0]) == "w" and _class(move[1]) == "w" and move[1] != sem.REGISTER_WSP and _scratch(move[0]) and p.false_path(index + 2):
                     replacement = p.new_branch(branch[0], branch[2], move[1])
                     # The taken target may observe the scratch definition.
@@ -675,12 +679,12 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_fold_zero_compare_immediate", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_mov_compare_source")
-    span = fold_mov_compare_source(fragments, semantics, span)
+    span = _run_owned_move_matchers(fragments, semantics, span, 6) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_compare_source(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_mov_compare_source", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_mov_zero_branch_source")
-    span = fold_mov_zero_branch_source(fragments, semantics, span)
+    span = _run_owned_move_matchers(fragments, semantics, span, 7) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_zero_branch_source(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_mov_zero_branch_source", started)
     if phase_timing is not None:
@@ -919,6 +923,12 @@ def _run_owned_zero_branch(fragments, semantics, span):
 
 
 def _run_owned_store(fragments, semantics, span, mode):
+    if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
+        return _run(fragments, semantics, span, mode)
+    return _run(fragments, semantics, span, mode, True)
+
+
+def _run_owned_move_matchers(fragments, semantics, span, mode):
     if fragments.records._address != 0 or semantics.headers._address != 0 or semantics.tokens._address != 0:
         return _run(fragments, semantics, span, mode)
     return _run(fragments, semantics, span, mode, True)
