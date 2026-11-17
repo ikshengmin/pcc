@@ -173,6 +173,7 @@ def _assert_macos_stage1_step_contracts(stage1):
     assert _workflow_step_scalar(build, "id") == "mac_stage1"
     assert not re.search(r"(?m)^        if:", build)
     assert _workflow_step_env(build) == [
+        'PCC_PROFILE_COORDINATOR_MEMORY: "1"',
         'PCC_HOST_INDEXED_PROCESS_SPLIT: "1"',
         'PCC_MACHO_LINK_PHASE_EVENTS: "1"',
     ]
@@ -224,6 +225,10 @@ def _assert_macos_stage1_step_contracts(stage1):
     pytest.param("build", "        id: mac_stage1\n", "", id="missing-build-id"),
     pytest.param("build", "id: mac_stage1", "id: wrong", id="wrong-build-id"),
     pytest.param("build", "        env:\n", "", id="missing-build-env"),
+    pytest.param("build", '          PCC_PROFILE_COORDINATOR_MEMORY: "1"\n', "",
+                 id="missing-build-memory-profile"),
+    pytest.param("build", 'PCC_PROFILE_COORDINATOR_MEMORY: "1"',
+                 'PCC_PROFILE_COORDINATOR_MEMORY: "0"', id="disabled-build-memory-profile"),
     pytest.param("build", 'PCC_HOST_INDEXED_PROCESS_SPLIT: "1"',
                  'PCC_HOST_INDEXED_PROCESS_SPLIT: "0"', id="wrong-build-env"),
     pytest.param("build", '          PCC_MACHO_LINK_PHASE_EVENTS: "1"\n', "",
