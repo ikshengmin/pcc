@@ -466,7 +466,11 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
                             replacement = p.changed_register(previous, 0, move[0], 0)
                         consumed = 1
             elif mode == 10 and b >= 0:
-                first, second = p.move(a), p.move(b)
+                if owned_matcher_only:
+                    first = p.move(a)
+                    second = p.move(b) if first is not None else None
+                else:
+                    first, second = p.move(a), p.move(b)
                 if first and second and first[0] == second[1] and _scratch(first[0]) and p.dead(index + 2, first[0], True):
                     replacement = p.new_move(second[0], first[1])
                     if replacement != -2:
@@ -702,7 +706,7 @@ def _run_aarch64_typed_peepholes(
         phase_timing.complete_backend_finalize("typed_fold_scratch_def_into_move", started)
     if phase_timing is not None:
         started = phase_timing.begin_backend_finalize("typed_fold_mov_mov_chain")
-    span = fold_mov_mov_chain(fragments, semantics, span)
+    span = _run_owned_move_matchers(fragments, semantics, span, 10) if owned_stack_windows and _owned_timer_is_canonical(phase_timing) else fold_mov_mov_chain(fragments, semantics, span)
     if phase_timing is not None:
         phase_timing.complete_backend_finalize("typed_fold_mov_mov_chain", started)
     if phase_timing is not None:
