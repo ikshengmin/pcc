@@ -419,7 +419,7 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
             elif mode in (5, 6) and b >= 0:
                 compare = p.compare(b)
                 zero = p.zero(a) if not owned_matcher_only or mode == 5 else -1
-                move = p.move(a)
+                move = p.move(a) if not owned_matcher_only or mode != 6 or compare is not None else None
                 if compare is not None:
                     lhs, rhs = compare
                     if mode == 5 and zero >= 0 and rhs == zero and lhs != zero and lhs not in (sem.REGISTER_XZR, sem.REGISTER_WZR) and p.dead(index + 2, zero):
