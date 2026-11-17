@@ -56,8 +56,22 @@ def test_native_cycle_failure_snapshots_preserve_predicates_and_first_line():
         'if (status != 0) { printf("sweep-verdict:blocked status=%d phase=%d mode=%d\\n", '
         'status, phase, mode); report_cycle_failure(status); }'
     )
-    # The callback full-heap count discrepancy remains an unchanged failure.
-    assert "finalizers != 0 || weak_callbacks != 0 || collected != 0 || known_first != 1" in run
+    # Mode 5 is a full-heap collection: callback temporaries can die while
+    # the watched target is rescued. Other live/no-work modes still collect
+    # exactly zero; all modes retain the target/finalizer/weakref predicates.
+    assert (
+        "finalizers != 0 || weak_callbacks != 0 || collected < 0 || "
+        "(mode != 5 && collected != 0) || known_first != 1"
+    ) in run
+    assert "if (!inspect_live(0, 1)) return 144;" in run
+    assert "if (mode == 5 && (gc_callbacks != 2 || !inspect_callback_keeper())) return 145;" in run
+    keeper = fixture.split("static int inspect_callback_keeper(void) {", 1)[1].split(
+        "static void report_live_verdict_failure", 1)[0]
+    assert "if (py_list_len(roots[KEEPER]) != 1) return 0;" in keeper
+    assert "PyObject *kept = py_list_get(roots[KEEPER], 0);" in keeper
+    assert "int same = kept == watched[0];" in keeper
+    assert "if (kept != 0) py_decref(kept);" in keeper
+    assert "return same;" in keeper
 
 
 class _SweepBoundary:
@@ -323,7 +337,7 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
         "status=%d phase=%d mode=%d effective_backend=%lld",
         "finalizers=%d expected_finalizers=%d",
         "weak_callbacks=%d expected_weak_callbacks=%d",
-        "collected=%lld expected_collected=0",
+        "collected=%lld expected_collected=%s",
         "known_first=%d expected_known_first=1",
         "known_second=%d gc_callbacks=%d callback_error=%d",
     ):
@@ -331,16 +345,19 @@ def test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref():
     assert (
         "status, phase, mode, (long long)pcc_gc_backend(), "
         "finalizers, expected_finalizers, weak_callbacks, expected_weak_callbacks, "
-        "(long long)collected, "
+        '(long long)collected, mode == 5 ? "nonnegative-whole-heap" : "0", '
         "known_first, known_second, gc_callbacks, callback_error);"
     ) in " ".join(diagnostic.split())
     assert "watched[" not in diagnostic
     assert "py_" not in diagnostic
     assert "pcc_gc_collect" not in diagnostic
     run = fixture.split("static int run_mode(void) {", 1)[1].split("int main(", 1)[0]
-    for status, expected in ((143, "0"), (150, "count")):
+    for status, expected, collected_guard in (
+        (143, "0", "collected < 0 || (mode != 5 && collected != 0)"),
+        (150, "count", "collected != 0"),
+    ):
         assert (
-            f"if (finalizers != {expected} || weak_callbacks != {expected} || collected != 0 "
+            f"if (finalizers != {expected} || weak_callbacks != {expected} || {collected_guard} "
             "|| known_first != 1) { "
             f"report_live_verdict_failure({status}, {expected}, {expected}, "
             "collected, known_first, known_second); "

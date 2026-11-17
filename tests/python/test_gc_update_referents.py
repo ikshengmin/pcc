@@ -11,6 +11,7 @@ gate covers the representative container types end-to-end.
 
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -815,16 +816,25 @@ def test_capi_extension_dynamic_tags_do_not_use_instance_layout_source():
         "pcc_capi_dealloc_cext_object(o, tag) != 0"
     ) < typed_body.index("if tag >= PY_TYPE_USER_CLASS_START:")
 
-    py_sweep_body = tracing_collector_py[
-        tracing_collector_py.index(
-            "def pcc_gc_tracing_sweep_unreachable("
-        ) : tracing_collector_py.rindex(
-            "    pcc_gc_tracing_recheck_reachability_after_finalizers()"
-        )
+    # The sweep selects an intact batch with the real pending predicate,
+    # then dispatches that selected target array. Follow that owner whether
+    # it is the original sweep body or the extracted PASS0 phase.
+    selection_owners = [
+        node for node in ast.parse(tracing_collector_py).body
+        if isinstance(node, ast.FunctionDef)
+        and any(isinstance(call, ast.Call) and isinstance(call.func, ast.Name)
+                and call.func.id == "py_user_del_pending" for call in ast.walk(node))
     ]
-    assert "pcc_capi_is_cext_type_tag(tag) == 0" in py_sweep_body
-    assert py_sweep_body.index("pcc_capi_is_cext_type_tag(tag) == 0") < (
-        py_sweep_body.index("py_user_del_dispatch(obj)")
+    assert len(selection_owners) == 1
+    assert selection_owners[0].name in {"pcc_gc_tracing_sweep_unreachable", "_sweep_finalizers"}
+    py_sweep_body = ast.get_source_segment(tracing_collector_py, selection_owners[0])
+    assert py_sweep_body.index("if py_user_del_pending(obj) != 0:") < (
+        py_sweep_body.index("_finalizer_targets_append(targets, obj)")
+    ) < py_sweep_body.index("py_user_del_dispatch(target)")
+    pending_body = dunder_py.split("def py_user_del_pending(", 1)[1].split("\ndef ", 1)[0]
+    assert "if pcc_capi_is_cext_type_tag(tag) != 0:\n        return 0" in pending_body
+    assert pending_body.index("pcc_capi_is_cext_type_tag(tag) != 0") < (
+        pending_body.index("_load_instance_cls(o)")
     )
 
     assert "pcc_capi_is_cext_type_tag = extern(" in collector_py
