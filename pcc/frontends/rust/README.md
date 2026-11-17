@@ -67,7 +67,8 @@ in the named modules; locate them with
 | `for` over arrays | `moves.py` | moves of iterated owned arrays and across iterations | **owned for reference-free input** (stage 3) |
 | Shared references in bodies, parameters and `&self` receivers: local, field and indexed borrows, reborrows | `moves.py` (loans, holders, liveness), `reference_admission.py` (post-sema shape guard) | NLL shared loans, liveness, array-index overlap, E0505/E0506/E0597 | **owned** (stage 4); references in results or aggregates, temporaries' lifetime extension, generic reference arguments and default binding modes stay explicit gaps |
 | `&mut` types and borrows, `&mut self` receivers, implicit reborrows | `moves.py` (loan kinds, deref places, two-phase), `semantics.py` (implicit reborrows) | mutable loans, two-phase borrows, E0499/E0502/E0503 | **owned** (stage 5); explicit receiver types (`self: &mut Self`) stay a gap |
-| Explicit lifetimes, lifetime parameters, outlives bounds, reference parameter reassignment | `semantics.py`, `generics.py` | region inference and outlives constraints | open (stage 6) |
+| Reference results, function lifetime parameters and elision, reference parameter reassignment | `regions.py`, `moves.py`, `semantics.py` | E0106, E0515, E0597, "lifetime may not live long enough" | **owned** (stage 6, first part) |
+| Lifetime parameters on structs/enums/impls, outlives bounds (`'a: 'b`), references in aggregates, explicit lifetimes in bodies, generic reference arguments | `generics.py`, `semantics.py`, `function_generics.py` | region inference across type arguments and outlives constraints | open (stage 6, second part) |
 | Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
 | Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
 
@@ -132,7 +133,23 @@ Migration order:
    programs) equal a rustc 1.92.0 `-O` build's including the error code, and
    47 reference-bearing originals (33 with `&mut`) run with owned
    compile/assemble/link and match rustc.
-6. Signatures: lifetime elision, explicit lifetimes and outlives bounds.
+6. Signatures. First part (done): a function or method may return a
+   top-level reference and name lifetimes in its signature. `regions.py`
+   applies rustc's elision (an elided output takes `self`'s region, else the
+   region of the only input lifetime position, else E0106). Reference
+   parameters hold an origin, their universal region; a returned value may
+   hold no loan of the function's own storage (E0515) and only the output
+   region or 'static ("lifetime may not live long enough"); assigning into a
+   reference parameter needs the same; parameter holders are used at every
+   exit (E0597 for a local stored in one); a call's reference result holds
+   the arguments whose region is the output region. Results coerce `&mut T`
+   to `&T`, and assignments may write through a reference a call returns.
+   Verdicts in `tests/rust/test_rust_owned_signature_regions.py::CORPUS` (54
+   original programs) equal a rustc 1.92.0 `-O` build's. Second part (open):
+   lifetime parameters on data and impls (a value of `W<'a>` holds loans of
+   its region, and a field read through `&'s W<'a>` yields the field's
+   region, not the outer one), outlives bounds, references in aggregates and
+   generic reference arguments.
 7. Trait gates: default methods, standard markers, bound well-formedness.
 8. Owned lints for the attributes a crate denies, then multi-file crates on the
    same path (DataSketches Rust stops at `#![deny(missing_docs)]`).

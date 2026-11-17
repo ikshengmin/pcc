@@ -155,10 +155,9 @@ def test_mutable_reference_programs_run_with_owned_admission_and_match_rustc(nam
 
 
 @pytest.mark.parametrize('source,boundary', [
-    ("pub fn f<'a>(x: &'a mut u64) {}", 'explicit function lifetimes require'),
-    ('pub fn f(x: &mut u64) -> &mut u64 { x }', 'reference returns and aggregate reference storage require'),
+    ("pub struct W<'a> { pub r: &'a mut u64 }", 'lifetime parameters on data declarations require'),
+    ('pub fn f(x: &mut u64) -> (&mut u64, u64) { (x, 1) }', 'reference returns and aggregate reference storage require'),
     ('pub struct S { pub a: u64 } impl S { pub fn f(self: &mut Self) {} }', 'explicit receiver types require'),
-    ('pub fn f(mut p: &mut u64) { let mut x = 1u64; p = &mut x; }', 'reference parameter reassignment requires'),
     ('pub fn id<T>(t: T) -> T { t } pub fn f() -> u64 { let mut a = 1u64; *id(&mut a) }',
      'generic function reference arguments require'),
 ])

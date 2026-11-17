@@ -146,6 +146,7 @@ class Checker:
         self.replaying_instance = False
         self.pointer_bits = pointer_bits
         self.externally_checked = externally_checked
+        self.signature_lifetimes = None  # lifetimes declared on the signature being validated
         self.functions = functions
         self.records: dict[str, Record] = {}
         for record in records:
@@ -484,8 +485,13 @@ class Checker:
                 return  # Declaration layout was already checked; storage waits for body constraints.
             self.generics.instantiate(ty, token)
         if isinstance(ty, SharedReference):
-            if ty.lifetime and not self.externally_checked:
-                raise token.error("explicit reference lifetimes require a matching external rustc check record")
+            if ty.lifetime and ty.lifetime != "'_" and not self.externally_checked:
+                lifetimes = self.signature_lifetimes
+                if lifetimes is None:
+                    raise token.error("explicit reference lifetimes outside a function signature need region "
+                                      "inference, which is not implemented")
+                if ty.lifetime != "'static" and ty.lifetime not in lifetimes:
+                    raise token.error(f"use of undeclared lifetime name `{ty.lifetime}` (rustc E0261)")
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
@@ -543,6 +549,18 @@ class Checker:
                 return base[0], base[1] + (expr.value,)
         return None
 
+    def reference_temporary(self, expr):
+        """The reference-valued temporary (e.g. a call result) an assignee is
+        reached through, as in `*s.slot() = v`, or None."""
+        if expr.kind == "group":
+            return self.reference_temporary(expr.children[0])
+        if expr.kind in {"deref", "field", "index"}:
+            base = expr.children[0]
+            if isinstance(base.ty, SharedReference) and self.place(base) is None:
+                return base
+            return self.reference_temporary(base) if expr.kind != "deref" else None
+        return None
+
     def through_reference(self, expr: Expr) -> bool:
         if expr.kind == "deref":
             return True
@@ -551,6 +569,26 @@ class Checker:
         if expr.kind in {"field", "index"}:
             return isinstance(expr.children[0].ty, SharedReference) or self.through_reference(expr.children[0])
         return False
+
+    def coercible(self, ty, target, token):
+        """`&mut T` where `&T` is expected: a reference coercion."""
+        from .call_inference import partial
+        ty, target = partial(ty), partial(target)
+        if (isinstance(ty, SharedReference) and isinstance(target, SharedReference)
+                and ty.mutable and not target.mutable):
+            unify(target.referent, ty.referent, token)
+            return True
+        return False
+
+    def result_coercion(self, body, body_ty):
+        """Coerce a block's `&mut T` tail to the `&T` result it returns."""
+        if (body.kind != "block" or len(body.children) <= body.value
+                or not self.coercible(body_ty, self.result, body.children[-1].token)):
+            return False
+        tail = body.children[-1]
+        body.children[-1] = self.implicit_reborrow(tail, self.result) or Expr(
+            "reference_coerce", tail.token, children=[tail], ty=self.result)
+        return True
 
     def implicit_reborrow(self, expr, target, *, two_phase=False):
         """A `&mut` place used where a reference is expected (a coercion site:
@@ -622,20 +660,26 @@ class Checker:
                 self.current_module = fn.item_identity.module
             if fn.explicit_receiver and not self.externally_checked:
                 raise fn.token.error("explicit receiver types require a matching external rustc check record")
-            if fn.lifetime_parameters and not self.externally_checked:
-                raise fn.token.error("explicit function lifetimes require a matching external rustc check record")
             self.type_scope = self.function_generics.prepare(fn)
             self.abstract_function = bool(fn.type_parameters)
             fn.result = self.generics.normalize(fn.result, fn.token)
             fn.params = [(token, self.generics.normalize(ty, token), mutable)
                          for token, ty, mutable in fn.params]
-            self.valid_type(fn.result, fn.token, allow_reference=False)
-            parameter_names = set()
-            for token, ty, _ in fn.params:
-                if token.text in parameter_names:
-                    raise token.error(f"duplicate parameter {token.text!r}")
-                parameter_names.add(token.text)
-                self.valid_type(ty, token)
+            # A top-level reference result is owned (regions.py); references
+            # nested in result aggregates still need region parameters.
+            self.signature_lifetimes = {token.text for token in fn.lifetime_parameters}
+            try:
+                self.valid_type(fn.result, fn.token)
+                parameter_names = set()
+                for token, ty, _ in fn.params:
+                    if token.text in parameter_names:
+                        raise token.error(f"duplicate parameter {token.text!r}")
+                    parameter_names.add(token.text)
+                    self.valid_type(ty, token)
+            finally:
+                self.signature_lifetimes = None
+            from .regions import signature_regions
+            signature_regions(fn)  # rustc E0106 for an underivable elided output
             name = fn.declaration_name
             if name in self.names:
                 raise fn.token.error(f"duplicate function {name!r}")
@@ -698,7 +742,11 @@ class Checker:
                     raise name.error(f"duplicate parameter {name.text!r}")
                 params.append(self.bind(name, ty, mutable, parameter=True))
             self.parameters[fn.identity] = params
-            unify(fn.result, self.expression(fn.body), fn.body.token)
+            body_ty = self.expression(fn.body)
+            if self.result_coercion(fn.body, body_ty):
+                # The result is a coercion site: `&mut T` becomes `&T` there.
+                body_ty = fn.body.ty = fn.result
+            unify(fn.result, body_ty, fn.body.token)
             from .call_inference import finish
             finish(self, self.inferred_calls)
             self.validate(fn.body)
@@ -1128,12 +1176,10 @@ class Checker:
             lhs = children[0]
             target = self.expression(lhs, place_context=True)
             place = self.place(lhs)
-            if place is None:
+            if place is None and self.reference_temporary(lhs) is None:
                 raise lhs.token.error("assignment target must be a local binding or field")
             if not self.mutable_place(lhs):
                 raise lhs.token.error("cannot assign through a shared reference" if self.through_reference(lhs) else f"cannot assign to immutable binding {place[0].name!r}")
-            if not self.externally_checked and place[0].parameter and isinstance(target, SharedReference):
-                raise lhs.token.error("reference parameter reassignment requires lifetime constraints, which are not implemented")
             unify(target, self.expression(children[1]), expr.token)
             if expr.value == "=":
                 children[1] = self.implicit_reborrow(children[1], target) or children[1]
@@ -1259,7 +1305,12 @@ class Checker:
             # associated with this loop turns its never type into unit.
             ty = "()" if context.has_break else NEVER
         elif kind == "return":
-            unify(self.result, self.expression(children[0]) if children else "()", expr.token)
+            value_ty = self.expression(children[0]) if children else "()"
+            if children and self.coercible(value_ty, self.result, children[0].token):
+                children[0] = self.implicit_reborrow(children[0], self.result) or Expr(
+                    "reference_coerce", children[0].token, children=[children[0]], ty=self.result)
+                value_ty = self.result
+            unify(self.result, value_ty, expr.token)
             ty = NEVER
         elif kind in {"break", "continue"}:
             if not self.loops:

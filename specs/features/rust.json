@@ -2573,6 +2573,20 @@
       "evidence": []
     },
     {
+      "id": "rust.admission.owned-signature-regions",
+      "title": "Owned signature regions: reference results, function lifetimes, parameter regions",
+      "chapter_ids": [
+        "rust.ref.8.2.4"
+      ],
+      "scope": "Qualification missing, not implementation missing: stage 6 (first part) of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". Functions and methods return top-level references and name lifetimes in their signatures with no rustc and no attestation. regions.py applies rustc's elision (self's region, else the only input lifetime position, else E0106). Reference parameters hold their universal region as an origin; returned values may hold no loan of the function's own storage (E0515) and only the output region or 'static (\"lifetime may not live long enough\"); assigning into a reference parameter needs the same; parameter holders are used at every exit (E0597); a call's reference result holds the arguments whose region is the output region. Results coerce &mut to &, and assignments write through references calls return. A two-phase loan a call result holds is active, not reserved, when passed on. 54 original programs get a rustc 1.92.0 -O build's verdict without rustc running, and two original programs run with owned compile, assemble and link and match rustc builds. Lifetime parameters on data and impls, outlives bounds, references in aggregates, explicit lifetimes in bodies and generic reference arguments keep explicit boundaries. Local Mac; the Linux-target actual-check lane is unrun here.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_owned_signature_regions.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

@@ -99,11 +99,14 @@ def has_reference(ty) -> bool:
 
 
 def reject_unowned_reference_shapes(checker):
-    """Fail closed after sema: owned loans (stages 4-5) cover references in
-    bodies and parameters only, never in results or aggregate storage, even if
-    a semantic transformation synthesized one."""
+    """Fail closed after sema: owned loans (stages 4-6) cover references in
+    bodies, parameters and top-level results, never in aggregate storage, even
+    if a semantic transformation synthesized one."""
+    from .call_inference import partial
     for function in checker.functions:
-        if has_reference(function.result):
+        result = partial(function.result)
+        # A top-level reference result is owned (stage 6, regions.py).
+        if has_reference(result.referent if isinstance(result, SharedReference) else result):
             raise function.token.error(REFERENCE_RETURN_GAP)
     for record in checker.records.values():
         for token, ty in record.fields:

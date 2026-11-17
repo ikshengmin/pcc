@@ -24,7 +24,7 @@ LEGACY_REFERENCE_PROGRAMS = (
 REFERENCE_FORMS = (
     ('fn unused(x:&u64){}', None),
     ('fn unused(x:&mut u64){}', None),
-    ("fn unused<'a>(x:&'a u64){}", 'explicit function lifetimes require'),
+    ("fn unused<'a>(x:&'a u64){}", None),
     ('struct R{x:u64} impl R{fn read(&self)->u64{self.x}} fn f(){let r=R{x:1};r.read();}', None),
     ('struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}', 'explicit receiver types require'),
     ('fn unused<T>(x:&T){}', None),
@@ -103,15 +103,15 @@ def test_actual_checker_rejects_unchanged_noncopy_move_before_reference_lowering
 
 def test_semantic_reference_synthesis_cannot_bypass_the_second_guard(monkeypatch):
     from pcc.frontends.rust.semantics import Checker
-    from pcc.frontends.rust.types import SharedReference
+    from pcc.frontends.rust.types import SharedReference, TupleType
     original=Checker.check
     def synthesize(self):
         original(self)
-        self.functions[0].result=SharedReference('u64')
+        self.functions[0].result=TupleType((SharedReference('u64'),))
     monkeypatch.setattr(Checker,'check',synthesize)
     forbid_lowering(monkeypatch)
     # Owned admission re-validates the reference shapes after sema: a
-    # synthesized reference return is outside the owned shared-loan subset.
+    # synthesized reference inside a result aggregate is outside the owned subset.
     with pytest.raises(RustError,match='reference returns and aggregate reference storage require'):
         compile_rust('fn f()->u64{1}',experimental_rustc_checked=True)
 

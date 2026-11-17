@@ -131,9 +131,10 @@ def test_edition_is_not_an_admission_waiver(edition, monkeypatch):
     # PCC's owned checks in every edition, still with no external compiler.
     assert compile_rust(ORIGINAL, edition=edition).edition == edition
     assert compile_rust('fn f(x:&mut u64){*x=42;}', edition=edition).edition == edition  # owned loans
+    assert compile_rust("fn f<'a>(x:&'a mut u64){*x=42;}", edition=edition).edition == edition  # owned regions
     monkeypatch.setattr(Lowerer, 'lower', forbidden)
-    with pytest.raises(RustError, match='explicit function lifetimes require'):
-        compile_rust("fn f<'a>(x:&'a mut u64){*x=42;}", edition=edition,
+    with pytest.raises(RustError, match='explicit impl lifetimes require'):
+        compile_rust("struct W{x:u64} impl<'a> W{fn f(&self)->u64{self.x}}", edition=edition,
                      experimental_rustc_checked=True)
     with pytest.raises(RustError, match='no_core requires'):
         compile_rust('#![no_core]fn f(){}', edition=edition,

@@ -47,6 +47,15 @@ allowed, mutable loans conflict as E0499) and activated by the call, which
 then conflicts with every other live loan, its operands' included.
 Reassigning a reference releases the not yet invalidated loans of its old
 referent.
+
+Signature regions (stage 6, regions.py): a reference parameter holds an
+origin, its universal region, beside loans; values derived from it carry the
+origin. A returned value may hold no loan of the function's own storage
+(E0515) and only origins that are the output region or 'static ("lifetime may
+not live long enough"); assigning into a reference parameter needs the same of
+its region. Parameter holders are used at every exit, so a loan of a local
+stored in one fails when the local dies (E0597). A call returning a reference
+holds the values of the arguments whose region is the callee's output region.
 """
 from __future__ import annotations
 
@@ -165,6 +174,9 @@ class MoveChecker:
         self.loan_info = {}    # loan id -> (loan place, borrow token, borrowed name, mutable, two-phase)
         self.event_info = {}   # invalidation -> (token, message)
         self.produced = {}     # id(expr) -> frozenset of (loan, invalidation) its reference value holds
+        self.parameter_regions = {}  # serial -> region of each parameter of the checked function
+        self.returns_reference = False
+        self.out_region = None
 
     @staticmethod
     def declare(state, binding, held=()):
@@ -198,9 +210,11 @@ class MoveChecker:
                 self.report(event)
 
     def poison(self, state, invalid):
-        """Replace each valid holder loan for which invalid(loan) gives an event."""
+        """Replace each valid holder loan for which invalid(loan) gives an event
+        (origins, the non-integer entries, are never invalidated)."""
         for key in [key for key in state if isinstance(key, tuple)]:
-            state[key] = {(loan, invalid(loan) if event is None else event) for loan, event in state[key]}
+            state[key] = {(loan, invalid(loan) if event is None and type(loan) is int else event)
+                          for loan, event in state[key]}
 
     def invalidate(self, state, target, token, kind):
         """An access (read, share, mut, write, move) of a place invalidates the
@@ -268,7 +282,8 @@ class MoveChecker:
             return ("E0597", loan)
 
         self.poison(state, dead)
-        return [frozenset((loan, dead(loan) if event is None else event) for loan, event in value)
+        return [frozenset((loan, dead(loan) if event is None and type(loan) is int else event)
+                          for loan, event in value)
                 for value in values]
 
     def leave(self, edges, state):
@@ -286,6 +301,20 @@ class MoveChecker:
                 return self.produced.pop(id(child))
             return self.reference_value(child, state)
         raise expr.token.error(REFERENCE_GAP)
+
+    def call_result(self, expr, operands):
+        """A call's reference result holds the values of the arguments whose
+        region is the callee's output region (none for 'static)."""
+        from .regions import STATIC, signature_regions
+        regions, out = signature_regions(expr.binding)
+        held = frozenset()
+        if out is None:
+            raise expr.token.error(REFERENCE_GAP)
+        if out != STATIC:
+            for operand, region in zip(operands, regions):
+                if region == out:
+                    held |= self.produced.get(id(operand), frozenset())
+        return held
 
     def loan_target(self, expr):
         """(binding, loan path, untracked) of a place expression with explicit
@@ -339,10 +368,46 @@ class MoveChecker:
     def check_function(self, function) -> None:
         if function.body is None:
             return
+        from .regions import signature_regions
+        regions, self.out_region = signature_regions(function)
+        self.returns_reference = has_reference(function.result)
         state = {}
-        for binding in self.checker.parameters[function.identity]:
-            self.declare(state, binding)
-        self.expression(function.body, state)
+        parameters = self.checker.parameters[function.identity]
+        self.parameter_regions = {}
+        for binding, region in zip(parameters, regions):
+            self.declare(state, binding, {(("origin", region), None)} if region is not None else ())
+            self.parameter_regions[binding.serial] = region
+        result = self.expression(function.body, state)
+        if result is not None:
+            if self.returns_reference:
+                self.returned(self.produced.pop(id(function.body), frozenset()), function.body.token)
+            self.exit(result)
+
+    def returned(self, value, token):
+        """A returned reference may hold no loan of this function's own storage
+        (E0515) and only the output region or 'static as origins."""
+        from .regions import STATIC
+        for loan, _ in value:
+            if type(loan) is int:
+                place, _, name, _, _ = self.loan_info[loan]
+                if DEREF not in place.path:
+                    raise token.error(f"cannot return a reference to {name!r}: it is data owned by the current "
+                                      "function (E0515)")
+            elif loan[1] not in (self.out_region, STATIC):
+                raise token.error("lifetime may not live long enough: the returned reference comes from a "
+                                  "parameter whose lifetime is not the result's")
+        self.use(value)
+
+    def exit(self, state):
+        """At a function exit every local dies while the parameters' regions
+        are still live: a parameter holding a loan of a local fails (E0597)."""
+        state = clone(state)
+        self.end_scope(state, [key for key in state if not isinstance(key, tuple)
+                               and key not in self.parameter_regions])
+        for serial in self.parameter_regions:
+            held = state.get((LOANS, serial))
+            if held:
+                self.use(held)
 
     def guard_effect(self, binding, path, token, *, write, mutable_borrow=False):
         """A move (write=False) or write of a place while match guards are evaluated."""
@@ -591,6 +656,16 @@ class MoveChecker:
             if result is None:
                 return None
             lhs = children[0]
+            if self.checker.place(lhs) is None:
+                # Writing through a reference temporary (`*s.slot() = v`): the
+                # temporary is evaluated and used; its own loans already keep
+                # every other access to the referent out.
+                base = self.checker.reference_temporary(lhs)
+                result = self.expression(base, result)
+                held = self.produced.pop(id(base), None) if result is not None else None
+                if held:
+                    self.use(held)
+                return result
             binding, path = self.checker.place(lhs)
             target = self.loan_target(lhs)
             if self.guards:
@@ -609,9 +684,17 @@ class MoveChecker:
                 # and loans of its old referent (`*r`) no longer concern the
                 # local (rustc kills them); an already invalidated one stays.
                 result[(LOANS, binding.serial)] = set(self.produced.get(id(children[1]), ()))
+                region = self.parameter_regions.get(binding.serial)
+                if region is not None:
+                    from .regions import STATIC
+                    if any(type(loan) is not int and loan[1] not in (region, STATIC)
+                           for loan, _ in result[(LOANS, binding.serial)]):
+                        raise expr.token.error(f"lifetime may not live long enough: {binding.name!r} keeps the "
+                                               "caller's lifetime, which the assigned reference may not outlive")
                 for key in [key for key in result if isinstance(key, tuple)]:
                     result[key] = {(loan, event) for loan, event in result[key]
-                                   if event is not None or self.loan_info[loan][0].root != binding.serial
+                                   if event is not None or type(loan) is not int
+                                   or self.loan_info[loan][0].root != binding.serial
                                    or DEREF not in self.loan_info[loan][0].path}
             path = structural_place(binding, path).path
             moved = result[binding.serial]
@@ -780,7 +863,12 @@ class MoveChecker:
             return None
         if kind == "return":
             if children:
-                self.expression(children[0], state)
+                state = self.expression(children[0], state)
+                if state is None:
+                    return None
+                if self.returns_reference:
+                    self.returned(self.produced.pop(id(children[0]), frozenset()), children[0].token)
+            self.exit(state)
             return None
         # Rust evaluates constructor fields and call arguments in source order,
         # not declaration order. The function-name child is not a local use.
@@ -793,10 +881,16 @@ class MoveChecker:
                     current = self.expression(child, current)
                     # The operand's reference value awaits this consumer.
                     for loan, _ in self.produced.get(id(child), ()):
+                        if type(loan) is not int:
+                            continue  # an origin, not a loan
                         place, token, name, mutable, two_phase = self.loan_info[loan]
-                        self.loans.append((place, mutable, two_phase, token, name))
+                        # Only the operand that is the two-phase borrow itself
+                        # is reserved; one a call result holds is active.
+                        self.loans.append((place, mutable, two_phase and loan == id(child), token, name))
             if kind == "call" and current is not None:
                 self.activate(current, active_loans, expr.token)
+                if has_reference(expr.ty):
+                    self.produced[id(expr)] = self.call_result(expr, operands)
             return current
         finally:
             del self.loans[active_loans:]

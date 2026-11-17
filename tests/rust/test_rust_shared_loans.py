@@ -47,7 +47,6 @@ def test_internal_noncertifying_receiver_loan_model_stays_live_during_all_later_
 
 
 @pytest.mark.parametrize('source,message', [
-    ('fn f(x:&u64)->&u64{x}', 'reference returns'),
     ('fn read(x:&u64){} fn f(){read(&1);}', 'temporaries'),
     ('struct R{x:u64} impl R{fn read(&self){}} fn f(){R{x:1}.read();}', 'temporaries'),
     ('struct R{x:u64} fn f(p:&R)->R{*p}', 'non-Copy'),
@@ -142,21 +141,26 @@ def test_original_conflicting_loans_are_rejected_by_rustc(body,tmp_path):
 INVALID_PARAMETER_REBINDING = Path(__file__).with_name('programs') / 'shared_rebinding.rs'
 
 
-def test_internal_model_exact_original_parameter_rebinding_requires_lifetime_constraints(monkeypatch):
+def test_exact_original_parameter_rebinding_is_rejected_by_owned_regions(monkeypatch):
+    # Owned signature regions (stage 6): p keeps the caller's lifetime, which
+    # the assigned reference does not outlive, as rustc reports.
     from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unqualified parameter lifetime reached IR'))
-    with pytest.raises(RustError,match='reference parameter reassignment requires lifetime constraints'):
-        analyze_source(INVALID_PARAMETER_REBINDING.read_text())
+    monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('invalid parameter lifetime reached IR'))
+    with pytest.raises(RustError,match='lifetime may not live long enough'):
+        compile_rust(INVALID_PARAMETER_REBINDING.read_text())
 
 
-@pytest.mark.parametrize('source', [
-    'fn f(mut p:&u64,q:&u64){p=q;}',
-    'fn f<T>(mut p:&T,q:&T){p=q;}',
-    'fn f(mut p:&u64){p=p;}',  # Valid Rust; internal legacy model rejects, actual checked public route permits.
+@pytest.mark.parametrize('source,verdict', [
+    ('fn f(mut p:&u64,q:&u64){p=q;}', 'lifetime may not live long enough'),
+    ('fn f<T>(mut p:&T,q:&T){p=q;}', 'lifetime may not live long enough'),
+    ('fn f(mut p:&u64){p=p;}', None),  # valid Rust
 ])
-def test_internal_model_parameter_rebinding_conservative_boundary_is_not_public_admission(source):
-    with pytest.raises(RustError,match='reference parameter reassignment requires lifetime constraints'):
-        analyze_source(source)
+def test_parameter_rebinding_follows_rustc_with_owned_regions(source, verdict):
+    if verdict is None:
+        assert not compile_rust(source).externally_checked
+    else:
+        with pytest.raises(RustError,match=verdict):
+            compile_rust(source)
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

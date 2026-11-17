@@ -64,7 +64,7 @@ def test_former_runtime_string_rows_now_compile(source):
 @pytest.mark.parametrize('source,message', [
     # Other str reference forms keep explicit owned boundaries.
     ('pub fn g(s: &str) -> u64 { 1 }', "unsupported Rust type 'str'"),
-    ('pub fn g<\'a>(s: &\'a str) -> u64 { 1 }', 'explicit function lifetimes require'),
+    ('pub fn g<\'a>(s: &\'a str) -> u64 { 1 }', "unsupported Rust type 'str'"),
     ('pub fn g() -> u64 { let s = &"x"; 1 }', 'shared borrowing of temporaries requires'),
     # Operations that need core's str/PartialEq model.
     ('pub fn g() -> bool { "a" == "a" }', "operator '==' does not accept &'static str"),

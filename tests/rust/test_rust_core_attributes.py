@@ -122,8 +122,7 @@ def test_structured_doc_prose_does_not_bypass_real_reference_admission():
     # attribute neither authorizes nor blocks that admission.
     assert 'define' in compile_source('#[doc(hidden)]fn f(x:&u64)->u64{*x}').ir_text
     assert 'define' in compile_source('#[doc(hidden)]fn f(x:&mut u64)->u64{*x}').ir_text
-    with pytest.raises(RustError,match='explicit function lifetimes require'):
-        compile_source("#[doc(hidden)]fn f<'a>(x:&'a u64)->u64{*x}")
+    assert 'define' in compile_source("#[doc(hidden)]fn f<'a>(x:&'a u64)->u64{*x}").ir_text
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

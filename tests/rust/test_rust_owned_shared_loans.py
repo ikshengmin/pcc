@@ -179,12 +179,11 @@ def test_reference_programs_run_with_owned_admission_and_match_rustc(name, tmp_p
 
 
 @pytest.mark.parametrize('source,boundary', [
-    ("pub fn f<'a>(x: &'a u64) -> u64 { *x }", 'explicit function lifetimes require'),
-    ('pub fn f(x: &u64) -> &u64 { x }', 'reference returns and aggregate reference storage require'),
+    ("pub struct W<'a> { pub r: &'a u64 }", 'lifetime parameters on data declarations require'),
+    ('pub fn f(x: &u64) -> (&u64, u64) { (x, 1) }', 'reference returns and aggregate reference storage require'),
     ('pub fn f() -> u64 { let a = 1u64; let t = (&a, 1u64); 0 }', 'aggregate reference storage requires'),
     ('pub fn id<T>(t: T) -> T { t } pub fn f() -> u64 { let a = 1u64; *id(&a) }',
      'generic function reference arguments require'),
-    ('pub fn f(mut p: &u64) { let x = 1u64; p = &x; }', 'reference parameter reassignment requires'),
     ('pub fn f() -> u64 { let r = &5u64; *r }', 'shared borrowing of temporaries requires'),
     ('pub enum E { A(u64), B } pub fn f(e: &E) -> u64 { match e { E::A(x) => *x, E::B => 0 } }',
      'needs default binding modes, which are not implemented'),
