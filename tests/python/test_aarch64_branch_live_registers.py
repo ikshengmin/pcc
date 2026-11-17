@@ -202,8 +202,29 @@ def test_guard_and_retention_mutants_killed(monkeypatch,kind,mode,name,old,new):
     namespace=dict(p._run.__globals__)
     exec(compile(source.replace(old,new),'<branch-live-mutant>','exec'),namespace)
     monkeypatch.setattr(p,'_run',namespace['_run'])
-    with pytest.raises(AssertionError,match=r'^typed branch live oracle(?:\n|$)'):
-        check(mode,name)
+    if kind == 'wsp':
+        # The valid source above must compile. Removing this optimizer guard
+        # now reaches the shared encoder's defensive rejection, rather than
+        # emitting the previously incorrect SP-as-ZR branch.
+        with pytest.raises(o.enc.EncodeError) as caught:
+            check(mode,name)
+        assert type(caught.value) is o.enc.EncodeError
+        assert str(caught.value) == 'bad emitted zero-branch register'
+        frames = []
+        encoder_frames = []
+        tb = caught.value.__traceback__
+        while tb is not None:
+            frames.append(tb.tb_frame.f_code)
+            if tb.tb_frame.f_code is o.enc.encode_emitted_branch_base_parts.__code__:
+                encoder_frames.append(tb.tb_frame.f_locals)
+            tb = tb.tb_next
+        assert namespace['_run'].__code__ in frames
+        assert len(encoder_frames) == 1
+        assert encoder_frames[0]['register'] == 'wsp'
+        assert encoder_frames[0]['mnemonic'] in ('cbz', 'cbnz')
+    else:
+        with pytest.raises(AssertionError,match=r'^typed branch live oracle(?:\n|$)'):
+            check(mode,name)
 
 
 def execute_memory(words):

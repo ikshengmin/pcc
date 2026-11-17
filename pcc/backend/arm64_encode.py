@@ -936,7 +936,8 @@ def encode_emitted_branch_base_parts(
         return 0x54000000 | _cond(mnemonic[2:])
     if mnemonic == "cbz" or mnemonic == "cbnz":
         register_code = _emitted_register_code(register)
-        if register_code < 0 or register_code >> 6 not in (
+        # In CBZ/CBNZ, register 31 is ZR, never SP (unlike ADD immediate).
+        if register in ("sp", "wsp") or register_code < 0 or register_code >> 6 not in (
             _EMITTED_REG_X,
             _EMITTED_REG_W,
         ):
