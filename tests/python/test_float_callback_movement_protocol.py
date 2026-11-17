@@ -37,6 +37,9 @@ def _move_function(protocol, *, optimize=0):
         "resume_world": protocol.resume,
         "stopped_at_gates": protocol.gates,
         "evidence": [],
+        "producer_phase": protocol.phase,
+        "guards": protocol.guards,
+        "active": protocol.active,
     }
     exec(compile(ast.Module(body=[function], type_ignores=[]), str(source),
                  "exec", optimize=optimize), namespace)
@@ -53,6 +56,11 @@ class _Protocol:
         self.fail_at = fail_at
         self.events = []
         self.metric_reads = 0
+        self.phase = ["start"]
+        self.guards = []
+
+    def active(self):
+        return 0
 
     def _event(self, name, *args):
         self.events.append((name, *args))
@@ -106,10 +114,13 @@ def test_float_movement_one_shot_order_and_nested_stop_balance():
             move, evidence = _move_function(protocol, optimize=optimize)
             move("callback")
             assert protocol.depth == initial_depth
-            # optimize=1 checks successful acquire/release effects only.
+            # optimize=1 still evaluates the read-only gate_status assignment.
+            # Checks successful acquire/release effects only.
             # The native witness requires its normal gate/movement assertions;
             # this is not qualification for running that witness with -O.
-            gate_events = [("gates",)] if optimize == 0 else []
+            gate_events = [("gates",)]
+            assert protocol.phase == ["callback"]
+            assert protocol.guards == [("callback", 0)]
             assert protocol.events == [
                 ("pending",), ("stop",),
             ] + gate_events + [
@@ -169,3 +180,59 @@ def test_float_movement_failure_inside_scope_always_releases_once():
         move("cleanup")
     assert protocol.events == sequence + [("resume",)]
     assert evidence == []
+
+
+def _record_function():
+    source = Path(__file__).with_name("test_native_float_callback_movement.py")
+    module = ast.parse(source.read_text())
+    function = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "_record_float_execution")
+    namespace = {}
+    exec(compile(ast.Module(body=[function], type_ignores=[]), str(source), "exec"), namespace)
+    return namespace[function.name]
+
+
+@pytest.mark.parametrize("failed_index", [None, 0, 1, 2])
+def test_float_receipt_preserves_every_execution_and_failure(failed_index):
+    record = _record_function()
+    receipt = {"status": "RUNNING", "executions": [], "source_sha256": "source",
+               "runtime_sha256": "runtime", "binary_sha256": "binary"}
+    modes = ((0, "synchronous"), (4, "positive"), (4, "deferred"))
+    for index, (backend, mode) in enumerate(modes):
+        current = dict(gc_backend=backend, execution_mode=mode,
+                       status="NATIVE_EXECUTION_FAILED" if failed_index == index else "PASS",
+                       stdout=f"evidence-{index}", stderr="", returncode=1 if failed_index == index else 0)
+        record(receipt, current)
+        current["status"] = "OVERWRITTEN_LOCAL"
+        assert len(receipt["executions"]) == index + 1
+        assert receipt["executions"][-1]["stdout"] == f"evidence-{index}"
+        assert receipt["executions"][-1]["status"] != "OVERWRITTEN_LOCAL"
+        expected = ("NATIVE_EXECUTION_FAILED" if failed_index is not None and failed_index <= index
+                    else "PASS" if index == 2 else "RUNNING")
+        assert receipt["status"] == expected
+        assert {key:receipt[key] for key in ("source_sha256", "runtime_sha256", "binary_sha256")} == {
+            "source_sha256":"source", "runtime_sha256":"runtime", "binary_sha256":"binary"}
+    assert [(row["gc_backend"], row["execution_mode"]) for row in receipt["executions"]] == list(modes)
+
+
+def test_float_receipt_rejects_missing_or_reordered_modes():
+    record = _record_function()
+    receipt = {"status": "RUNNING", "executions": []}
+    with pytest.raises(AssertionError):
+        record(receipt, dict(gc_backend=4, execution_mode="deferred", status="PASS"))
+    assert receipt == {"status":"RUNNING", "executions":[]}
+
+
+def test_float_ci_allowlisted_receipt_writes_aggregate_not_last_mode():
+    source = Path(__file__).with_name("test_native_float_callback_movement.py")
+    module = ast.parse(source.read_text())
+    function = next(node for node in module.body if isinstance(node, ast.FunctionDef)
+                    and node.name == "test_canonical_float_callback_movement_gc4")
+    loop = next(node for node in function.body if isinstance(node, ast.For))
+    statements = [ast.unparse(node) for node in loop.body]
+    record_at = statements.index("_record_float_execution(receipt, current)")
+    writes = [(index,text) for index,text in enumerate(statements) if text.startswith("receipt_path.write_text(")]
+    assert len(writes) == 1
+    assert writes[0][0] > record_at
+    assert "json.dumps(receipt, indent=2)" in writes[0][1]
+    assert "json.dumps(current" not in writes[0][1]
