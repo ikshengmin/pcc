@@ -697,6 +697,9 @@ def test_thread_unregister_with_live_no_park_depth_fails_stop(
 
 
 def test_strict_thread_unregister_cleanup_reentry_fails_stop(tmp_path: Path) -> None:
+    # GC0 naturally recurses during terminal TLS decref. Count-free GC drops
+    # that root without synchronously invoking user code. Keep both contracts,
+    # plus direct existing-guard coverage for every backend, in real programs.
     executable = _compile_runtime_probe(
         tmp_path,
         kind="pcc_python",
@@ -706,47 +709,108 @@ def test_strict_thread_unregister_cleanup_reentry_fails_stop(tmp_path: Path) -> 
             #include "py_internal.h"
             #include <stdint.h>
 
+            /* Existing production TLS, not a new hook or a replacement guard. */
+            extern _Thread_local int32_t pcc_tls_unregister_in_progress_py;
+            extern _Thread_local void *pcc_tls_thread_state_py;
+            extern int64_t pcc_gc_debt_threshold_override;
+            static int direct_guard;
+            static int delayed;
+            static int callback_error;
+            static int finalizer_calls;
+
             static void recursive_finalizer(PyObject *self) {
                 (void)self;
+                finalizer_calls++;
+                /* This marker proves the counted cleanup really reached user code. */
+                pcc_platform_write(2, "cleanup-finalizer\n", sizeof("cleanup-finalizer\n") - 1);
                 pcc_thread_unregister_current();
+            }
+
+            static void delayed_finalizer(PyObject *self) {
+                (void)self;
+                finalizer_calls++;
+                if (pcc_tls_unregister_in_progress_py != 0) callback_error = 1;
+                if (pcc_thread_is_running() != 1) callback_error = 2;
             }
 
             static void *worker(void *arg) {
                 (void)arg;
-                PyClassObject *cls = py_class_new(
-                    "RecursiveUnregister", 0, 0, 0, 0
-                );
+                if (direct_guard) {
+                    /* Only the reentry condition is injected. All preceding guard
+                     * conditions must be false on this real registered worker. */
+                    if (((uintptr_t)pcc_tls_thread_state_py & 281474976710656ULL) != 0) return (void *)(uintptr_t)25;
+                    if (pcc_current_thread_id() <= 0 || pcc_thread_is_running() != 1) return (void *)(uintptr_t)21;
+                    if (pcc_thread_no_park_depth() != 0 || pcc_thread_owns_stopped_world() != 0) return (void *)(uintptr_t)22;
+                    if (pcc_tls_unregister_in_progress_py != 0) return (void *)(uintptr_t)23;
+                    pcc_tls_unregister_in_progress_py = 1;
+                    pcc_platform_write(2, "unregister-guard-armed\n", sizeof("unregister-guard-armed\n") - 1);
+                    pcc_thread_unregister_current();
+                    return (void *)(uintptr_t)24; /* Returning is never a passing abort. */
+                }
+                PyClassObject *cls = py_class_new("RecursiveUnregister", 0, 0, 0, 0);
                 if (cls == 0) return (void *)(uintptr_t)2;
-                py_class_add_method(
-                    cls,
-                    "__del__",
-                    (PyObject *)(uintptr_t)recursive_finalizer
-                );
+                py_class_add_method(cls, "__del__", (PyObject *)(uintptr_t)(delayed ? delayed_finalizer : recursive_finalizer));
                 PyObject *inst = py_instance_new(cls);
                 if (inst == 0) return (void *)(uintptr_t)3;
-                /* Transfer the instance's sole owned reference to the TLS
-                 * exception slot.  Trampoline teardown decrefs it, enters
-                 * __del__, and recursively invokes unregister. */
+                /* GC0's TLS terminal decref invokes __del__ during teardown. Count-free
+                 * collectors only drop the root here; later GC owns finalization. */
                 py_tls_exc_set(inst);
                 return 0;
             }
 
-            int main(void) {
+            int main(int argc, char **argv) {
+                if (argc != 3 || argv[1][0] < '0' || argv[1][0] > '4' || argv[1][1] != 0) return 6;
+                if (pcc_gc_backend() != argv[1][0] - '0') return 7;
+                if (pcc_gc_debt_threshold_override != 1099511627776LL) return 8;
+                if (argv[2][0] != 'g' && argv[2][0] != 'c' && argv[2][0] != 'd') return 9;
+                direct_guard = argv[2][0] == 'g';
+                delayed = argv[2][0] == 'd';
                 PccThreadHandle *thread = 0;
                 if (pcc_thread_start(&thread, worker, 0) != 0) return 4;
                 void *result = 0;
-                return pcc_thread_join(thread, &result) == 0 ? 0 : 5;
+                if (pcc_thread_join(thread, &result) != 0) return 5;
+                if (result != 0) return (int)(uintptr_t)result;
+                if (delayed) {
+                    if (pcc_gc_backend() == 0 || finalizer_calls != 0) return 31;
+                    (void)pcc_gc_collect(0);
+                    if (finalizer_calls != 1 || callback_error != 0) return 32;
+                    (void)pcc_gc_collect(0);
+                    if (finalizer_calls != 1 || callback_error != 0) return 33;
+                    return 0;
+                }
+                if (direct_guard || pcc_gc_backend() == 0 || finalizer_calls != 0) return 10;
+                return 0;
             }
         ''',
     )
-    run = subprocess.run(
-        [str(executable)], capture_output=True, text=True, timeout=20
-    )
-    assert run.returncode in {-int(signal.SIGABRT), 134}, (
-        f"expected recursive-unregister fail-stop, got {run.returncode}: "
-        + run.stdout
-        + run.stderr
-    )
+    for backend in range(5):
+        modes = ("cleanup", "guard") if backend == 0 else ("cleanup", "guard", "delayed")
+        for mode in modes:
+            run = subprocess.run(
+                [str(executable), str(backend), mode],
+                capture_output=True,
+                text=True,
+                timeout=20,
+                env={
+                    **os.environ,
+                    "PCC_GC_BACKEND": str(backend),
+                    # Isolate explicit collection from allocation-triggered GC.
+                    "PCC_GC_DEBT_THRESHOLD": "1099511627776",
+                },
+            )
+            context = f"GC{backend} {mode}: {run.returncode}: {run.stdout}{run.stderr}"
+            if mode == "guard" or (mode == "cleanup" and backend == 0):
+                marker = (
+                    "unregister-guard-armed\n" if mode == "guard"
+                    else "cleanup-finalizer\n"
+                )
+                assert run.returncode in {-int(signal.SIGABRT), 134}, context
+                assert run.stdout == "", context
+                assert run.stderr.startswith(marker), context
+            else:
+                # delayed additionally requires exactly one real callback after
+                # explicit collection and no second callback on another collect.
+                assert (run.returncode, run.stdout, run.stderr) == (0, "", ""), context
 
 
 def test_threading_c_oracle_is_not_linked_into_pcc_python_archive():
