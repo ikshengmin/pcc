@@ -58,7 +58,16 @@ CORPUS = (
     ('i32-sub-neg', 'pub fn f() -> i32 { let a: i32 = -2147483647; a - 2 }', 'overflow'),
     ('no-ovf-exact', 'pub fn f() -> u64 { let x: u64 = 18446744073709551614; x + 1 }', 'ok'),
     ('shadow', 'pub fn f() -> u64 { let x: u64 = 18446744073709551615; let x: u64 = 0; x + 1 }', 'ok'),
-    ('assign-then-call-arg', 'fn g(v: u64) -> u64 { v } pub fn f() -> u64 { let mut x: u64 = 0; x = 18446744073709551615; g(x + 1) }', 'overflow')
+    ('assign-then-call-arg', 'fn g(v: u64) -> u64 { v } pub fn f() -> u64 { let mut x: u64 = 0; x = 18446744073709551615; g(x + 1) }', 'overflow'),
+    # A local whose address is taken is never propagated (CanConstProp).
+    ('shared-borrowed-local', 'pub fn f() -> u64 { let x: u64 = 18446744073709551615; let r = &x; x + 1 }', 'ok'),
+    ('borrowed-after-use', 'pub fn f() -> u64 { let x: u64 = 18446744073709551615; let v = x + 1; let r = &x; v + *r }', 'ok'),
+    ('borrow-in-dead-branch', 'pub fn f(c: bool) -> u64 { let x: u64 = 18446744073709551615; if c { let r = &x; } x + 1 }', 'ok'),
+    ('guard-fake-borrow', 'pub fn f() -> u64 { let x: u64 = 18446744073709551615; match x { v if v > 0 => x + 1, _ => 0 } }', 'ok'),
+    ('unguarded-match-propagates', 'pub fn f() -> u64 { let x: u64 = 18446744073709551615; match x { 0 => 0, _ => x + 1 } }', 'overflow'),
+    ('borrow-through-reference', 'pub fn f(p: &u64) -> u64 { let x: u64 = 18446744073709551615; let r = &*p; x + *r }', 'ok'),
+    ('autoref-receiver', 'pub struct S { pub a: u64 } impl S { pub fn g(&self) -> u64 { self.a } } pub fn f() -> u64 { let s = S { a: 18446744073709551615 }; let v = s.g(); s.a + 1 + v }', 'ok'),
+    ('field-root-not-borrowed', 'pub struct S { pub a: u64, pub b: u64 } pub fn f() -> u64 { let s = S { a: 18446744073709551615, b: 1 }; s.a + 1 }', 'overflow'),
 )
 
 

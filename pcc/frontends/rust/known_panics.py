@@ -19,7 +19,10 @@ builds of original programs (tests/rust/test_rust_known_panics.py):
   after one that must (unless guarded).
 Values computed before a boundary in one expression are temporaries assigned
 once, so they stay known. Generic bodies are evaluated too; values of
-type-parameter type are never known.
+type-parameter type are never known. A local whose address is taken anywhere
+in the body (a borrow not through a reference, an autoref receiver, or the
+fake borrow a guarded match takes of its scrutinee) is never propagated, as in
+the pass's CanConstProp (indirect mutation cannot be reasoned about).
 """
 from __future__ import annotations
 
@@ -28,6 +31,24 @@ from .types import TupleType
 
 UNKNOWN = object()
 BOUNDARY_KINDS = frozenset({"call", "method_call", "index"})
+
+
+def borrowed_locals(checker, body):
+    """Serials of locals whose address is taken: rustc never propagates them."""
+    borrowed = set()
+    pending = [body]
+    while pending:
+        expr = pending.pop()
+        place = None
+        if expr.kind == "borrow" and not checker.through_reference(expr.children[0]):
+            place = checker.place(expr.children[0])
+        elif expr.kind == "match" and any(arm.kind == "match_guard" for arm in expr.children[1:]):
+            if not checker.through_reference(expr.children[0]):
+                place = checker.place(expr.children[0])  # guards fake-borrow the scrutinee
+        if place is not None:
+            borrowed.add(place[0].serial)
+        pending.extend(expr.children)
+    return borrowed
 
 
 def assignment_counts(body):
@@ -64,6 +85,7 @@ class KnownPanics:
             if function.body is None:
                 continue
             self.once = {serial for serial, count in assignment_counts(function.body).items() if count == 1}
+            self.borrowed = borrowed_locals(self.checker, function.body)
             self.env = {}
             self.value(function.body)
 
@@ -81,7 +103,7 @@ class KnownPanics:
         return result
 
     def bind(self, binding, value):
-        if binding is not None:
+        if binding is not None and binding.serial not in self.borrowed:
             self.env[binding.serial] = value
 
     def value(self, expr):
@@ -111,7 +133,8 @@ class KnownPanics:
                 operand = self.value(children[1])
                 value = self.arithmetic(expr, expr.value[:-1], current, operand, target.ty)
             if target.kind == "name" and target.binding is not None:
-                self.env[target.binding.serial] = value
+                if target.binding.serial not in self.borrowed:
+                    self.env[target.binding.serial] = value
             else:
                 root = target
                 while root.kind in {"field", "group", "index"}:
