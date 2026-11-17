@@ -184,7 +184,7 @@ def test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections
 def test_placeholder_inference_never_mints_reference_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified placeholder reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

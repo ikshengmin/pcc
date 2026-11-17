@@ -114,7 +114,8 @@ def test_for_originals_compile_without_rustc_unless_they_hold_references(name, m
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
     source = Path(__file__).with_name('programs').joinpath(name + '.rs').read_text()
     if source_has_references(source):
-        with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
+        # Shared loans are owned (stage 4); these originals also use &mut (stage 5).
+        with pytest.raises(RustError, match='mutable references require'):
             compile_rust(source)
     else:
         assert not compile_rust(source).externally_checked

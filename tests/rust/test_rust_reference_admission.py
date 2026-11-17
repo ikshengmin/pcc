@@ -1,9 +1,13 @@
-"""Public reference admission requires actual same-input external checking.
+"""Public reference admission: owned shared loans, explicit gaps for the rest.
 
 Rust Reference: https://doc.rust-lang.org/reference/types/pointer.html
 https://doc.rust-lang.org/reference/expressions/operator-expr.html#borrow-operators
 https://doc.rust-lang.org/reference/expressions/method-call-expr.html
-An attestation flag is not a borrow check; internal model tests are not execution.
+Shared references in bodies, parameters and `&self` receivers are admitted by
+PCC's own loan checking (stage 4 of pcc/frontends/rust/README.md, "Replacing
+the rustc admission gate"); `&mut`, explicit lifetimes, explicit receivers,
+reference returns and references stored in aggregates keep explicit owned
+boundaries until their stages. An attestation flag changes nothing.
 """
 from pathlib import Path
 import os
@@ -16,22 +20,23 @@ LEGACY_REFERENCE_PROGRAMS = (
     'shared_explicit', 'shared_generic', 'shared_local_rebinding', 'shared_methods',
     'shared_order', 'shared_partial', 'shared_reborrow', 'shared_scalar', 'inferred_shared',
 )
+# (source, None when owned shared loans admit it, else its explicit boundary)
 REFERENCE_FORMS = (
-    'fn unused(x:&u64){}',
-    'fn unused(x:&mut u64){}',
-    "fn unused<'a>(x:&'a u64){}",
-    'struct R{x:u64} impl R{fn read(&self)->u64{self.x}} fn f(){let r=R{x:1};r.read();}',
-    'struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}',
-    'fn unused<T>(x:&T){}',
-    'fn f(){let x=1;let p=&x;let q=p;}',
-    'fn f(){let x=1;if false {let p=&x;}}',
-    'fn f(p:(&u64,)){}',
-    'fn f(p:[&u64;2]){}',
-    'struct R<T>{x:T} fn f(p:R<&u64>){}',
-    'struct R{p:&u64}',
-    'enum E{A(&u64)}',
-    'fn f(){let x=1;*x;}',
-    'extern "C"{fn f(p:&u64);}',
+    ('fn unused(x:&u64){}', None),
+    ('fn unused(x:&mut u64){}', 'mutable references require'),
+    ("fn unused<'a>(x:&'a u64){}", 'explicit function lifetimes require'),
+    ('struct R{x:u64} impl R{fn read(&self)->u64{self.x}} fn f(){let r=R{x:1};r.read();}', None),
+    ('struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}', 'explicit receiver types require'),
+    ('fn unused<T>(x:&T){}', None),
+    ('fn f(){let x=1;let p=&x;let q=p;}', None),
+    ('fn f(){let x=1;if false {let p=&x;}}', None),
+    ('fn f(p:(&u64,)){}', 'reference returns and aggregate reference storage require lifetime analysis'),
+    ('fn f(p:[&u64;2]){}', 'reference returns and aggregate reference storage require lifetime analysis'),
+    ('struct R<T>{x:T} fn f(p:R<&u64>){}', 'reference returns and aggregate reference storage require lifetime analysis'),
+    ('struct R{p:&u64}', 'aggregate reference storage requires lifetime analysis'),
+    ('enum E{A(&u64)}', 'aggregate reference storage requires lifetime analysis'),
+    ('fn f(){let x=1;*x;}', 'dereference requires an admitted shared reference'),
+    ('extern "C"{fn f(p:&u64);}', 'foreign shared references require'),
 )
 
 
@@ -40,19 +45,22 @@ def forbid_lowering(monkeypatch):
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified reference reached IR'))
 
 
-@pytest.mark.parametrize('source', REFERENCE_FORMS)
-def test_bare_flag_cannot_authorize_any_reference_shape(source, monkeypatch):
-    forbid_lowering(monkeypatch)
-    with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
-        compile_rust(source, experimental_rustc_checked=True)
+@pytest.mark.parametrize('source,boundary', REFERENCE_FORMS)
+def test_owned_shared_loans_admit_some_shapes_and_others_keep_explicit_boundaries(source, boundary, monkeypatch):
+    import subprocess
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
+    for flag in (False, True):  # the legacy flag changes nothing
+        if boundary is None:
+            assert not compile_rust(source, experimental_rustc_checked=flag).externally_checked
+        else:
+            with pytest.raises(RustError, match=boundary):
+                compile_rust(source, experimental_rustc_checked=flag)
 
 
 @pytest.mark.parametrize('name', LEGACY_REFERENCE_PROGRAMS)
-def test_unchanged_legacy_reference_originals_now_require_actual_check(name, monkeypatch):
+def test_unchanged_legacy_reference_originals_compile_with_owned_loans(name):
     path=Path(__file__).with_name('programs')/(name+'.rs');original=path.read_bytes()
-    forbid_lowering(monkeypatch)
-    with pytest.raises(RustError, match='reference-bearing Rust source requires an actual'):
-        compile_rust(original.decode(), experimental_rustc_checked=True)
+    assert not compile_rust(original.decode()).externally_checked
     assert path.read_bytes()==original
 
 
@@ -102,7 +110,9 @@ def test_semantic_reference_synthesis_cannot_bypass_the_second_guard(monkeypatch
         self.functions[0].result=SharedReference('u64')
     monkeypatch.setattr(Checker,'check',synthesize)
     forbid_lowering(monkeypatch)
-    with pytest.raises(RustError,match='reference-bearing Rust source requires an actual'):
+    # Owned admission re-validates the reference shapes after sema: a
+    # synthesized reference return is outside the owned shared-loan subset.
+    with pytest.raises(RustError,match='reference returns and aggregate reference storage require'):
         compile_rust('fn f()->u64{1}',experimental_rustc_checked=True)
 
 

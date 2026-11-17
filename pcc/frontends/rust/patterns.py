@@ -6,7 +6,7 @@ a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, InferredType, bounds, resolve, unify
 from .syntax import Enumeration
-from .types import FixedArrayType, TupleType, TypeApplication, TypeParameter
+from .types import FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
@@ -60,6 +60,11 @@ def contains_binding(pattern):
 PRELUDE_VARIANTS = {"Some": "Option", "Ok": "Result", "Err": "Result"}
 
 
+def _partial(ty):
+    from .call_inference import partial
+    return partial(ty)
+
+
 def check_pattern(checker, pattern, ty, *, allow_inferred=False):
     pattern.ty = ty
     if pattern.kind == "wildcard":
@@ -72,6 +77,11 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
             # `x @ p`: p is checked against the same scrutinee type and its
             # own bindings share this pattern's scope (E0416 on reuse).
             check_pattern(checker, pattern.children[0], ty, allow_inferred=allow_inferred)
+    elif isinstance(_partial(ty), SharedReference):
+        # A constructor/literal pattern against a reference dereferences it
+        # with default binding modes (by-reference bindings).
+        raise pattern.token.error("matching a reference against a non-reference pattern needs default binding "
+                                  "modes, which are not implemented")
     elif pattern.kind == "or":
         if contains_binding(pattern):
             raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")

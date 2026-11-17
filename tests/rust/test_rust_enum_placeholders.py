@@ -102,7 +102,7 @@ def test_invalid_enum_holes_fail_before_lowering(name, text, message, code, monk
 @pytest.mark.parametrize('text,message', [
     ('enum E<T>{Some(T)}fn f(){E::<u64>::Some::<_>(1);}', 'constructor segments'),
     ('enum E<T>{Some(T)}impl<T>E<T>{fn wrap(x:T)->Self{Self::Some(x)}}fn f()->E<u64>{E::<_>::wrap(1)}', "unsupported Rust type '_'"),
-    ('enum E<T>{Some(T)}fn f(p:&u64){E::<_>::Some(p);}', 'actual source/options-bound CheckedRustSource'),
+    ('enum E<T>{Some(T)}fn f(p:&u64){E::<_>::Some(p);}', 'reference returns and aggregate reference storage require'),
     ('mod m {} fn f<T>() { T::<u64>::missing(); }', 'generic arguments require'),
 ])
 def test_enum_holes_preserve_other_capability_boundaries(text, message, monkeypatch):

@@ -131,7 +131,7 @@ def test_edition_is_not_an_admission_waiver(edition, monkeypatch):
     # PCC's owned checks in every edition, still with no external compiler.
     assert compile_rust(ORIGINAL, edition=edition).edition == edition
     monkeypatch.setattr(Lowerer, 'lower', forbidden)
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):
         compile_rust('fn f(x:&mut u64){*x=42;}', edition=edition,
                      experimental_rustc_checked=True)
     with pytest.raises(RustError, match='no_core requires'):

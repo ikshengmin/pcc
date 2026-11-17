@@ -115,7 +115,7 @@ def test_unknown_bound_dependent_or_competing_lookup_stays_explicit(text):
 def test_receiver_inference_does_not_mint_reference_certification(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked receiver reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_rust(source(PROGRAMS[-1]), experimental_rustc_checked=True)
 
 

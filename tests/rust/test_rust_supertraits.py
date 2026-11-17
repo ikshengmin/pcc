@@ -99,7 +99,7 @@ def test_invalid_unused_obligations_fail_before_ir(name,text,message,code,monkey
 def test_shared_mutable_supertrait_original_requires_actual_check(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unchecked references reached IR'))
-    with pytest.raises(RustError,match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError,match='mutable references require'):  # &mut is stage 5
         compile_rust(source(PROGRAMS[1]),experimental_rustc_checked=True)
 
 

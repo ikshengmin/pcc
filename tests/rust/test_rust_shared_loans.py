@@ -42,12 +42,11 @@ INVALID_BODIES = [
 def test_internal_noncertifying_receiver_loan_model_stays_live_during_all_later_arguments(body, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('conflicting loan reached IR'))
-    with pytest.raises(RustError,match='while borrowed'):
+    with pytest.raises(RustError,match=r'because it is borrowed \(E050[56]\)'):
         analyze_source(PRELUDE+'fn f(){'+body+'}')
 
 
 @pytest.mark.parametrize('source,message', [
-    ('fn f(){let x=1;let p=&x;}', 'direct shared-reference call argument'),
     ('fn f(x:&u64)->&u64{x}', 'reference returns'),
     ('fn read(x:&u64){} fn f(){read(&1);}', 'temporaries'),
     ('struct R{x:u64} impl R{fn read(&self){}} fn f(){R{x:1}.read();}', 'temporaries'),
@@ -57,7 +56,6 @@ def test_internal_noncertifying_receiver_loan_model_stays_live_during_all_later_
     ('struct R{x:u64} struct O{r:R} fn f(p:&O)->R{p.r}', 'non-Copy'),
     ('struct R<T>{x:T} impl<T> R<T>{fn take(&self)->T{self.x}}', 'non-Copy'),
     ('fn f<T>(p:&T)->T{*p}', 'non-Copy'),
-    ('fn read(p:&u64){} fn f(){let r=1;read({&r});}', 'direct shared-reference'),
     ('fn f(p:&u64){let t=(p,);}', 'reference storage'),
     ('extern "C" fn f(p:&u64){}', 'foreign shared references'),
     ('struct R{x:u64} extern "C" fn f(p:&R){}', 'foreign shared references'),

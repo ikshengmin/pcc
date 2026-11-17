@@ -125,8 +125,8 @@ def test_doc_payload_reference_text_does_not_authorize_or_invent_references():
     assert not contains_references(functions)
     parser=Parser('/// prose\nfn f(x:&u64)->u64{*x}');functions=parser.parse()
     assert contains_references(functions)
-    with pytest.raises(RustError,match='actual source/options-bound'):
-        compile_rust(parser.source,experimental_rustc_checked=True)
+    # Admitted by owned shared loans (stage 4), whatever the doc prose says.
+    assert not compile_rust(parser.source).externally_checked
 
 
 def test_literal_payloads_cannot_impersonate_syntax_tokens():

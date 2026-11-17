@@ -100,15 +100,19 @@ def test_ambiguous_invalid_and_moved_local_holes_fail_before_ir(name, text, mess
         compile_rust(text, experimental_rustc_checked=True)
 
 
-@pytest.mark.parametrize('text', [
-    'fn f()->u64{let x=1u64;let p:_=&x;*p}',
-    'fn f(p:&u64)->u64{let q:&_=p;*q}',
-    'fn f()->u64{let mut x=1u64;let p:&mut _=&mut x;*p=2u64;*p}',
+@pytest.mark.parametrize('text,boundary', [
+    ('fn f()->u64{let x=1u64;let p:_=&x;*p}', None),
+    ('fn f(p:&u64)->u64{let q:&_=p;*q}', None),
+    ('fn f()->u64{let mut x=1u64;let p:&mut _=&mut x;*p=2u64;*p}', 'mutable borrowing requires'),
 ])
-def test_local_holes_cannot_mint_reference_certification(text, monkeypatch):
+def test_local_holes_cannot_mint_reference_certification(text, boundary, monkeypatch):
+    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
+    if boundary is None:
+        assert not compile_rust(text).externally_checked
+        return
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match=boundary):
         compile_rust(text, experimental_rustc_checked=True)
 
 

@@ -119,15 +119,14 @@ def test_trait_capability_frontiers_are_not_silent_fallbacks(text, message, monk
 def test_trait_references_require_actual_check_not_boolean(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked trait reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_source(source(name))
 
 
-def test_unused_trait_reference_signature_alone_requires_actual_check(monkeypatch):
+def test_unused_trait_reference_signature_is_an_owned_shared_reference(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked signature reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_source('trait T{fn f(&self);} fn answer()->u64{42}')
+    # A `&self` trait signature is an owned shared reference (stage 4).
+    assert 'define' in compile_source('trait T{fn f(&self);} fn answer()->u64{42}').ir_text
 
 
 @pytest.mark.integration
@@ -213,7 +212,7 @@ def test_trait_lifetime_capability_model_does_not_bypass_public_admission(monkey
     from tests.rust.analysis_only import analyze_source
     text = "trait T{fn f<'a>(&'a self);}"
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unqualified lifetime reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='trait method lifetime parameters are not implemented'):
         compile_source(text)
     with pytest.raises(RustError, match='lifetime parameters'):
         analyze_source(text, moves=False)  # Facts-only model, no execution authorization.

@@ -84,7 +84,6 @@ def record_run(image, expected, tmp_path):
     (RECORD + 'fn f(p:&P){let t:(&P,)= (p,);}', "reference storage"),
     (RECORD + 'fn f(mut p:&P){p.value=2;}', "shared reference"),
     (RECORD + 'fn f(mut p:&P){unsafe {p.value+=2;}}', "shared reference"),
-    (RECORD + 'fn f(p:P){let q=&p;}', "borrowing"),
     (RECORD + 'extern "C" fn f(p:P){}', "aggregate ABI"),
     ('extern "C" {fn __pcc_rust_f();}', "reserved"),
 ])

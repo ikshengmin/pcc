@@ -119,8 +119,11 @@ def test_invalid_ambiguous_or_out_of_scope_methods_fail_before_ir(text, message,
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_method_generics_never_turn_reference_flag_into_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
+    if name == 'method_generic_shared':
+        assert 'define' in compile_source(source(name)).ir_text  # owned shared loans (stage 4)
+        return
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified method reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_source(source(name))
 
 
@@ -129,7 +132,7 @@ def test_reference_in_method_type_arguments_is_structurally_detected(monkeypatch
     text = ('struct R{x:u64} impl R{fn accept<U>(x:U){}}'
             'fn forever<T>()->T{forever()} fn f(){R::accept::<&u64>(forever());}')
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('reference type argument reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='generic function reference arguments require'):
         compile_source(text)
 
 

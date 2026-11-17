@@ -18,7 +18,6 @@ from .external_check import (
 from .builtin_macros import CompileEnvironment
 from .configuration import CfgOptions, OwnedRustConfiguration
 from .moves import MoveChecker
-from .reference_admission import reject_uncertified_references as _reject_uncertified_references
 from .semantics import Checker
 from .syntax import Parser, RustError
 from .targets import DEFAULT_TARGET, LINUX_LAYOUT, resolve_target
@@ -80,13 +79,15 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     (a CompileEnvironment or a str->str mapping); the host environment is
     never consulted.
 
-    Reference-free input is admitted by PCC's owned checks alone (types,
-    mutability, moves through branches, loops, while let, if let and array
-    for, match-guard borrows, exhaustiveness and the arithmetic_overflow
-    lint); `experimental_rustc_checked` is accepted for
-    compatibility and has no effect. Reference-bearing input and the other
-    features listed in README "Replacing the rustc admission gate" still need
-    an actual CheckedRustSource during that transition. The rustc_check path
+    Input is admitted by PCC's owned checks alone (types, mutability, moves
+    through branches, loops, while let, if let and array for, shared loans with
+    non-lexical liveness for references in bodies, parameters and `&self`
+    receivers, match-guard borrows, exhaustiveness and the arithmetic_overflow
+    lint); `experimental_rustc_checked` is accepted for compatibility and has
+    no effect. `&mut`, explicit lifetimes, reference returns, references in
+    aggregates and the other features listed in README "Replacing the rustc
+    admission gate" still need an actual CheckedRustSource during that
+    transition. The rustc_check path
     accepts only an adapter-minted CheckedRustSource after the explicit external
     check_rust_source phase. Ordinary provenance records do not authorize this
     path. This owned phase invokes no rustc process and never consumes MIR.
@@ -130,7 +131,11 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     from .inline_attributes import collect_inline_hints
     inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:
-        _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
+        # Shared references are owned (stage 4): sema rejects &mut, explicit
+        # lifetimes, reference returns and references in aggregates, and the
+        # move checker owns shared loans. Slices have no owned layout yet.
+        from .reference_admission import reject_slices
+        reject_slices(functions, records, enums, parser.implementations, parser.traits)
         from .default_methods import reject_uncertified_defaults
         reject_uncertified_defaults(parser.traits)
         if inline_hints:
@@ -142,16 +147,14 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
     checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)
     checker.check()
+    if rustc_check is None:
+        from .reference_admission import reject_unowned_reference_shapes
+        reject_unowned_reference_shapes(checker)
     # rustc's build-time arithmetic_overflow lint, owned in every admission
     # mode (a metadata check never runs it).
     from .known_panics import KnownPanics
     KnownPanics(checker).check(functions)
     marker_context = checker.standard_markers.checked_context(rustc_check, source, target.triple, overflow_checks)
-    if rustc_check is None:
-        # Fail closed if a future semantic transformation synthesizes a
-        # reference not represented in the original syntax. This is presence
-        # checking only; actual checked input never uses partial borrow legality.
-        _reject_uncertified_references(functions, records, enums, parser.implementations, parser.traits)
     from .reference_admission import contains_references
     if rustc_check is None or not contains_references(functions, records, enums, parser.implementations,
                                                       parser.traits):

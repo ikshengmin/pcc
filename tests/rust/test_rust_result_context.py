@@ -99,7 +99,7 @@ def test_result_context_does_not_turn_reference_flag_into_certification(monkeypa
     from pcc.frontends.rust.lowering import Lowerer
     source = Path(__file__).with_name('programs').joinpath(PROGRAMS[-1] + '.rs').read_text()
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_source(source)
 
 

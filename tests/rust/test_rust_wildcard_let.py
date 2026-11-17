@@ -83,8 +83,7 @@ def test_invalid_wildcard_originals_fail_before_lowering(name, text, message, co
     ('fn f(){let _=loop{};}', 'diverging let initializers are not implemented'),
     ('fn f(){let [x]=[1];}', 'array destructuring'),
     # `fn f(){let (x,y)=(1,2);}` moved to test_rust_let_patterns (now supported).
-    ('fn f(p:&u64){let _=p;}', 'actual source/options-bound CheckedRustSource'),
-    ('fn f(){let _: &u64 = &1u64;}', 'actual source/options-bound CheckedRustSource'),
+    ('fn f(){let _: &u64 = &1u64;}', 'shared borrowing of temporaries requires'),
 ])
 def test_wildcard_let_keeps_other_capability_boundaries(text, message):
     with pytest.raises(RustError, match=message):

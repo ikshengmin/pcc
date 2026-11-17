@@ -99,7 +99,7 @@ def test_invalid_omitted_enum_originals_stop_before_lowering(name, text, message
     ('enum E<T>{Some(T)}fn f(x:E){}', 'requires explicit type arguments'),
     ('enum E<T>{Some(T)}fn f(){E::Some::<u64>(1);}', 'constructor segments'),
     ('enum E<T>{Some(T)}impl<T>E<T>{fn wrap(x:T)->Self{Self::Some(x)}}fn f()->E<u64>{E::wrap(1)}', 'requires explicit type arguments'),
-    ('enum E<T>{Some(T)}fn f(p:&u64){E::Some(p);}', 'actual source/options-bound CheckedRustSource'),
+    ('enum E<T>{Some(T)}fn f(p:&u64){E::Some(p);}', 'reference returns and aggregate reference storage require'),
 ])
 def test_omitted_enum_arguments_preserve_other_boundaries(text, message):
     with pytest.raises(RustError, match=message):

@@ -84,7 +84,7 @@ def test_bad_struct_matches_fail_before_lowering(name, text, message, code, monk
 
 @pytest.mark.parametrize('text,message', [
     ('struct R<T>{x:T}fn f()->u64{match (R::<_>{x:[4294967296]}){r=>r.x[0]}}', 'array match coverage'),
-    ('struct R<T>{x:T}fn f(p:&u64)->u64{match (R::<_>{x:p}){r=>*r.x}}', 'actual source/options-bound CheckedRustSource'),
+    ('struct R<T>{x:T}fn f(p:&u64)->u64{match (R::<_>{x:p}){r=>*r.x}}', 'reference returns and aggregate reference storage require'),
 ])
 def test_other_struct_match_boundaries_remain_explicit(text, message, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer

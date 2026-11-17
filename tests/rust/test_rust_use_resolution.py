@@ -341,11 +341,10 @@ def test_value_use_originals_have_owned_source_ir_obligations(name, monkeypatch)
     assert compile_source(source(name)).emit_object().startswith(b'\x7fELF')
 
 
-def test_imports_never_turn_the_boolean_into_reference_certification(monkeypatch):
+def test_import_reference_alias_compiles_with_owned_shared_loans(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked import reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_source(source('use_reference_alias'))
+    # Its shared references are owned loans now (stage 4).
+    assert 'define' in compile_source(source('use_reference_alias')).ir_text
 
 
 def test_long_forward_import_chain_has_an_explicit_bound_before_ir(monkeypatch):

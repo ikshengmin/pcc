@@ -55,7 +55,10 @@ def test_bounded_method_still_checks_unused_abstract_body_before_instances():
 def test_method_bounds_do_not_turn_public_flag_into_admission(name,monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified method bounds reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
+    message = ('mutable references require' if name in {'method_marker_receivers', 'method_marker_forward_result'}
+               else 'actual source/options-bound CheckedRustSource')
+    with pytest.raises(RustError, match=message):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

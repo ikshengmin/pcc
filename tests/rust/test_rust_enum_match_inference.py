@@ -94,7 +94,7 @@ def test_invalid_inferred_matches_fail_before_ir(name, text, message, code, monk
 
 @pytest.mark.parametrize('text,message', [
     ('enum E<T>{None,Some(T)}fn f()->u64{match E::<_>::None{E::None=>0,E::Some((x,y))=>x}}', 'cannot infer'),
-    ('enum E<T>{Some(T)}fn f(p:&u64)->u64{match E::<_>::Some(p){E::Some(x)=>*x}}', 'actual source/options-bound CheckedRustSource'),
+    ('enum E<T>{Some(T)}fn f(p:&u64)->u64{match E::<_>::Some(p){E::Some(x)=>*x}}', 'reference returns and aggregate reference storage require'),
 ])
 def test_inferred_enum_matches_do_not_widen_other_boundaries(text, message, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer

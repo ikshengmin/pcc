@@ -33,5 +33,5 @@ def test_syntactically_complete_drop_implementation_is_not_silently_ignored():
     from tests.rust.analysis_only import analyze_source
     with pytest.raises(RustError, match="trait impls"):
         analyze_source(source)  # Non-lowering capability model, not certification.
-    with pytest.raises(RustError, match="reference-bearing Rust source requires an actual"):
+    with pytest.raises(RustError, match="trait impls require a declared local trait"):
         compile_rust(source, experimental_rustc_checked=True)

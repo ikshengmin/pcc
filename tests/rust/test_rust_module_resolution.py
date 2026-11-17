@@ -104,8 +104,11 @@ def test_scoped_semantic_errors_reject_before_ir(name, text, message, code, monk
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_reference_modules_cannot_use_the_boolean_as_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
+    if name == 'modules_shared_reference':
+        assert 'define' in compile_source(source(name)).ir_text  # owned shared loans (stage 4)
+        return
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked module reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
         compile_source(source(name))
 
 

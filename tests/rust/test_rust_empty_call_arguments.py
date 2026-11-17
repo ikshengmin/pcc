@@ -135,7 +135,7 @@ def test_empty_lists_do_not_expand_owner_constructor_or_reference_substitution(t
 
 
 def test_empty_turbofish_does_not_admit_reference_source_with_a_boolean_flag():
-    with pytest.raises(RustError,match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError,match='mutable references require'):  # &mut is stage 5
         compile_rust(source(PROGRAMS[-1]),experimental_rustc_checked=True)
 
 

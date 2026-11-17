@@ -77,8 +77,6 @@ def test_array_private_function_type_is_real_ir_array_not_flattened_tuple():
     ('fn f(){let a=[1u64];a[0]=2;}', 'immutable'),
     ('fn f(a:&[u64;2]){a[0]=3;}', 'shared reference'),
     ('extern "C" fn f(a:[u64;2]){}', 'ABI'),
-    ('fn read(p:&u64)->u64{*p} fn f(){let a=[1u64,2];read(&a[0]);}', 'indexed borrowing requires an actual'),
-    ('struct R{n:u64} impl R{fn read(&self)->u64{self.n}} fn f(){let a=[R{n:1}];a[0].read();}', 'indexed receiver borrowing requires an actual'),
     ('fn f(a:[u64;2]){match a{_=>()}}', 'array match coverage'),
     ('fn f(){let [a,b]=[1,2];}', 'array destructuring'),
     ('fn f(a:[u64;2]){match a{[x,y]=>()}}', 'array destructuring'),
@@ -140,3 +138,13 @@ def test_array_index_alias_invalidity_is_owned_by_actual_external_checker(tmp_pa
         compile_rust_checked(original, toolchain=toolchain(), evidence_directory=tmp_path / 'certifier')
     assert not (tmp_path / 'certifier/checked.rmeta').exists()
     assert path.read_text() == original
+
+
+@pytest.mark.parametrize('source', [
+    'fn read(p:&u64)->u64{*p} fn f(){let a=[1u64,2];read(&a[0]);}',
+    'struct R{n:u64} impl R{fn read(&self)->u64{self.n}} fn f(){let a=[R{n:1}];a[0].read();}',
+])
+def test_former_index_borrow_rows_are_owned_shared_loans(source):
+    # Index borrows are owned loans (stage 4); any two indices of one array
+    # overlap, as in rustc (tests/rust/test_rust_owned_shared_loans.py).
+    assert not compile_rust(source).externally_checked

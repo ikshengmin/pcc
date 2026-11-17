@@ -552,11 +552,25 @@ class Checker:
             return isinstance(expr.children[0].ty, SharedReference) or self.through_reference(expr.children[0])
         return False
 
+    def binding_moves(self, scrutinee, pattern):
+        """By-value bindings of a place scrutinee move out of it: not through
+        a shared reference (rustc E0507) or an array index (E0508)."""
+        if self.place(scrutinee) is None:
+            return
+        from .patterns import pattern_bindings
+        for binding in pattern_bindings(pattern):
+            if self.copy_type(binding.ty):
+                continue
+            if self.through_reference(scrutinee):
+                raise pattern.token.error("cannot move a non-Copy value out of a shared reference")
+            if self.through_array_index(scrutinee):
+                raise pattern.token.error("cannot move a non-Copy value out of an array index")
+
     def through_array_index(self, expr):
         return expr.kind == "index" or expr.kind in {"group", "field"} and self.through_array_index(expr.children[0])
 
     def mutable_place(self, expr: Expr) -> bool:
-        """Mutability/addressability only; lifetime and alias checking is external."""
+        """Mutability/addressability only; shared loans are the move checker's, &mut aliasing external."""
         if expr.kind == "group":
             return self.mutable_place(expr.children[0])
         if expr.kind == "deref":
@@ -687,11 +701,9 @@ class Checker:
         elif kind == "borrow":
             if expr.value and not self.externally_checked:
                 raise expr.token.error("mutable borrowing requires a matching external rustc check record")
-            if not allow_borrow and not self.externally_checked:
-                raise expr.token.error("local borrowing is supported only as a direct shared-reference call argument; reference storage/escape lifetime analysis is not implemented")
+            # Shared loans, their liveness and index overlap are owned by the
+            # move checker (moves.py); escapes beyond a body need regions.
             referent = self.expression(children[0], place_context=True)
-            if self.through_array_index(children[0]) and not self.externally_checked:
-                raise expr.token.error("indexed borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
             if self.place(children[0]) is None:
                 raise expr.token.error("shared borrowing of temporaries requires lifetime extension, which is not implemented")
             if expr.value and not self.mutable_place(children[0]):
@@ -924,8 +936,6 @@ class Checker:
                     return "usize"
                 fn, fixed_arguments = pinned_method or self.methods.lookup(receiver_type, callee.value, callee.token, receiver=True)
                 if isinstance(fn.params[0][1], SharedReference) and not isinstance(receiver_type, SharedReference):
-                    if self.through_array_index(receiver) and not self.externally_checked:
-                        raise receiver.token.error("indexed receiver borrowing requires an actual external rustc check; legacy partial loans do not prove array disjointness")
                     if self.place(receiver) is None:
                         raise receiver.token.error("shared receiver borrowing of temporaries requires lifetime extension, which is not implemented")
                     if fn.params[0][1].mutable and not self.mutable_place(receiver):
@@ -1120,7 +1130,9 @@ class Checker:
                 from .conditional_patterns import normalize_if_let
                 normalize_if_let(expr)
             from .call_inference import partial, pending_integer
-            scrutinee_ty = partial(self.expression(children[0]))
+            # A place scrutinee is inspected in place; only its by-value
+            # bindings move (checked per arm below).
+            scrutinee_ty = partial(self.expression(children[0], place_context=self.place(children[0]) is not None))
             if kind == "if_let" and scrutinee_ty == NEVER:
                 raise expr.token.error("diverging if let scrutinees require additional never-type analysis, which is not implemented")
             # Ordinary bindings/wildcards can also carry unresolved struct
@@ -1133,6 +1145,7 @@ class Checker:
             for pattern, arm in zip(expr.value, children[1:]):
                 self.scopes.append({})
                 check_pattern(self, pattern, scrutinee_ty, allow_inferred=kind == "match")
+                self.binding_moves(children[0], pattern)
                 if arm.kind == "match_guard":
                     # The guard sees the arm's bindings and must be bool. Its
                     # borrow rules are owned by the move checker (GuardScope).
@@ -1144,9 +1157,8 @@ class Checker:
                     ty = unify(ty, self.expression(arm), arm.token)
                 self.scopes.pop()
         elif kind == "for":
-            # Moves of the array and across iterations are owned by the move
-            # checker's loop fixed point; reference-bearing loops keep the
-            # reference admission gate.
+            # Moves of the array and across iterations, and shared loans in
+            # the body, are owned by the move checker's loop fixed point.
             from .call_inference import partial
             source = partial(self.expression(children[0]))
             if not isinstance(source, FixedArrayType):
@@ -1195,7 +1207,7 @@ class Checker:
             from .loops import LoopContext
             from .patterns import check_pattern
 
-            scrutinee = partial(self.expression(children[0]))
+            scrutinee = partial(self.expression(children[0], place_context=self.place(children[0]) is not None))
             if scrutinee == NEVER:
                 raise expr.token.error("diverging while let scrutinees require additional never-type analysis, which is not implemented")
             if isinstance(scrutinee, TypeApplication) and pending_integer(scrutinee):
@@ -1206,6 +1218,7 @@ class Checker:
             self.loops.append(LoopContext('while_let'))
             try:
                 check_pattern(self, expr.value, scrutinee)
+                self.binding_moves(children[0], expr.value)
                 unify("()", self.expression(children[1]), children[1].token)
             finally:
                 self.loops.pop()

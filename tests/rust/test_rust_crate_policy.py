@@ -126,12 +126,11 @@ def test_unsupported_dependencies_and_unowned_context_never_reach_ir(text, messa
         compile_rust(text, experimental_rustc_checked=True)
 
 
-def test_self_alias_reference_consumer_cannot_use_a_flag_instead_of_actual_check(monkeypatch):
+def test_self_alias_reference_consumer_compiles_with_owned_shared_loans(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     text=Path(__file__).with_name('programs').joinpath('core_self_alias_consumer.rs').read_text()
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked reference reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text, experimental_rustc_checked=True)
+    # Its shared references are owned loans now (stage 4): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.integration

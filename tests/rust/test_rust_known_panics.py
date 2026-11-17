@@ -91,6 +91,8 @@ def test_reference_free_programs_compile_with_no_rustc_and_no_attestation():
     assert compile_rust('pub fn f() -> u64 { 1 }', experimental_rustc_checked=True).symbols
 
 
-def test_reference_bearing_programs_still_need_the_actual_check():
-    with pytest.raises(RustError, match='reference'):
-        compile_rust('pub fn f(x: &u64) -> u64 { *x }')
+def test_shared_references_are_owned_and_mutable_ones_still_need_the_check():
+    # Stage 4 owns shared loans; &mut is stage 5.
+    assert not compile_rust('pub fn f(x: &u64) -> u64 { *x }').externally_checked
+    with pytest.raises(RustError, match='mutable references require'):
+        compile_rust('pub fn f(x: &mut u64) -> u64 { *x }')

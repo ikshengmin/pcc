@@ -65,7 +65,7 @@ in the named modules; locate them with
 | Match guards | `semantics.py`, `moves.py` | guard borrows E0505/E0506/E0507/E0510/E0594/E0596 | **owned** (stage 1) |
 | `loop`, `while let`, `if let` admission | `moves.py` (loop fixed point; `if let` is a normalized match) | move flow through loops and refutable lets | **owned for reference-free input** (stage 3) |
 | `for` over arrays | `moves.py` | moves of iterated owned arrays and across iterations | **owned for reference-free input** (stage 3) |
-| Reference-bearing items, local borrows beyond call arguments, indexed borrows | `__init__.py`, `semantics.py`, `reference_admission.py` | NLL loans, liveness, array-index disjointness | open (stage 4) |
+| Shared references in bodies, parameters and `&self` receivers: local, field and indexed borrows, reborrows | `moves.py` (loans, holders, liveness), `reference_admission.py` (post-sema shape guard) | NLL shared loans, liveness, array-index overlap, E0505/E0506/E0597 | **owned** (stage 4); references in results or aggregates, temporaries' lifetime extension, generic reference arguments and default binding modes stay explicit gaps |
 | `&mut` types and borrows, explicit receivers | `semantics.py` | mutable loans, two-phase borrows | open (stage 5) |
 | Explicit lifetimes, lifetime parameters, outlives bounds, reference parameter reassignment | `semantics.py`, `generics.py` | region inference and outlives constraints | open (stage 6) |
 | Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
@@ -104,7 +104,21 @@ Migration order:
    case; since stage 2 runs it on checked reference-free input, a checked `for`
    whose body read its element failed with an internal `KeyError` (found here;
    the Linux checked lane that would show it does not run locally).
-4. Shared references in bodies: loans with liveness, index disjointness.
+4. Shared references in bodies (done): `&place` creates a loan; reference
+   locals and temporaries *hold* loans (copies, reborrows and if/match/block
+   values carry them). Moving or assigning an overlapping place, or ending the
+   borrowed local's scope, invalidates the loan in every holder; using an
+   invalidated holder later reports E0505/E0506/E0597, which is NLL liveness on
+   the move checker's fixed point. Every mention of a reference local is a use;
+   a block's reference value is used when stored, not when discarded. Pending
+   reference temporaries (call arguments, operands) conflict immediately. Any
+   two indices of one array overlap, as in rustc. Matching a place through a
+   reference or index moves only non-Copy by-value bindings (E0507/E0508).
+   Verdicts in `tests/rust/test_rust_owned_shared_loans.py::CORPUS` (89
+   original programs) equal a rustc 1.92.0 `-O` build's, and 14
+   reference-bearing originals run with owned compile/assemble/link and match
+   rustc. Reference-bearing checked input still leaves loans to the actual
+   check (owned loans run without one).
 5. `&mut`: mutable loans, reborrows and two-phase receivers.
 6. Signatures: lifetime elision, explicit lifetimes and outlives bounds.
 7. Trait gates: default methods, standard markers, bound well-formedness.

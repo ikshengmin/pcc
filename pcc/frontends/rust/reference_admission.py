@@ -1,10 +1,14 @@
-"""Reference presence is not a borrow proof: require the actual-check token.
+"""Reference admission boundaries.
 
-This is an admission boundary only, not another partial borrow checker. Walking
-all declaration/type/expression fields also covers unused functions, nested type
-applications and implicit method autoref declarations. Unsupported aliases or
-reference syntax still fail in the owned parser/type checker; they never reach
-pointer lowering through a caller-attestation flag.
+Shared references in bodies, parameters and `&self` receivers are admitted by
+owned analysis (stage 4 of README "Replacing the rustc admission gate"): sema
+rejects `&mut`, explicit lifetimes, reference returns and references in
+aggregates with explicit boundaries, the move checker owns shared loans, and
+reject_unowned_reference_shapes re-validates the subset after sema. Presence
+detection (contains_references) still decides which checked inputs leave moves
+to the actual check and gates the module-only analysis API. Walking all
+declaration/type/expression fields also covers unused functions, nested type
+applications and implicit method autoref declarations, never token text.
 """
 from dataclasses import fields, is_dataclass
 
@@ -71,6 +75,49 @@ def first_slice(*roots):
         elif is_dataclass(value) and not isinstance(value, type):
             pending.extend(getattr(value, item.name) for item in fields(value))
     return None
+
+
+REFERENCE_RETURN_GAP = ("reference returns and aggregate reference storage require lifetime analysis, "
+                        "which is not implemented")
+
+
+def has_reference(ty) -> bool:
+    """Whether a (resolved) type contains a reference anywhere."""
+    from .call_inference import partial
+    from .types import FixedArrayType, TupleType, TypeApplication
+    ty = partial(ty)
+    if isinstance(ty, SharedReference):
+        return True
+    if isinstance(ty, TupleType):
+        return any(has_reference(item) for item in ty.elements)
+    if isinstance(ty, FixedArrayType):
+        return has_reference(ty.element)
+    if isinstance(ty, TypeApplication):
+        return any(has_reference(item) for item in ty.arguments)
+    return False
+
+
+def reject_unowned_reference_shapes(checker):
+    """Fail closed after sema: owned shared loans (stage 4) cover references in
+    bodies and parameters only, never in results or aggregate storage, even if
+    a semantic transformation synthesized one."""
+    for function in checker.functions:
+        if has_reference(function.result):
+            raise function.token.error(REFERENCE_RETURN_GAP)
+    for record in checker.records.values():
+        for token, ty in record.fields:
+            if has_reference(ty):
+                raise token.error(REFERENCE_RETURN_GAP)
+    for enum in checker.enums.values():
+        for payload in enum.payloads.values():
+            if any(has_reference(ty) for ty in payload):
+                raise enum.token.error(REFERENCE_RETURN_GAP)
+
+
+def reject_slices(*roots):
+    slice_type = first_slice(*roots)
+    if slice_type is not None and slice_type.token is not None:
+        raise slice_type.token.error(SLICE_GAP)
 
 
 def reject_uncertified_references(*roots):

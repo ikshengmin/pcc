@@ -17,6 +17,7 @@ from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
 from tests.rust.certification_support import actual_check_prerequisite, certify_source
 
+OLD_GATE = 'actual source/options-bound CheckedRustSource'
 PROGRAMS = ('impl_bound_dispatch', 'impl_bound_copy', 'impl_bound_mutable',
             'impl_bound_result', 'impl_bound_lookup_order')
 PRIOR_CAPABILITIES = (
@@ -96,7 +97,9 @@ def test_empty_or_unused_marker_impl_cannot_authorize_owned_ir_with_a_boolean(te
 def test_impl_originals_keep_genuine_source_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked impl source reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
+    message = 'mutable references require' if name == 'impl_bound_lookup_order' else OLD_GATE
+    with pytest.raises(RustError, match=message):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

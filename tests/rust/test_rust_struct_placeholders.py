@@ -105,7 +105,7 @@ def test_constructor_holes_do_not_authorize_reference_storage(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified reference reached IR'))
     text = 'struct R<T>{x:T}fn f(p:&u64){R::<_>{x:p};}'
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
+    with pytest.raises(RustError, match='reference returns and aggregate reference storage require'):
         compile_rust(text, experimental_rustc_checked=True)
 
 
