@@ -35,9 +35,13 @@ def test_uncertified_impl_lifetimes_are_an_explicit_gap():
 
 
 @pytest.mark.parametrize('text', ["struct T<'a>{n:&'a u64}", "enum E<'a>{A(&'a u64)}"])
-def test_data_declaration_lifetimes_stay_an_explicit_gap(text):
-    # They now parse (tests/rust/test_rust_lifetime_arguments.py); without an
-    # actual rustc check they remain an explicit semantic boundary.
+def test_single_lifetime_data_declarations_are_owned_regions(text):
+    # One lifetime parameter is owned (stage 6, tests/rust/test_rust_owned_data_regions.py).
     Parser(text).parse()
-    with pytest.raises(RustError, match='lifetime parameters on data declarations require a matching external rustc check'):
+    analyze_source(text)
+
+
+@pytest.mark.parametrize('text', ["struct T<'a, 'b>{n:&'a u64, m:&'b u64}", "struct G<'a, T>{n:&'a T}"])
+def test_several_or_mixed_data_lifetimes_stay_an_explicit_gap(text):
+    with pytest.raises(RustError, match='several lifetime parameters, or lifetimes beside type parameters'):
         analyze_source(text)

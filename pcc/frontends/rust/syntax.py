@@ -307,6 +307,9 @@ class Function:
     # body rules are rustc's to check (compilation already requires that
     # check or its attestation); PCC never evaluates it at compile time.
     const_fn: bool = False
+    # Parameter and result types as written, before normalization erases the
+    # lifetime arguments of data types (pcc/frontends/rust/regions.py).
+    written_signature: tuple | None = None
     # Synthesized concrete body inherited from this declaration-owned default.
     default_source: tuple[str, str] | None = None
 

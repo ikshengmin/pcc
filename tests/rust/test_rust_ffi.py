@@ -77,7 +77,7 @@ def record_run(image, expected, tmp_path):
     ('extern "C" {fn f(){}}', "expected ';'"),
     ('#[no_mangle] fn f(){}', "only on extern C"),
     ('#[no_mangle] struct P{x:i32}', "only on extern C"),
-    (RECORD + 'struct Q{p:&P}', "reference storage"),
+    (RECORD + 'struct Q{p:&P}', "missing lifetime specifier"),  # rustc E0106
     (RECORD + 'fn f(p:&P){let t=(p,);}', "reference storage"),
     (RECORD + 'fn f(p:&P){let t:(&P,)= (p,);}', "reference storage"),
     (RECORD + 'fn f(mut p:&P){p.value=2;}', "shared reference"),

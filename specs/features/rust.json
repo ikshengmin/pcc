@@ -2587,6 +2587,20 @@
       "evidence": []
     },
     {
+      "id": "rust.admission.owned-data-regions",
+      "title": "Owned data regions: structs, enums and impls with one lifetime parameter",
+      "chapter_ids": [
+        "rust.ref.8.2.4"
+      ],
+      "scope": "Qualification missing, not implementation missing: stage 6 (second part) of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". A struct or enum with one lifetime parameter and no type parameters stores references (&'a T, &'a mut T, &'static T with a region-free T) and such data types written with 'a; impl<'a> W<'a> methods name 'a; no rustc and no attestation. Values have up to two region slots (regions.py); the move checker keeps inner-slot entries beside outer ones, field reads yield the data type's slot, reborrows hold the last dereferenced reference's slots, calls map the callee's slots, writes through &mut add the written loans to every local the reference may point to and into caller memory must satisfy the parameter's region; &'s W<'a> parameters imply 'a: 's. rustc's declaration errors E0106, E0107, E0261, E0392, E0637 and E0621 are reported; derive(Copy, Clone) accepts shared reference fields. 58 original programs get a rustc 1.92.0 -O build's verdict without rustc running, and an original program with getters, a setter, Self results, an enum of references and a &mut field runs with owned compile, assemble and link and matches rustc. Several lifetimes or lifetimes beside type parameters, outlives bounds, references in tuples and arrays, deeper nesting and generic reference arguments keep explicit boundaries. Local Mac; the Linux-target actual-check lane is unrun here.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_owned_data_regions.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

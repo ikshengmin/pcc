@@ -73,8 +73,9 @@ from pcc.analysis.ownership import (
 
 from dataclasses import dataclass
 
-from .reference_admission import has_reference
+from .reference_admission import has_regions
 from .syntax import Expr
+from .types import SharedReference
 
 LOANS = "loans"  # state key (LOANS, serial): the (loan, invalidation) pairs a local holds
 WILDCARD_INDEX = Index(None)
@@ -85,6 +86,30 @@ FORWARDING = frozenset({"group", "block", "if", "match", "unsafe", "statement", 
 @dataclass(frozen=True)
 class Deref:
     """A dereference projection in a loan place (`*r`)."""
+
+
+@dataclass(frozen=True)
+class Inner:
+    """An entry of a value's inner region slot: what the data a reference
+    refers to holds (`&'s W<'a>`: entries for 'a). Outer entries are bare."""
+    loan: object
+
+
+def unwrap(loan):
+    return loan.loan if isinstance(loan, Inner) else loan
+
+
+def outer_part(held):
+    return frozenset(entry for entry in held if not isinstance(entry[0], Inner))
+
+
+def inner_part(held):
+    """The inner slot, unwrapped: the value of the referent."""
+    return frozenset((entry[0].loan, entry[1]) for entry in held if isinstance(entry[0], Inner))
+
+
+def wrap(held):
+    return frozenset((Inner(loan), event) for loan, event in held)
 
 
 DEREF = Deref()
@@ -116,6 +141,11 @@ def conflict_code(loan, mutable, access, kind):
     return None
 REFERENCE_GAP = ("reference values produced by this expression need region inference (stage 6 of the "
                  "owned admission migration), which is not implemented")
+
+
+def partial_type(ty):
+    from .call_inference import partial
+    return partial(ty)
 
 
 def loan_place(binding, path) -> Place:
@@ -174,9 +204,11 @@ class MoveChecker:
         self.loan_info = {}    # loan id -> (loan place, borrow token, borrowed name, mutable, two-phase)
         self.event_info = {}   # invalidation -> (token, message)
         self.produced = {}     # id(expr) -> frozenset of (loan, invalidation) its reference value holds
-        self.parameter_regions = {}  # serial -> region of each parameter of the checked function
+        self.parameter_regions = {}  # serial -> region slots of each parameter of the checked function
         self.returns_reference = False
-        self.out_region = None
+        self.out_regions = ()
+        self.anonymous = {}
+        self.outlives = set()
 
     @staticmethod
     def declare(state, binding, held=()):
@@ -213,7 +245,7 @@ class MoveChecker:
         """Replace each valid holder loan for which invalid(loan) gives an event
         (origins, the non-integer entries, are never invalidated)."""
         for key in [key for key in state if isinstance(key, tuple)]:
-            state[key] = {(loan, invalid(loan) if event is None and type(loan) is int else event)
+            state[key] = {(loan, invalid(unwrap(loan)) if event is None and type(unwrap(loan)) is int else event)
                           for loan, event in state[key]}
 
     def invalidate(self, state, target, token, kind):
@@ -282,7 +314,7 @@ class MoveChecker:
             return ("E0597", loan)
 
         self.poison(state, dead)
-        return [frozenset((loan, dead(loan) if event is None and type(loan) is int else event)
+        return [frozenset((loan, dead(unwrap(loan)) if event is None and type(unwrap(loan)) is int else event)
                           for loan, event in value)
                 for value in values]
 
@@ -292,28 +324,80 @@ class MoveChecker:
         return edges.outer(state)
 
     def reference_value(self, expr, state):
-        """The loans a reference-typed value read from a local holds."""
-        if expr.kind == "name" and expr.binding is not None:
-            return frozenset(state.get((LOANS, expr.binding.serial), ()))
-        if expr.kind in {"group", "unsafe", "reference_coerce"}:
+        """What a value with regions holds: read from a place, forwarded or built."""
+        kind = expr.kind
+        if kind in {"group", "unsafe", "reference_coerce"}:
             child = expr.children[0]
             if id(child) in self.produced:
                 return self.produced.pop(id(child))
             return self.reference_value(child, state)
+        value = self.place_value(expr, state)
+        if value is not None:
+            return value
+        if kind in {"construct", "enum_construct", "variant"}:
+            # A struct or enum value holds what its fields with regions hold.
+            return frozenset().union(*(outer_part(self.produced.get(id(child), frozenset()))
+                                       for child in expr.children))
+        if kind == "clone":
+            return self.place_value(expr.children[0], state) or frozenset()
         raise expr.token.error(REFERENCE_GAP)
 
+    def place_value(self, expr, state):
+        """What the value at a place (or reached from a temporary) holds, or
+        None when expr is neither: a reference's referent is its inner slot,
+        and a field with regions shares its data type's single slot."""
+        kind = expr.kind
+        if kind == "group":
+            return self.place_value(expr.children[0], state)
+        if kind == "name":
+            return frozenset(state.get((LOANS, expr.binding.serial), ())) if expr.binding is not None else None
+        if kind in {"deref", "field"}:
+            base = expr.children[0]
+            held = self.place_value(base, state)
+            if held is None:
+                held = self.produced.get(id(base))
+            if held is None:
+                return None
+            if kind == "deref" or isinstance(partial_type(base.ty), SharedReference):
+                held = inner_part(held)
+            return held if self.slots(expr.ty) else frozenset()
+        return None
+
+    def last_reference(self, expr):
+        """The reference expression a place is last dereferenced through, or None."""
+        kind = expr.kind
+        if kind == "group":
+            return self.last_reference(expr.children[0])
+        if kind == "deref":
+            return expr.children[0]
+        if kind in {"field", "index"}:
+            base = expr.children[0]
+            return base if isinstance(partial_type(base.ty), SharedReference) else self.last_reference(base)
+        return None
+
+    def slots(self, ty):
+        from .regions import slot_count
+        count = slot_count(ty, self.checker)
+        return count if count is not None else 0
+
+    def regions(self, ty):
+        return has_regions(ty, self.checker)
+
     def call_result(self, expr, operands):
-        """A call's reference result holds the values of the arguments whose
-        region is the callee's output region (none for 'static)."""
+        """Each region slot of a call's result holds the argument slots that
+        have the callee's region for it (none for 'static)."""
         from .regions import STATIC, signature_regions
-        regions, out = signature_regions(expr.binding)
+        regions, out = signature_regions(expr.binding, self.checker)
         held = frozenset()
-        if out is None:
-            raise expr.token.error(REFERENCE_GAP)
-        if out != STATIC:
-            for operand, region in zip(operands, regions):
-                if region == out:
-                    held |= self.produced.get(id(operand), frozenset())
+        for index, region in enumerate(out):
+            if region == STATIC:
+                continue
+            for operand, slots in zip(operands, regions):
+                value = self.produced.get(id(operand), frozenset())
+                for slot, argument_region in enumerate(slots):
+                    if argument_region == region:
+                        part = outer_part(value) if slot == 0 else inner_part(value)
+                        held |= part if index == 0 else wrap(part)
         return held
 
     def loan_target(self, expr):
@@ -344,22 +428,25 @@ class MoveChecker:
         return None
 
     def hold_pattern(self, state, pattern, held):
-        """Declared pattern bindings take loans; only a whole-value binding can hold references."""
+        """Declared pattern bindings take what the scrutinee value holds: the
+        whole value, or the single slot its parts with regions share."""
         from .patterns import pattern_bindings
         top = pattern.binding if pattern.kind in {"binding", "at"} else None
         for binding in pattern_bindings(pattern):
-            if binding is not top and has_reference(binding.ty):
+            slots = self.slots(binding.ty)
+            if binding is not top and slots > 1:
                 raise pattern.token.error(REFERENCE_GAP)
-            state[(LOANS, binding.serial)] = set(held if binding is top and has_reference(binding.ty) else ())
+            state[(LOANS, binding.serial)] = set((held if binding is top else outer_part(held)) if slots else ())
 
     def scrutinee_loans(self, scrutinee, place, state):
-        if not has_reference(scrutinee.ty):
+        if not self.regions(scrutinee.ty):
             return frozenset()
         if place is None:
             return self.produced.pop(id(scrutinee), frozenset())
-        if place[1] or self.checker.through_reference(scrutinee):
+        value = self.place_value(scrutinee, state)
+        if value is None:
             raise scrutinee.token.error(REFERENCE_GAP)
-        return frozenset(state.get((LOANS, place[0].serial), ()))
+        return value
 
     def check(self) -> None:
         for function in self.checker.functions:
@@ -369,14 +456,21 @@ class MoveChecker:
         if function.body is None:
             return
         from .regions import signature_regions
-        regions, self.out_region = signature_regions(function)
-        self.returns_reference = has_reference(function.result)
+        regions, self.out_regions = signature_regions(function, self.checker)
+        self.returns_reference = self.regions(function.result)
         state = {}
         parameters = self.checker.parameters[function.identity]
         self.parameter_regions = {}
-        for binding, region in zip(parameters, regions):
-            self.declare(state, binding, {(("origin", region), None)} if region is not None else ())
-            self.parameter_regions[binding.serial] = region
+        self.anonymous = {}  # anonymous region -> the parameter that has it (E0621)
+        # Implied bounds: a well-formed `&'s W<'a>` parameter means 'a: 's.
+        self.outlives = {(slots[1], slots[0]) for slots in regions if len(slots) == 2}
+        for binding, slots in zip(parameters, regions):
+            held = set()
+            for slot, region in enumerate(slots):
+                held |= ({(("origin", region), None)} if slot == 0 else wrap({(("origin", region), None)}))
+                self.anonymous.setdefault(region, binding.name)
+            self.declare(state, binding, held)
+            self.parameter_regions[binding.serial] = slots
         result = self.expression(function.body, state)
         if result is not None:
             if self.returns_reference:
@@ -384,19 +478,89 @@ class MoveChecker:
             self.exit(result)
 
     def returned(self, value, token):
-        """A returned reference may hold no loan of this function's own storage
-        (E0515) and only the output region or 'static as origins."""
-        from .regions import STATIC
-        for loan, _ in value:
-            if type(loan) is int:
-                place, _, name, _, _ = self.loan_info[loan]
-                if DEREF not in place.path:
-                    raise token.error(f"cannot return a reference to {name!r}: it is data owned by the current "
-                                      "function (E0515)")
-            elif loan[1] not in (self.out_region, STATIC):
-                raise token.error("lifetime may not live long enough: the returned reference comes from a "
-                                  "parameter whose lifetime is not the result's")
+        """A returned value may hold no loan of this function's own storage
+        (E0515) and, in each region slot, only that slot's output region or
+        'static as origins."""
+        for slot, part in enumerate((outer_part(value), inner_part(value))):
+            region = self.out_regions[slot] if slot < len(self.out_regions) else None
+            for loan, _ in part:
+                if type(loan) is int:
+                    place, _, name, _, _ = self.loan_info[loan]
+                    if DEREF not in place.path:
+                        raise token.error(f"cannot return a reference to {name!r}: it is data owned by the "
+                                          "current function (E0515)")
+                else:
+                    self.require_region(loan[1], region, token)
         self.use(value)
+
+    def require_slots(self, value, slots, token):
+        """Data stored where a parameter's regions are required."""
+        for slot, part in enumerate((outer_part(value), inner_part(value))):
+            for loan, _ in part:
+                if type(loan) is not int:
+                    self.require_region(loan[1], slots[slot] if slot < len(slots) else None, token)
+
+    def write_into(self, state, reference, written, token, seen=None):
+        """The data a reference value refers to is written with `written` (a
+        one-slot value): every local it may point to gains those loans; data
+        the caller owns (an origin) needs them to outlive its region."""
+        seen = set() if seen is None else seen
+        written = outer_part(written)
+        for loan, _ in outer_part(reference):
+            if type(loan) is not int:
+                # Caller memory: its data has the reference's inner region.
+                for inner, _ in inner_part(reference):
+                    region = inner[1] if type(inner) is not int else None
+                    for item, _ in written:
+                        if type(item) is int:
+                            place, borrow, name, _, _ = self.loan_info[item]
+                            if DEREF not in place.path:
+                                raise borrow.error(f"{name!r} does not live long enough: it is stored into data "
+                                                   "the caller owns (E0597)")
+                        elif region is not None:
+                            self.require_region(item[1], region, token)
+                continue
+            place = self.loan_info[loan][0]
+            if place.root in seen:
+                continue
+            seen.add(place.root)
+            if DEREF in place.path:
+                # Behind another reference: follow what that reference holds.
+                self.write_into(state, frozenset(state.get((LOANS, place.root), ())), written, token, seen)
+            elif (LOANS, place.root) in state:
+                state[(LOANS, place.root)] |= written
+
+    def call_writes(self, state, expr, operands):
+        """A `&mut` argument to data with a region may be written by the
+        callee with the arguments that share that region."""
+        from .regions import signature_regions
+        regions, _ = signature_regions(expr.binding, self.checker)
+        for (_, ty, _), operand, slots in zip(expr.binding.params, operands, regions):
+            ty = partial_type(ty)
+            if not (isinstance(ty, SharedReference) and ty.mutable and len(slots) == 2):
+                continue
+            written = frozenset()
+            for other, other_slots in zip(operands, regions):
+                if other is operand:
+                    continue
+                value = self.produced.get(id(other), frozenset())
+                for slot, region in enumerate(other_slots):
+                    if region == slots[1]:
+                        written |= outer_part(value) if slot == 0 else inner_part(value)
+            if written:
+                self.write_into(state, self.produced.get(id(operand), frozenset()), written, expr.token)
+
+    def require_region(self, origin, region, token):
+        """Data of a parameter's region may flow only where that region (or
+        'static data) is required."""
+        from .regions import STATIC
+        if origin in (region, STATIC) or (origin, region) in self.outlives:
+            return
+        if origin.startswith("'_") and region is not None and not region.startswith("'_") and region != STATIC:
+            raise token.error(f"explicit lifetime required in the type of {self.anonymous.get(origin, 'a parameter')!r}"
+                              f": lifetime {region} required (E0621)")
+        raise token.error("lifetime may not live long enough: the value comes from a parameter whose lifetime "
+                          "is not the one required")
 
     def exit(self, state):
         """At a function exit every local dies while the parameters' regions
@@ -549,14 +713,15 @@ class MoveChecker:
         if result is None:
             return None
         kind = expr.kind
+        # The value first (a field or constructor reads its operands), then
+        # the consumer uses its operands' values.
+        if id(expr) not in self.produced and self.regions(expr.ty):
+            self.produced[id(expr)] = self.reference_value(expr, result)
         if kind not in FORWARDING:
-            # A consumer uses its operands' reference values.
             for child in expr.children[1:] if kind == "call" else expr.children:
                 held = self.produced.pop(id(child), None)
                 if held:
                     self.use(held)
-        if id(expr) not in self.produced and has_reference(expr.ty):
-            self.produced[id(expr)] = self.reference_value(expr, result)
         return result
 
     def evaluate(self, expr: Expr, state: State) -> State | None:
@@ -570,19 +735,32 @@ class MoveChecker:
                 self.guard_effect(*place, expr.token, write=True, mutable_borrow=True)
             self.read_place(children[0], state, consume=False, effect=None)
             binding, path, untracked = target = self.loan_target(children[0])
-            held = frozenset(state.get((LOANS, binding.serial), ()))
+            # A reborrow holds what the last dereferenced reference holds
+            # (rustc's reborrow constraints): both its slots for a reference
+            # to data with a region, else one (implied bounds keep both).
+            through = self.last_reference(children[0])
+            via = frozenset()
+            if through is not None:
+                via = self.place_value(through, state)
+                via = self.produced.get(id(through), frozenset()) if via is None else via
+            if self.slots(expr.ty) != 2:
+                # Region-free data reached through `&'s W<'a>`: only 's.
+                via = outer_part(via)
             if untracked:
-                # A borrow through a shared reference is not tracked: it holds
-                # the loans of the reference it was reached through.
-                self.produced[id(expr)] = held
+                # A borrow through a shared reference is not tracked.
+                self.produced[id(expr)] = via
                 return state
             mutable, two_phase = bool(expr.value), expr.value == TWO_PHASE
             # A two-phase borrow is reserved here and activated by its call.
             self.invalidate(state, target, expr.token,
                             "reserve" if two_phase else "mut" if mutable else "share")
             self.loan_info[id(expr)] = (Place(binding.serial, path), expr.token, binding.name, mutable, two_phase)
-            # A reborrow through `&mut` also keeps the reference's own loans live.
-            self.produced[id(expr)] = frozenset({(id(expr), None)}) | (held if DEREF in path else frozenset())
+            value = frozenset({(id(expr), None)})
+            if DEREF in path:
+                value |= via  # a reborrow through `&mut` keeps the reference's own loans live
+            elif self.slots(expr.ty) == 2:
+                value |= wrap(self.place_value(children[0], state) or frozenset())  # `&w` of a `W<'a>`
+            self.produced[id(expr)] = value
             return state
         if kind in {"clone", "derived_eq"}:
             # Clone::clone(&x) and PartialEq::eq(&a, &b) borrow their places;
@@ -623,7 +801,7 @@ class MoveChecker:
                 value = self.produced.pop(id(children[-1]), frozenset()) if len(children) > expr.value else frozenset()
                 dying = [key for key in current if not isinstance(key, tuple) and key not in visible]
                 value, = self.end_scope(current, dying, [value])
-                if has_reference(expr.ty):
+                if self.regions(expr.ty):
                     self.produced[id(expr)] = value
             return current
         if kind == "wildcard_let":
@@ -635,7 +813,7 @@ class MoveChecker:
         if kind == "let":
             result = self.expression(children[0], state)
             if result is not None:
-                held = self.produced.get(id(children[0]), ()) if has_reference(expr.binding.ty) else ()
+                held = self.produced.get(id(children[0]), ()) if self.regions(expr.binding.ty) else ()
                 self.declare(result, expr.binding, held)
             return result
         if kind == "pattern_let":
@@ -677,25 +855,33 @@ class MoveChecker:
                 # Writing through a reference uses the reference.
                 self.access(binding, (), binding.ty, lhs.token, result, effect=None)
             self.invalidate(result, target, expr.token, "write")
+            value = self.produced.get(id(children[1]), frozenset())
             if DEREF in target[1]:
+                if self.regions(lhs.ty):
+                    # The referent gains what the written value holds.
+                    through = self.last_reference(lhs)
+                    self.write_into(result, self.place_value(through, result) or frozenset(), value, expr.token)
+                    if through.kind == "name" and through.binding is not None:
+                        result[(LOANS, through.binding.serial)] |= wrap(outer_part(value))
                 return result  # the referent is written; the local is not reinitialized
-            if not path and has_reference(binding.ty):
-                # Overwriting a reference local replaces the loans it holds,
-                # and loans of its old referent (`*r`) no longer concern the
-                # local (rustc kills them); an already invalidated one stays.
-                result[(LOANS, binding.serial)] = set(self.produced.get(id(children[1]), ()))
-                region = self.parameter_regions.get(binding.serial)
-                if region is not None:
-                    from .regions import STATIC
-                    if any(type(loan) is not int and loan[1] not in (region, STATIC)
-                           for loan, _ in result[(LOANS, binding.serial)]):
-                        raise expr.token.error(f"lifetime may not live long enough: {binding.name!r} keeps the "
-                                               "caller's lifetime, which the assigned reference may not outlive")
+            slots = self.parameter_regions.get(binding.serial)
+            if path and self.regions(lhs.ty):
+                # A field with regions shares its data type's single slot.
+                result[(LOANS, binding.serial)] |= outer_part(value)
+                if slots:
+                    self.require_slots(outer_part(value), slots[:1], expr.token)
+            if not path and self.regions(binding.ty):
+                # Overwriting a local with regions replaces what it holds, and
+                # loans of its old referent (`*r`) no longer concern the local
+                # (rustc kills them); an already invalidated one stays.
+                result[(LOANS, binding.serial)] = set(value)
+                if slots:
+                    self.require_slots(value, slots, expr.token)
                 for key in [key for key in result if isinstance(key, tuple)]:
                     result[key] = {(loan, event) for loan, event in result[key]
-                                   if event is not None or type(loan) is not int
-                                   or self.loan_info[loan][0].root != binding.serial
-                                   or DEREF not in self.loan_info[loan][0].path}
+                                   if event is not None or type(unwrap(loan)) is not int
+                                   or self.loan_info[unwrap(loan)][0].root != binding.serial
+                                   or DEREF not in self.loan_info[unwrap(loan)][0].path}
             path = structural_place(binding, path).path
             moved = result[binding.serial]
             if expr.value == "=" and path and any(prefix(item, path) and item != path for item in moved):
@@ -748,7 +934,7 @@ class MoveChecker:
                     value, = self.end_scope(result, [binding.serial for binding in pattern_bindings(pattern)], [value])
                     values.append(value)
                     exits.append(result)
-            if has_reference(expr.ty):
+            if self.regions(expr.ty):
                 self.produced[id(expr)] = frozenset().union(*values)
             return join(exits)
         if kind == "if":
@@ -757,7 +943,7 @@ class MoveChecker:
                 return None
             yes = self.expression(children[1], clone(after_condition))
             no = self.expression(children[2], clone(after_condition)) if len(children) == 3 else clone(after_condition)
-            if has_reference(expr.ty):
+            if self.regions(expr.ty):
                 self.produced[id(expr)] = frozenset().union(*(
                     self.produced.pop(id(branch), frozenset())
                     for branch, after in zip(children[1:], (yes, no)) if after is not None))
@@ -881,6 +1067,7 @@ class MoveChecker:
                     current = self.expression(child, current)
                     # The operand's reference value awaits this consumer.
                     for loan, _ in self.produced.get(id(child), ()):
+                        loan = unwrap(loan)
                         if type(loan) is not int:
                             continue  # an origin, not a loan
                         place, token, name, mutable, two_phase = self.loan_info[loan]
@@ -889,7 +1076,8 @@ class MoveChecker:
                         self.loans.append((place, mutable, two_phase and loan == id(child), token, name))
             if kind == "call" and current is not None:
                 self.activate(current, active_loans, expr.token)
-                if has_reference(expr.ty):
+                self.call_writes(current, expr, operands)
+                if self.regions(expr.ty):
                     self.produced[id(expr)] = self.call_result(expr, operands)
             return current
         finally:

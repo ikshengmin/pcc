@@ -59,9 +59,11 @@ def test_misordered_lifetime_arguments_are_rejected_at_parse_time(source, messag
 
 
 @pytest.mark.parametrize('source,message', [
-    ("struct S{n:u64} pub fn f(s: S<'a>)->u64{1}", 'explicit lifetime arguments require a matching external rustc check'),
-    ("struct View<'a>{n:u64} pub fn f()->u64{1}", 'lifetime parameters on data declarations require a matching external rustc check'),
-    ("enum E<'a>{A(u64)} pub fn f()->u64{1}", 'lifetime parameters on data declarations require a matching external rustc check'),
+    # Owned regions (stage 6) report rustc's own errors for these.
+    ("struct S{n:u64} pub fn f(s: S<'a>)->u64{1}", r'S takes 0 lifetime arguments but 1 were supplied \(rustc E0107\)'),
+    ("struct View<'a>{n:u64} pub fn f()->u64{1}", r"lifetime parameter `'a` is never used \(rustc E0392\)"),
+    ("enum E<'a>{A(u64)} pub fn f()->u64{1}", r"lifetime parameter `'a` is never used \(rustc E0392\)"),
+    ("struct P<'a, 'b>{x:&'a u64, y:&'b u64} pub fn f()->u64{1}", 'several lifetime parameters'),
 ])
 def test_without_an_actual_check_every_explicit_lifetime_is_a_boundary(source, message):
     with pytest.raises(RustError, match=message):
@@ -73,12 +75,15 @@ def test_without_an_actual_check_every_explicit_lifetime_is_a_boundary(source, m
     ("struct S{n:u64} fn f<'a>(s: S<'a>)->u64{s.n}", "S takes 0 lifetime arguments but 1 were supplied"),
     # rustc E0107: struct takes 1 lifetime argument but 2 lifetime arguments were supplied
     ("struct S<'a>{n:u64} fn f<'a>(s: S<'a, 'a>)->u64{s.n}", "S takes 1 lifetime arguments but 2 were supplied"),
-    # Reference storage in data stays its own explicit gap even after a check.
-    ("struct S<'a>{n:&'a u64} fn f()->u64{1}", 'aggregate reference storage requires lifetime analysis'),
 ])
 def test_checked_semantic_model_rechecks_arity_and_keeps_reference_storage_explicit(source, message):
     with pytest.raises(RustError, match=message):
         checked_model(source)
+
+
+def test_checked_semantic_model_admits_reference_fields_of_a_lifetime_declaration():
+    # References stored in a data type with a lifetime are owned (stage 6).
+    checked_model("struct S<'a>{n:&'a u64} fn f()->u64{1}")
 
 
 def test_checked_semantic_model_erases_lifetime_only_arguments():

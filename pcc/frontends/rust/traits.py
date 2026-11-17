@@ -144,7 +144,7 @@ class StaticTraits:
             methods = self.traits.get(implementation.trait)
             if methods is None:
                 raise implementation.token.error('trait impls require a declared local trait; external traits/lang items are not implemented')
-            owner = checker.generics.normalize(implementation.owner, implementation.token, {})
+            owner = checker.generics.normalize_owner(implementation, implementation.token, {})
             base = owner.name if isinstance(owner, TypeApplication) else owner
             if base not in checker.generics.definitions:
                 raise implementation.token.error('trait impl requires a concrete local nominal struct or enum')

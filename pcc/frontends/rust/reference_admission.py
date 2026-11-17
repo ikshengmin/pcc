@@ -98,23 +98,41 @@ def has_reference(ty) -> bool:
     return False
 
 
+def has_regions(ty, checker) -> bool:
+    """Whether a type carries a region: a reference, or a data type with a
+    lifetime parameter (erased from the normalized type)."""
+    from .call_inference import partial
+    from .types import FixedArrayType, TupleType, TypeApplication
+    ty = partial(ty)
+    if isinstance(ty, SharedReference):
+        return True
+    if isinstance(ty, TupleType):
+        return any(has_regions(item, checker) for item in ty.elements)
+    if isinstance(ty, FixedArrayType):
+        return has_regions(ty.element, checker)
+    if isinstance(ty, TypeApplication):
+        return any(has_regions(item, checker) for item in ty.arguments)
+    declaration = checker.generics.definitions.get(ty) if isinstance(ty, str) else None
+    return declaration is not None and bool(declaration.lifetime_parameters)
+
+
 def reject_unowned_reference_shapes(checker):
     """Fail closed after sema: owned loans (stages 4-6) cover references in
     bodies, parameters and top-level results, never in aggregate storage, even
     if a semantic transformation synthesized one."""
-    from .call_inference import partial
+    from .regions import slot_count
     for function in checker.functions:
-        result = partial(function.result)
-        # A top-level reference result is owned (stage 6, regions.py).
-        if has_reference(result.referent if isinstance(result, SharedReference) else result):
+        # A reference, a data type with a lifetime or a reference to one is
+        # owned (stage 6, regions.py); regions nested deeper are not.
+        if slot_count(function.result, checker) is None:
             raise function.token.error(REFERENCE_RETURN_GAP)
     for record in checker.records.values():
         for token, ty in record.fields:
-            if has_reference(ty):
+            if has_reference(ty) and not record.lifetime_parameters:
                 raise token.error(REFERENCE_RETURN_GAP)
     for enum in checker.enums.values():
         for payload in enum.payloads.values():
-            if any(has_reference(ty) for ty in payload):
+            if any(has_reference(ty) for ty in payload) and not enum.lifetime_parameters:
                 raise enum.token.error(REFERENCE_RETURN_GAP)
 
 

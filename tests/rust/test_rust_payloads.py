@@ -24,7 +24,7 @@ def compile_source(source):
     ('enum E{A(P)} struct P{x:E}','infinite size'),
     ('enum E{A((i32,E))}','infinite size'),
     ('enum E{A(Unknown)}','unsupported Rust type'),
-    ('enum E{A(&P)} #[repr(C)] struct P{x:i64}','lifetime analysis'),
+    ('enum E{A(&P)} #[repr(C)] struct P{x:i64}', 'missing lifetime specifier'),
     ('enum E{A()}','empty tuple variants'),
     ('enum E{A(i32)=7}','require an integer repr'),
     ('enum E{A(i32),B=7}','require an integer repr'),

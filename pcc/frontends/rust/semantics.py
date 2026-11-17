@@ -1,6 +1,8 @@
 """Name resolution, monomorphic scalar inference, and Rust type checking."""
 from __future__ import annotations
 
+from contextlib import contextmanager
+
 import re
 from dataclasses import dataclass
 
@@ -189,9 +191,15 @@ class Checker:
         from .methods import InherentMethods
         self.methods = InherentMethods(self, implementations)
         for implementation in implementations:
-            # Lifetimes are erased; only the matching actual rustc check
-            # establishes that the impl's region constraints hold.
-            if implementation.lifetime_parameters and not externally_checked:
+            # Owned regions (stage 6): `impl<'a> W<'a>` for a data type with
+            # one lifetime and no type parameters, its methods' signatures
+            # naming 'a. Other impl lifetimes keep the actual-check gate.
+            owner = implementation.owner
+            if (implementation.lifetime_parameters and not externally_checked
+                    and not (len(implementation.lifetime_parameters) == 1 and not implementation.type_parameters
+                             and implementation.trait is None and isinstance(owner, TypeApplication)
+                             and not owner.arguments
+                             and owner.lifetimes == (implementation.lifetime_parameters[0].text,))):
                 raise implementation.lifetime_parameters[0].error(
                     "explicit impl lifetimes require a matching external rustc check record")
         from .traits import StaticTraits
@@ -485,13 +493,8 @@ class Checker:
                 return  # Declaration layout was already checked; storage waits for body constraints.
             self.generics.instantiate(ty, token)
         if isinstance(ty, SharedReference):
-            if ty.lifetime and ty.lifetime != "'_" and not self.externally_checked:
-                lifetimes = self.signature_lifetimes
-                if lifetimes is None:
-                    raise token.error("explicit reference lifetimes outside a function signature need region "
-                                      "inference, which is not implemented")
-                if ty.lifetime != "'static" and ty.lifetime not in lifetimes:
-                    raise token.error(f"use of undeclared lifetime name `{ty.lifetime}` (rustc E0261)")
+            if ty.lifetime and not self.externally_checked:
+                self.require_lifetime(ty.lifetime, token)
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
@@ -513,9 +516,11 @@ class Checker:
         if ty in self.enums:
             if ty in stack:
                 raise token.error("recursive aggregate has infinite size")
-            for fields in self.enums[ty].payloads.values():
-                for field_ty in fields:
-                    self.valid_type(field_ty, token, stack + (ty,), allow_reference=False)
+            enum = self.enums[ty]
+            with self.declaration_lifetimes(enum):
+                for fields in enum.payloads.values():
+                    for field_ty in fields:
+                        self.valid_type(field_ty, token, stack + (ty,), allow_reference=bool(enum.lifetime_parameters))
             return
         if ty not in self.records:
             raise token.error(f"unsupported Rust type {ty!r}")
@@ -525,11 +530,12 @@ class Checker:
         if not record.fields:
             raise record.token.error("zero-field structs are not implemented")
         names = set()
-        for field, field_ty in record.fields:
-            if field.text in names:
-                raise field.error("duplicate struct field")
-            names.add(field.text)
-            self.valid_type(field_ty, field, stack + (ty,), allow_reference=False)
+        with self.declaration_lifetimes(record):
+            for field, field_ty in record.fields:
+                if field.text in names:
+                    raise field.error("duplicate struct field")
+                names.add(field.text)
+                self.valid_type(field_ty, field, stack + (ty,), allow_reference=bool(record.lifetime_parameters))
 
     def place(self, expr: Expr):
         if expr.kind == "group":
@@ -606,6 +612,59 @@ class Checker:
         return Expr("borrow", expr.token, (TWO_PHASE if two_phase else True) if mutable else False,
                     children=[deref], ty=SharedReference(ty.referent, mutable))
 
+    @contextmanager
+    def declaration_lifetimes(self, declaration):
+        """Validate inside a data declaration's own lifetime scope."""
+        previous = self.signature_lifetimes
+        self.signature_lifetimes = {token.text for token in declaration.lifetime_parameters}
+        try:
+            yield
+        finally:
+            self.signature_lifetimes = previous
+
+    def require_lifetime(self, lifetime, token):
+        """A written lifetime outside an actual check: 'static, '_ or one the
+        enclosing signature, impl or data declaration declares."""
+        if lifetime in ("'_", "'static"):
+            return
+        if self.signature_lifetimes is None:
+            raise token.error("explicit reference lifetimes outside a function signature need region "
+                              "inference, which is not implemented")
+        if lifetime not in self.signature_lifetimes:
+            raise token.error(f"use of undeclared lifetime name `{lifetime}` (rustc E0261)")
+
+    def reference_field(self, declaration, ty, aggregate):
+        """A reference field of a data declaration with one lifetime parameter
+        (stage 6): `&'a T` or `&'static T` with a region-free T."""
+        from .reference_admission import has_regions
+        token = declaration.token
+        if self.externally_checked:
+            return
+        if aggregate:
+            raise token.error("references inside tuple or array fields need region inference, which is not "
+                              "implemented")
+        if not declaration.lifetime_parameters:
+            raise token.error("missing lifetime specifier: a reference field needs the declaration's "
+                              "lifetime parameter (E0106)")
+        if ty.lifetime is None or ty.lifetime == "'_":
+            raise token.error("missing lifetime specifier: a reference field must name a lifetime (E0106)")
+        if ty.lifetime not in ("'static", declaration.lifetime_parameters[0].text):
+            raise token.error(f"use of undeclared lifetime name `{ty.lifetime}` (rustc E0261)")
+        if has_regions(ty.referent, self):
+            raise token.error("a reference field to data with regions needs region inference, which is not "
+                              "implemented")
+
+    def region_field(self, declaration, nested, aggregate):
+        """A field of a data type with a lifetime shares the declaration's region."""
+        if self.externally_checked:
+            return
+        if not declaration.lifetime_parameters:
+            raise declaration.token.error(f"missing lifetime specifier: a field of type "
+                                          f"{nested.token.text} needs a lifetime parameter (E0106)")
+        if aggregate:
+            raise declaration.token.error("data with regions inside tuple or array fields needs region "
+                                          "inference, which is not implemented")
+
     def binding_moves(self, scrutinee, pattern):
         """By-value bindings of a place scrutinee move out of it: not through
         a shared reference (rustc E0507) or an array index (E0508)."""
@@ -662,13 +721,17 @@ class Checker:
                 raise fn.token.error("explicit receiver types require a matching external rustc check record")
             self.type_scope = self.function_generics.prepare(fn)
             self.abstract_function = bool(fn.type_parameters)
-            fn.result = self.generics.normalize(fn.result, fn.token)
-            fn.params = [(token, self.generics.normalize(ty, token), mutable)
-                         for token, ty, mutable in fn.params]
+            # Written types keep the lifetimes normalization erases (regions.py).
+            if fn.written_signature is None:
+                fn.written_signature = (tuple(ty for _, ty, _ in fn.params), fn.result)
             # A top-level reference result is owned (regions.py); references
             # nested in result aggregates still need region parameters.
-            self.signature_lifetimes = {token.text for token in fn.lifetime_parameters}
+            impl_lifetimes = fn.implementation.lifetime_parameters if fn.implementation is not None else ()
+            self.signature_lifetimes = {token.text for token in (*fn.lifetime_parameters, *impl_lifetimes)}
             try:
+                fn.result = self.generics.normalize(fn.result, fn.token)
+                fn.params = [(token, self.generics.normalize(ty, token), mutable)
+                             for token, ty, mutable in fn.params]
                 self.valid_type(fn.result, fn.token)
                 parameter_names = set()
                 for token, ty, _ in fn.params:
@@ -679,7 +742,7 @@ class Checker:
             finally:
                 self.signature_lifetimes = None
             from .regions import signature_regions
-            signature_regions(fn)  # rustc E0106 for an underivable elided output
+            signature_regions(fn, self)  # rustc E0106 for an underivable elided output
             name = fn.declaration_name
             if name in self.names:
                 raise fn.token.error(f"duplicate function {name!r}")
@@ -773,7 +836,9 @@ class Checker:
             ty = SharedReference(referent, bool(expr.value))
             self.valid_type(ty, expr.token)
         elif kind == "deref":
-            pointer = self.expression(children[0])
+            # Dereferencing a place reads the pointer in place; it never moves
+            # a `&mut` field out of what it is reached through.
+            pointer = self.expression(children[0], place_context=self.place(children[0]) is not None)
             if not isinstance(pointer, SharedReference):
                 raise expr.token.error("dereference requires an admitted shared reference; raw pointers are not implemented")
             ty = pointer.referent

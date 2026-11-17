@@ -62,6 +62,25 @@ def substitute(ty, bindings):
     return ty
 
 
+def written_lifetimes(types):
+    """Lifetimes named in written (unnormalized) types."""
+    found, pending = set(), list(types)
+    while pending:
+        ty = pending.pop()
+        if isinstance(ty, SharedReference):
+            if ty.lifetime:
+                found.add(ty.lifetime)
+            pending.append(ty.referent)
+        elif isinstance(ty, TypeApplication):
+            found.update(ty.lifetimes)
+            pending.extend(ty.arguments)
+        elif isinstance(ty, TupleType):
+            pending.extend(ty.elements)
+        elif isinstance(ty, FixedArrayType):
+            pending.append(ty.element)
+    return found
+
+
 class GenericDeclarations:
     def __init__(self, checker):
         self.checker = checker
@@ -103,14 +122,23 @@ class GenericDeclarations:
                                    ty.mutable, ty.lifetime)
         if isinstance(ty, TypeApplication):
             lifetimes = ty.lifetimes
-            if lifetimes and not self.checker.externally_checked:
-                raise token.error("explicit lifetime arguments require a matching external rustc check record")
             ty = TypeApplication(self.canonical_name(ty.name, token, scope), ty.arguments)
             if ty.name in scope or ty.name in PRIMITIVES:
                 raise token.error("generic arguments require a named generic data declaration")
             declaration = self.definitions.get(ty.name)
             if declaration is None:
                 raise token.error(f"unsupported Rust type {ty.name!r}")
+            if len(lifetimes) > len(declaration.lifetime_parameters):
+                raise token.error(f"{ty.name} takes {len(declaration.lifetime_parameters)} lifetime arguments "
+                                  f"but {len(lifetimes)} were supplied (rustc E0107)")
+            if lifetimes and not self.checker.externally_checked:
+                # Owned regions (stage 6): one lifetime on a data type without
+                # type parameters; a value of it has one region slot.
+                if len(declaration.lifetime_parameters) != 1 or declaration.type_parameters:
+                    raise token.error("lifetime arguments of data types with several lifetimes or with type "
+                                      "parameters need region inference, which is not implemented")
+                for lifetime in lifetimes:
+                    self.checker.require_lifetime(lifetime, token)
             if len(lifetimes) > len(declaration.lifetime_parameters):
                 raise token.error(f"{ty.name} takes {len(declaration.lifetime_parameters)} lifetime arguments "
                                   f"but {len(lifetimes)} were supplied (rustc E0107)")
@@ -139,6 +167,42 @@ class GenericDeclarations:
             raise token.error(f"generic type {ty} requires explicit type arguments; constructor inference is not implemented")
         return ty
 
+    def elided_field_lifetimes(self, declaration, raw):
+        """A data type's lifetime cannot be elided in a field (rustc E0106)."""
+        declared = {item.text for item in declaration.lifetime_parameters} | {"'static"}
+        pending = list(raw)
+        while pending:
+            ty = pending.pop()
+            if isinstance(ty, SharedReference):
+                if ty.lifetime == "'_":
+                    raise declaration.token.error("`'_` cannot be used in a field type (rustc E0637)")
+                if ty.lifetime is not None and ty.lifetime not in declared:
+                    raise declaration.token.error(f"use of undeclared lifetime name `{ty.lifetime}` (rustc E0261)")
+                pending.append(ty.referent)
+            elif isinstance(ty, (TupleType, FixedArrayType)):
+                pending.extend(ty.elements if isinstance(ty, TupleType) else (ty.element,))
+            elif isinstance(ty, (str, TypeApplication)):
+                name = ty.name if isinstance(ty, TypeApplication) else ty
+                nested = self.definitions.get(name)
+                written = ty.lifetimes if isinstance(ty, TypeApplication) else ()
+                if nested is not None and nested.lifetime_parameters and len(written) < len(nested.lifetime_parameters):
+                    raise declaration.token.error(f"missing lifetime specifier: field type {name} needs its "
+                                                  "lifetime written (E0106)")
+                if "'_" in written:
+                    raise declaration.token.error("`'_` cannot be used in a field type (rustc E0637)")
+                if isinstance(ty, TypeApplication):
+                    pending.extend(ty.arguments)
+
+    def normalize_owner(self, implementation, token, scope):
+        """An impl's self type, in the impl's own lifetime scope."""
+        checker = self.checker
+        previous = checker.signature_lifetimes
+        checker.signature_lifetimes = {item.text for item in implementation.lifetime_parameters}
+        try:
+            return self.normalize(implementation.owner, token, scope)
+        finally:
+            checker.signature_lifetimes = previous
+
     def enum_constructor_type(self, owner, token):
         """Fresh holes belong to a constructor use, never a bare type name."""
         if isinstance(owner, str):
@@ -151,9 +215,14 @@ class GenericDeclarations:
 
     def prepare(self):
         for name, declaration in self.definitions.items():
-            if declaration.lifetime_parameters and not self.checker.externally_checked:
+            if (declaration.lifetime_parameters and not self.checker.externally_checked
+                    and (len(declaration.lifetime_parameters) != 1 or declaration.type_parameters)):
+                # One lifetime parameter is owned (stage 6, a value has one
+                # region slot); several, or lifetimes beside type parameters,
+                # need region inference across type arguments.
                 raise declaration.lifetime_parameters[0].error(
-                    "lifetime parameters on data declarations require a matching external rustc check record")
+                    "several lifetime parameters, or lifetimes beside type parameters, on data declarations "
+                    "need region inference, which is not implemented")
             if declaration.outlives_bounds and not self.checker.externally_checked:
                 # Region constraints only: proven by the actual check, then erased.
                 raise declaration.outlives_bounds[0][1][0].error(
@@ -168,15 +237,30 @@ class GenericDeclarations:
                     raise parameter.error("generic parameters shadowing primitive names are not implemented")
                 scope[parameter.text] = TypeParameter(name, index, parameter.text)
             self.parameters[name] = tuple(scope.values())
+            raw = ([t for fields in declaration.payloads.values() for t in fields]
+                   if isinstance(declaration, Enumeration) else [t for _, t in declaration.fields])
+            if not self.checker.externally_checked:
+                self.elided_field_lifetimes(declaration, raw)
+            if declaration.lifetime_parameters and not self.checker.externally_checked:
+                parameter = declaration.lifetime_parameters[0]
+                if parameter.text not in written_lifetimes(raw):
+                    raise parameter.error(f"lifetime parameter `{parameter.text}` is never used (rustc E0392)")
+            previous = self.checker.signature_lifetimes
+            self.checker.signature_lifetimes = {token.text for token in declaration.lifetime_parameters}
+            try:
+                if isinstance(declaration, Enumeration):
+                    declaration.payloads = {
+                        variant: tuple(self.normalize(t, declaration.token, scope) for t in fields)
+                        for variant, fields in declaration.payloads.items()
+                    }
+                else:
+                    declaration.fields = [(field, self.normalize(t, field, scope))
+                                          for field, t in declaration.fields]
+            finally:
+                self.checker.signature_lifetimes = previous
             if isinstance(declaration, Enumeration):
-                declaration.payloads = {
-                    variant: tuple(self.normalize(t, declaration.token, scope) for t in fields)
-                    for variant, fields in declaration.payloads.items()
-                }
                 fields = [t for types in declaration.payloads.values() for t in types]
             else:
-                declaration.fields = [(field, self.normalize(t, field, scope))
-                                      for field, t in declaration.fields]
                 names = [field.text for field, _ in declaration.fields]
                 if len(set(names)) != len(names):
                     raise declaration.token.error("duplicate struct field")
@@ -218,7 +302,7 @@ class GenericDeclarations:
             start = TypeApplication(name, self.parameters[name]) if self.parameters[name] else name
             budget = MAX_LAYOUT_STEPS
 
-            def visit(ty, stack=()):
+            def visit(ty, stack=(), aggregate=False):
                 nonlocal budget
                 budget -= 1
                 if budget < 0 or len(stack) > 32:
@@ -227,16 +311,21 @@ class GenericDeclarations:
                 if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty == STATIC_STR:
                     return  # A `&'static str` field stores literal data only.
                 if isinstance(ty, SharedReference):
-                    raise declaration.token.error("aggregate reference storage requires lifetime analysis, which is not implemented")
+                    if len(stack) == 1:  # a direct field; nested declarations check their own
+                        self.checker.reference_field(declaration, ty, aggregate)
+                    return
                 if isinstance(ty, FixedArrayType):
-                    visit(ty.element, stack)
+                    visit(ty.element, stack, True)
                     return
                 if isinstance(ty, TupleType):
                     for element in ty.elements:
-                        visit(element, stack)
+                        visit(element, stack, True)
                     return
                 if ty in stack:
                     raise declaration.token.error("recursive aggregate has infinite size")
+                nested = self.definitions.get(ty.name if isinstance(ty, TypeApplication) else ty)
+                if len(stack) == 1 and nested is not None and nested.lifetime_parameters:
+                    self.checker.region_field(declaration, nested, aggregate)
                 for field in self.specialized_fields(ty):
                     visit(field, stack + (ty,))
 

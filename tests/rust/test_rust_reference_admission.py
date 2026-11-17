@@ -33,8 +33,8 @@ REFERENCE_FORMS = (
     ('fn f(p:(&u64,)){}', 'reference returns and aggregate reference storage require lifetime analysis'),
     ('fn f(p:[&u64;2]){}', 'reference returns and aggregate reference storage require lifetime analysis'),
     ('struct R<T>{x:T} fn f(p:R<&u64>){}', 'reference returns and aggregate reference storage require lifetime analysis'),
-    ('struct R{p:&u64}', 'aggregate reference storage requires lifetime analysis'),
-    ('enum E{A(&u64)}', 'aggregate reference storage requires lifetime analysis'),
+    ('struct R{p:&u64}', r'missing lifetime specifier.*\(E0106\)'),
+    ('enum E{A(&u64)}', r'missing lifetime specifier.*\(E0106\)'),
     ('fn f(){let x=1;*x;}', 'dereference requires an admitted shared reference'),
     ('extern "C"{fn f(p:&u64);}', 'foreign shared references require'),
 )

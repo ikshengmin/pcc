@@ -123,8 +123,8 @@ def test_source_map_does_not_guess_paths_or_decode_bytes(sources):
 def test_module_parser_graph_does_not_create_an_unchecked_public_lowering_escape(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unresolved module graph reached IR'))
-    with pytest.raises(RustError, match='lifetime parameters on data declarations require'):
-        compile_rust("mod a{pub struct W<'a>{pub r:&'a u64}}", experimental_rustc_checked=True)
+    with pytest.raises(RustError, match='several lifetime parameters'):
+        compile_rust("mod a{pub struct W<'a,'b>{pub r:&'a u64,pub s:&'b u64}}", experimental_rustc_checked=True)
     monkeypatch.undo()
     assert not compile_rust("mod a{pub fn f<'a>(x:&'a u64)->&'a u64{x}}").externally_checked
     # References in an inline module are owned loans (stages 4-5).

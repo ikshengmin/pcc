@@ -179,7 +179,7 @@ def test_reference_programs_run_with_owned_admission_and_match_rustc(name, tmp_p
 
 
 @pytest.mark.parametrize('source,boundary', [
-    ("pub struct W<'a> { pub r: &'a u64 }", 'lifetime parameters on data declarations require'),
+    ("pub struct W<'a, 'b> { pub r: &'a u64, pub s: &'b u64 }", 'several lifetime parameters'),
     ('pub fn f(x: &u64) -> (&u64, u64) { (x, 1) }', 'reference returns and aggregate reference storage require'),
     ('pub fn f() -> u64 { let a = 1u64; let t = (&a, 1u64); 0 }', 'aggregate reference storage requires'),
     ('pub fn id<T>(t: T) -> T { t } pub fn f() -> u64 { let a = 1u64; *id(&a) }',

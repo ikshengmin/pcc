@@ -58,7 +58,7 @@ class GenericFunctions:
             self.raw_bodies[function.declaration_name] = deepcopy(function.body)
         if function.implementation is not None:
             owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
-            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
+            scope['Self'] = self.checker.generics.normalize_owner(function.implementation, function.token, owner_scope)
             if function.implementation.trait is not None:
                 scope.update(self.checker.traits.associated.scope(function.implementation.trait, scope['Self']))
         return scope
@@ -69,7 +69,7 @@ class GenericFunctions:
                  zip(parameters, parameters if arguments is None else arguments)}
         if function.implementation is not None:
             owner_scope = {p.text: scope[p.text] for p in function.implementation.type_parameters}
-            scope['Self'] = self.checker.generics.normalize(function.implementation.owner, function.token, owner_scope)
+            scope['Self'] = self.checker.generics.normalize_owner(function.implementation, function.token, owner_scope)
             if function.implementation.trait is not None:
                 scope.update(self.checker.traits.associated.scope(function.implementation.trait, scope['Self']))
         return scope

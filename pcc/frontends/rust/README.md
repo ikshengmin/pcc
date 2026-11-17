@@ -68,7 +68,8 @@ in the named modules; locate them with
 | Shared references in bodies, parameters and `&self` receivers: local, field and indexed borrows, reborrows | `moves.py` (loans, holders, liveness), `reference_admission.py` (post-sema shape guard) | NLL shared loans, liveness, array-index overlap, E0505/E0506/E0597 | **owned** (stage 4); references in results or aggregates, temporaries' lifetime extension, generic reference arguments and default binding modes stay explicit gaps |
 | `&mut` types and borrows, `&mut self` receivers, implicit reborrows | `moves.py` (loan kinds, deref places, two-phase), `semantics.py` (implicit reborrows) | mutable loans, two-phase borrows, E0499/E0502/E0503 | **owned** (stage 5); explicit receiver types (`self: &mut Self`) stay a gap |
 | Reference results, function lifetime parameters and elision, reference parameter reassignment | `regions.py`, `moves.py`, `semantics.py` | E0106, E0515, E0597, "lifetime may not live long enough" | **owned** (stage 6, first part) |
-| Lifetime parameters on structs/enums/impls, outlives bounds (`'a: 'b`), references in aggregates, explicit lifetimes in bodies, generic reference arguments | `generics.py`, `semantics.py`, `function_generics.py` | region inference across type arguments and outlives constraints | open (stage 6, second part) |
+| One lifetime parameter on a struct/enum and `impl<'a> W<'a>`; references and such data types in their fields | `regions.py` (slots), `moves.py` (inner slot, writes through `&mut`), `generics.py`, `semantics.py` | E0106, E0107, E0261, E0392, E0597, E0621, implied bounds | **owned** (stage 6, second part) |
+| Several lifetime parameters or lifetimes beside type parameters, outlives bounds (`'a: 'b`), references in tuples/arrays, regions nested beyond `&'s W<'a>`, explicit lifetimes in bodies, generic reference arguments | `generics.py`, `semantics.py`, `function_generics.py` | region inference across type arguments and outlives constraints | open |
 | Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
 | Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
 
@@ -145,11 +146,22 @@ Migration order:
    the arguments whose region is the output region. Results coerce `&mut T`
    to `&T`, and assignments may write through a reference a call returns.
    Verdicts in `tests/rust/test_rust_owned_signature_regions.py::CORPUS` (54
-   original programs) equal a rustc 1.92.0 `-O` build's. Second part (open):
-   lifetime parameters on data and impls (a value of `W<'a>` holds loans of
-   its region, and a field read through `&'s W<'a>` yields the field's
-   region, not the outer one), outlives bounds, references in aggregates and
-   generic reference arguments.
+   original programs) equal a rustc 1.92.0 `-O` build's. Second part (done):
+   a struct or enum with one lifetime parameter and no type parameters stores
+   references and such data types written with 'a; `impl<'a> W<'a>` methods
+   name 'a. A value has up to two region slots (`W<'a>`/`&'a T` one,
+   `&'s W<'a>` two); the inner slot's entries ride beside the outer ones, a
+   field read yields its data type's slot, a reborrow holds the last
+   dereferenced reference's slots (only the outer one for region-free data),
+   calls map the callee's slots, and a write through `&mut` adds the written
+   loans to every local the reference may point to (into caller memory they
+   must satisfy the parameter's region, E0597/E0621). `&'s W<'a>` parameters
+   imply 'a: 's. Lifetime arguments are erased by normalization, so
+   signatures keep their written types (`Function.written_signature`).
+   Verdicts in `tests/rust/test_rust_owned_data_regions.py::CORPUS` (58
+   original programs) equal a rustc 1.92.0 `-O` build's. Open: several
+   lifetimes or lifetimes beside type parameters, outlives bounds, references
+   in tuples and arrays, deeper nesting, generic reference arguments.
 7. Trait gates: default methods, standard markers, bound well-formedness.
 8. Owned lints for the attributes a crate denies, then multi-file crates on the
    same path (DataSketches Rust stops at `#![deny(missing_docs)]`).

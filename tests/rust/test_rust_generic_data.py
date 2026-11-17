@@ -45,7 +45,7 @@ def compile_source(source, **options):
     ('struct Pair<T,U>{a:T,b:U} struct Bad{value:Pair<i32>}', 'argument count'),
     ('struct Wrap<T>{value:T} fn f(x:Wrap<i32,u32>){}', 'argument count'),
     ('struct S<T>{x:T} fn f(x:T){}', 'unsupported Rust type'),
-    ('struct S<T>{x:&T}', 'lifetime analysis'),
+    ('struct S<T>{x:&T}', r'missing lifetime specifier.*\(E0106\)'),
     ('struct S<T>{x:T} fn f(){S::<bool>{x:1};}', 'type mismatch'),
     ('struct S<T>{x:T} fn take(x:S<i64>){} fn f(x:S<u64>){take(x);}', 'type mismatch'),
     ('struct S<T>{x:T} struct R<T>{x:T} fn take(x:S<i64>){} fn f(x:R<i64>){take(x);}', 'type mismatch'),

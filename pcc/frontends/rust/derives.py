@@ -50,7 +50,10 @@ def derive_attribute(parser, attribute, start):
 
 def implements(checker, ty, trait):
     """Whether a field type implements a derivable trait in PCC's type universe."""
-    from .types import STATIC_STR, FixedArrayType, TupleType
+    from .types import STATIC_STR, FixedArrayType, SharedReference, TupleType
+    if isinstance(ty, SharedReference):
+        # `&T` is Copy and Clone; `&mut T` is neither (stage 6 reference fields).
+        return trait in ('Copy', 'Clone') and not ty.mutable
     if ty in checker.records or ty in checker.enums:
         return trait in checker.declared_derives.get(ty, ())
     if isinstance(ty, TupleType):
@@ -64,6 +67,7 @@ def implements(checker, ty, trait):
 
 
 def validate_derives(checker):
+    from .types import SharedReference
     """Record each ADT's derived traits after checking them as rustc does."""
     # Generic declarations have left checker.records by now; check them here.
     for declaration in checker.generics.definitions.values():
@@ -106,6 +110,8 @@ def validate_derives(checker):
         written = [derive.name for derive in declaration.derives]
         for trait in sorted(derived, key=lambda name: (name != 'Copy', written.index(name))):
             for ty in field_types:
+                if isinstance(ty, SharedReference) and trait not in ('Copy', 'Clone'):
+                    raise token[trait].error(f'deriving `{trait}` with a reference field is not implemented')
                 if not implements(checker, ty, trait):
                     code = 'E0204' if trait == 'Copy' else 'E0369' if trait == 'PartialEq' else 'E0277'
                     raise token[trait].error(f'field type {ty} does not implement `{trait}` (rustc {code})')

@@ -44,7 +44,7 @@ class InherentMethods:
                         or len(owner.arguments) != len(names)
                         or set(owner.arguments) != set(names)):
                     raise implementation.token.error('specialized, repeated or unconstrained impl parameters require coherence checking, which is not implemented')
-            elif isinstance(owner, TypeApplication) or names:
+            elif isinstance(owner, TypeApplication) and owner.arguments or names:
                 raise implementation.token.error('nongeneric impl owner cannot have generic arguments or unconstrained parameters')
             token = implementation.token
             identity = f'inherent impl {token.source_path or "<input>"}:{token.line}:{token.column}'
@@ -58,7 +58,7 @@ class InherentMethods:
             markers.prepare(replace(implementation, parameter_bounds=marker_bounds,
                                     where_predicates=()), scope)
             self.parameters[implementation] = tuple(scope.values())
-            self.checker.generics.normalize(owner, token, scope)
+            self.checker.generics.normalize_owner(implementation, token, scope)
         for function in self.checker.functions:
             if function.implementation is None or function.implementation.trait is not None:
                 continue

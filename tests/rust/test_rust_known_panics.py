@@ -100,11 +100,12 @@ def test_reference_free_programs_compile_with_no_rustc_and_no_attestation():
     assert compile_rust('pub fn f() -> u64 { 1 }', experimental_rustc_checked=True).symbols
 
 
-def test_references_and_signature_lifetimes_are_owned_and_data_lifetimes_need_the_check():
-    # Stages 4-6 own shared and mutable loans and signature regions; lifetime
-    # parameters on structs and enums are still gated.
+def test_references_and_lifetimes_are_owned_and_several_data_lifetimes_need_the_check():
+    # Stages 4-6 own loans, signature regions and one data lifetime; several
+    # lifetime parameters on a data type are still gated.
     assert not compile_rust('pub fn f(x: &u64) -> u64 { *x }').externally_checked
     assert not compile_rust('pub fn f(x: &mut u64) -> u64 { *x }').externally_checked
     assert not compile_rust("pub fn f<'a>(x: &'a u64) -> &'a u64 { x }").externally_checked
-    with pytest.raises(RustError, match='lifetime parameters on data declarations require'):
-        compile_rust("pub struct W<'a> { pub r: &'a u64 }")
+    assert not compile_rust("pub struct W<'a> { pub r: &'a u64 }").externally_checked
+    with pytest.raises(RustError, match='several lifetime parameters'):
+        compile_rust("pub struct W<'a, 'b> { pub r: &'a u64, pub s: &'b u64 }")
