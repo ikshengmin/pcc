@@ -6,6 +6,7 @@
 
 extern int64_t pcc_gc_stack_slot_root_is_conservative(void *);
 extern int64_t pcc_thread_native_slots_conservative(void *);
+extern int64_t pcc_gc_frame_slots_conservative(void *);
 extern void *pcc_py_gc_scheduler_root_stack_handle;
 static PyObject *global_slot;
 
@@ -20,6 +21,9 @@ int main(void) {
     int global_conservative = (int)pcc_gc_stack_slot_root_is_conservative(&global_slot);
     int native_stack = (int)pcc_thread_native_slots_conservative(&stack_slot);
     int native_global = (int)pcc_thread_native_slots_conservative(&global_slot);
+    int frame_stack = (int)pcc_gc_frame_slots_conservative(&stack_slot);
+    int frame_global = (int)pcc_gc_frame_slots_conservative(&global_slot);
+    if (frame_stack != expected || frame_global != 0) return 109;
     if (stack_conservative != expected || global_conservative != 0
         || native_stack != expected || native_global != 0) return 104;
 
@@ -37,8 +41,8 @@ int main(void) {
     pcc_gc_scheduler_root_unregister_handle(stack_handle);
     if (stack_sentinel != expected || global_sentinel != 0 || !distinct) return 107;
     if (stack_slot != 0 || global_slot != 0) return 108;
-    printf("stack-root-contract:ok backend=%d stack=%d global=%d native_stack=%d native_global=%d stack_sentinel=%d global_sentinel=%d distinct=%d\n",
-           backend, stack_conservative, global_conservative, native_stack, native_global,
+    printf("stack-root-contract:ok backend=%d stack=%d global=%d native_stack=%d native_global=%d frame_stack=%d frame_global=%d stack_sentinel=%d global_sentinel=%d distinct=%d\n",
+           backend, stack_conservative, global_conservative, native_stack, native_global, frame_stack, frame_global,
            stack_sentinel, global_sentinel, distinct);
     return 0;
 }

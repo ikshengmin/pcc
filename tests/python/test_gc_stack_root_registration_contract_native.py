@@ -55,7 +55,8 @@ def test_stack_root_registration_contract_all_five_backends(tmp_path):
         conservative = int(backend != 0)
         assert result.stdout == (
             f"stack-root-contract:ok backend={backend} stack={conservative} global=0 "
-            f"native_stack={conservative} native_global=0 stack_sentinel={conservative} "
+            f"native_stack={conservative} native_global=0 "
+            f"frame_stack={conservative} frame_global=0 stack_sentinel={conservative} "
             "global_sentinel=0 distinct=1\n"
         ), receipt
     assert all(_digest(Path(path)) == digest for path, digest in hashes.items())
