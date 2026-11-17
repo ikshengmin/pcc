@@ -109,25 +109,40 @@ def isolated_rustc_environment():
     return {**keep, **dict(ENV.variables)}
 
 
+def _run_env_reference(*args, **kwargs):
+    """Retain captured diagnostics without changing subprocess failure semantics."""
+    try:
+        return subprocess.run(*args, **kwargs)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        error.add_note(
+            "Rust env reference subprocess diagnostics:\n"
+            + "returncode=" + repr(getattr(error, "returncode", None)) + "\n"
+            + "timeout=" + repr(getattr(error, "timeout", None)) + "\n"
+            + "stdout=" + repr(error.stdout) + "\n"
+            + "stderr=" + repr(error.stderr)
+        )
+        raise
+
+
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 def test_rustc_expands_and_rejects_the_same_uses(tmp_path):
     rustc, environment = shutil.which('rustc'), isolated_rustc_environment()
     printed = ''.join('print!("{:?}|", ' + body + ');' for body, *_ in EXPANDED)
     (tmp_path / 'main.rs').write_text('fn main(){' + printed + '}\n')
-    subprocess.run([rustc, '--edition=2021', str(tmp_path / 'main.rs'), '-o', str(tmp_path / 'main')],
+    _run_env_reference([rustc, '--edition=2021', str(tmp_path / 'main.rs'), '-o', str(tmp_path / 'main')],
                    check=True, capture_output=True, timeout=60, env=environment)
-    output = subprocess.run([str(tmp_path / 'main')], check=True, capture_output=True, text=True, timeout=10).stdout
+    output = _run_env_reference([str(tmp_path / 'main')], check=True, capture_output=True, text=True, timeout=10).stdout
     expected = ''.join(('None' if value is None else f'Some("{value}")' if name == 'option_env' else f'"{value}"') + '|'
                        for _, name, _, value in EXPANDED)
     assert output == expected
     for index, (body, message) in enumerate(REJECTED):
         result = 'Option<&\'static str>' if body.startswith('option_env') else '&\'static str'
         (tmp_path / f'case{index}.rs').write_text(f'pub fn f()->{result}{{ {body} }}\n')
-        run = subprocess.run([rustc, '--crate-type=lib', '--edition=2021', '--emit=metadata',
+        run = _run_env_reference([rustc, '--crate-type=lib', '--edition=2021', '--emit=metadata',
                               str(tmp_path / f'case{index}.rs'), '-o', str(tmp_path / f'case{index}.rmeta')],
                              capture_output=True, text=True, timeout=60, env=environment)
-        assert run.returncode != 0 and 'error: ' + message in run.stderr, (body, run.stderr)
+        assert run.returncode != 0 and 'error: ' + message in run.stderr, (body, run.returncode, run.stdout, run.stderr)
 
 
 # --- Cargo's crate environment ------------------------------------------------
@@ -200,3 +215,53 @@ def test_cargo_sets_the_same_crate_environment(tmp_path):
     assert run.returncode == 0, run.stderr
     observed = dict(line.split('=', 1) for line in run.stdout.splitlines())
     assert {name: value.strip('"') for name, value in observed.items()} == EXPECTED
+
+
+@pytest.mark.parametrize("failure", ("exit", "timeout"))
+@pytest.mark.parametrize("captured", ((b"out\xff", b"err\xfe"), ("out", "err"), (None, None)))
+def test_env_reference_retains_original_subprocess_failure(monkeypatch, failure, captured):
+    command = ["rustc", "main.rs"]
+    environment = {"PATH": "toolchain", "PCC_SET": "value", "PCC_EMPTY": ""}
+    options = dict(check=True, capture_output=True, timeout=60, env=environment)
+    stdout, stderr = captured
+    if failure == "exit":
+        original = subprocess.CalledProcessError(1, command, output=stdout, stderr=stderr)
+    else:
+        original = subprocess.TimeoutExpired(command, 60, output=stdout, stderr=stderr)
+    original.add_note("prior note")
+    calls = []
+
+    def fail(*args, **kwargs):
+        calls.append((args, kwargs))
+        raise original
+
+    monkeypatch.setattr(subprocess, "run", fail)
+    with pytest.raises(type(original)) as raised:
+        _run_env_reference(command, **options)
+    assert raised.value is original
+    assert original.stdout is stdout and original.stderr is stderr
+    assert original.cmd is command
+    assert getattr(original, "returncode", None) == (1 if failure == "exit" else None)
+    assert getattr(original, "timeout", None) == (60 if failure == "timeout" else None)
+    assert calls == [((command,), options)]
+    assert calls[0][1]["env"] is environment
+    assert original.__notes__ == ["prior note",
+        "Rust env reference subprocess diagnostics:\n"
+        + "returncode=" + repr(1 if failure == "exit" else None) + "\n"
+        + "timeout=" + repr(60 if failure == "timeout" else None) + "\n"
+        + "stdout=" + repr(stdout) + "\n" + "stderr=" + repr(stderr)]
+
+
+def test_env_reference_preserves_success_and_unchecked_rejection(monkeypatch):
+    command = ["rustc", "main.rs"]
+    for code in (0, 1):
+        result = subprocess.CompletedProcess(command, code, stdout="out", stderr="err")
+        calls = []
+
+        def run(*args, **kwargs):
+            calls.append((args, kwargs))
+            return result
+
+        monkeypatch.setattr(subprocess, "run", run)
+        assert _run_env_reference(command, capture_output=True, timeout=60) is result
+        assert calls == [((command,), dict(capture_output=True, timeout=60))]
