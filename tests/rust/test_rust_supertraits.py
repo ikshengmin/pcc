@@ -96,11 +96,9 @@ def test_invalid_unused_obligations_fail_before_ir(name,text,message,code,monkey
         compile_rust(text,experimental_rustc_checked=True)
 
 
-def test_shared_mutable_supertrait_original_requires_actual_check(monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer,'lower',lambda *a:pytest.fail('unchecked references reached IR'))
-    with pytest.raises(RustError,match='mutable references require'):  # &mut is stage 5
-        compile_rust(source(PROGRAMS[1]),experimental_rustc_checked=True)
+def test_shared_mutable_supertrait_original_compiles_with_owned_loans():
+    # Its shared and mutable references are owned loans now (stages 4-5).
+    assert not compile_rust(source(PROGRAMS[1])).externally_checked
 
 
 def test_context_hierarchy_uses_canonical_module_paths_not_marker_names():

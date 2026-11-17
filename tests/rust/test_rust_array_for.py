@@ -105,20 +105,15 @@ def test_former_range_iterator_gaps_are_integer_range_loops(source):
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_for_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+def test_for_originals_compile_without_rustc(name, monkeypatch):
     # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
     # the array move and moves across iterations are decided by the owned move
-    # checker's loop fixed point; the reference gate still precedes the model.
+    # checker's loop fixed point.
     import subprocess
-    from tests.rust.certification_support import source_has_references
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
     source = Path(__file__).with_name('programs').joinpath(name + '.rs').read_text()
-    if source_has_references(source):
-        # Shared loans are owned (stage 4); these originals also use &mut (stage 5).
-        with pytest.raises(RustError, match='mutable references require'):
-            compile_rust(source)
-    else:
-        assert not compile_rust(source).externally_checked
+    # Shared (stage 4) and mutable (stage 5) loans are owned too.
+    assert not compile_rust(source).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

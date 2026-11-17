@@ -132,18 +132,13 @@ def test_generic_replay_starts_from_original_if_let_and_uses_distinct_bindings()
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_if_let_originals_compile_without_rustc_unless_they_hold_references(name, monkeypatch):
+def test_if_let_originals_compile_without_rustc(name, monkeypatch):
     # Stage 3 of the owned admission migration (pcc/frontends/rust/README.md):
     # moves through if-let arms (the shared match machinery) are decided by the owned move checker's fixed
-    # point, so reference-free originals need no rustc and no attestation.
-    from tests.rust.certification_support import source_has_references
+    # point, so originals need no rustc and no attestation.
     monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned admission ran a tool'))
-    if source_has_references(source(name)):
-        # Shared loans are owned (stage 4); these originals also use &mut (stage 5).
-        with pytest.raises(RustError, match='mutable references require'):
-            compile_rust(source(name))
-    else:
-        assert not compile_rust(source(name)).externally_checked
+    # Shared (stage 4) and mutable (stage 5) loans are owned too.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.parametrize('text', [

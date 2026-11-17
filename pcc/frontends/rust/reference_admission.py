@@ -1,9 +1,10 @@
 """Reference admission boundaries.
 
-Shared references in bodies, parameters and `&self` receivers are admitted by
-owned analysis (stage 4 of README "Replacing the rustc admission gate"): sema
-rejects `&mut`, explicit lifetimes, reference returns and references in
-aggregates with explicit boundaries, the move checker owns shared loans, and
+Shared and mutable references in bodies, parameters and `&self`/`&mut self`
+receivers are admitted by owned analysis (stages 4-5 of README "Replacing the
+rustc admission gate"): sema rejects explicit lifetimes and receiver types,
+reference returns and references in aggregates with explicit boundaries, the
+move checker owns shared and mutable loans, and
 reject_unowned_reference_shapes re-validates the subset after sema. Presence
 detection (contains_references) still decides which checked inputs leave moves
 to the actual check and gates the module-only analysis API. Walking all
@@ -98,7 +99,7 @@ def has_reference(ty) -> bool:
 
 
 def reject_unowned_reference_shapes(checker):
-    """Fail closed after sema: owned shared loans (stage 4) cover references in
+    """Fail closed after sema: owned loans (stages 4-5) cover references in
     bodies and parameters only, never in results or aggregate storage, even if
     a semantic transformation synthesized one."""
     for function in checker.functions:

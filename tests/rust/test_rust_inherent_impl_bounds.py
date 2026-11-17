@@ -97,9 +97,8 @@ def test_empty_or_unused_marker_impl_cannot_authorize_owned_ir_with_a_boolean(te
 def test_impl_originals_keep_genuine_source_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked impl source reached IR'))
-    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
-    message = 'mutable references require' if name == 'impl_bound_lookup_order' else OLD_GATE
-    with pytest.raises(RustError, match=message):
+    # References are owned (stages 4-5); the trait-bound gate (stage 7) remains.
+    with pytest.raises(RustError, match=OLD_GATE):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

@@ -103,10 +103,10 @@ def test_ambiguous_invalid_and_moved_local_holes_fail_before_ir(name, text, mess
 @pytest.mark.parametrize('text,boundary', [
     ('fn f()->u64{let x=1u64;let p:_=&x;*p}', None),
     ('fn f(p:&u64)->u64{let q:&_=p;*q}', None),
-    ('fn f()->u64{let mut x=1u64;let p:&mut _=&mut x;*p=2u64;*p}', 'mutable borrowing requires'),
+    ('fn f()->u64{let mut x=1u64;let p:&mut _=&mut x;*p=2u64;*p}', None),
 ])
 def test_local_holes_cannot_mint_reference_certification(text, boundary, monkeypatch):
-    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
+    # Shared and mutable loans are owned (stages 4-5).
     if boundary is None:
         assert not compile_rust(text).externally_checked
         return

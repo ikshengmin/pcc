@@ -99,11 +99,8 @@ def test_trait_self_does_not_silently_gain_sized_from_method_parameter_defaults(
 def test_trait_marker_public_admission_still_requires_actual_check(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified trait marker reached IR'))
-    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
-    message = ('mutable references require'
-               if name in {'trait_marker_receivers', 'trait_marker_identity', 'trait_marker_forward_result'}
-               else 'actual source/options-bound CheckedRustSource')
-    with pytest.raises(RustError, match=message):
+    # References are owned (stages 4-5); the marker-bound gate (stage 7) remains.
+    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

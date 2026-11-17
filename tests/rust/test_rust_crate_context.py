@@ -123,11 +123,12 @@ def test_source_map_does_not_guess_paths_or_decode_bytes(sources):
 def test_module_parser_graph_does_not_create_an_unchecked_public_lowering_escape(monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unresolved module graph reached IR'))
-    with pytest.raises(RustError, match='mutable references require'):
-        compile_rust('mod a{pub fn f(x:&mut u64)->u64{*x}}', experimental_rustc_checked=True)
+    with pytest.raises(RustError, match='explicit function lifetimes require'):
+        compile_rust("mod a{pub fn f<'a>(x:&'a u64)->u64{*x}}", experimental_rustc_checked=True)
     monkeypatch.undo()
-    # Shared references in an inline module are owned loans (stage 4).
+    # References in an inline module are owned loans (stages 4-5).
     assert not compile_rust('mod a{pub fn f(x:&u64)->u64{*x}}').externally_checked
+    assert not compile_rust('mod a{pub fn f(x:&mut u64)->u64{*x}}').externally_checked
 
 
 def test_original_core_root_retains_no_core_and_staging_failure():

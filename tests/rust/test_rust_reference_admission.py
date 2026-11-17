@@ -23,7 +23,7 @@ LEGACY_REFERENCE_PROGRAMS = (
 # (source, None when owned shared loans admit it, else its explicit boundary)
 REFERENCE_FORMS = (
     ('fn unused(x:&u64){}', None),
-    ('fn unused(x:&mut u64){}', 'mutable references require'),
+    ('fn unused(x:&mut u64){}', None),
     ("fn unused<'a>(x:&'a u64){}", 'explicit function lifetimes require'),
     ('struct R{x:u64} impl R{fn read(&self)->u64{self.x}} fn f(){let r=R{x:1};r.read();}', None),
     ('struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}', 'explicit receiver types require'),

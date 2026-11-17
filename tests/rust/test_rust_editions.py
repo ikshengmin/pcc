@@ -130,9 +130,10 @@ def test_edition_is_not_an_admission_waiver(edition, monkeypatch):
     # Formerly 'has no borrow checker': reference-free input is now admitted by
     # PCC's owned checks in every edition, still with no external compiler.
     assert compile_rust(ORIGINAL, edition=edition).edition == edition
+    assert compile_rust('fn f(x:&mut u64){*x=42;}', edition=edition).edition == edition  # owned loans
     monkeypatch.setattr(Lowerer, 'lower', forbidden)
-    with pytest.raises(RustError, match='mutable references require'):
-        compile_rust('fn f(x:&mut u64){*x=42;}', edition=edition,
+    with pytest.raises(RustError, match='explicit function lifetimes require'):
+        compile_rust("fn f<'a>(x:&'a mut u64){*x=42;}", edition=edition,
                      experimental_rustc_checked=True)
     with pytest.raises(RustError, match='no_core requires'):
         compile_rust('#![no_core]fn f(){}', edition=edition,

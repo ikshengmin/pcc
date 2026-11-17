@@ -118,9 +118,7 @@ def test_trait_capability_frontiers_are_not_silent_fallbacks(text, message, monk
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_trait_references_require_actual_check_not_boolean(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked trait reference reached IR'))
-    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
-        compile_source(source(name))
+    assert 'define' in compile_source(source(name)).ir_text  # owned loans (stages 4-5)
 
 
 def test_unused_trait_reference_signature_is_an_owned_shared_reference(monkeypatch):

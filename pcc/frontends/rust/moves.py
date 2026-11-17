@@ -33,6 +33,20 @@ by construction, so a conflict with it is immediate. Index projections of one
 array always overlap, as in rustc. Reference values produced any other way
 (generic calls returning references, references stored in aggregates) are an
 explicit gap until region inference exists.
+
+Mutable loans add kinds and explicit dereferences to loan places (stage 5).
+An access conflicts with a live loan by rustc's places_conflict: reads and
+shared borrows with mutable loans (E0503, E0502), mutable borrows with any
+loan (E0499, E0502), writes, moves and scope ends with any loan (E0506,
+E0505, E0597), where a write to or the end of a reference does not reach
+behind its dereference and a borrow through a shared reference is not
+tracked. `&mut` values move on use; sema inserts implicit reborrows at
+coercion sites. Autoref receivers and argument reborrows are two-phase:
+reserved while their call's operands are evaluated (reads and shared borrows
+allowed, mutable loans conflict as E0499) and activated by the call, which
+then conflicts with every other live loan, its operands' included.
+Reassigning a reference releases the not yet invalidated loans of its old
+referent.
 """
 from __future__ import annotations
 
@@ -56,7 +70,41 @@ from .syntax import Expr
 LOANS = "loans"  # state key (LOANS, serial): the (loan, invalidation) pairs a local holds
 WILDCARD_INDEX = Index(None)
 # Nodes that forward a child's value instead of consuming it.
-FORWARDING = frozenset({"group", "block", "if", "match", "unsafe", "statement", "discard"})
+FORWARDING = frozenset({"group", "block", "if", "match", "unsafe", "statement", "discard", "reference_coerce"})
+
+
+@dataclass(frozen=True)
+class Deref:
+    """A dereference projection in a loan place (`*r`)."""
+
+
+DEREF = Deref()
+# (access, loan is mutable) -> rustc's error. Reads and shared borrows only
+# conflict with mutable loans; writes, moves, mutable borrows and scope ends
+# conflict with any loan. Reserving a two-phase borrow conflicts with mutable
+# loans only (rustc ignores shared ones until activation).
+CONFLICTS = {
+    ("read", True): "E0503", ("share", True): "E0502", ("mut", True): "E0499", ("mut", False): "E0502",
+    ("reserve", True): "E0499",
+    ("write", True): "E0506", ("write", False): "E0506", ("move", True): "E0505", ("move", False): "E0505",
+    ("dead", True): "E0597", ("dead", False): "E0597",
+}
+
+
+def conflict_code(loan, mutable, access, kind):
+    """rustc's places_conflict for a loan and an access of the given kind."""
+    code = CONFLICTS.get((kind, mutable))
+    if code is None or loan.root != access.root:
+        return None
+    if prefix(loan.path, access.path):
+        return code  # the access is within the borrowed place
+    if prefix(access.path, loan.path):
+        # The access encloses the borrowed place. A shallow write (assigning
+        # the place) or a scope end does not reach behind a dereference.
+        if kind in {"write", "dead"} and DEREF in loan.path[len(access.path):]:
+            return None
+        return code
+    return None
 REFERENCE_GAP = ("reference values produced by this expression need region inference (stage 6 of the "
                  "owned admission migration), which is not implemented")
 
@@ -113,9 +161,9 @@ class MoveChecker:
         self.checker = checker
         self.loops: list[LoopEdges] = []
         self.guards: list[GuardScope] = []
-        self.loans = []        # loan places held by reference temporaries awaiting their consumer
-        self.loan_info = {}    # loan id -> (loan place, borrow token, borrowed name)
-        self.event_info = {}   # invalidation -> (kind, token, name)
+        self.loans = []        # (loan place, mutable, two-phase, token, name) of reference temporaries awaiting their consumer
+        self.loan_info = {}    # loan id -> (loan place, borrow token, borrowed name, mutable, two-phase)
+        self.event_info = {}   # invalidation -> (token, message)
         self.produced = {}     # id(expr) -> frozenset of (loan, invalidation) its reference value holds
 
     @staticmethod
@@ -123,13 +171,25 @@ class MoveChecker:
         state[binding.serial] = set()
         state[(LOANS, binding.serial)] = set(held)
 
+    @staticmethod
+    def message(code, kind, name):
+        if code == "E0597":
+            return f"{name!r} does not live long enough: it is dropped while still borrowed (E0597)"
+        if code == "E0505":
+            return f"cannot move out of {name!r} because it is borrowed (E0505)"
+        if code == "E0506":
+            return f"cannot assign to {name!r} because it is borrowed (E0506)"
+        if code == "E0503":
+            return f"cannot use {name!r} because it was mutably borrowed (E0503)"
+        if code == "E0499":
+            return f"cannot borrow {name!r} as mutable more than once at a time (E0499)"
+        if kind == "share":
+            return f"cannot borrow {name!r} as immutable because it is also borrowed as mutable (E0502)"
+        return f"cannot borrow {name!r} as mutable because it is also borrowed as immutable (E0502)"
+
     def report(self, event):
-        kind, token, name = self.event_info[event]
-        if kind == "dead":
-            raise token.error(f"{name!r} does not live long enough: it is dropped while still borrowed (E0597)")
-        if kind == "move":
-            raise token.error(f"cannot move out of {name!r} because it is borrowed (E0505)")
-        raise token.error(f"cannot assign to {name!r} because it is borrowed (E0506)")
+        token, message = self.event_info[event]
+        raise token.error(message)
 
     def use(self, held):
         """A reference value is used: every loan it holds must still be valid."""
@@ -142,15 +202,54 @@ class MoveChecker:
         for key in [key for key in state if isinstance(key, tuple)]:
             state[key] = {(loan, invalid(loan) if event is None else event) for loan, event in state[key]}
 
-    def invalidate(self, state, binding, path, token, kind):
-        """A move or assignment of a place invalidates every overlapping loan."""
-        place = loan_place(binding, path)
-        if any(loan.overlaps(place) for loan in self.loans):
-            self.event_info[(kind, id(token))] = (kind, token, binding.name)
-            self.report((kind, id(token)))
-        event = (kind, id(token))
-        self.event_info[event] = (kind, token, binding.name)
-        self.poison(state, lambda loan: event if self.loan_info[loan][0].overlaps(place) else None)
+    def invalidate(self, state, target, token, kind):
+        """An access (read, share, mut, write, move) of a place invalidates the
+        loans it conflicts with in every holder; a conflict with a reference
+        temporary awaiting its consumer is immediate. A reserved two-phase
+        borrow admits reads and shared borrows until its call activates it."""
+        binding, path, _ = target
+        place = Place(binding.serial, path)
+        for loan, mutable, two_phase, _, _ in self.loans:
+            if two_phase and kind in {"read", "share"}:
+                continue
+            code = conflict_code(loan, mutable, place, kind)
+            if code is not None:
+                raise token.error(self.message(code, kind, binding.name))
+
+        def event(loan):
+            loan_place_, _, _, mutable, _ = self.loan_info[loan]
+            code = conflict_code(loan_place_, mutable, place, kind)
+            if code is None:
+                return None
+            key = (code, kind, id(token))
+            self.event_info[key] = (token, self.message(code, kind, binding.name))
+            return key
+
+        self.poison(state, event)
+
+    def activate(self, state, start, token):
+        """A call activates its reserved two-phase borrows: a mutable access
+        that conflicts with every other loan still live, its other operands
+        included (rustc's two-phase borrow activation)."""
+        pending = self.loans[start:]
+        for index, (place, _, two_phase, borrow, name) in enumerate(pending):
+            if not two_phase:
+                continue
+            for other, (loan, other_mutable, _, _, _) in enumerate(pending):
+                code = conflict_code(loan, other_mutable, place, "mut") if other != index else None
+                if code is not None:
+                    raise borrow.error(self.message(code, "mut", name))
+
+            def event(loan, place=place, borrow=borrow, name=name):
+                loan_place_, _, _, loan_mutable, _ = self.loan_info[loan]
+                code = conflict_code(loan_place_, loan_mutable, place, "mut")
+                if code is None:
+                    return None
+                key = (code, "mut", id(borrow))
+                self.event_info[key] = (borrow, self.message(code, "mut", name))
+                return key
+
+            self.poison(state, event)
 
     def end_scope(self, state, dying, values=()):
         """Locals leave scope: loans on them die (E0597 if a holder is used later)."""
@@ -162,11 +261,11 @@ class MoveChecker:
             state.pop((LOANS, serial), None)
 
         def dead(loan):
-            place, token, name = self.loan_info[loan]
-            if place.root not in dying:
-                return None
-            self.event_info[("dead", loan)] = ("dead", token, name)
-            return ("dead", loan)
+            place, token, name, mutable, _ = self.loan_info[loan]
+            if place.root not in dying or conflict_code(place, mutable, Place(place.root), "dead") is None:
+                return None  # what lies behind a dying reference outlives it
+            self.event_info[("E0597", loan)] = (token, self.message("E0597", "dead", name))
+            return ("E0597", loan)
 
         self.poison(state, dead)
         return [frozenset((loan, dead(loan) if event is None else event) for loan, event in value)
@@ -181,12 +280,39 @@ class MoveChecker:
         """The loans a reference-typed value read from a local holds."""
         if expr.kind == "name" and expr.binding is not None:
             return frozenset(state.get((LOANS, expr.binding.serial), ()))
-        if expr.kind in {"group", "unsafe"}:
+        if expr.kind in {"group", "unsafe", "reference_coerce"}:
             child = expr.children[0]
             if id(child) in self.produced:
                 return self.produced.pop(id(child))
             return self.reference_value(child, state)
         raise expr.token.error(REFERENCE_GAP)
+
+    def loan_target(self, expr):
+        """(binding, loan path, untracked) of a place expression with explicit
+        dereferences; untracked when the path passes through a shared
+        reference, whose referent no loan can conflict with."""
+        from .call_inference import partial
+        from .types import SharedReference
+        kind = expr.kind
+        if kind == "group":
+            return self.loan_target(expr.children[0])
+        if kind == "name":
+            return (expr.binding, (), False) if expr.binding is not None else None
+        if kind in {"deref", "field", "index"}:
+            child = expr.children[0]
+            base = self.loan_target(child)
+            if base is None:
+                return None
+            binding, path, untracked = base
+            pointer = partial(child.ty)
+            if isinstance(pointer, SharedReference):
+                path, untracked = path + (DEREF,), untracked or not pointer.mutable
+            if kind == "field":
+                path += (Field(expr.value),)
+            elif kind == "index":
+                path += (WILDCARD_INDEX,)
+            return binding, path, untracked
+        return None
 
     def hold_pattern(self, state, pattern, held):
         """Declared pattern bindings take loans; only a whole-value binding can hold references."""
@@ -257,7 +383,10 @@ class MoveChecker:
         return GuardScope({item.binding.serial: item.token.text for item in binding_patterns(pattern)},
                           None, (), ())
 
-    def access(self, binding, path, ty, token, state, *, consume=False):
+    def access(self, binding, path, ty, token, state, *, consume=False, target=None, effect="read"):
+        """Use a place: check moves and holder loans, then move it (non-Copy
+        consume) or apply `effect` (a read, or None) to conflicting loans.
+        `target` is its loan place with explicit dereferences."""
         held = state.get((LOANS, binding.serial))
         if held:
             self.use(held)
@@ -265,18 +394,27 @@ class MoveChecker:
         moved = state[binding.serial]
         if any(Place(place.root, item).overlaps(place) for item in moved):
             raise token.error(f"use of moved or possibly moved value {binding.name!r}")
+        if target is None:
+            target = (binding, loan_place(binding, path).path, False)
         if consume and not self.checker.copy_type(ty):
             if self.guards:
                 self.guard_effect(binding, path, token, write=False)
-            self.invalidate(state, binding, path, token, "move")
+            self.invalidate(state, target, token, "move")
             moved.add(place.path)
+        elif effect is not None:
+            self.invalidate(state, target, token, effect)
 
-    def read_place(self, expr: Expr, state: State, *, consume: bool = True) -> None:
+    def read_place(self, expr: Expr, state: State, *, consume: bool = True, effect="read") -> None:
         binding, path = self.checker.place(expr)
-        self.access(binding, path, expr.ty, expr.token, state, consume=consume)
+        self.access(binding, path, expr.ty, expr.token, state, consume=consume,
+                    target=self.loan_target(expr), effect=effect)
 
-    def pattern_access(self, pattern, state, place, *, bind=False):
+    def pattern_access(self, pattern, state, place, *, bind=False, target=None):
         # Pattern inspection and selected-arm bindings are separate effects.
+        # `target` projects the scrutinee's loan place (explicit dereferences)
+        # alongside `place`.
+        if place is not None and target is None:
+            target = (place[0], loan_place(*place).path, False)
         # Inspecting an enum discriminant uses its owning enum place: a prior
         # payload move prevents rematching that enum, even for another field.
         # Tuple wildcards below still permit independent unmoved field access.
@@ -287,7 +425,7 @@ class MoveChecker:
             # Copy part may be bound beside a moved whole; a non-Copy part
             # cannot be moved twice, even out of a temporary scrutinee.
             from .patterns import binding_patterns
-            self.pattern_access(pattern.children[0], state, place, bind=bind)
+            self.pattern_access(pattern.children[0], state, place, bind=bind, target=target)
             if not bind:
                 return
             for inner in binding_patterns(pattern.children[0]):
@@ -298,28 +436,30 @@ class MoveChecker:
         if kind in {"binding", "at"}:
             if bind:
                 if place is not None:
-                    self.access(*place, pattern.ty, pattern.token, state, consume=True)
+                    self.access(*place, pattern.ty, pattern.token, state, consume=True, target=target)
                 self.declare(state, pattern.binding)
             return
         if kind in {"wildcard", "unit"}:
             return
         if kind == "literal":
             if not bind and place is not None:
-                self.access(*place, pattern.ty, pattern.token, state)
+                self.access(*place, pattern.ty, pattern.token, state, target=target)
             return
         if kind in {"variant", "payload"}:
             if not bind and place is not None:
-                self.access(*place, pattern.ty, pattern.token, state)
+                self.access(*place, pattern.ty, pattern.token, state, target=target)
             if kind == "variant":
                 return
             if place is not None:
                 index = list(self.checker.enums[pattern.ty].payloads).index(pattern.variant) + 1
                 place = place[0], place[1] + (index,)
+                target = target[0], target[1] + (Field(index),), target[2]
         for index, child in enumerate(pattern.children):
-            child_place = place
+            child_place, child_target = place, target
             if kind in {"tuple", "payload"} and place is not None:
                 child_place = place[0], place[1] + (index,)
-            self.pattern_access(child, state, child_place, bind=bind)
+                child_target = target[0], target[1] + (Field(index),), target[2]
+            self.pattern_access(child, state, child_place, bind=bind, target=child_target)
 
     def wildcard_place(self, expr: Expr, state: State) -> State | None:
         """A wildcard omits the final read, not evaluation of its place."""
@@ -359,18 +499,25 @@ class MoveChecker:
         if kind in {"integer", "bool", "unit", "variant", "const", "static", "string"}:
             return state
         if kind == "borrow":
+            from .semantics import TWO_PHASE
             place = self.checker.place(children[0])
             if expr.value and self.guards and place is not None:
                 self.guard_effect(*place, expr.token, write=True, mutable_borrow=True)
-            self.read_place(children[0], state, consume=False)
-            binding, path = place
-            if self.checker.through_reference(children[0]):
-                # A reborrow through a shared reference borrows its referent,
-                # not the local storing the pointer: it holds that local's loans.
-                self.produced[id(expr)] = frozenset(state.get((LOANS, binding.serial), ()))
-            else:
-                self.loan_info[id(expr)] = (loan_place(binding, path), expr.token, binding.name)
-                self.produced[id(expr)] = frozenset({(id(expr), None)})
+            self.read_place(children[0], state, consume=False, effect=None)
+            binding, path, untracked = target = self.loan_target(children[0])
+            held = frozenset(state.get((LOANS, binding.serial), ()))
+            if untracked:
+                # A borrow through a shared reference is not tracked: it holds
+                # the loans of the reference it was reached through.
+                self.produced[id(expr)] = held
+                return state
+            mutable, two_phase = bool(expr.value), expr.value == TWO_PHASE
+            # A two-phase borrow is reserved here and activated by its call.
+            self.invalidate(state, target, expr.token,
+                            "reserve" if two_phase else "mut" if mutable else "share")
+            self.loan_info[id(expr)] = (Place(binding.serial, path), expr.token, binding.name, mutable, two_phase)
+            # A reborrow through `&mut` also keeps the reference's own loans live.
+            self.produced[id(expr)] = frozenset({(id(expr), None)}) | (held if DEREF in path else frozenset())
             return state
         if kind in {"clone", "derived_eq"}:
             # Clone::clone(&x) and PartialEq::eq(&a, &b) borrow their places;
@@ -391,6 +538,9 @@ class MoveChecker:
                 state = self.expression(children[0], state)
             return self.expression(children[1], state) if kind == "index" and state is not None else state
         if kind == "deref":
+            if self.checker.place(children[0]) is not None:
+                self.read_place(children[0], state, consume=False)  # reading through r never moves r
+                return state
             return self.expression(children[0], state)
         if kind in {"name", "field", "group"}:
             if self.checker.place(expr) is not None:
@@ -440,18 +590,32 @@ class MoveChecker:
             result = self.expression(children[1], state)
             if result is None:
                 return None
-            binding, path = self.checker.place(children[0])
+            lhs = children[0]
+            binding, path = self.checker.place(lhs)
+            target = self.loan_target(lhs)
             if self.guards:
                 self.guard_effect(binding, path, expr.token, write=True)
-            self.invalidate(result, binding, path, expr.token, "assign")
+            if expr.value != "=":
+                # A compound assignment reads first (E0503 against a mutable loan).
+                self.read_place(lhs, result, consume=False)
+            elif DEREF in target[1]:
+                # Writing through a reference uses the reference.
+                self.access(binding, (), binding.ty, lhs.token, result, effect=None)
+            self.invalidate(result, target, expr.token, "write")
+            if DEREF in target[1]:
+                return result  # the referent is written; the local is not reinitialized
             if not path and has_reference(binding.ty):
-                # Overwriting a reference local replaces the loans it holds.
+                # Overwriting a reference local replaces the loans it holds,
+                # and loans of its old referent (`*r`) no longer concern the
+                # local (rustc kills them); an already invalidated one stays.
                 result[(LOANS, binding.serial)] = set(self.produced.get(id(children[1]), ()))
+                for key in [key for key in result if isinstance(key, tuple)]:
+                    result[key] = {(loan, event) for loan, event in result[key]
+                                   if event is not None or self.loan_info[loan][0].root != binding.serial
+                                   or DEREF not in self.loan_info[loan][0].path}
             path = structural_place(binding, path).path
             moved = result[binding.serial]
-            if expr.value != "=":
-                self.read_place(children[0], result, consume=False)
-            elif path and any(prefix(item, path) and item != path for item in moved):
+            if expr.value == "=" and path and any(prefix(item, path) and item != path for item in moved):
                 raise expr.token.error("cannot initialize a field beneath a moved aggregate; reinitialize its owning place first")
             # Replacing a whole value or exactly the moved field makes its
             # subplaces available again. Sibling partial moves remain marked.
@@ -462,6 +626,7 @@ class MoveChecker:
 
             scrutinee = children[0]
             place = self.checker.place(scrutinee)
+            target = self.loan_target(scrutinee) if place is not None else None
             after = state if place is not None else self.expression(scrutinee, state)
             if after is None:
                 return None
@@ -469,7 +634,7 @@ class MoveChecker:
             exits, values = [], []
             current = after
             for pattern, arm in zip(expr.value, children[1:]):
-                self.pattern_access(pattern, current, place)
+                self.pattern_access(pattern, current, place, target=target)
                 selected = current
                 if arm.kind == "match_guard":
                     # The guard runs before the scrutinee moves into by-value
@@ -492,7 +657,7 @@ class MoveChecker:
                         selected.pop((LOANS, binding.serial), None)
                     current = join([current, selected])
                 branch = clone(selected)
-                self.pattern_access(pattern, branch, place, bind=True)
+                self.pattern_access(pattern, branch, place, bind=True, target=target)
                 self.hold_pattern(branch, pattern, held)
                 result = self.expression(arm, branch)
                 if result is not None:
@@ -524,6 +689,7 @@ class MoveChecker:
             visible = set(state)
             scrutinee, body_node = children
             place = self.checker.place(scrutinee)
+            target = self.loan_target(scrutinee) if place is not None else None
 
             def transfer(header):
                 # Inspect the pattern before consuming selected bindings.
@@ -532,9 +698,9 @@ class MoveChecker:
                 if condition is None:
                     return [], []
                 held = self.scrutinee_loans(scrutinee, place, condition)
-                self.pattern_access(expr.value, condition, place)
+                self.pattern_access(expr.value, condition, place, target=target)
                 selected = clone(condition)
-                self.pattern_access(expr.value, selected, place, bind=True)
+                self.pattern_access(expr.value, selected, place, bind=True, target=target)
                 self.hold_pattern(selected, expr.value, held)
                 edges = LoopEdges(visible)
                 self.loops.append(edges)
@@ -626,7 +792,11 @@ class MoveChecker:
                 if current is not None:
                     current = self.expression(child, current)
                     # The operand's reference value awaits this consumer.
-                    self.loans.extend(self.loan_info[loan][0] for loan, _ in self.produced.get(id(child), ()))
+                    for loan, _ in self.produced.get(id(child), ()):
+                        place, token, name, mutable, two_phase = self.loan_info[loan]
+                        self.loans.append((place, mutable, two_phase, token, name))
+            if kind == "call" and current is not None:
+                self.activate(current, active_loans, expr.token)
             return current
         finally:
             del self.loans[active_loans:]

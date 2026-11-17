@@ -66,7 +66,7 @@ in the named modules; locate them with
 | `loop`, `while let`, `if let` admission | `moves.py` (loop fixed point; `if let` is a normalized match) | move flow through loops and refutable lets | **owned for reference-free input** (stage 3) |
 | `for` over arrays | `moves.py` | moves of iterated owned arrays and across iterations | **owned for reference-free input** (stage 3) |
 | Shared references in bodies, parameters and `&self` receivers: local, field and indexed borrows, reborrows | `moves.py` (loans, holders, liveness), `reference_admission.py` (post-sema shape guard) | NLL shared loans, liveness, array-index overlap, E0505/E0506/E0597 | **owned** (stage 4); references in results or aggregates, temporaries' lifetime extension, generic reference arguments and default binding modes stay explicit gaps |
-| `&mut` types and borrows, explicit receivers | `semantics.py` | mutable loans, two-phase borrows | open (stage 5) |
+| `&mut` types and borrows, `&mut self` receivers, implicit reborrows | `moves.py` (loan kinds, deref places, two-phase), `semantics.py` (implicit reborrows) | mutable loans, two-phase borrows, E0499/E0502/E0503 | **owned** (stage 5); explicit receiver types (`self: &mut Self`) stay a gap |
 | Explicit lifetimes, lifetime parameters, outlives bounds, reference parameter reassignment | `semantics.py`, `generics.py` | region inference and outlives constraints | open (stage 6) |
 | Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
 | Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
@@ -119,7 +119,19 @@ Migration order:
    reference-bearing originals run with owned compile/assemble/link and match
    rustc. Reference-bearing checked input still leaves loans to the actual
    check (owned loans run without one).
-5. `&mut`: mutable loans, reborrows and two-phase receivers.
+5. `&mut` (done): loans have kinds and loan places carry explicit
+   dereferences; conflicts follow rustc's places_conflict (reads and shared
+   borrows against mutable loans, everything else against any loan; a write
+   to or the end of a reference does not reach behind its dereference; borrows
+   through a shared reference are untracked). `&mut` values move on use; sema
+   inserts implicit reborrows at coercion sites (arguments, annotated lets,
+   assignments). Autoref receivers and argument reborrows are two-phase:
+   reserved during argument evaluation, activated by the call. Reassigning a
+   reference releases the loans of its old referent. Verdicts in
+   `tests/rust/test_rust_owned_mutable_loans.py::CORPUS` (66 original
+   programs) equal a rustc 1.92.0 `-O` build's including the error code, and
+   47 reference-bearing originals (33 with `&mut`) run with owned
+   compile/assemble/link and match rustc.
 6. Signatures: lifetime elision, explicit lifetimes and outlives bounds.
 7. Trait gates: default methods, standard markers, bound well-formedness.
 8. Owned lints for the attributes a crate denies, then multi-file crates on the

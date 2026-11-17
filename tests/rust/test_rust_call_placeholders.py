@@ -183,9 +183,8 @@ def test_valid_out_of_scope_placeholders_remain_capabilities_not_rust_rejections
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_placeholder_inference_never_mints_reference_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified placeholder reference reached IR'))
-    with pytest.raises(RustError, match='mutable references require'):  # &mut is stage 5
-        compile_rust(source(name), experimental_rustc_checked=True)
+    # Shared and mutable loans are owned (stages 4-5): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

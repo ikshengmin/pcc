@@ -62,10 +62,8 @@ def test_same_named_inherent_call_does_not_inherit_trait_obligations():
 def test_public_weaker_contract_still_needs_actual_token(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified weaker contract reached IR'))
-    # Shared loans are owned (stage 4); &mut stays a stage 5 boundary.
-    message = ('mutable references require' if name == 'trait_weaker_receivers'
-               else 'actual source/options-bound CheckedRustSource')
-    with pytest.raises(RustError, match=message):
+    # References are owned (stages 4-5); the marker-bound gate (stage 7) remains.
+    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
         compile_rust(source(name), experimental_rustc_checked=True)
 
 

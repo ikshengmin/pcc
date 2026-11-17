@@ -80,14 +80,15 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     never consulted.
 
     Input is admitted by PCC's owned checks alone (types, mutability, moves
-    through branches, loops, while let, if let and array for, shared loans with
-    non-lexical liveness for references in bodies, parameters and `&self`
-    receivers, match-guard borrows, exhaustiveness and the arithmetic_overflow
-    lint); `experimental_rustc_checked` is accepted for compatibility and has
-    no effect. `&mut`, explicit lifetimes, reference returns, references in
-    aggregates and the other features listed in README "Replacing the rustc
-    admission gate" still need an actual CheckedRustSource during that
-    transition. The rustc_check path
+    through branches, loops, while let, if let and array for, shared and
+    mutable loans with non-lexical liveness, implicit and two-phase reborrows
+    for references in bodies, parameters and `&self`/`&mut self` receivers,
+    match-guard borrows, exhaustiveness and the arithmetic_overflow lint);
+    `experimental_rustc_checked` is accepted for compatibility and has no
+    effect. Explicit lifetimes and receiver types, reference returns,
+    references in aggregates and the other features listed in README
+    "Replacing the rustc admission gate" still need an actual CheckedRustSource
+    during that transition. The rustc_check path
     accepts only an adapter-minted CheckedRustSource after the explicit external
     check_rust_source phase. Ordinary provenance records do not authorize this
     path. This owned phase invokes no rustc process and never consumes MIR.
@@ -131,9 +132,10 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     from .inline_attributes import collect_inline_hints
     inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:
-        # Shared references are owned (stage 4): sema rejects &mut, explicit
-        # lifetimes, reference returns and references in aggregates, and the
-        # move checker owns shared loans. Slices have no owned layout yet.
+        # References are owned (stages 4-5): sema rejects explicit lifetimes
+        # and receiver types, reference returns and references in aggregates,
+        # and the move checker owns shared and mutable loans. Slices have no
+        # owned layout yet.
         from .reference_admission import reject_slices
         reject_slices(functions, records, enums, parser.implementations, parser.traits)
         from .default_methods import reject_uncertified_defaults

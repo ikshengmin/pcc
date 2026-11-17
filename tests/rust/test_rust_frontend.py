@@ -114,7 +114,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("/* never closed", "unterminated block comment"),
     ("fn f(){ 0b102; }", "invalid or unsupported integer"),
     ("fn f(){ 12i8; }", "invalid or unsupported integer"),
-    ("fn f(){ let x=1; let y=&mut x; }", "mutable borrowing requires"),
+    ("fn f(){ let x=1; let y=&mut x; }", "cannot borrow an immutable place as mutable"),
     ("fn f(){ panic!(); }", "1:9: macro invocations require macro-by-example expansion"),
     ("struct S {}", "zero-field structs"),
     ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),

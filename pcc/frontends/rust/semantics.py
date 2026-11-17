@@ -13,6 +13,8 @@ from .types import (
 INTEGERS = INTEGER_TYPES
 FFI_INTEGERS = frozenset({"i32", "i64", "u32", "u64"})
 NEVER = "!"
+# The value of a borrow node for a two-phase mutable borrow (truthy: mutable).
+TWO_PHASE = "two_phase"
 
 
 @dataclass(eq=False)
@@ -484,8 +486,6 @@ class Checker:
         if isinstance(ty, SharedReference):
             if ty.lifetime and not self.externally_checked:
                 raise token.error("explicit reference lifetimes require a matching external rustc check record")
-            if ty.mutable and not self.externally_checked:
-                raise token.error("mutable references require a matching external rustc check record")
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
@@ -551,6 +551,22 @@ class Checker:
         if expr.kind in {"field", "index"}:
             return isinstance(expr.children[0].ty, SharedReference) or self.through_reference(expr.children[0])
         return False
+
+    def implicit_reborrow(self, expr, target, *, two_phase=False):
+        """A `&mut` place used where a reference is expected (a coercion site:
+        an argument, an annotated let, an assignment) is reborrowed, `&mut *r`
+        or `&*r`, rather than moved (rustc's implicit reborrow). None when the
+        operand is not such a place."""
+        from .call_inference import partial
+        ty, target = partial(expr.ty), partial(target)
+        if not (isinstance(target, SharedReference) and isinstance(ty, SharedReference) and ty.mutable):
+            return None
+        if expr.kind == "borrow" or self.place(expr) is None:
+            return None
+        deref = Expr("deref", expr.token, children=[expr], ty=ty.referent)
+        mutable = target.mutable
+        return Expr("borrow", expr.token, (TWO_PHASE if two_phase else True) if mutable else False,
+                    children=[deref], ty=SharedReference(ty.referent, mutable))
 
     def binding_moves(self, scrutinee, pattern):
         """By-value bindings of a place scrutinee move out of it: not through
@@ -699,10 +715,8 @@ class Checker:
         elif kind == "group":
             ty = self.expression(children[0], allow_borrow=allow_borrow, place_context=place_context)
         elif kind == "borrow":
-            if expr.value and not self.externally_checked:
-                raise expr.token.error("mutable borrowing requires a matching external rustc check record")
-            # Shared loans, their liveness and index overlap are owned by the
-            # move checker (moves.py); escapes beyond a body need regions.
+            # Shared and mutable loans, their liveness and index overlap are
+            # owned by the move checker (moves.py); escapes need regions.
             referent = self.expression(children[0], place_context=True)
             if self.place(children[0]) is None:
                 raise expr.token.error("shared borrowing of temporaries requires lifetime extension, which is not implemented")
@@ -762,6 +776,7 @@ class Checker:
                     unify(annotation, init_ty, expr.token)
                     from .call_inference import partial
                     init_ty = partial(annotation)
+                    children[0] = self.implicit_reborrow(children[0], init_ty) or children[0]
                 if kind == "let":
                     expr.binding = self.bind(expr.token, init_ty, mutable)
             elif children:
@@ -940,7 +955,10 @@ class Checker:
                         raise receiver.token.error("shared receiver borrowing of temporaries requires lifetime extension, which is not implemented")
                     if fn.params[0][1].mutable and not self.mutable_place(receiver):
                         raise receiver.token.error("cannot borrow an immutable receiver as mutable")
-                    receiver = Expr("borrow", receiver.token, fn.params[0][1].mutable, children=[receiver], ty=SharedReference(receiver_type, fn.params[0][1].mutable))
+                    # A mutable autoref is a two-phase borrow: reserved while
+                    # the arguments are evaluated, activated by the call.
+                    receiver = Expr("borrow", receiver.token, TWO_PHASE if fn.params[0][1].mutable else False,
+                                    children=[receiver], ty=SharedReference(receiver_type, fn.params[0][1].mutable))
                 elif self.through_array_index(receiver) and not self.copy_type(receiver_type):
                     raise receiver.token.error("cannot move a non-Copy value receiver out of an array index")
                 elif self.through_reference(receiver) and not self.copy_type(receiver_type):
@@ -1063,9 +1081,12 @@ class Checker:
                 if (isinstance(param_ty, SharedReference) and isinstance(arg_ty, SharedReference)
                         and not param_ty.mutable and arg_ty.mutable):
                     unify(param_ty.referent, arg_ty.referent, arg.token)
-                    children[index + 1] = Expr("reference_coerce", arg.token, children=[arg], ty=param_ty)
+                    children[index + 1] = self.implicit_reborrow(arg, param_ty) or Expr(
+                        "reference_coerce", arg.token, children=[arg], ty=param_ty)
                 else:
                     unify(param_ty, arg_ty, arg.token)
+                    # Arguments are coercion sites with two-phase reborrows.
+                    children[index + 1] = self.implicit_reborrow(arg, param_ty, two_phase=True) or arg
             ty = fn.result
         elif kind == "unary":
             ty = self.expression(children[0])
@@ -1114,6 +1135,8 @@ class Checker:
             if not self.externally_checked and place[0].parameter and isinstance(target, SharedReference):
                 raise lhs.token.error("reference parameter reassignment requires lifetime constraints, which are not implemented")
             unify(target, self.expression(children[1]), expr.token)
+            if expr.value == "=":
+                children[1] = self.implicit_reborrow(children[1], target) or children[1]
             ty = "()"
         elif kind == "cast":
             self.expression(children[0])

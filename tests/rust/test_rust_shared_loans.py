@@ -50,8 +50,6 @@ def test_internal_noncertifying_receiver_loan_model_stays_live_during_all_later_
     ('fn f(x:&u64)->&u64{x}', 'reference returns'),
     ('fn read(x:&u64){} fn f(){read(&1);}', 'temporaries'),
     ('struct R{x:u64} impl R{fn read(&self){}} fn f(){R{x:1}.read();}', 'temporaries'),
-    ('fn f(p:&mut u64){}', 'mutable references'),
-    ('fn read(p:&u64){} fn f(){let mut x=1;read(&mut x);}', 'mutable borrowing'),
     ('struct R{x:u64} fn f(p:&R)->R{*p}', 'non-Copy'),
     ('struct R{x:u64} struct O{r:R} fn f(p:&O)->R{p.r}', 'non-Copy'),
     ('struct R<T>{x:T} impl<T> R<T>{fn take(&self)->T{self.x}}', 'non-Copy'),
