@@ -227,6 +227,9 @@ def _owned_publish_semantics_can_retire(sink, phase_timing) -> bool:
     return True
 
 
+from .self_backend_aarch64_typed_peepholes import _SpanOwnerTransfer
+
+
 class _NativeAArch64Emission:
     """One module emission scope over the canonical incremental assembler.
 
@@ -239,6 +242,7 @@ class _NativeAArch64Emission:
 
     def __init__(self, *, optimize: bool = False, owned_stack_windows: bool = False) -> None:
         self._owned_stack_windows = owned_stack_windows
+        self._span_owner_transfer: _SpanOwnerTransfer | None = None
         direct_semantics = borrow_direct_instruction_semantics() if optimize else None
         self.symbol_names: list[str] = []
         self.symbol_ids: dict[str, int] = {}
@@ -289,6 +293,8 @@ class _NativeAArch64Emission:
         self._family_scalar = EMITTED_INSTRUCTION_SCALAR
 
     def close(self) -> None:
+        if self._span_owner_transfer is not None:
+            self._span_owner_transfer.revoke()
         self.builder.close()
         self.scratch.close()
         self.fragments.close()
@@ -427,43 +433,54 @@ class _NativeAArch64Emission:
         raise BackendUnavailable("optimized native instruction lacks typed producer provenance")
 
     def finish_optimized_instructions(self, metadata_labels, cold_fallthrough_edges, phase_timing=None) -> None:
-        from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes
+        from .self_backend_aarch64_typed_peepholes import _run_aarch64_typed_peepholes, run_aarch64_typed_peepholes, _owned_timer_is_canonical
         from .self_backend_aarch64_typed_cfg import run_aarch64_typed_cfg_passes
-        if not self.collecting_optimized or self.fragments.semantics is None:
-            raise BackendUnavailable("optimized module capture is not active")
-        if phase_timing is not None:
-            started = phase_timing.begin_backend_finalize("typed_validate")
-        require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
-        self.fragments.semantics.require_complete(self.fragments.records, len(self.fragments.symbol_names))
-        if phase_timing is not None:
-            phase_timing.complete_backend_finalize("typed_validate", started)
-        if self._owned_stack_windows:
-            span = _run_aarch64_typed_peepholes(
-                self.fragments, self.fragments.semantics, self.module_span,
-                phase_timing=phase_timing, owned_stack_windows=True,
+        try:
+            if not self.collecting_optimized or self.fragments.semantics is None:
+                raise BackendUnavailable("optimized module capture is not active")
+            if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
+                self._span_owner_transfer.revoke()
+            if phase_timing is not None:
+                started = phase_timing.begin_backend_finalize("typed_validate")
+            if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
+                self._span_owner_transfer.revoke()
+            require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
+            self.fragments.semantics.require_complete(self.fragments.records, len(self.fragments.symbol_names))
+            if self._span_owner_transfer is not None and not _owned_timer_is_canonical(phase_timing):
+                self._span_owner_transfer.revoke()
+            if phase_timing is not None:
+                phase_timing.complete_backend_finalize("typed_validate", started)
+            if self._owned_stack_windows:
+                span = _run_aarch64_typed_peepholes(
+                    self.fragments, self.fragments.semantics, self.module_span,
+                    phase_timing=phase_timing, owned_stack_windows=True,
+                    span_owner_transfer=self._span_owner_transfer,
+                )
+            else:
+                span = run_aarch64_typed_peepholes(
+                    self.fragments, self.fragments.semantics, self.module_span,
+                    phase_timing=phase_timing,
+                )
+            span = run_aarch64_typed_cfg_passes(
+                self.fragments, self.fragments.semantics, span, metadata_labels,
+                cold_fallthrough_edges, phase_timing=phase_timing,
             )
-        else:
-            span = run_aarch64_typed_peepholes(
-                self.fragments, self.fragments.semantics, self.module_span,
-                phase_timing=phase_timing,
-            )
-        span = run_aarch64_typed_cfg_passes(
-            self.fragments, self.fragments.semantics, span, metadata_labels,
-            cold_fallthrough_edges, phase_timing=phase_timing,
-        )
-        if phase_timing is not None:
-            started = phase_timing.begin_backend_finalize("typed_publish")
-        self.collecting_optimized = False
-        if self._owned_stack_windows and _owned_publish_semantics_can_retire(self, phase_timing):
-            self.fragments.semantics.close()
-        self.publish_fragment(span)
-        require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
-        # The builder now owns words, fixups and symbols. Retire module
-        # provenance storage before final layout and PC-based metadata allocate.
-        self.fragments.close()
-        self.metadata_lines.clear()
-        if phase_timing is not None:
-            phase_timing.complete_backend_finalize("typed_publish", started)
+            if phase_timing is not None:
+                started = phase_timing.begin_backend_finalize("typed_publish")
+            self.collecting_optimized = False
+            if self._owned_stack_windows and _owned_publish_semantics_can_retire(self, phase_timing):
+                self.fragments.semantics.close()
+            self.publish_fragment(span)
+            require_closed_aarch64_memory_pair_barrier(self.barrier_depth)
+            # The builder now owns words, fixups and symbols. Retire module
+            # provenance storage before final layout and PC-based metadata allocate.
+            self.fragments.close()
+            self.metadata_lines.clear()
+            if phase_timing is not None:
+                phase_timing.complete_backend_finalize("typed_publish", started)
+        finally:
+            if self._span_owner_transfer is not None:
+                self._span_owner_transfer.revoke()
 
     def _publish_directive(self, record: CompilerInt4) -> None:
         kind = record.first
@@ -995,6 +1012,13 @@ def _emit_prepared_aarch64_darwin_lines(
             if native_undefined is not None:
                 from .self_backend_aarch64_typed_peepholes import _owned_timer_is_canonical
                 native_sink = _NativeAArch64Emission(optimize=optimize, owned_stack_windows=_owned_timer_is_canonical(phase_timing))
+                # Only this factory owns the entire fresh capture lifecycle.
+                # Public sink construction and native scalar storage never grant
+                # permission to consume the old span-owner after mode1.
+                if (optimize and native_sink._owned_stack_windows
+                        and native_sink.fragments.spans.nodes._address == 0
+                        and native_sink.fragments.spans.spans._address == 0):
+                    native_sink._span_owner_transfer = _SpanOwnerTransfer(native_sink.fragments.spans)
             return _emit_prepared_aarch64_darwin_lines_active(
                 prepared,
                 optimize,
