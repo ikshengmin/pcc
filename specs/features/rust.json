@@ -2601,6 +2601,20 @@
       "evidence": []
     },
     {
+      "id": "rust.admission.owned-trait-obligations",
+      "title": "Owned trait admission: marker bounds, local trait bounds, defaults, associated types",
+      "chapter_ids": [
+        "rust.ref.8.2.4"
+      ],
+      "scope": "Qualification missing, not implementation missing: stage 7 of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". Explicit standard marker bounds (Copy, Sized, ?Sized), local trait bounds and where clauses, supertraits, default trait methods and associated types compile with no rustc and no attestation, decided by the owned obligations in traits.py, standard_markers.py, default_methods.py and associated_types.py; a supplied actual check must still match the edition. Trait diagnostics carry rustc's codes (E0034, E0046, E0053, E0119, E0201, E0276, E0277, E0404, E0407, E0428, E0437, E0599). The 81 formerly gated example programs run with owned compile, assemble and link and match rustc; the 222 invalid rows the trait test modules list are rejected without rustc with the listed code whenever PCC names one (a rustc node confirms the codes); an original corpus matches a rustc 1.92.0 -O build. Associated-type projections through generic bounds, Trait::method(x) without a Self type, impls on primitives or generic types and inline attributes keep explicit boundaries. Local Mac; the Linux-target actual-check lane is unrun here.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_owned_trait_admission.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

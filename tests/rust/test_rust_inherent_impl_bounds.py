@@ -17,7 +17,6 @@ from pcc.frontends.rust.syntax import Parser
 from tests.rust.analysis_only import analyze_source
 from tests.rust.certification_support import actual_check_prerequisite, certify_source
 
-OLD_GATE = 'actual source/options-bound CheckedRustSource'
 PROGRAMS = ('impl_bound_dispatch', 'impl_bound_copy', 'impl_bound_mutable',
             'impl_bound_result', 'impl_bound_lookup_order')
 PRIOR_CAPABILITIES = (
@@ -78,28 +77,21 @@ def test_header_markers_resolve_before_suffix_shadowing_and_keep_permuted_prefix
     'trait A{}struct H<T>{x:T}impl<T:A>H<T>{}',
     'trait A{}struct H<T>{x:T}impl<T>H<T>where T:A{}',
 ])
-def test_empty_local_impl_header_requires_actual_token_before_checking(text, monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('unchecked empty impl entered Sema'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_empty_local_impl_header_compiles_with_owned_admission(text, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.parametrize('text', [text for _, text in PRIOR_CAPABILITIES])
-def test_empty_or_unused_marker_impl_cannot_authorize_owned_ir_with_a_boolean(text, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked impl reached IR'))
-    with pytest.raises(RustError, match='standard marker bounds require an actual'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_empty_or_unused_marker_impl_compiles_with_owned_admission(text, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_impl_originals_keep_genuine_source_certification(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked impl source reached IR'))
-    # References are owned (stages 4-5); the trait-bound gate (stage 7) remains.
-    with pytest.raises(RustError, match=OLD_GATE):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_impl_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

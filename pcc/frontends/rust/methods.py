@@ -139,6 +139,9 @@ class InherentMethods:
             enum = self.checker.generics.definitions.get(base)
             if isinstance(enum, Enumeration) and name in enum.discriminants:
                 return None
+            if isinstance(base, str) and base in self.checker.traits.traits and enum is None:
+                raise token.error(f"calling `{base}::{name}(..)` needs Self inferred from the arguments, which is not "
+                                  f"implemented; write `<Type as {base}>::{name}(..)`")
             owner = self.checker.generics.normalize(owner, token)
         else:
             from .call_inference import pending_integer
@@ -174,7 +177,7 @@ class InherentMethods:
                     break
                 matches = [f for f in traits if f.receiver and receiver_kind(f) is kind]
                 if len(matches) > 1:
-                    raise token.error('ambiguous trait method; use an explicit qualified trait path')
+                    raise token.error('ambiguous trait method; use an explicit qualified trait path (rustc E0034)')
                 if matches:
                     function = matches[0]
                     break
@@ -182,8 +185,8 @@ class InherentMethods:
                 if inherent is not None or traits:
                     raise token.error('associated function has no self receiver; use its qualified type path')
                 if unavailable:
-                    raise token.error('unsatisfied inherent impl bounds')
-                raise token.error('unknown inherent or concrete trait method')
+                    raise token.error('unsatisfied inherent impl bounds (rustc E0599)')
+                raise token.error('unknown inherent or concrete trait method (rustc E0599)')
         elif inherent is not None:
             function = inherent
         elif len(traits) > 1:
@@ -192,7 +195,7 @@ class InherentMethods:
             function = traits[0]
         else:
             if unavailable:
-                raise token.error('unsatisfied inherent impl bounds')
+                raise token.error('unsatisfied inherent impl bounds (rustc E0599)')
             return None
         # Resolution is complete. Do not retry another candidate because this
         # selected receiver fails mutability, move or lifetime requirements.

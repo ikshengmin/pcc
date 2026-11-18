@@ -101,7 +101,6 @@ def test_invalid_trait_originals_reject_before_ir(name, text, message, code, mon
     ('trait T{const N:u64;}', 'associated types'),
     ('unsafe trait T{}', "expected 'fn'"),
     ('trait T{unsafe fn f(self);}', 'safe required'),
-    ('trait T{fn f<U:Copy>(self,x:U);}', 'actual source/options-bound CheckedRustSource'),
     ('trait T{} struct R<U>{x:U} impl<U> T for R<U>{}', 'blanket/generic'),
     ('trait T{} impl T for u64{}', 'local nominal'),
     # This exact prior capability control now lives among actual-certified

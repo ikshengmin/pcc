@@ -73,7 +73,7 @@ class StaticTraits:
             methods = {}
             for function in trait.methods:
                 if function.token.text in methods:
-                    raise function.token.error('duplicate trait associated item')
+                    raise function.token.error('duplicate trait associated item (rustc E0428)')
                 methods[function.token.text] = function
             self.traits[name] = methods
         self.associated.prepare()
@@ -159,7 +159,7 @@ class StaticTraits:
                     function.implementation = implementation
             key = implementation.trait, owner
             if key in self.impls:
-                raise implementation.token.error('conflicting concrete trait implementations')
+                raise implementation.token.error('conflicting concrete trait implementations (rustc E0119)')
             self.associated.register(implementation)
             members = {}
             for function in checker.functions:
@@ -169,14 +169,14 @@ class StaticTraits:
                 if any(p.text == 'Self' for p in function.type_parameters):
                     raise function.token.error('Self is reserved in trait method parameters')
                 if function.token.text in members:
-                    raise function.token.error('duplicate trait implementation method')
+                    raise function.token.error('duplicate trait implementation method (rustc E0201)')
                 if function.token.text not in methods:
-                    raise function.token.error('method is not a member of the implemented trait')
+                    raise function.token.error('method is not a member of the implemented trait (rustc E0407)')
                 members[function.token.text] = function
             missing = {name for name in methods.keys() - members.keys()
                        if methods[name].body is None}
             if missing:
-                raise implementation.token.error('missing required trait methods: ' + ', '.join(sorted(missing)))
+                raise implementation.token.error('missing required trait methods: ' + ', '.join(sorted(missing)) + ' (rustc E0046)')
             self.defaults.inherit(implementation, members)
             self.impls[key] = members
             impl_tokens[key] = implementation.token
@@ -197,7 +197,7 @@ class StaticTraits:
                 local_contracts = [(self.parameter_bounds[required_parameter], self.parameter_bounds[parameter])
                                    for required_parameter, parameter in zip(required_parameters, parameters)]
                 if any(not actual <= expected for expected, actual in contracts + local_contracts):
-                    raise function.token.error('trait implementation method bounds are stricter than the trait contract')
+                    raise function.token.error('trait implementation method bounds are stricter than the trait contract (rustc E0276)')
                 # Selection always produces the implementation function, but
                 # a call through dot/type/trait-qualified syntax must retain
                 # the trait declaration's obligations. Keep the impl's own
@@ -219,7 +219,7 @@ class StaticTraits:
                 expected = tuple(substitute(ty, bindings) for _, ty, _ in signature.params)
                 result = substitute(signature.result, bindings)
                 if expected != tuple(ty for _, ty, _ in function.params) or result != function.result:
-                    raise function.token.error('trait implementation method signature mismatch')
+                    raise function.token.error('trait implementation method signature mismatch (rustc E0053)')
 
     def self_sized(self, function, scope):
         """A trait method's `where Self: Sized` predicate.
@@ -273,9 +273,12 @@ class StaticTraits:
         return tuple(marker_bounds)
 
     def require_checked_context(self, checked, source, target, overflow_checks):
-        # Presence admission, not trait legality: run before any abstract body
-        # check or concrete scheduling. The semantic pass below resolves the
-        # bound and checks all obligations, including unused declarations.
+        # Without an actual check, local trait bounds and associated types are
+        # admitted by this module's owned obligations (stage 7 of README
+        # "Replacing the rustc admission gate"). A supplied check must still
+        # match the selected edition.
+        if checked is None:
+            return
         names = {trait.token.text for trait in self.declarations}
         functions = list(self.checker.functions)
         functions.extend(function for trait in self.declarations for function in trait.methods)
@@ -308,7 +311,7 @@ class StaticTraits:
 
     def require(self, owner, trait, token):
         if not self.proves(owner, trait):
-            raise token.error(f'unsatisfied local trait bound {owner}: {trait}')
+            raise token.error(f'unsatisfied local trait bound {owner}: {trait} (rustc E0277)')
 
     def check_function_call(self, parameters, arguments, token):
         for parameter, argument in zip(parameters, arguments):
@@ -348,7 +351,7 @@ class StaticTraits:
             return self.abstract_method(owner, trait, name, token), ()
         members = self.impls.get((trait, owner))
         if members is None:
-            raise token.error('no concrete implementation for qualified trait path')
+            raise token.error('no concrete implementation for qualified trait path (rustc E0277)')
         function = members.get(name)
         if function is None:
             raise token.error('unknown trait associated method')

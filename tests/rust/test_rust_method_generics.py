@@ -99,7 +99,6 @@ def test_impl_prefix_method_suffix_and_registry_identity_are_separate():
     ('struct R<T>{x:T} impl<T> R<T>{fn take<U>(self,x:U)->U{x}} fn f(){R::<u64>::take::<bool>(R::<u32>{x:1},true);}', 'type mismatch'),
     ('struct R{x:u64} impl R{fn bad<U>(self,x:U)->(U,U){(x,x)}}', 'moved'),
     ('struct R{x:u64} impl R{fn bad<U>(self,x:U)->U{x+x}}', 'operator'),
-    ('struct R{x:u64} impl R{fn bound<U:Copy>(self,x:U){}}', 'actual source/options-bound CheckedRustSource'),
     # Exact method-where control retained as a genuine-check positive in
     # test_rust_inherent_local_bounds.
     ('struct R{x:u64} impl R{fn bound<const N:usize>(self){}}', 'const generic'),

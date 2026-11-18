@@ -5,11 +5,13 @@ layouts. The defining identity is core; std and the edition prelude reexport it.
 Local lexical bindings win before that prelude. no_core, source lang attributes,
 staged_api and the inspection registry cannot activate this contract.
 
-The temporary public admission boundary is an actual CheckedRustSource for ANY
-explicit marker bound, including value-only code. This descriptor is provenance,
-not a token, borrow checker, trust flag, standard-library loader or final pcc1
-compiler certification. Clone is only the transitive Copy supertrait obligation;
-its methods, implementations and explicit bounds remain unsupported.
+Explicit marker bounds are admitted by these owned obligations without an
+external check (stage 7 of README "Replacing the rustc admission gate"); with
+an actual CheckedRustSource the descriptor records its provenance. It is not a
+token, borrow checker, trust flag, standard-library loader or final pcc1
+compiler certification. Clone is only the transitive Copy supertrait
+obligation; its methods, implementations and explicit bounds remain
+unsupported.
 """
 from dataclasses import dataclass
 
@@ -61,7 +63,7 @@ class StandardMarkers:
             raise bound.token.error('generic arguments and associated item constraints on trait bounds require trait/projection solving, which is not implemented')
         first = bound.path.split('::', 1)[0]
         if first in scope:
-            raise bound.token.error('generic parameter shadows the requested standard marker; expected a trait')
+            raise bound.token.error('generic parameter shadows the requested standard marker; expected a trait (rustc E0404)')
         checker = self.checker
         resolution = checker.module_resolution
         # Trait declarations are all in the module namespace, including later
@@ -121,7 +123,7 @@ class StandardMarkers:
     def require_sized(self, ty, token):
         if isinstance(ty, TypeParameter):
             if ty in self.constraints and SIZED not in self.constraints[ty]:
-                raise token.error('type parameter requires canonical Sized at this by-value/storage position; ?Sized does not provide DST layout support')
+                raise token.error('type parameter requires canonical Sized at this by-value/storage position; ?Sized does not provide DST layout support (rustc E0277)')
         elif isinstance(ty, (FixedArrayType, TupleType, TypeApplication)):
             from .generics import children
             for item in children(ty):
@@ -146,12 +148,15 @@ class StandardMarkers:
         for parameter, argument in zip(parameters, arguments):
             obligations = self.call_constraints.get(parameter, self.constraints[parameter])
             if SIZED in obligations and not self.proves_sized(argument):
-                raise token.error('generic call does not satisfy canonical Sized obligation')
+                raise token.error('generic call does not satisfy canonical Sized obligation (rustc E0277)')
             if COPY in obligations and not self.checker.copy_type(argument):
-                raise token.error('generic call does not satisfy canonical Copy obligation')
+                raise token.error('generic call does not satisfy canonical Copy obligation (rustc E0277)')
 
     def checked_context(self, checked, source, target, overflow_checks):
-        if self.first_explicit_bound is None:
+        # Without an actual check, marker bounds are admitted by the owned
+        # Copy/Sized obligations here (stage 7); a check still records its
+        # provenance and must match the selected edition.
+        if self.first_explicit_bound is None or checked is None:
             return None
         from .external_check import CheckedRustSource
         if type(checked) is not CheckedRustSource:

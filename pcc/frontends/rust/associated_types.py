@@ -73,11 +73,11 @@ class AssociatedTypes:
             if name in aliases:
                 raise item.token.error('duplicate trait implementation associated type')
             if name not in required:
-                raise item.token.error('associated type is not a member of the implemented trait')
+                raise item.token.error('associated type is not a member of the implemented trait (rustc E0437)')
             aliases[name] = item
         missing = required.keys() - aliases.keys()
         if missing:
-            raise implementation.token.error('missing required trait associated types: ' + ', '.join(sorted(missing)))
+            raise implementation.token.error('missing required trait associated types: ' + ', '.join(sorted(missing)) + ' (rustc E0046)')
         values = {}
         for name, item in aliases.items():
             bounded_type(item.value, item.token)

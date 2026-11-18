@@ -52,12 +52,9 @@ def test_bounded_method_still_checks_unused_abstract_body_before_instances():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_method_bounds_do_not_turn_public_flag_into_admission(name,monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified method bounds reached IR'))
-    # References are owned (stages 4-5); the marker-bound gate (stage 7) remains.
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_method_bound_originals_compile_with_owned_admission(name,monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

@@ -127,21 +127,25 @@ def test_local_marker_names_in_where_predicates_are_not_standard_markers():
     assert not checker.copy_type(required) and not checker.copy_type(actual)
 
 
-@pytest.mark.parametrize('text', [PRIOR_CAPABILITIES[0][1], PRIOR_CAPABILITIES[1][1],
-    'trait A{}trait Ops{fn f<U>(u:U)->U;}struct H{x:u64}impl Ops for H{fn f<V>(v:V)->V where V:A{v}}'])
-def test_unused_local_where_contract_requires_actual_check_before_sema(text, monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('unchecked local contract entered Sema'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust(text, experimental_rustc_checked=True)
+@pytest.mark.parametrize('text,verdict', [
+    (PRIOR_CAPABILITIES[0][1], None), (PRIOR_CAPABILITIES[1][1], None),
+    # rustc E0276: the impl's where clause is stricter than the trait's
+    ('trait A{}trait Ops{fn f<U>(u:U)->U;}struct H{x:u64}impl Ops for H{fn f<V>(v:V)->V where V:A{v}}',
+     r'stricter than the trait contract \(rustc E0276\)'),
+])
+def test_unused_local_where_contracts_are_decided_by_owned_admission(text, verdict):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    if verdict is None:
+        assert not compile_rust(text).externally_checked
+    else:
+        with pytest.raises(RustError, match=verdict):
+            compile_rust(text)
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_where_originals_cannot_use_opt_in_boolean_instead_of_real_token(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unchecked where contract reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_where_contract_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

@@ -140,9 +140,9 @@ def test_empty_turbofish_does_not_admit_reference_source_with_a_boolean_flag():
 
 
 @pytest.mark.parametrize('text',CERTIFIED_VALID)
-def test_empty_calls_retain_actual_certification_for_local_bound_replay(text):
-    with pytest.raises(RustError,match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text,experimental_rustc_checked=True)
+def test_empty_calls_with_local_bound_replay_compile_with_owned_admission(text):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.parametrize('name',PROGRAMS[:-1])

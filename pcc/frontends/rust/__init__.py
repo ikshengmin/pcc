@@ -138,8 +138,6 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         # owned layout yet.
         from .reference_admission import reject_slices
         reject_slices(functions, records, enums, parser.implementations, parser.traits)
-        from .default_methods import reject_uncertified_defaults
-        reject_uncertified_defaults(parser.traits)
         if inline_hints:
             raise inline_hints[0].attributes[0].token.error(
                 'inline attribute admission requires an actual source/options-bound '

@@ -206,11 +206,14 @@ def test_unused_defaults_are_checked_but_not_emitted_as_abstract_self_functions(
     'trait Unused{fn value()->u64{42}}fn answer()->u64{42}',
     'trait Unused{fn value<U>(x:U)->U{x}}',
 ])
-def test_every_default_body_requires_actual_original_certification_before_ir(text, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified default reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_every_default_body_compiles_with_owned_admission(text, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    if '#[inline' in text:
+        # Inline attributes keep their own gate (stage 8).
+        with pytest.raises(RustError, match='inline attribute admission requires an actual'):
+            compile_rust(text)
+        return
+    assert not compile_rust(text).externally_checked
 
 
 INVALID = (

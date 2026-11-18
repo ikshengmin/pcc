@@ -70,7 +70,7 @@ in the named modules; locate them with
 | Reference results, function lifetime parameters and elision, reference parameter reassignment | `regions.py`, `moves.py`, `semantics.py` | E0106, E0515, E0597, "lifetime may not live long enough" | **owned** (stage 6, first part) |
 | One lifetime parameter on a struct/enum and `impl<'a> W<'a>`; references and such data types in their fields | `regions.py` (slots), `moves.py` (inner slot, writes through `&mut`), `generics.py`, `semantics.py` | E0106, E0107, E0261, E0392, E0597, E0621, implied bounds | **owned** (stage 6, second part) |
 | Several lifetime parameters or lifetimes beside type parameters, outlives bounds (`'a: 'b`), references in tuples/arrays, regions nested beyond `&'s W<'a>`, explicit lifetimes in bodies, generic reference arguments | `generics.py`, `semantics.py`, `function_generics.py` | region inference across type arguments and outlives constraints | open |
-| Default trait methods, standard marker bounds, trait-bound subjects | `default_methods.py`, `standard_markers.py`, `traits.py` | trait well-formedness and marker solving | open (stage 7) |
+| Default trait methods, standard marker bounds, local trait bounds and where clauses, supertraits, associated types | `default_methods.py`, `standard_markers.py`, `traits.py`, `associated_types.py` | trait well-formedness, marker solving, E0034/E0046/E0053/E0119/E0201/E0276/E0277/E0404/E0407/E0428/E0437/E0599 | **owned** (stage 7); projections through generic bounds, `Trait::method(x)` without a Self type, impls on primitives or generic types stay explicit gaps |
 | Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
 
 Design. The owned checker extends the existing flow analysis in `moves.py`
@@ -162,7 +162,17 @@ Migration order:
    original programs) equal a rustc 1.92.0 `-O` build's. Open: several
    lifetimes or lifetimes beside type parameters, outlives bounds, references
    in tuples and arrays, deeper nesting, generic reference arguments.
-7. Trait gates: default methods, standard markers, bound well-formedness.
+7. Trait gates (done): explicit marker bounds, local trait bounds and where
+   clauses, supertraits, default trait methods and associated types are
+   admitted by the owned obligations already in `traits.py`,
+   `standard_markers.py`, `default_methods.py` and `associated_types.py`; a
+   supplied actual check must still match the edition. Their diagnostics now
+   carry rustc's codes. Evidence in `tests/rust/test_rust_owned_trait_admission.py`:
+   the 81 formerly gated example programs run with owned compile/assemble/link
+   and match rustc; every listed invalid row of the trait test modules (222)
+   is rejected without rustc, with the listed code whenever PCC names one, and
+   a rustc node confirms those codes; an original corpus matches a rustc
+   1.92.0 `-O` build.
 8. Owned lints for the attributes a crate denies, then multi-file crates on the
    same path (DataSketches Rust stops at `#![deny(missing_docs)]`).
 

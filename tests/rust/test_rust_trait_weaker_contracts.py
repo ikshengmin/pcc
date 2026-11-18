@@ -59,12 +59,9 @@ def test_same_named_inherent_call_does_not_inherit_trait_obligations():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_public_weaker_contract_still_needs_actual_token(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified weaker contract reached IR'))
-    # References are owned (stages 4-5); the marker-bound gate (stage 7) remains.
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_weaker_contract_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

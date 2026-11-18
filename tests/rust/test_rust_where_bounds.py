@@ -124,18 +124,14 @@ def test_actual_rustc_accepts_the_same_empty_and_trailing_bound_forms(text, tmp_
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_where_bounds_cannot_use_the_bare_experimental_flag(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified where source reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_where_bound_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
-def test_unused_local_where_bound_needs_token_before_scheduling(monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('unchecked local where predicate entered Sema'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust(PRIOR_CAPABILITIES[2][1], experimental_rustc_checked=True)
+def test_unused_local_where_bound_compiles_with_owned_admission(monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(PRIOR_CAPABILITIES[2][1]).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

@@ -13,15 +13,6 @@ from .generics import substitute
 from .standard_markers import SIZED
 
 
-def reject_uncertified_defaults(traits):
-    for trait in traits:
-        for function in trait.methods:
-            if function.body is not None:
-                raise function.token.error(
-                    'default trait methods require an actual source/options-bound '
-                    'CheckedRustSource; caller attestation is not certification')
-
-
 class DefaultMethods:
     def __init__(self, traits):
         self.traits = traits

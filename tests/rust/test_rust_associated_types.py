@@ -179,11 +179,9 @@ def test_recursive_generic_result_parses_before_impl_sized_rejection():
 
 
 @pytest.mark.parametrize('text', POSITIVE_ORIGINALS)
-def test_new_public_associated_inputs_require_actual_check_not_boolean(text, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('unchecked associated type reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_associated_type_originals_compile_with_owned_admission(text, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 INVALID = (

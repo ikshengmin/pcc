@@ -66,4 +66,4 @@ class TraitHierarchy:
         for trait, owner in implementations:
             for parent in self.ancestors[trait]:
                 if (parent, owner) not in implementations:
-                    raise tokens[trait, owner].error('missing required supertrait implementation')
+                    raise tokens[trait, owner].error('missing required supertrait implementation (rustc E0277)')

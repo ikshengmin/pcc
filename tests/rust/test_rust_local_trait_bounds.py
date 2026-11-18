@@ -86,18 +86,14 @@ def test_local_marker_names_never_supply_standard_copy():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_public_local_bound_originals_need_actual_source_token(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified local bounds reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_local_bound_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
-def test_unused_value_only_local_bound_is_gated_before_scheduling(monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('uncertified local bounds entered scheduling'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust('trait Read{}fn unused<T:Read>(x:T)->T{x}', experimental_rustc_checked=True)
+def test_unused_value_only_local_bound_compiles_with_owned_admission(monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust('trait Read{}fn unused<T:Read>(x:T)->T{x}').externally_checked
 
 
 def checked_owned(text, directory, monkeypatch):

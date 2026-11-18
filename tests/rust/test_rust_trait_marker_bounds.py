@@ -96,19 +96,14 @@ def test_trait_self_does_not_silently_gain_sized_from_method_parameter_defaults(
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_trait_marker_public_admission_still_requires_actual_check(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified trait marker reached IR'))
-    # References are owned (stages 4-5); the marker-bound gate (stage 7) remains.
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_trait_marker_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
-def test_unused_value_only_trait_signature_alone_requires_genuine_marker_context(monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unused marker signature reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust('trait T{fn unused<U:Copy>(x:U)->U;}', experimental_rustc_checked=True)
+def test_unused_value_only_trait_signature_compiles_with_owned_admission(monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust('trait T{fn unused<U:Copy>(x:U)->U;}').externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')
@@ -177,11 +172,9 @@ def test_local_names_in_old_required_signatures_keep_local_canonical_identity(na
 
 
 @pytest.mark.parametrize('name,text,trait,bound', PRIOR_LOCAL_CAPABILITIES)
-def test_old_local_signature_controls_need_actual_token_before_sema(name, text, trait, bound, monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('uncertified local signature reached Sema'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_old_local_signature_controls_compile_with_owned_admission(name, text, trait, bound, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

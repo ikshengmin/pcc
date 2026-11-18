@@ -65,11 +65,9 @@ def test_argument_and_result_inference_share_the_existing_instance_registry():
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_even_value_only_explicit_marker_contract_requires_actual_check(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified marker contract reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_explicit_marker_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 def test_mutable_reference_is_not_copy_and_shared_reference_is_copy_in_the_model():

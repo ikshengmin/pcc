@@ -70,19 +70,15 @@ def test_method_where_ast_keeps_owner_prefix_distinct_from_predicate_subject():
 
 
 @pytest.mark.parametrize('text', [PRIOR_CAPABILITIES[0][1], PRIOR_CAPABILITIES[1][1]])
-def test_unused_value_only_inherent_local_bounds_need_token_before_scheduling(text, monkeypatch):
-    from pcc.frontends.rust.semantics import Checker
-    monkeypatch.setattr(Checker, 'check', lambda *a: pytest.fail('unchecked method local bound entered Sema'))
-    with pytest.raises(RustError, match='local trait bounds require an actual'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_unused_value_only_inherent_local_bounds_compile_with_owned_admission(text, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(text).externally_checked
 
 
 @pytest.mark.parametrize('name', PROGRAMS)
-def test_inherent_local_originals_cannot_use_only_the_boolean(name, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified method source reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(source(name), experimental_rustc_checked=True)
+def test_inherent_local_originals_compile_with_owned_admission(name, monkeypatch):
+    # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
+    assert not compile_rust(source(name)).externally_checked
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')
