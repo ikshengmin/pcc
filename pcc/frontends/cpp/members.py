@@ -33,6 +33,9 @@ def mangle_member(owner, name, parameters, const=False, variadic=False):
 
 
 def declare_member_function(definition, symbol, const=False, outside=False, static=False, encode_name=True):
+    if symbol.template_parameters:
+        from pcc.frontends.cpp.member_templates import declare_member_template
+        return declare_member_template(definition, symbol, const, outside, static)
     if static and const:
         raise CppDiagnostic("cpp.static-member-cv", "a static member function cannot have cv-qualifiers", symbol.coord)
     scope = definition.scope
@@ -44,6 +47,8 @@ def declare_member_function(definition, symbol, const=False, outside=False, stat
         raise CppDiagnostic("cpp.invalid-constructor", "a constructor cannot have a return type", symbol.coord)
     if group is not None:
         for previous in group.overloads:
+            if previous.template_parameters:
+                continue
             if previous.variadic != symbol.variadic:
                 continue
             previous_static = getattr(previous, "method_static", False)
@@ -127,6 +132,10 @@ def call_named_member(parser, group, arguments, coord, virtual_dispatch=True):
     of C (or a class derived from it) is being defined, else a contrived
     object of type C; selecting a non-static member without (*this) is
     ill-formed."""
+    from pcc.frontends.cpp.member_template_calls import active_definition
+    if active_definition(parser):
+        from pcc.frontends.cpp.member_template_patterns import pattern_named_call
+        return pattern_named_call(parser, group, arguments, coord, virtual_dispatch)
     if is_static_group(group):
         return call_static_member(parser, group, arguments, coord)
     if not is_mixed_group(group):
@@ -176,7 +185,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_call
         return pattern_call(parser, group, object_expression, arguments, coord, False, address_available)
-    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
+    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None
+                                                and getattr(parser, 'member_template_instance', None) is None):
         raise CppDiagnostic("cpp.unsupported.member-templates", "member calls in templates require dependent lookup", coord)
     arguments = [parser._decay_array(arg) for arg in arguments]
     # Use the same partial-order conversion owner as ordinary overloads. The
@@ -236,7 +246,8 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
         if discarded_base is not None:
             raise CppDiagnostic('cpp.unsupported.member-templates', 'untyped discarded receiver cannot enter a method Pattern', coord)
         return pattern_call(parser, group, None, arguments, coord, True)
-    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None):
+    if parser.template_function is not None or (parser.instantiating_template and getattr(parser, 'class_template_instance', None) is None
+                                                and getattr(parser, 'member_template_instance', None) is None):
         raise CppDiagnostic("cpp.unsupported.member-templates",
                             "member calls in templates require dependent lookup", coord)
     arguments = [parser._decay_array(arg) for arg in arguments]

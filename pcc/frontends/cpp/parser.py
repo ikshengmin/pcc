@@ -433,7 +433,8 @@ class CppParser:
     def _check_value_type(self, dtype, token):
         plain = unqualified(dtype)
         nominal = unqualified(plain.pointee) if isinstance(plain, PointerType) else plain
-        if self.parsing_template and isinstance(dtype, ReferenceType):
+        member_signature = getattr(self, "function_template_type_patterns", False)
+        if self.parsing_template and isinstance(dtype, ReferenceType) and not member_signature:
             raise CppDiagnostic("cpp.unsupported.references", "reference template deduction/replay is not implemented", token.coord)
         if self.parsing_template and contains_array(dtype):
             raise CppDiagnostic("cpp.unsupported.array-templates", "array template typing/deduction is not implemented", token.coord)
@@ -441,6 +442,7 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum-related template semantics are not implemented", token.coord)
         if (self.parsing_template and getattr(self, 'class_template_method', None) is None
+                and not member_signature and not getattr(self.template_function, 'ordinary_member_template', False)
                 and (pointer_type(dtype) or isinstance(dtype, ConstType))):
             raise CppDiagnostic("cpp.unsupported.pointer-templates",
                                 "pointer/cv template types are not implemented", token.coord)
@@ -605,6 +607,8 @@ class CppParser:
         if (self.parsing_template and not getattr(self, 'class_template_signature', False)
                 and getattr(self, 'class_template_method', None) is None
                 and not getattr(self, 'class_template_member_declaration', False)
+                and not getattr(self, 'function_template_type_patterns', False)
+                and not getattr(self.template_function, 'ordinary_member_template', False)
                 and not allow_template_type_id):
             raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template types are not implemented", token.coord)
         if "volatile" in qualifiers:
@@ -614,7 +618,8 @@ class CppParser:
 
     def _reference(self, dtype, token):
         if (token.value != '&'
-                or (self.parsing_template and not getattr(self, 'class_template_signature', False))
+                or (self.parsing_template and not getattr(self, 'class_template_signature', False)
+                    and not getattr(self, 'function_template_type_patterns', False))
                 or self.template_function is not None):
             raise CppDiagnostic("cpp.unsupported.references", "rvalue/dependent references require additional semantics", token.coord)
         from pcc.frontends.cpp.references import lvalue_reference
@@ -852,7 +857,7 @@ class CppParser:
         typename = c_ast.Typename(None, [], self._scalar_type(None, dtype, coord), coord)
         return c_ast.Cast(typename, expression.node, coord)
 
-    def _template(self):
+    def _template(self, member_definition=None):
         keyword = self._expect("template")
         if self.language_linkage == "C":
             raise CppDiagnostic("cpp.template-c-linkage",
@@ -903,7 +908,8 @@ class CppParser:
                 from pcc.frontends.cpp.class_templates import parse_declaration
                 parse_declaration(self, tuple(parameters), parent)
             else:
-                self._function(template_parameters=tuple(parameters), declaration_scope=parent)
+                self._function(template_parameters=tuple(parameters), declaration_scope=parent,
+                               member_definition=member_definition)
         finally:
             self.scope = parent
             self.parsing_template = False
@@ -1008,7 +1014,7 @@ class CppParser:
         named_scope = (member_definition is None and self.scope.kind == "namespace"
                        and bool(self.scope.namespace_path()) and not self.scope.internal_linkage
                        and not template_parameters and self.language_linkage is None)
-        inline_specifiers = [] if member_definition is not None or named_scope else None
+        inline_specifiers = [] if member_definition is not None or named_scope or template_parameters else None
         virtual_specifier = None
         while (self._peek().value in ("extern", "static")
                or inline_specifiers is not None and self._peek().value == "inline"
@@ -1092,16 +1098,25 @@ class CppParser:
             owner = unqualified(target.dtype)
             require_complete(owner, name.coord)
             enclosing = owner.declaration_scope
-            while enclosing is not None and enclosing is not parent:
+            lexical_parent = declaration_scope if template_parameters else parent
+            while enclosing is not None and enclosing is not lexical_parent:
                 enclosing = enclosing.parent
             if enclosing is None:
                 raise CppDiagnostic("cpp.member-definition-namespace", "member definition is not in an enclosing namespace", name.coord)
             member_owner = owner.definition
-            parameter_scope.parent = member_owner.scope
+            if template_parameters:
+                from pcc.frontends.cpp.member_templates import member_parameter_scope
+                member_parameter_scope(parameter_scope, parent, member_owner)
+            else:
+                parameter_scope.parent = member_owner.scope
 
         variadic = []
         default_arguments = []
         def parameter_clause():
+            if template_parameters and member_owner is not None:
+                from pcc.frontends.cpp.member_template_calls import signature_operation
+                return signature_operation(self, self._parameter_clause, params, parameter_symbols,
+                                           variadic, check_lowering=False, defaults=default_arguments)
             return self._parameter_clause(params, parameter_symbols, variadic,
                                           check_lowering=False, defaults=default_arguments)
 
@@ -1112,9 +1127,14 @@ class CppParser:
                                           parse_noexcept=self._declaration_noexcept).parse()
             is_function = any(chunk.kind == "function" for chunk in declarator.chunks)
             # A class-qualified object declarator names a static data member.
-            name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
-                                                       member=member_owner is not None,
-                                                       namespace_function=namespace_owner is not None and is_function)
+            if is_function and template_parameters and member_owner is not None:
+                from pcc.frontends.cpp.member_template_calls import signature_operation
+                name, result_type = signature_operation(self, self._apply_declarator, declarator,
+                                                        result_type, function=True, member=True)
+            else:
+                name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
+                                                           member=member_owner is not None,
+                                                           namespace_function=namespace_owner is not None and is_function)
         finally:
             self.scope = parent
         virt_specifiers, pure = (), False
@@ -1201,20 +1221,27 @@ class CppParser:
                                 and declaration_scope.kind == "namespace" and self._peek().value == "="
                                 and self.cursor.tokens[self.cursor.position + 1].value == "delete")
         definition = self._peek().value == "{" or deleted_template
+        if inline_specifiers and template_parameters and member_owner is None:
+            raise CppDiagnostic('cpp.unsupported.inline-declarations',
+                                'inline free function templates require separate ODR tracking', name.coord)
         if inline_specifiers and not definition:
             raise CppDiagnostic("cpp.unsupported.inline-member-declarations",
                                 "explicit inline member declarations without an in-class body need separate ODR tracking", name.coord)
         if variadic and any(isinstance(t, ReferenceType) for _, t in params):
             raise CppDiagnostic("cpp.unsupported.references", "variadic reference signatures require dedicated va_start/ABI admission", name.coord)
-        if template_parameters and any(isinstance(t, ReferenceType) for _, t in params):
+        if template_parameters and member_owner is None and any(isinstance(t, ReferenceType) for _, t in params):
             raise CppDiagnostic("cpp.unsupported.references", "reference template parameter deduction is not implemented", name.coord)
         if any(isinstance(t, ReferenceType) and is_class_type(t.referent) for _, t in params) and definition:
             from pcc.frontends.cpp.references import ordinary_class_result_context
-            if not ordinary_class_result_context(self):
+            if not ordinary_class_result_context(self) and not (template_parameters and member_owner is not None):
                 raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference template bodies require separate semantics", name.coord)
         if definition or member_owner is not None or template_parameters:
             for dtype in (result_type,) + tuple(t for _, t in params):
-                self._check_value_type(dtype, name)
+                if template_parameters and member_owner is not None:
+                    from pcc.frontends.cpp.member_template_calls import signature_operation
+                    signature_operation(self, self._check_value_type, dtype, name)
+                else:
+                    self._check_value_type(dtype, name)
         exception_specification = declarator.chunks[0].exception_specification
         validate_declaration(self, name, result_type, tuple(t for _, t in params),
                              bool(exception_specification), definition, member_owner, storage, template_parameters, bool(variadic))
@@ -1233,8 +1260,8 @@ class CppParser:
             from pcc.frontends.cpp.varargs import require_sysv_target
             require_sysv_target(self, name.coord)
         if member_owner is not None:
-            if template_parameters or self.parsing_template:
-                raise CppDiagnostic("cpp.unsupported.member-templates", "member templates require separate deduction/ODR semantics", name.coord)
+            if self.parsing_template and not template_parameters:
+                raise CppDiagnostic("cpp.unsupported.member-templates", "nested member templates require separate deduction/ODR semantics", name.coord)
             if storage is not None and (member_definition is None or storage.value != "static"):
                 raise CppDiagnostic("cpp.invalid-member-storage",
                                     "only an in-class declaration may specify static for a member function", storage.coord)
@@ -1280,7 +1307,9 @@ class CppParser:
             symbol = declare_member_function(member_owner, new_symbol, const,
                                              outside=member_definition is None,
                                              static=storage is not None and storage.value == "static")
-            if member_definition is not None:
+            if template_parameters and (virtual_specifier is not None or virt_specifiers or pure):
+                raise CppDiagnostic("cpp.virtual-member-template", "a member function template cannot be virtual", name.coord)
+            if member_definition is not None and not template_parameters:
                 from pcc.frontends.cpp.virtual_functions import declare_virtual
                 declare_virtual(member_owner, symbol, virtual_specifier, virt_specifiers, pure, name.coord)
         elif namespace_owner is not None:
@@ -1311,9 +1340,20 @@ class CppParser:
             if not definition:
                 self._expect(";")
                 return None
-            for param, dtype in params:
-                if param is None:
-                    self._unsupported(name, "unnamed definition parameters")
+            if member_owner is None:
+                for param, dtype in params:
+                    if param is None:
+                        self._unsupported(name, "unnamed definition parameters")
+            if member_owner is not None:
+                from pcc.frontends.cpp.member_templates import (
+                    bind_member_template_body, defer_member_template_body,
+                )
+                if member_definition is not None:
+                    defer_member_template_body(self, member_owner, symbol, result_type,
+                                               parameter_scope, parameter_symbols)
+                else:
+                    bind_member_template_body(self, symbol, result_type, parameter_scope, parameter_symbols)
+                return None
             previous_template, previous_return = self.template_function, self.return_type
             self.template_function, self.return_type = symbol, result_type
             self.scope = parameter_scope
@@ -2179,6 +2219,23 @@ class CppParser:
         if style == "static_cast" and pointer_type(target):
             from pcc.frontends.cpp.static_casts import convert_void_pointer
             return convert_void_pointer(self, target, expression, coord)
+        # [expr.cast], [conv.ptr]: this is only the standard object-pointer
+        # conversion. Do not admit the other C-style reinterpret/const/static
+        # combinations or route named static_cast through this owner.
+        if (style == "C-style" and pointer_type(target)
+                and unqualified(target.pointee) == "void"
+                and pointer_type(source)
+                and unqualified(source.pointee) != "void"
+                and not contains_function(source)
+                and not isinstance(source.pointee, ReferenceType)
+                and (not const_qualified(source.pointee)
+                     or const_qualified(target.pointee))
+                and not self.parsing_template
+                and self.template_function is None
+                and not self.instantiating_template):
+            node = self._convert(expression, target, coord)
+            return Expression(node, target, constant_fact=not_constant(
+                target, "pointer conversion is not a supported constant expression", coord))
         same_enum = is_enum_type(target) and source is target
         if is_enum_type(target) and not same_enum:
             raise CppDiagnostic("cpp.unsupported.enum-casts",
@@ -2331,7 +2388,8 @@ class CppParser:
                 # Explicit operator= syntax is an ordinary member call. Its
                 # receiver precedes its argument; infix assignment has a
                 # different ordering and retains its separate capability gate.
-            if self.template_function is not None and getattr(self, 'class_template_method', None) is None:
+            if (self.template_function is not None and getattr(self, 'class_template_method', None) is None
+                    and not getattr(self.template_function, 'ordinary_member_template', False)):
                 raise CppDiagnostic("cpp.unsupported.dependent-lookup", "template member lookup is not implemented", operator.coord)
             expression = member_access(self, expression, operator.value, member)
         return expression
@@ -2461,7 +2519,8 @@ class CppParser:
             expression = self._decay_array(expression)
         self._require_value(expression, allow_class=operator == "&", object_address=operator == "&")
         if operator in ("&", "*"):
-            if self.parsing_template and getattr(self, 'class_template_method', None) is None:
+            if (self.parsing_template and getattr(self, 'class_template_method', None) is None
+                    and not getattr(self.template_function, 'ordinary_member_template', False)):
                 raise CppDiagnostic("cpp.unsupported.pointer-templates", "pointer template expressions are not implemented", coord)
             if operator == "&":
                 if expression.assignment_result:
@@ -2712,7 +2771,8 @@ class CppParser:
                 or current is not owner and not is_proper_base(owner, current)):
             raise CppDiagnostic("cpp.nonstatic-member-without-object", "a non-static member requires an object", coord)
         symbol = self.this_symbol
-        if getattr(self, 'class_template_method', None) is not None:
+        if (getattr(self, 'class_template_method', None) is not None
+                or getattr(self.template_function, 'ordinary_member_template', False)):
             return Expression(Pattern('member-this', coord, symbol), symbol.dtype)
         node = c_ast.ID(symbol.c_name, coord)
         receivers = getattr(self, 'default_initializer_receivers', None)
@@ -2833,7 +2893,7 @@ class CppParser:
         explicit_arguments = None
         if (symbol is not None and symbol.kind == "function" and self._peek().value == "<"
                 and any(candidate.template_parameters for candidate in symbol.overloads)):
-            explicit_arguments = self._explicit_template_arguments()
+            explicit_arguments = self._explicit_template_arguments(allow_class_types=getattr(symbol, "class_owner", None) is not None)
             if self._peek().value != "(":
                 raise CppDiagnostic("cpp.unsupported.template-id-values",
                                     "a function template-id is implemented only as a direct call", token.coord)
@@ -2858,6 +2918,11 @@ class CppParser:
                         break
                     self._expect(",")
             if getattr(symbol, "class_owner", None) is not None:
+                from pcc.frontends.cpp.member_template_calls import has_templates, call as call_template
+                if has_templates(symbol):
+                    return call_template(self, symbol, None, arguments, token.coord,
+                                         named=True, explicit=explicit_arguments,
+                                         virtual_dispatch=not name.global_scope and len(name.parts) == 1)
                 from pcc.frontends.cpp.members import call_named_member
                 return call_named_member(self, symbol, arguments, token.coord,
                                          virtual_dispatch=not name.global_scope and len(name.parts) == 1)
@@ -2937,6 +3002,9 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.namespace-object-templates",
                                 "template namespace object bindings require a completed integral constant", token.coord)
         if self.template_function is not None:
+            if getattr(self.template_function, 'ordinary_member_template', False) and isinstance(symbol.dtype, ReferenceType):
+                return Expression(Pattern('name', token.coord, symbol), symbol.dtype.referent,
+                                  True, symbol, decltype_entity=symbol.dtype)
             return Expression(Pattern("name", token.coord, symbol), symbol.dtype,
                               symbol.kind == "value", symbol)
         if isinstance(symbol.dtype, ReferenceType):
@@ -2985,6 +3053,9 @@ class CppParser:
             if specialization is not None:
                 from pcc.frontends.cpp.class_templates import substitute_member
                 return substitute_member(dtype, bindings, specialization, coord, self)
+            if getattr(self, 'member_template_instance', None) is not None:
+                from pcc.frontends.cpp.class_templates import specialization
+                return substitute(dtype, bindings, instantiate_class=lambda sym, args, at: specialization(self, sym, args, at))
             return substitute(dtype, bindings)
         from pcc.frontends.cpp.class_templates import substitute_member
         return substitute_member(dtype, bindings, context.symbol.class_owner, coord, self)
@@ -3032,6 +3103,12 @@ class CppParser:
             member, operator, token = pattern.value
             base = self._instantiate_expression(pattern.children[0], bindings, environment)
             return member_access(self, base, operator, token)
+        if kind in ('function-member-field', 'function-member-call'):
+            from pcc.frontends.cpp.member_template_patterns import replay
+            return replay(self, pattern, bindings, environment)
+        if kind == 'member-placement-new':
+            from pcc.frontends.cpp.member_placement_patterns import instantiate
+            return instantiate(self, pattern, bindings, environment)
         if kind == 'new-array':
             from pcc.frontends.cpp.allocation_patterns import instantiate_array_new
             return instantiate_array_new(self, pattern, bindings, environment)
@@ -3185,6 +3262,9 @@ class CppParser:
         return self._discarded_value_node(self._instantiate_expression(pattern, bindings, environment))
 
     def _instantiate_body(self, instance, request_coord):
+        if getattr(instance, 'class_owner', None) is not None:
+            from pcc.frontends.cpp.member_template_instances import instantiate_body
+            return instantiate_body(self, instance, request_coord)
         origin = instance.template_origin
         if origin.pattern is None:
             raise CppDiagnostic("cpp.template-definition", "selected template has no available definition",

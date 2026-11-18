@@ -198,8 +198,11 @@ def parse_new(parser):
     coord = token.coord
     if parser._peek().value != '(':
         return parse_allocating_new(parser, global_only, coord)
-    if parser.template_function is not None or parser.parsing_template or parser.instantiating_template:
+    from pcc.frontends.cpp.member_placement_patterns import active_definition, capture_group, retain
+    patterned = active_definition(parser)
+    if (parser.template_function is not None or parser.parsing_template or parser.instantiating_template) and not patterned:
         raise CppDiagnostic('cpp.unsupported.allocation-templates', 'dependent allocation is not implemented', coord)
+    allocation_group = capture_group(parser)
     parser._expect('(')
     if parser._is_type(parser._peek()):
         raise CppDiagnostic('cpp.unsupported.new-type-id', 'parenthesized allocation type-ids are not implemented', coord)
@@ -214,31 +217,16 @@ def parse_new(parser):
     dtype = parser._abstract_pointer_type(parser._type(check_lowering=False))
     if parser._peek().value == '[' or array_type(dtype):
         raise CppDiagnostic('cpp.unsupported.array-new', 'array construction, cookies and failure cleanup are not implemented', coord)
-    if not is_class_type(dtype):
-        raise CppDiagnostic('cpp.unsupported.placement-object-type', 'placement initialization currently requires a complete class constructor', coord)
-    require_complete(dtype, coord)
-    from pcc.frontends.cpp.virtual_functions import require_concrete
-    require_concrete(dtype, coord)
-    owner = unqualified(dtype)
-    from pcc.frontends.cpp.arrays import require_trivial_member_array
-    for member in owner.definition.members:
-        if array_type(member.dtype):
-            require_trivial_member_array(member.dtype, member.coord)
-    if not global_only and 'operator new' in owner.definition.scope.names:
-        raise CppDiagnostic('cpp.unsupported.class-allocation-functions', 'class-specific allocation lookup is not implemented', coord)
-    group = parser.scope.global_scope().names.get('operator new')
-    if group is None or group.kind != 'function':
-        raise CppDiagnostic('cpp.undeclared-allocation-function', 'placement new requires its allocation function declaration', coord)
-    size_type = c_size_type_name(parser.types.target_triple)
-    selected = resolve_overload(group, [size_type] + [arg.dtype for arg in placement], parser.types,
-                                coord, [False] + [arg.null_pointer for arg in placement],
-                                [False] + [arg.lvalue or arg.assignment_result for arg in placement])
-    if (selected.variadic or selected.parameters != (size_type, PointerType('void')) or not selected.nonthrowing
-            or selected.language_linkage != 'C++' or selected.dtype != PointerType('void')):
-        raise CppDiagnostic('cpp.unsupported.placement-allocation-overload',
-                            'only the reserved nonallocating placement function is implemented', coord)
-    if len(placement) != 1:
-        raise AssertionError('reserved placement overload has one placement argument')
+    if not patterned:
+        check_reserved_placement(parser, dtype, placement, global_only, allocation_group, coord)
+    else:
+        from pcc.frontends.cpp.templates import dependent, value_dependent
+        if not dependent(dtype):
+            # Concrete constraints are definition-time obligations even in a
+            # never-instantiated member template. No lowering/evaluation here.
+            check_placement_object(dtype, global_only, coord)
+            if not any(value_dependent(arg) for arg in placement):
+                check_reserved_placement(parser, dtype, placement, global_only, allocation_group, coord)
     arguments = []
     initialization_kind = 'default'
     if parser._accept('('):
@@ -254,6 +242,55 @@ def parse_new(parser):
                 parser._expect(',')
     elif parser._peek().value == '{':
         raise CppDiagnostic('cpp.unsupported.placement-list-initialization', 'placement list initialization requires its distinct rules', coord)
+    if patterned:
+        return retain(parser, dtype, placement, arguments, initialization_kind,
+                      global_only, allocation_group, coord)
+    return lower_reserved_placement(parser, dtype, placement, arguments,
+                                    initialization_kind, global_only, allocation_group, coord)
+
+
+def check_placement_object(dtype, global_only, coord):
+    """Non-emitting complete allocated-object constraints."""
+    if not is_class_type(dtype):
+        raise CppDiagnostic('cpp.unsupported.placement-object-type', 'placement initialization currently requires a complete class constructor', coord)
+    require_complete(dtype, coord)
+    from pcc.frontends.cpp.virtual_functions import require_concrete
+    require_concrete(dtype, coord)
+    owner = unqualified(dtype)
+    from pcc.frontends.cpp.arrays import require_trivial_member_array
+    for member in owner.definition.members:
+        if array_type(member.dtype):
+            require_trivial_member_array(member.dtype, member.coord)
+    if not global_only and 'operator new' in owner.definition.scope.names:
+        raise CppDiagnostic('cpp.unsupported.class-allocation-functions', 'class-specific allocation lookup is not implemented', coord)
+    return owner
+
+
+def check_reserved_placement(parser, dtype, placement, global_only, allocation_group, coord):
+    """Original pre-initializer validation, shared without changing diagnostics."""
+    owner = check_placement_object(dtype, global_only, coord)
+    group = allocation_group
+    if group is None or group.kind != 'function':
+        raise CppDiagnostic('cpp.undeclared-allocation-function', 'placement new requires its allocation function declaration', coord)
+    size_type = c_size_type_name(parser.types.target_triple)
+    selected = resolve_overload(group, [size_type] + [arg.dtype for arg in placement], parser.types,
+                                coord, [False] + [arg.null_pointer for arg in placement],
+                                [False] + [arg.lvalue or arg.assignment_result for arg in placement])
+    if (selected.variadic or selected.parameters != (size_type, PointerType('void')) or not selected.nonthrowing
+            or selected.language_linkage != 'C++' or selected.dtype != PointerType('void')):
+        raise CppDiagnostic('cpp.unsupported.placement-allocation-overload',
+                            'only the reserved nonallocating placement function is implemented', coord)
+    if len(placement) != 1:
+        raise AssertionError('reserved placement overload has one placement argument')
+    return owner
+
+
+def lower_reserved_placement(parser, dtype, placement, arguments, initialization_kind,
+                             global_only, allocation_group, coord):
+    """One reserved placement owner for ordinary and instantiated expressions."""
+    from pcc.frontends.cpp.parser import Expression
+    from pcc.frontends.cpp.constructors import constructor_call
+    owner = check_reserved_placement(parser, dtype, placement, global_only, allocation_group, coord)
     # No initializer and () both select a default constructor but differ in
     # default/value initialization. Only a non-user-provided selected C1 can
     # require the preceding value-initialization zero phase.

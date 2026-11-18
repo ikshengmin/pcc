@@ -27,8 +27,8 @@ from pcc.frontends.cpp.declarators import DeclaratorParser
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.templates import (
-    ArrayBoundPattern, IntegralArgument, TypeParameter, convert_integral_argument, dependent,
-    substitute, type_key, value_dependent,
+    ArrayBoundPattern, IntegralArgument, Pattern, TypeParameter, ValueParameter,
+    convert_integral_argument, dependent, substitute, type_key, value_dependent,
 )
 from pcc.frontends.cpp.types import (
     ArrayType, ConstType, PointerType, ReferenceType, array_type,
@@ -432,7 +432,7 @@ def parse_declaration(parser, parameters, parent):
 
 
 class TemplateIdPattern:
-    """A class template-id with dependent type arguments, in a member declaration.
+    """A class template-id retaining dependent argument declaration identities.
 
     N4659 [temp.dep.type]/9: the simple-template-id is a dependent type. Each
     enclosing specialization substitutes the arguments and names the ordinary
@@ -449,7 +449,7 @@ class TemplateIdPattern:
         return self.name + '<...>'
 
 
-def bind_arguments(parser, pattern, allow_dependent=False):
+def bind_arguments(parser, pattern, allow_dependent=False, allow_function_patterns=False):
     explicit = parser._explicit_template_arguments(allow_class_types=True)
     if len(explicit) != len(pattern.parameters):
         raise CppDiagnostic('cpp.template-argument-count', 'class template argument count differs from its parameter list', pattern.coord)
@@ -459,13 +459,28 @@ def bind_arguments(parser, pattern, allow_dependent=False):
             if argument.kind != 'type':
                 raise CppDiagnostic('cpp.template-argument-kind', 'class template parameter requires a type argument', argument.coord)
             dtype = argument.value
-            if isinstance(unqualified(dtype), (TypeParameter, InjectedClassPattern)) or (
-                    dependent(dtype) and not allow_dependent):
+            if (isinstance(unqualified(dtype), InjectedClassPattern)
+                    or isinstance(unqualified(dtype), TypeParameter) and not allow_function_patterns or (
+                    dependent(dtype) and not (allow_dependent or allow_function_patterns))):
                 unsupported(argument.coord, 'dependent class template-ids are not implemented')
             bindings.append(dtype)
         else:
             if argument.kind != 'value':
                 raise CppDiagnostic('cpp.template-argument-kind', 'class template parameter requires a value argument', argument.coord)
+            if allow_function_patterns and value_dependent(argument.value):
+                node = argument.value.node
+                # Retain the declaration identity rather than source tokens.
+                # Expressions such as N+1 need a typed expression substitution
+                # owner and are not interchangeable with the parameter N.
+                if not (isinstance(node, Pattern) and node.kind == 'template-value'
+                        and isinstance(node.value, ValueParameter)):
+                    unsupported(argument.coord, 'dependent class template arguments require a directly named integral parameter')
+                destination = substitute(parameter.dtype, bindings)
+                source = node.value.dtype
+                if dependent(destination) or dependent(source) or destination != source:
+                    unsupported(argument.coord, 'dependent integral template argument conversion requires a separate substitution owner')
+                bindings.append(node.value)
+                continue
             if value_dependent(argument.value) or dependent(parameter.dtype) and any(map(dependent, bindings)):
                 unsupported(argument.coord, 'value-dependent class template arguments are not implemented')
             dtype = substitute(parameter.dtype, bindings)
@@ -476,12 +491,15 @@ def bind_arguments(parser, pattern, allow_dependent=False):
 def specialize(parser, symbol, coord):
     pattern = symbol.dtype
     member_declaration = getattr(parser, 'class_template_member_declaration', False)
-    if parser.parsing_template and not member_declaration:
+    function_patterns = getattr(parser, 'function_template_type_patterns', False)
+    if parser.parsing_template and not (member_declaration or function_patterns):
         unsupported(coord, 'dependent/nested template-id member type patterns are not implemented')
     if parser._peek().value != '<':
         unsupported(coord, 'class template argument deduction is not implemented')
-    arguments = bind_arguments(parser, pattern, allow_dependent=member_declaration)
-    if any(dependent(argument) for argument in arguments if not isinstance(argument, IntegralArgument)):
+    arguments = bind_arguments(parser, pattern, allow_dependent=member_declaration,
+                               allow_function_patterns=function_patterns)
+    if any(isinstance(argument, ValueParameter) or dependent(argument)
+           for argument in arguments if not isinstance(argument, IntegralArgument)):
         return TemplateIdPattern(symbol, arguments, coord)
     return specialization(parser, symbol, arguments, coord)
 

@@ -634,7 +634,7 @@ def argument_dependent_lookup(name, arguments, ordinary, coord):
 
 
 def resolve_overload(group, arguments, types, coord, null_constants=None, lvalues=None,
-                     explicit_arguments=None):
+                     explicit_arguments=None, *, distinguish_template_ambiguity=False):
     """Select a unique best viable candidate, using a per-argument partial order.
 
     Summing conversion costs is wrong: better on one argument and worse on
@@ -716,8 +716,10 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
         raise CppDiagnostic("cpp.no-viable-overload",
                             f"no viable overload for '{group.name}'", coord)
     best = []
+    potential_template_winners = []
     for candidate, ranks in viable:
         beats_all = True
+        could_beat_all = True
         for other, other_ranks in viable:
             if other is candidate:
                 continue
@@ -743,13 +745,36 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
             better = any(value < 0 for value in comparisons)
             non_template_preferred = (candidate.template_origin is None
                                       and other.template_origin is not None)
-            if not (no_worse and (better or non_template_preferred)):
-                beats_all = False
-                break
+            if no_worse and (better or non_template_preferred):
+                continue
+            if (distinguish_template_ambiguity and no_worse and not better
+                    and candidate.template_origin is not None
+                    and other.template_origin is not None):
+                # Call-context partial ordering compares the declaration
+                # patterns, not the coincidentally equal instantiated types.
+                from pcc.frontends.cpp.member_template_ordering import compare_member_template_order
+                order = compare_member_template_order(
+                    candidate.template_origin, other.template_origin, len(arguments) - 1)
+                if order == -1:
+                    continue
+                if order is None:
+                    # This unresolved tie could become a win, but a third
+                    # candidate with a better conversion can still rule it out.
+                    beats_all = False
+                    continue
+            # Incomparable or worse conversion sequences cannot be rescued
+            # by template partial ordering. Known equal patterns have no win.
+            beats_all = False
+            could_beat_all = False
+            break
         if beats_all:
             best.append(candidate)
+        elif distinguish_template_ambiguity and could_beat_all:
+            potential_template_winners.append(candidate)
     if len(best) != 1:
-        if sum(candidate.template_origin is not None for candidate, ranks in viable) > 1:
+        needs_ordering = (bool(potential_template_winners) if distinguish_template_ambiguity else
+                          sum(candidate.template_origin is not None for candidate, ranks in viable) > 1)
+        if needs_ordering:
             raise CppDiagnostic("cpp.unsupported.template-ordering",
                                 "function-template partial ordering is not implemented", coord)
         raise CppDiagnostic("cpp.ambiguous-overload",

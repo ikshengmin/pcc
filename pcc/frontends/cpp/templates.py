@@ -155,6 +155,12 @@ def type_key(dtype):
         return ("pointer", type_key(dtype.pointee))
     if isinstance(dtype, ArrayType):
         return ("array", type_key(dtype.element), dtype.bound)
+    if getattr(dtype, 'cpp_template_id_pattern', False):
+        return ('template-id', dtype.symbol, tuple(type_key(a) for a in dtype.arguments))
+    if isinstance(dtype, ValueParameter):
+        return ('value-parameter', dtype.index, type_key(dtype.dtype))
+    if isinstance(dtype, IntegralArgument):
+        return ('integral-argument', dtype)
     return ("parameter", dtype.index) if isinstance(dtype, TypeParameter) else ("scalar", dtype)
 
 
@@ -162,14 +168,15 @@ def same_type(lhs, rhs):
     return type_key(lhs) == type_key(rhs)
 
 
-def substitute(dtype, arguments):
+def substitute(dtype, arguments, instantiate_class=None):
     from pcc.frontends.cpp.types import qualify_const
     if isinstance(dtype, ReferenceType):
-        return ReferenceType(substitute(dtype.referent, arguments))
+        from pcc.frontends.cpp.references import lvalue_reference
+        return lvalue_reference(substitute(dtype.referent, arguments, instantiate_class), None)
     if isinstance(dtype, ConstType):
-        return qualify_const(substitute(dtype.base, arguments))
+        return qualify_const(substitute(dtype.base, arguments, instantiate_class))
     if isinstance(dtype, PointerType):
-        pointee = substitute(dtype.pointee, arguments)
+        pointee = substitute(dtype.pointee, arguments, instantiate_class)
         if isinstance(unqualified(pointee), ReferenceType):
             raise CppDiagnostic('cpp.invalid-reference-type', 'substitution cannot form a pointer to a reference', None)
         return PointerType(pointee)
@@ -177,8 +184,29 @@ def substitute(dtype, arguments):
         if isinstance(dtype.bound, ArrayBoundPattern):
             raise CppDiagnostic('cpp.unsupported.array-templates',
                                 'dependent array bounds require class-template substitution', dtype.bound.coord)
-        return ArrayType(substitute(dtype.element, arguments), dtype.bound)
-    return arguments[dtype.index] if isinstance(dtype, TypeParameter) else dtype
+        return ArrayType(substitute(dtype.element, arguments, instantiate_class), dtype.bound)
+    if getattr(dtype, 'cpp_template_id_pattern', False):
+        if instantiate_class is None:
+            raise CppDiagnostic('cpp.unsupported.class-templates',
+                                'dependent template-id substitution requires an instantiation context', dtype.coord)
+        for arg in dtype.arguments:
+            if not (isinstance(arg, (str, TypeParameter, ValueParameter, IntegralArgument,
+                                     ConstType, PointerType, ReferenceType, ArrayType))
+                    or getattr(arg, 'cpp_class_type', False)
+                    or getattr(arg, 'cpp_template_id_pattern', False) or is_enum_type(arg)):
+                raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                                    'class template value expression substitution is not implemented', dtype.coord)
+        converted = tuple(substitute(arg, arguments, instantiate_class) for arg in dtype.arguments)
+        if any(arg is None or dependent(arg) for arg in converted):
+            raise CppDiagnostic('cpp.unsupported.class-templates',
+                                'class template arguments remain dependent after substitution', dtype.coord)
+        return instantiate_class(dtype.symbol, converted, dtype.coord)
+    if isinstance(dtype, (TypeParameter, ValueParameter)):
+        return arguments[dtype.index]
+    if isinstance(dtype, Pattern):
+        raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                            'dependent value expressions require expression substitution', dtype.coord)
+    return dtype
 
 
 def signature_key(function):
@@ -188,11 +216,115 @@ def signature_key(function):
             tuple(type_key(p) for p in function.parameters))
 
 
-def deduce(function, arguments, explicit_arguments=None, types=None):
-    """Bind an explicit prefix, then deduce only remaining by-value types.
+def _fully_explicit_pattern(dtype, explicit_count):
+    """Whether an entire parameter becomes nondependent after the prefix.
 
-    Values are never inferred from function arguments or non-deduced
-    expressions. Parameter ordinals, not source spellings, survive redeclaration.
+    This check belongs at the function-parameter boundary, not recursively at
+    individual template-id arguments: fixed arguments inside a dependent
+    template-id must still match during structural deduction.
+    """
+    if isinstance(dtype, (TypeParameter, ValueParameter)):
+        return dtype.index < explicit_count
+    if isinstance(dtype, ReferenceType):
+        return _fully_explicit_pattern(dtype.referent, explicit_count)
+    if isinstance(dtype, ConstType):
+        return _fully_explicit_pattern(dtype.base, explicit_count)
+    if isinstance(dtype, PointerType):
+        return _fully_explicit_pattern(dtype.pointee, explicit_count)
+    if getattr(dtype, 'cpp_template_id_pattern', False):
+        return all(_fully_explicit_pattern(arg, explicit_count) for arg in dtype.arguments)
+    if isinstance(dtype, IntegralArgument):
+        return True
+    # Unknown dependent value expressions must not masquerade as fixed types.
+    if (isinstance(dtype, (str, PointerType, ArrayType))
+            or getattr(dtype, 'cpp_class_type', False) or is_enum_type(dtype)):
+        return not dependent(dtype)
+    return False
+
+
+def _deduce_type_pattern(formal, actual, bindings, explicit_count):
+    """Match one supported type pattern, not arbitrary value expressions.
+
+    Integral bindings come only from concrete class-specialization arguments.
+    A direct ValueParameter inside a TemplateIdPattern is deducible; arithmetic
+    expressions, array bounds, derived-class matching and dependent qualifiers
+    are deliberately not added here. The caller still owns conversions and the
+    source expression's reference binding/value category.
+    """
+    if isinstance(formal, TypeParameter):
+        if formal.index < explicit_count:
+            return same_type(bindings[formal.index], actual)
+        previous = bindings[formal.index]
+        if previous is not None and not same_type(previous, actual):
+            return False
+        bindings[formal.index] = actual
+        return True
+    if isinstance(formal, ReferenceType):
+        actual = actual.referent if isinstance(actual, ReferenceType) else actual
+        return _deduce_type_pattern(formal.referent, actual, bindings, explicit_count)
+    if isinstance(formal, ConstType):
+        return _deduce_type_pattern(formal.base, unqualified(actual), bindings, explicit_count)
+    if isinstance(formal, PointerType):
+        actual = unqualified(actual)
+        if not isinstance(actual, PointerType):
+            return False
+        return _deduce_type_pattern(formal.pointee, actual.pointee, bindings, explicit_count)
+    if getattr(formal, 'cpp_template_id_pattern', False):
+        actual = unqualified(actual)
+        if getattr(actual, 'template_origin', None) is not formal.symbol:
+            return False
+        actual_arguments = actual.template_arguments
+        if len(formal.arguments) != len(actual_arguments):
+            return False
+        for parameter, argument in zip(formal.arguments, actual_arguments):
+            if isinstance(parameter, ValueParameter):
+                if parameter.index < explicit_count:
+                    if bindings[parameter.index] != argument:
+                        return False
+                    continue
+                if not isinstance(argument, IntegralArgument):
+                    return False
+                destination = substitute(parameter.dtype, bindings)
+                if dependent(destination):
+                    raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                                        'deduced integral parameter type must be independently known', parameter.coord)
+                # Unlike explicitly supplied converted constant expressions,
+                # deduction from a template-id requires the same value type.
+                if not same_type(destination, argument.dtype):
+                    return False
+                previous = bindings[parameter.index]
+                if previous is not None and previous != argument:
+                    return False
+                bindings[parameter.index] = argument
+            elif isinstance(parameter, IntegralArgument):
+                if parameter != argument:
+                    return False
+            elif isinstance(parameter, TypeParameter) or getattr(parameter, 'cpp_template_id_pattern', False):
+                if not _deduce_type_pattern(parameter, argument, bindings, explicit_count):
+                    return False
+            elif isinstance(parameter, (str, ConstType, PointerType, ReferenceType)) or getattr(parameter, 'cpp_class_type', False):
+                if dependent(parameter):
+                    raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                                        'this dependent class argument shape is not implemented', formal.coord)
+                if not same_type(parameter, argument):
+                    return False
+            else:
+                raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                                    'only direct class template arguments can be deduced', formal.coord)
+        return True
+    if dependent(formal):
+        raise CppDiagnostic('cpp.unsupported.non-type-template-deduction',
+                            'this dependent parameter shape is not implemented', getattr(formal, 'coord', None))
+    return same_type(formal, actual)
+
+
+def deduce(function, arguments, explicit_arguments=None, types=None, *, unbound_is_nonviable=False):
+    """Bind an explicit prefix, then deduce supported remaining type patterns.
+
+    Values are inferred only from direct class-template argument positions,
+    never runtime argument values or arithmetic expressions. Reference patterns
+    preserve referent cv; the caller must supply the original argument type and
+    separately enforce reference binding. Parameter ordinals survive renaming.
     """
     if len(function.parameters) != len(arguments):
         return None
@@ -213,15 +345,23 @@ def deduce(function, arguments, explicit_arguments=None, types=None):
                 raise CppDiagnostic("cpp.unsupported.non-type-template-deduction",
                                     "non-type parameter type requires an earlier explicit type argument", argument.coord)
             bindings[parameter.index] = convert_integral_argument(argument.value, dtype, types, argument.coord)
+    # Once every template parameter is explicit, deduction is unnecessary.
+    # The overload resolver checks substituted parameter conversions separately.
+    if len(explicit) == len(function.template_parameters):
+        return tuple(bindings)
     for parameter, argument in zip(function.parameters, arguments):
-        if not isinstance(parameter, TypeParameter) or parameter.index < len(explicit):
+        if _fully_explicit_pattern(parameter, len(explicit)):
             continue
-        previous = bindings[parameter.index]
-        if previous is not None and previous != argument:
+        # A by-value T discards top-level cv. A T& pattern does not.
+        source = argument if isinstance(parameter, ReferenceType) else unqualified(argument)
+        if not _deduce_type_pattern(parameter, source, bindings, len(explicit)):
             return None
-        bindings[parameter.index] = argument
     for parameter, binding in zip(function.template_parameters, bindings):
         if binding is None and isinstance(parameter, ValueParameter):
+            if unbound_is_nonviable:
+                # This parameter has neither a deduced nor explicit argument,
+                # and there are no defaults in the admitted template syntax.
+                return None
             raise CppDiagnostic("cpp.unsupported.non-type-template-deduction",
                                 "non-type template arguments must be provided explicitly", parameter.coord)
     if any(binding is None for binding in bindings):
@@ -237,39 +377,21 @@ def mangle_argument(argument):
 
 
 def mangle_instance(function, arguments):
-    """Itanium 5.1.2/5.1.8: namespace-owned scalar function templates.
-
-    Encode the declaring namespace, never a using-declaration's scope or a
-    namespace alias spelling. Namespace prefixes enter the substitution table
-    before the template prefix and dependent parameter types; ::std is the
-    ABI's predefined substitution and does not consume a numbered entry.
-    """
+    """Namespace-owned function template ABI, sharing all substitution entries."""
+    from pcc.frontends.cpp.types import _mangle_type
+    from pcc.frontends.cpp.template_abi import mangle_template_type
     path = function.owner.namespace_path() if function.owner is not None else ()
-    name = str(len(function.name)) + function.name
-    name += "I" + "".join(mangle_argument(t) for t in arguments) + "E"
-    namespace_count = len(path)
-    if path == ("std",):
-        name = "St" + name
-        namespace_count = 0
+    substitutions = [('namespace-prefix', path[:i + 1])
+                     for i in range(len(path)) if path[:i + 1] != ('std',)]
+    substitutions.append(('function-template-prefix', function))
+    encoded_arguments = ''.join(mangle_argument(a) if isinstance(a, IntegralArgument)
+                                else _mangle_type(a, substitutions) for a in arguments)
+    name = str(len(function.name)) + function.name + 'I' + encoded_arguments + 'E'
+    if path == ('std',):
+        name = 'St' + name
     elif path:
-        prefix, parts = "", path
-        if path[0] == "std":
-            prefix, parts = "St", path[1:]
-            namespace_count -= 1
-        name = "N" + prefix + "".join(str(len(part)) + part for part in parts) + name + "E"
-    # Scalar template arguments add no substitution entries. The template
-    # prefix itself follows the namespace prefixes, before the first T_.
-    substitutions = {}
-    encoded = []
-    for dtype in (function.dtype,) + function.parameters:
-        if not isinstance(dtype, TypeParameter):
-            encoded.append(scalar_mangling_code(dtype))
-            continue
-        if dtype.index in substitutions:
-            encoded.append(_substitution(substitutions[dtype.index]))
-        else:
-            substitutions[dtype.index] = namespace_count + 1 + len(substitutions)
-            encoded.append("T_" if dtype.index == 0 else "T" + str(dtype.index - 1) + "_")
-    if not function.parameters:
-        encoded.append("v")
-    return "_Z" + name + "".join(encoded)
+        prefix, parts = ('St', path[1:]) if path[0] == 'std' else ('', path)
+        name = 'N' + prefix + ''.join(str(len(p)) + p for p in parts) + name + 'E'
+    signature = mangle_template_type(function.dtype, substitutions)
+    signature += ''.join(mangle_template_type(p, substitutions) for p in function.parameters) or 'v'
+    return '_Z' + name + signature

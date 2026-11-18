@@ -168,6 +168,8 @@ class ClassDefinition:
         self.inline_constructors = []
         self.defaulted_constructors = []
         self.inline_methods = []
+        self.member_templates = []
+        self.pending_member_templates = []
         self.default_arguments = []
         # Nominal class identities, not copied declarations or access flags.
         # Forward completion must not replace the nominated friend's identity.
@@ -503,7 +505,10 @@ def parse_class(parser):
                 if nested is not None:
                     definition.nested_definitions.append(nested)
                 continue
-            if token.value in ("template", "constexpr", "operator"):
+            if token.value == "template":
+                parser._template(member_definition=definition)
+                continue
+            if token.value in ("constexpr", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
                 from pcc.frontends.cpp.enums import parse_enum
@@ -616,6 +621,8 @@ def _bind_completed_class_tree(parser, definition):
     bind_definitions(parser, definition)
     from pcc.frontends.cpp.inline_methods import bind_methods
     bind_methods(parser, definition)
+    from pcc.frontends.cpp.member_templates import bind_member_templates
+    bind_member_templates(parser, definition)
 
 
 def _nested_record_declarations(definition):
@@ -650,6 +657,9 @@ def member_access(parser, expression, operator, member):
     """Resolve a data member, check access, then emit the shared C StructRef."""
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_member_access
+        return pattern_member_access(parser, expression, operator, member)
+    if getattr(getattr(parser, 'template_function', None), 'ordinary_member_template', False):
+        from pcc.frontends.cpp.member_template_patterns import pattern_member_access
         return pattern_member_access(parser, expression, operator, member)
     dtype = expression.dtype
     if operator == "->":
@@ -696,6 +706,16 @@ def member_access(parser, expression, operator, member):
         raise CppDiagnostic("cpp.no-member", "class '" + owner.name + "' has no member '" + member.value + "'", member.coord)
     if symbol.kind == "function":
         from pcc.frontends.cpp.members import call_member, call_static_member, is_static_group
+        from pcc.frontends.cpp.member_template_calls import has_templates, call as call_template
+        if has_templates(symbol):
+            explicit = parser._explicit_template_arguments(allow_class_types=True) if parser._peek().value == '<' else None
+            if not parser._accept('('):
+                raise CppDiagnostic('cpp.unsupported.member-pointers', 'a member template-id requires an immediate call', member.coord)
+            arguments = parser._call_arguments()
+            if operator == '.' and not expression.lvalue:
+                _unsupported(member, 'class temporary materialization is not implemented')
+            receiver = parser._unary_expression('&', expression, member.coord) if operator == '.' else expression
+            return call_template(parser, symbol, receiver, arguments, member.coord, explicit=explicit)
         if is_static_group(symbol):
             if not parser._accept("("):
                 raise CppDiagnostic("cpp.unsupported.function-pointers", "static function names require an immediate call", member.coord)
