@@ -319,8 +319,8 @@ def test_invalid_enhanced_for_originals_are_language_errors_not_capability_gaps(
 # shared GC0 managed envelope instead of remaining a model-only plan.
 NATIVE_ITERATION = {"variable-write-does-not-store-array", "later-components-read-after-body-writes",
                     "current-component-copied-before-body", "parenthesized-array-expression"}
-# Native syntax keeps null as an unsupported reference expression.
-NATIVE_CODES = {"capture-survives-null-rebind": "java.unsupported.object-expressions"}
+# A managed null is now representable. Replacing a live foreach source
+# still requires a replacement-root lifetime; no native code may be emitted.
 
 
 @pytest.mark.parametrize("name,text", PROGRAMS, ids=[row[0] for row in PROGRAMS])
@@ -342,7 +342,9 @@ def test_checked_array_iteration_never_grants_native_compilation(name, text, mon
                    lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample")):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        assert caught.value.code == NATIVE_CODES.get(name, "java.unsupported.array-storage")
+        assert caught.value.code == "java.unsupported.array-storage"
+        if name == "capture-survives-null-rebind":
+            assert "reassigning a managed binding requires replacement and scoped ownership" in str(caught.value)
 
 
 @pytest.mark.parametrize("name,text", BOUNDARIES, ids=[row[0] for row in BOUNDARIES])

@@ -9,6 +9,7 @@ remain explicit unsupported domains.
 """
 from .diagnostics import UnsupportedJava
 from .source_sema import SourceAnalyzer
+from .source_native_references import reference, resolve_named
 from .source_types import DECLARED, select_method
 from .source_member_types import StaticMemberTypes
 
@@ -85,8 +86,8 @@ class SourceProject(StaticMemberTypes):
             self.imports[program.name] = self.imports[self.nest_root(program).name]
             self.static_types[program.name] = self.static_types[self.nest_root(program).name]
         # Resolve declaration identities before building overload tables. The
-        # native scalar owner has no extra declaration domain; model subclasses
-        # may bind retained source type names without granting lowering.
+        # native owner resolves only supplied simple class identities; the
+        # nonlowering model has its own richer declaration contract.
         for program in self.programs:
             self.resolve_declaration_types(program)
         for program in self.programs:
@@ -191,7 +192,9 @@ class SourceProject(StaticMemberTypes):
         return imported
 
     def resolve_declaration_types(self, program):
-        pass
+        for method in program.methods:
+            method.result = resolve_named(self, program, method.result)
+            method.parameter_types = tuple(resolve_named(self, program, dtype) for dtype in method.parameter_types)
 
     def external_type_dependency(self, program, tokens):
         # Only a nonlowering semantic model may describe an unresolved type.
@@ -246,8 +249,11 @@ class SourceProject(StaticMemberTypes):
         caller = analyzer.program
         # JLS 6.5.2 expression-name reclassification precedes package/type
         # lookup. An int local obscures an identically named class/package.
-        if (any(pieces[0] in scope for scope in analyzer.scopes)
-                or self.simple_field(analyzer, pieces[0], node.token) is not None):
+        binding = next((scope[pieces[0]] for scope in reversed(analyzer.scopes) if pieces[0] in scope), None)
+        if analyzer.native_array_domain and binding is not None and reference(binding.dtype):
+            node.token.error("a reference-expression qualifier may select a static or instance member; expression-qualified member lookup is not implemented",
+                             code="java.unsupported.instance-methods")
+        if binding is not None or self.simple_field(analyzer, pieces[0], node.token) is not None:
             node.token.error("primitive local/parameter/field cannot be dereferenced as a source class")
         first = self.visible_simple_type(caller, pieces[0], node.token)
         qualifier = pieces[:-1]

@@ -244,18 +244,18 @@ def test_imported_model_string_calls_retain_callers_missing_runtime_contract(mon
     assert obligation.type_name == "java/lang/String"
     assert set(obligation.requirements) == {"owned-bootstrap-type-definition", "shared-owning-root-and-safepoint-ABI"}
     assert not model.models["app/Main"].runtime_registered and not model.semantic_context_complete
-    # Native project parsing uses sorted diagnostic filenames, so the exact
-    # caller's null token is encountered before the provider's String type.
+    # A null argument is now ordinary reference syntax. Neither it nor the
+    # model obligation is evidence for a native bootstrap String definition.
     for inputs in (sources, dict(reversed(tuple(sources.items())))):
         with pytest.raises(UnsupportedJava) as caught:
             compile_sources(inputs, entry_class="app.Main")
-        assert caught.value.code == "java.unsupported.object-expressions"
-        assert str(caught.value).startswith("app/Main.java:1:" + str(sources["app/Main.java"].index("null") + 1) + ":")
-    # The unmodified provider has its own later boundary when checked alone;
-    # this is not substituted for the complete project's first diagnostic.
+        assert caught.value.code == "java.unsupported.source-dependency"
+        assert str(caught.value).startswith("provider/Values.java:1:" + str(sources["provider/Values.java"].index("String") + 1) + ":")
+        assert "supplied source for String" in str(caught.value)
+    # The same provider must also fail independently at the same type token.
     with pytest.raises(UnsupportedJava) as provider:
         compile_source(sources["provider/Values.java"], filename="provider/Values.java")
-    assert provider.value.code == "java.unsupported.declared-parameter-type"
+    assert provider.value.code == "java.unsupported.source-dependency"
     assert str(provider.value).startswith("provider/Values.java:1:" + str(sources["provider/Values.java"].index("String") + 1) + ":")
     assert sources == originals
 

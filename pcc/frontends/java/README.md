@@ -580,3 +580,31 @@ Rules: [operand order](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15
 [remainder](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.17.3),
 [compound assignment](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.26.2),
 and [constant expressions](https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.29).
+
+
+### Static calls with cross-frame managed references
+
+The native source frontend on Linux x86-64 GC0 borrows reference parameters and
+returns a separately owning handle (or null). This applies to supplied, accessible
+non-generic class identities and one-dimensional integral/boolean arrays. A
+caller owns a returned value until it adopts or drops it; returning a borrowed
+argument or local clones its managed root before frame cleanup. Java identity
+uses the runtime identity operation, not the address of the opaque handle.
+Frame locals must be initialized at the method top level and cannot be rebound.
+Only immutable aliases of a locally proven array extent may be dereferenced;
+a returned or externally borrowed reference does not gain a non-null, bounds or
+class-layout proof. Foreign callers must provide already live, correctly typed
+handles on the registered serialized GC0 carrier. Passing a handle is not Java
+object construction. No Java class initializer, generic collection, virtual
+dispatch, reference field, classpath fallback, or exception implementation is
+implied. The runtime-free ELF startup rejects managed modules.
+
+The opt-in integration test consumes an explicitly verified base archive
+(`PCC_RUNTIME_ARCHIVE`) and native `py_shared_managed.o` with its matching
+production receipt (`PCC_JAVA_MANAGED_OBJECT`); a pytest worker never builds
+either input. CI publishes the optional object independently of the untouched
+Linux Stage1 bundle, and shared/integration verifies its source, workflow
+attempt, runtime archive, object provenance and before/after bytes. Missing
+input fails that mandatory ABI observation; it cannot mask the ordinary
+shared tests. The selected-JDK reference partition independently compiles and
+runs the identical originals with its own observers.

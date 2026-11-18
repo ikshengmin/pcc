@@ -6,8 +6,8 @@ https://docs.oracle.com/javase/specs/jls/se21/html/jls-14.html#jls-14.4
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-16.html#jls-16.2.4
 
 Whole original sources are shared unchanged by owned native execution and the
-selected development JDK. Array-declarator controls are semantic-model only;
-their native managed-storage boundary is not relaxed by this grammar change.
+selected development JDK. Array declarators retain their per-binding type;
+only a proven, immutable array alias can be dereferenced without a null check.
 """
 import hashlib
 import json
@@ -137,25 +137,34 @@ def test_declarators_retain_distinct_bindings_and_enclosing_scope():
     assert [binding.slot for binding in method.locals] == [0, 1]
 
 
-@pytest.mark.parametrize("body,types,native", [
-    ("int a[]={42},b=7;return a[0]+b;", [ArrayType("int"), "int"], True),
-    ("int[] a={42},b=a;return b[0];", [ArrayType("int"), ArrayType("int")], False),
-    ("int a=42,b[]={a};return b[0];", ["int", ArrayType("int")], True),
+@pytest.mark.parametrize("body,types", [
+    ("int a[]={42},b=7;return a[0]+b;", [ArrayType("int"), "int"]),
+    ("int[] a={42},b=a;return b[0];", [ArrayType("int"), ArrayType("int")]),
+    ("int a=42,b[]={a};return b[0];", ["int", ArrayType("int")]),
 ])
-def test_array_brackets_belong_to_their_declarator_model_only(body, types, native, monkeypatch):
-    """Per-declarator brackets in both models; an alias stays a native gap."""
-    from pcc.frontends.java.source_lowering import SourceLowerer
+def test_array_brackets_belong_to_their_declarator_model_only(body, types, monkeypatch):
+    forbid_bytecode_or_external_owner(monkeypatch)
     text = original(body)
     method = analyze_class_sources({"Declared.java": text}).programs[0].methods[0]
     assert [binding.dtype for binding in method.locals] == types
-    if native:
-        native_method = compile_source(text)
-        assert native_method.managed_runtime
-        return
-    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("managed array reached native IR"))
+    native_method = compile_source(text)
+    assert native_method.managed_runtime
+    assert native_method.emit_object().startswith(b"\x7fELF")
+    if types == [ArrayType("int"), ArrayType("int")]:
+        from tests.java.test_source_managed_reference_calls import DECLARED
+        assert text == DECLARED
+        assert "pcc_rt_managed_clone" in str(native_method.module)
+
+
+def test_grouped_returned_array_alias_does_not_invent_nonnull_length(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    text = original("int[] a=incoming(p),b=a;return b[0];",parameters="int[] p",
+                    helpers="static int[] incoming(int[] x){return x;}")
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("unproven array dereference reached native IR"))
     with pytest.raises(UnsupportedJava) as caught:
-        compile_source(text)
+        compile_source(text,descriptor="([I)I")
     assert caught.value.code == "java.unsupported.array-storage"
+    assert "without a non-null length proof" in str(caught.value)
 
 
 def test_original_grouped_blank_final_has_native_ir_but_keeps_model_boundary(monkeypatch):

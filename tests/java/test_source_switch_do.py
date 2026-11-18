@@ -165,11 +165,20 @@ def test_invalid_switch_do_is_rejected_before_ir(body, message, monkeypatch):
 @pytest.mark.parametrize("body,message", [
     ("return switch(1){case 1->42;default->7;};", "unsupported Java expression"),
     ("switch(1){case 1/0:return 42;default:return 7;}", "ArithmeticException"),
-    ("switch(1){case null:return 42;default:return 7;}", "unsupported Java expression"),
 ])
 def test_switch_runtime_and_expression_dependencies_are_explicit(body, message):
     with pytest.raises(UnsupportedJava, match=message):
         compile_source(original(body))
+
+
+def test_null_case_is_not_compatible_with_a_primitive_int_selector(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    monkeypatch.setattr(SourceLowerer, "lower", lambda *_: pytest.fail("invalid switch reached native IR"))
+    text = original("switch(1){case null:return 42;default:return 7;}")
+    with pytest.raises(JavaError, match="got null") as caught:
+        compile_source(text, filename="Control.java")
+    assert type(caught.value) is JavaError and caught.value.code is None
+    assert str(caught.value).startswith(f"Control.java:1:{text.index('null') + 1}:")
 
 
 def test_switch_selector_call_occurs_once_in_public_ir():

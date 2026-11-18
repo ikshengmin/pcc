@@ -56,6 +56,9 @@ PROGRAMS = [
     ("parenthesized-array", original("int[] a={42};return (a)[0]+(a).length-1;")),
     ("array-after-scalar-declarator", original("int x=40,a[]={2};return x+a[0];")),
     ("void-method-array", original("touch();return 42;", "static void touch(){int[] a={1};a[0]=2;}")),
+    ("alias", original("int[] a={42},b=a;return b[0];")),
+    ("reference-equality", original("int[] a={42};return a==a?42:0;")),
+    ("array-result", original("return 42;", "static int[] f(){int[] a={42};return a;}")),
     # Keep the former managed-plan negative's exact original as a runtime/JDK obligation.
     ("explicit-singleton", original("int[] a=new int[]{42};return a[0];")),
 ]
@@ -72,9 +75,7 @@ GAPS = [
     ("dynamic-dimension", original("int n=2;int[] a=new int[n];return 42;"), "java.unsupported.array-storage"),
     ("over-budget-dimension", original("int[] a=new int[65537];return 42;"), "java.unsupported.array-storage"),
     ("blank-array", original("int[] a;return 42;"), "java.unsupported.array-storage"),
-    ("alias", original("int[] a={42},b=a;return b[0];"), "java.unsupported.array-storage"),
     ("reassignment", original("int[] a={42};int[] b={1};a=b;return 42;"), "java.unsupported.array-storage"),
-    ("reference-equality", original("int[] a={42};return a==a?42:0;"), "java.unsupported.array-storage"),
     ("nested-block-local", original("if(true){int[] a={42};return a[0];}return 0;"),
      "java.unsupported.array-storage"),
     ("loop-local", original("int s=0;for(int i=0;i<2;i++){int[] a={21};s+=a[0];}return s;"),
@@ -84,8 +85,6 @@ GAPS = [
     ("increment-component", original("int[] a={41};a[0]++;return a[0];"),
      "java.unsupported.assignment-expression-target"),
     ("array-parameter", original("return f(new int[]{42});", "static int f(int[] a){return a[0];}"),
-     "java.unsupported.array-storage"),
-    ("array-result", original("return 42;", "static int[] f(){int[] a={42};return a;}"),
      "java.unsupported.array-storage"),
     ("static-array-field", "class ArrayExample{static final int[] V={42};static int run(){return V[0];}}",
      "java.unsupported.array-storage"),

@@ -97,21 +97,28 @@ def test_source_reference_model_does_not_enable_native_lowering(name, text, monk
         compile_source(text, filename="ArrayExample.java")
 
 
-@pytest.mark.parametrize("text,code", [
-    ("class A{static A run(){return null;}}", "declared-result-type"),
-    ("class A{static int run(A value){return 42;}}", "declared-parameter-type"),
-    ("class A{static int run(){A value=null;return 42;}}", "declared-local-type"),
-    ("class A{static final A value=null;static int run(){return 42;}}", "declared-result-type"),
+@pytest.mark.parametrize("text,signature", [
+    ("class A{static A run(){return null;}}", "()LA;"),
+    ("class A{static int run(A value){return 42;}}", "(LA;)I"),
+    ("class A{static int run(){A value=null;return 42;}}", "()I"),
 ])
-def test_static_named_declarations_hit_explicit_native_gate_before_any_lowering(text, code, monkeypatch):
-    from pcc.frontends.java.source_lowering import SourceLowerer
+def test_original_static_reference_declarations_have_native_owning_abi(text, signature, monkeypatch):
     forbid_bytecode_or_external_owner(monkeypatch)
-    monkeypatch.setattr(SourceLowerer, "__init__", lambda *args: pytest.fail("managed declaration constructed native lowerer"))
+    for compilation in (compile_source(text, filename="A.java", descriptor=signature),
+                        compile_sources({"A.java": text}, entry_class="A", descriptor=signature)):
+        assert compilation.managed_runtime and compilation.emit_object().startswith(b"\x7fELF")
+
+
+def test_static_reference_field_still_rejects_before_lowering(monkeypatch):
+    from pcc.frontends.java.source_lowering import SourceLowerer
+    text = "class A{static final A value=null;static int run(){return 42;}}"
+    forbid_bytecode_or_external_owner(monkeypatch)
+    monkeypatch.setattr(SourceLowerer, "__init__", lambda *args: pytest.fail("reference field reached lowering"))
     for invoke in (lambda: compile_source(text, filename="A.java"),
                    lambda: compile_sources({"A.java": text}, entry_class="A")):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        assert caught.value.code == "java.unsupported." + code
+        assert caught.value.code == "java.unsupported.declared-result-type"
 
 
 def test_unbraced_named_local_declarations_remain_invalid_java_not_a_capability_gap():

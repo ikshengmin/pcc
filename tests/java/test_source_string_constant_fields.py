@@ -84,14 +84,14 @@ def test_string_constant_fields_keep_exact_native_result(name, fields, value, tm
      "java.unsupported.string-literals", "materialization"),
     (original('static final String M="m";', "return Constants.M==M?1:0;"),
      "java.unsupported.string-literals", "materialization"),
-    # null is not a constant expression; the native parser rejects it first.
-    (original('static final String M=null;'), "java.unsupported.object-expressions", "unsupported Java expression"),
+    # null is valid reference syntax but is not a String constant initializer.
+    (original('static final String M=null;'), "java.unsupported.static-initialization", "constant-expression subset"),
     (original('static final String M="a"+1;'), "java.unsupported.static-initialization", "constant-expression subset"),
     (original('static final String M="a",N=M+1;'), "java.unsupported.static-initialization", "constant-expression subset"),
     (original('static final int I=1;static final String M="a"+I;'), "java.unsupported.string-literals", "conversion"),
     (original('static final String A=Constants.B,B=Constants.A;'), "java.unsupported.cyclic-initialization", "cyclic"),
-    (original('static String M="m";'), "java.unsupported.declared-result-type", "source method results"),
-    (original('static final String[] M={"m"};'), "java.unsupported.declared-result-type", "source method results"),
+    (original('static String M="m";'), "java.unsupported.declared-result-type", "reference fields require shared Java storage"),
+    (original('static final String[] M={"m"};'), "java.unsupported.array-model-shape", "reference array components"),
     (original('static final String M;'), "java.unsupported.static-initialization", "blank final"),
 ])
 def test_string_constant_boundaries_precede_ir(text, code, message, monkeypatch):

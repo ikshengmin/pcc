@@ -228,6 +228,7 @@
       "tests/python/test_typed_indirect_c_abi.py",
       "tests/python/test_user_class_tag_allocator_abi.py",
       "tests/python/test_valueclass_constructor_argument_abi.py",
+      "tests/runtime_shared/test_java_reference_abi.py",
       "tests/test_elf_image_raw_abi_fixture.py",
       "tests/test_regex_public_abi.py"
     ],

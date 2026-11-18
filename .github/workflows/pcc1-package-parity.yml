@@ -806,12 +806,23 @@ jobs:
       - name: Bind actual available reference tools and Rust target sysroot
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Download this run attempt's existing source native inputs
+        id: source_native_download
         uses: actions/download-artifact@v7
         with:
           name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/source-native-input
+      - name: Download the separate Java GC0 input for its shared ABI consumer
+        if: ${{ matrix.domain == 'shared' && matrix.lane == 'integration' }}
+        # Missing input is a real failed step, not a tolerated download.
+        uses: actions/download-artifact@v7
+        with:
+          name: java-managed-gc0-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/source-java-managed-input
       - name: Complete ordinary, integration or external-reference partition
-        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --platform linux-x86_64 --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --stage1-bundle "$RUNNER_TEMP/source-native-input" --out "$RUNNER_TEMP/source-validation"
+        # Preserve the original prerequisite. Even after companion download
+        # failure the original shared tests still run; the new ABI gate fails.
+        if: ${{ !cancelled() && steps.source_native_download.outcome == 'success' }}
+        run: uv run --frozen --no-sync python scripts/ci_validation_run.py --platform linux-x86_64 --domain "${{ matrix.domain }}" --lane "${{ matrix.lane }}" --stage1-bundle "$RUNNER_TEMP/source-native-input" --out "$RUNNER_TEMP/source-validation" ${{ matrix.domain == 'shared' && matrix.lane == 'integration' && '--java-managed-input "$RUNNER_TEMP/source-java-managed-input"' || '' }}
       - name: Retain raw inventory, prerequisite UNRUN, failures and resource receipts
         if: always()
         uses: actions/upload-artifact@v6
@@ -1565,6 +1576,32 @@ jobs:
             build/stage1-native-export/stage1-native.tar.gz
             build/stage1-native-export/manifest.json
 
+      - name: Produce the separately bound Java GC0 ABI object
+        id: java_managed_product
+        if: ${{ !cancelled() && matrix.platform == 'linux-x86_64' && steps.stage1_bundle.outcome == 'success' && contains(fromJSON(needs.validation-plan.outputs.matrix_native).include.*.domain, 'shared') }}
+        shell: bash
+        run: |
+          mkdir -p "$RUNNER_TEMP/java-managed-producer"
+          uv run --frozen --no-sync python scripts/run_process_tree_sample.py \
+            --performance-lock --timeout 90 --max-tree-rss-bytes 1073741824 \
+            --cwd "$GITHUB_WORKSPACE" --result "$RUNNER_TEMP/java-managed-producer/result.json" \
+            --samples "$RUNNER_TEMP/java-managed-producer/samples.tsv" \
+            --stdout "$RUNNER_TEMP/java-managed-producer/target.stdout" \
+            --stderr "$RUNNER_TEMP/java-managed-producer/target.stderr" \
+            -- .venv/bin/python -m scripts.ci_validation_java_managed \
+            --stage1 build/stage1-native-export --output "$RUNNER_TEMP/java-managed-input"
+      - name: Preserve the optional Java GC0 object and its binding
+        if: ${{ !cancelled() && steps.java_managed_product.outcome == 'success' }}
+        uses: actions/upload-artifact@v6
+        with:
+          name: java-managed-gc0-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/java-managed-input/py_shared_managed.o
+            ${{ runner.temp }}/java-managed-input/py_shared_managed.o.provenance.json
+            ${{ runner.temp }}/java-managed-input/managed-input.json
+
       # One integration budget, not 1800 seconds per collector. Same-run
       # immutable Stage1 bytes are admitted in place; no native provisioning.
       - name: Stage2 to Stage3 / five original bootstrap owners
@@ -1769,6 +1806,8 @@ jobs:
       - name: Install wheel and execute native output on the runner
         if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.build.outcome == 'success' }}
         run: python scripts/ci_native_wheel_gate.py dist
+
+
 
   pcc1-package-parity:
     needs: validation-plan

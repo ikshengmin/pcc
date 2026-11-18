@@ -504,18 +504,27 @@ def test_native_parser_and_public_entries_reject_throw_before_ir(text, monkeypat
     forbid_bytecode_or_external_owner(monkeypatch)
     monkeypatch.setattr(SourceLowerer, "__init__",
                         lambda *args: pytest.fail("throw source plan reached scalar IR"))
+    def statements(node):
+        if node.kind == "throw":
+            yield node
+        for child in node.children:
+            yield from statements(child)
+    parsed = SourceParser(text, "ArrayExample.java").parse()
+    throws = [node for method in parsed.methods for node in statements(method.body)]
+    assert len(throws) == text.count("throw ")
+    assert all(n.token.text == "throw" and n.token.filename == "ArrayExample.java" and
+               text[n.token.column-1:n.token.column+4] == "throw" and len(n.children) == 1 for n in throws)
     for invoke in (
-        lambda: SourceParser(text, "ArrayExample.java").parse(),
         lambda: compile_source(text, filename="ArrayExample.java"),
         lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample"),
     ):
         with pytest.raises(UnsupportedJava) as caught:
             invoke()
-        # The native parser admits throw statements (sema keeps them a
-        # runtime-statements gap); each original's operand is null, which
-        # native syntax still rejects as an object expression first.
-        assert caught.value.code == "java.unsupported.object-expressions"
-        assert "ArrayExample.java:" in str(caught.value)
+        # The complete syntax, including the null operands, survives parsing.
+        # Native sema still rejects the actual throw token before any IR.
+        assert caught.value.code == "java.unsupported.runtime-statements"
+        assert any(str(caught.value).startswith(f"ArrayExample.java:1:{n.token.column}:") for n in throws)
+        assert "throw statements require shared Java exception support" in str(caught.value)
 
 
 def test_native_throws_clause_keeps_explicit_hierarchy_boundary_before_ir(monkeypatch):

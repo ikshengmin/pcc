@@ -3,7 +3,7 @@
 This pass creates typed source AST, not JVM instructions. The scalar
 subset tracks scalar expression side effects and outcome-specific definite
 assignment. Primitive blank-final DU is checked separately after binding;
-native reference storage remains outside this scalar source owner.
+native reference locals and calls are checked in their closed managed domain.
 """
 from dataclasses import dataclass
 import re
@@ -12,7 +12,8 @@ from .integer_semantics import evaluate_division, wrap_integer
 from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
-from .source_native_arrays import NativeArrayAnalyzer, array_binding
+from .source_native_arrays import NativeArrayAnalyzer
+from .source_native_references import reference, resolve_named
 from .source_blank_final import check_blank_final_locals
 from .source_static_constructors import check_static_constructor_declarations
 
@@ -246,9 +247,16 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
 
     def typed_binary_extension(self, node):
         """Model-only extension after operands are checked exactly once."""
-        if node.value in {"==", "!="} and all(child.dtype == "null" for child in node.children):
-            node.token.error("native reference operations require the managed-object domain",
-                             code="java.unsupported.object-expressions")
+        if self.native_array_domain and node.value in {"==", "!="} and any(reference(child.dtype) for child in node.children):
+            left, right = (child.dtype for child in node.children)
+            if left == right == "null":
+                node.token.error("native null-only identity has no declared managed reference type",
+                                 code="java.unsupported.object-expressions")
+            if not (reference(left) and reference(right) and (left == right or "null" in (left, right))):
+                node.token.error("incomparable source reference operands")
+            node.operation_type = "reference"
+            node.dtype = "boolean"
+            return True
         return False
 
     def typed_assignment_extension(self, node):
@@ -271,6 +279,10 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             node.token.error("nonconstant or zero integer divisor requires shared ArithmeticException support", code="java.unsupported.arithmetic-exception")
 
     def assignment_value(self, node, target):
+        if self.native_array_domain and reference(target):
+            if not widening(node.dtype, target):
+                node.token.error("incompatible source reference assignment from " + str(node.dtype) + " to " + str(target))
+            return
         if target == "boolean":
             if node.dtype != "boolean":
                 node.token.error("boolean value required")
@@ -351,6 +363,13 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         self.require_completed_local(binding, target.token)
         if binding is None:
             if target.kind == "name":
+                # An unparenthesized qualified expression name is not initially
+                # an array_length node. Resolve its local prefix before static
+                # fields or unsupported instance-member dispatch (JLS 10.7).
+                pieces = target.value.split(".")
+                if (self.native_array_domain and len(pieces) == 2 and pieces[1] == "length"
+                        and self.local_array_binding(pieces[0]) is not None):
+                    target.token.error("array length is final and cannot be assigned")
                 field = self.project.resolve_field(self, target)
                 if "final" in field.modifiers:
                     target.token.error("cannot assign a final constant field " + target.value)
@@ -411,8 +430,8 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             node.token.error("class instance creation requires the shared managed object model",
                              code="java.unsupported.object-expressions")
         if kind == "null":
-            # Native syntax retains null only inside an inferred initializer.
-            # It can diagnose null-type inference, never create native storage.
+            # Null has its own type; storage is selected by the declared binding,
+            # not by an invented object or a numeric zero constant.
             node.dtype = "null"
             return
         if kind == "string":
@@ -438,8 +457,6 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                 for scope in reversed(self.scopes):
                     if op in scope:
                         node.symbol = scope[op]
-                        if self.native_array_domain and array_binding(node.symbol):
-                            self.array_reference_read(node, node.symbol)
                         if node.symbol not in assigned:
                             node.token.error("local variable is not definitely assigned: " + node.symbol.name)
                         node.dtype = node.symbol.dtype
@@ -594,6 +611,9 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                 assigned = self.statement(child, assigned)
             if kind == "block":
                 self.scopes.pop()
+        elif self.native_array_domain and kind == "var" and isinstance(node.value, NamedType):
+            node.value = resolve_named(self.project, self.program, node.value)
+            assigned = self.native_reference_local(node, assigned)
         elif self.native_array_domain and kind == "var" and isinstance(node.value, ArrayType):
             assigned = self.native_array_local(node, assigned)
         elif self.native_array_domain and kind == "enhanced_for":

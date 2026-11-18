@@ -642,10 +642,10 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
     assert "requires supplied source for java.util.List" in str(class_error.value)
     with pytest.raises(UnsupportedJava) as native_error:
         compile_sources(sources, **ENTRY)
-    # The String constant variable folds; the enhanced for and the nextPrime
-    # throw parse; the List<Integer> result type of primeFactors is next.
-    assert native_error.value.code == "java.unsupported.declared-result-type"
-    assert first + ":108:19:" in str(native_error.value)
+    # Primes now parses in native mode. Do not confuse the real next field
+    # initialization boundary with generic collection or whole-project support.
+    assert native_error.value.code == "java.unsupported.array-storage"
+    assert PRODUCTION[1] + ":39:18:" in str(native_error.value)
     assert sources == before
     assert all(sources[name].encode("utf-8") == files[name] for name in sources)
 

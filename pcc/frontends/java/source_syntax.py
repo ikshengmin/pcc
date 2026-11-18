@@ -5,8 +5,8 @@ structured control flow and scalar expressions. Unsupported grammar is never
 discarded. Unicode escapes are translated before comments and tokens, retaining
 raw-source diagnostic coordinates. Ordinary string literals retain UTF-16 code
 units in the source AST, without claiming managed String semantics or lowering.
-The nonlowering class model retains original named-reference declaration tokens;
-the native scalar declaration grammar remains closed to these types.
+Named-reference declaration tokens remain source-owned. Native static calls
+resolve only accessible supplied classes, with no inferred layout or erasure.
 Non-ASCII identifiers and text blocks remain explicit gaps.
 """
 from bisect import bisect_right
@@ -370,12 +370,12 @@ class SourceParser:
             location.error(message, code=code)
         location.error(message)
 
-    def array_suffix(self, dtype, *, local=False):
+    def array_suffix(self, dtype, *, local=False, signature=False):
         while self.peek().text == "[":
             token = self.take()
-            if not self.class_model and not local:
-                # Native locals have a non-throwing managed-array domain;
-                # fields, parameters and results do not.
+            if not self.class_model and not (local or signature):
+                # No storage is granted to array fields. Signature admission
+                # denotes a managed handle, never an array payload address.
                 token.error("array fields require shared Java storage and class initialization",
                             code="java.unsupported.array-storage")
             self.expect("]")
@@ -413,10 +413,10 @@ class SourceParser:
         return self.declaration_type(token)
 
     def declaration_type(self, token):
-        """Retain named reference declarations only in the nonlowering model."""
+        """Retain original names and arguments for type checking, never infer a class layout."""
         if token.text in DECLARED | {"void"}:
             return token.text
-        if self.class_model and re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - {"var"}:
+        if re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", token.text) and token.text not in KEYWORDS - {"var"}:
             names = [token]
             while self.accept("."):
                 names.append(self.identifier())
@@ -709,7 +709,7 @@ class SourceParser:
                 constructor = self.take()
                 if mods - {"public", "private", "protected"}:
                     constructor.error("invalid constructor modifier")
-                parameters, parameter_types, parameter_final = self.parameters(constructor, receiver=True)
+                parameters, parameter_types, parameter_final = self.parameters(constructor, receiver=True, native_constructor=not self.class_model)
                 self.throws_boundary()
                 # Keep the original constructor separate from ordinary
                 # methods. Native sema admits only private, no-argument,
@@ -736,10 +736,18 @@ class SourceParser:
                 # value use: sema resolves the name and folds the initializer.
                 result_type = NamedType((result,))
             else:
-                result_type = self.array_suffix(self.declaration_type(result))
+                result_type = self.array_suffix(self.declaration_type(result), signature=True)
             method_name = self.identifier()
             if self.peek().text != "(":
                 self.require_no_override("a field")
+                if not self.class_model and isinstance(result_type, ArrayType):
+                    result.error("array fields require shared Java storage and class initialization",
+                                 code="java.unsupported.array-storage")
+                if (not self.class_model and isinstance(result_type, NamedType) and
+                        not (len(result_type.tokens) == 1 and result_type.tokens[0].text == "String"
+                             and not result_type.arguments and {"static", "final"} <= mods)):
+                    result.error("reference fields require shared Java storage and class initialization",
+                                 code="java.unsupported.declared-result-type")
                 common_type = result_type
                 if result.text == "void":
                     result.error("a field cannot have void type")
@@ -775,11 +783,11 @@ class SourceParser:
                 continue
             # In model mode, legacy result brackets may follow the parameter
             # list (JLS 8.4); scalar native diagnostics keep their old boundary.
-            if not self.class_model and result.text not in DECLARED | {"void"}:
+            if not self.class_model and result.text not in DECLARED | {"void"} and not isinstance(result_type, NamedType):
                 self.type_boundary(result, "source method results require boolean, integral primitives or void",
                                    code="java.unsupported.declared-result-type")
             parameters, parameter_types, parameter_final = self.parameters(method_name, receiver="static" not in mods)
-            result_type = self.array_suffix(result_type)
+            result_type = self.array_suffix(result_type, signature=True)
             self.throws_boundary()
             if result.text not in DECLARED | {"void"} and not isinstance(result_type, (ArrayType, NamedType)):
                 self.type_boundary(result, "source method results require boolean, integral primitives or void",
@@ -801,7 +809,7 @@ class SourceParser:
             self.peek().error("throws clauses require the owned Throwable hierarchy and checked-exception analysis",
                               code="java.unsupported.throwable-types")
 
-    def parameters(self, token, *, receiver=False):
+    def parameters(self, token, *, receiver=False, native_constructor=False):
         self.expect("(")
         parameters, types, finals = [], [], []
         if self.peek().text != ")":
@@ -810,14 +818,14 @@ class SourceParser:
                 if self.peek().text == "final":
                     self.peek().error("duplicate final parameter modifier")
                 dtype = self.take()
-                if dtype.text not in DECLARED and not self.class_model:
+                if native_constructor and dtype.text not in DECLARED:
                     self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
-                parameter_type = self.array_suffix(self.declaration_type(dtype))
+                parameter_type = self.array_suffix(self.declaration_type(dtype), signature=not native_constructor)
                 if parameter_type == "void":
                     dtype.error("a parameter cannot have void type")
                 parameters.append(self.identifier())
-                parameter_type = self.array_suffix(parameter_type)
+                parameter_type = self.array_suffix(parameter_type, signature=not native_constructor)
                 if parameter_type not in DECLARED and not isinstance(parameter_type, (ArrayType, NamedType)):
                     self.type_boundary(dtype, "source parameters require boolean or integral primitives",
                                        code="java.unsupported.declared-parameter-type")
@@ -1046,9 +1054,6 @@ class SourceParser:
         if self.named_local_start():
             if not allow_declaration:
                 token.error("a local declaration requires a block or for initializer")
-            if not self.class_model:
-                self.peek().error("source locals require boolean or integral primitives",
-                                  code="java.unsupported.declared-local-type")
             return self.local_declaration(self.take(), is_final=is_final, allow_enhanced=allow_enhanced)
         if is_final:
             self.type_boundary(self.peek(), "final local declarations require boolean or integral primitives",
@@ -1182,7 +1187,7 @@ class SourceParser:
                     node = Node("receiver_call", member, member.text, self.arguments())
                 else:
                     node = Node("receiver_field", member, member.text)
-        elif (self.class_model or self.inferred_initializer_depth) and token.text == "null":
+        elif token.text == "null":
             node = Node("null", token)
         elif not self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
             # The native array domain admits only top-level local initializers.

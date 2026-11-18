@@ -464,7 +464,7 @@ def run(args):
     tool_receipt_path = None
     tool_receipt_sha = None
     consumed_rust_receipt = None
-    native_inputs = None
+    native_inputs = managed_input = managed_error = None
     manifest = manifest_digest = required_tools = None
     platform = getattr(args, "platform", None)
     receipt = {"status": "RUNNING", "domain": args.domain, "lane": args.lane,
@@ -506,6 +506,22 @@ def run(args):
             receipt["claim"] = ("bounded source tests retain explicit host-PCC/native-pcc1 ownership; "
                                 "admitted Stage1 inputs are not fixed-point or whole-project qualification")
             save(args.out / "native-inputs-before.json", native_inputs)
+        try:
+            from . import ci_validation_java_managed as java_managed
+        except ImportError:
+            import ci_validation_java_managed as java_managed
+        managed_dir = getattr(args, "java_managed_input", None)
+        needs_managed = java_managed.needed(args.domain, args.lane)
+        if not needs_managed and managed_dir is not None:
+            raise ValueError("unexpected Java managed artifact for this source partition")
+        if needs_managed:
+            # Missing companion must fail its own mandatory node, not prevent
+            # the original shared/integration modules from collecting/running.
+            managed_input, managed_updates, managed_error = java_managed.consumer_inputs(
+                ROOT, managed_dir, native_inputs, os.environ.get("PCC_JAVA_MANAGED_OBJECT"))
+            native_updates.update(managed_updates)
+            save(args.out / "java-managed-before.json", managed_input if managed_error is None else
+                 {"status": "FAILED", "error": managed_error})
         tool_receipt_path = Path(os.environ["PCC_CI_TOOL_RECEIPT"])
         tool_receipt_bytes = tool_receipt_path.read_bytes()
         tool_receipt_sha = hashlib.sha256(tool_receipt_bytes).hexdigest()
@@ -650,6 +666,17 @@ def run(args):
             except Exception as error:
                 receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE",
                                native_inputs_error=type(error).__name__ + ": " + str(error))
+        if managed_error is not None:
+            receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE", java_managed_input_error=managed_error)
+        if managed_input is not None:
+            try:
+                checked = java_managed.admit(ROOT, managed_input["directory"], native_inputs)
+                if checked != managed_input:
+                    raise ValueError("Java managed input changed during the source campaign")
+                save(args.out / "java-managed-after.json", checked)
+            except Exception as error:
+                receipt.update(status="INFRASTRUCTURE_OR_RESOURCE_FAILURE",
+                               java_managed_input_error=type(error).__name__ + ": " + str(error))
         if tool_receipt is not None:
             try:
                 if hashlib.sha256(tool_receipt_path.read_bytes()).hexdigest() != tool_receipt_sha:
@@ -680,6 +707,8 @@ def main():
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--platform", choices=tuple(owners.PLATFORMS),
                         help="Explicit source coverage producer; final reconciliation is required")
+    parser.add_argument("--java-managed-input", type=Path,
+                        help="Separately bound Linux GC0 product for shared/integration only")
     parser.add_argument("--stage1-bundle", type=Path,
                         help="Same-run Linux x86-64 Stage1 bundle required by native-dependent source lanes")
     return run(parser.parse_args())

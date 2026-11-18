@@ -48,7 +48,7 @@ CAPABILITIES = [
     ("class Diagnostic{int run(){return 42;}}", "instance-methods", "only ordinary static source methods"),
     ("class Diagnostic{static synchronized int run(){return 42;}}", "special-method-modifiers", "only ordinary static source methods"),
     ("class Diagnostic{static native int run();}", "special-method-modifiers", "only ordinary static source methods"),
-    ("class Diagnostic{static Object run(){return null;}}", "declared-result-type", "source method results"),
+    ("class Diagnostic{static Object run(){return null;}}", "source-dependency", "requires supplied source for Object"),
     ("class Diagnostic{static int[] values;}", "array-storage", "array fields require"),
     ("class Diagnostic{static int value;}", "static-initialization", "mutable static fields"),
     ("class Constants{static { int value=42; }static int run(){return 42;}}", "static-initialization", "source method results"),
@@ -58,7 +58,6 @@ CAPABILITIES = [
     (original("return 1/0;"), "arithmetic-exception", "ArithmeticException"),
     (original("return true?true:1;"), "reference-conditional", "reference/boxing conditional"),
     (original("return new Object();"), "object-expressions", "class instance creation requires the shared managed object model"),
-    (original("return null;"), "object-expressions", "unsupported Java expression"),
     (original("return switch(1){default->42;};"), "switch-expressions", "unsupported Java expression"),
     # A natively parsed operand, so the throw statement itself is the gap.
     (original("throw new RuntimeException();"), "runtime-statements", "throw statements require shared Java exception support"),
@@ -67,6 +66,12 @@ CAPABILITIES = [
     (original("return missing.Package.f();"), "implicit-type-metadata", "complete implicit-type metadata"),
     ("package java.lang; class Object{}", "bootstrap-object", "bootstrap Object"),
 ]
+
+
+def test_null_original_is_an_invalid_int_result_not_an_unavailable_reference_expression():
+    with pytest.raises(JavaError, match="integer value required") as caught:
+        compile_source(original("return null;"))
+    assert type(caught.value) is JavaError
 
 
 # The original inputs are retained verbatim as acceptance controls now that

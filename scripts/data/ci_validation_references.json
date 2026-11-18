@@ -3115,6 +3115,14 @@
           "Compiles the unchanged twelve-function input with the C++17 system headers and explicit reference compiler. The separate owned-archive test does not call this oracle."
         ]
       }
+    },
+    "tests/java/test_source_managed_reference_runtime.py": {
+      "test_unchanged_managed_reference_originals_in_selected_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Runs the explicitly selected JDK compiler and runtime on the unchanged managed-call sources with separate observers. Native ABI and root restoration are independent PCC-only checks."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

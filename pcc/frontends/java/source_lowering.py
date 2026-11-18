@@ -9,6 +9,7 @@ from .artifact import JavaCompilation, method_symbol
 from .diagnostics import UnsupportedJava
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
 from .source_native_arrays import NativeArrayLowering
+from .source_native_references import NativeReferenceLowering, reference
 from .source_types import FLOATING, ArrayType
 from .source_static_constructors import check_static_constructor_declarations
 
@@ -27,6 +28,7 @@ class SourceLowerer:
         self.i32 = ir.IntType(32)
         self.control_blocks = {}
         self.arrays = NativeArrayLowering(self)
+        self.references = NativeReferenceLowering(self)
 
     @staticmethod
     def scalar_type(dtype):
@@ -101,9 +103,12 @@ class SourceLowerer:
             check_static_constructor_declarations(program)
         methods = [method for program in self.programs for method in program.methods]
         for method in methods:
+            if any(reference(dtype) for dtype in (method.result, *method.parameter_types)):
+                self.references.select(method.token)
             key = (method.owner, method.token.text, method.descriptor)
-            signature = ir.FunctionType(self.abi_type(method.result),
-                                        [self.abi_type(dtype) for dtype in method.parameter_types])
+            def lane(dtype):
+                return self.references.pointer if reference(dtype) else self.abi_type(dtype)
+            signature = ir.FunctionType(lane(method.result), [lane(dtype) for dtype in method.parameter_types])
             self.functions[key] = ir.Function(self.module, signature, method_symbol(*key))
         for method in methods:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
@@ -111,13 +116,15 @@ class SourceLowerer:
             self.control_blocks = {}
             self.method = method
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
-            # Array locals own a stable root handle cell, null until allocated.
-            self.slots = {binding: (self.arrays.handle_slot(self.builder) if isinstance(binding.dtype, ArrayType)
+            self.references.begin_frame()
+            # Parameters borrow handles for the call. All other reference
+            # locals own exactly one root (initially null) until frame exit.
+            self.slots = {binding: (self.arrays.handle_slot(self.builder) if reference(binding.dtype)
                                     else self.builder.alloca(self.scalar_type(binding.dtype),
                                                              name="local_" + str(binding.slot)))
                           for binding in method.locals}
-            self.array_slots = [self.slots[binding] for binding in method.locals
-                                if isinstance(binding.dtype, ArrayType)]
+            self.array_slots = [self.slots[binding] for binding in method.locals[len(method.parameters):]
+                                if reference(binding.dtype)]
             for argument, binding in zip(self.function.args, method.locals):
                 self.builder.store(self.from_abi(argument, binding.dtype), self.slots[binding])
             self.statement(method.body)
@@ -157,9 +164,7 @@ class SourceLowerer:
         if kind == "name":
             return self.builder.load(self.slots[node.symbol])
         if kind == "call":
-            arguments = [self.to_abi(self.expression(argument), dtype)
-                         for argument, dtype in zip(node.children, node.symbol.parameter_types)]
-            result = self.builder.call(self.functions[node.symbol.owner, node.symbol.token.text, node.symbol.descriptor], arguments)
+            result = self.references.call(node)
             return self.from_abi(result, node.dtype)
         if kind == "group":
             return self.expression(node.children[0])
@@ -194,6 +199,8 @@ class SourceLowerer:
                 return self.builder.sub(ir.Constant(value.type, 0), value)
             return self.builder.not_(value)
         if kind == "binary":
+            if node.operation_type == "reference":
+                return self.references.identity(node)
             left = self.expression(node.children[0])
             if node.value in ("&&", "||"):
                 origin = self.builder.block
@@ -274,8 +281,11 @@ class SourceLowerer:
             return
         if kind == "empty":
             return
-        if kind == "var" and isinstance(node.value, ArrayType):
-            self.arrays.allocate(node, self.slots[node.symbol])
+        if kind == "var" and reference(node.value):
+            if node.children[0].kind in {"array_new", "array_initializer"}:
+                self.arrays.allocate(node, self.slots[node.symbol])
+            else:
+                self.builder.store(self.references.own(node.children[0]), self.slots[node.symbol])
             return
         if kind == "enhanced_for":
             self.enhanced_for(node)
@@ -288,11 +298,18 @@ class SourceLowerer:
             self.assignment(node, node.children)
             return
         if kind == "expression":
-            self.expression(node.children[0])
+            child, = node.children
+            if reference(child.dtype):
+                value, owns = self.references.value(child)
+                if owns:
+                    self.references.drop(value)
+            else:
+                self.expression(child)
             return
         if kind == "return":
-            # Evaluate the result before retiring frame array roots.
-            value = self.to_abi(self.expression(node.children[0]), self.result_type) if node.children else None
+            # A returned reference owns a distinct root before frame retirement.
+            value = (self.references.own(node.children[0]) if reference(self.result_type) else
+                     self.to_abi(self.expression(node.children[0]), self.result_type) if node.children else None)
             self.arrays.drop_all(self.array_slots)
             if value is not None:
                 self.builder.ret(value)

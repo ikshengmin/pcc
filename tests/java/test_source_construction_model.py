@@ -280,13 +280,12 @@ def test_complete_primes_original_retains_throw_and_generic_result_type():
     assert call.kind == 'call' and call.value == 'String.format'
     assert [child.value for child in call.children] == ['NUMBER_TOO_SMALL', 'n', '0']
     # The class model parses the whole original, including List<Integer>.
-    # The native domain still has no reference results: the List<Integer>
-    # result type of primeFactors is its next prerequisite. Parser reach is
-    # not execution.
+    # This single-unit native parse retains the signature but cannot replace
+    # the original java.util.List import with an erased or invented provider.
     with pytest.raises(UnsupportedJava) as native:
         compile_source(sources[first], filename=first)
-    assert native.value.code == 'java.unsupported.declared-result-type'
-    assert ':108:19:' in str(native.value)
+    assert native.value.code == 'java.unsupported.source-dependency'
+    assert 'requires supplied source for java.util.List' in str(native.value)
     assert sources == before
     # No token removal, source slice, fake library, or project acceptance.
 

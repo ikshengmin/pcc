@@ -24,6 +24,12 @@ LANGUAGES = ("cpp", "rust", "java", "go")
 LANES = ("ordinary", "integration", "reference")
 SCOPES = ("auto", "frontends", "cpp", "rust", "java", "go", "shared", "legacy", "all")
 SHA = re.compile(r"[0-9a-f]{40}\Z")
+JAVA_MANAGED_ABI_INPUTS = frozenset({
+    "pcc/frontends/java/source_lowering.py", "pcc/frontends/java/source_native_arrays.py",
+    "pcc/frontends/java/source_native_references.py", "pcc/frontends/java/source_project.py",
+    "pcc/frontends/java/source_sema.py", "pcc/frontends/java/source_syntax.py",
+    "tests/java/ManagedReferenceObserve.c", "tests/java/test_source_managed_reference_calls.py",
+})
 CI_FILES = ("scripts/ci_validation", "scripts/data/ci_validation", ".github/workflows/")
 NATIVE_PLATFORMS = (
     {"platform": "linux-x86_64", "runner": "ubuntu-24.04", "docker_platform": "linux/amd64"},
@@ -78,6 +84,9 @@ def select(changes, *, scope="auto", before=None, after=None, full_chain=False, 
         if language:
             domains.add(language)
             reasons.append({"path": path, "reason": f"whole {language} source suite"})
+            if path in JAVA_MANAGED_ABI_INPUTS:
+                domains.add("shared")
+                reasons.append({"path": path, "reason": "shared native Java managed-reference ABI"})
         elif path.startswith(CI_FILES) or path == "tests/test_ci_validation.py":
             # A workflow/harness edit can alter an old gate itself. Its source
             # policy tests are not a substitute for executing that gate.

@@ -6,18 +6,18 @@ complete abruptly are admitted, as with the nonzero-constant division domain:
 
 - a one-dimensional boolean/integral local declared once at the method's top
   level with an initializer or a provably bounded nonnegative dimension,
-  never reassigned and never escaping;
+  never reassigned; identity-preserving aliases and calls use the separate
+  source_native_references owning-result/borrowed-argument ABI;
 - ``a.length``; reads and simple stores of a constant in-range component;
 - enhanced ``for`` over such a local, which is non-null by construction.
 
-Every other array use needs shared NullPointerException,
-ArrayIndexOutOfBoundsException or NegativeArraySizeException support, class
-initialization, or a managed root/ownership ABI across calls; each stays an
-explicit capability boundary. Allocation failure (OutOfMemoryError) is an
+Dereferencing an array without a verified local non-null extent needs shared
+NullPointerException and bounds handling. Static fields, dynamic allocation
+extents, arbitrary indices and replacement remain explicit boundaries. Allocation failure (OutOfMemoryError) is an
 explicit fatal runtime boundary with a labeled diagnostic, not an exception.
 
-Each allocation is owned by a stable root handle in the method's frame and is
-dropped on every method exit. Component storage is the envelope's payload with
+Each allocation is owned by a stable frame handle dropped on every method exit.
+Returning a local first gives the recipient an independent owning handle. Component storage is the envelope's payload with
 the component's PCC ABI width. Only the Linux x86-64 GC0 envelope is admitted:
 GC0 never moves an object, so a payload address is stable while its handle
 roots it. Programs using it need the owned runtime archive and the opt-in
@@ -28,6 +28,7 @@ from pcc.ir.compat import ir
 
 from .diagnostics import UnsupportedJava
 from .source_types import ArrayType, widening
+from .source_native_references import reference
 
 # Component storage widths, the PCC ABI types of the native scalar lowering.
 COMPONENT_BYTES = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8}
@@ -54,7 +55,6 @@ class NativeArrayAnalyzer:
 
     def reset_native_arrays(self, method):
         method.array_lengths = {}
-        self.array_operands = set()
 
     def local_array_binding(self, name):
         for scope in reversed(self.scopes):
@@ -65,13 +65,14 @@ class NativeArrayAnalyzer:
     def array_operand(self, node, assigned):
         """Type a local array reference in an admitted, non-escaping position."""
         while node.kind == "group":
-            self.array_operands.add(id(node))
             node = node.children[0]
         if node.kind == "name" and "." not in node.value:
             binding = self.local_array_binding(node.value)
             if binding is not None:
-                self.array_operands.add(id(node))
                 self.expression(node, assigned)
+                if binding not in self.method.array_lengths:
+                    node.token.error("dereferencing a borrowed or returned array without a non-null length proof "
+                                     "requires shared NullPointerException support", code="java.unsupported.array-storage")
                 return binding
         if node.kind == "name":
             node.token.error("static array fields require shared Java class initialization",
@@ -79,10 +80,22 @@ class NativeArrayAnalyzer:
         node.token.error("array expressions other than a top-level initialized local require shared "
                          "NullPointerException support and managed root ownership", code="java.unsupported.array-storage")
 
-    def array_reference_read(self, node, binding):
-        if id(node) not in self.array_operands:
-            node.token.error("array references escaping length, constant component access and enhanced for "
-                             "require the shared managed root/ownership ABI", code="java.unsupported.array-storage")
+    def native_reference_local(self, node, assigned):
+        if len(self.scopes) != 2 or self.controls or not node.children:
+            node.token.error("managed locals require an initialized top-level frame root",
+                             code="java.unsupported.array-storage")
+        node.symbol = self.declare(node.token, node.value, node.is_final)
+        initializer, = node.children
+        self.expression(initializer, assigned)
+        self.assignment_value(initializer, node.value)
+        # A direct immutable alias inherits exactly the same non-null extent.
+        origin = initializer
+        while origin.kind == "group":
+            origin = origin.children[0]
+        if origin.kind == "name" and origin.symbol in self.method.array_lengths:
+            self.method.array_lengths[node.symbol] = self.method.array_lengths[origin.symbol]
+        assigned.add(node.symbol)
+        return assigned
 
     def native_array_local(self, node, assigned):
         dtype = node.value
@@ -93,8 +106,7 @@ class NativeArrayAnalyzer:
             node.token.error("array locals inside nested blocks, loops or switches require scoped root "
                              "retirement", code="java.unsupported.array-storage")
         if not node.children or node.children[0].kind not in {"array_initializer", "array_new"}:
-            node.token.error("array locals without an owned allocation require shared root/ownership semantics",
-                             code="java.unsupported.array-storage")
+            return self.native_reference_local(node, assigned)
         initializer = node.children[0]
         if initializer.value != dtype:
             initializer.token.error("incompatible primitive array element type: cannot assign "
@@ -212,8 +224,8 @@ class NativeArrayAnalyzer:
         return set.intersection(set(assigned), *loop["break"])
 
     def reject_array_reassignment(self, node):
-        if array_binding(node.symbol):
-            node.token.error("reassigning an array local requires the shared managed root/ownership ABI",
+        if reference(node.symbol.dtype):
+            node.token.error("reassigning a managed binding requires replacement and scoped ownership",
                              code="java.unsupported.array-storage")
 
 
