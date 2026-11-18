@@ -418,6 +418,70 @@ class CompilerIntArena:
             self._values[index] = source._values[source_start + index]
             index += 1
 
+    def extend_from(self, source: CompilerIntArena, start: int, count: int) -> None:
+        """Append ``source[start:start + count]`` with one bulk copy."""
+
+        if start < 0 or count < 0 or start + count > len(source):
+            raise IndexError("compiler int arena extension span out of range")
+        if self._address != 0:
+            if source._address == 0:
+                raise RuntimeError("compiler arena storage projections disagree")
+            required = self._length + count
+            if required > self._capacity:
+                self._grow(required)
+            if count:
+                # Read the source address after growth: it may be this arena.
+                memcpy(
+                    ptr_add(int_to_ptr(self._address), self._length * 8),
+                    ptr_add(int_to_ptr(source._address), start * 8),
+                    count * 8,
+                )
+        else:
+            if self._closed:
+                raise RuntimeError("compiler int arena is closed")
+            if source._address != 0:
+                raise RuntimeError("compiler arena storage projections disagree")
+            self._values.extend(source._values[start:start + count])
+        self._length += count
+
+    def extend_list(self, values: list[int]) -> None:
+        """Append every scalar of one proven ``list[int]`` in order."""
+
+        count = len(values)
+        if self._address != 0:
+            required = self._length + count
+            if required > self._capacity:
+                self._grow(required)
+            address = int_to_ptr(self._address)
+            index = 0
+            while index < count:
+                store_i64(address, (self._length + index) * 8, values[index])
+                index += 1
+        else:
+            if self._closed:
+                raise RuntimeError("compiler int arena is closed")
+            self._values.extend(values)
+        self._length += count
+
+    def min_from(self, start: int, count: int) -> int:
+        """Smallest scalar of one nonempty proven in-range span."""
+
+        if start < 0 or count <= 0 or start + count > self._length:
+            raise IndexError("compiler int arena minimum span out of range")
+        if self._address != 0:
+            address = int_to_ptr(self._address)
+            smallest = load_i64(address, start * 8)
+            index = start + 1
+            while index < start + count:
+                value = load_i64(address, index * 8)
+                if value < smallest:
+                    smallest = value
+                index += 1
+            return smallest
+        if self._closed:
+            raise RuntimeError("compiler int arena is closed")
+        return min(self._values[start:start + count])
+
     def or_prefix_from_unchecked(
         self,
         source: CompilerIntArena,
@@ -842,6 +906,13 @@ class CompilerRecordSpanArena:
     snapshots the source root, so later source appends and self-extension have
     ordinary sequence semantics. Nodes and traversal state contain only scalar
     IDs; the normal replay API never constructs Python per-record containers.
+
+    Node triples are a leaf ``(-1, record_id, 1)``, a concatenation
+    ``(left, right, 0)`` or a run ``(-2, start, count)`` of ``count`` record
+    IDs stored contiguously in ``runs``. A whole sequence appended at once is
+    one run: one node and one scalar per record instead of two node triples.
+    A cursor holds pending node IDs and, for a run being replayed, the pair
+    ``(end, -(position + 1))``; node IDs are never negative.
     """
 
     def __init__(self) -> None:
@@ -849,6 +920,12 @@ class CompilerRecordSpanArena:
         try:
             self.spans: CompilerIntArena = CompilerIntArena()
         except Exception:
+            self.nodes.close()
+            raise
+        try:
+            self.runs: CompilerIntArena = CompilerIntArena()
+        except Exception:
+            self.spans.close()
             self.nodes.close()
             raise
         self.generation: int = 1
@@ -908,6 +985,83 @@ class CompilerRecordSpanArena:
             destination.first * 2, next_root, left.second + right.second,
         )
 
+    def append_ids(self, span: CompilerInt2, ids: CompilerIntArena) -> None:
+        """Append every record ID of ``ids`` in order as one run node."""
+
+        root: CompilerInt2 = self._root(span)
+        count = len(ids)
+        if count == 0:
+            return
+        if root.second > 0x7FFFFFFF - count:
+            raise OverflowError("compiler record span exceeds its length limit")
+        start = len(self.runs)
+        self.runs.extend_from(ids, 0, count)
+        self._publish_run(span, root, start, count)
+
+    def append_id_list(self, span: CompilerInt2, records: list[int]) -> None:
+        """Append every record ID of one ``list[int]`` in order as one run node."""
+
+        root: CompilerInt2 = self._root(span)
+        count = len(records)
+        if count == 0:
+            return
+        if root.second > 0x7FFFFFFF - count:
+            raise OverflowError("compiler record span exceeds its length limit")
+        start = len(self.runs)
+        self.runs.extend_list(records)
+        self._publish_run(span, root, start, count)
+
+    def _publish_run(self, span: CompilerInt2, root: CompilerInt2, start: int, count: int) -> None:
+        # The copied payload is unreachable until the root commit below, so a
+        # rejected sequence leaves every published span unchanged.
+        try:
+            if self.runs.min_from(start, count) < 0:
+                raise ValueError("compiler record id must be nonnegative")
+            run = len(self.nodes) // 3
+            self.nodes.append3(-2, start, count)
+            next_root = run
+            if root.first >= 0:
+                next_root = len(self.nodes) // 3
+                self.nodes.append3(root.first, run, 0)
+        except Exception:
+            self.runs.truncate(start)
+            raise
+        self.spans.set2_unchecked(span.first * 2, next_root, root.second + count)
+
+    def copy_ids(self, span: CompilerInt2, out: CompilerIntArena) -> None:
+        """Append the span's record IDs to ``out``; runs are copied in bulk."""
+
+        root: CompilerInt2 = self._root(span)
+        if root.first < 0:
+            return
+        pending = CompilerIntArena()
+        try:
+            pending.append(root.first)
+            while len(pending) > 0:
+                index = len(pending) - 1
+                node_id = pending.get_unchecked(index)
+                pending.truncate(index)
+                if node_id < 0 or node_id >= len(self.nodes) // 3:
+                    raise RuntimeError("compiler record span node is out of range")
+                node: CompilerInt3 = self.nodes.get3_unchecked(node_id)
+                if node.first == -1:
+                    if node.second < 0 or node.third != 1:
+                        raise RuntimeError("compiler record span leaf is invalid")
+                    out.append(node.second)
+                elif node.first == -2:
+                    if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
+                        raise RuntimeError("compiler record span run is invalid")
+                    out.extend_from(self.runs, node.second, node.third)
+                else:
+                    if (
+                        node.first < 0 or node.first >= node_id
+                        or node.second < 0 or node.second >= node_id
+                    ):
+                        raise RuntimeError("compiler record span tree is not acyclic")
+                    pending.append2(node.second, node.first)
+        finally:
+            pending.close()
+
     def start_cursor(self, span: CompilerInt2, cursor: CompilerIntArena) -> None:
         root: CompilerInt2 = self._root(span)
         cursor.clear()
@@ -922,14 +1076,33 @@ class CompilerRecordSpanArena:
         while len(cursor) > 1:
             index = len(cursor) - 1
             node_id = cursor.get_unchecked(index)
+            if node_id < 0:
+                # A run in progress: (end, -(position + 1)) above the generation.
+                position = -node_id - 1
+                if index < 2:
+                    raise RuntimeError("compiler record span cursor is invalid")
+                end = cursor.get_unchecked(index - 1)
+                if position >= end or end > len(self.runs):
+                    raise RuntimeError("compiler record span run is invalid")
+                if position + 1 < end:
+                    cursor.set_unchecked(index, -(position + 2))
+                else:
+                    cursor.truncate(index - 1)
+                return self.runs.get_unchecked(position)
             cursor.truncate(index)
-            if node_id < 0 or node_id >= len(self.nodes) // 3:
+            if node_id >= len(self.nodes) // 3:
                 raise RuntimeError("compiler record span node is out of range")
             node: CompilerInt3 = self.nodes.get3_unchecked(node_id)
             if node.first == -1:
                 if node.second < 0 or node.third != 1:
                     raise RuntimeError("compiler record span leaf is invalid")
                 return node.second
+            if node.first == -2:
+                if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
+                    raise RuntimeError("compiler record span run is invalid")
+                if node.third > 1:
+                    cursor.append2(node.second + node.third, -(node.second + 2))
+                return self.runs.get_unchecked(node.second)
             if (
                 node.first < 0 or node.first >= node_id
                 or node.second < 0 or node.second >= node_id
@@ -944,6 +1117,7 @@ class CompilerRecordSpanArena:
             raise OverflowError("compiler record span generation limit reached")
         self.nodes.clear()
         self.spans.clear()
+        self.runs.clear()
         self.generation += 1
 
     def close(self) -> None:
@@ -951,6 +1125,7 @@ class CompilerRecordSpanArena:
             return
         self.nodes.close()
         self.spans.close()
+        self.runs.close()
         self.closed = True
 
     def diagnostic_values(self, span: CompilerInt2) -> list[int]:
