@@ -21,6 +21,14 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc_relocation_selector_object_relocatable",
+    "pcc_gc_relocation_selector_graph_leaf_tag",
+    "pcc_gc_relocation_selector_slab_live_cells",
+    "pcc_gc_relocation_selector_slab_rank_locked",
+    "pcc_gc_relocation_selector_slab_add_candidate",
+    "pcc_gc_relocation_selector_slab_select_span_locked",
+    "pcc_gc_relocation_selector_slab_select",
+
     'pcc_gc_relocation_selector_owned_trailer_begin',
     'pcc_gc_relocation_selector_owned_trailer_collect_batch',
     'pcc_gc_relocation_selector_owned_trailer_drop',
@@ -58,6 +66,16 @@ OWNED_GLOBALS = {
     "pcc_gc_backend4_relocation_add_refusals_g",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_allocator_record_span_first",
+    "pcc_allocator_record_span_next",
+    "pcc_allocator_record_span_records",
+    "pcc_allocator_record_span_cells",
+    "pcc_allocator_record_span_page",
+    "pcc_gc_page_evacuating",
+    "pcc_gc_pin_conservative_thread_roots",
+    "pcc_gc_alloc_stage_drain_locked",
+    "pcc_gc_page_set_evacuating",
+
     "pcc_gc_object_is_white",
     "pcc_gc_object_is_address_pinned",
     "free",
@@ -76,6 +94,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_threads_enabled",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc_nonmoving_count_free",
+    "pcc_gc_backend4_slab_evacuation_head",
     "pcc_gc_backend4_page_head",
     "pcc_gc_read_barrier_enabled",
     "pcc_gc_backend4_evacuation_candidate_bytes_count",

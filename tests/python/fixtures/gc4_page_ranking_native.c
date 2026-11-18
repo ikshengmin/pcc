@@ -5,6 +5,7 @@
 #include <string.h>
 #include <time.h>
 #include "harness_globals.h"
+#include "gc4_legacy_selector_providers.h"
 extern int64_t pcc_gc_backend4_select_relocation_pages(int64_t);
 extern int64_t pcc_gc_backend4_candidate_fresh_skips_count(void);
 extern int64_t pcc_gc_backend4_relocation_add_refusals_count(void);
