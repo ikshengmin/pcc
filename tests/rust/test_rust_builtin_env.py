@@ -17,6 +17,11 @@ import subprocess
 
 import pytest
 
+from tests.rust.rustc_reference_host import (
+    _RUSTC_BASE_ENV, _RUSTC_WINDOWS_ENV, run_reference, rustc_toolchain_environment as _rustc_toolchain_environment,
+)
+
+
 from pcc.frontends.rust import CompileEnvironment, RustError, compile_rust
 from pcc.frontends.rust.cargo_config import cargo_environment
 from pcc.frontends.rust.syntax import Parser
@@ -102,31 +107,6 @@ def test_compile_rust_takes_a_mapping_or_an_environment_and_never_reads_the_host
         CompileEnvironment.of({'X': '1'}, {'X': 'reason'})
 
 
-_RUSTC_BASE_ENV = ('PATH', 'HOME', 'RUSTUP_HOME', 'CARGO_HOME', 'RUSTUP_TOOLCHAIN')
-_RUSTC_WINDOWS_ENV = (
-    # Windows loader, Rust home/temp and Visual Studio discovery locations.
-    'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
-    'PROGRAMW6432', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE',
-    'APPDATA', 'LOCALAPPDATA',
-    # Preserve an already selected MSVC/SDK toolchain, not compiler flags.
-    'VSINSTALLDIR', 'VCINSTALLDIR', 'VCTOOLSINSTALLDIR', 'VCTOOLSVERSION',
-    'VISUALSTUDIOVERSION', 'VSCMD_ARG_HOST_ARCH', 'VSCMD_ARG_TGT_ARCH',
-    'WINDOWSSDKDIR', 'WINDOWSSDKVERSION',
-    'WINDOWSSDKLIBVERSION', 'UNIVERSALCRTSDKDIR', 'UCRTVERSION',
-    'INCLUDE', 'LIB', 'LIBPATH',
-)
-
-
-def _rustc_toolchain_environment(environ, *, windows):
-    """Retain toolchain/OS locators without leaking arbitrary macro inputs."""
-    if windows:
-        # Windows environment names are case-insensitive. Retain the original
-        # spelling and values rather than inventing SDK paths or PATH ordering.
-        allowed = set(_RUSTC_BASE_ENV + _RUSTC_WINDOWS_ENV)
-        return {key: value for key, value in environ.items() if key.upper() in allowed}
-    return {key: environ[key] for key in _RUSTC_BASE_ENV if key in environ}
-
-
 def isolated_rustc_environment():
     # Dropping Windows discovery variables can make rustc fall through to the
     # unrelated GNU coreutils link.exe on PATH. Still isolate PCC_UNSET/HIDDEN
@@ -135,19 +115,9 @@ def isolated_rustc_environment():
     return {**keep, **dict(ENV.variables)}
 
 
+
 def _run_env_reference(*args, **kwargs):
-    """Retain captured diagnostics without changing subprocess failure semantics."""
-    try:
-        return subprocess.run(*args, **kwargs)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        error.add_note(
-            "Rust env reference subprocess diagnostics:\n"
-            + "returncode=" + repr(getattr(error, "returncode", None)) + "\n"
-            + "timeout=" + repr(getattr(error, "timeout", None)) + "\n"
-            + "stdout=" + repr(error.stdout) + "\n"
-            + "stderr=" + repr(error.stderr)
-        )
-        raise
+    return run_reference('Rust env reference', *args, **kwargs)
 
 
 @pytest.mark.xdist_group(name='rust-native-reference')

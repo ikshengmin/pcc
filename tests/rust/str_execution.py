@@ -138,6 +138,22 @@ def run_owned_u64_function(source, function, tmp_path, monkeypatch, *, target_tr
     return int.from_bytes(run.stdout, 'little')
 
 
+def _reference_environment(inherited, requested, *, windows, link=False):
+    from tests.rust.rustc_reference_host import rustc_toolchain_environment
+    # An arbitrary fixture must not gain access to SDK-selection variables.
+    # The generated observer, unlike an rlib, must find a native linker and SDK.
+    base = rustc_toolchain_environment(inherited, windows=windows, include_sdk=link)
+    if windows and requested:
+        overridden = {name.upper() for name in requested}
+        base = {key: value for key, value in base.items() if key.upper() not in overridden}
+    return {**base, **(requested or {})}
+
+
+def _reference_command(stage, command, *, timeout, env=None):
+    from tests.rust.rustc_reference_host import run_reference
+    return run_reference(stage, command, check=True, capture_output=True, timeout=timeout, env=env).stdout
+
+
 def run_rustc_str_function(source, function, tmp_path, *, edition=2021, environment=None, cfg=(), panic=None,
                            output='{call}.as_bytes()'):
     """The same function built by a development rustc, printed byte for byte
@@ -150,17 +166,18 @@ def run_rustc_str_function(source, function, tmp_path, *, edition=2021, environm
     call = output.format(call=f'rust_reference::{function}()')
     main.write_text('use std::io::Write;\nfn main(){std::io::stdout().write_all('
                     f'{call}).unwrap();}}\n')
-    keep = {key: os.environ[key] for key in ('PATH', 'HOME', 'RUSTUP_HOME', 'CARGO_HOME', 'RUSTUP_TOOLCHAIN')
-            if key in os.environ}
-    env = {**keep, **(environment or {})}
+    windows = sys.platform == 'win32'
+    env = _reference_environment(os.environ, environment, windows=windows)
+    link_env = _reference_environment(os.environ, environment, windows=windows, link=True)
+    binary = tmp_path / ('reference.exe' if windows else 'reference')
     strategy = ['-C', f'panic={panic}'] if panic else []
     common = [f'--edition={edition}', '-C', 'overflow-checks=off', *strategy,
               *[part for spec in cfg for part in ('--cfg', spec)]]
-    subprocess.run([rustc, '--crate-name', 'rust_reference', '--crate-type=rlib', '-A', 'warnings', *common,
-                    str(library), '-o', str(tmp_path / 'librust_reference.rlib')],
-                   check=True, capture_output=True, timeout=120, env=env)
-    subprocess.run([rustc, f'--edition={edition}', *strategy,
-                    '--extern', 'rust_reference=' + str(tmp_path / 'librust_reference.rlib'),
-                    str(main), '-o', str(tmp_path / 'reference')],
-                   check=True, capture_output=True, timeout=120, env=env)
-    return subprocess.run([str(tmp_path / 'reference')], check=True, capture_output=True, timeout=10).stdout
+    _reference_command('rustc fixture rlib',
+                       [rustc, '--crate-name', 'rust_reference', '--crate-type=rlib', '-A', 'warnings', *common,
+                        str(library), '-o', str(tmp_path / 'librust_reference.rlib')], timeout=120, env=env)
+    _reference_command('rustc observer executable',
+                       [rustc, f'--edition={edition}', *strategy,
+                        '--extern', 'rust_reference=' + str(tmp_path / 'librust_reference.rlib'),
+                        str(main), '-o', str(binary)], timeout=120, env=link_env)
+    return _reference_command('execute rustc observer', [str(binary)], timeout=10)
