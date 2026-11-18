@@ -1321,6 +1321,8 @@ class TypeParseContext:
     pointer_type_cache: dict[int, tuple[TypeDesc, TypeDesc]] = field(default_factory=dict)
     # Original module metadata and dense per-function source coordinates.
     debug_info: DebugMetadata | None = None
+    # Set only by a module owner that has observed the actual target layout.
+    x86_dynamic_layout_supported: bool = field(default=False, init=False, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -1433,6 +1435,7 @@ class ParsedFunction:
     # Empty is the legacy is_global-only representation. Keep this at the end
     # so positional constructors and ordinary indexed wire bytes are unchanged.
     definition_linkage: str = ""
+    x86_dynamic_stack: bool = field(default=False, init=False, repr=False, compare=False)
 
 
 def parsed_module_instruction_arena_profile(module: ParsedModule) -> dict[str, int]:

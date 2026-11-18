@@ -23,6 +23,8 @@ guessing.
 from . import BackendUnavailable
 from .code_profile import apply_function_order_profile
 from .precise_stackmap import precise_stackmap_tables_enabled
+from .self_backend_dynamic_alloca import X86_DYNAMIC_ARRAY
+from .self_backend_x86_dynamic_stack import emit_checked_dynamic_array, has_checked_dynamic_stack
 from .self_backend_emit import emit_function_blocks
 from .self_backend_float_bits import (
     float32_to_bits,
@@ -2954,9 +2956,11 @@ def _emit_compute_instruction(func: ParsedFunction, kind: str, data: tuple) -> l
             raise BackendUnavailable(
                 f"x86_64 self backend intrinsic not translated yet in {func.name!r}: {callee}"
             )
+        if not is_indirect and not _WINDOWS_ABI and callee == X86_DYNAMIC_ARRAY:
+            return emit_checked_dynamic_array(func, dest, ret_type, args)
         if not is_indirect and callee == "llvm.pcc.dynamic.alloca":
-            # Frame slots are addressed from RSP here, so moving RSP at run
-            # time would shift every slot; refuse instead of miscompiling.
+            # Legacy byte-only records cannot verify count-times-stride
+            # overflow. Windows has a different stack/unwind contract.
             raise BackendUnavailable(
                 "x86_64 self backend does not support run-time sized stack "
                 f"allocation (VLA or alloca) in {func.name!r}"
@@ -3128,8 +3132,12 @@ def _emit_epilogue(func: ParsedFunction) -> list[str]:
         return ["  ud2"]
     lines: list[str] = []
     saved_rbx = 176 if func.is_vararg else 0
-    lines.append(f"  mov rbx, QWORD PTR [rsp + {saved_rbx}]")
     total_frame = func.frame_size + func.platform_frame_extra
+    if func.x86_dynamic_stack:
+        # Restore the true fixed-frame base before the register-allocation
+        # postpass's preserved-register restore anchor and saved RBX.
+        lines.append(f"  lea rsp, [rbp - {total_frame}]")
+    lines.append(f"  mov rbx, QWORD PTR [rsp + {saved_rbx}]")
     if total_frame:
         lines.append(f"  add rsp, {total_frame}")
     lines.append("  pop rbp")
@@ -3473,12 +3481,13 @@ def _emit_function(
     if _WINDOWS_ABI:
         from .self_backend_win64_abi import outgoing_size
         _WINDOWS_SCRATCH_BASE = outgoing_size(func)
+    kernel = get_indexed_function_kernel(func)
+    func.x86_dynamic_stack = not _WINDOWS_ABI and has_checked_dynamic_stack(func, kernel)
     symbol = _asm_symbol(func.name)
     from .self_backend_x86_frame import fixed_frame_padding
     lines = _emit_prologue(
         func, padding=fixed_frame_padding(func, stack_map_plan),
     )
-    kernel = get_indexed_function_kernel(func)
     if phase_timing is not None:
         phase_timing.add(12, phase_start)
     # Indexed input owns no legacy block graph. Keep the compatibility view

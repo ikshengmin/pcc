@@ -8,6 +8,44 @@ from pcc.frontends.c.codegen.c_types import get_ir_type, int8_t, int32_t, int64_
 from pcc.frontends.c.ast import c_ast as c_ast
 
 
+def _vla_tree_has(node, kinds):
+    pending = [node] if node is not None else []
+    while pending:
+        current = pending.pop()
+        if isinstance(current, kinds):
+            return True
+        for _name, child in current.children():
+            if isinstance(child, (tuple, list)):
+                pending.extend(child)
+            elif child is not None:
+                pending.append(child)
+    return False
+
+
+def _function_lifetime_vla_declarations(definition):
+    # A body-level declaration lasts until return unless control can go
+    # back across it. Walk through switches and GNU statement expressions,
+    # not just the code generator's dispatchable-label inventory.
+    if _vla_tree_has(definition, (c_ast.Label, c_ast.LabelAddress, c_ast.Goto,
+                                 c_ast.ComputedGoto, c_ast.AsmStatement)):
+        return {}
+    # An arbitrary prior call could be an indirect returns-twice function.
+    # Calls after (rather than before or in) this declaration are harmless:
+    # resumption after the allocation does not reexecute its instruction.
+    if _vla_tree_has(definition.decl, (c_ast.FuncCall,)):
+        return {}
+    for parameter in definition.param_decls or ():
+        if _vla_tree_has(parameter, (c_ast.FuncCall,)):
+            return {}
+    candidates = {}
+    for item in definition.body.block_items or ():
+        if _vla_tree_has(item, (c_ast.FuncCall,)):
+            break
+        if isinstance(item, c_ast.Decl) and isinstance(item.type, c_ast.ArrayDecl):
+            candidates[id(item)] = item
+    return candidates
+
+
 class CDeclarationLoweringMixin:
     def codegen_Decl(self, node):
         """Lower a declaration, then apply C17 6.7.5 object alignment to its storage."""
@@ -490,10 +528,17 @@ class CDeclarationLoweringMixin:
                             dynamic_dim_val = self._implicit_convert(
                                 dynamic_dim_val, ir.IntType(64)
                             )
+                        from pcc.backend.self_backend_target_match import is_x86_64_linux_triple
+                        context = getattr(self, "_direct_vla_context", None)
+                        lifetime = False
+                        if (context is not None and context[1] is node
+                                and is_x86_64_linux_triple(self.module.triple)):
+                            if context[2] is None:
+                                context[2] = _function_lifetime_vla_declarations(context[0])
+                            lifetime = context[2].get(id(node)) is node
                         var_addr = self.builder.alloca(
-                            elem_ir_type,
-                            size=dynamic_dim_val,
-                            name=node.name,
+                            elem_ir_type, size=dynamic_dim_val, name=node.name,
+                            function_lifetime=lifetime,
                         )
                         self.define(node.name, (ir.PointerType(elem_ir_type), var_addr))
                         self._mark_vla_binding(var_addr, dynamic_dim_val)

@@ -7266,8 +7266,11 @@ class CCodeGenerator(
             self.builder = saved_builder
             self.builder.position_at_end(saved_block)
 
-    def _codegen_compound_items(self, node, use_new_scope):
+    def _codegen_compound_items(self, node, use_new_scope, function_definition=None):
         scope = self.new_scope() if use_new_scope else nullcontext()
+        # Lazily classify only functions which really lower a direct VLA.
+        # Nested declarations cannot borrow their enclosing declaration's proof.
+        vla_context = [function_definition, None, None] if function_definition is not None else None
 
         with scope:
             if node.block_items:
@@ -7288,7 +7291,18 @@ class CCodeGenerator(
                         ):
                             self._codegen_compound_with_forward_labels(stmt)
                         continue
-                    self.codegen(stmt)
+                    if (vla_context is not None and isinstance(stmt, c_ast.Decl)
+                            and isinstance(stmt.type, c_ast.ArrayDecl)):
+                        old = getattr(self, "_direct_vla_context", None)
+                        vla_context[1] = stmt
+                        self._direct_vla_context = vla_context
+                        try:
+                            self.codegen(stmt)
+                        finally:
+                            self._direct_vla_context = old
+                            vla_context[1] = None
+                    else:
+                        self.codegen(stmt)
         return None, None
 
     def codegen_FuncDecl(self, node):
@@ -7464,7 +7478,7 @@ class CCodeGenerator(
                     self.builder.position_at_end(self.function.basic_blocks[_ssa_prev_block_count - 1])
 
             if not _used_ssa_lowering:
-                self._codegen_compound_items(node.body, use_new_scope=False)
+                self._codegen_compound_items(node.body, use_new_scope=False, function_definition=node)
 
             if not self.builder.block.is_terminated:
                 if isinstance(ir_type, ir.VoidType):

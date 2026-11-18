@@ -2337,7 +2337,24 @@ class IRBuilder:
 
     # ------------- memory -------------
 
-    def alloca(self, ty: Type, size: Optional[Value] = None, name: str = "") -> Value:
+    @staticmethod
+    def _require_direct_unit_alloca_count(size) -> None:
+        # A canonical explicit one is exactly one fixed element. Never treat
+        # arbitrary textual lookalikes or a stale mutable constant as proof.
+        if (type(size) is Constant and type(size.type) is IntType
+                and type(size.type.width) is int and size.type.width > 0
+                and type(size.value) is int and size.value == 1 and size._ref == "1"):
+            return
+        raise NotImplementedError("direct indexed IR does not represent counted alloca")
+
+    def alloca(self, ty: Type, size: Optional[Value] = None, name: str = "",
+               function_lifetime: bool = False) -> Value:
+        if function_lifetime and size is None:
+            raise ValueError("a counted-allocation lifetime needs an element count")
+        # The direct producer currently records a type but has no count field.
+        # Never publish a one-element fixed slot for a counted allocation.
+        if size is not None and self._direct_indexed_capture:
+            self._require_direct_unit_alloca_count(size)
         v = self._next(name, PointerType(ty))
         direct_builder = self._direct_builder_plane()
         if self._direct_indexed_no_text and direct_builder is not None:
@@ -2347,6 +2364,9 @@ class IRBuilder:
             if size is not None:
                 size_text = ", " + str(size.type) + " " + str(size)
             rec = self._emit(str(v) + " = alloca " + str(ty) + size_text)
+            if function_lifetime:
+                proof = self._fn.module.add_metadata(["pcc.alloca.function_lifetime.v1"])
+                rec.set_metadata("pcc.alloca.function_lifetime", proof)
         if direct_builder is not None:
             rec._direct_record_id = DirectIndexedFunctionBuilder.publish_alloca(
                 direct_builder,

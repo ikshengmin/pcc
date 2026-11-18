@@ -68,16 +68,24 @@ def emit(func, dest, ret_type, callee, args, windows=False):
                 save = outgoing_size(func) + MXCSR_OFFSET
             else:
                 save = 184 if func.is_vararg else 8
-            lines.append(f"  stmxcsr DWORD PTR [rsp + {save}]")
+            # The SysV fixed frame survives a runtime RSP move; nearbyint
+            # must not use or overwrite the caller's variable-length array.
+            saved = f"[rsp + {save}]"
+            after = f"[rsp + {save + 4}]"
+            if not windows and func.x86_dynamic_stack:
+                frame = func.frame_size + func.platform_frame_extra
+                saved = f"[rbp - {frame - save}]"
+                after = f"[rbp - {frame - save - 4}]"
+            lines.append(f"  stmxcsr DWORD PTR {saved}")
         # These functions are authored in freestanding_libc_numeric.py; no
         # external libm is introduced. Win64 home space is part of the frame.
         lines.append("  call rint" if callee.startswith(("llvm.rint.", "llvm.nearbyint.")) else "  call floor")
         if nearby:
-            lines.extend([f"  stmxcsr DWORD PTR [rsp + {save + 4}]",
-                          f"  mov eax, DWORD PTR [rsp + {save}]", "  and eax, 32",
-                          f"  mov r10d, DWORD PTR [rsp + {save + 4}]", "  and r10d, -33",
-                          "  or r10d, eax", f"  mov DWORD PTR [rsp + {save + 4}], r10d",
-                          f"  ldmxcsr DWORD PTR [rsp + {save + 4}]"])
+            lines.extend([f"  stmxcsr DWORD PTR {after}",
+                          f"  mov eax, DWORD PTR {saved}", "  and eax, 32",
+                          f"  mov r10d, DWORD PTR {after}", "  and r10d, -33",
+                          "  or r10d, eax", f"  mov DWORD PTR {after}, r10d",
+                          f"  ldmxcsr DWORD PTR {after}"])
         if ceil:
             lines.extend(["  movq rax, xmm0", "  mov r10, 9223372036854775808", "  xor rax, r10", "  movq xmm0, rax"])
         if single:

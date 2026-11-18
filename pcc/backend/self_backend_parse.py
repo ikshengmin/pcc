@@ -20,7 +20,7 @@ from .wide_float import encode_float_bits, float_bytes
 from .self_backend_target_match import is_x86_64_linux_triple
 from .self_backend_kernel import IndexedFunctionSeed, get_indexed_function_kernel
 from .self_backend_wide_int import legalize_wide_integers
-from .self_backend_dynamic_alloca import legalize_dynamic_allocas
+from .self_backend_dynamic_alloca import X86_DYNAMIC_ARRAY, legalize_dynamic_allocas, sysv_dynamic_layout_supported
 from .self_backend_half import legalize_half_floats
 from .self_backend_literals import (
     _is_float_token,
@@ -128,7 +128,7 @@ _ARG_RE = re.compile(
     r'(?P<name>%(?:"[^"]+"|[A-Za-z_.$][\w.$-]*))$'
 )
 _ALLOCA_RE = re.compile(
-    rf"^(?P<dest>%.*)\s*=\s*alloca\s+(?P<type>{_TYPE_TOKEN})(?:\s*,.*)?$"
+    rf"^(?P<dest>%.*)\s*=\s*alloca\s+(?P<type>{_TYPE_TOKEN})(?P<tail>\s*,.*)?$"
 )
 _STORE_RE = re.compile(
     rf"^store\s+(?P<val_type>{_TYPE_TOKEN})\s+(?P<value>.+?),\s+"
@@ -380,10 +380,13 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     # Targets model scalars as one 64-bit register; split i128 values first.
     ir_text = legalize_wide_integers(ir_text)
     # Every alloca is a fixed frame slot below; counted ones need their size.
-    ir_text = legalize_dynamic_allocas(ir_text)
+    triple = parse_self_backend_target_triple(ir_text)
+    ir_text = legalize_dynamic_allocas(ir_text, checked_sysv_x86=is_x86_64_linux_triple(triple))
     # No target has a binary16 register class; carry half values as float.
     ir_text = legalize_half_floats(ir_text)
     type_context = TypeParseContext()
+    if is_x86_64_linux_triple(triple) and X86_DYNAMIC_ARRAY in ir_text:
+        type_context.x86_dynamic_layout_supported = sysv_dynamic_layout_supported(ir_text)
     from .self_backend_debug import parse_debug_metadata
     type_context.debug_info = parse_debug_metadata(ir_text)
     type_context.type_cache.clear()
@@ -400,7 +403,7 @@ def parse_self_backend_module(ir_text: str) -> ParsedModule:
     _parse_named_types(ir_text, type_context=type_context)
     _resolve_declaration_type_attributes(ir_text, type_context=type_context)
     return ParsedModule(
-        triple=parse_self_backend_target_triple(ir_text),
+        triple=triple,
         globals_=tuple(_parse_globals(ir_text, type_context=type_context)),
         functions=tuple(_parse_functions(ir_text, type_context=type_context)), type_context=type_context,
     )
@@ -4386,6 +4389,19 @@ def _is_call_instruction_shape(line: str) -> bool:
     )
 
 
+def _reject_remaining_alloca_count(tail):
+    # A fixed-slot owner cannot model even a syntactically valid SSA count.
+    # Never discard it if an upstream legalizer missed a spelling or a
+    # caller goes directly to this parser. Non-count metadata/align survive.
+    if not tail:
+        return
+    tail = tail.lstrip()
+    if tail.startswith(","):
+        tail = tail[1:].lstrip()
+    if len(tail) > 1 and tail[0] == "i" and tail[1].isdigit():
+        raise BackendUnavailable("fixed-slot parser cannot discard an unlegalized alloca count")
+
+
 def _parse_indexed_hot_instruction(
     function_name: str,
     block_name: str,
@@ -4435,10 +4451,12 @@ def _parse_indexed_hot_instruction(
 
     alloca_type = None
     if match := _ALLOCA_RE.match(line):
+        _reject_remaining_alloca_count(match.group("tail"))
         alloca_type = _parse_type(match.group("type"), type_context=type_context)
     elif "= alloca " in line:
         _dest_text, rest = line.split("= alloca ", 1)
-        type_text, _tail = _extract_leading_type_token(rest, type_context=type_context)
+        type_text, tail = _extract_leading_type_token(rest, type_context=type_context)
+        _reject_remaining_alloca_count(tail)
         alloca_type = _parse_type(type_text, type_context=type_context)
     if alloca_type is not None:
         if dest_value_id < 0:
@@ -4771,13 +4789,15 @@ def _parse_instruction(function_name: str, block_name: str, line: str, *, type_c
     if type_context is None:
         type_context = TypeParseContext()
     if match := _ALLOCA_RE.match(line):
+        _reject_remaining_alloca_count(match.group("tail"))
         return ParsedInstr(
             "alloca",
             (decode_ssa_name(match.group("dest")), _parse_type(match.group("type"), type_context=type_context)),
         )
     if "= alloca " in line:
         dest_text, rest = line.split("= alloca ", 1)
-        type_text, _tail = _extract_leading_type_token(rest, type_context=type_context)
+        type_text, tail = _extract_leading_type_token(rest, type_context=type_context)
+        _reject_remaining_alloca_count(tail)
         return ParsedInstr(
             "alloca", (decode_ssa_name(dest_text.strip()), _parse_type(type_text, type_context=type_context))
         )
