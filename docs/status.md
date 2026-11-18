@@ -544,8 +544,9 @@ PCC_NO_AUTO_PCC1=1 PCC_GPU_HARDWARE_STRICT=1 gtimeout 500 uv run pytest -x -n0 \
 
 Not done: no pcc1 built from current source was available, so there is no
 pcc1-native result and the pcc1 and five-GC gates under `tests/gpu_hardware/`
-were not run. Asynchronous launch with a fence, no-copy buffers, the remaining
-Kernel IR shapes on this path and any model runtime are open. The older
+were not run. Asynchronous launch has a shared-event prototype (below);
+no-copy buffers, the remaining Kernel IR shapes on this path and any model
+runtime are open. The older
 `pcc-metal` path still uses its Objective-C bridge. Design and milestones:
 [local-model architecture](design/pcc-local-model-architecture.md).
 
@@ -610,6 +611,45 @@ selection above, unlike the owned focused gate.
 No pcc1 bootstrap was run for this batch. Synchronous execution under five
 collectors is **not** pcc1 compilation, moving-resource stress or asynchronous
 fence-lifetime qualification. M2 and later local-model milestones remain open.
+
+### Shared-event fences, M4 prototype (local Mac, 2026-11-18)
+
+Source: `515280210`. `metal_device.py` adds `event_create`, `event_release`,
+`event_value`, `event_wait`, `dispatch_async` and `command_finish`. A 32-byte
+fence record gives an optional GPU-side wait (`encodeWaitForEvent:value:`) and
+the signal after the dispatch (`encodeSignalEvent:value:`); the host reads
+`signaledValue` or blocks in `waitUntilSignaledValue:timeoutMS:`, with a
+timeout reported in band. No Objective-C block is used. The synchronous path
+now shares the launch check and encoder; its object still imports the same ten
+libSystem symbols.
+
+Executed, host pcc0, Apple silicon, `PCC_GPU_HARDWARE_STRICT=1`:
+
+- `tests/gpu_hardware/test_metal_device_runtime.py`: **10 passed** on
+  `0f3291851` plus this change, including two new gates. An asynchronous launch
+  signals value 1 and equals the CPU oracle; a missing signal event, a zero
+  signal value and an over-wide threadgroup are refused before encoding, the
+  command handle is cleared and the event stays at 0. A consumer committed
+  first on a second context's queue waits on the GPU for the producer: the host
+  wait for value 2 times out at 50 ms with the event at 0, then, after the
+  producer is committed, reaches 2, and the result equals the oracle.
+- A mutant without the GPU-side wait, built from a scratch copy of the runtime,
+  fails the ordering gate.
+- Before fast-forwarding to `0f3291851`, the same runtime with
+  `tests/gpu_hardware/test_metal_device_packet.py`,
+  `tests/python/test_gpu_metal.py` and `tests/kernel/test_gpu_host_launch.py`
+  gave **44 passed**. `tests/gpu_hardware/test_gpu_kernel_launch.py` was not
+  rerun for this change.
+
+```bash
+PCC_NO_AUTO_PCC1=1 PCC_GPU_HARDWARE_STRICT=1 gtimeout 600 uv run pytest -x -n0 \
+  tests/gpu_hardware/test_metal_device_runtime.py
+```
+
+Not done: the ordering gate needs two contexts because a context owns one
+queue; buffer release driven by a fence, no-copy buffers, foreign kernels and
+a wait that the collectors see as blocked are open, so M4 is not done. No pcc1
+or five-collector result exists for this path.
 
 ## Gateway Web Frameworks Benchmark: native request path
 

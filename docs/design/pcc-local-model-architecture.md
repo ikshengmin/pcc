@@ -1,8 +1,9 @@
 # Local-model mode: architecture for Harness, Strata compatibility and the device layer
 
 Status: proposed architecture, 2026-11-12. Layer 0, the Kernel IR packet path
-of M1 and the public annotated-kernel CLI of M1a execute on a real device with
-host pcc0. Layers 2–6 remain specifications, not implemented local-model modes.
+of M1, the public annotated-kernel CLI of M1a and, since 2026-11-18, the
+shared-event fence prototype of M4 execute on a real device with host pcc0.
+Layers 2–6 remain specifications, not implemented local-model modes.
 Maintainer direction of 2026-11-12, translated: Metal is the first GPU device,
 and the architecture for a local-model mode that supports Strata and Harness
 must be built.
@@ -48,7 +49,20 @@ buffer_create / buffer_contents / buffer_length / buffer_release
 pipeline_create(source, function, pipeline_out, diagnostic, capacity)
 pipeline_limits(pipeline, limits_out)               pipeline_release
 dispatch_sync(pipeline, bindings, binding_count, grid, threads)
+event_create / event_release / event_value(event, value_out)
+event_wait(event, value, timeout_ms)
+dispatch_async(pipeline, bindings, binding_count, grid, threads,
+               fence, command_out)                  command_finish(command)
 ```
+
+The asynchronous calls order work with shared events (`MTLSharedEvent`), the
+design Modular's open-source Metal driver uses for its events
+(`Target/lib/Metal/Event.cpp`, `Queue.cpp`); the idea is reimplemented here,
+no code is copied. A fence record names an optional event and value the
+command buffer waits for on the GPU before its dispatch, and the event and
+value it signals afterwards. No Objective-C block is needed: the host either
+reads the signaled value or blocks in `waitUntilSignaledValue:timeoutMS:`, and
+a timeout is an in-band status.
 
 Rules that are part of the contract, not of the Metal implementation:
 
@@ -73,9 +87,11 @@ The owned host runtime still calls Apple's `newLibraryWithSource:options:error:`
 `device_owner=pcc-metal-device` names the host adapter, not ownership of the
 system's shader compiler or GPU machine-code generation.
 
-Missing at L0 and required by the layers above: asynchronous launch with a
-completion fence, no-copy buffers over existing pages, a queue per stream, and
-device identity fields (family, memory limits) for the fit decision.
+Asynchronous launch with a shared-event fence exists as a prototype (see M4).
+Still missing at L0 and required by the layers above: no-copy buffers over
+existing pages, more than one queue per context (the ordering gate opens two
+contexts on the same device instead), device identity fields (family, memory
+limits) for the fit decision, and a wait that the collectors see as blocked.
 
 ### L1 kernels
 
@@ -255,7 +271,7 @@ higher.
 | M1a | Public `@gpu.kernel` / `gpu.launch` through the owned device | `tests/gpu_hardware/test_gpu_kernel_launch.py`: five executed gates, CPU/binary32 references and observed GC0–4 identities; embedded-source binaries run without inspection sidecars. Host-pcc0/self, local Darwin arm64, 2026-11-12. No external host compiler with a verified prebuilt runtime. Not pcc1 or asynchronous lifetime evidence. |
 | M2 | pcc1-native and five-GC handle lifetime on the owned device | The workload from a pcc1-built program plus resource-handle lifetime checks under observed GC0–4; merely selecting a collector or running synchronous copies is insufficient. |
 | M3 | Harness local route to an external engine (S1) | One prompt and one tool call through the pcc1-built Harness against a running local server; stopped engine gives `model-unavailable`; no cloud request is made. |
-| M4 | Asynchronous fence, no-copy weights, foreign kernel assets (S4) | A fence-ordered release test; one foreign kernel equal to its CPU oracle. |
+| M4 | Asynchronous fence, no-copy weights, foreign kernel assets (S4) | A fence-ordered release test; one foreign kernel equal to its CPU oracle. Prototype 2026-11-18 (`515280210`, host-pcc0): shared-event fences execute in `tests/gpu_hardware/test_metal_device_runtime.py`, including GPU-side ordering across two queues and an in-band host timeout. Release driven by a fence, no-copy weights, foreign kernels and collector-visible waits remain open, so M4 is not done. |
 | M5 | One small model in an engine process (topology C) | Token-exact against a CPU oracle; Harness uses it through the M3 client unchanged. |
 | M6 | A Strata-class model family (S3, S5) | Separate plan. |
 
@@ -267,8 +283,9 @@ translation reaches a working HTTP client.
 - Whether the operating system's Metal compiler is an accepted platform
   boundary under the pcc1 ownership contract is still the maintainer's
   decision. M0 relies on it.
-- The asynchronous completion path needs either an Objective-C block built in
-  pcc-Python or a dedicated waiting thread. Neither is designed.
+- Completion no longer needs an Objective-C block: shared events give both a
+  non-blocking read and a blocking wait. Which thread waits, and how a waiting
+  engine thread hands results to virtual threads, is not designed.
 - The mechanism that marks a thread as blocked during a device wait is not
   identified in the threaded runtime yet.
 - pcc-gui's window and render bridge is still Objective-C built by an external
