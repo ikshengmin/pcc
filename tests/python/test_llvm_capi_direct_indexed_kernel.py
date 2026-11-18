@@ -75,6 +75,23 @@ _ARENA_FIELDS = (
 )
 
 
+@pytest.mark.parametrize("first,second", [("0", "1"), ("1", "0")])
+def test_inline_error_edge_choice_is_bound_per_builder(monkeypatch, first, second):
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
+    monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
+    monkeypatch.delenv("PCC_DIRECT_INDEXED_KERNEL_VALIDATE", raising=False)
+    monkeypatch.delenv("PCC_TEXT_INDEXED_KERNEL_EMIT", raising=False)
+    module = ir.Module(name="inline-edge-route")
+    fn = ir.Function(module, ir.FunctionType(ir.VoidType(), []), name="f")
+    block = fn.append_basic_block("entry")
+    monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", first)
+    original = ir.IRBuilder(block)
+    monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", second)
+    later = ir.IRBuilder(block)
+    assert ir.IRBuilder_can_inline_error_edge(original) is (first == "1")
+    assert ir.IRBuilder_can_inline_error_edge(later) is (second == "1")
+
+
 def test_direct_inline_error_edge_plane_matches_explicit_cfg_oracle(monkeypatch):
     def build(*, direct: bool):
         if direct:
@@ -121,7 +138,7 @@ def test_direct_inline_error_edge_plane_matches_explicit_cfg_oracle(monkeypatch)
             builder.ret(ir.Constant(i64, 1))
         return module
 
-    monkeypatch.setattr(ir, "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED", True)
+    monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "1")
     direct_source = build(direct=True)
     direct = direct_source.direct_indexed_module()
     kernel = get_indexed_function_kernel(direct.functions[0])
@@ -188,7 +205,7 @@ def test_direct_transport_preserves_deferred_instruction_order(monkeypatch, tmp_
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_FUSE_USES", "1")
-    monkeypatch.setattr(ir, "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED", True)
+    monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "1")
 
     def build():
         module = ir.Module(name="instruction-order-" + shape)
@@ -460,7 +477,7 @@ def test_direct_inline_error_edge_trigger_follows_records_inserted_ahead(
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_FUSE_USES", "1")
-    monkeypatch.setattr(ir, "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED", True)
+    monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "1")
     module = ir.Module(name="inline-error-edge-shift")
     module.triple = "arm64-apple-darwin23.6.0"
     i64 = ir.IntType(64)
@@ -561,35 +578,16 @@ def _generate_frontend_module(monkeypatch, *, direct: bool):
     """Lower the canary source through L1CodeGen in direct or text mode."""
     from pcc.frontends.python.py_lift import parse_and_lift
     from pcc.frontends.python import type_infer
-    from pcc.frontends.python.codegen import exception_lowering
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
     if direct:
         monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
         monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
-        monkeypatch.setattr(
-            ir,
-            "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED",
-            True,
-        )
-        monkeypatch.setattr(
-            exception_lowering,
-            "_DIRECT_INLINE_ERROR_EDGE_ENABLED",
-            True,
-        )
+        monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "1")
     else:
         monkeypatch.delenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", raising=False)
         monkeypatch.delenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", raising=False)
-        monkeypatch.setattr(
-            ir,
-            "_DIRECT_INLINE_ERROR_EDGE_CAPTURE_ENABLED",
-            False,
-        )
-        monkeypatch.setattr(
-            exception_lowering,
-            "_DIRECT_INLINE_ERROR_EDGE_ENABLED",
-            False,
-        )
+        monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "0")
     ast_module = parse_and_lift(
         _FRONTEND_INLINE_EDGE_SOURCE, "<inline-edge>", "inline_edge"
     )
