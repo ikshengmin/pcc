@@ -206,7 +206,7 @@ def _check_return(definition, symbol, overridden, coord):
                         "return type of overriding '" + symbol.name + "' differs from the overridden function", coord)
 
 
-def declare_virtual(definition, symbol, virtual_token, specifiers, pure, coord):
+def declare_virtual(definition, symbol, virtual_token, specifiers, pure, coord, *, parser=None):
     """Apply the declaration rules once the member's identity is known."""
     overridden = overridden_member(definition, symbol)
     if overridden is not None and getattr(symbol, "method_static", False):
@@ -229,7 +229,10 @@ def declare_virtual(definition, symbol, virtual_token, specifiers, pure, coord):
         _check_final(overridden, coord)
         _check_return(definition, symbol, overridden, coord)
     if symbol.variadic:
-        _unsupported(coord, "variadic virtual functions require variadic table entries")
+        if parser is None:
+            _unsupported(coord, "variadic virtual functions require variadic table entries")
+        from pcc.frontends.cpp.variadic_virtuals import declare
+        declare(parser, definition, symbol, pure, coord)
     if symbol.name.startswith("operator"):
         _unsupported(coord, "virtual operator functions require operator-call dispatch")
     symbol.method_virtual = True
@@ -334,7 +337,10 @@ def complete_class(parser, definition, *, synthesize_constructors=True):
         name = _slot_name(index)
         function = deepcopy(entry.overrider.virtual_prototype.type)
         _rename(function, name)
-        fields.append(c_ast.Decl(name, [], [], [], c_ast.PtrDecl([], function, coord), None, None, coord))
+        field = c_ast.Decl(name, [], [], [], c_ast.PtrDecl([], function, coord), None, None, coord)
+        fields.append(field)
+        if entry.overrider.variadic:
+            parser.variadic_virtual_obligations.slot(definition, index, entry, field)
         if entry.deleting or entry.overrider.method_pure:
             values.append(c_ast.Constant("int", "0", coord))
         else:

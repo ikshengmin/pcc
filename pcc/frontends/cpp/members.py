@@ -224,6 +224,9 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
         converted += convert_ellipsis_arguments(parser, arguments[len(selected.parameters):], coord)
     function = c_ast.ID(selected.c_name, coord)
     if virtual_dispatch and getattr(selected, "method_virtual", False):
+        if selected.variadic:
+            from pcc.frontends.cpp.variadic_virtuals import check_slot
+            check_slot(parser, selected, coord)
         # [class.virtual]/16: a qualified name suppresses the virtual call.
         from pcc.frontends.cpp.virtual_functions import callee
         function = callee(selected, c_ast.ID(name, coord), coord)

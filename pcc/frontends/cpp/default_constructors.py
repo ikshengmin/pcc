@@ -73,11 +73,15 @@ def bind_defaulted_definitions(parser, definition):
                             'defaulted C1 subobjects require recursive special-member deletion and initialization',
                             definition.dtype.coord)
     base = getattr(definition, 'base', None)
+    primary_plan = None
     if base is not None:
         from pcc.frontends.cpp.default_member_initializers import has_initializers
         from pcc.frontends.cpp.inheritance import base_chain
         chain = [base.dtype, *base_chain(base.dtype)]
         if any(item.definition.constructors.overloads or has_initializers(item.definition) for item in chain):
+            from pcc.frontends.cpp.primary_default_base import classify
+            primary_plan = classify(parser, definition)
+        if primary_plan is not None and primary_plan.status == 'unsupported':
             raise CppDiagnostic('cpp.unsupported.constructor-subobjects',
                                 'defaulted C1 base subobjects require recursive special-member initialization',
                                 definition.dtype.coord)
@@ -87,7 +91,8 @@ def bind_defaulted_definitions(parser, definition):
     )
     for pending in definition.defaulted_constructors:
         symbol = pending.symbol
-        symbol.constructor_deleted = definition.default_constructor_deleted
+        symbol.constructor_deleted = (definition.default_constructor_deleted
+                                      or primary_plan is not None and primary_plan.status == 'implicitly-deleted')
         symbol.constructor_trivial = not symbol.constructor_user_provided and not definition.polymorphic and not any(
             getattr(member, 'default_initializer_tokens', None) is not None
             for member in definition.members)
@@ -95,9 +100,27 @@ def bind_defaulted_definitions(parser, definition):
             # An unused deleted defaulted declaration is valid. Aggregate
             # initialization can bypass it; do not manufacture a failing body.
             continue
-        stores = lower_member_initializers(parser, definition, pending.this, {})
+        construction_calls = {}
+        if primary_plan is None:
+            stores = lower_member_initializers(parser, definition, pending.this, {})
+        else:
+            previous_scope = parser.scope
+            previous_dependencies = getattr(parser, 'defaulted_construction_dependencies', None)
+            dependencies = []
+            parser.scope = pending.parameter_scope
+            parser.defaulted_construction_dependencies = dependencies
+            try:
+                stores = lower_member_initializers(parser, definition, pending.this, {},
+                                                  construction_calls=construction_calls)
+            finally:
+                parser.scope = previous_scope
+                parser.defaulted_construction_dependencies = previous_dependencies
+            pending.construction_dependencies = tuple(dependencies)
+            if list(construction_calls.values()) != [primary_plan.selected]:
+                raise CppDiagnostic('cpp.unsupported.constructor-subobjects',
+                                    'generated base C1 differs from its qualified declaration', pending.coord)
         body = c_ast.Compound(stores, pending.coord)
-        closed = closed_construction_body(body, {})
+        closed = closed_construction_body(body, construction_calls)
         from pcc.frontends.cpp.constructors import require_deferred_construction_proof
         require_deferred_construction_proof(symbol, closed)
         symbol.closed_construction_body = symbol.closed_normal_body = closed
@@ -118,6 +141,13 @@ def request_definition(parser, symbol):
     context = getattr(symbol, 'defaulted_definition', None)
     if context is None or parser.unevaluated_depth:
         return
+    collecting = getattr(parser, 'defaulted_construction_dependencies', None)
+    if collecting is not None:
+        if symbol not in collecting:
+            collecting.append(symbol)
+        return
+    for dependency in getattr(context, 'construction_dependencies', ()):
+        request_definition(parser, dependency)
     # The common call owner has already checked selection/access/deletion and
     # all supported effects. Use the session's sole worklist, not a C1 queue.
     parser.instance_registry.request((symbol, ()), symbol, context)

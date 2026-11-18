@@ -159,6 +159,7 @@ class CppParser:
 
     def parse(self, text, filename=""):
         self.scope = Scope()
+        self.variadic_virtual_obligations = None
         self.has_class_result_plans = False
         self.return_type = None
         self.template_function = None
@@ -205,6 +206,8 @@ class CppParser:
         instances = [item for item in instances if item is not None]
         from pcc.frontends.cpp.constructors import unbound_construction_proofs
         unbound_construction_proofs(self)
+        if self.variadic_virtual_obligations is not None:
+            self.variadic_virtual_obligations.finish()
         declarations = self.class_template_declarations + declarations
         if instances:
             # Instances may call declarations appearing anywhere earlier in
@@ -1322,7 +1325,7 @@ class CppParser:
                 raise CppDiagnostic("cpp.virtual-member-template", "a member function template cannot be virtual", name.coord)
             if member_definition is not None and not template_parameters:
                 from pcc.frontends.cpp.virtual_functions import declare_virtual
-                declare_virtual(member_owner, symbol, virtual_specifier, virt_specifiers, pure, name.coord)
+                declare_virtual(member_owner, symbol, virtual_specifier, virt_specifiers, pure, name.coord, parser=self)
         elif namespace_owner is not None:
             from pcc.frontends.cpp.namespace_functions import (
                 declare_function as declare_namespace_function,
@@ -1492,7 +1495,10 @@ class CppParser:
             # Reaching the end of main is a C++ return of zero, not C's general
             # fallthrough behavior. Appending after a return is harmless AST.
             body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", coord), coord))
-        return c_ast.FuncDef(declaration, None, body, coord)
+        function = c_ast.FuncDef(declaration, None, body, coord)
+        if self.variadic_virtual_obligations is not None and symbol.variadic:
+            self.variadic_virtual_obligations.bound(symbol, function)
+        return function
 
     def _block(self, new_scope=True):
         start = self._expect("{")

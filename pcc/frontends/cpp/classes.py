@@ -681,6 +681,11 @@ def member_access(parser, expression, operator, member):
     if member.value == 'operator=' and getattr(owner, 'template_origin', None) is not None:
         raise CppDiagnostic('cpp.unsupported.class-operators',
                             'class-template assignment calls require their own body owner', member.coord)
+    cursor = getattr(parser, 'cursor', None)
+    if (cursor is not None and cursor.peek().value == ":" and cursor.position + 1 < len(cursor.tokens)
+            and cursor.tokens[cursor.position + 1].value == ":"):
+        from pcc.frontends.cpp.qualified_member_calls import call
+        return call(parser, expression, operator, member, owner)
     definition = owner.definition
     # Qualified member lookup must not find an unrelated enclosing declaration.
     symbol = definition.scope.names.get(member.value)
@@ -698,12 +703,6 @@ def member_access(parser, expression, operator, member):
                           else base_subobject(parser, expression, declaring, member.coord))
             dtype = expression.dtype if operator == "." else unqualified(expression.dtype).pointee
             owner, definition, symbol, inherited = declaring, declaring.definition, found, True
-    cursor = getattr(parser, "cursor", None)
-    if (symbol is None and cursor is not None and cursor.peek().value == ":"
-            and cursor.position + 1 < len(cursor.tokens) and cursor.tokens[cursor.position + 1].value == ":"):
-        # x.B::m names m through a nested-name-specifier ([basic.lookup.classref]).
-        raise CppDiagnostic("cpp.unsupported.base-classes",
-                            "qualified class member access (x.C::m) is not implemented", member.coord)
     if symbol is None:
         if member.value == 'operator=':
             raise CppDiagnostic('cpp.unsupported.class-assignment',
