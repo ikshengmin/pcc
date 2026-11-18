@@ -287,8 +287,10 @@ def _parse_mem(text: str) -> _Mem | None:
         disp += _parse_int(term)
     if base is None:
         raise X86EncodeError(f"memory operand lacks a base register: {text!r}")
-    if index is not None and index.low == 4:
-        raise X86EncodeError("rsp/r12 cannot be an x86 SIB index")
+    # SIB 100 means no index only when REX.X is clear. With REX.X=1 it
+    # denotes r12, unlike rsp, and _encode_rm preserves that extension bit.
+    if index is not None and index.low == 4 and not index.high:
+        raise X86EncodeError("rsp cannot be an x86 SIB index")
     return _Mem(width, base=base, index=index, scale=scale, disp=disp)
 
 
@@ -818,6 +820,43 @@ def _encode_binary(mnemonic: str, operands: list, pc: int) -> EncodedInstruction
             pc=pc, legacy=_legacy_width(width), opcode=bytes((opcode,)),
             width=width, reg=src, rm=dst,
         )
+    # Group 1 CMP (extension /7) has a memory/immediate form. Do not
+    # implicitly admit sibling operations with different flag/write effects.
+    if mnemonic == "cmp" and isinstance(dst, _Mem) and isinstance(src, _Imm):
+        width = dst.width
+        if width not in (8, 16, 32, 64):
+            raise X86EncodeError("cmp memory immediate requires an explicit scalar width")
+        full_immediate_width = 1 if width == 8 else 2 if width == 16 else 4
+        value = src.value
+        # A qword source literal can also spell a negative imm32 as its
+        # *64-bit* two's-complement pattern. Do not reinterpret a positive
+        # 32-bit 0xffffffff, truncate values wider than 64, or change a bit.
+        if width == 64 and (1 << 64) - (1 << 31) <= value < (1 << 64):
+            value -= 1 << 64
+        _require_immediate_bits(value, full_immediate_width, owner="cmp",
+                                signed_only=width == 64)
+        # For finite 16/32-bit operands, an unsigned spelling of the same
+        # bit pattern can use the canonical sign-extended imm8 as GNU as does.
+        if width in (16, 32) and value >= (1 << (width - 1)):
+            value -= 1 << width
+        if width == 8:
+            opcode, immediate_width = b"\x80", 1
+        elif -128 <= value <= 127:
+            opcode, immediate_width = b"\x83", 1
+        else:
+            opcode, immediate_width = b"\x81", 2 if width == 16 else 4
+        _require_immediate_bits(value, immediate_width, owner="cmp",
+                                signed_only=width == 64)
+        base = _modrm_instruction(
+            pc=pc, legacy=_legacy_width(width), opcode=opcode,
+            width=width, reg=_Reg("group", 7, width), rm=dst,
+        )
+        tail = _int_bytes(value, immediate_width)
+        # RIP is the end of the entire instruction, including the immediate.
+        relocations = tuple(EncodedRelocation(rel.offset, rel.symbol, rel.type,
+                                            rel.addend - immediate_width)
+                            for rel in base.relocations)
+        return EncodedInstruction(base.code + tail, relocations)
     if isinstance(dst, _Reg) and dst.kind == "gp" and isinstance(src, _Imm):
         width = dst.width
         group_reg = _Reg("group", _BINARY_IMM_GROUP[mnemonic], width)
