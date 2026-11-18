@@ -359,6 +359,7 @@ def touch_nested(arena: Arena | None) -> int:
 
 def test_transitive_inherited_raw_arena_control(tmp_path) -> None:
     from pcc.frontends.python.pipeline import compile_python_multi
+    from pcc.frontends.python.pipeline_targets import host_target_triple
 
     base = tmp_path / "base.py"
     records = tmp_path / "records.py"
@@ -451,7 +452,9 @@ print(touch(Seed()))
         ir_scaffold_mode="on",
         backend="self",
         recursive_stdlib=False,
-        target_triple="arm64-apple-darwin23.6.0",
+        # This case executes its output; use the runner's target and runtime.
+        # The static field/ABI cases above continue to cross-check Darwin.
+        target_triple=host_target_triple(),
     )
     result = subprocess.run(
         [str(output)],
