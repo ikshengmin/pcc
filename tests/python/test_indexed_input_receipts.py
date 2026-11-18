@@ -111,11 +111,10 @@ def _type_capture_fixture(value):
 
     # Specification: docs/project-intent.md, bounded owned transport must
     # preserve the ordinary serialized values and fail closed on overflow.
-    # Outside the type payload: module 4096, triple 34, global syntax 20,
-    # the two False flags 33 each,
-    # name 35, type cold-cell allowance 32, initializer 35, TLS 34,
-    # alignment 33, IR prefix 34 and empty trailing-attribute tuple 32.
-    return ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None), 4451
+    # Legacy conservative walk, outside the type payload: module 4096,
+    # triple 10, global syntax 20, flags 33 each, name 11, raw-type reserve 8,
+    # initializer 11, TLS 10, alignment 9, IR prefix 10, empty attributes 32.
+    return ParsedModule("", (GlobalDef("g", value, "0", False, False),), (), None), 4283
 
 
 @pytest.mark.parametrize("number", (
@@ -1065,7 +1064,7 @@ def test_capture_string_budget_matches_default_json_bytes(text):
     # Only the string component is exact. Retain the module and cold-cell
     # conservative charges rather than presenting the sum as a wire size.
     parsed = ParsedModule(text, (), (), None)
-    expected = 4096 + 32 + len(json.dumps(text).encode("utf-8"))
+    expected = 4096 + 8 + len(json.dumps(text).encode("utf-8"))
     codec._bounded_capture_budget(parsed, expected)
     state = {}
     with pytest.raises(ValueError, match="diagnostic exceeds"):
@@ -1106,7 +1105,7 @@ def test_capture_unicode_scan_stops_at_remaining_budget(monkeypatch):
 
     text = "\u0800" * 2048
     parsed = ParsedModule(text, (), (), None)
-    minimum = 4096 + 32 + len(text) + 2
+    minimum = 4096 + 8 + len(text) + 2
     inspected = []
 
     def observed_ord(character):
@@ -1133,7 +1132,7 @@ def test_capture_printable_ascii_uses_no_per_character_dispatch(monkeypatch):
     for count in (4096, 4 * 4096, 16 * 4096):
         text = 'a"\\z' * count
         parsed = ParsedModule(text, (), (), None)
-        expected = 4096 + 32 + len(json.dumps(text).encode("utf-8"))
+        expected = 4096 + 8 + len(json.dumps(text).encode("utf-8"))
         codec._bounded_capture_budget(parsed, expected)
         with pytest.raises(ValueError, match="diagnostic exceeds"):
             codec._bounded_capture_budget(parsed, expected - 1)
@@ -1259,7 +1258,7 @@ def test_capture_global_budget_counts_all_nine_fields(
     assert len(json.dumps([row, row])) == 2 * len(json.dumps(row)) + 4
     # The raw int64 TypeDesc JSON is 34 bytes. All cold-cell allowances
     # remain; the two flag cells charge 33 for False and 34 for True.
-    expected = 4451 + 34 + int(is_constant) + int(is_internal)
+    expected = 4283 + 34 + int(is_constant) + int(is_internal)
     codec._bounded_capture_budget(parsed, expected)
     state = {}
     with pytest.raises(ValueError, match="diagnostic exceeds"):
@@ -1305,7 +1304,11 @@ def test_capture_many_globals_preserves_wire_with_original_limit(tmp_path):
 def test_capture_many_globals_still_rejects_before_wire(tmp_path, monkeypatch):
     from pcc.backend import self_backend_indexed_codec as codec
 
-    parsed = _many_global_capture_module(8192)
+    # The old 8192-row fixture fits the genuine wire cap. Prove this new
+    # fixture exceeds it even before accounting for header keys and framing.
+    parsed = _many_global_capture_module(32768)
+    smallest = codec._global_to_wire(parsed.globals_[0])
+    assert len(parsed.globals_) * len(json.dumps(smallest)) > receipts.LIMIT
 
     def forbidden(*args, **kwargs):
         raise AssertionError("oversize globals materialized")

@@ -322,6 +322,31 @@ def _write_host_arena(stream, arena: CompilerIntArena) -> None:
         stream.write(b"".join(chunks))
 
 
+def _charge_json_string(value, charge):
+    # Reserve minimum bytes before the added escape inspection.
+    # Each such scan is bounded by the remaining capture budget,
+    # without materializing JSON or an encoded copy.
+    charge(len(value) + 2)
+    if value.isascii() and value.isprintable():
+        # Ordinary names/IR text need only two allocation-free counts.
+        charge(value.count('"') + value.count("\\"))
+    else:
+        for character in value:
+            point = ord(character)
+            if (
+                point == 34 or point == 92 or point == 8
+                or point == 12 or point == 10 or point == 13
+                or point == 9
+            ):
+                charge(1)
+            elif point < 0x20 or 0x7F <= point <= 0xFFFF:
+                # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
+                charge(5)
+            elif point > 0xFFFF:
+                # A supplementary scalar is a JSON surrogate pair.
+                charge(11)
+
+
 def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=None) -> None:
     """Reject oversized diagnostics before constructing wire lists or buffers.
 
@@ -343,28 +368,7 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
             raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
 
     def string(value):
-        # Reserve minimum bytes before the added escape inspection.
-        # Each such scan is bounded by the remaining capture budget,
-        # without materializing JSON or an encoded copy.
-        charge(len(value) + 2)
-        if value.isascii() and value.isprintable():
-            # Ordinary names/IR text need only two allocation-free counts.
-            charge(value.count('"') + value.count("\\"))
-        else:
-            for character in value:
-                point = ord(character)
-                if (
-                    point == 34 or point == 92 or point == 8
-                    or point == 12 or point == 10 or point == 13
-                    or point == 9
-                ):
-                    charge(1)
-                elif point < 0x20 or 0x7F <= point <= 0xFFFF:
-                    # Includes DEL and lone UTF-16 surrogates: \\uXXXX.
-                    charge(5)
-                elif point > 0xFFFF:
-                    # A supplementary scalar is a JSON surrogate pair.
-                    charge(11)
+        _charge_json_string(value, charge)
 
     def type_integer(value):
         # bool is an int subclass, but JSON uses true/false rather than 1/0.
@@ -523,6 +527,54 @@ def _bounded_capture_budget(module: ParsedModule, max_bytes: int, diagnostic=Non
             cold(types)
 
 
+def _plain_budget_diagnostic(diagnostic):
+    if diagnostic is None:
+        return True
+    # The producer uses seven scalar state fields. Do not scan an unbounded
+    # external mapping, compare custom keys, or delay releasing an object
+    # with a destructor when assigning the first observed byte count.
+    if type(diagnostic) is not dict or len(diagnostic) > 32:
+        return False
+    for key in diagnostic:
+        if type(key) is not str:
+            return False
+    return type(diagnostic.get("observed_bytes", -1)) is int
+
+
+def _check_capture_budget(module, max_bytes, diagnostic):
+    # Keep the ordinary fast acceptance and preserve the original walk's
+    # callback order and errors. Refine *only* its own size-limit rejection,
+    # never an exception from a user-defined value (even a matching ValueError).
+    if type(max_bytes) is not int or not _plain_budget_diagnostic(diagnostic):
+        # Additional comparisons or diagnostic writes could invoke user code.
+        _bounded_capture_budget(module, max_bytes, diagnostic)
+        return
+    rejection = {}
+    try:
+        _bounded_capture_budget(module, max_bytes, rejection)
+        return
+    except ValueError:
+        if "observed_bytes" not in rejection:
+            raise
+
+    from .self_backend_indexed_budget import count_plain_wire
+
+    try:
+        if count_plain_wire(
+            module, max_bytes, _ARENA_FIELDS, _MAGIC,
+            _SCHEMA, _ODR_SCHEMA, _charge_json_string,
+        ):
+            return
+    except (OverflowError, RecursionError):
+        # Proven oversize, or too deeply nested for this optional refinement.
+        pass
+    # Retain the original first-rejection observation (a conservative prefix,
+    # not the final wire size), including the 4096-byte initial reserve.
+    if diagnostic is not None:
+        diagnostic["observed_bytes"] = rejection["observed_bytes"]
+    raise BackendUnavailable("indexed module diagnostic exceeds the size limit")
+
+
 def encode_indexed_module_file(
     path: str, module: ParsedModule, *, max_bytes: int = 0, diagnostic=None,
 ) -> None:
@@ -532,7 +584,7 @@ def encode_indexed_module_file(
         diagnostic["stage"] = "codec-preflight"
         diagnostic["remaining_bytes"] = max_bytes
     if max_bytes:
-        _bounded_capture_budget(module, max_bytes, diagnostic)
+        _check_capture_budget(module, max_bytes, diagnostic)
     if diagnostic is not None:
         diagnostic["stage"] = "codec-shape"
     functions: list[dict] = []
