@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ast
 import os
 import re
 import subprocess
@@ -77,6 +78,71 @@ TLS_STORAGE_SYMBOLS = {
     "pcc_gc_frame_node_pool_heads",
     "pcc_gc_frame_node_pool_total",
 }
+# These words belong to other GC providers, not to the frame registry. Keep
+# the real storage owner, TLS kind and initializer independent of the ABI list.
+OTHER_GC_TLS_STORAGE = {
+    "pcc_gc_scheduler_root_tls_cache": (
+        "freestanding_gc_root_registry", "define_thread_local_ptr_null", (),
+    ),
+    "pcc_gc_scheduler_root_tls_cache_count": (
+        "freestanding_gc_root_registry", "define_thread_local_i32", (0,),
+    ),
+    "pcc_gc_tls_live_bytes_delta": (
+        "freestanding_gc_object_nodes", "define_thread_local_i32", (0,),
+    ),
+}
+
+
+def _assert_other_gc_tls_storage(sources):
+    actual = {name: [] for name in OTHER_GC_TLS_STORAGE}
+    for provider, source in sources:
+        # The runtime DSL requires a literal storage name at module scope.
+        if "define_" not in source:
+            continue
+        body = ast.parse(source).body
+        # Match the frontend's from-pcc.unsafe binding, including as-names.
+        # An unrelated Python function with the same spelling is not storage.
+        definitions = {
+            alias.asname or alias.name: alias.name
+            for stmt in body if isinstance(stmt, ast.ImportFrom)
+            and stmt.level == 0 and stmt.module == "pcc.unsafe"
+            for alias in stmt.names if alias.name.startswith("define_")
+        }
+        for stmt in body:
+            if not isinstance(stmt, ast.Expr) or not isinstance(stmt.value, ast.Call):
+                continue
+            call = stmt.value
+            if (not isinstance(call.func, ast.Name)
+                    or call.func.id not in definitions or not call.args
+                    or not isinstance(call.args[0], ast.Constant)):
+                continue
+            name = call.args[0].value
+            if name in actual:
+                args = tuple(ast.literal_eval(arg) for arg in call.args[1:])
+                assert not call.keywords
+                actual[name].append((provider, definitions[call.func.id], args))
+    assert actual == {name: [definition] for name, definition in OTHER_GC_TLS_STORAGE.items()}
+
+
+def _assert_thread_exit_drains(unregister):
+    functions = [stmt for stmt in ast.parse(unregister).body
+                 if isinstance(stmt, ast.FunctionDef) and stmt.name == "pcc_gc_thread_unregister_buffers"]
+    assert len(functions) == 1
+    required = ("pcc_gc_frame_node_tls_pool_drain", "pcc_gc_scheduler_root_tls_cache_drain", "_live_bytes_flush")
+    # Keep all three in the entry's unconditional call block. Comments,
+    # conditionals, calls after a return and unevaluated expressions do not run.
+    entry = []
+    for stmt in functions[0].body:
+        if not (isinstance(stmt, ast.Expr) and isinstance(stmt.value, ast.Call)
+                and isinstance(stmt.value.func, ast.Name)):
+            break
+        if not stmt.value.args and not stmt.value.keywords:
+            entry.append(stmt.value.func.id)
+    all_calls = [node.func.id for node in ast.walk(functions[0]) if isinstance(node, ast.Call)
+                 and isinstance(node.func, ast.Name)]
+    assert all(entry.count(name) == all_calls.count(name) == 1 for name in required)
+
+
 RAW_ONLY_CROSS_OBJECT_SYMBOLS = {
     "pcc_gc_index_slot_size",
     "pcc_gc_cycle_requested_store_release",
@@ -203,7 +269,7 @@ def test_frame_registry_has_one_strict_source_owner():
         assert symbol in internal_header
     # Collector identity, pressure and deferred work have independent TLS owners.
     # Keep the complete current inventory, not the earlier pre-deferred-sweep set.
-    assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS - TLS_STORAGE_SYMBOLS == {
+    assert FREESTANDING_GC_THREAD_LOCAL_GLOBALS == TLS_STORAGE_SYMBOLS | set(OTHER_GC_TLS_STORAGE) | {
         "pcc_gc_cms_worker_current", "pcc_gc_pressure_image_depth", "pcc_gc_pressure_owner",
         "pcc_gc_trace_stack_owner", "pcc_gc_gray_local_batch",
         # The allocation staging ring of freestanding_gc_alloc_stage.
@@ -216,6 +282,10 @@ def test_frame_registry_has_one_strict_source_owner():
         # A thread's unpublished allocation debt and count (pcc_gc_cms_note_alloc).
         "pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes",
     }
+    _assert_other_gc_tls_storage(
+        (path.stem, path.read_text(encoding="utf-8"))
+        for path in (RUNTIME_DIR / "py").glob("*.py")
+    )
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_heads")' in strict
     assert 'define_thread_local_ptr_null("pcc_gc_frame_node_pool_counts")' in strict
     assert 'define_thread_local_i32("pcc_gc_frame_node_pool_total", 0)' in strict
@@ -225,9 +295,56 @@ def test_frame_registry_has_one_strict_source_owner():
         '@c_abi_export("pcc_gc_thread_unregister_buffers")', 1
     )[1].split("\n@c_abi_export", 1)[0]
     assert "pcc_gc_frame_node_tls_pool_drain()" in unregister
+    _assert_thread_exit_drains(unregister)
     assert "freestanding_gc_frame_registry" in makefile
     for symbol in PUBLIC_SYMBOLS:
         assert f'"{symbol}"' in wrappers
+
+
+@pytest.mark.parametrize("change", ["missing", "duplicate", "aliased-duplicate", "split-literal", "wrong-owner", "not-tls", "wrong-width", "not-zero"])
+def test_other_gc_tls_storage_rejects_wrong_definitions(change):
+    rows = [
+        ("freestanding_gc_root_registry", 'define_thread_local_ptr_null("pcc_gc_scheduler_root_tls_cache")'),
+        ("freestanding_gc_root_registry", 'define_thread_local_i32("pcc_gc_scheduler_root_tls_cache_count", 0)'),
+        ("freestanding_gc_object_nodes", 'define_thread_local_i32("pcc_gc_tls_live_bytes_delta", 0)'),
+    ]
+    imports = ("from pcc.unsafe import define_thread_local_ptr_null, define_thread_local_i32, "
+               "define_thread_local_i64, define_global_i32\n")
+    rows = [(owner, imports + body) for owner, body in rows]
+    _assert_other_gc_tls_storage(rows)
+    owner, source = rows.pop()
+    if change == "split-literal":
+        rows.extend(((owner, source), ("another_provider", imports +
+            'define_thread_local_i32("pcc_gc_tls_" "live_bytes_delta", 0)')))
+    elif change == "aliased-duplicate":
+        rows.extend(((owner, source), ("another_provider",
+            'from pcc.unsafe import define_thread_local_i32 as storage\n'
+            'storage("pcc_gc_tls_live_bytes_delta", 0)')))
+    elif change == "duplicate":
+        rows.extend(((owner, source), ("another_provider", source)))
+    elif change == "wrong-owner":
+        rows.append(("freestanding_gc_frame_registry", source))
+    elif change == "not-tls":
+        rows.append((owner, source.replace("define_thread_local_", "define_global_")))
+    elif change == "wrong-width":
+        rows.append((owner, source.replace("_i32", "_i64")))
+    elif change == "not-zero":
+        rows.append((owner, source.replace(", 0)", ", 1)")))
+    with pytest.raises(AssertionError):
+        _assert_other_gc_tls_storage(rows)
+
+
+@pytest.mark.parametrize("change", [
+    "# _live_bytes_flush()", "if sometimes: _live_bytes_flush()", "return; _live_bytes_flush()",
+    "_live_bytes_flush(); _live_bytes_flush()", "_live_bytes_flush(0)",
+])
+def test_thread_exit_drain_contract_rejects_ineffective_cleanup(change):
+    prefix = ("def pcc_gc_thread_unregister_buffers():\n"
+              "    pcc_gc_frame_node_tls_pool_drain()\n"
+              "    pcc_gc_scheduler_root_tls_cache_drain()\n    ")
+    _assert_thread_exit_drains(prefix + "_live_bytes_flush()\n")
+    with pytest.raises(AssertionError):
+        _assert_thread_exit_drains(prefix + change + "\n")
 
 
 def test_frame_registry_allocator_and_release_tails_are_outside_graph_lock():
