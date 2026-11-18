@@ -126,17 +126,19 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     functions = parser.parse()
     resolution = None
     records, enums, consts = parser.records, parser.enums, parser.consts + parser.statics
+    implementations, traits = parser.implementations, parser.traits
     if parser.modules or parser.crate_aliases or parser.uses:
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
         consts = resolution.consts + resolution.statics
+        implementations, traits = resolution.implementations, resolution.traits
     if rustc_check is None and parser.crate_lint_attributes:
         from .missing_docs import check_missing_docs
         from .module_resolution import inline_crate
         check_missing_docs(resolution.crate if resolution is not None else inline_crate(parser, functions),
                            parser.crate_lint_attributes, test=cfg is not None and cfg.test)
-    parsed = _ParsedCrate(functions, records, enums, consts, parser.implementations, parser.traits,
+    parsed = _ParsedCrate(functions, records, enums, consts, implementations, traits,
                           resolution, parser.crate_policy, tuple(parser.macro_expansions),
                           parser.crate_lint_attributes, parser.crate_cfg_attributes, parser.conditional_items)
     return _check_and_lower(parsed, rustc_check=rustc_check, source=source, target=target,

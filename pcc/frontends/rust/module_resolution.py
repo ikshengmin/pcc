@@ -268,9 +268,16 @@ class ModuleResolution(ModuleNamespaces):
         # Every module's impls and traits (each resolved in its own module).
         self.implementations, self.traits = [], []
         for module in self.modules.values():
-            if module.body.traits or module.body.implementations:
-                item = (module.body.traits or module.body.implementations)[0]
-                raise item.token.error('module-scoped trait and inherent method resolution is not implemented')
+            trait_impls = [item for item in module.body.implementations if item.trait is not None]
+            if module.body.traits or trait_impls:
+                item = (module.body.traits or trait_impls)[0]
+                raise item.token.error('module-scoped traits and trait implementations are not implemented')
+            resolved = {id(implementation): self.inherent_impl(implementation, module.identity)
+                        for implementation in module.body.implementations}
+            for function in module.body.functions:
+                if function.implementation is not None:
+                    function.implementation = resolved[id(function.implementation)]
+                    self.functions.append(function)
             for declaration in module.items.values():
                 item = declaration.syntax
                 if isinstance(item, (Module, CrateSelfAlias)):
@@ -290,6 +297,27 @@ class ModuleResolution(ModuleNamespaces):
                     if item.abi != 'Rust' or item.no_mangle:
                         raise item.token.error('foreign/export ABI in a resolved module crate is not implemented')
                     self.functions.append(item)
+
+    def inherent_impl(self, implementation, module):
+        """An inherent impl's owner names a local struct or enum as seen from
+        the impl's module (items/implementations.html#inherent-implementations);
+        its canonical identity keys the methods for every module."""
+        from dataclasses import replace
+        owner = implementation.owner
+        name = owner.name if isinstance(owner, TypeApplication) else owner
+        declaration = self.resolve(name, 'type', module, implementation.token)
+        if not isinstance(declaration.syntax, (Record, Enumeration)):
+            raise implementation.token.error('inherent impl requires a local nominal struct or enum')
+        canonical = declaration.identity.binding_key
+        owner = replace(owner, name=canonical) if isinstance(owner, TypeApplication) else canonical
+        implementation = replace(implementation, owner=owner, module=module)
+        self.implementations.append(implementation)
+        return implementation
+
+    def method_visible(self, function, requester):
+        """An impl item's visibility is scoped from the impl's module."""
+        scope = self._scope(function.public, function.implementation.module)
+        return self._within(requester, scope)
 
     def type_name(self, path, requester, token):
         if path in self.by_key:

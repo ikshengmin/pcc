@@ -169,10 +169,13 @@ def check_missing_docs(crate, attributes, *, test=False):
                 continue
             owner = implementation.owner
             name = owner.name if hasattr(owner, 'name') else owner
-            try:
-                declaration = namespaces.resolve(name, 'type', module_id, implementation.token)
-            except RustError:
-                continue  # an unresolved owner is reported by semantic checking
+            if name in namespaces.by_key:
+                declaration = namespaces.by_key[name]  # already resolved by ModuleResolution
+            else:
+                try:
+                    declaration = namespaces.resolve(name, 'type', module_id, implementation.token)
+                except RustError:
+                    continue  # an unresolved owner is reported by semantic checking
             if exported.get(id(declaration.syntax), True) is False and not hidden(function.documentation) \
                     and not has_doc(function.documentation):
                 missing(function.token, function_kind(function))

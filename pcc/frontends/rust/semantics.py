@@ -226,6 +226,16 @@ class Checker:
         from .standard_markers import StandardMarkers
         self.standard_markers = StandardMarkers(self, crate_policy)
 
+    @staticmethod
+    def function_module(fn):
+        """The module whose scope fn's signature and body resolve in, if any:
+        its own item module, or its impl's."""
+        if fn.item_identity is not None:
+            return fn.item_identity.module
+        if fn.implementation is not None:
+            return fn.implementation.module
+        return None
+
     def source_type_access(self, ty, token):
         # Privacy of source-written types/expressions is checked in the unused
         # abstract body before any concrete instance is scheduled. A caller's
@@ -255,6 +265,8 @@ class Checker:
         if not isinstance(path, str) or "::" not in path:
             return None
         owner, variant = path.rsplit("::", 1)
+        if all(part in {"crate", "self", "super"} for part in owner.split("::")):
+            return None  # `super::S { .. }`: a module path, never an enum
         if owner == "Self":
             resolved = self.generics.enum_constructor_type("Self", token)
             enum = self.generics.definitions.get(resolved.name if isinstance(resolved, TypeApplication) else resolved)
@@ -364,6 +376,8 @@ class Checker:
 
     def constant_named(self, name, token):
         """The const item a bare value name denotes in the current module."""
+        if name == "self":
+            return None  # the receiver keyword, never an item path
         if self.module_resolution is not None:
             return self.module_resolution.constant(name, self.current_module, token)
         return self.const_names.get(name)
@@ -745,8 +759,9 @@ class Checker:
             self.evaluate_const(const, const.token)
         declarations = tuple(self.functions)
         for fn in declarations:
-            if fn.item_identity is not None:
-                self.current_module = fn.item_identity.module
+            module = self.function_module(fn)
+            if module is not None:
+                self.current_module = module
             self.type_scope = self.function_generics.prepare(fn)
             self.abstract_function = bool(fn.type_parameters)
             # Written types keep the lifetimes normalization erases (regions.py).
@@ -818,8 +833,9 @@ class Checker:
         previous_function, self.current_function = self.current_function, fn
         previous_module, previous_replay = self.current_module, self.replaying_instance
         self.replaying_instance = fn.instance_arguments is not None
-        if fn.item_identity is not None:
-            self.current_module = fn.item_identity.module
+        module = self.function_module(fn)
+        if module is not None:
+            self.current_module = module
         previous_calls, self.inferred_calls = self.inferred_calls, []
         self.type_scope, self.abstract_function = type_scope, abstract
         try:

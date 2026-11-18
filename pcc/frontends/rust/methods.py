@@ -24,6 +24,8 @@ class InherentMethods:
         for implementation in self.implementations:
             if implementation.trait is not None:
                 continue
+            if implementation.module is not None:
+                self.checker.current_module = implementation.module
             owner = implementation.owner
             name = owner.name if isinstance(owner, TypeApplication) else owner
             definition = self.checker.generics.definitions.get(name)
@@ -197,6 +199,11 @@ class InherentMethods:
             if unavailable:
                 raise token.error('unsatisfied inherent impl bounds (rustc E0599)')
             return None
+        resolution = self.checker.module_resolution
+        if (resolution is not None and function.implementation.trait is None
+                and not resolution.method_visible(function, self.checker.current_module)):
+            kind = 'method' if function.receiver else 'associated function'
+            raise token.error(f"{kind} `{function.token.text}` is private (rustc E0624)")
         # Resolution is complete. Do not retry another candidate because this
         # selected receiver fails mutability, move or lifetime requirements.
         if receiver and through_reference and not isinstance(function.params[0][1], SharedReference):

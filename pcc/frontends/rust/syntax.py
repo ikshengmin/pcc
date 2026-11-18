@@ -212,6 +212,9 @@ class Implementation:
     associated_types: tuple[AssociatedType, ...] = ()
     # Erased after the matching actual rustc check (items/implementations.html#generic-implementations).
     lifetime_parameters: tuple[Token, ...] = ()
+    # In a resolved module crate: the ModuleId the impl is declared in, whose
+    # scope its owner, signatures and bodies resolve in.
+    module: object = None
 
     @property
     def effective_parameter_bounds(self):
