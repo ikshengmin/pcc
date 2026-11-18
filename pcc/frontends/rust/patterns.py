@@ -6,7 +6,7 @@ a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, InferredType, bounds, resolve, unify
 from .syntax import Enumeration
-from .types import INTEGER_SUFFIXES, RUST_U8, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import INTEGER_SUFFIXES, RUST_U8, STATIC_STR, is_borrowed_str, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
@@ -87,6 +87,13 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
             raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
         for child in pattern.children:
             check_pattern(checker, child, ty, allow_inferred=allow_inferred)
+    elif pattern.kind == "string_literal":
+        # The literal is a shared str value, not a reference pattern which
+        # borrows/dereferences the scrutinee. Its lifetime need not be static.
+        scrutinee = _partial(ty)
+        if scrutinee != STATIC_STR and not is_borrowed_str(scrutinee):
+            raise pattern.token.error("string literal patterns require a shared str slice; other "
+                                      "types and implicit dereference patterns are not implemented")
     elif isinstance(_partial(ty), SharedReference):
         # A constructor/literal pattern against a reference dereferences it
         # with default binding modes (by-reference bindings).
@@ -231,6 +238,8 @@ def validate_pattern_scrutinee(checker, ty, token):
         pending.extend(children(item))
 
     def admitted(ty):
+        if ty == STATIC_STR or is_borrowed_str(ty):
+            return True
         if isinstance(ty, TypeParameter):
             # Unknown T admits only wildcard/binding patterns; type checking
             # already rejected concrete constructors/literals against T.
@@ -288,7 +297,12 @@ def validate_match(checker, expr):
         if any(all(p.kind in {"wildcard", "binding"} for p in row) for row in matrix):
             return True
         ty = types[0]
-        if isinstance(ty, SharedReference):
+        if ty == STATIC_STR or is_borrowed_str(ty):
+            # There are always more possible str values than this bounded
+            # matrix has literal rows. Rows covering a fresh OTHER value
+            # cover every literal as well (no literal can match OTHER).
+            constructors = [("other_str", None, ())]
+        elif isinstance(ty, SharedReference):
             constructors = [("reference", None, (ty.referent,))]
         elif isinstance(ty, TupleType):
             constructors = [("tuple", None, ty.elements)]

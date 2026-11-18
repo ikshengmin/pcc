@@ -2510,7 +2510,7 @@ class Parser:
         elif token.text == "ref":
             raise token.error("ref binding patterns are not implemented")
         elif token.kind == "string":
-            raise token.error("string literal patterns are not implemented")
+            result = Pattern("string_literal", token, token.literal_value)
         elif token.text in {"&", "&&"}:
             # Rust Reference patterns.html#reference-patterns:
             # `(& | &&) mut? PatternWithoutRange`. `&&` is two reference

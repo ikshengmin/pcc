@@ -65,7 +65,7 @@ def test_former_runtime_string_rows_now_compile(source):
     # Operations that need core's str/PartialEq model.
     ('pub fn g() -> bool { "a" == "a" }', "operator '==' does not accept &'static str"),
     ('pub fn g() -> u64 { "abc" as u64 }', 'supported casts'),
-    ('pub fn g() -> u64 { match "a" { "a" => 1, _ => 2 } }', 'string literal patterns are not implemented'),
+    ('pub fn g() -> bool { "a" != "b" }', "operator '!=' does not accept &'static str"),
 ])
 def test_other_references_and_str_operations_stay_explicit(source, message):
     with pytest.raises(RustError, match=message):

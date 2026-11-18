@@ -798,6 +798,45 @@ class Lowerer:
         index = list(enum.payloads).index(pattern.variant) + 1
         return self.builder.extract_value(value, index)
 
+    def str_pattern_test(self, text, value):
+        """Match a shared str by byte content, independent of its data address."""
+        length = self.builder.extract_value(value, 1)
+        size = len(text.encode("utf-8"))
+        length_matches = self.builder.icmp_unsigned("==", length, ir.Constant(length.type, size))
+        if size == 0:
+            return length_matches  # no pointer load, even for non-identical empty slices
+
+        # A fixed-size loop instead of unrolling unbounded literal data into
+        # code. Both buffers are read with i8 loads only after equal lengths;
+        # no terminator or extra readable byte is required.
+        zero = ir.Constant(length.type, 0)
+        one = ir.Constant(length.type, 1)
+        false = ir.Constant(ir.IntType(1), 0)
+        true = ir.Constant(ir.IntType(1), 1)
+        start = self.builder.block
+        compare = self.function.append_basic_block("str.match.byte")
+        advance = self.function.append_basic_block("str.match.next")
+        done = self.function.append_basic_block("str.match.end")
+        actual = self.builder.extract_value(value, 0)
+        wanted = self.builder.extract_value(self.static_str(text), 0)
+        self.builder.cbranch(length_matches, compare, done)
+        self.builder.position_at_end(compare)
+        index = self.builder.phi(length.type)
+        index.add_incoming(zero, start)
+        lhs = self.builder.load(self.builder.gep(actual, [index]))
+        rhs = self.builder.load(self.builder.gep(wanted, [index]))
+        self.builder.cbranch(self.builder.icmp_unsigned("==", lhs, rhs), advance, done)
+        self.builder.position_at_end(advance)
+        successor = self.builder.add(index, one)
+        self.builder.cbranch(self.builder.icmp_unsigned("==", successor, length), done, compare)
+        index.add_incoming(successor, advance)
+        self.builder.position_at_end(done)
+        matched = self.builder.phi(ir.IntType(1))
+        matched.add_incoming(false, start)
+        matched.add_incoming(false, compare)
+        matched.add_incoming(true, advance)
+        return matched
+
     def pattern_test(self, pattern, value):
         true = ir.Constant(ir.IntType(1), 1)
         if pattern.kind in {"wildcard", "unit", "binding"}:
@@ -807,6 +846,8 @@ class Lowerer:
         if pattern.kind == "reference":
             # `&p` tests p against the referent the matched pointer addresses.
             return self.pattern_test(pattern.children[0], self.referent(pattern, value))
+        if pattern.kind == "string_literal":
+            return self.str_pattern_test(pattern.value, value)
         if pattern.kind == "literal":
             return self.builder.icmp_unsigned("==", value, ir.Constant(self.type(pattern.ty), int(pattern.value)))
         if pattern.kind in {"variant", "payload"}:

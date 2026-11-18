@@ -2337,7 +2337,7 @@
         "rust.ref.8.2.16",
         "rust.ref.9"
       ],
-      "scope": "Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Single-evaluation match, admitted integer literals, wildcard and finite constructor matrices; no guards, borrow patterns, ranges or full match ergonomics. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance.",
+      "scope": "Qualification missing, not implementation missing: this mechanism has source-bound implementation but no complete accepted evidence set for this exact ledger feature. README preserves the separate axes and source proofs. Single-evaluation match, admitted integer literals, wildcard and finite constructor matrices; shared str slice literal patterns compare byte content and require coverage of all other string values; no guards, borrow patterns, ranges or full match ergonomics. Code is present, but no feature-specific complete runtime raw-reference qualification triplet is migrated for this row; historical tests do not automatically imply schema2 acceptance.",
       "tests": [
         "tests/rust/test_rust_patterns.py::test_match_joins_moves_on_every_live_edge"
       ],

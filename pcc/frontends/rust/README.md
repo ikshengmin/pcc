@@ -11,8 +11,13 @@ coercions are not implemented. Function inputs/results use the same checked life
 rules as other shared references. `.len()` counts bytes including embedded
 NULs, and `.is_empty()` inspects the same byte count. User types and type
 parameters called `str` keep their lexical identity. Mutable string views,
-unsized by-value access, content comparison, indexing/slicing, String/Deref
+unsized by-value access, the general equality operators, indexing/slicing, String/Deref
 coercions and an external C string ABI are outside this implementation.
+A string literal in a pattern, including a string-only alternative, compares
+the UTF-8 bytes of a static or shared string slice. It tests length before any
+buffer read and never treats NUL as a terminator. A bounded list of literal
+arms always needs a default covering the remaining values; a guarded default
+can fall through. This is not general dereference matching or the std I/O ABI.
 
 
 `compile_rust(source, experimental_rustc_checked=True, overflow_checks=False)`

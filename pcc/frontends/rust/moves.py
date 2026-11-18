@@ -183,7 +183,7 @@ def guard_paths(checker, pattern, path, bound, tested):
         return
     if kind in {"wildcard", "unit"}:
         return
-    if kind == "literal":
+    if kind in {"literal", "string_literal"}:
         tested.append(path)
         return
     if kind in {"variant", "payload"}:
@@ -674,7 +674,7 @@ class MoveChecker:
             return
         if kind in {"wildcard", "unit"}:
             return
-        if kind == "literal":
+        if kind in {"literal", "string_literal"}:
             if not bind and place is not None:
                 self.access(*place, pattern.ty, pattern.token, state, target=target)
             return
@@ -910,6 +910,15 @@ class MoveChecker:
 
             scrutinee = children[0]
             place = self.checker.place(scrutinee)
+            # Wildcards do not test or bind any part of a string. For a
+            # simple local (no place projections or dereferences), if EVERY
+            # arm is exactly a wildcard, a guard may assign that local: no
+            # later arm inspects its captured descriptor. Other match shapes
+            # keep their existing shallow loans, including string literals.
+            from .types import STATIC_STR, is_borrowed_str
+            uninspected_string = (scrutinee.kind == 'name' and place is not None and not place[1]
+                                  and (scrutinee.ty == STATIC_STR or is_borrowed_str(scrutinee.ty))
+                                  and all(p.kind == 'wildcard' for p in expr.value))
             target = self.loan_target(scrutinee) if place is not None else None
             after = state if place is not None else self.expression(scrutinee, state)
             if after is None:
@@ -929,7 +938,7 @@ class MoveChecker:
                     for binding in pattern_bindings(pattern):
                         self.declare(inspected, binding)
                     self.hold_pattern(inspected, pattern, held)
-                    self.guards.append(self.guard_scope(pattern, place))
+                    self.guards.append(self.guard_scope(pattern, None if uninspected_string else place))
                     try:
                         selected = self.expression(guard, inspected)
                     finally:
