@@ -11,9 +11,11 @@ with `rustc --print cfg` and each predicate's selection with rustc's own.
 """
 import json
 import platform
+import re
 import shutil
 import subprocess
 import sys
+from dataclasses import replace
 
 import pytest
 
@@ -22,6 +24,7 @@ from pcc.frontends.rust.cargo_config import cargo_cfg_options, profile_options, 
 from pcc.frontends.rust.configuration import GATED_CFG, TARGET_CFG, OwnedRustConfiguration
 from pcc.frontends.rust.crate_context import parse_crate_sources
 from pcc.frontends.rust.syntax import Parser
+from tests.rust.str_execution import HOST_TARGET, UNAVAILABLE, run_owned_u64_function
 from tests.rust.test_rust_ffi import record_run
 from tests.rust.test_rust_targets import PROGRAMS as PROGRAM_DIRECTORY
 
@@ -48,18 +51,41 @@ def rustc_flags(options):
 
 # --- recorded target data ---------------------------------------------------
 
+def reference_cfg_profile(version_info):
+    # Choose a prediction from the release alone, before --print cfg; never
+    # discover the expected keys/values by looking at the result being tested.
+    releases = [line.removeprefix('release: ') for line in version_info.splitlines()
+                if line.startswith('release: ')]
+    assert len(releases) == 1, version_info
+    version = re.fullmatch(r'1\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)', releases[0])
+    assert version and int(version[1]) >= 91, f'no stable cfg baseline for rustc {releases[0]!r}'
+    return 'rustc-1.97' if int(version[1]) >= 97 else 'rustc-1.92'
+
+
+def reference_cfg_options(rustc, options):
+    info = subprocess.run([rustc, '-vV'], capture_output=True, text=True, timeout=30, check=True).stdout
+    return replace(options, target_cfg_profile=reference_cfg_profile(info)), info
+
+
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 @pytest.mark.parametrize('target', ['x86_64-unknown-linux-gnu', 'x86_64-unknown-linux-musl', 'aarch64-apple-darwin'])
-def test_recorded_target_cfg_matches_rustc_print_cfg(target):
-    printed = subprocess.run([shutil.which('rustc'), '--print', 'cfg', '--target', target],
+def test_recorded_target_cfg_matches_rustc_print_cfg(target, record_property):
+    rustc = shutil.which('rustc')
+    # Default codegen options add these two; CfgOptions owns them in PCC.
+    options, info = reference_cfg_options(rustc, CfgOptions(debug_assertions=True, panic='unwind'))
+    record_property('rustc_verbose_version', info.strip())
+    record_property('owned_cfg_profile', options.target_cfg_profile)
+    expected = OwnedRustConfiguration(target, 2021, options).entries
+    printed = subprocess.run([rustc, '--print', 'cfg', '--target', target],
                              capture_output=True, text=True, timeout=30, check=True).stdout
     entries = set()
     for line in printed.splitlines():
         name, _, value = line.partition('=')
         entries.add((name, json.loads(value) if value else None))
-    # Default codegen options add these two; CfgOptions owns them in PCC.
-    assert entries == set(TARGET_CFG[target]) | {('debug_assertions', None), ('panic', 'unwind')}
+    # Full equality: unexpected or missing entries (including future stable
+    # drift) must fail, with the actual compiler identity in the failure.
+    assert entries == expected, info
 
 
 def test_pcc_target_spellings_share_the_recorded_data():
@@ -68,13 +94,114 @@ def test_pcc_target_spellings_share_the_recorded_data():
         OwnedRustConfiguration('x86_64-linux', 2021, FAST)
 
 
+@pytest.mark.parametrize('release,profile', [
+    ('1.91.1', 'rustc-1.92'), ('1.92.0', 'rustc-1.92'), ('1.96.0', 'rustc-1.92'),
+    ('1.97.0', 'rustc-1.97'), ('1.100.0', 'rustc-1.97'),
+])
+def test_reference_predicts_the_cfg_snapshot_from_a_stable_release(release, profile):
+    assert reference_cfg_profile('host: ignored\nrelease: ' + release + '\n') == profile
+
+
+@pytest.mark.parametrize('info', [
+    '', 'release: 1.97', 'release: 1.90.0', 'release: 1.97.0-nightly',
+    'release: 2.0.0', 'release: 1.97.0\nrelease: 1.91.1',
+])
+def test_reference_rejects_an_unknown_or_ambiguous_release(info):
+    with pytest.raises(AssertionError):
+        reference_cfg_profile(info)
+
+
+@pytest.mark.parametrize('target,widths', [
+    ('x86_64-unknown-linux-gnu', {'8', '16', '32', '64', 'ptr'}),
+    ('x86_64-unknown-linux-musl', {'8', '16', '32', '64', 'ptr'}),
+    ('aarch64-apple-darwin', {'8', '16', '32', '64', '128', 'ptr'}),
+    ('arm64-apple-darwin', {'8', '16', '32', '64', '128', 'ptr'}),
+])
+def test_each_builtin_snapshot_owns_exactly_the_recorded_target_values(target, widths, monkeypatch):
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned cfg invoked a tool'))
+    old = OwnedRustConfiguration(target, 2021, FAST).entries
+    modern = replace(FAST, target_cfg_profile='rustc-1.97')
+    assert old == set(TARGET_CFG[target]) | {('feature', 'fast'), ('panic', 'abort')}
+    assert OwnedRustConfiguration(target, 2021, modern).entries == old | {
+        ('target_has_atomic_primitive_alignment', width) for width in widths}
+    for width in ('8', '16', '32', '64', '128', 'ptr', '256'):
+        predicate = f'target_has_atomic_primitive_alignment="{width}"'
+        assert not selected_by_pcc(predicate, FAST, target)
+        assert selected_by_pcc(predicate, modern, target) is (width in widths)
+    assert not selected_by_pcc('target_has_atomic_primitive_alignment', modern, target)
+
+
+@pytest.mark.parametrize('profile', [None, 'rustc', '1.97', 'rustc-1.100', [], 97])
+def test_owned_cfg_rejects_an_unknown_snapshot(profile):
+    with pytest.raises(RustError, match='unknown target cfg profile'):
+        CfgOptions(target_cfg_profile=profile)
+
+
+def test_atomic_cfg_rename_preserves_each_snapshots_compiler_owned_namespace():
+    target = 'x86_64-unknown-linux-gnu'
+    old_name = 'target_has_atomic_equal_alignment="other"'
+    new_name = 'target_has_atomic_primitive_alignment="other"'
+    with pytest.raises(RustError, match='is built in'):
+        CfgOptions(cfg=(old_name,))
+    with pytest.raises(RustError, match='experimental'):
+        selected_by_pcc(old_name, FAST, target)
+    assert selected_by_pcc(new_name, CfgOptions(cfg=(new_name,)), target)
+    with pytest.raises(RustError, match='is built in'):
+        CfgOptions(cfg=(new_name,), target_cfg_profile='rustc-1.97')
+    assert not selected_by_pcc(old_name, CfgOptions(target_cfg_profile='rustc-1.97'), target)
+    assert selected_by_pcc(old_name, CfgOptions(cfg=(old_name,), target_cfg_profile='rustc-1.97'), target)
+    bare = 'target_has_atomic_primitive_alignment'
+    options = CfgOptions(cfg=(bare,), target_cfg_profile='rustc-1.97')
+    assert selected_by_pcc(bare, options, target)
+    assert not selected_by_pcc(bare + '="128"', options, target)
+
+
+def test_object_format_is_a_separate_experimental_cfg_in_the_modern_snapshot():
+    target = 'x86_64-unknown-linux-gnu'
+    word, value = 'target_object_format', 'target_object_format="elf"'
+    assert not selected_by_pcc(value, FAST, target)
+    assert selected_by_pcc(value, CfgOptions(cfg=(value,)), target)
+    with pytest.raises(RustError, match='is built in'):
+        CfgOptions(cfg=(value,), target_cfg_profile='rustc-1.97')
+    for specs in ((), (word,)):
+        options = CfgOptions(cfg=specs, target_cfg_profile='rustc-1.97')
+        for predicate in (word, value, f'any(unix,{value})'):
+            with pytest.raises(RustError, match='experimental'):
+                selected_by_pcc(predicate, options, target)
+
+
+def test_cargo_cfg_snapshot_is_explicit_not_inferred_from_manifest_msrv():
+    manifest = {'package': {'name': 'probe', 'rust-version': '1.97'}}
+    assert cargo_cfg_options(manifest)[0].target_cfg_profile == 'rustc-1.92'
+    old, old_selection = cargo_cfg_options(manifest)
+    modern, selection = cargo_cfg_options(manifest, target_cfg_profile='rustc-1.97')
+    assert (modern, selection) == (replace(old, target_cfg_profile='rustc-1.97'), old_selection)
+
+
+@pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
+@pytest.mark.parametrize('profile', ['rustc-1.92', 'rustc-1.97'])
+def test_profile_selected_atomic_branches_execute_owned(profile, tmp_path, monkeypatch):
+    source = '''
+#[cfg(target_has_atomic_primitive_alignment="64")] fn scalar()->u64{40}
+#[cfg(not(target_has_atomic_primitive_alignment="64"))] fn scalar()->u64{7}
+#[cfg(target_has_atomic_primitive_alignment="128")] fn wide()->u64{2}
+#[cfg(not(target_has_atomic_primitive_alignment="128"))] fn wide()->u64{1}
+pub fn answer()->u64{scalar()+wide()}
+'''
+    expected = 8 if profile == 'rustc-1.92' else 42 if HOST_TARGET == 'arm64-apple-darwin' else 41
+    assert run_owned_u64_function(source, 'answer', tmp_path, monkeypatch,
+                                  cfg=CfgOptions(target_cfg_profile=profile)) == expected
+
+
 # --- predicate evaluation against rustc -------------------------------------
 
 PREDICATES = (
     'unix', 'windows', 'target_os="linux"', 'target_os="macos"', 'target_arch="x86_64"',
     'target_arch="aarch64"', 'target_pointer_width="64"', 'target_endian="little"',
     'target_env="gnu"', 'target_env=""', 'target_family="unix"', 'target_vendor="apple"',
-    'target_has_atomic="64"', 'target_has_atomic="128"', 'target_feature="sse2"',
+    'target_has_atomic="64"', 'target_has_atomic="128"',
+    'target_has_atomic_primitive_alignment="64"', 'target_has_atomic_primitive_alignment="128"',
+    'target_has_atomic_primitive_alignment="ptr"', 'target_feature="sse2"',
     'target_feature="neon"', 'target_abi=""', 'feature="fast"', 'feature="slow"',
     'not(feature="slow")', 'all(unix,feature="fast")', 'any(windows,feature="slow")', 'all()',
     'any()', 'true', 'false', 'test', 'debug_assertions', 'panic="abort"', 'panic="unwind"',
@@ -119,15 +246,17 @@ def host_target():
 @pytest.mark.parametrize('options', OPTION_SETS, ids=['fast-abort', 'slow-unwind-debug'])
 def test_every_predicate_selects_what_rustc_selects_on_the_host_target(options, tmp_path):
     target = host_target()
+    rustc = shutil.which('rustc')
+    options, info = reference_cfg_options(rustc, options)
     for predicate in PREDICATES:
         source = tmp_path / 'probe.rs'
         source.write_text('#[cfg(' + predicate + ')] compile_error!("selected");\npub fn f(){}\n')
-        run = subprocess.run([shutil.which('rustc'), '--crate-type=lib', '--edition=2021',
+        run = subprocess.run([rustc, '--crate-type=lib', '--edition=2021',
                               '--emit=metadata', *rustc_flags(options), str(source),
                               '-o', str(tmp_path / 'probe.rmeta')], capture_output=True, text=True, timeout=30)
         rustc_selected = 'selected' in run.stderr
         assert run.returncode == (1 if rustc_selected else 0), run.stderr
-        assert selected_by_pcc(predicate, options, target) is rustc_selected, predicate
+        assert selected_by_pcc(predicate, options, target) is rustc_selected, (predicate, info)
 
 
 # --- explicit errors --------------------------------------------------------

@@ -8,7 +8,8 @@ features are outside-source --cfg inputs. Two configuration owners exist:
   harness; other built-in/target predicates remain gaps there.
 * `OwnedRustConfiguration`, built by PCC from an explicit `CfgOptions`
   (rustc's --cfg, --test, -C debug-assertions and -C panic) and PCC's own
-  record of each admitted target's built-in cfg set. No host tool is asked;
+  explicitly selected record of each admitted target's built-in cfg set.
+  No host tool is asked;
   an unrecorded target, an unset option-dependent name and an unstable cfg
   are explicit errors, never guesses.
 """
@@ -48,6 +49,30 @@ TARGET_CFG = {
 # PCC spellings of the same targets.
 TARGET_CFG['arm64-apple-darwin'] = TARGET_CFG['aarch64-apple-darwin']
 
+# Stable target-cfg snapshots, not a claim of whole-compiler compatibility.
+# 1.97 stabilized and renamed target_has_atomic_equal_alignment. The option
+# is true only when the primitive ABI alignment equals the atomic width;
+# the pointer uses its own ABI alignment. Do not infer it from target_has_atomic.
+# See rust-lang/rust@1.97.0 compiler/rustc_session/src/config/cfg.rs and
+# compiler/rustc_target/src/spec/targets/{x86_64_unknown_linux_{gnu,musl},
+# aarch64_apple_darwin}.rs (i64:64, i128:128, 64-bit default pointers).
+DEFAULT_TARGET_CFG_PROFILE = 'rustc-1.92'
+_ALIGNED = 'target_has_atomic_primitive_alignment'
+_OLD_ALIGNED = 'target_has_atomic_equal_alignment'
+_X86_64_ALIGNED = ('8', '16', '32', '64', 'ptr')
+_DARWIN_ALIGNED = ('8', '16', '32', '64', '128', 'ptr')
+_ALIGNED_WIDTHS = {
+    'x86_64-unknown-linux-gnu': _X86_64_ALIGNED,
+    'x86_64-unknown-linux-musl': _X86_64_ALIGNED,
+    'aarch64-apple-darwin': _DARWIN_ALIGNED,
+    'arm64-apple-darwin': _DARWIN_ALIGNED,
+}
+_TARGET_CFG_PROFILES = {
+    DEFAULT_TARGET_CFG_PROFILE: TARGET_CFG,
+    'rustc-1.97': {target: entries + tuple((_ALIGNED, w) for w in _ALIGNED_WIDTHS[target])
+                    for target, entries in TARGET_CFG.items()},
+}
+
 # Names rustc 1.92.0 rejects on stable as experimental (E0658), and the gated
 # list forms `version(..)` and compact `target(..)`.
 GATED_CFG = frozenset({
@@ -57,10 +82,22 @@ GATED_CFG = frozenset({
     'relocation_model', 'fmt_debug', 'emscripten_wasm_eh', 'target_has_reliable_f16',
     'target_has_reliable_f128', 'target_has_reliable_f16_math', 'target_has_reliable_f128_math',
 })
-# Names a compiler invocation sets itself; an explicit --cfg must not spoof them.
-_BUILTIN_NAMES = frozenset({name for entries in TARGET_CFG.values() for name, _ in entries}
-                           | {'windows', 'debug_assertions', 'panic', 'test', 'proc_macro',
-                              'doc', 'doctest', 'miri', 'clippy', 'rustfmt'} | GATED_CFG)
+# Under 1.92 the old spelling is experimental; under 1.97 it is no
+# longer a compiler cfg at all. Likewise the *new* spelling was an ordinary
+# user cfg under 1.92. Keep the --cfg namespace of each snapshot distinct.
+_PROFILE_GATED = {DEFAULT_TARGET_CFG_PROFILE: GATED_CFG,
+                  'rustc-1.97': (GATED_CFG - {_OLD_ALIGNED}) | {'target_object_format'}}
+# For these new keys rustc 1.97 forbids only an explicit name="value".
+# A separately provided bare word sets no target width or object format;
+# testing target_object_format in source remains gated in either form.
+_VALUE_ONLY_BUILTINS = {DEFAULT_TARGET_CFG_PROFILE: frozenset(),
+                        'rustc-1.97': frozenset({_ALIGNED, 'target_object_format'})}
+_BUILTIN_NAMES = {
+    profile: frozenset(name for entries in targets.values() for name, _ in entries)
+    | {'windows', 'debug_assertions', 'panic', 'test', 'proc_macro',
+       'doc', 'doctest', 'miri', 'clippy', 'rustfmt'} | _PROFILE_GATED[profile]
+    for profile, targets in _TARGET_CFG_PROFILES.items()
+}
 
 
 def _parse_cfg_spec(spec):
@@ -81,17 +118,24 @@ def _parse_cfg_spec(spec):
 class CfgOptions:
     """Explicit owned cfg inputs, as rustc's --cfg, --test, -C debug-assertions
     and -C panic. `None` means not chosen: a predicate on that name is an
-    explicit error rather than a default."""
+    explicit error rather than a default. target_cfg_profile chooses PCC's
+    stable built-in cfg snapshot, not a tool, edition or minimum Rust version.
+    The default retains the original Rust 1.92 snapshot for existing callers."""
     cfg: tuple = ()
     test: bool = False
     debug_assertions: bool | None = None
     panic: str | None = None
+    target_cfg_profile: str = DEFAULT_TARGET_CFG_PROFILE
 
     def __post_init__(self):
+        if type(self.target_cfg_profile) is not str or self.target_cfg_profile not in _TARGET_CFG_PROFILES:
+            raise RustError(f'unknown target cfg profile {self.target_cfg_profile!r}; '
+                            f'choose one of {", ".join(_TARGET_CFG_PROFILES)}')
         if type(self.cfg) is not tuple:
             raise RustError('CfgOptions.cfg must be a tuple of cfg specs')
-        for name, _value in map(_parse_cfg_spec, self.cfg):
-            if name in _BUILTIN_NAMES:
+        for name, value in map(_parse_cfg_spec, self.cfg):
+            if (name in _BUILTIN_NAMES[self.target_cfg_profile]
+                    and not (value is None and name in _VALUE_ONLY_BUILTINS[self.target_cfg_profile])):
                 raise RustError(f'cfg {name!r} is built in; set it through its target or CfgOptions field')
         if type(self.test) is not bool or self.debug_assertions not in {None, True, False}:
             raise RustError('CfgOptions.test and debug_assertions must be booleans')
@@ -119,7 +163,8 @@ class OwnedRustConfiguration:
     @property
     def entries(self):
         options = self.options
-        entries = set(TARGET_CFG[self.target_triple]) | set(options.entries())
+        targets = _TARGET_CFG_PROFILES[options.target_cfg_profile]
+        entries = set(targets[self.target_triple]) | set(options.entries())
         if options.test:
             entries.add(('test', None))
         if options.debug_assertions:
@@ -152,7 +197,7 @@ class OwnedRustConfiguration:
             if item.name in {'version', 'target'}:
                 raise item.token.error(f'cfg({item.name}(..)) is experimental (rustc E0658)')
             raise item.token.error(f'invalid cfg predicate {item.name!r} (rustc E0537)')
-        if item.name in GATED_CFG:
+        if item.name in _PROFILE_GATED[self.options.target_cfg_profile]:
             raise item.token.error(f'cfg({item.name}) is experimental (rustc E0658)')
         if item.name == 'debug_assertions' and self.options.debug_assertions is None:
             raise item.token.error('cfg(debug_assertions) requires an explicit CfgOptions.debug_assertions choice')

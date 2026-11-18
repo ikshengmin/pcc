@@ -25,7 +25,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass
 
-from .configuration import CfgOptions
+from .configuration import DEFAULT_TARGET_CFG_PROFILE, CfgOptions
 from .syntax import RustError
 
 _DEPENDENCY_TABLES = ('dependencies', 'build-dependencies')
@@ -138,13 +138,18 @@ def profile_options(manifest, profile):
 
 
 def cargo_cfg_options(package_manifest, *, workspace_manifest=None, features=(),
-                      default_features=True, profile='release', test=False):
-    """The cfg inputs `cargo build` gives rustc for this package."""
+                      default_features=True, profile='release', test=False,
+                      target_cfg_profile=DEFAULT_TARGET_CFG_PROFILE):
+    """Cargo's cfg inputs, with an explicit PCC target-cfg snapshot.
+
+    A manifest's rust-version is an MSRV, not a compiler version or snapshot.
+    """
     selection = resolve_features(package_manifest, features=features, default_features=default_features)
     # Profiles are read from the workspace root manifest when there is one.
     debug_assertions, panic = profile_options(workspace_manifest or package_manifest, profile)
     cfg = tuple(f'feature="{name}"' for name in selection.features)
-    return CfgOptions(cfg=cfg, test=test, debug_assertions=debug_assertions, panic=panic), selection
+    return CfgOptions(cfg=cfg, test=test, debug_assertions=debug_assertions, panic=panic,
+                      target_cfg_profile=target_cfg_profile), selection
 
 
 _SEMVER = re.compile(r'(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
