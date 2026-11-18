@@ -102,10 +102,36 @@ def test_compile_rust_takes_a_mapping_or_an_environment_and_never_reads_the_host
         CompileEnvironment.of({'X': '1'}, {'X': 'reason'})
 
 
+_RUSTC_BASE_ENV = ('PATH', 'HOME', 'RUSTUP_HOME', 'CARGO_HOME', 'RUSTUP_TOOLCHAIN')
+_RUSTC_WINDOWS_ENV = (
+    # Windows loader, Rust home/temp and Visual Studio discovery locations.
+    'SYSTEMROOT', 'WINDIR', 'SYSTEMDRIVE', 'PROGRAMFILES', 'PROGRAMFILES(X86)',
+    'PROGRAMW6432', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE',
+    'APPDATA', 'LOCALAPPDATA',
+    # Preserve an already selected MSVC/SDK toolchain, not compiler flags.
+    'VSINSTALLDIR', 'VCINSTALLDIR', 'VCTOOLSINSTALLDIR', 'VCTOOLSVERSION',
+    'VISUALSTUDIOVERSION', 'VSCMD_ARG_HOST_ARCH', 'VSCMD_ARG_TGT_ARCH',
+    'WINDOWSSDKDIR', 'WINDOWSSDKVERSION',
+    'WINDOWSSDKLIBVERSION', 'UNIVERSALCRTSDKDIR', 'UCRTVERSION',
+    'INCLUDE', 'LIB', 'LIBPATH',
+)
+
+
+def _rustc_toolchain_environment(environ, *, windows):
+    """Retain toolchain/OS locators without leaking arbitrary macro inputs."""
+    if windows:
+        # Windows environment names are case-insensitive. Retain the original
+        # spelling and values rather than inventing SDK paths or PATH ordering.
+        allowed = set(_RUSTC_BASE_ENV + _RUSTC_WINDOWS_ENV)
+        return {key: value for key, value in environ.items() if key.upper() in allowed}
+    return {key: environ[key] for key in _RUSTC_BASE_ENV if key in environ}
+
+
 def isolated_rustc_environment():
-    """Only the toolchain locators plus the test variables reach rustc."""
-    keep = {key: os.environ[key] for key in ('PATH', 'HOME', 'RUSTUP_HOME', 'CARGO_HOME', 'RUSTUP_TOOLCHAIN')
-            if key in os.environ}
+    # Dropping Windows discovery variables can make rustc fall through to the
+    # unrelated GNU coreutils link.exe on PATH. Still isolate PCC_UNSET/HIDDEN
+    # and every unrelated host variable; never inherit RUSTFLAGS or LINK flags.
+    keep = _rustc_toolchain_environment(os.environ, windows=os.name == 'nt')
     return {**keep, **dict(ENV.variables)}
 
 
@@ -267,3 +293,42 @@ def test_env_reference_preserves_success_and_unchecked_rejection(monkeypatch):
         monkeypatch.setattr(subprocess, "run", run)
         assert _run_env_reference(command, capture_output=True, timeout=60) is result
         assert calls == [((command,), dict(capture_output=True, timeout=60))]
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.parametrize('windows', [False, True])
+def test_env_reference_keeps_only_platform_toolchain_locators(windows):
+    source = {key: 'value:' + key for key in _RUSTC_BASE_ENV + _RUSTC_WINDOWS_ENV}
+    source.update({'PCC_UNSET': 'must not leak', 'PCC_HIDDEN': 'must not leak',
+                   'PCC_FROM_HOST': 'must not leak', 'TOKEN': 'must not leak',
+                   'RUSTFLAGS': '--cfg bad', 'LINK': '/bad', 'CL': '/bad',
+                   'VSTEL_MSBUILDPROJECTFULLPATH': 'not a toolchain locator'})
+    before = dict(source)
+    actual = _rustc_toolchain_environment(source, windows=windows)
+    keys = _RUSTC_BASE_ENV + (_RUSTC_WINDOWS_ENV if windows else ())
+    assert actual == {key: source[key] for key in keys}
+    assert source == before
+    assert _rustc_toolchain_environment({}, windows=windows) == {}
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+def test_env_reference_windows_names_preserve_case_and_values():
+    source = {'Path': r'C:\Git\usr\bin;C:\SDK\bin',
+              'ProgramFiles(x86)': r'C:\Program Files (x86)',
+              'SystemRoot': r'C:\Windows', 'vCtOoLsVeRsIoN': '14.44',
+              'Lib': 'sdk libs', 'pcc_unset': 'must not leak',
+              'rustflags': '--cfg bad'}
+    assert _rustc_toolchain_environment(source, windows=True) == {
+        key: value for key, value in source.items()
+        if key not in ('pcc_unset', 'rustflags')}
+    assert _rustc_toolchain_environment(source, windows=False) == {}
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+def test_env_reference_explicit_values_win_and_absent_inputs_stay_absent(monkeypatch):
+    source = {'PATH': 'same-path', 'PCC_SET': 'host-wrong', 'PCC_EMPTY': 'host-wrong',
+              'PCC_UNSET': 'host-wrong', 'PCC_HIDDEN': 'host-wrong'}
+    monkeypatch.setattr(os, 'environ', source)
+    actual = isolated_rustc_environment()
+    assert actual == {'PATH': 'same-path', 'PCC_SET': 'value', 'PCC_EMPTY': ''}
+    assert source['PCC_UNSET'] == 'host-wrong'
