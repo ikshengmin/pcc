@@ -11,7 +11,8 @@ import sys
 import tempfile
 
 from pcc.backend import BackendUnavailable
-from pcc.backend.self_backend_parse import decode_global_name, parse_self_backend_module
+from pcc.backend.definition_linkage import checked_function_definition_linkage
+from pcc.backend.self_backend_parse import _iter_function_defs, decode_global_name, parse_self_backend_module
 from pcc.driver.project import TranslationUnit
 from pcc.frontends.python.pipeline_ir_text import rename_llvm_global_refs
 
@@ -40,6 +41,55 @@ def _scalar_type(ty, *, unsigned=False):
     raise BackendUnavailable("owned C evaluation cannot transport result type " + repr(ty))
 
 
+def _coalesced_entry_for_result_bridge(units, entry, target, matches):
+    """Choose a call ABI, not a body: every definition still goes to the linker."""
+    # Only public definitions in distinct translation units may coalesce.
+    if len({i for i, _fn in matches}) != len(matches) or any(not fn.is_global for _i, fn in matches):
+        raise ValueError("ambiguous C entry " + repr(entry) + ": duplicate or TU-local definition")
+    strong = [(i, fn) for i, fn in matches
+              if checked_function_definition_linkage(fn, target) == "external"]
+    if len(strong) > 1:
+        raise ValueError("multiple strong definitions of C entry " + repr(entry))
+
+    # Parsed IR scalar types alone erase parameter ABI attributes, including
+    # sret/byval, and the distinction between signed and unsigned transport.
+    # Admit the ordinary C frontend's scalar signatures, not arbitrary IR
+    # calling conventions, attribute groups or foreign entry adapters.
+    scalar = r"(?:i(?:1|8|16|32|64)|float|double|ptr)"
+    name = re.escape(entry)
+    header = re.compile(
+        r'^[ \t]*define[ \t]+(?:(?:weak|weak_odr|external)[ \t]+)?'
+        r'(' + scalar + r'|void)[ \t]+@(?:"' + name + '"|' + name +
+        r')\(([^()\n]*)\)([^{}\n]*)\s*\{', re.M)
+    parameter = re.compile(scalar + r'(?:[ \t]+noundef)?(?:[ \t]+%(?:[-\w.$]+|"[-\w.$]+"))?')
+    hints = {"ssp", "sspstrong", "sspreq", "nounwind", "nofree", "norecurse",
+             "willreturn", "noinline", "alwaysinline", "inlinehint", '"pcc-c-unsigned-return"'}
+    signature = None
+    for i, fn in matches:
+        # The backend owns definition boundaries. Do not use a declaration,
+        # a similarly named function, a comment or body text as ABI evidence.
+        row = None
+        for definition, _body in _iter_function_defs(units[i][1]):
+            row = header.fullmatch(definition)
+            if row is not None:
+                break
+        if row is None or fn.is_vararg:
+            raise ValueError("unsupported call ABI for coalesced C entry " + repr(entry))
+        attrs = row[3].split()
+        params = row[2].split(",") if row[2].strip() else []
+        if any(attr not in hints for attr in attrs) or any(
+                not parameter.fullmatch(arg.strip()) for arg in params):
+            raise ValueError("unsupported call ABI for coalesced C entry " + repr(entry))
+        key = (fn.ret_type, tuple(arg.type for arg in fn.args), '"pcc-c-unsigned-return"' in attrs)
+        if signature is not None and signature != key:
+            raise ValueError("incompatible call ABI for coalesced C entry " + repr(entry))
+        signature = key
+    # All-weak definitions have the same bridge ABI. This choice of metadata
+    # cannot pick a winning function or override the target's coalescing rule.
+    i, fn = (strong or matches)[0]
+    return i, fn, signature[2]
+
+
 def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
                    optimize=True, base_dir=None, link_args=None, dump_dir=None,
                    return_descriptor=None):
@@ -52,13 +102,19 @@ def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
     """
     if evaluator.is_cross:
         raise BackendUnavailable("cannot execute C for a foreign target")
-    functions = []
+    functions_by_unit = []
     for unit in units:
-        functions.extend(parse_self_backend_module(unit[1]).functions)
-    matches = [function for function in functions if function.name == entry]
-    if len(matches) != 1:
+        functions_by_unit.append(parse_self_backend_module(unit[1]).functions)
+    matches = [(i, fn) for i, functions in enumerate(functions_by_unit)
+               for fn in functions if fn.name == entry]
+    if not matches:
         raise ValueError("expected one definition of C entry " + repr(entry))
-    function = matches[0]
+    coalesced_unsigned = None
+    if len(matches) == 1:
+        unit_index, function = matches[0]
+    else:
+        unit_index, function, coalesced_unsigned = _coalesced_entry_for_result_bridge(
+            units, entry, evaluator.target_triple, matches)
     symbols = set()
     # Declarations and data symbols occupy the same linker namespace as
     # definitions. Include all references before choosing bridge symbols.
@@ -68,7 +124,7 @@ def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
     reserved = "__pcc_evaluate_entry"
     while reserved in symbols:
         reserved += "_"
-    unsigned_return = any(
+    unsigned_return = coalesced_unsigned if coalesced_unsigned is not None else any(
         '"pcc-c-unsigned-return"' in line
         and re.match(r'^\s*define\b.*@(?:"' + re.escape(entry) + r'"|' + re.escape(entry) + r')\(', line)
         for unit in units for line in unit[1].splitlines()
@@ -81,6 +137,8 @@ def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
                             and not (isinstance(value, int) and value == 0)
                             for value, ty in zip(supplied, parameter_types))
     load_in_process = function.ret_type.kind == "ptr" or host_pointer_args
+    if coalesced_unsigned is not None and load_in_process:
+        raise BackendUnavailable("owned C coalesced entry requires child-process scalar evaluation")
     if load_in_process and (
         sys.implementation.name != "cpython"
         or not evaluator.target_triple.startswith(("arm64-apple-", "aarch64-apple-"))
@@ -150,7 +208,9 @@ def evaluate_units(evaluator, units, *, entry="main", args=None, prog_args=None,
 
             prepared = evaluator._prepare_self_backend_units(renamed, optimize=optimize) if optimize else renamed
             if return_descriptor is None:
-                return_descriptor = matches and next((unit[2] for unit in units if entry in [fn.name for fn in parse_self_backend_module(unit[1]).functions]), None)
+                # A coalesced host-pointer call was rejected above. This is
+                # the same unique definition the ordinary bridge always used.
+                return_descriptor = units[unit_index][2]
             native_args = supplied
             if entry == "main" and not supplied and parameter_types == ["int", "void *"]:
                 import ctypes

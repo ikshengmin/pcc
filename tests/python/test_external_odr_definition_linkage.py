@@ -1,7 +1,8 @@
-"""Function identity: C++17 [dcl.fct.spec]/[basic.def.odr], Itanium ABI §5.2.1.
+"""Function identity: ELF symbol binding and C++17 [dcl.fct.spec]/[basic.def.odr].
 
 https://itanium-cxx-abi.github.io/cxx-abi/abi.html#vague-linkage
 https://llvm.org/docs/LangRef.html#linkage-types
+https://gabi.xinuos.com/elf/05-symtab.html#symbol-binding
 
 These are the shared protocol's bounded weak-definition tests, not complete
 C++ inline/static-local/COMDAT or native-pcc1 qualification.
@@ -112,19 +113,24 @@ def test_c_static_inline_is_not_an_odr_surrogate(storage):
         _module(storage + " int f(void) { return 7; }")
 
 
-@pytest.mark.parametrize("linkage", ["weak", "linkonce", "linkonce_odr", "available_externally", "private", "internal weak_odr"])
+@pytest.mark.parametrize("linkage", [
+    "linkonce", "linkonce_odr", "available_externally", "private", "internal weak_odr",
+    "internal weak", "weak external", "weak weak_odr", "weak weak",
+])
 def test_unimplemented_or_conflicting_ir_linkage_is_not_silently_strong(linkage):
     with pytest.raises(BackendUnavailable, match="linkage"):
         parse_self_backend_module(_ir(linkage))
 
 
-def test_elf_definition_is_weak_but_ordinary_definition_unchanged():
-    weak_asm = emit_x86_64_linux_asm(_ir())
+@pytest.mark.parametrize("linkage", ["weak_odr", "weak"])
+def test_elf_definition_is_weak_but_ordinary_definition_unchanged(linkage):
+    weak_asm = emit_x86_64_linux_asm(_ir(linkage))
     strong_asm = emit_x86_64_linux_asm(_ir(""))
     assert weak_asm.replace(".weak f\n", "") == strong_asm
     weak = assemble_file(weak_asm)
     strong = assemble_file(strong_asm)
     assert next(symbol for symbol in weak.symbols if symbol.name == "f").binding == elf.STB_WEAK
+    assert next(symbol for symbol in strong.symbols if symbol.name == "f").binding == elf.STB_GLOBAL
     for value in (weak, strong):
         assert elf.parse_relocatable(elf.emit_relocatable(value)) == value
 
@@ -163,6 +169,9 @@ _start:
  call addr_b
  cmp rax, rbx
  jne failed
+ call rbx
+ cmp eax, {expected}
+ jne failed
  call call_a
  cmp eax, {expected}
  jne failed
@@ -187,10 +196,11 @@ def _run(path, payload):
 
 
 @pytest.mark.integration
+@pytest.mark.parametrize("weak_linkage", ["weak_odr", "weak"])
 @pytest.mark.parametrize("reverse,strong,merged", [(False, False, False), (True, False, False), (False, True, False), (True, True, False), (False, False, True), (True, True, True)])
-def test_owned_elf_two_tu_function_address_and_call_identity(tmp_path, reverse, strong, merged):
+def test_owned_elf_two_tu_function_address_and_call_identity(tmp_path, reverse, strong, merged, weak_linkage):
     from pcc.backend.relocatable_merge import merge_elf_objects
-    sources = [_tu("a", 7), _tu("b", 11, "" if strong else "weak_odr")]
+    sources = [_tu("a", 7, weak_linkage), _tu("b", 11, "" if strong else weak_linkage)]
     objects = [assemble_file(emit_x86_64_linux_asm(source)) for source in sources]
     if reverse:
         objects.reverse()
@@ -201,14 +211,32 @@ def test_owned_elf_two_tu_function_address_and_call_identity(tmp_path, reverse, 
     _run(tmp_path / "owned", elf.link_static_executable(objects))
 
 
+@pytest.mark.parametrize("merged", [False, True])
+def test_two_strong_definitions_are_not_coalesced(merged):
+    from pcc.backend.relocatable_merge import merge_elf_objects
+    objects = [assemble_file(emit_x86_64_linux_asm(_tu(suffix, value, "")))
+               for suffix, value in (("a", 7), ("b", 11))]
+    with pytest.raises(elf.ElfError, match="duplicate strong definition of 'f'"):
+        if merged:
+            merge_elf_objects(objects)
+        else:
+            elf.link_static_executable([_entry(7), *objects])
+
+
 @pytest.mark.integration
-def test_same_emitted_assembly_external_gnu_reference_and_owned_execution(tmp_path):
+@pytest.mark.parametrize("override,reverse", [(False, False), (True, False), (True, True)],
+                         ids=["same-odr", "weak-strong", "strong-weak"])
+def test_same_emitted_assembly_external_gnu_reference_and_owned_execution(tmp_path, override, reverse):
     # Reference covers the owned assembler/linker protocol, not C++ Sema.
     compiler = shutil.which("cc")
     assert compiler, "external GNU assembler/linker reference prerequisite is unavailable"
-    sources = [_tu("a"), _tu("b")]
+    sources = ([_tu("a", 7, "weak"), _tu("b", 11, "")] if override
+               else [_tu("a"), _tu("b")])
+    if reverse:
+        sources.reverse()
+    expected = 11 if override else 7
     entry = tmp_path / "entry.o"
-    entry.write_bytes(elf.emit_relocatable(_entry(7)))
+    entry.write_bytes(elf.emit_relocatable(_entry(expected)))
     reference_objects = []
     for index, source in enumerate(sources):
         assembly = emit_x86_64_linux_asm(source)
@@ -221,7 +249,7 @@ def test_same_emitted_assembly_external_gnu_reference_and_owned_execution(tmp_pa
     subprocess.run([compiler, "-nostdlib", "-static", str(entry), *reference_objects, "-o", str(reference)], check=True, capture_output=True, timeout=30)
     result = subprocess.run([str(reference)], capture_output=True, timeout=10)
     assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")
-    objects = [_entry(7), *(assemble_file(emit_x86_64_linux_asm(source)) for source in sources)]
+    objects = [_entry(expected), *(assemble_file(emit_x86_64_linux_asm(source)) for source in sources)]
     _run(tmp_path / "owned", elf.link_static_executable(objects))
 
 
