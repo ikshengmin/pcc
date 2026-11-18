@@ -163,6 +163,8 @@ class ClassDefinition:
         self.access = "private" if class_key == "class" else "public"
         self.members = []
         self.method_declarations = []
+        self.nested_definitions = []
+        self.nested_declarations = []
         self.inline_constructors = []
         self.defaulted_constructors = []
         self.inline_methods = []
@@ -180,7 +182,7 @@ class ClassDefinition:
         self.base = None
         self.complete = False
         # The enclosing declaration provides the injected name for the current
-        # non-nested/non-template class boundary. A data member can hide it just
+        # ordinary non-template class boundary. A data member can hide it just
         # as it can hide another enclosing type name; no lexer reclassification.
         dtype.definition = self
 
@@ -350,7 +352,7 @@ def _unsupported(token, detail):
 
 
 def parse_class(parser):
-    """Parse a namespace-scope class declaration using the ordinary parser.
+    """Parse an ordinary namespace-scope or member class declaration.
 
     The owner calls this before its ordinary function declaration parser. The
     type projection hook must recognize ``ClassType``; no source-to-source C
@@ -362,22 +364,28 @@ def parse_class(parser):
         _unsupported(keyword, "unknown class-key")
     if parser.parsing_template:
         _unsupported(keyword, "class template semantics are not implemented")
-    if parser.scope.kind != "namespace":
+    if parser.scope.kind not in ("namespace", "class"):
         _unsupported(keyword, "local and nested class semantics are not implemented")
+    enclosing = getattr(parser.scope, "class_type", None)
     name = parser._identifier()
+    if enclosing is not None and name.value == enclosing.name:
+        raise CppDiagnostic("cpp.class-name-member", "nested class cannot have its enclosing class name", name.coord)
     previous = parser.scope.names.get(name.value)
     if getattr(previous, "namespace_object", False):
         raise CppDiagnostic("cpp.unsupported.tag-hiding",
                             "class/object dual name lookup is not implemented", name.coord)
     if previous is None:
         dtype = ClassType(
-            name.value, parser.scope.namespace_path() + (name.value,), name.coord,
+            name.value, (enclosing.qualified_name if enclosing is not None else parser.scope.namespace_path()) + (name.value,), name.coord,
             internal_linkage=parser.scope.namespace().internal_linkage,
             declaration_scope=parser.scope,
         )
         dtype.is_union = keyword.value == "union"
         previous = parser.scope.declare(Symbol(name.value, "type", name.coord, dtype=dtype))
         previous.class_declaration = True
+        if enclosing is not None:
+            previous.access = enclosing.definition.access
+            previous.class_owner = enclosing
     elif not getattr(previous, "class_declaration", False):
         raise CppDiagnostic(
             "cpp.redeclaration", "'" + name.value + "' is not a class declaration", name.coord
@@ -388,6 +396,8 @@ def parse_class(parser):
                             "'" + name.value + "' was declared with a different class-key", name.coord)
     elif previous.owner is not parser.scope:
         _unsupported(name, "redeclaration of an imported class outside its declaring namespace is not implemented")
+    if enclosing is not None and previous.access != enclosing.definition.access:
+        raise CppDiagnostic("cpp.redeclaration", "nested class redeclared with different access", name.coord)
     dtype = previous.dtype
     dtype.declaration_symbol = previous
     if parser._accept(";"):
@@ -486,8 +496,14 @@ def parse_class(parser):
                 from pcc.frontends.cpp.virtual_functions import parse_virtual_member
                 definition.method_declarations.append(parse_virtual_member(parser, definition))
                 continue
-            if token.value in ("class", "struct", "union",
-                               "template", "constexpr", "operator"):
+            if token.value in ("class", "struct", "union"):
+                declaration = parse_class(parser)
+                nested = parser.last_class_definition
+                definition.nested_declarations.append(declaration)
+                if nested is not None:
+                    definition.nested_definitions.append(nested)
+                continue
+            if token.value in ("template", "constexpr", "operator"):
                 _unsupported(token, "non-data class member semantics are not implemented")
             if token.value == "enum":
                 from pcc.frontends.cpp.enums import parse_enum
@@ -575,18 +591,59 @@ def parse_class(parser):
     # even an unevaluated D1 call in a class default argument checks deletion.
     from pcc.frontends.cpp.default_destructors import bind_definition
     bind_definition(definition)
+    if enclosing is None:
+        _prepare_completed_class_tree(parser, definition)
+        _bind_completed_class_tree(parser, definition)
+    parser.last_class_definition = definition
+    return definition.c_declaration(parser._scalar_type)
+
+
+def _prepare_completed_class_tree(parser, definition):
+    for nested in definition.nested_definitions:
+        _prepare_completed_class_tree(parser, nested)
     from pcc.frontends.cpp.default_arguments import bind_class
     bind_class(parser, definition)
     from pcc.frontends.cpp.default_member_initializers import bind
     bind(parser, definition)
     from pcc.frontends.cpp.default_constructors import bind_defaulted_definitions
     bind_defaulted_definitions(parser, definition)
+
+
+def _bind_completed_class_tree(parser, definition):
+    for nested in definition.nested_definitions:
+        _bind_completed_class_tree(parser, nested)
     from pcc.frontends.cpp.inline_constructors import bind_definitions
     bind_definitions(parser, definition)
     from pcc.frontends.cpp.inline_methods import bind_methods
     bind_methods(parser, definition)
-    parser.last_class_definition = definition
-    return definition.c_declaration(parser._scalar_type)
+
+
+def _nested_record_declarations(definition):
+    records = []
+    for nested in definition.nested_definitions:
+        records.extend(_nested_record_declarations(nested))
+    records.extend(definition.nested_declarations)
+    return records
+
+
+def _class_method_declarations(definition):
+    methods = list(definition.method_declarations)
+    for nested in definition.nested_definitions:
+        methods.extend(_class_method_declarations(nested))
+    return methods
+
+
+def project_class_declarations(declaration, definition):
+    if definition is None:
+        return [declaration]
+    # Member classes have their own record identities and no field in the
+    # enclosing layout. Inner records precede outer records that contain them.
+    declarations = _nested_record_declarations(definition) + [declaration]
+    methods = _class_method_declarations(definition)
+    # All prototypes must precede any body across the complete class tree.
+    declarations.extend(item for item in methods if not isinstance(item, c_ast.FuncDef))
+    declarations.extend(item for item in methods if isinstance(item, c_ast.FuncDef))
+    return declarations
 
 
 def member_access(parser, expression, operator, member):

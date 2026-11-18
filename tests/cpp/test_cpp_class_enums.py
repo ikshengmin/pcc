@@ -26,6 +26,7 @@ from tests.cpp.test_cpp_enum_execution import owned_artifact
 
 
 ORIGINAL_CLASS_ENUM = "struct S{enum E{A};};int f(){return S::A;}"
+ORIGINAL_NESTED_CLASS_ENUM = "struct S{struct Inner{enum E{A};};};"
 ORIGINAL_MEMBER_ALIAS = "struct S{using T=int;};S::T f();"
 
 CLASS_ENUM_CASES = (
@@ -103,11 +104,10 @@ UNIMPLEMENTED_CLASS_ENUM_CASES = (
     # Exact anonymous-enum original retained in test_cpp_anonymous_class_enums.
     "struct S{enum E:int;};enum S::E:int{A};",
     "struct S{enum E{A};};template<class T>int f(T x){return S::A;}",
-    "struct S{struct Inner{enum E{A};};};",
 )
 
 
-@pytest.mark.parametrize("source", (ORIGINAL_CLASS_ENUM, ORIGINAL_MEMBER_ALIAS))
+@pytest.mark.parametrize("source", (ORIGINAL_CLASS_ENUM, ORIGINAL_MEMBER_ALIAS, ORIGINAL_NESTED_CLASS_ENUM))
 def test_formerly_gated_original_class_name_sources_are_preserved_verbatim(source):
     CppParser().parse(source, "original.cpp")
 

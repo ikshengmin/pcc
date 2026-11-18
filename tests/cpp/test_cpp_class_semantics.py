@@ -197,7 +197,8 @@ CLASS_UNIMPLEMENTED_CASES = (
     # Original static data member declaration moved verbatim to
     # test_cpp_static_data_members (an external object declaration).
     "struct S{int value:3;};",
-    "struct S{struct Nested{};};",
+    # Original nested class declaration is retained verbatim and executed in
+    # test_cpp_nested_classes, including independent inner/outer layout.
     "namespace n{using T=int;}struct S{using n::T;};",
     "namespace n{struct S;}using n::S;struct S{int value;};",
     "int f(){struct Local{};return 0;}",

@@ -21,7 +21,7 @@ from pcc.frontends.cpp.sema import (
 )
 from pcc.frontends.cpp.classes import (
     ClassType, c_class_type, default_initialize,
-    is_class_type, member_access, parse_class, record_declaration_projection_supported, require_complete,
+    is_class_type, member_access, parse_class, project_class_declarations, record_declaration_projection_supported, require_complete,
 )
 from pcc.frontends.cpp.initializers import (
     lower_aggregate_initializer, parse_initializer_list,
@@ -239,12 +239,7 @@ class CppParser:
                 declarations.extend(self._namespace())
             elif value in ("class", "struct", "union"):
                 declaration = parse_class(self)
-                declarations.append(declaration)
-                # A class has no storage field for a method. Publish real C
-                # prototypes after its record definition, with this only for non-static members.
-                dtype = self.last_class_definition
-                if dtype is not None:
-                    declarations.extend(dtype.method_declarations)
+                declarations.extend(project_class_declarations(declaration, self.last_class_definition))
             elif value == "enum":
                 parse_enum(self)
             elif value in ("using", "typedef"):
