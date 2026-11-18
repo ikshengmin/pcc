@@ -200,6 +200,7 @@ DARWIN_LANE = darwin_check_prerequisite() or (
     None if sys.platform == 'darwin' else 'owned execution here is the arm64 Darwin lane')
 
 
+@pytest.mark.pcc_source_group(legacy='rust-native-reference', name='rust-darwin-owned')
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=DARWIN_LANE)
 def test_checked_program_runs_with_owned_compile_assemble_and_link(tmp_path, monkeypatch):

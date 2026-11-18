@@ -93,6 +93,7 @@ def test_checked_semantic_model_erases_the_bound():
     assert [ty for _, ty, _ in checker.names['f'].params] == [TypeApplication('S', ('u64',))]
 
 
+@pytest.mark.pcc_source_group(legacy='rust-native-reference', name='rust-darwin-owned')
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=darwin_check_prerequisite() or (
     None if sys.platform == 'darwin' else 'owned execution here is the arm64 Darwin lane'))

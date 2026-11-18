@@ -274,6 +274,20 @@
       "nodeid": "tests/java/test_source_floating_darwin_abi.py::test_owned_caller_passes_tenth_float_to_clang_on_darwin_arm64",
       "platforms": ["macos-arm64"],
       "tools": {"macos-arm64": ["clang"]}
+    },
+    {
+      "domain": "rust",
+      "lane": "ordinary",
+      "nodeid": "tests/rust/test_rust_data_outlives_bounds.py::test_checked_program_runs_with_owned_compile_assemble_and_link",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["rustc"]}
+    },
+    {
+      "domain": "rust",
+      "lane": "ordinary",
+      "nodeid": "tests/rust/test_rust_match_guards.py::test_checked_program_runs_with_owned_compile_assemble_and_link",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["rustc"]}
     }
   ]
 }

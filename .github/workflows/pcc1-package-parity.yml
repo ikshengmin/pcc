@@ -871,6 +871,15 @@ jobs:
       - uses: astral-sh/setup-uv@v7
       - name: Install frozen host test dependencies only
         run: uv sync --frozen --dev --no-install-project
+      - name: Install the pinned official Rust compiler and both checked targets
+        if: ${{ matrix.domain == 'rust' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          command -v rustup
+          rustup toolchain install 1.91.1 --profile minimal \
+            --target x86_64-unknown-linux-gnu --target aarch64-apple-darwin
+          echo "PCC_CI_RUST_TOOLCHAIN=1.91.1" >> "$GITHUB_ENV"
       - name: Bind actual PATH clang and available reference tools
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Execute exact source-platform ownership partition

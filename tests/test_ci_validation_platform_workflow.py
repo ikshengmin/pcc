@@ -185,3 +185,21 @@ def test_compact_join_allowlist_preserves_full_raw_diagnostics():
         assert {line.strip().removeprefix("${{ runner.temp }}/source-validation/")
                 for line in paths if line.strip()} == suffixes
         assert "if: always()" in compact and "if-no-files-found: error" in compact
+
+
+def test_rust_keeps_linux_lanes_and_attests_same_pinned_toolchain_on_darwin():
+    result = plan.select([("M", "tests/rust/test_rust_match_guards.py")])
+    assert result["matrix"]["include"] == [{"domain": "rust", "lane": lane} for lane in plan.LANES]
+    assert result["matrix_platform"]["include"] == [
+        {"domain": "rust", "lane": "ordinary", "platform": "macos-arm64", "runner": "macos-15"}]
+    installs = []
+    for name in ("source-validation", "source-platform-validation"):
+        text = job(name)
+        install, = [step for step in steps(text) if "rustup toolchain install" in step]
+        assert "if: ${{ matrix.domain == 'rust' }}" in install
+        assert "rustup toolchain install 1.91.1 --profile minimal" in install
+        assert "--target x86_64-unknown-linux-gnu --target aarch64-apple-darwin" in install
+        assert 'echo "PCC_CI_RUST_TOOLCHAIN=1.91.1" >> "$GITHUB_ENV"' in install
+        assert text.index(install) < text.index("scripts/ci_validation_tools.py") < text.index("scripts/ci_validation_run.py")
+        installs.append(install)
+    assert installs[0] == installs[1]

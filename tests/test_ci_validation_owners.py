@@ -478,3 +478,59 @@ def test_mocked_campaign_transfers_never_pass_or_mask_local_failures(tmp_path, m
     nonlocal_name = "darwin" if platform == LINUX else "linux"
     assert all(row(nonlocal_name)["nodeid"] not in selected for selected in selections)
     assert len(checks) == 2
+
+
+def test_rust_transfers_only_the_two_certified_darwin_executions():
+    modules = ["tests/rust/test_rust_data_outlives_bounds.py", "tests/rust/test_rust_match_guards.py"]
+    owned = "test_checked_program_runs_with_owned_compile_assemble_and_link"
+    native_ids = [f"{module}::{owned}" for module in modules]
+    registry = json.loads(run.REFERENCES.read_text())["functions"]
+    manifest, _ = owners.read_manifest(ROOT)
+    rows = []
+    for module in modules:
+        for func in ast.parse((ROOT / module).read_text()).body:
+            if not isinstance(func, ast.FunctionDef) or not func.name.startswith("test_"):
+                continue
+            marks = {ast.unparse(mark.func): mark for mark in func.decorator_list if isinstance(mark, ast.Call)}
+            if func.name != owned:
+                assert "pytest.mark.pcc_source_group" not in marks
+                if func.name != "test_program_runs_without_an_actual_rustc_check":
+                    continue
+            legacy = marks["pytest.mark.xdist_group"]
+            assert not legacy.args and {kw.arg: ast.literal_eval(kw.value) for kw in legacy.keywords} == {
+                "name": "rust-native-reference"}
+            group = "rust-native-reference"
+            if func.name == owned:
+                override = marks["pytest.mark.pcc_source_group"]
+                assert not override.args
+                assert {kw.arg: ast.literal_eval(kw.value) for kw in override.keywords} == {
+                    "legacy": group, "name": "rust-darwin-owned"}
+                group = "rust-darwin-owned"
+            assert "pytest.mark.pcc_gate" in marks
+            assert classify(module, func.name, False, registry) == "ordinary"
+            node = f"{module}::{func.name}"
+            rows.append(dict(file=module, function=func.name, canonical_nodeid=node, nodeid=node,
+                             lane="ordinary", groups=[group], gates=[{"unavailable": "Darwin" if func.name == owned else None}],
+                             selected_by_repository=func.name != owned, reference_activity=registry.get(module, {}).get(func.name, "unknown")))
+    original = copy.deepcopy(rows)
+    assert [rule for rule in manifest["overrides"] if rule["domain"] == "rust"] == [
+        dict(domain="rust", lane="ordinary", nodeid=node, platforms=[MAC], tools={MAC: ["rustc"]})
+        for node in native_ids]
+    assert owners.owner_modules(manifest, "rust", "ordinary", MAC) == modules
+    linux = owners.partition(rows, manifest, "rust", "ordinary", LINUX)
+    assert linux["local_nodeids"] == [f"{modules[1]}::test_program_runs_without_an_actual_rustc_check"]
+    assert linux["transfers"] == [dict(domain="rust", lane="ordinary", nodeid=node, platform=MAC, tools=["rustc"])
+                                  for node in native_ids]
+    mac = owners.partition(rows, manifest, "rust", "ordinary", MAC, complete=False)
+    assert mac["local_nodeids"] == native_ids
+    unrun = [dict(item, status="UNRUN_PREREQUISITE") for item in rows
+             if item["canonical_nodeid"] in mac["local_nodeids"] and not item["selected_by_repository"]]
+    assert len(unrun) == 2
+    assert run.campaign_status(dict(batches=[], unrun=unrun, lane_count=2, coverage=mac)) == "INCOMPLETE_UNRUN"
+    with pytest.raises(ValueError, match="required owner tool unavailable: rustc"):
+        owners.required_tool_bindings(mac["obligations"], MAC, {})
+    assert rows == original
+    for item in rows:
+        item["groups"] = ["rust-native-reference"]
+    with pytest.raises(ValueError, match="splits xdist group"):
+        owners.partition(rows, manifest, "rust", "ordinary", LINUX)
