@@ -150,7 +150,8 @@ def test_original_instance_array_field_is_now_semantic_only(monkeypatch):
 
 # Top-level initialized locals with constant in-range components are the
 # non-throwing native array domain (tests/java/test_source_native_arrays.py).
-NATIVE_ARRAYS = {"initializer", "index-promotion", "empty-array", "parenthesized-place"}
+NATIVE_ARRAYS = {"initializer", "index-promotion", "empty-array", "parenthesized-place",
+                 "allocated-zero", "component-store"}
 
 
 @pytest.mark.parametrize("name,text", PROGRAMS, ids=[x[0] for x in PROGRAMS])
@@ -158,7 +159,8 @@ def test_model_does_not_grant_native_array_compilation(name, text, monkeypatch):
     """The model never grants native compilation; only the native domain does."""
     from pcc.frontends.java.source_lowering import SourceLowerer
     if name in NATIVE_ARRAYS:
-        assert compile_source(text, filename="ArrayExample.java").managed_runtime
+        compilation = compile_source(text, filename="ArrayExample.java")
+        assert compilation.managed_runtime and compilation.emit_object().startswith(b"\x7fELF")
         return
     monkeypatch.setattr(SourceLowerer, "lower", lambda *a: pytest.fail("managed array reached scalar IR"))
     with pytest.raises(UnsupportedJava):

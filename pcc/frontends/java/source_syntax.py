@@ -533,6 +533,25 @@ class SourceParser:
         self.expect("}")
         return Node("array_initializer", token, dtype, values)
 
+    def primitive_array_creation(self, token):
+        """One-dimensional explicit new; caller owns its admission context."""
+        component = self.take()
+        self.expect("[")
+        dtype = ArrayType(component.text)
+        if self.accept("]"):
+            if self.peek().text == "[":
+                self.peek().error("multidimensional arrays require the next array semantic domain",
+                                  code="java.unsupported.array-model-shape")
+            node = self.array_initializer(dtype)
+        else:
+            dimension = self.expression()
+            self.expect("]")
+            if self.peek().text == "[":
+                self.peek().error("multidimensional arrays require the next array semantic domain",
+                                  code="java.unsupported.array-model-shape")
+            node = Node("array_new", token, dtype, [dimension])
+        return node
+
     def annotation(self):
         """JLS 9.7.2 marker annotation; only java.lang.Override has a domain."""
         at = self.expect("@")
@@ -969,8 +988,20 @@ class SourceParser:
                 # its scope starts only in the body, never in that expression.
                 return Node("enhanced_var", name, dtype, is_final=is_final)
             if self.accept("="):
-                initializer = (self.array_initializer(dtype) if isinstance(dtype, ArrayType) and self.peek().text == "{"
-                               else self.expression())
+                if isinstance(dtype, ArrayType) and self.peek().text == "{":
+                    initializer = self.array_initializer(dtype)
+                elif (not self.class_model and isinstance(dtype, ArrayType) and self.peek().text == "new"
+                      and self.peek(1).text in ARRAY_COMPONENTS):
+                    # A direct allocation into this declaration, not a general
+                    # permission to pass an array, return it or discard its root.
+                    initializer = self.primitive_array_creation(self.take())
+                    if initializer.kind == "array_new" and self.peek().text == "{":
+                        self.peek().error("an array creation with a dimension cannot also have an initializer")
+                    if self.peek().text not in {",", ";"}:
+                        self.peek().error("only direct array creation into a local has native root ownership",
+                                          code="java.unsupported.array-storage")
+                else:
+                    initializer = self.expression()
                 children = [initializer]
             else:
                 children = []
@@ -1158,21 +1189,7 @@ class SourceParser:
             token.error("array creation expressions require shared NullPointerException/NegativeArraySizeException "
                         "support and managed root ownership", code="java.unsupported.array-storage")
         elif self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
-            component = self.take()
-            self.expect("[")
-            dtype = ArrayType(component.text)
-            if self.accept("]"):
-                if self.peek().text == "[":
-                    self.peek().error("multidimensional arrays require the next array semantic domain",
-                                      code="java.unsupported.array-model-shape")
-                node = self.array_initializer(dtype)
-            else:
-                dimension = self.expression()
-                self.expect("]")
-                if self.peek().text == "[":
-                    self.peek().error("multidimensional arrays require the next array semantic domain",
-                                      code="java.unsupported.array-model-shape")
-                node = Node("array_new", token, dtype, [dimension])
+            node = self.primitive_array_creation(token)
         elif (token.text == "new" and
               re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", self.peek().text) and
               self.peek().text not in KEYWORDS):

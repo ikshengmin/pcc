@@ -5,7 +5,8 @@ envelope (pcc/runtime/py/py_shared_managed.py). Only operations which cannot
 complete abruptly are admitted, as with the nonzero-constant division domain:
 
 - a one-dimensional boolean/integral local declared once at the method's top
-  level with an array initializer, never reassigned and never escaping;
+  level with an initializer or a provably bounded nonnegative dimension,
+  never reassigned and never escaping;
 - ``a.length``; reads and simple stores of a constant in-range component;
 - enhanced ``for`` over such a local, which is non-null by construction.
 
@@ -30,7 +31,7 @@ from .source_types import ArrayType, widening
 
 # Component storage widths, the PCC ABI types of the native scalar lowering.
 COMPONENT_BYTES = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8}
-# Bounded initializer length (IR size), far below the envelope's own limits.
+# Local initialization bound, far below the envelope's own limits.
 MAX_INITIALIZER_COMPONENTS = 65536
 PRIMITIVE_VARIABLES = frozenset(COMPONENT_BYTES) | {"float", "double"}
 MANAGED_TARGET = "x86_64-unknown-linux-gnu"
@@ -91,20 +92,41 @@ class NativeArrayAnalyzer:
         if len(self.scopes) != 2 or self.controls:
             node.token.error("array locals inside nested blocks, loops or switches require scoped root "
                              "retirement", code="java.unsupported.array-storage")
-        if not node.children or node.children[0].kind != "array_initializer":
-            node.token.error("array locals without an array initializer require shared "
-                             "NullPointerException/NegativeArraySizeException support", code="java.unsupported.array-storage")
+        if not node.children or node.children[0].kind not in {"array_initializer", "array_new"}:
+            node.token.error("array locals without an owned allocation require shared root/ownership semantics",
+                             code="java.unsupported.array-storage")
         initializer = node.children[0]
-        if len(initializer.children) > MAX_INITIALIZER_COMPONENTS:
-            initializer.token.error("array initializer exceeds the bounded component limit (65536)", code="java.unsupported.array-storage")
+        if initializer.value != dtype:
+            initializer.token.error("incompatible primitive array element type: cannot assign "
+                                    + str(initializer.value) + " to " + str(dtype))
         node.symbol = self.declare(node.token, dtype, node.is_final)
-        # JLS 15.10.3: components are evaluated left to right, each converted
-        # by assignment conversion before the variable becomes assigned.
-        for value in initializer.children:
-            self.expression(value, assigned)
-            self.assignment_value(value, dtype.component)
+        if initializer.kind == "array_new":
+            dimension, = initializer.children
+            self.expression(dimension, assigned)
+            if dimension.dtype not in {"byte", "short", "char", "int"}:
+                dimension.token.error("array dimension must promote to int")
+            origin = dimension
+            while origin.kind == "group":
+                origin = origin.children[0]
+            # An immutable local's length is known here, but is NOT a JLS
+            # constant expression. Do not set node.constant on the source AST.
+            length = (self.method.array_lengths[origin.symbol] if origin.kind == "array_length"
+                      else dimension.constant)
+            if length is None or length < 0 or length > MAX_INITIALIZER_COMPONENTS:
+                dimension.token.error("native array dimension needs a proven nonnegative length within "
+                                      "65536 components; dynamic/negative lengths require shared exception support",
+                                      code="java.unsupported.array-storage")
+        else:
+            length = len(initializer.children)
+            if length > MAX_INITIALIZER_COMPONENTS:
+                initializer.token.error("array initializer exceeds the bounded component limit (65536)",
+                                        code="java.unsupported.array-storage")
+            # JLS 10.6: check each initializer in its original left-to-right order.
+            for value in initializer.children:
+                self.expression(value, assigned)
+                self.assignment_value(value, dtype.component)
         initializer.dtype = dtype
-        self.method.array_lengths[node.symbol] = len(initializer.children)
+        self.method.array_lengths[node.symbol] = length
         assigned.add(node.symbol)
         return assigned
 
@@ -249,9 +271,9 @@ class NativeArrayLowering:
         builder.store(ir.Constant(ir.IntType(8).as_pointer(), None), slot)
         return slot
 
-    def allocate(self, node, slot, initializers):
-        """JLS 10.6: create a zeroed array of n components, then evaluate the
-        initializers left to right, storing each before evaluating the next."""
+    def allocate(self, node, slot):
+        """JLS 15.10.2/10.6: evaluate a dimension before allocation, or
+        initialize the allocated array with its values in source order."""
         self.require_target(node.token)
         self.used = True
         lowerer = self.lowerer
@@ -262,7 +284,16 @@ class NativeArrayLowering:
                                  [pointer, ir.IntType(64), pointer.as_pointer()])
         fatal = self.external("pcc_debug_fatal_py", ir.VoidType(), [pointer])
         descriptor = builder.bitcast(self.descriptor(component), pointer)
-        status = builder.call(allocate, [descriptor, ir.Constant(ir.IntType(64), len(initializers)), slot])
+        initializer, = node.children
+        if initializer.kind == "array_new":
+            # JLS 15.10.2: evaluate the dimension before allocating the zeroed
+            # array. Unlike an initializer list it performs no element stores.
+            count = lowerer.coerce(lowerer.expression(initializer.children[0]), "long")
+            initializers = ()
+        else:
+            initializers = initializer.children
+            count = ir.Constant(ir.IntType(64), len(initializers))
+        status = builder.call(allocate, [descriptor, count, slot])
         failed = lowerer.function.append_basic_block("java_array_allocation_failed")
         ready = lowerer.function.append_basic_block("java_array_allocated")
         builder.cbranch(builder.icmp_unsigned("!=", status, ir.Constant(ir.IntType(32), 0)), failed, ready)

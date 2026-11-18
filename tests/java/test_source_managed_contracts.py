@@ -208,9 +208,13 @@ def test_construction_bindings_and_order_are_preserved_beneath_the_shared_plan()
     assert not model.runtime_registered
 
 
+NATIVE_LOCAL = "class ArrayExample{static int run(){int[] a=new int[]{42};return a[0];}}"
+
+
 @pytest.mark.parametrize("text", [
     MIXED_SOURCE,
-    "class ArrayExample{static int run(){int[] a=new int[]{42};return a[0];}}",
+    NATIVE_LOCAL,
+    "class ArrayExample{static int[] get(){return new int[]{42};}static int run(){return get()[0];}}",
     'class ArrayExample{static String run(){return "original";}}',
     "class ArrayExample{static ArrayExample run(){return new ArrayExample();}}",
 ])
@@ -218,12 +222,19 @@ def test_consumed_common_plans_never_admit_native_managed_lowering(text, monkeyp
     from pcc.frontends.java.source_lowering import SourceLowerer
 
     forbid_bytecode_or_external_owner(monkeypatch)
-    monkeypatch.setattr(SourceLowerer, "__init__", lambda *args: pytest.fail("managed reference reached native lowering"))
     analyze_class_sources({"ArrayExample.java": text})
+    if text != NATIVE_LOCAL:
+        monkeypatch.setattr(SourceLowerer, "__init__", lambda *a: pytest.fail("managed reference reached native lowering"))
     for invoke in (lambda: compile_source(text, filename="ArrayExample.java"),
                    lambda: compile_sources({"ArrayExample.java": text}, entry_class="ArrayExample")):
-        with pytest.raises(UnsupportedJava):
-            invoke()
+        if text == NATIVE_LOCAL:
+            # Only the independent local allocation domain grants this object;
+            # its array reference must still be rejected as a scalar ABI below.
+            compilation = invoke()
+            assert compilation.managed_runtime and compilation.emit_object().startswith(b"\x7fELF")
+        else:
+            with pytest.raises(UnsupportedJava):
+                invoke()
     for dtype in (ArrayType("int"), ClassType("ArrayExample"), BootstrapStringType(), "null"):
         for lane in (SourceLowerer.scalar_type, SourceLowerer.abi_type):
             with pytest.raises(UnsupportedJava) as caught:

@@ -5,10 +5,9 @@ JLS 10.3-10.7 (array creation, access, initializers), 14.14.2 (enhanced for),
 Only operations that cannot complete abruptly are lowered, onto the shared GC0
 managed envelope; every other array use keeps an explicit capability code.
 Native execution needs the owned runtime archive and the opt-in shared managed
-object, which the runtime-free Java executable cannot link: PCC native
-execution of these programs is UNRUN. The selected JDK independently checks
-that every positive original returns 42 and that every invalid one is
-rejected.
+object, which the runtime-free Java executable cannot link. The ordinary
+tests below prove object production, not native execution. The selected
+JDK independently runs each positive original and rejects the invalid ones.
 """
 import re
 
@@ -23,6 +22,16 @@ def original(body, helpers=""):
 
 
 PROGRAMS = [
+    ("array-creation", original("int[] a=new int[3];return 42;")),
+    ("explicit-initializer", original("int x=40;int[] a=new int[]{x=x+1,x=x+1};return a[1]+a[0]-41;")),
+    ("explicit-initializer-empty", original("byte[] a=new byte[]{};return 42+a.length;")),
+    ("dimension-zeroed", original("long[] a=new long[3];a[1]=42;return (int)(a[0]+a[1]+a[2]);")),
+    ("boolean-defaults", original("boolean[] a=new boolean[2];return a[0]||a[1]?0:42;")),
+    ("constant-dimension", original("final char n=3;short[] a=new short[n+1];return 38+a.length+a[3];")),
+    ("prior-length", original("byte[] a={7,2};int[] b=new int[(a.length)];return 40+b.length+b[1];")),
+    ("bounded-maximum", original("int[] a=new int[65536];return a[65535]+42;")),
+    ("explicit-trailing-comma", original("char[] a=new char[]{'*',};return a[0];")),
+    ("explicit-zero", original("int[] a=new int[0];return a.length+42;")),
     ("initializer-components", original("int[] a={10,20,12};return a[0]+a[1]+a[2];")),
     ("length", original("long[] a={1L,2L,3L,4L};return a.length+38;")),
     ("empty-array", original("short[] a={};return a.length+42;")),
@@ -47,6 +56,8 @@ PROGRAMS = [
     ("parenthesized-array", original("int[] a={42};return (a)[0]+(a).length-1;")),
     ("array-after-scalar-declarator", original("int x=40,a[]={2};return x+a[0];")),
     ("void-method-array", original("touch();return 42;", "static void touch(){int[] a={1};a[0]=2;}")),
+    # Keep the former managed-plan negative's exact original as a runtime/JDK obligation.
+    ("explicit-singleton", original("int[] a=new int[]{42};return a[0];")),
 ]
 # Valid Java with an explicit native capability code (JDK accepts, no run).
 GAPS = [
@@ -55,7 +66,11 @@ GAPS = [
     ("negative-constant-index", original("int[] a={42};return a[-1];"), "java.unsupported.array-index-exception"),
     ("store-nonconstant-index", original("int[] a={42};int i=0;a[i]=1;return 42;"),
      "java.unsupported.array-index-exception"),
-    ("array-creation", original("int[] a=new int[3];return 42;"), "java.unsupported.array-storage"),
+    ("negative-dimension", original("int[] a=new int[-1];return 42;"), "java.unsupported.array-storage"),
+    ("effectful-dimension", original("int n=2;int[] a=new int[n++];return 42;"), "java.unsupported.array-storage"),
+    ("overflowed-dimension", original("int[] a=new int[2147483647+1];return 42;"), "java.unsupported.array-storage"),
+    ("dynamic-dimension", original("int n=2;int[] a=new int[n];return 42;"), "java.unsupported.array-storage"),
+    ("over-budget-dimension", original("int[] a=new int[65537];return 42;"), "java.unsupported.array-storage"),
     ("blank-array", original("int[] a;return 42;"), "java.unsupported.array-storage"),
     ("alias", original("int[] a={42},b=a;return b[0];"), "java.unsupported.array-storage"),
     ("reassignment", original("int[] a={42};int[] b={1};a=b;return 42;"), "java.unsupported.array-storage"),
@@ -78,6 +93,12 @@ GAPS = [
 ]
 # Invalid Java: ordinary errors, never capability codes.
 INVALID = [
+    ("mismatched-created-array", original("short[] a=new int[]{1};return 42;")),
+    ("mismatched-dimension-array", original("int[] a=new long[3];return 42;")),
+    ("both-dimension-and-initializer", original("int[] a=new int[1]{0};return 42;")),
+    ("long-dimension", original("int[] a=new int[2L];return 42;")),
+    ("boolean-dimension", original("int[] a=new int[true];return 42;")),
+    ("self-length-before-initialization", original("int[] a=new int[a.length];return 42;")),
     ("narrowing-initializer", original("byte[] a={128};return 42;")),
     ("floating-initializer", original("int[] a={1.5};return 42;")),
     ("narrowing-iteration", original("int[] a={42};for(byte b:a){}return 42;")),
@@ -122,13 +143,22 @@ def test_descriptors_are_version_one_scalar_layouts(component, size):
             f"[i64 1, i64 0, i64 {size}, i64 {size}, i64 0, i64 0]") in ir
 
 
-def test_allocation_precedes_left_to_right_initializers():
+@pytest.mark.parametrize("creation", ["{f(40),f(1),f(1)}", "new int[]{f(40),f(1),f(1)}"])
+def test_allocation_precedes_left_to_right_initializers(creation):
     # JLS 10.6: the array exists before any initializer runs.
-    ir = ir_of(PROGRAMS[[row[0] for row in PROGRAMS].index("initializer-calls")][1])
+    ir = ir_of(original("int[] a=" + creation + ";return a[0]+a[1]+a[2];",
+                        "static int f(int x){return x;}"))
     run = re.search(r"^define [^\n]*@pcc_java_[0-9a-f_]*72756e[^\n]*\{\n(.*?)^}", ir, re.M | re.S).group(1)
     alloc = run.index("@pcc_rt_managed_alloc")
     calls = [match.start() for match in re.finditer(r"call i32 \([^)]*\) @pcc_java_", run)]
     assert len(calls) == 3 and alloc < min(calls)
+
+
+@pytest.mark.parametrize("count", [0, 3, 65536])
+def test_dimensioned_allocation_does_not_synthesize_component_stores(count):
+    ir = ir_of(original(f"int[] a=new int[{count}];return 42;"))
+    assert ir.count("call i32 (ptr, i64, ptr) @pcc_rt_managed_alloc(") == 1
+    assert "@pcc_rt_managed_data" not in ir
 
 
 def test_allocation_failure_is_a_labeled_fatal_boundary():

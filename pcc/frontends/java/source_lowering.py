@@ -275,7 +275,7 @@ class SourceLowerer:
         if kind == "empty":
             return
         if kind == "var" and isinstance(node.value, ArrayType):
-            self.arrays.allocate(node, self.slots[node.symbol], node.children[0].children)
+            self.arrays.allocate(node, self.slots[node.symbol])
             return
         if kind == "enhanced_for":
             self.enhanced_for(node)
