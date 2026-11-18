@@ -911,6 +911,9 @@ class CompilerRecordSpanArena:
     ``(left, right, 0)`` or a run ``(-2, start, count)`` of ``count`` record
     IDs stored contiguously in ``runs``. A whole sequence appended at once is
     one run: one node and one scalar per record instead of two node triples.
+    A checked run ``(-3, start, count)`` is identical except that its producer
+    validated every ID against the arena's owner before publication; the
+    arena itself never interprets that mark.
     A cursor holds pending node IDs and, for a run being replayed, the pair
     ``(end, -(position + 1))``; node IDs are never negative.
     """
@@ -985,7 +988,7 @@ class CompilerRecordSpanArena:
             destination.first * 2, next_root, left.second + right.second,
         )
 
-    def append_ids(self, span: CompilerInt2, ids: CompilerIntArena) -> None:
+    def append_ids(self, span: CompilerInt2, ids: CompilerIntArena, checked: bool = False) -> None:
         """Append every record ID of ``ids`` in order as one run node."""
 
         root: CompilerInt2 = self._root(span)
@@ -996,7 +999,7 @@ class CompilerRecordSpanArena:
             raise OverflowError("compiler record span exceeds its length limit")
         start = len(self.runs)
         self.runs.extend_from(ids, 0, count)
-        self._publish_run(span, root, start, count)
+        self._publish_run(span, root, start, count, -3 if checked else -2)
 
     def append_id_list(self, span: CompilerInt2, records: list[int]) -> None:
         """Append every record ID of one ``list[int]`` in order as one run node."""
@@ -1009,16 +1012,16 @@ class CompilerRecordSpanArena:
             raise OverflowError("compiler record span exceeds its length limit")
         start = len(self.runs)
         self.runs.extend_list(records)
-        self._publish_run(span, root, start, count)
+        self._publish_run(span, root, start, count, -2)
 
-    def _publish_run(self, span: CompilerInt2, root: CompilerInt2, start: int, count: int) -> None:
+    def _publish_run(self, span: CompilerInt2, root: CompilerInt2, start: int, count: int, kind: int) -> None:
         # The copied payload is unreachable until the root commit below, so a
         # rejected sequence leaves every published span unchanged.
         try:
             if self.runs.min_from(start, count) < 0:
                 raise ValueError("compiler record id must be nonnegative")
             run = len(self.nodes) // 3
-            self.nodes.append3(-2, start, count)
+            self.nodes.append3(kind, start, count)
             next_root = run
             if root.first >= 0:
                 next_root = len(self.nodes) // 3
@@ -1027,6 +1030,15 @@ class CompilerRecordSpanArena:
             self.runs.truncate(start)
             raise
         self.spans.set2_unchecked(span.first * 2, next_root, root.second + count)
+
+    def is_checked_run(self, span: CompilerInt2) -> bool:
+        """Whether the span is exactly one checked run (a snapshot shares it)."""
+
+        root: CompilerInt2 = self._root(span)
+        if root.first < 0 or root.first >= len(self.nodes) // 3:
+            return False
+        node: CompilerInt3 = self.nodes.get3_unchecked(root.first)
+        return node.first == -3 and node.third == root.second
 
     def copy_ids(self, span: CompilerInt2, out: CompilerIntArena) -> None:
         """Append the span's record IDs to ``out``; runs are copied in bulk."""
@@ -1048,7 +1060,7 @@ class CompilerRecordSpanArena:
                     if node.second < 0 or node.third != 1:
                         raise RuntimeError("compiler record span leaf is invalid")
                     out.append(node.second)
-                elif node.first == -2:
+                elif node.first == -2 or node.first == -3:
                     if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
                         raise RuntimeError("compiler record span run is invalid")
                     out.extend_from(self.runs, node.second, node.third)
@@ -1097,7 +1109,7 @@ class CompilerRecordSpanArena:
                 if node.second < 0 or node.third != 1:
                     raise RuntimeError("compiler record span leaf is invalid")
                 return node.second
-            if node.first == -2:
+            if node.first == -2 or node.first == -3:
                 if node.second < 0 or node.third < 1 or node.second + node.third > len(self.runs):
                     raise RuntimeError("compiler record span run is invalid")
                 if node.third > 1:

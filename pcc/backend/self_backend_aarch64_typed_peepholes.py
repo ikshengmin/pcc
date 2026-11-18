@@ -116,11 +116,16 @@ class _Pass:
             self.ids.close()
             raise
         try:
-            # One bulk span copy; every record is still validated per pass.
+            # A checked run is a previous pass's output: that pass validated
+            # each ID against these same records and semantics, and every
+            # replacement was validated when appended. Other spans are still
+            # validated record by record. The CFG stage revalidates the whole
+            # module before publication.
+            checked = semantics is fragments.semantics and fragments.spans.is_checked_run(span)
             fragments.copy_record_ids(span, self.ids)
             records = fragments.records
             record_count = len(records) // 4
-            index = 0
+            index = len(self.ids) if checked else 0
             while index < len(self.ids):
                 record_id = self.ids.get_unchecked(index)
                 if record_id >= record_count:
@@ -388,7 +393,7 @@ class _Pass:
         # New records were transactionally staged on result; the returned root
         # is rebuilt from selected IDs so staging cannot duplicate instructions.
         result = self.fragments.new_fragment()
-        self.fragments.spans.append_ids(result, self.output)
+        self.fragments.spans.append_ids(result, self.output, self.semantics is self.fragments.semantics)
         return result
 
 
@@ -882,7 +887,7 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
             pending = CompilerRecordSpanArena()
             pending.generation = old_owner.generation + 1
             result = pending.new_span()
-            pending.append_ids(result, p.output)
+            pending.append_ids(result, p.output, semantics is fragments.semantics)
         finally:
             p.close()
     except Exception:

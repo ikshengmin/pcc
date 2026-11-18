@@ -349,6 +349,33 @@ def test_record_span_corrupt_runs_fail_closed(start, count):
         arena.close()
 
 
+def test_record_span_checked_mark_requires_one_whole_checked_run():
+    arena = CompilerRecordSpanArena()
+    ids = CompilerIntArena()
+    try:
+        ids.append(3)
+        ids.append(4)
+        plain, checked, empty = arena.new_span(), arena.new_span(), arena.new_span()
+        arena.append_ids(plain, ids)
+        arena.append_ids(checked, ids, True)
+        assert not arena.is_checked_run(plain)
+        assert not arena.is_checked_run(empty)
+        assert arena.is_checked_run(checked)
+        snapshot = arena.new_span()
+        arena.extend(snapshot, checked)
+        assert arena.is_checked_run(snapshot)
+        assert _cursor_values(arena, checked) == _copied_values(arena, checked) == [3, 4]
+        arena.append(checked, 5)
+        assert not arena.is_checked_run(checked)
+        assert arena.is_checked_run(snapshot)
+        root = arena.spans.get2_unchecked(snapshot.first)
+        arena.spans.set2_unchecked(snapshot.first * 2, root.first, 7)
+        assert not arena.is_checked_run(snapshot)
+    finally:
+        ids.close()
+        arena.close()
+
+
 def test_record_span_partial_construction_closes_earlier_arenas(monkeypatch):
     from pcc.backend import self_backend_value_arena as module
     allocated = []

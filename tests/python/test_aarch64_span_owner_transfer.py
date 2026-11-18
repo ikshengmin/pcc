@@ -95,11 +95,11 @@ def test_failures_preserve_owner_and_primary(monkeypatch, fault):
         primary = MemoryError('transfer primary'); secondary = RuntimeError('cleanup secondary')
         append = CompilerRecordSpanArena.append_ids; close = CompilerRecordSpanArena.close; passclose = p._Pass.close
         # The new owner's root is built from the output IDs as one run.
-        def failappend(owner, handle, output):
+        def failappend(owner, handle, output, *checked):
             if owner is not old:
                 if owner not in new: new.append(owner)
                 if fault != 'scratch_close': raise primary
-            return append(owner, handle, output)
+            return append(owner, handle, output, *checked)
         def failclose(pass_):
             scratch.extend((pass_.ids, pass_.output)); passclose(pass_)
             if fault == 'scratch_close': raise primary
