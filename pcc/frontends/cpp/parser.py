@@ -7,6 +7,8 @@ text, invoke the C parser, or discard missing lifetime/exception/template
 semantics. Unimplemented features remain explicit errors.
 """
 
+from pcc.frontends.cpp.class_result_guards import reject_pending
+
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.c.c_abi_layout import c_ptrdiff_type_name, c_size_type_name
 from pcc.frontends.c.parse.c_lex import CLexer
@@ -157,6 +159,7 @@ class CppParser:
 
     def parse(self, text, filename=""):
         self.scope = Scope()
+        self.has_class_result_plans = False
         self.return_type = None
         self.template_function = None
         self.member_function = None
@@ -214,8 +217,10 @@ class CppParser:
                 if isinstance(decl.type, c_ast.FuncDecl) and decl.name not in names:
                     prototypes.append(decl)
                     names.add(decl.name)
-            return c_ast.FileAST(prototypes + declarations + instances)
-        return c_ast.FileAST(declarations)
+            from pcc.frontends.cpp.class_result_guards import seal_projection
+            return seal_projection(c_ast.FileAST(prototypes + declarations + instances), self.has_class_result_plans)
+        from pcc.frontends.cpp.class_result_guards import seal_projection
+        return seal_projection(c_ast.FileAST(declarations), self.has_class_result_plans)
 
     @property
     def pending_instances(self):
@@ -803,12 +808,14 @@ class CppParser:
                           constant_fact=expression.constant_fact)
 
     def _discarded_value_node(self, expression):
+        reject_pending('generic discard (not standalone statement)', None, expression)
         if expression.lvalue and expression.discarded_known:
             return (expression.discarded_node if expression.discarded_node is not None
                     else c_ast.Constant('int', '0', expression.node.coord))
         return self._nullptr_rvalue(expression).node
 
     def _convert(self, expression, dtype, coord, force=False, contextual=False):
+        reject_pending('conversion', coord, expression)
         if isinstance(dtype, ReferenceType):
             from pcc.frontends.cpp.references import bind
             return bind(self, expression, dtype, coord)
@@ -1193,9 +1200,13 @@ class CppParser:
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "function name shadows a template parameter", name.coord)
         declaration_only = (self._peek().value == ";" and member_owner is None and not template_parameters)
-        for signature_type in (result_type,) + tuple(dtype for param, dtype in params):
+        from pcc.frontends.cpp.class_result_declarations import admitted_signature
+        class_result_projection = (is_class_type(result_type) and admitted_signature(
+            self, result_type, member_definition, template_parameters, name.coord))
+        for signature_index, signature_type in enumerate((result_type,) + tuple(dtype for param, dtype in params)):
             plain = unqualified(signature_type)
             if is_class_type(plain) and not (
+                    signature_index == 0 and class_result_projection or
                     declaration_only and record_declaration_projection_supported(plain, self.types)):
                 raise CppDiagnostic("cpp.unsupported.class-value-abi",
                                     "class by-value function ABI/lifetime is not implemented", name.coord)
@@ -1380,6 +1391,33 @@ class CppParser:
                                  c_name=self._local_projection_name("this"),
                                  dtype=object_pointer_type(symbol))
             param_decls.insert(0, self._decl(this_symbol.c_name, this_symbol.dtype, name.coord))
+        if class_result_projection:
+            from pcc.frontends.cpp.class_result_declarations import DeferredClassResultDeclaration
+            pending_result = DeferredClassResultDeclaration(symbol, param_decls, name.coord)
+            if member_definition is not None:
+                if not definition:
+                    self._expect(';')
+                    return pending_result
+                from pcc.frontends.cpp.inline_methods import DeferredMethod
+                from pcc.frontends.cpp.inline_constructors import collect_body
+                symbol.definition_linkage = 'external_odr'
+                member_definition.inline_methods.append(DeferredMethod(
+                    symbol, result_type, parameter_scope, parameter_symbols, pending_result,
+                    this_symbol, collect_body(self), name.coord))
+                return pending_result
+            declaration = pending_result.materialize(self)
+            if not definition:
+                self._expect(';')
+                return declaration
+            if named_scope and inline_specifiers:
+                from pcc.backend.definition_linkage import supports_external_odr_function_definitions
+                if not supports_external_odr_function_definitions(self.types.target_triple):
+                    raise CppDiagnostic('cpp.unsupported.inline-declarations',
+                                        'named namespace inline functions require external-ODR definition linkage', name.coord)
+                symbol.explicit_inline = True
+                symbol.definition_linkage = declaration.definition_linkage = 'external_odr'
+            return self._bind_function_body(symbol, result_type, parameter_scope, parameter_symbols,
+                                            declaration, this_symbol, member_owner, name.coord)
         declaration = self._decl(symbol.c_name, result_type, name.coord)
         if symbol.noreturn:
             declaration.funcspec = ["_Noreturn"]
@@ -1424,13 +1462,30 @@ class CppParser:
         self.return_type = result_type
         previous_function = self.current_function
         self.current_function = symbol
+        previous_class_result = getattr(self, 'class_result_projection', None)
+        previous_constructed_returns = getattr(self, 'class_result_constructed_returns', None)
+        self.class_result_constructed_returns = []
+        result_plan = getattr(symbol, 'class_result_abi', None)
+        self.class_result_projection = ((result_plan, symbol.class_result_hidden_name)
+                                        if result_plan is not None else None)
         symbol.parameter_symbols = parameter_symbols
+        from pcc.frontends.cpp.class_result_effects import ResultBodyEffects
+        effect_proof = ResultBodyEffects(self, symbol) if result_plan is not None else None
         try:
             body = self._block(new_scope=False)
+            if effect_proof is not None:
+                effect_proof.check(body, coord)
+            if result_plan is not None:
+                from pcc.frontends.cpp.class_result_body import require_constructed_returns
+                require_constructed_returns(body, self.class_result_constructed_returns, coord)
         finally:
             self.scope = parent
             self.return_type = previous_return_type
             self.current_function = previous_function
+            self.class_result_projection = previous_class_result
+            self.class_result_constructed_returns = previous_constructed_returns
+            if effect_proof is not None:
+                effect_proof.restore(self)
             self.member_function, self.this_symbol = previous_member, previous_this
         if (member_owner is None and symbol.name == "main"
                 and symbol.owner is self.scope.global_scope()):
@@ -1532,7 +1587,12 @@ class CppParser:
             jump = c_ast.Break(token.coord) if token.value == "break" else c_ast.Continue(token.coord)
             return self.lifetimes.jump(token.value, jump, token.coord)
         if self._accept("return"):
-            expression = None if self._peek().value == ";" else self._expression()
+            projection = getattr(self, 'class_result_projection', None)
+            if projection is None:
+                expression = None if self._peek().value == ";" else self._expression()
+            else:
+                from pcc.frontends.cpp.class_result_frontend import parse_return_expression
+                expression = parse_return_expression(self)
             self._expect(";")
             return self._return_statement(expression, token.coord)
         if self._is_declaration(allow_range=for_init):
@@ -1665,6 +1725,11 @@ class CppParser:
             symbol.initialization_complete = True
             return self._decl(symbol.c_name, dtype, name.coord, init)
         expression = self._expression()
+        from pcc.frontends.cpp.class_result_calls import CallResultPlan
+        if isinstance(expression.node, CallResultPlan):
+            from pcc.frontends.cpp.class_result_lifetimes import discard_full_expression
+            self._expect(";")
+            return discard_full_expression(self, expression, token.coord)
         self._require_value(expression, allow_void=True)
         self._expect(";")
         return self._discarded_value_node(expression)
@@ -1830,6 +1895,9 @@ class CppParser:
             raise CppDiagnostic("cpp.invalid-object-type", "an object cannot have type void", coord)
 
     def _return_statement(self, expression, coord):
+        if getattr(self, 'class_result_projection', None) is not None:
+            from pcc.frontends.cpp.class_result_frontend import finish_return
+            return finish_return(self, expression, coord)
         if getattr(self.member_function, "destructor", False) and expression is not None:
             raise CppDiagnostic("cpp.destructor-return-value", "destructors cannot return an expression", coord)
         if getattr(self.member_function, "constructor", False) and expression is not None:
@@ -1873,6 +1941,8 @@ class CppParser:
         return self.lifetimes.return_statement(self, self._convert(expression, self.return_type, coord), coord)
 
     def _require_value(self, expression, allow_void=False, allow_class=False, object_address=False):
+        if not allow_class:
+            reject_pending('scalar value', None, expression)
         if not object_address:
             self._check_extended_value_type(expression.dtype, expression.node)
         if contains_function(expression.dtype):
@@ -1906,6 +1976,7 @@ class CppParser:
         return lhs
 
     def _compound_assignment_expression(self, operator, lhs, rhs, coord):
+        reject_pending('compound assignment', coord, lhs, rhs)
         if array_type(lhs.dtype):
             raise CppDiagnostic("cpp.array-not-assignable", "builtin array assignment is not permitted", coord)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
@@ -1959,6 +2030,7 @@ class CppParser:
                           constant_fact=not_constant(dtype, "modification of a runtime object", coord))
 
     def _assignment_expression(self, lhs, rhs, coord):
+        reject_pending('assignment', coord, lhs, rhs)
         if array_type(lhs.dtype):
             raise CppDiagnostic("cpp.array-not-assignable", "builtin array assignment is not permitted", coord)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
@@ -2089,6 +2161,7 @@ class CppParser:
             dtype, "pointer difference constant-expression proof is not implemented", coord))
 
     def _binary_expression(self, operator, lhs, rhs, coord):
+        reject_pending('binary operator', coord, lhs, rhs)
         lhs, rhs = self._decay_array(lhs), self._decay_array(rhs)
         if is_class_type(lhs.dtype) or is_class_type(rhs.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class operator lookup/conversion is not implemented", coord)
@@ -2206,6 +2279,7 @@ class CppParser:
             return self._peek().value == ")"
 
     def _explicit_arithmetic_cast(self, dtype, expression, coord, style):
+        reject_pending('explicit cast', coord, expression)
         target, source = unqualified(dtype), unqualified(expression.dtype)
         feature = "static-cast" if style == "static_cast" else "c-style-cast"
         if dependent(target) or dependent(source):
@@ -2395,6 +2469,7 @@ class CppParser:
         return expression
 
     def _subscript_expression(self, left, right, coord):
+        reject_pending('subscript', coord, left, right)
         if self.template_function is not None:
             left, right = self._decay_array(left), self._decay_array(right)
             first_pointer = pointer_type(left.dtype)
@@ -2463,6 +2538,7 @@ class CppParser:
                           constant_fact=unmodeled(unqualified(dtype), "array element constant proof is not implemented", coord))
 
     def _increment_expression(self, operator, expression, coord, postfix=False):
+        reject_pending('increment', coord, expression)
         dtype = unqualified(expression.dtype)
         self._check_extended_value_type(dtype, expression.node)
         if array_type(dtype):
@@ -2512,6 +2588,7 @@ class CppParser:
                           constant_fact=fact)
 
     def _unary_expression(self, operator, expression, coord):
+        reject_pending('unary operator', coord, expression)
         if operator == "&" and expression.qualified_member is not None:
             raise CppDiagnostic("cpp.unsupported.member-pointers",
                                 "qualified member address requires a pointer-to-member type and representation", coord)
@@ -2541,7 +2618,7 @@ class CppParser:
             if operator == "&" and isinstance(expression.node, c_ast.UnaryOp) and expression.node.op == "*":
                 return Expression(expression.node.expr, dtype)
             class_glvalue = operator == "*" and (is_class_type(dtype) or unqualified(dtype) == "nullptr")
-            return Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*",
+            result = Expression(c_ast.UnaryOp(operator, expression.node, coord), dtype, operator == "*",
                               discarded_known=class_glvalue,
                               discarded_node=expression.node if class_glvalue else None,
                               discarded_fact=self._constant_fact(expression) if class_glvalue else None,
@@ -2549,6 +2626,12 @@ class CppParser:
                                               and (getattr(expression.symbol, "namespace_object", False)
                                                    or getattr(expression.symbol, "static_data_member", False))
                                               else None))
+            # Record the source operation, not an internal dereference emitted
+            # for reference-return calls or implicit member lowering.
+            if operator == '*' and is_class_type(dtype):
+                from pcc.frontends.cpp.class_result_copy import mark_explicit_dereference
+                mark_explicit_dereference(result)
+            return result
         if is_class_type(expression.dtype):
             raise CppDiagnostic("cpp.unsupported.class-operators", "class unary operator lookup/conversion is not implemented", coord)
         if is_enum_type(expression.dtype) and unqualified(expression.dtype).scoped:
@@ -2585,12 +2668,17 @@ class CppParser:
     def _check_call_value_abi(self, selected, coord):
         from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
         check_result(selected.dtype, coord, allow_class=ordinary_class_result_context(self))
-        for dtype in (selected.dtype,) + selected.parameters:
+        # Only an independently projected, ordinary result admits a destination
+        # plan. By-value parameters and every unclassified return keep the gate.
+        result_plan = getattr(selected, 'class_result_abi', None)
+        owned = result_plan is not None and ordinary_class_result_context(self)
+        for dtype in (() if owned else (selected.dtype,)) + selected.parameters:
             if is_class_type(dtype):
                 raise CppDiagnostic("cpp.unsupported.class-value-abi", "record declaration projection does not implement copy/materialization at a call", coord)
             self._check_extended_value_type(dtype, selected)
 
     def _call_expression(self, group, arguments, coord, explicit_arguments=None, unqualified_lookup=False):
+        reject_pending('function argument', coord, *arguments)
         if (self.template_function is not None or self.instantiating_template) and any(
                 isinstance(t, ReferenceType) for candidate in group.overloads for t in candidate.parameters):
             raise CppDiagnostic("cpp.unsupported.references", "reference calls in template replay require value-category deduction", coord)
@@ -2690,6 +2778,9 @@ class CppParser:
             raise CppDiagnostic("cpp.unsupported.enum-templates",
                                 "enum results in template instantiation require dependent lookup", coord)
         from pcc.frontends.cpp.references import call_result, ordinary_class_result_context
+        if getattr(selected, 'class_result_abi', None) is not None:
+            from pcc.frontends.cpp.class_result_calls import selected_call
+            return selected_call(self, selected, converted, coord)
         return call_result(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
                                           c_ast.ExprList(converted, coord), coord), selected.dtype, coord,
                            allow_class=ordinary_class_result_context(self))
@@ -2864,6 +2955,9 @@ class CppParser:
             if array_type(dtype):
                 raise CppDiagnostic("cpp.invalid-array-conversion", "functional conversion to an array is not permitted", token.coord)
             if is_class_type(dtype):
+                if getattr(self, 'reading_class_return_expression', False):
+                    from pcc.frontends.cpp.class_result_prvalues import parse_prvalue
+                    return parse_prvalue(self, dtype, token.coord)
                 raise CppDiagnostic("cpp.unsupported.class-initialization", "class temporary materialization is not implemented", token.coord)
             # [expr]/6: a non-class, non-array prvalue loses top-level cv.
             # The named alias itself and entity decltype retain their cv type.

@@ -9,6 +9,8 @@ Ordinary reference results borrow existing scalar/pointer/class lvalues.
 Temporary materialization, class-value calls and implicit class copies remain
 gaps; class-reference results in template patterns/replay remain separate.
 """
+
+from pcc.frontends.cpp.class_result_guards import reject_pending
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.types import (
@@ -109,6 +111,7 @@ def compare(source, first, second, types, null_pointer=False):
 
 
 def bind(parser, expression, destination, coord, *, allow_class=False):
+    reject_pending('reference binding', coord, expression)
     from pcc.frontends.cpp.classes import is_class_type
     if expression.assignment_result:
         raise CppDiagnostic('cpp.unsupported.references',
@@ -140,6 +143,7 @@ def convert_call_argument(parser, expression, dtype, coord):
 Overload selection and the call owner retain by-value, variadic and template
 gates. This is argument conversion, not general class value conversion.
 """
+    reject_pending('argument conversion', coord, expression)
     from pcc.frontends.cpp.classes import is_class_type
     if isinstance(dtype, ReferenceType) and is_class_type(dtype.referent):
         if not ordinary_class_result_context(parser):

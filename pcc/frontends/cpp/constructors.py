@@ -473,6 +473,11 @@ def construct_local(parser, symbol):
             direct_list = True
         else:
             expression = parser._expression()
+            from pcc.frontends.cpp.class_result_calls import CallResultPlan
+            if isinstance(expression.node, CallResultPlan):
+                from pcc.frontends.cpp.class_result_lifetimes import initialize_local
+                parser._expect(";")
+                return initialize_local(parser, symbol, expression, symbol.coord)
             parser._require_value(expression, allow_class=True)
             if is_class_type(expression.dtype):
                 raise CppDiagnostic("cpp.unsupported.class-initialization",
@@ -493,6 +498,8 @@ def construct_local(parser, symbol):
 def parse_constructor_argument(parser):
     """A C1 reference slot may borrow a class glvalue without fetching it."""
     expression = parser._expression()
+    from pcc.frontends.cpp.class_result_guards import reject_pending
+    reject_pending('constructor argument temporary', expression.node.coord, expression)
     # Ordinary function calls retain their separate class-value/ADL boundary.
     parser._require_value(expression, allow_class=True,
                           object_address=is_class_type(expression.dtype))
@@ -661,6 +668,8 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
                             "member-owning construction requires closed argument and default effects", coord)
     if construction_calls is not None:
         construction_calls[call] = selected
+    from pcc.frontends.cpp.class_result_effects import record_constructor
+    record_constructor(parser, call, selected)
     from pcc.frontends.cpp.default_constructors import request_definition
     request_definition(parser, selected)
     return invocation

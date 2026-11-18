@@ -7,6 +7,8 @@ keep their existing explicit capability boundaries. Constant facts are separate
 from runtime AST and do not delete an operand before its static checks.
 """
 
+from pcc.frontends.cpp.class_result_guards import reject_pending
+
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type
 from pcc.frontends.cpp.constants import (
@@ -84,6 +86,7 @@ def _sequence_fact(parser, first, second, dtype, coord):
 
 
 def conditional_expression(parser, condition, consequent, alternative, coord):
+    reject_pending('conditional expression', coord, condition, consequent, alternative)
     from pcc.frontends.cpp.parser import Expression
 
     condition_node = parser._convert(condition, 'bool', coord, contextual=True)
@@ -164,6 +167,7 @@ def conditional_expression(parser, condition, consequent, alternative, coord):
 
 
 def comma_expression(parser, first, second, coord):
+    reject_pending('comma expression', coord, first, second)
     from pcc.frontends.cpp.parser import Expression
 
     parser._require_value(first, allow_void=True, allow_class=True)

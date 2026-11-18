@@ -79,6 +79,8 @@ class AutomaticLifetimes:
                                      c_ast.ExprList([address], coord), coord)
                 if self.cleanup_destructors is not None:
                     self.cleanup_destructors[call] = destructor
+                from pcc.frontends.cpp.class_result_effects import record_destructor
+                record_destructor(self, call, destructor)
                 calls.append(call)
         return calls
 

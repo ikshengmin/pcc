@@ -25,6 +25,8 @@ members; Itanium C++ ABI sections 2.2 and 2.4. Tests are original
 PCC cases, not copied compiler-suite inputs.
 """
 
+from pcc.frontends.cpp.class_result_guards import reject_pending
+
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.constants import NOT_CONSTANT, not_constant, unmodeled
@@ -617,6 +619,8 @@ def _prepare_completed_class_tree(parser, definition):
 def _bind_completed_class_tree(parser, definition):
     for nested in definition.nested_definitions:
         _bind_completed_class_tree(parser, nested)
+    from pcc.frontends.cpp.class_result_declarations import materialize_completed_class
+    materialize_completed_class(parser, definition)
     from pcc.frontends.cpp.inline_constructors import bind_definitions
     bind_definitions(parser, definition)
     from pcc.frontends.cpp.inline_methods import bind_methods
@@ -655,6 +659,7 @@ def project_class_declarations(declaration, definition):
 
 def member_access(parser, expression, operator, member):
     """Resolve a data member, check access, then emit the shared C StructRef."""
+    reject_pending('member receiver', member.coord, expression)
     if getattr(parser, 'class_template_method', None) is not None:
         from pcc.frontends.cpp.class_template_members import pattern_member_access
         return pattern_member_access(parser, expression, operator, member)

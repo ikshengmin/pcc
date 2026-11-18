@@ -1,0 +1,84 @@
+.intel_syntax noprefix
+.text
+.globl abi_probe
+abi_probe:
+  sub rsp, 136
+  mov dword ptr [rsp+64], 0
+  lea rdi, [rsp+32]
+  lea rsi, [rsp+64]
+  mov rdx, 1
+  mov rcx, 2
+  mov r8, 3
+  mov r9, 4
+  mov qword ptr [rsp], 5
+  mov qword ptr [rsp+8], 6
+  mov qword ptr [rsp+16], 7
+  mov rax, 0x4004000000000000
+  movq xmm0, rax
+  call @MAKE@
+  lea rcx, [rsp+32]
+  cmp rax, rcx
+  jne .Lbad11
+  cmp qword ptr [rsp+32], 7654346
+  jne .Lbad12
+  lea rcx, [rsp+64]
+  cmp qword ptr [rsp+40], rcx
+  jne .Lbad12
+  cmp dword ptr [rsp+64], 0
+  jne .Lbad12
+  lea rdi, [rsp+48]
+  mov rsi, 3
+  lea rdx, [rsp+64]
+  call @CTOR@
+  lea rdi, [rsp+32]
+  lea rsi, [rsp+48]
+  mov rdx, 1
+  mov rcx, 2
+  mov r8, 3
+  mov r9, 4
+  mov qword ptr [rsp], 5
+  mov qword ptr [rsp+8], 6
+  mov qword ptr [rsp+16], 7
+  mov rax, 0x4004000000000000
+  movq xmm0, rax
+  call @PRESS@
+  lea rcx, [rsp+32]
+  cmp rax, rcx
+  jne .Lbad13
+  cmp qword ptr [rsp+32], 7654349
+  jne .Lbad14
+  lea rcx, [rsp+64]
+  cmp qword ptr [rsp+40], rcx
+  jne .Lbad14
+  lea rdi, [rsp+32]
+  lea rsi, [rsp+48]
+  call @COPY@
+  lea rcx, [rsp+32]
+  cmp rax, rcx
+  jne .Lbad15
+  cmp qword ptr [rsp+32], 3
+  jne .Lbad16
+  cmp dword ptr [rsp+64], 1
+  jne .Lbad16
+  mov eax, 42
+  jmp .Ldone
+.Lbad11:
+  mov eax, 11
+  jmp .Ldone
+.Lbad12:
+  mov eax, 12
+  jmp .Ldone
+.Lbad13:
+  mov eax, 13
+  jmp .Ldone
+.Lbad14:
+  mov eax, 14
+  jmp .Ldone
+.Lbad15:
+  mov eax, 15
+  jmp .Ldone
+.Lbad16:
+  mov eax, 16
+.Ldone:
+  add rsp, 136
+  ret

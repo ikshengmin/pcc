@@ -11,6 +11,8 @@ The first emission boundary is non-inline declarations and out-of-class
 bodies. In-class bodies require C++ inline/ODR emission, not C's TU-local
 inline behavior, and therefore remain an explicit capability boundary.
 """
+
+from pcc.frontends.cpp.class_result_guards import reject_pending
 from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.constants import not_constant
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
@@ -172,6 +174,7 @@ def single_overload(group, selected, coord):
 
 def call_member(parser, group, object_expression, arguments, coord, address_available=True,
                 virtual_dispatch=True):
+    reject_pending('member receiver/argument', coord, object_expression, *arguments)
     require_nontemplate_mixed_call(parser, group, coord)
     if is_mixed_group(group):
         # x.f(args) / p->f(args): rank with the real object; a selected static
@@ -202,6 +205,11 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
                             "dot member calls require shared address-only aggregate lowering", coord)
     from pcc.frontends.cpp.default_arguments import expand
     arguments = expand(parser, selected, arguments, coord)
+    if getattr(selected, 'class_result_abi', None) is not None:
+        from pcc.frontends.cpp.class_result_calls import selected_call
+        from pcc.frontends.cpp.references import convert_call_arguments
+        converted = convert_call_arguments(parser, arguments, selected.parameters, coord)
+        return selected_call(parser, selected, converted, coord, object_expression=object_expression)
     this_type = object_pointer_type(selected)
     # This is compiler-created storage, not a source local declaration.
     # Its initializer and explicit arguments may themselves name this_argument;
@@ -265,6 +273,9 @@ def call_static_member(parser, group, arguments, coord, discarded_base=None):
     if selected.variadic:
         from pcc.frontends.cpp.varargs import convert_ellipsis_arguments
         converted += convert_ellipsis_arguments(parser, arguments[len(selected.parameters):], coord)
+    if getattr(selected, 'class_result_abi', None) is not None:
+        from pcc.frontends.cpp.class_result_calls import selected_call
+        return selected_call(parser, selected, converted, coord, discarded_object=discarded_base)
     node = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
     if discarded_base is not None:
         node = c_ast.ExprList([discarded_base, node], coord)
