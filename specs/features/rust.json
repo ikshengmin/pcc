@@ -2635,10 +2635,25 @@
         "rust.ref.8.2.4",
         "rust.ref.8.2"
       ],
-      "scope": "Qualification missing, not implementation missing: `<<`, `>>`, `<<=` and `>>=` on any two integer types, never unified (rustc enforce_builtin_binop_types): the result is the left type and an unconstrained literal amount is i32. With overflow checks off the amount is truncated or zero-extended to the shifted width and masked to width - 1 (rustc build_masked_shift); `>>` is arithmetic for signed and logical for unsigned types. A known amount whose unsigned bit pattern is at least the width is the arithmetic_overflow lint where reachable (known_panics.py, which now also propagates known &, |, ^, ! and shift results) and E0080 in constant evaluation (const and static initializers, array lengths, enum discriminants); bool operands are E0369. Expression precedence is the Rust Reference's (&, ^ and | bind tighter than comparisons; shifts between & and +), replacing a C ordering under which `a | b == b` on bools miscompiled. rustc's parse error for `<<` after `x as T` is kept. 51 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:33:31 and stops at bloom/sketch.rs:185:12 (a function named with the weak keyword `union`). Operator-trait (Shl/Shr) implementations for user types and u8/u16/i8/i16/128-bit operands keep explicit boundaries. Local Mac.",
+      "scope": "Qualification missing, not implementation missing: `<<`, `>>`, `<<=` and `>>=` on any two integer types, never unified (rustc enforce_builtin_binop_types): the result is the left type and an unconstrained literal amount is i32. With overflow checks off the amount is truncated or zero-extended to the shifted width and masked to width - 1 (rustc build_masked_shift); `>>` is arithmetic for signed and logical for unsigned types. A known amount whose unsigned bit pattern is at least the width is the arithmetic_overflow lint where reachable (known_panics.py, which now also propagates known &, |, ^, ! and shift results) and E0080 in constant evaluation (const and static initializers, array lengths, enum discriminants); bool operands are E0369. Expression precedence is the Rust Reference's (&, ^ and | bind tighter than comparisons; shifts between & and +), replacing a C ordering under which `a | b == b` on bools miscompiled. rustc's parse error for `<<` after `x as T` is kept. 51 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:33:31. Operator-trait (Shl/Shr) implementations for user types and u8/u16/i8/i16/128-bit operands keep explicit boundaries. Local Mac.",
       "status": "missing",
       "tests": [
         "tests/rust/test_rust_shift_operators.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.expressions.compound-assignment-and-weak-union",
+      "title": "Every compound assignment operator and the weak keyword union",
+      "chapter_ids": [
+        "rust.ref.8.2.4",
+        "rust.ref.2.3"
+      ],
+      "scope": "Qualification missing, not implementation missing: `&=`, `|=` and `^=` on integers and on bool (core's bool BitAndAssign, BitOrAssign and BitXorAssign), and `/=` and `%=` with the same divisor rule as `/` and `%` (a known nonzero divisor, not signed -1, until owned panics exist). Known `&=`, `|=` and `^=` results propagate in the owned arithmetic_overflow lint; `/=` and `%=` end a basic block like rustc's divisor check. `union` is a weak keyword: it starts an item only before a non-reserved identifier (rustc is_union_item) and otherwise names functions, methods, locals, parameters, fields and modules; union items keep an explicit boundary. 21 original programs get a rustc 1.92.0 -O build's verdict without rustc running (for `x |= 1u64` rustc reports E0277 and E0308, PCC a type mismatch) and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:185:12 (`fn union`) and stops at bloom/sketch.rs:194:13, a tuple pattern in `for`. Dynamic divisors and union items keep explicit boundaries. Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_union_and_compound_assignment.py"
       ],
       "diagnostics": [],
       "evidence": []

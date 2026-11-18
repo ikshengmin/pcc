@@ -184,10 +184,10 @@ Migration order:
    advisory; explicit receiver types are the implicit receivers. Verdicts in
    `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
    a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
-   `#![deny(missing_docs)]` and its shift operators, and stops at the
-   function named `union` (`bloom/sketch.rs:185:12`; `union` is a weak
-   keyword). Open: item-level lint attributes and other lints, then the
-   multi-file crate path through sema and lowering.
+   `#![deny(missing_docs)]`, its shift operators and `fn union`, and stops
+   at a `for` tuple pattern (`bloom/sketch.rs:194:13`). Open:
+   item-level lint attributes and other lints, then the multi-file crate path
+   through sema and lowering.
 
 ### Certified crate lint transition
 
@@ -301,6 +301,16 @@ constant evaluation (const and static initializers, array lengths, enum
 discriminants). Operator precedence is Rust's, not C's: `&`, `^` and `|` bind
 tighter than comparisons. rustc's parse error for `<<` after `x as T` is kept.
 Verdicts in `tests/rust/test_rust_shift_operators.py::CORPUS` (51 original
+programs) equal a rustc 1.92.0 `-O` build's.
+
+Compound assignment covers every operator: `&=`, `|=` and `^=` also take
+bool operands (core's bool BitAndAssign/BitOrAssign/BitXorAssign), and `/=`
+and `%=` follow `/` and `%` (a known nonzero divisor, not signed -1, until
+owned panics exist; in the lint they end a basic block like the divisor
+check). `union` is a weak keyword: it starts an item only before an
+identifier (rustc's is_union_item) and otherwise names functions, methods,
+locals, fields and modules; union items keep an explicit boundary. Verdicts in
+`tests/rust/test_rust_union_and_compound_assignment.py::CORPUS` (21 original
 programs) equal a rustc 1.92.0 `-O` build's.
 
 By default symbols are `__pcc_rust_<name>` and returned in `symbols`; this is **not rustc's

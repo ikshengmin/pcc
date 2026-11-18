@@ -137,8 +137,13 @@ class KnownPanics:
                 op = expr.value[:-1]
                 if op in SHIFTS:
                     value = self.shift(expr, op, current, operand, target.ty, children[1].ty)
-                else:
+                elif op in {"+", "-", "*"}:
                     value = self.arithmetic(expr, op, current, operand, target.ty)
+                elif op in {"&", "|", "^"}:
+                    value = self.bitwise(op, current, operand)
+                else:
+                    self.boundary()  # `/=` and `%=`: the divisor check ends the block
+                    value = UNKNOWN
             if target.kind == "name" and target.binding is not None:
                 if target.binding.serial not in self.borrowed:
                     self.env[target.binding.serial] = value
@@ -249,9 +254,8 @@ class KnownPanics:
             return self.arithmetic(expr, op, left, right, expr.ty)
         if op in SHIFTS:
             return self.shift(expr, op, left, right, expr.ty, expr.children[1].ty)
-        if op in {"&", "|", "^"} and type(left) is type(right) and type(left) in (int, bool):
-            # In-range operands give an in-range result, signed ones included.
-            return left & right if op == "&" else left | right if op == "|" else left ^ right
+        if op in {"&", "|", "^"}:
+            return self.bitwise(op, left, right)
         if type(left) is int and type(right) is int:
             if op in {"==", "!=", "<", "<=", ">", ">="}:
                 return {"==": left == right, "!=": left != right, "<": left < right, "<=": left <= right,
@@ -267,6 +271,12 @@ class KnownPanics:
         if not low <= result <= high:
             raise expr.token.error("this arithmetic operation will overflow (rustc arithmetic_overflow)")
         return result
+
+    def bitwise(self, op, left, right):
+        """In-range operands give an in-range result, signed ones included."""
+        if type(left) is not type(right) or type(left) not in (int, bool):
+            return UNKNOWN
+        return left & right if op == "&" else left | right if op == "|" else left ^ right
 
     def shift(self, expr, op, left, right, ty, amount_ty):
         """A known amount at least the width overflows, whatever the shifted

@@ -1447,6 +1447,13 @@ class Checker:
                                    "(rustc E0080)")
         return True
 
+    def require_static_divisor(self, expr: Expr, divisor, ty) -> None:
+        """Until owned panics exist, `/` and `%` (and `/=`, `%=`) need a known
+        divisor that cannot panic: nonzero, and not -1 for a signed type."""
+        if divisor is None or divisor == 0 or (ty.startswith("i") and divisor == -1):
+            raise expr.token.error("panic-capable division/remainder is unsupported; divisor must be a nonzero "
+                                   "constant, not signed -1")
+
     def shift_operands(self, expr: Expr, op: str) -> None:
         """Both shift operands must be integers: core implements Shl/Shr for
         every pair of integer types; bool has none (rustc E0369). User
@@ -1566,9 +1573,7 @@ class Checker:
             if operand_ty not in allowed:
                 raise expr.token.error(f"operator {op!r} does not accept {operand_ty}")
             if op in {"/", "%"}:
-                divisor = values[1]
-                if divisor is None or divisor == 0 or (operand_ty.startswith("i") and divisor == -1):
-                    raise expr.token.error("panic-capable division/remainder is unsupported; divisor must be a nonzero constant, not signed -1")
+                self.require_static_divisor(expr, values[1], operand_ty)
             if op in {"+", "-", "*"} and all(value is not None for value in values):
                 left, right = values
                 value = left + right if op == "+" else left - right if op == "-" else left * right
@@ -1589,6 +1594,11 @@ class Checker:
                 if op in {"==", "!=", "<", "<=", ">", ">="}:
                     return {"==": left == right, "!=": left != right, "<": left < right,
                             "<=": left <= right, ">": left > right, ">=": left >= right}[op]
-        if kind == "assign" and op != "=" and expr.children[0].ty not in INTEGERS:
-            raise expr.token.error(f"operator {op!r} requires integer operands")
+        if kind == "assign" and op != "=":
+            operand_ty = expr.children[0].ty
+            # core implements BitAndAssign/BitOrAssign/BitXorAssign for bool too.
+            if operand_ty not in INTEGERS and not (operand_ty == "bool" and op in {"&=", "|=", "^="}):
+                raise expr.token.error(f"operator {op!r} requires integer operands")
+            if op in {"/=", "%="}:
+                self.require_static_divisor(expr, values[1], operand_ty)
         return None

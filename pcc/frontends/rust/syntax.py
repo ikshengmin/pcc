@@ -30,7 +30,10 @@ class Token:
 
 # Rust uses Unicode Pattern_White_Space, not Python str.isspace().
 _WHITESPACE = "\t\n\v\f\r \u0085\u200e\u200f\u2028\u2029"
-_KEYWORDS = set("as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while yield abstract become box do final macro override priv typeof unsized virtual try union".split())
+_KEYWORDS = set("as async await break const continue crate dyn else enum extern false fn for if impl in let loop match mod move mut pub ref return self Self static struct super trait true type unsafe use where while yield abstract become box do final macro override priv typeof unsized virtual try".split())
+# Weak keywords (Rust Reference keywords.html#weak-keywords) lex as names:
+# `union` starts an item only before an identifier (Parser.union_item),
+# `macro_rules` only before `!`.
 _OPERATORS = ("<<=", ">>=", "->", "=>", "::", "==", "!=", "<=", ">=", "&&", "||", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "<<", ">>", "..=", "..")
 
 
@@ -557,10 +560,10 @@ class Pattern:
 _TYPES = {"i32", "i64", "u32", "u64", "isize", "usize", "bool", "()"}
 # Rust Reference expressions.html#expression-precedence: unlike C, `&`, `^`
 # and `|` bind tighter than comparisons, and shifts sit between them and `+`.
-_PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "<<=": 1, ">>=": 1, "||": 2, "&&": 3,
+_PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "&=": 1, "|=": 1, "^=": 1,
+               "<<=": 1, ">>=": 1, "||": 2, "&&": 3,
                "==": 4, "!=": 4, "<": 4, "<=": 4, ">": 4, ">=": 4, "|": 5, "^": 6, "&": 7,
                "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
-_SHIFTS = {"<<", ">>"}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
@@ -649,6 +652,12 @@ class Parser:
         if self.token.kind != "name" or self.token.text == "_":
             raise self.token.error("expected an identifier")
         return self.take()
+
+    def union_item(self) -> bool:
+        """rustc's is_union_item: the weak keyword `union` followed by a
+        non-reserved identifier. Anywhere else `union` is an identifier."""
+        following = self.tokens[self.pos + 1]
+        return self.token.text == "union" and following.kind == "name" and following.text != "_"
 
     def type(self) -> object:
         token = self.take()
@@ -1542,6 +1551,9 @@ class Parser:
                 if self.token.kind == "name" and self.tokens[self.pos + 1].text == "!":
                     raise self.token.error("macro_rules! definitions and item macro invocations require "
                                            "macro-by-example expansion, which is not implemented")
+                if self.union_item():
+                    raise self.token.error("union items require untagged overlapping field layout and "
+                                           "unsafe field reads, which are not implemented")
                 unsafe = self.accept("unsafe")
                 abi = "Rust"
                 if self.accept("extern"):
