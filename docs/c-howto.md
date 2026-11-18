@@ -121,6 +121,28 @@ lives in `pcc/frontends/c/codegen/c_gnu_attributes.py`; the executed checks
 are `tests/c/test_c_gnu_attributes.py`, `tests/c/test_c_gnu_asm.py`,
 `tests/c/test_c_weak_functions.py` and `tests/c/test_c_constructor_attributes.py`.
 
+## Variable-length arrays on Linux x86-64
+
+The owned SysV x86-64 backend supports one-dimensional local variable-length
+arrays declared directly in a function body when the declaration runs only
+once per call. For example:
+
+```c
+int main(void) {
+    int n = 3;
+    int a[n];
+    a[1] = 42;
+    return a[1];
+}
+```
+
+The array may be used in a later loop or across ordinary function calls.
+Declaring it *inside* a loop or nested block is a different lifetime and
+is not supported by this path. Code that can jump back to the declaration
+is also rejected. See the [executed x86-64 stack and lifetime
+checks](../tests/python/test_x86_64_dynamic_stack.py) for the supported
+boundary; this is not a claim about Win64.
+
 ## GNU statement expressions and PCC address behavior
 
 In value context, a final array expression statement inside `({ ...; })`
