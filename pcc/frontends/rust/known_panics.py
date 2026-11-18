@@ -2,8 +2,11 @@
 
 rustc's deny-by-default arithmetic_overflow lint (its KnownPanicsLint MIR pass)
 rejects an integer `+`, `-`, `*` or negation whose operands are known
-constants and whose result does not fit the type, even when the operands are
-locals. It runs when a crate is built, not in a metadata check, so the
+constants and whose result does not fit the type, and a shift by a known
+amount whose unsigned bit pattern is at least the shifted width (whatever the
+shifted value), even when the operands are locals. Known `&`, `|`, `^`, `!`
+and shift results propagate. It runs when a crate is built, not in a metadata
+check, so the
 external check never saw it; PCC owns it here for every admission mode.
 
 The propagation follows the pass's reach, measured against rustc 1.92.0
@@ -26,7 +29,7 @@ the pass's CanConstProp (indirect mutation cannot be reasoned about).
 """
 from __future__ import annotations
 
-from .semantics import INTEGERS, bounds, cast_constant
+from .semantics import INTEGERS, SHIFTS, bounds, cast_constant, shift_overflows, shift_value
 from .types import TupleType
 
 UNKNOWN = object()
@@ -131,7 +134,11 @@ class KnownPanics:
             else:
                 current = self.value(target)
                 operand = self.value(children[1])
-                value = self.arithmetic(expr, expr.value[:-1], current, operand, target.ty)
+                op = expr.value[:-1]
+                if op in SHIFTS:
+                    value = self.shift(expr, op, current, operand, target.ty, children[1].ty)
+                else:
+                    value = self.arithmetic(expr, op, current, operand, target.ty)
             if target.kind == "name" and target.binding is not None:
                 if target.binding.serial not in self.borrowed:
                     self.env[target.binding.serial] = value
@@ -165,6 +172,8 @@ class KnownPanics:
                 return self.overflow(expr, -value)
             if expr.value == "!" and type(value) is bool:
                 return not value
+            if expr.value == "!" and self.integer(value, expr.ty) is not UNKNOWN:
+                return cast_constant(~value, expr.ty, self.pointer_bits)
             return UNKNOWN
         if kind == "binary":
             return self.binary(expr)
@@ -238,6 +247,11 @@ class KnownPanics:
             return UNKNOWN
         if op in {"+", "-", "*"}:
             return self.arithmetic(expr, op, left, right, expr.ty)
+        if op in SHIFTS:
+            return self.shift(expr, op, left, right, expr.ty, expr.children[1].ty)
+        if op in {"&", "|", "^"} and type(left) is type(right) and type(left) in (int, bool):
+            # In-range operands give an in-range result, signed ones included.
+            return left & right if op == "&" else left | right if op == "|" else left ^ right
         if type(left) is int and type(right) is int:
             if op in {"==", "!=", "<", "<=", ">", ">="}:
                 return {"==": left == right, "!=": left != right, "<": left < right, "<=": left <= right,
@@ -253,6 +267,17 @@ class KnownPanics:
         if not low <= result <= high:
             raise expr.token.error("this arithmetic operation will overflow (rustc arithmetic_overflow)")
         return result
+
+    def shift(self, expr, op, left, right, ty, amount_ty):
+        """A known amount at least the width overflows, whatever the shifted
+        value; with both known, the result propagates."""
+        right = self.integer(right, amount_ty)
+        if right is UNKNOWN:
+            return UNKNOWN
+        if shift_overflows(right, amount_ty, ty, self.pointer_bits):
+            raise expr.token.error("this arithmetic operation will overflow (rustc arithmetic_overflow)")
+        left = self.integer(left, ty)
+        return UNKNOWN if left is UNKNOWN else shift_value(op, left, right, ty, self.pointer_bits)
 
     def matches(self, pattern, value):
         """True, False, or None when a known value's match is not decided here."""

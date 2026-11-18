@@ -118,7 +118,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("fn f(){ panic!(); }", "1:9: macro invocations require macro-by-example expansion"),
     ("struct S {}", "zero-field structs"),
     ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),
-    ("fn f(){ 1<<2; }", "expected ';'"),
+    ("fn f(x: u64) -> u32 { x as u32 << 2 }", "`<<` is interpreted as a start of generic arguments for `u32`"),
     ("extern \"C\" fn f(x:bool){}", "extern C currently supports"),
     ("#[no_mangle] fn f(){}", "no_mangle is supported only on extern C"),
     ("fn __pcc_rust_bad(){}", "reserved"),

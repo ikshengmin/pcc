@@ -93,9 +93,9 @@ Migration order:
    mode (generic bodies and instances included), mutability, and rustc's
    build-time `arithmetic_overflow` lint (`known_panics.py`, verdicts in
    `tests/rust/test_rust_known_panics.py` equal a rustc 1.92.0 `-O` build's).
-   `let x;` without an initializer, shifts and `u8`/`i8` are still rejected by
-   the parser, so definite initialization and shift overflow need owning when
-   those land.
+   `let x;` without an initializer and `u8`/`i8` are still rejected by the
+   parser, so definite initialization needs owning when it lands. Shift
+   overflow is owned with the shift operators (see Arithmetic below).
 3. Control flow (done): `loop`, `while`, `while let`, `if let` and array
    `for` on the owned fixed point. `for` moves or copies its array once and
    binds a fresh element per iteration; a value moved in one iteration is
@@ -184,9 +184,10 @@ Migration order:
    advisory; explicit receiver types are the implicit receivers. Verdicts in
    `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
    a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
-   `#![deny(missing_docs)]` and stops at its first shift operator
-   (`bloom/sketch.rs:33:31`). Open: item-level lint attributes and other
-   lints, then the multi-file crate path through sema and lowering.
+   `#![deny(missing_docs)]` and its shift operators, and stops at the
+   function named `union` (`bloom/sketch.rs:185:12`; `union` is a weak
+   keyword). Open: item-level lint attributes and other lints, then the
+   multi-file crate path through sema and lowering.
 
 ### Certified crate lint transition
 
@@ -287,7 +288,20 @@ is not rustc lint parity or general constant propagation through local state. Di
 remainder follows the dividend. Until owned panic support lands, division and
 remainder require a statically known nonzero divisor (and not signed -1).
 Dynamic/panic-capable division is rejected, never emitted as unsafe raw `sdiv`.
-Shifts are currently rejected instead of silently using a target's shift mask.
+
+Shifts (`<<`, `>>`, `<<=`, `>>=`) take any two integer operand types, never
+unified: the result is the left type and an unconstrained literal amount is
+i32 (rustc enforce_builtin_binop_types). With overflow checks off the amount is
+truncated or zero-extended to the shifted width and masked to `width - 1`
+(rustc's build_masked_shift); `>>` is arithmetic for signed types, logical for
+unsigned ones. A known amount whose unsigned bit pattern is at least the width
+is rustc's `arithmetic_overflow` lint where reachable (`known_panics.py`, which
+now also propagates known `&`, `|`, `^`, `!` and shift results) and E0080 in
+constant evaluation (const and static initializers, array lengths, enum
+discriminants). Operator precedence is Rust's, not C's: `&`, `^` and `|` bind
+tighter than comparisons. rustc's parse error for `<<` after `x as T` is kept.
+Verdicts in `tests/rust/test_rust_shift_operators.py::CORPUS` (51 original
+programs) equal a rustc 1.92.0 `-O` build's.
 
 By default symbols are `__pcc_rust_<name>` and returned in `symbols`; this is **not rustc's
 Rust ABI or symbol mangling**. The finite `extern "C"` scalar boundary uses

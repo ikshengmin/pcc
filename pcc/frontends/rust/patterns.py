@@ -35,7 +35,8 @@ def check_enums(checker, declarations=None):
                             unsuffixed(child)
                     unsuffixed(expr)
                 unify(dtype, checker.expression(expr), token)
-                value = checker.validate(expr)
+                with checker.constant_evaluation():
+                    value = checker.validate(expr)
                 if value is None:
                     raise token.error("enum discriminant must be a supported integer constant")
             else:

@@ -2620,10 +2620,25 @@
       "chapter_ids": [
         "rust.ref.8.2.4"
       ],
-      "scope": "Qualification missing, not implementation missing: stage 8 (first part) of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". missing_docs.py owns the crate missing_docs level as rustc's MissingDoc pass does: the crate root and every exported item (through pub modules or pub use re-exports) with its named pub fields, variants and struct-variant fields, trait items and pub inherent-impl items of an exported type; #[doc(hidden)] items and anything defined inside a hidden module, item or impl type are exempt; overriding forbid is E0453; a test build skips it; single-file and multi-file crates alike. #[inline] is validated as rustc does (E0539, E0805, target and form errors) and stays advisory; explicit receiver types are the implicit receivers. 64 original programs get a rustc 1.92.0 -O build's verdict without rustc running and two original programs run with owned compile, assemble and link and match rustc. DataSketches Rust passes lib.rs:63:4 #![deny(missing_docs)] and stops at bloom/sketch.rs:33:31 (shift operators). Item-level lint attributes, other lints and groups, doc(alias) and inline on const fn keep explicit boundaries. Local Mac.",
+      "scope": "Qualification missing, not implementation missing: stage 8 (first part) of pcc/frontends/rust/README.md, \"Replacing the rustc admission gate\". missing_docs.py owns the crate missing_docs level as rustc's MissingDoc pass does: the crate root and every exported item (through pub modules or pub use re-exports) with its named pub fields, variants and struct-variant fields, trait items and pub inherent-impl items of an exported type; #[doc(hidden)] items and anything defined inside a hidden module, item or impl type are exempt; overriding forbid is E0453; a test build skips it; single-file and multi-file crates alike. #[inline] is validated as rustc does (E0539, E0805, target and form errors) and stays advisory; explicit receiver types are the implicit receivers. 64 original programs get a rustc 1.92.0 -O build's verdict without rustc running and two original programs run with owned compile, assemble and link and match rustc. DataSketches Rust passes lib.rs:63:4 #![deny(missing_docs)]. Item-level lint attributes, other lints and groups, doc(alias) and inline on const fn keep explicit boundaries. Local Mac.",
       "status": "missing",
       "tests": [
         "tests/rust/test_rust_owned_lints.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.expressions.shift-operators",
+      "title": "Shift operators and Rust operator precedence",
+      "chapter_ids": [
+        "rust.ref.8.2.4",
+        "rust.ref.8.2"
+      ],
+      "scope": "Qualification missing, not implementation missing: `<<`, `>>`, `<<=` and `>>=` on any two integer types, never unified (rustc enforce_builtin_binop_types): the result is the left type and an unconstrained literal amount is i32. With overflow checks off the amount is truncated or zero-extended to the shifted width and masked to width - 1 (rustc build_masked_shift); `>>` is arithmetic for signed and logical for unsigned types. A known amount whose unsigned bit pattern is at least the width is the arithmetic_overflow lint where reachable (known_panics.py, which now also propagates known &, |, ^, ! and shift results) and E0080 in constant evaluation (const and static initializers, array lengths, enum discriminants); bool operands are E0369. Expression precedence is the Rust Reference's (&, ^ and | bind tighter than comparisons; shifts between & and +), replacing a C ordering under which `a | b == b` on bools miscompiled. rustc's parse error for `<<` after `x as T` is kept. 51 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:33:31 and stops at bloom/sketch.rs:185:12 (a function named with the weak keyword `union`). Operator-trait (Shl/Shr) implementations for user types and u8/u16/i8/i16/128-bit operands keep explicit boundaries. Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_shift_operators.py"
       ],
       "diagnostics": [],
       "evidence": []

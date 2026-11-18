@@ -70,7 +70,7 @@ def test_upstream_symbolic_links_stay_links_inside_the_pin(tmp_path):
         load_project('rust', copy)
 
 
-def test_rust_crate_stops_at_its_first_shift_operator():
+def test_rust_crate_stops_at_a_function_named_union():
     from pcc.frontends.rust import RustError
     from pcc.frontends.rust.configuration import CfgOptions, OwnedRustConfiguration
     from pcc.frontends.rust.crate_context import parse_crate_sources
@@ -80,9 +80,10 @@ def test_rust_crate_stops_at_its_first_shift_operator():
     options = CfgOptions(cfg=tuple(f'feature="{name}"' for name in RUST_FEATURES),
                          debug_assertions=False, panic='unwind')
     configuration = OwnedRustConfiguration('aarch64-apple-darwin', 2024, options)
-    # Past the owned `#![deny(missing_docs)]` lint (stage 8): shift operators
-    # are not parsed yet.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: src/bloom/mod\.rs: src/bloom/sketch\.rs: 33:31: expected ';', found '<<'"):
+    # Past the owned `#![deny(missing_docs)]` lint (stage 8) and the shift
+    # operators (bloom/sketch.rs:33:31): `union` is a weak keyword, an
+    # ordinary identifier outside a union item, but the parser rejects it.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: src/bloom/mod\.rs: src/bloom/sketch\.rs: 185:12: expected an identifier"):
         parse_crate_sources('src/lib.rs', units, crate_name='datasketches', edition=2024,
                             configuration=configuration)
 

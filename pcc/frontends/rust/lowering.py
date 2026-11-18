@@ -416,7 +416,7 @@ class Lowerer:
             slot = None if children[0].ty == "()" else self.place_pointer(children[0])
             if slot is not None:
                 if expr.value != "=":
-                    right = self.binary(expr.value[0], self.builder.load(slot), right, children[0].ty)
+                    right = self.binary(expr.value[:-1], self.builder.load(slot), right, children[0].ty)
                 self.builder.store(right, slot)
             return None
         if kind == "cast":
@@ -709,6 +709,21 @@ class Lowerer:
         operations = {"+": self.builder.add, "-": self.builder.sub, "*": self.builder.mul, "&": self.builder.and_, "|": self.builder.or_, "^": self.builder.xor}
         if op in operations:
             return operations[op](left, right)
+        if op in {"<<", ">>"}:
+            # Overflow checks off: rustc masks the amount (codegen_ssa
+            # build_masked_shift). It is first truncated or zero-extended to
+            # the shifted width (zext even when signed: the mask drops the
+            # extension bits), then `& (width - 1)`; `>>` is arithmetic for a
+            # signed type, logical for an unsigned one.
+            width = left.type.width
+            if right.type.width > width:
+                right = self.builder.trunc(right, left.type)
+            elif right.type.width < width:
+                right = self.builder.zext(right, left.type)
+            right = self.builder.and_(right, ir.Constant(left.type, width - 1))
+            if op == "<<":
+                return self.builder.shl(left, right)
+            return (self.builder.ashr if ty.startswith("i") else self.builder.lshr)(left, right)
         if op in {"/", "%"}:
             if op == "/":
                 operation = self.builder.sdiv if ty.startswith("i") else self.builder.udiv

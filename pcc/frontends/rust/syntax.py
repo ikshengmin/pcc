@@ -555,7 +555,12 @@ class Pattern:
 
 
 _TYPES = {"i32", "i64", "u32", "u64", "isize", "usize", "bool", "()"}
-_PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "||": 2, "&&": 3, "|": 4, "^": 5, "&": 6, "==": 7, "!=": 7, "<": 7, "<=": 7, ">": 7, ">=": 7, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
+# Rust Reference expressions.html#expression-precedence: unlike C, `&`, `^`
+# and `|` bind tighter than comparisons, and shifts sit between them and `+`.
+_PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "<<=": 1, ">>=": 1, "||": 2, "&&": 3,
+               "==": 4, "!=": 4, "<": 4, "<=": 4, ">": 4, ">=": 4, "|": 5, "^": 6, "&": 7,
+               "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
+_SHIFTS = {"<<", ">>"}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 
 
@@ -2227,7 +2232,13 @@ class Parser:
                 break
             operator = self.take()
             if op == "as":
-                expr = Expr("cast", operator, self.type(), [expr])
+                target = self.type()
+                if self.token.text == "<<":
+                    # rustc's parser reads `<<` after a cast type as generic
+                    # arguments and rejects it; the operand needs parentheses.
+                    raise self.token.error(f"`<<` is interpreted as a start of generic arguments for "
+                                           f"`{self.tokens[self.pos - 1].text}`, not a shift")
+                expr = Expr("cast", operator, target, [expr])
                 continue
             if op in _COMPARISONS and expr.kind == "binary" and expr.value in _COMPARISONS:
                 raise operator.error("comparison operators cannot be chained")

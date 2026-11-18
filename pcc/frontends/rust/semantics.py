@@ -13,6 +13,7 @@ from .types import (
 )
 
 INTEGERS = INTEGER_TYPES
+SHIFTS = frozenset({"<<", ">>"})
 FFI_INTEGERS = frozenset({"i32", "i64", "u32", "u64"})
 NEVER = "!"
 # The value of a borrow node for a two-phase mutable borrow (truthy: mutable).
@@ -136,6 +137,21 @@ def cast_constant(value: int, ty: str, pointer_bits=None) -> int:
     return value
 
 
+def shift_overflows(amount: int, amount_ty: str, ty: str, pointer_bits=None) -> bool:
+    """rustc's KnownPanicsLint (and const evaluation): a shift overflows when
+    the amount's bit pattern, read unsigned in its own type, is at least the
+    shifted type's width. A negative amount is therefore always an overflow."""
+    pattern = amount & ((1 << integer_bits(amount_ty, pointer_bits)) - 1)
+    return pattern >= integer_bits(ty, pointer_bits)
+
+
+def shift_value(op: str, value: int, amount: int, ty: str, pointer_bits=None) -> int:
+    """`value << amount` / `value >> amount` in `ty` for an in-range amount:
+    bits shifted out are lost (not an overflow), `>>` is arithmetic for a
+    signed type and logical for an unsigned one (its value is nonnegative)."""
+    return cast_constant(value << amount if op == "<<" else value >> amount, ty, pointer_bits)
+
+
 class Checker:
     def __init__(self, functions: list[Function], records: list[Record] = (), enums: list[Enumeration] = (), implementations=(), traits=(), *, externally_checked=False, pointer_bits=None, module_resolution=None, crate_policy=None, consts=()):
         if pointer_bits is None:
@@ -173,6 +189,9 @@ class Checker:
                     raise const.token.error(f'the name {const.token.text!r} is defined multiple times in the value namespace')
                 self.const_names[const.token.text] = const
         self.evaluating_consts = []
+        # Nesting of mandatory constant evaluation (array lengths, enum
+        # discriminants; const and static initializers use evaluating_consts).
+        self.const_evaluation = 0
         self.declared_derives = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
@@ -1209,6 +1228,11 @@ class Checker:
                 literal = literal.children[0]
             if expr.value == "-" and literal.kind == "integer":
                 literal.binding = "negative-literal"
+        elif kind == "binary" and expr.value in SHIFTS:
+            # rustc enforce_builtin_binop_types: a shift's operands are any
+            # two integer types, never unified; the result is the LHS type.
+            ty = self.expression(children[0])
+            self.expression(children[1])
         elif kind == "binary":
             left = self.expression(children[0])
             right = self.expression(children[1])
@@ -1236,7 +1260,9 @@ class Checker:
             static = lhs.binding
             if not static.mutable:
                 raise lhs.token.error(f"cannot assign to immutable static item `{static.token.text}` (rustc E0594)")
-            unify(static.ty, self.expression(children[1]), expr.token)
+            value = self.expression(children[1])
+            if expr.value[:-1] not in SHIFTS:
+                unify(static.ty, value, expr.token)
             ty = "()"
         elif kind == "assign":
             lhs = children[0]
@@ -1246,7 +1272,9 @@ class Checker:
                 raise lhs.token.error("assignment target must be a local binding or field")
             if not self.mutable_place(lhs):
                 raise lhs.token.error("cannot assign through a shared reference" if self.through_reference(lhs) else f"cannot assign to immutable binding {place[0].name!r}")
-            unify(target, self.expression(children[1]), expr.token)
+            value = self.expression(children[1])
+            if expr.value[:-1] not in SHIFTS:
+                unify(target, value, expr.token)
             if expr.value == "=":
                 children[1] = self.implicit_reborrow(children[1], target) or children[1]
             ty = "()"
@@ -1399,6 +1427,37 @@ class Checker:
         expr.ty = ty
         return ty
 
+    @contextmanager
+    def constant_evaluation(self):
+        """Evaluate a value rustc's const evaluator must produce."""
+        self.const_evaluation += 1
+        try:
+            yield
+        finally:
+            self.const_evaluation -= 1
+
+    def shift_overflow(self, expr: Expr, amount, amount_ty, ty) -> bool:
+        """Whether a shift by a folded amount overflows. Mandatory constant
+        evaluation rejects it (rustc E0080). In a body the value is left
+        unfolded: KnownPanics judges it there, only where it is reachable."""
+        if amount is None or not shift_overflows(amount, amount_ty, ty, self.pointer_bits):
+            return False
+        if self.evaluating_consts or self.const_evaluation:
+            raise expr.token.error("evaluation of constant value failed: attempt to shift with overflow "
+                                   "(rustc E0080)")
+        return True
+
+    def shift_operands(self, expr: Expr, op: str) -> None:
+        """Both shift operands must be integers: core implements Shl/Shr for
+        every pair of integer types; bool has none (rustc E0369). User
+        operator-trait implementations are not modeled."""
+        for operand in expr.children:
+            if operand.ty not in INTEGERS:
+                reason = ("(rustc E0369)" if operand.ty == "bool"
+                          else "user operator trait implementations are not implemented")
+                raise expr.token.error(f"operator {op!r} does not accept {operand.ty}: no implementation "
+                                       f"for {expr.children[0].ty} {op} {expr.children[1].ty} {reason}")
+
     def validate(self, expr: Expr) -> int | None:
         # Resolve only after the complete function has contributed constraints:
         # `let x = 1; takes_i64(x)` must infer i64, not prematurely default i32.
@@ -1492,6 +1551,15 @@ class Checker:
                 raise expr.token.error("an enum with payload fields cannot be cast to an integer")
             if values[0] is not None:
                 return cast_constant(int(values[0]), expr.ty, self.pointer_bits)
+        if kind == "binary" and op in SHIFTS:
+            self.shift_operands(expr, op)
+            left, right = values
+            if self.shift_overflow(expr, right, expr.children[1].ty, expr.ty) or None in values:
+                return None
+            return shift_value(op, left, right, expr.ty, self.pointer_bits)
+        if kind == "assign" and op[:-1] in SHIFTS:
+            self.shift_operands(expr, op[:-1])
+            return None
         if kind == "binary":
             operand_ty = expr.children[0].ty
             allowed = INTEGERS | {"bool"} if op in {"&", "|", "^", "==", "!=", "<", "<=", ">", ">=", "&&", "||"} else INTEGERS

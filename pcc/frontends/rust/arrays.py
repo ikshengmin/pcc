@@ -31,7 +31,8 @@ def length_value(checker, length, token):
         expression = deepcopy(length.expression)
         unify('usize', checker.expression(expression), token)
         closed_constant(expression, token)
-        length = checker.validate(expression)
+        with checker.constant_evaluation():
+            length = checker.validate(expression)
     if type(length) is not int or length < 0:
         raise token.error('array length must be a nonnegative usize constant')
     if length > MAX_ARRAY_ELEMENTS:
