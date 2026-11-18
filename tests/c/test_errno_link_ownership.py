@@ -6,6 +6,7 @@ controls, which require an explicit system oracle or an admitted owned runtime.
 from __future__ import annotations
 
 import ast
+from functools import partial
 import os
 from pathlib import Path
 import platform
@@ -17,6 +18,8 @@ import pytest
 
 from pcc.driver.project import TranslationUnit
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
+from pcc.frontends.c.parse import make_c_parser
 from pcc.frontends.c.preprocessor import preprocess
 from pcc.frontends.python import owned_runtime_build, pipeline
 from pcc.frontends.python.codegen.runtime_abi import (
@@ -48,6 +51,48 @@ def no_external_processes(monkeypatch):
             monkeypatch.setattr(os, name, forbidden)
 
 
+@pytest.fixture
+def errno_translation_unit_api_owner(request, monkeypatch):
+    from pcc.frontends.c.evaluator import c_evaluator
+    from tests import pcc1_route
+
+    job = c_evaluator._compile_translation_unit_artifact_job
+    if not (isinstance(job, partial) and job.func is pcc1_route.compile_c_artifact):
+        assert not (os.environ.get("PCC_TEST_COMPILER")
+                    and os.environ.get(pcc1_route.STRICT_ENV) == "1"), (
+            "strict native C artifact route is not installed")
+        request.getfixturevalue("no_external_processes")
+        yield
+        return
+    # Only the installed strict native route may create a process. Environment
+    # variables alone are not evidence that the evaluator has been redirected.
+    assert os.environ.get(pcc1_route.STRICT_ENV) == "1"
+    assert not job.args and set(job.keywords) == {"_compiler", "_runtime_archive"}
+    compiler = job.keywords["_compiler"]
+    runtime = job.keywords["_runtime_archive"]
+    assert compiler == os.environ.get("PCC_TEST_COMPILER") and Path(compiler).is_file()
+    assert runtime == os.environ.get("PCC_RUNTIME_ARCHIVE") and Path(runtime).is_file()
+    popen = subprocess.Popen
+    launches = 0
+
+    def native_only(argv, *args, **kwargs):
+        nonlocal launches
+        assert (isinstance(argv, (list, tuple)) and len(argv) == 4
+                and tuple(argv[:2]) == (compiler, "--pcc-c-unit-artifact-worker"))
+        assert not args and not kwargs.get("shell") and kwargs.get("executable") is None
+        env = kwargs["env"]
+        assert env["PCC_RUNTIME_ARCHIVE"] == runtime
+        assert env["PCC_HOST_PYTHON"] == env["PCC_RUNTIME_CC"] == "/usr/bin/false"
+        assert env["PCC_NO_AUTO_PCC1"] == env["PCC_TEST_COMPILER_ROUTED"] == "1"
+        launches += 1
+        assert launches == 1, "errno API must launch exactly one native worker"
+        return popen(argv, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", native_only)
+    yield
+    assert launches == 1, "errno API must launch exactly one native worker"
+
+
 @pytest.mark.parametrize("target,accessor", (
     (LINUX_TARGETS[0], "__errno_location"),
     (LINUX_TARGETS[1], "__errno_location"),
@@ -73,6 +118,26 @@ def test_errno_header_preserves_platform_owner(target, accessor, no_external_pro
 
 @pytest.mark.parametrize("target", LINUX_TARGETS)
 def test_c_errno_uses_platform_pointer_abi(target, no_external_processes):
+    # This control promises host-only C preprocessing and IR lowering. Use
+    # those APIs explicitly; CEvaluator's unit API is separately tested below
+    # because strict CI correctly routes that API through the native compiler.
+    source = preprocess(
+        "#include <errno.h>\nint *location(void) { return &errno; }\n",
+        include_dirs=[str(HEADERS)], target_triple=target,
+    )
+    tree = make_c_parser().parse(source)
+    codegen = CCodeGenerator(translation_unit_name="errno.c")
+    codegen.set_target_text(target, "")
+    codegen.generate_code(tree)
+    text = str(codegen.module)
+    assert re.search(r"\bcall ptr(?: \(\))? @__errno_location\(\)", text)
+    assert "@pcc_errno_location" not in text
+
+
+@pytest.mark.parametrize("target", LINUX_TARGETS)
+def test_c_errno_translation_unit_api_preserves_platform_pointer_abi(target, errno_translation_unit_api_owner):
+    # Preserve the original evaluator/native-artifact obligation on the same
+    # source. Do not disable strict routing or substitute a host-only result.
     evaluator = CEvaluator(backend="self", target_triple=target)
     units = evaluator.compile_translation_units(
         [TranslationUnit("errno.c", "errno.c", "#include <errno.h>\nint *location(void) { return &errno; }\n")],
@@ -83,6 +148,27 @@ def test_c_errno_uses_platform_pointer_abi(target, no_external_processes):
     text = units[0][1]
     assert re.search(r"\bcall ptr(?: \(\))? @__errno_location\(\)", text)
     assert "@pcc_errno_location" not in text
+
+
+@pytest.mark.parametrize("api", ("run", "Popen", "system"))
+def test_host_errno_unit_api_cannot_start_external_processes(request, monkeypatch, api):
+    from pcc.frontends.c.evaluator import c_evaluator
+
+    def unexpected_process(*args, **kwargs):
+        if api == "system":
+            return os.system("exit 0")
+        return getattr(subprocess, api)([sys.executable, "-c", "pass"])
+
+    monkeypatch.setattr(c_evaluator, "_compile_translation_unit_artifact_job", unexpected_process)
+    # Resolve ownership after installing the deliberately bad host adapter.
+    # A native-required lane must reject this missing route even earlier.
+    if os.environ.get("PCC_TEST_COMPILER") and os.environ.get("PCC_TEST_COMPILER_STRICT") == "1":
+        with pytest.raises(AssertionError, match="strict native C artifact route is not installed"):
+            request.getfixturevalue("errno_translation_unit_api_owner")
+        return
+    request.getfixturevalue("errno_translation_unit_api_owner")
+    with pytest.raises(AssertionError, match="host errno control attempted an external process"):
+        test_c_errno_translation_unit_api_preserves_platform_pointer_abi(LINUX_TARGETS[0], None)
 
 
 def test_owned_errno_adapter_forwards_the_same_cell_in_host_model():
