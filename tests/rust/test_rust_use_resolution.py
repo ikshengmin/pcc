@@ -315,7 +315,7 @@ def test_marker_shadow_query_counts_imported_types_but_not_value_only_names(name
 GAPS = (
     ('glob', 'mod a{pub fn value(){}} use a::*;', 'glob use declarations'),
     ('group-glob', 'mod a{pub fn value(){}} use a::{*};', 'glob use declarations'),
-    ('group-self', 'mod a{pub fn value(){}} use a::{self};', 'nonleading self/crate/super'),
+    ('group-self', 'mod a{pub fn value(){}} use a::{self};', 'duplicate imported type-namespace item'),
     ('empty-group', 'mod a{pub fn value(){}} use a::{};', 'empty use groups'),
     ('anonymous', 'mod a{pub fn value(){}} use a::value as _;', 'anonymous use'),
     ('absolute', 'mod a{pub fn value(){}} use ::a::value;', 'absolute use paths'),

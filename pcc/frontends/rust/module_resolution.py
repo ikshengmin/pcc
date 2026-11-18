@@ -14,7 +14,7 @@ from .crate_context import (
     CrateId, CrateSyntax, ModuleId, SourceFile, _Loader,
 )
 from .generics import PRIMITIVES
-from .syntax import ConstItem, CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError, StaticItem
+from .syntax import ConstItem, CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError, StaticItem, Trait
 from .types import TypeApplication
 from .visibility import scope_components, within
 
@@ -122,13 +122,17 @@ class ModuleNamespaces:
             # the first consumer happens to request. Canonical declaration
             # identity stays at the target, separately from alias visibility.
             reexport = self._scope(item.public, module)
-            for namespace in ('type', 'value'):
+            namespaces = ('type',) if item.group_self is not None else ('type', 'value')
+            for namespace in namespaces:
                 declaration = self.resolve(path, namespace, module, item.token,
                                            _use_root=self.policy.edition == 2015,
                                            _optional_final=True,
                                            _reexport=reexport)
                 if declaration is None:
                     continue
+                if (item.group_self is not None and
+                        not isinstance(declaration.syntax, (Module, CrateSelfAlias, Enumeration, Trait))):
+                    raise item.group_self.error('grouped self import of this parent kind is not implemented')
                 # Generic normalization and associated-path lookup still
                 # recognize these language-prelude names before scoped lookup.
                 # Do not admit a nominal type alias that those owners could
@@ -156,7 +160,8 @@ class ModuleNamespaces:
         if declaration is not None:
             return declaration, self._scope(declaration.public, module)
         item = self._uses[module].get(name)
-        if item is None:
+        # Its visibility never shadows or exports a value of the same name.
+        if item is None or (item.group_self is not None and namespace != 'type'):
             return None, module
         scope = self._scope(item.public, module)
         if not self._within(requester, scope):

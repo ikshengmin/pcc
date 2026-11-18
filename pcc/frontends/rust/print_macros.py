@@ -100,7 +100,9 @@ def require_unshadowed_output(parser, first):
     # Glob, block-scoped use, macro_rules!, and macro_use remain unsupported.
     if not parser.uses:
         return
-    names = {item.binding.text for item in parser.uses}
+    # A brace-terminal self import is known to import only a TYPE binding;
+    # unlike a simple import, it cannot shadow a macro of the same name.
+    names = {item.binding.text for item in parser.uses if item.group_self is None}
     for plan in parser.macro_expansions[first:]:
         if (isinstance(plan, StdOutputExpansion) and plan.module_scope == parser._macro_scope
                 and plan.name in names):

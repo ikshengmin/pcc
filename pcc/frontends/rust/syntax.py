@@ -479,6 +479,9 @@ class UseDeclaration:
     documentation: tuple[Documentation, ...]
     source_span: tuple[int, int]
     public: bool = False
+    # A terminal `self` inside braces imports its parent in the TYPE
+    # namespace only. Keep the actual token for diagnostics and provenance.
+    group_self: Token | None = None
 
     @property
     def binding(self):
@@ -1157,7 +1160,8 @@ class Parser:
         prefix and leaf paths concatenated, exactly as separate simple use
         declarations would. Every leaf keeps the declaration's `use` token,
         documentation and source span; resolution checks each one, used or
-        not. Globs, absolute paths, `self` leaves and empty groups remain gaps.
+        not. A grouped `self` leaf binds only its parent type namespace.
+        Globs, absolute paths and empty groups remain gaps.
         A `pub use` re-export keeps `public`; resolution checks that every
         re-exported binding is itself public (rustc E0364/E0365).
         """
@@ -1168,8 +1172,8 @@ class Parser:
         self.use_tree(token, (), leaves, 0)
         end = self.expect(';')
         span = (offset(self, token), offset(self, end) + 1)
-        for path, alias in leaves:
-            self.uses.append(UseDeclaration(token, path, alias, documentation, span, public))
+        for path, alias, group_self in leaves:
+            self.uses.append(UseDeclaration(token, path, alias, documentation, span, public, group_self))
 
     def use_tree(self, token, prefix, leaves, depth):
         if self.token.text == '*':
@@ -1177,23 +1181,33 @@ class Parser:
         if self.token.text == '{':
             self.use_group(token, prefix, leaves, depth)
             return
-        path = list(prefix)
-        while True:
-            if self.token.text in {'crate', 'self', 'super'}:
-                if path and not (self.token.text == 'super' and all(p.text == 'super' for p in path)):
-                    raise self.token.error('nonleading self/crate/super use segments are not implemented')
-                path.append(self.take())
-            else:
-                path.append(self.name())
-            if len(path) > 128:
+        group_self = None
+        if (depth and self.token.text == 'self'
+                and self.tokens[self.pos + 1].text in {',', '}', 'as'}):
+            group_self = self.take()
+            if not prefix or prefix[-1].kind != 'name':
+                raise group_self.error('grouped self import needs a supported named parent path')
+            if len(prefix) + 1 > 128:
                 raise token.error('use path exceeds implementation limit (128 segments)')
-            if not self.accept('::'):
-                break
-            if self.token.text == '*':
-                raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
-            if self.token.text == '{':
-                self.use_group(token, tuple(path), leaves, depth)
-                return
+            path = list(prefix)
+        else:
+            path = list(prefix)
+            while True:
+                if self.token.text in {'crate', 'self', 'super'}:
+                    if path and not (self.token.text == 'super' and all(p.text == 'super' for p in path)):
+                        raise self.token.error('nonleading self/crate/super use segments are not implemented')
+                    path.append(self.take())
+                else:
+                    path.append(self.name())
+                if len(path) > 128:
+                    raise token.error('use path exceeds implementation limit (128 segments)')
+                if not self.accept('::'):
+                    break
+                if self.token.text == '*':
+                    raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
+                if self.token.text == '{':
+                    self.use_group(token, tuple(path), leaves, depth)
+                    return
         alias = None
         if self.accept('as'):
             if self.token.text == '_':
@@ -1203,7 +1217,7 @@ class Parser:
             raise path[-1].error('use paths naming a module qualifier alone are not implemented')
         if len(leaves) >= 4096:
             raise token.error('use declaration binding count exceeds implementation limit (4096)')
-        leaves.append((tuple(path), alias))
+        leaves.append((tuple(path), alias, group_self))
 
     def use_group(self, token, prefix, leaves, depth):
         opener = self.expect('{')
@@ -1211,7 +1225,14 @@ class Parser:
             raise opener.error('use tree nesting exceeds implementation limit (32)')
         if self.token.text == '}':
             raise opener.error('empty use groups require binding-free path resolution, which is not implemented')
+        seen_direct_self = False
         while True:
+            # The pinned reference frontend (rustc 1.91.1) forbids repeated
+            # direct self imports even under different aliases (E0430).
+            if self.token.text == 'self' and self.tokens[self.pos + 1].text in {',', '}', 'as'}:
+                if seen_direct_self:
+                    raise self.token.error('multiple direct self imports in one group are not implemented')
+                seen_direct_self = True
             self.use_tree(token, prefix, leaves, depth + 1)
             if self.accept('}'):
                 return
