@@ -143,6 +143,17 @@ PROGRAMS = (
     ('string-element-address', 'int main(void){char*p=&"xy"[1];if(*p!=\'y\')return 1;return 42;}'),
     ('wide-string-array-address', 'int main(void){int(*p)[3]=&L"xy";if(sizeof(*p)!=3*sizeof(int))return 1;if((*p)[1]!=L\'y\')return 2;return 42;}'),
     ('string-array-address', 'int main(void){char(*p)[3]=&"xy";if(sizeof(*p)!=3)return 1;if((*p)[1]!=\'y\')return 2;return 42;}'),
+    # An array or string used as the final expression *statement* converts
+    # inside the GNU value boundary. sizeof of a bare array or of a pointer's
+    # array pointee still sees that array. Compare unchanged C bytes to cc.
+    ('gnu-stmt-value-fixed-array-size', 'int main(void){int a[3];return sizeof(({a;}))==sizeof(int*)&&sizeof(a)==3*sizeof(int)?42:1;}'),
+    ('gnu-stmt-value-row-pointer-size', 'int main(void){int a[5][3];return sizeof(({a;}))==sizeof(int(*)[3])&&sizeof(*({a;}))==3*sizeof(int)&&sizeof(*({&a;}))==sizeof(a)?42:1;}'),
+    ('gnu-stmt-value-literals-size', 'int main(void){return sizeof(({"hello";}))==sizeof(char*)&&sizeof(({(int[9]){0};}))==sizeof(int*)&&sizeof("hello")==6?42:1;}'),
+    ('gnu-stmt-value-nested-generic-size', 'int main(void){int a[7];return sizeof(({({_Generic(1,int:a,default:0);});}))==sizeof(int*)?42:1;}'),
+    ('gnu-stmt-value-captured-vla-size', 'int main(void){int n=7;int a[n];n=3;return sizeof(({a;}))==sizeof(int*)&&sizeof(a)==7*sizeof(int)?42:1;}'),
+    ('gnu-stmt-value-query-local-vla-is-unevaluated', 'int ticks;int extent(void){ticks++;return 5;}int main(void){int n=sizeof(({int a[extent()];a;}));return n==sizeof(int*)&&ticks==0?42:1;}'),
+    ('gnu-stmt-value-prefix-is-unevaluated', 'int ticks;int main(void){int a[17];int n=sizeof(({ticks++;a;}));return n==sizeof(int*)&&ticks==0?42:1;}'),
+    ('gnu-stmt-value-aggregate-is-not-a-pointer', 'struct S{int a[5];int x;};int main(void){struct S s;return sizeof(({s;}))==sizeof(s)?42:1;}'),
 )
 
 

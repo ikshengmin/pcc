@@ -303,7 +303,11 @@ class CUnevaluatedTypeMixin:
             final = items[-1]
             if address_context:
                 return self._infer_unevaluated_address_pointee(final)
-            return self._infer_sizeof_operand_ir_type(final)
+            # The final expression statement produces a value. Array decay
+            # happens inside the GNU statement expression, before its outer
+            # sizeof sees the type. Do not evaluate a local VLA bound or
+            # decay the pointee of an explicit address in the last statement.
+            return self._decay_ir_type(self._infer_sizeof_operand_ir_type(final))
 
     def _infer_unevaluated_address_pointee(self, node):
         if isinstance(node, c_ast.StmtExpr):
