@@ -136,23 +136,50 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         from .module_resolution import inline_crate
         check_missing_docs(resolution.crate if resolution is not None else inline_crate(parser, functions),
                            parser.crate_lint_attributes, test=cfg is not None and cfg.test)
+    parsed = _ParsedCrate(functions, records, enums, consts, parser.implementations, parser.traits,
+                          resolution, parser.crate_policy, tuple(parser.macro_expansions),
+                          parser.crate_lint_attributes, parser.crate_cfg_attributes, parser.conditional_items)
+    return _check_and_lower(parsed, rustc_check=rustc_check, source=source, target=target,
+                            overflow_checks=overflow_checks, module_name=module_name, edition=edition)
+
+
+@dataclass(frozen=True)
+class _ParsedCrate:
+    """What checking and lowering take from a parsed single-file or multi-file crate."""
+    functions: list
+    records: list
+    enums: list
+    consts: list
+    implementations: list
+    traits: list
+    resolution: object
+    crate_policy: object
+    macro_expansions: tuple
+    crate_lint_attributes: tuple
+    crate_cfg_attributes: tuple
+    conditional_items: tuple
+
+
+def _check_and_lower(parsed, *, rustc_check, source, target, overflow_checks, module_name, edition):
+    functions, records, enums = parsed.functions, parsed.records, parsed.enums
+    implementations, traits = parsed.implementations, parsed.traits
     from .inline_attributes import collect_inline_hints
-    inline_hints = collect_inline_hints(functions, parser.traits)
+    inline_hints = collect_inline_hints(functions, traits)
     if rustc_check is None:
         # References are owned (stages 4-5): sema rejects explicit lifetimes
         # and receiver types, reference returns and references in aggregates,
         # and the move checker owns shared and mutable loans. Slices have no
         # owned layout yet.
         from .reference_admission import reject_slices
-        reject_slices(functions, records, enums, parser.implementations, parser.traits)
-    checker = Checker(functions, records, enums, parser.implementations, parser.traits, consts=consts,
+        reject_slices(functions, records, enums, implementations, traits)
+    checker = Checker(functions, records, enums, implementations, traits, consts=parsed.consts,
                       externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
-                      module_resolution=resolution, crate_policy=parser.crate_policy)
+                      module_resolution=parsed.resolution, crate_policy=parsed.crate_policy)
     checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)
     checker.check()
     # A syntactic macro expansion is not an implementation of std::io. Check
     # even uninstantiated/unused functions before issuing an owned compilation.
-    for expansion in parser.macro_expansions:
+    for expansion in parsed.macro_expansions:
         if expansion.name in {'println', 'eprintln'}:
             raise expansion.missing_runtime()
     if rustc_check is None:
@@ -164,8 +191,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     KnownPanics(checker).check(functions)
     marker_context = checker.standard_markers.checked_context(rustc_check, source, target.triple, overflow_checks)
     from .reference_admission import contains_references
-    if rustc_check is None or not contains_references(functions, records, enums, parser.implementations,
-                                                      parser.traits):
+    if rustc_check is None or not contains_references(functions, records, enums, implementations, traits):
         # Owned moves decide every reference-free program, checked or not;
         # reference-bearing checked input awaits owned loans (stage 4).
         MoveChecker(checker).check()
@@ -177,14 +203,58 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                            target_triple=target.triple, data_layout=target.data_layout,
                            standard_marker_contract=marker_context, edition=edition,
                            external_rustc_lints=(ExternalRustcLints(
-                               parser.crate_lint_attributes, rustc_check.stderr,
+                               parsed.crate_lint_attributes, rustc_check.stderr,
                                rustc_check.provenance) if rustc_check is not None else None),
-                           crate_cfg_attributes=parser.crate_cfg_attributes,
-                           conditional_items=parser.conditional_items,
+                           crate_cfg_attributes=parsed.crate_cfg_attributes,
+                           conditional_items=parsed.conditional_items,
                            function_inline_hints=inline_hints)
+
+
+def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: int = 2021,
+                       cfg: CfgOptions | TargetPlatformFacts | None = None,
+                       env: CompileEnvironment | dict | None = None,
+                       target_triple: str = DEFAULT_TARGET,
+                       module_name: str = "rust") -> RustCompilation:
+    """Compile a supplied original multi-file crate with owned admission only.
+
+    `sources` maps normalized relative POSIX paths to decoded text and must
+    contain every outlined module (crate_context.parse_crate_sources); no
+    file system, Cargo or rustc is consulted. The module tree is resolved
+    without flattening its scopes, then checked and lowered exactly as
+    compile_rust checks and lowers a single source (owned admission, no
+    attestation). `cfg` and `env` are as for compile_rust.
+    """
+    edition = require_edition(edition)
+    if type(module_name) is not str:
+        raise RustError("invalid Rust module_name: expected a string label")
+    target = resolve_target(target_triple)
+    configuration = None
+    if cfg is not None:
+        if type(cfg) not in (CfgOptions, TargetPlatformFacts):
+            raise RustError('compile_rust_crate cfg must be CfgOptions or TargetPlatformFacts')
+        configuration = OwnedRustConfiguration(target.triple, edition, cfg)
+    environment = env
+    if env is not None and type(env) is not CompileEnvironment:
+        environment = CompileEnvironment.of(env)
+    from .crate_context import _parse_crate_sources
+    from .module_resolution import ModuleResolution
+    # The crate's missing_docs level is checked over every module while parsing.
+    crate, parsers = _parse_crate_sources(crate_root, sources, crate_name=crate_name, edition=edition,
+                                          parser_type=Parser, configuration=configuration,
+                                          environment=environment)
+    root = parsers[0]
+    resolution = ModuleResolution(crate)
+    parsed = _ParsedCrate(resolution.functions, resolution.records, resolution.enums,
+                          resolution.consts + resolution.statics, resolution.implementations,
+                          resolution.traits, resolution, root.crate_policy,
+                          tuple(expansion for parser in parsers for expansion in parser.macro_expansions),
+                          root.crate_lint_attributes, root.crate_cfg_attributes,
+                          tuple(item for parser in parsers for item in parser.conditional_items))
+    return _check_and_lower(parsed, rustc_check=None, source=None, target=target, overflow_checks=False,
+                            module_name=module_name, edition=edition)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
            "ExternalRustcLints",
            "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
-           "RustCompilation", "RustError", "compile_rust", "CfgOptions", "CompileEnvironment", "TargetPlatformFacts"]
+           "RustCompilation", "RustError", "compile_rust", "compile_rust_crate", "CfgOptions", "CompileEnvironment", "TargetPlatformFacts"]

@@ -2689,6 +2689,23 @@
       "evidence": []
     },
     {
+      "id": "rust.crates.multi-file-compilation",
+      "title": "Multi-file crates through owned sema and lowering",
+      "chapter_ids": [
+        "rust.ref.4",
+        "rust.ref.6.1",
+        "rust.ref.12.4",
+        "rust.ref.12.6"
+      ],
+      "scope": "Qualification missing, not implementation missing: step 1 (first part) of pcc/frontends/rust/README.md, \"Plan: the DataSketches Rust arm\". compile_rust_crate(crate_root, sources, crate_name=...) loads a supplied source map (outlined `mod name;` as name.rs or name/mod.rs, nested directories) without flattening its scopes, resolves it per module (crate::/super:: paths, use and pub use, pub(crate)/pub(super), field and item privacy) and checks and lowers it with the same pipeline as compile_rust, with owned admission only; module functions get their crate paths as symbol names. An original five-file crate runs with owned compile, assemble and link and matches a rustc 1.92.0 build; 7 original crates get rustc's verdict (E0603, E0616, E0451, E0425 or ok) without rustc running. Module-scoped impls and traits keep an explicit boundary (steps 1b and 1c). Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_crate_compilation.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

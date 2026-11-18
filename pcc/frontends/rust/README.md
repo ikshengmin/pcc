@@ -309,6 +309,12 @@ a local rustc build's result:
 8. The driver: `println!`/`format!` for its JSON line, `Instant`,
    `env::args`. Milestone M5: the Rust arm runs and is timed.
 
+Progress: step 1 first part (1a) is done: `compile_rust_crate` compiles a
+supplied multi-file crate through the shared pipeline
+(`tests/rust/test_rust_crate_compilation.py`); 1b (module-scoped inherent
+impls) and 1c (module-scoped traits, method candidates only from traits in
+scope) are next.
+
 Out of scope until M5: parse blockers outside the closure, Linux execution,
 and the remaining rustc admission gates (several lifetime parameters and
 outlives bounds, item-level lint attributes), which are taken up when the

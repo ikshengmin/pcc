@@ -118,18 +118,38 @@ def run_owned_u64_function(source, function, tmp_path, monkeypatch, *, target_tr
     with monkeypatch.context() as patch:
         patch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned compile/link invoked a tool'))
         result = compile_rust(source, target_triple=target, **options)
-        symbol = result.symbols[function]
-        if 'apple' in target:
-            from pcc.backend import macho_exec, macho_obj
-            from pcc.backend.arm64_asm_driver import assemble_file
-            sections, undefined = assemble_file(DARWIN_U64_OBSERVER.format(symbol=symbol))
-            image = macho_exec.link_executable([result.emit_object(),
-                                                macho_obj.emit_object(sections, undefined=undefined)])
-        else:
-            from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
-            from pcc.backend.x86_64_asm_driver import assemble_file
-            image = link_static_executable([parse_relocatable(result.emit_object()),
-                                            assemble_file(LINUX_U64_OBSERVER.format(symbol=symbol))])
+        image = _link_u64_observer(result, result.symbols[function], target)
+    return _run_u64_image(image, tmp_path)
+
+
+def run_owned_crate_u64_function(crate_root, sources, function, tmp_path, monkeypatch, *, crate_name,
+                                 target_triple=None, **options):
+    """compile_rust_crate a supplied multi-file crate for the host, run the
+    function at crate path `function` (e.g. 'answer' or 'stats::total'),
+    return its u64. No tool runs while compiling or linking."""
+    from pcc.frontends.rust import compile_rust_crate
+    target = target_triple or HOST_TARGET
+    with monkeypatch.context() as patch:
+        patch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('owned compile/link invoked a tool'))
+        result = compile_rust_crate(crate_root, sources, crate_name=crate_name, target_triple=target, **options)
+        image = _link_u64_observer(result, result.symbols[function], target)
+    return _run_u64_image(image, tmp_path)
+
+
+def _link_u64_observer(result, symbol, target):
+    if 'apple' in target:
+        from pcc.backend import macho_exec, macho_obj
+        from pcc.backend.arm64_asm_driver import assemble_file
+        sections, undefined = assemble_file(DARWIN_U64_OBSERVER.format(symbol=symbol))
+        return macho_exec.link_executable([result.emit_object(),
+                                           macho_obj.emit_object(sections, undefined=undefined)])
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    return link_static_executable([parse_relocatable(result.emit_object()),
+                                   assemble_file(LINUX_U64_OBSERVER.format(symbol=symbol))])
+
+
+def _run_u64_image(image, tmp_path):
     binary = tmp_path / 'owned-u64'
     binary.write_bytes(image)
     binary.chmod(0o700)
@@ -154,15 +174,30 @@ def _reference_command(stage, command, *, timeout, env=None):
     return run_reference(stage, command, check=True, capture_output=True, timeout=timeout, env=env).stdout
 
 
+def run_rustc_crate_function(crate_root, sources, function, tmp_path, *, edition=2021,
+                             output='&{call}.to_le_bytes()'):
+    """The same multi-file crate built by a development rustc (its files
+    written under tmp_path/crate), `function` at its crate path printed."""
+    crate = tmp_path / 'crate'
+    for path, text in sources.items():
+        (crate / path).parent.mkdir(parents=True, exist_ok=True)
+        (crate / path).write_text(text)
+    return run_rustc_str_function(None, function, tmp_path, edition=edition, output=output,
+                                  library=crate / crate_root)
+
+
 def run_rustc_str_function(source, function, tmp_path, *, edition=2021, environment=None, cfg=(), panic=None,
-                           output='{call}.as_bytes()'):
+                           output='{call}.as_bytes()', library=None):
     """The same function built by a development rustc, printed byte for byte
-    (`output='&{call}.to_le_bytes()'` for an integer result)."""
+    (`output='&{call}.to_le_bytes()'` for an integer result). `library` is an
+    existing crate root file used instead of writing `source`."""
     import os
     import shutil
     rustc = shutil.which('rustc')
-    library, main = tmp_path / 'reference_lib.rs', tmp_path / 'reference_main.rs'
-    library.write_text(source)
+    main = tmp_path / 'reference_main.rs'
+    if library is None:
+        library = tmp_path / 'reference_lib.rs'
+        library.write_text(source)
     call = output.format(call=f'rust_reference::{function}()')
     main.write_text('use std::io::Write;\nfn main(){std::io::stdout().write_all('
                     f'{call}).unwrap();}}\n')

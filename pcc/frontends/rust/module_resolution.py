@@ -265,6 +265,8 @@ class ModuleResolution(ModuleNamespaces):
             raise obligation.token.error("unresolved owned compiler context: " + obligation.description)
         super().__init__(crate)
         self.functions, self.records, self.enums, self.consts, self.statics = [], [], [], [], []
+        # Every module's impls and traits (each resolved in its own module).
+        self.implementations, self.traits = [], []
         for module in self.modules.values():
             if module.body.traits or module.body.implementations:
                 item = (module.body.traits or module.body.implementations)[0]
