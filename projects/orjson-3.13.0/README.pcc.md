@@ -30,7 +30,10 @@ Files without their own SPDX notice retain the project-declaration provenance
 rather than an invented per-file SPDX statement. Cargo.lock dependency hashes
 do not establish dependency source availability or dependency license clearance.
 
-This is **not** the complete Rust module/crate/dependency/test-data closure.
+The 15-file fixture itself is **not** the complete Rust module/crate/dependency/test-data closure.
+A [separate authenticated Cargo package store](../orjson-3.13.0-build-sources/README.md) retains the complete
+pinned upstream distribution and registry sources without widening this gate. Input availability and a
+locked prerequisite plan still do not constitute an extension build or test execution.
 Original upstream Python tests live under projects/orjson-3.13.0, outside
 tests/rust discovery and the repository's pytest testpaths. In particular,
 test_roundtrip.py depends on omitted data fixtures and its own needs_data

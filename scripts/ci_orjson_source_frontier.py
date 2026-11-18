@@ -29,6 +29,11 @@ from scripts.ci_source_frontier_support import (
 )
 
 FIXTURE = ROOT / "projects/orjson-3.13.0"
+PACKAGE_STORE = ROOT / "projects/orjson-3.13.0-build-sources"
+# The trusted commit -> tree association comes from the immutable Git commit
+# object. Recomputing the tree verifies all archive contents and file modes.
+UPSTREAM_TREE = "48b5e5df86fbfddd828ced45d309069ce985ea46"
+UPSTREAM_TAR_SHA256 = "00145316d1931ddfe41d22512c90a96a4533722bf0effc562259af0aa75d0568"
 LOCK_SHA256 = "d6497472fb5d57c557a6a96235fe9da9b5b7f9f53dbe60cc2d5ae9aba3355153"
 UPSTREAM_REVISION = "bd00937c5c46ab20eb5d7fe1cfc034b906c4578f"
 RUST_ROOTS = ("src/lib.rs", "build.rs")
@@ -84,6 +89,23 @@ def load_inputs(directory=FIXTURE):
             or 'pyo3_build_config::PythonImplementation::CPython' not in build):
         raise ValueError("original build.rs C configuration/ABI provenance differs")
     return lock, files
+
+
+def authenticated_package_sources(files, store=PACKAGE_STORE):
+    from pcc.frontends.rust.cargo_package_sources import RootArchivePin, load_cargo_source_closure
+
+    pin = RootArchivePin(UPSTREAM_REVISION, UPSTREAM_TREE, UPSTREAM_TAR_SHA256,
+                         "orjson-" + UPSTREAM_REVISION)
+    return load_cargo_source_closure(store, pin, original_files=files)
+
+
+def default_library_plan(closure):
+    from pcc.frontends.rust.cargo_build_plan import CargoPlatform, plan_locked_library
+
+    # This is a declared hermetic plan, not a measured host/libc/CPython ABI.
+    # No ambient cfg/rustflags, PyO3 config, build-script stdout or OUT_DIR data.
+    platform = CargoPlatform(TARGET)
+    return plan_locked_library(closure, host=platform, target=platform)
 
 
 def unrun(reason):
@@ -145,7 +167,9 @@ def initial_report():
             "source_parse": {"status": "UNRUN"},
             "frontend_object": unrun("bounded dependency lane stops at owned preprocessing/parsing"),
         },
-        "owned_cargo_graph": unrun("owned dependency/feature/build orchestration and source closure not established"),
+        "package_source_store": {"status": "UNRUN"},
+        "locked_library_unit_plan": {"status": "UNRUN"},
+        "owned_cargo_graph": unrun("no compiled/executed dependent units; a source store and prerequisite plan are not build orchestration"),
         "build_rs_execution": unrun("owned Cargo/build dependencies and real interpreter ABI configuration missing"),
         "procedural_macros": unrun(
             "feature reachability unresolved; lock includes no-panic/proc-macro2/syn, not proof they run by default"
@@ -218,6 +242,38 @@ def run_worker(directory):
         "status": "PASS", "scope": "preflight only", "files": len(files),
         "bytes": sum(map(len, files.values())),
     }
+    save(receipt, report)
+    # The old 15-file gate above is not widened. Hash the independently bounded
+    # complete upstream tree / Cargo.lock registry packages, plan their actual
+    # reachable units, then drop their contents BEFORE the original C/Rust work.
+    from pcc.frontends.rust.cargo_package_sources import CargoSourceError, archive_identities, verify_cargo_source_archives
+    package_ids = None
+    valid, closure = attempt(report, receipt, report, "package_source_store",
+                             lambda: authenticated_package_sources(files), (CargoSourceError,))
+    if valid:
+        package_ids = archive_identities(closure)
+        report["package_source_store"].update(closure.record(), scope="before source stages")
+        planned, graph = attempt(report, receipt, report, "locked_library_unit_plan",
+                                 lambda: default_library_plan(closure), (CargoSourceError,))
+        if planned:
+            report["locked_library_unit_plan"].update(graph.record())
+            report["owned_cargo_graph"]["blocked_by"] = "locked prerequisite plan exists; no actual build-unit execution"
+            report["build_rs_execution"]["blocked_by"] = (
+                "required host build-script executable/standard library and actual direct links output "
+                "from the dependency are absent; no generated files, interpreter ABI or feature cfg inferred"
+            )
+            report["procedural_macros"]["blocked_by"] = (
+                "default selected plan does not activate the optional no-panic macro; "
+                "other feature selections and general macro execution are not qualified"
+            )
+            report["upstream_tests"]["blocked_by"] = (
+                "complete upstream source/test/data file set available in pinned archive; "
+                "upstream test environment, dependencies and PCC-native extension missing"
+            )
+        del graph
+        del closure
+    else:
+        report["locked_library_unit_plan"] = unrun("package source input authentication failed")
     save(receipt, report)
     # Imports are intentionally confined to the guarded CI worker.
     from pcc.frontends.rust import CompileEnvironment, RustError, TargetPlatformFacts, compile_rust
@@ -305,6 +361,14 @@ def run_worker(directory):
         save(receipt, report)
         return 2
     report["source_integrity"]["scope"] = "identical before and after all attempted source stages"
+    if package_ids is not None:
+        try:
+            verify_cargo_source_archives(PACKAGE_STORE, package_ids)
+        except CargoSourceError as error:
+            report["package_source_store"].update(status="FAIL", diagnostic=str(error))
+            save(receipt, report)
+            return 2
+        report["package_source_store"]["scope"] = "all consumed archives identical before/after source stages"
     report["terminal"] = True
     save(receipt, report)
     return 1  # Later stages are UNRUN, never whole orjson acceptance.
