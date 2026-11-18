@@ -7,8 +7,10 @@ linker. No Objective-C source, external compiler, ``ctypes`` adapter or
 prebuilt bridge takes part.
 
 Host Python runs the compiler, so these are host-pcc0 results. They are not
-pcc1-native or five-GC evidence, and a synchronous launch is not a fence
-lifetime proof.
+pcc1-native or five-GC evidence. The shared-event gates prove GPU-side
+ordering, host waits with an in-band timeout and asynchronous completion of
+one launch; they do not prove collector-visible blocking or buffer release
+driven by a fence.
 
 A machine without a Metal device reports that in band. The report is accepted
 by default and rejected when ``PCC_GPU_HARDWARE_STRICT=1``.
@@ -72,6 +74,25 @@ REPORT_NAME_LENGTH = 9
 REPORT_EXTRA_A = 10
 REPORT_EXTRA_B = 11
 
+# A second report the shared-event gates emit right after the first one.
+EVENT_REPORT_WORDS = 16
+EVENT_REPORT_BYTES = EVENT_REPORT_WORDS * 8
+EVENT_CREATE = 0
+EVENT_INITIAL = 1
+EVENT_DISPATCH = 2
+EVENT_WAIT = 3
+EVENT_VALUE = 4
+EVENT_FINISH = 5
+EVENT_NULL_SIGNAL = 6
+EVENT_ZERO_SIGNAL = 7
+EVENT_TOO_WIDE = 8
+EVENT_SAME_DEVICE = 9
+EVENT_SECOND_DISPATCH = 10
+EVENT_SECOND_FINISH = 11
+EVENT_EARLY_WAIT = 12
+EVENT_EARLY_VALUE = 13
+EVENT_COMMAND_CLEARED = 14
+
 _ALL_STATUSES = (
     abi.STATUS_BAD_ARGUMENT,
     abi.STATUS_OUT_OF_MEMORY,
@@ -88,6 +109,8 @@ _ALL_STATUSES = (
     abi.STATUS_DISPATCH_EXCEEDS_PIPELINE,
     abi.STATUS_ENCODER_UNAVAILABLE,
     abi.STATUS_COMMAND_FAILED,
+    abi.STATUS_EVENT_TIMEOUT,
+    abi.STATUS_EVENT_UNAVAILABLE,
 )
 _UNAVAILABLE_STATUSES = (
     abi.STATUS_OBJC_RUNTIME_UNAVAILABLE,
@@ -128,6 +151,15 @@ _RUNTIME_CALLS = (
         "dispatch_sync", "dispatch_sync", "i64",
         ("ptr", "ptr", "ptr", "i64", "ptr", "ptr"),
     ),
+    ("event_create", "event_create", "i64", ("ptr", "ptr")),
+    ("event_release", "event_release", "i64", ("ptr", "ptr")),
+    ("event_value", "event_value", "i64", ("ptr", "ptr", "ptr")),
+    ("event_wait", "event_wait", "i64", ("ptr", "ptr", "i64", "i64")),
+    (
+        "dispatch_async", "dispatch_async", "i64",
+        ("ptr", "ptr", "ptr", "i64", "ptr", "ptr", "ptr", "ptr"),
+    ),
+    ("command_finish", "command_finish", "i64", ("ptr", "ptr")),
 )
 
 
@@ -302,6 +334,29 @@ def _substitutions() -> dict[str, str]:
         "R_NAME_LENGTH": REPORT_NAME_LENGTH * 8,
         "R_EXTRA_A": REPORT_EXTRA_A * 8,
         "R_EXTRA_B": REPORT_EXTRA_B * 8,
+        "EVENT_REPORT_WORDS": EVENT_REPORT_WORDS,
+        "EVENT_REPORT_BYTES": EVENT_REPORT_BYTES,
+        "E_CREATE": EVENT_CREATE * 8,
+        "E_INITIAL": EVENT_INITIAL * 8,
+        "E_DISPATCH": EVENT_DISPATCH * 8,
+        "E_WAIT": EVENT_WAIT * 8,
+        "E_VALUE": EVENT_VALUE * 8,
+        "E_FINISH": EVENT_FINISH * 8,
+        "E_NULL_SIGNAL": EVENT_NULL_SIGNAL * 8,
+        "E_ZERO_SIGNAL": EVENT_ZERO_SIGNAL * 8,
+        "E_TOO_WIDE": EVENT_TOO_WIDE * 8,
+        "E_SAME_DEVICE": EVENT_SAME_DEVICE * 8,
+        "E_SECOND_DISPATCH": EVENT_SECOND_DISPATCH * 8,
+        "E_SECOND_FINISH": EVENT_SECOND_FINISH * 8,
+        "E_EARLY_WAIT": EVENT_EARLY_WAIT * 8,
+        "E_EARLY_VALUE": EVENT_EARLY_VALUE * 8,
+        "E_COMMAND_CLEARED": EVENT_COMMAND_CLEARED * 8,
+        "FENCE_BYTES": abi.FENCE_BYTES,
+        "FENCE_WAIT_EVENT": abi.FENCE_WAIT_EVENT,
+        "FENCE_WAIT_VALUE": abi.FENCE_WAIT_VALUE,
+        "FENCE_SIGNAL_EVENT": abi.FENCE_SIGNAL_EVENT,
+        "FENCE_SIGNAL_VALUE": abi.FENCE_SIGNAL_VALUE,
+        "CONTEXT_DEVICE": abi.CONTEXT_DEVICE,
         "LIMITS_BYTES": abi.LIMITS_BYTES,
         "LIMIT_MAX_THREADS": abi.LIMIT_MAX_THREADS,
         "LIMIT_EXECUTION_WIDTH": abi.LIMIT_EXECUTION_WIDTH,
@@ -371,6 +426,11 @@ def _report(stdout: bytes) -> tuple[int, ...]:
     return struct.unpack_from("<%dq" % REPORT_WORDS, stdout)
 
 
+def _event_report(stdout: bytes) -> tuple[int, ...]:
+    assert len(stdout) >= REPORT_BYTES + EVENT_REPORT_BYTES, len(stdout)
+    return struct.unpack_from("<%dq" % EVENT_REPORT_WORDS, stdout, REPORT_BYTES)
+
+
 def _device_available(report: tuple[int, ...]) -> bool:
     """Return False for an accepted in-band unavailable-device report."""
     status = report[REPORT_OPEN]
@@ -435,6 +495,12 @@ def test_runtime_status_and_layout_constants_are_distinct():
     assert limits == (0, 8, 16)
     assert abi.LIMITS_BYTES == 24
     assert abi.MAX_BINDING_INDEX == 30
+    fence = (
+        abi.FENCE_WAIT_EVENT, abi.FENCE_WAIT_VALUE,
+        abi.FENCE_SIGNAL_EVENT, abi.FENCE_SIGNAL_VALUE,
+    )
+    assert fence == (0, 8, 16, 24)
+    assert abi.FENCE_BYTES == 32
 
 
 def test_runtime_object_binds_only_libsystem_symbols(tmp_path):
@@ -459,6 +525,8 @@ def test_runtime_object_binds_only_libsystem_symbols(tmp_path):
         "buffer_create", "buffer_contents",
         "buffer_length", "buffer_release", "pipeline_create",
         "pipeline_limits", "pipeline_release", "dispatch_sync",
+        "event_create", "event_release", "event_value", "event_wait",
+        "dispatch_async", "command_finish",
         "packet_result_bytes", "launch_packet", "packet_main",
     ):
         assert "_pcc_metal_device_" + name in defined
@@ -666,3 +734,228 @@ def test_kernel_ir_copy_source_executes_on_the_owned_device(tmp_path):
     assert func.threads <= report[REPORT_MAX_THREADS]
     assert report[REPORT_DISPATCH] == abi.STATUS_OK
     assert struct.unpack("<4f", stdout[REPORT_BYTES:]) == values
+
+
+# --- shared-event fences ------------------------------------------------------
+
+EVENT_STEP = '''
+    events = calloc(@EVENT_REPORT_WORDS@, 8)
+    event_slot = stack_alloc(8)
+    store_i64(events, @E_CREATE@, event_create(context, event_slot))
+    event = load_ptr(event_slot, 0)
+    if ptr_is_null(event):
+        emit(report, @REPORT_BYTES@)
+        emit(events, @EVENT_REPORT_BYTES@)
+        return 0
+    value_slot = stack_alloc(8)
+    command_slot = stack_alloc(8)
+    fence = calloc(1, @FENCE_BYTES@)
+    store_i64(grid, 0, (count + width - 1) // width)
+    store_i64(threads, 0, width)
+'''
+
+EVENT_BAIL = '''
+        emit(report, @REPORT_BYTES@)
+        emit(events, @EVENT_REPORT_BYTES@)
+        return 0
+'''
+
+TWO_STAGE_SOURCE = PROBE_SOURCE + """kernel void pcc_add7(const device uint *src [[buffer(0)]],
+                     device uint *dst [[buffer(1)]],
+                     constant uint &count [[buffer(2)]],
+                     uint gid [[thread_position_in_grid]]) {
+    if (gid >= count) { return; }
+    dst[gid] = src[gid] + 7u;
+}
+"""
+
+
+@_needs_arm64_darwin
+def test_async_dispatch_signals_shared_event_and_matches_cpu_oracle(tmp_path):
+    # MTLSharedEvent semantics: a command buffer encodes a signal of a value;
+    # the host waits until the event's signaled value reaches it. Invalid
+    # launches are refused before encoding, so the event stays at 0.
+    count = 1000
+    body = PIPELINE_STEP + BUFFER_STEP + EVENT_STEP + '''
+    store_ptr(command_slot, 0, fence)
+    store_i64(fence, @FENCE_SIGNAL_VALUE@, 1)
+    store_i64(events, @E_NULL_SIGNAL@, dispatch_async(
+        context, pipeline, bindings, 3, grid, threads, fence, command_slot,
+    ))
+    store_ptr(fence, @FENCE_SIGNAL_EVENT@, event)
+    store_i64(fence, @FENCE_SIGNAL_VALUE@, 0)
+    store_i64(events, @E_ZERO_SIGNAL@, dispatch_async(
+        context, pipeline, bindings, 3, grid, threads, fence, command_slot,
+    ))
+    store_i64(fence, @FENCE_SIGNAL_VALUE@, 1)
+    store_i64(threads, 0, max_threads + 1)
+    store_i64(events, @E_TOO_WIDE@, dispatch_async(
+        context, pipeline, bindings, 3, grid, threads, fence, command_slot,
+    ))
+    store_i64(threads, 0, width)
+    cleared: i64 = 0
+    if ptr_is_null(load_ptr(command_slot, 0)):
+        cleared = 1
+    store_i64(events, @E_COMMAND_CLEARED@, cleared)
+    event_value(context, event, value_slot)
+    store_i64(events, @E_INITIAL@, load_i64(value_slot, 0))
+    store_i64(events, @E_DISPATCH@, dispatch_async(
+        context, pipeline, bindings, 3, grid, threads, fence, command_slot,
+    ))
+    store_i64(events, @E_WAIT@, event_wait(context, event, 1, 10000))
+    event_value(context, event, value_slot)
+    store_i64(events, @E_VALUE@, load_i64(value_slot, 0))
+    store_i64(events, @E_FINISH@, command_finish(
+        context, load_ptr(command_slot, 0),
+    ))
+    emit(report, @REPORT_BYTES@)
+    emit(events, @EVENT_REPORT_BYTES@)
+    emit(target_data, nbytes)
+    event_release(context, event)
+    buffer_release(context, target_buffer)
+    buffer_release(context, source_buffer)
+    pipeline_release(context, pipeline)
+    device_close(context)
+    return 0
+'''
+    stdout = _run_driver(
+        tmp_path, body, SOURCE=repr(PROBE_SOURCE), FUNCTION=repr("pcc_probe"),
+        COUNT=str(count), FILL=RAMP_FILL,
+    )
+    report = _report(stdout)
+    if not _device_available(report):
+        return
+    assert report[REPORT_PIPELINE] == abi.STATUS_OK
+    events = _event_report(stdout)
+    assert events[EVENT_CREATE] == abi.STATUS_OK
+    assert events[EVENT_NULL_SIGNAL] == abi.STATUS_BAD_ARGUMENT
+    assert events[EVENT_ZERO_SIGNAL] == abi.STATUS_BAD_ARGUMENT
+    assert events[EVENT_TOO_WIDE] == abi.STATUS_DISPATCH_EXCEEDS_PIPELINE
+    assert events[EVENT_COMMAND_CLEARED] == 1
+    assert events[EVENT_INITIAL] == 0
+    assert events[EVENT_DISPATCH] == abi.STATUS_OK
+    assert events[EVENT_WAIT] == abi.STATUS_OK
+    assert events[EVENT_VALUE] == 1
+    assert events[EVENT_FINISH] == abi.STATUS_OK
+    payload = stdout[REPORT_BYTES + EVENT_REPORT_BYTES:]
+    oracle = tuple(((i * 7 + 5) * 3 + 1) & 0xFFFFFFFF for i in range(count))
+    assert struct.unpack("<%dI" % count, payload) == oracle
+
+
+@_needs_arm64_darwin
+def test_shared_event_orders_two_queues_on_the_gpu(tmp_path):
+    # The consumer is committed first, on a second context's queue, and waits
+    # on the GPU for value 1. Until the producer is committed the host wait
+    # for value 2 must time out in band with the event still at 0. The
+    # consumer reads the producer's output, so a missing GPU-side wait would
+    # read zeros and give src + 7 = 7.
+    count = 777
+    body = PIPELINE_STEP + BUFFER_STEP + EVENT_STEP + '''
+    second_slot = stack_alloc(8)
+    status = device_open(second_slot)
+    store_i64(report, @R_EXTRA_A@, status)
+    if status != 0:
+@EVENT_BAIL@
+    second = load_ptr(second_slot, 0)
+    same: i64 = 0
+    if load_i64(context, @CONTEXT_DEVICE@) == load_i64(second, @CONTEXT_DEVICE@):
+        same = 1
+    store_i64(events, @E_SAME_DEVICE@, same)
+    if same == 0:
+@EVENT_BAIL@
+    consumer_slot = stack_alloc(8)
+    store_i64(report, @R_EXTRA_B@, pipeline_create(
+        second, cstr(@SOURCE@), cstr("pcc_add7"), consumer_slot,
+        diagnostic, @DIAGNOSTIC_BYTES@,
+    ))
+    consumer = load_ptr(consumer_slot, 0)
+    if ptr_is_null(consumer):
+@EVENT_BAIL@
+    result_slot = stack_alloc(8)
+    store_i64(report, @R_NAME_LENGTH@, buffer_create(context, nbytes, result_slot))
+    result_buffer = load_ptr(result_slot, 0)
+    if ptr_is_null(result_buffer):
+@EVENT_BAIL@
+    result_data = buffer_contents(context, result_buffer)
+    index = 0
+    while index < count:
+        store_i32(result_data, index * 4, 0)
+        index = index + 1
+    later = calloc(3, @BINDING_BYTES@)
+    store_i64(later, @B0_KIND@, @KIND_BUFFER@)
+    store_i64(later, @B0_INDEX@, 0)
+    store_ptr(later, @B0_POINTER@, target_buffer)
+    store_i64(later, @B0_EXTENT@, 0)
+    store_i64(later, @B1_KIND@, @KIND_BUFFER@)
+    store_i64(later, @B1_INDEX@, 1)
+    store_ptr(later, @B1_POINTER@, result_buffer)
+    store_i64(later, @B1_EXTENT@, 0)
+    store_i64(later, @B2_KIND@, @KIND_BYTES@)
+    store_i64(later, @B2_INDEX@, 2)
+    store_ptr(later, @B2_POINTER@, count_slot)
+    store_i64(later, @B2_EXTENT@, 4)
+    store_ptr(fence, @FENCE_WAIT_EVENT@, event)
+    store_i64(fence, @FENCE_WAIT_VALUE@, 1)
+    store_ptr(fence, @FENCE_SIGNAL_EVENT@, event)
+    store_i64(fence, @FENCE_SIGNAL_VALUE@, 2)
+    store_i64(events, @E_DISPATCH@, dispatch_async(
+        second, consumer, later, 3, grid, threads, fence, command_slot,
+    ))
+    store_i64(events, @E_EARLY_WAIT@, event_wait(context, event, 2, 50))
+    event_value(context, event, value_slot)
+    store_i64(events, @E_EARLY_VALUE@, load_i64(value_slot, 0))
+    producer_fence = calloc(1, @FENCE_BYTES@)
+    store_ptr(producer_fence, @FENCE_SIGNAL_EVENT@, event)
+    store_i64(producer_fence, @FENCE_SIGNAL_VALUE@, 1)
+    producer_slot = stack_alloc(8)
+    store_i64(events, @E_SECOND_DISPATCH@, dispatch_async(
+        context, pipeline, bindings, 3, grid, threads, producer_fence,
+        producer_slot,
+    ))
+    store_i64(events, @E_WAIT@, event_wait(context, event, 2, 10000))
+    event_value(context, event, value_slot)
+    store_i64(events, @E_VALUE@, load_i64(value_slot, 0))
+    store_i64(events, @E_FINISH@, command_finish(
+        second, load_ptr(command_slot, 0),
+    ))
+    store_i64(events, @E_SECOND_FINISH@, command_finish(
+        context, load_ptr(producer_slot, 0),
+    ))
+    emit(report, @REPORT_BYTES@)
+    emit(events, @EVENT_REPORT_BYTES@)
+    emit(result_data, nbytes)
+    event_release(context, event)
+    buffer_release(context, result_buffer)
+    buffer_release(context, target_buffer)
+    buffer_release(context, source_buffer)
+    pipeline_release(second, consumer)
+    pipeline_release(context, pipeline)
+    device_close(second)
+    device_close(context)
+    return 0
+'''
+    stdout = _run_driver(
+        tmp_path, body, SOURCE=repr(TWO_STAGE_SOURCE), FUNCTION=repr("pcc_probe"),
+        COUNT=str(count), FILL=RAMP_FILL, EVENT_BAIL=EVENT_BAIL,
+    )
+    report = _report(stdout)
+    if not _device_available(report):
+        return
+    events = _event_report(stdout)
+    assert report[REPORT_PIPELINE] == abi.STATUS_OK
+    assert events[EVENT_CREATE] == abi.STATUS_OK
+    assert report[REPORT_EXTRA_A] == abi.STATUS_OK
+    assert events[EVENT_SAME_DEVICE] == 1
+    assert report[REPORT_EXTRA_B] == abi.STATUS_OK
+    assert report[REPORT_NAME_LENGTH] == abi.STATUS_OK
+    assert events[EVENT_DISPATCH] == abi.STATUS_OK
+    assert events[EVENT_EARLY_WAIT] == abi.STATUS_EVENT_TIMEOUT
+    assert events[EVENT_EARLY_VALUE] == 0
+    assert events[EVENT_SECOND_DISPATCH] == abi.STATUS_OK
+    assert events[EVENT_WAIT] == abi.STATUS_OK
+    assert events[EVENT_VALUE] == 2
+    assert events[EVENT_FINISH] == abi.STATUS_OK
+    assert events[EVENT_SECOND_FINISH] == abi.STATUS_OK
+    payload = stdout[REPORT_BYTES + EVENT_REPORT_BYTES:]
+    oracle = tuple(((i * 7 + 5) * 3 + 1 + 7) & 0xFFFFFFFF for i in range(count))
+    assert struct.unpack("<%dI" % count, payload) == oracle

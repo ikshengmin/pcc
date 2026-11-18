@@ -32,6 +32,29 @@ and ``threads`` are three i64 words each (x, y, z). ``dispatch_sync`` returns
 only after the command buffer completed, so every binding may be released as
 soon as it returns.
 
+Asynchronous launches are ordered by shared events (``MTLSharedEvent``), not by
+Objective-C completion blocks:
+
+  event_create(context, event_out) -> status
+  event_release(context, event) -> status
+  event_value(context, event, value_out) -> status
+  event_wait(context, event, value, timeout_ms) -> status
+  dispatch_async(context, pipeline, bindings, binding_count,
+                 grid, threads, fence, command_out) -> status
+  command_finish(context, command) -> status
+
+``fence`` is one ``FENCE_BYTES`` record. Before its dispatch the command buffer
+waits on the GPU until the wait event reaches the wait value (no wait when the
+wait event is null); after it, the command buffer signals the signal event with
+the signal value. ``dispatch_async`` commits and returns at once with a retained
+command handle. ``event_wait`` blocks the calling thread until the value is
+reached or the timeout passes, which is the in-band ``STATUS_EVENT_TIMEOUT``.
+``command_finish`` waits for the handle, reports whether the command buffer
+completed without error and releases the handle; a failed command buffer may
+never signal, so a caller waits with a timeout and then finishes the handle.
+Bindings must stay alive until the signal value is observed. The blocked thread
+is not reported to the collectors; a caller must not wait on a carrier thread.
+
 A launch is refused before anything is encoded when the packet is malformed or
 when the threadgroup is larger than the pipeline allows. Metal does not execute
 such a dispatch and reports no error, so accepting it would return stale
@@ -95,10 +118,12 @@ STATUS_SOURCE_REJECTED = 20
 STATUS_FUNCTION_NOT_FOUND = 21
 STATUS_PIPELINE_REJECTED = 22
 STATUS_BUFFER_UNAVAILABLE = 30
+STATUS_EVENT_UNAVAILABLE = 31
 STATUS_BAD_BINDING = 40
 STATUS_DISPATCH_EXCEEDS_PIPELINE = 41
 STATUS_ENCODER_UNAVAILABLE = 42
 STATUS_COMMAND_FAILED = 43
+STATUS_EVENT_TIMEOUT = 44
 
 # Device context: one calloc'd record owned by open()/close().
 CONTEXT_OBJC = 0
@@ -197,6 +222,14 @@ STORAGE_MODE_SHARED = 0
 # MTLCommandBufferStatusCompleted.
 COMMAND_BUFFER_COMPLETED = 4
 
+# Fence record for dispatch_async. Values are unsigned on the device and must
+# be positive here; 0 is a new event's value, so waiting for it orders nothing.
+FENCE_WAIT_EVENT = 0
+FENCE_WAIT_VALUE = 8
+FENCE_SIGNAL_EVENT = 16
+FENCE_SIGNAL_VALUE = 24
+FENCE_BYTES = 32
+
 
 @c_abi_export("pcc_metal_device_objc_selector")
 def _selector(context, name):
@@ -279,6 +312,35 @@ def _send_void_word(context, target, name, value: i64) -> i64:
     call_c_abi(
         load_ptr(context, CONTEXT_SEND), "void", ("ptr", "ptr", "i64"),
         (target, _selector(context, name), value), None,
+    )
+    return 0
+
+
+@c_abi_export("pcc_metal_device_objc_send_word1")
+def _send_word1(context, target, name, arg0) -> i64:
+    out = stack_alloc(8)
+    call_c_abi(
+        load_ptr(context, CONTEXT_SEND), "i64", ("ptr", "ptr", "ptr"),
+        (target, _selector(context, name), arg0), out,
+    )
+    return load_i64(out, 0)
+
+
+@c_abi_export("pcc_metal_device_objc_send_void_word2")
+def _send_void_word2(context, target, name, first: i64, second: i64) -> i64:
+    call_c_abi(
+        load_ptr(context, CONTEXT_SEND), "void", ("ptr", "ptr", "i64", "i64"),
+        (target, _selector(context, name), first, second), None,
+    )
+    return 0
+
+
+@c_abi_export("pcc_metal_device_objc_send_void_ptr_word")
+def _send_void_ptr_word(context, target, name, pointer, value: i64) -> i64:
+    """``encodeSignalEvent:value:`` and ``encodeWaitForEvent:value:`` shape."""
+    call_c_abi(
+        load_ptr(context, CONTEXT_SEND), "void", ("ptr", "ptr", "ptr", "i64"),
+        (target, _selector(context, name), pointer, value), None,
     )
     return 0
 
@@ -648,8 +710,8 @@ def _check_bindings(context, bindings, binding_count: i64) -> i64:
     return STATUS_OK
 
 
-@c_abi_export("pcc_metal_device_dispatch_sync")
-def pcc_metal_device_dispatch_sync(
+@c_abi_export("pcc_metal_device_check_launch")
+def _check_launch(
     context,
     pipeline,
     bindings,
@@ -657,6 +719,7 @@ def pcc_metal_device_dispatch_sync(
     grid,
     threads,
 ) -> i64:
+    """Validate a whole launch before any command buffer exists."""
     if ptr_is_null(context) or ptr_is_null(pipeline):
         return STATUS_BAD_ARGUMENT
     if ptr_is_null(grid) or ptr_is_null(threads):
@@ -684,20 +747,22 @@ def pcc_metal_device_dispatch_sync(
     if threads_x * threads_y * threads_z > max_threads:
         return STATUS_DISPATCH_EXCEEDS_PIPELINE
 
-    checked: i64 = _check_bindings(context, bindings, binding_count)
-    if checked != STATUS_OK:
-        return checked
+    return _check_bindings(context, bindings, binding_count)
 
-    pool = _pool_push(context)
-    command_buffer = _send(
-        context, load_ptr(context, CONTEXT_QUEUE), cstr("commandBuffer")
-    )
-    if ptr_is_null(command_buffer):
-        _pool_pop(context, pool)
-        return STATUS_ENCODER_UNAVAILABLE
+
+@c_abi_export("pcc_metal_device_encode_dispatch")
+def _encode_dispatch(
+    context,
+    command_buffer,
+    pipeline,
+    bindings,
+    binding_count: i64,
+    grid,
+    threads,
+) -> i64:
+    """Encode one checked dispatch into ``command_buffer``; nothing commits."""
     encoder = _send(context, command_buffer, cstr("computeCommandEncoder"))
     if ptr_is_null(encoder):
-        _pool_pop(context, pool)
         return STATUS_ENCODER_UNAVAILABLE
     _send_void1(context, encoder, cstr("setComputePipelineState:"), pipeline)
     index: i64 = 0
@@ -718,6 +783,12 @@ def pcc_metal_device_dispatch_sync(
                 load_i64(record, BINDING_INDEX),
             )
         index = index + 1
+    grid_x: i64 = load_i64(grid, EXTENT_X)
+    grid_y: i64 = load_i64(grid, EXTENT_Y)
+    grid_z: i64 = load_i64(grid, EXTENT_Z)
+    threads_x: i64 = load_i64(threads, EXTENT_X)
+    threads_y: i64 = load_i64(threads, EXTENT_Y)
+    threads_z: i64 = load_i64(threads, EXTENT_Z)
     call_c_abi(
         load_ptr(context, CONTEXT_SEND), "void",
         ("ptr", "ptr", "{i64,i64,i64}", "{i64,i64,i64}"),
@@ -732,10 +803,167 @@ def pcc_metal_device_dispatch_sync(
         None,
     )
     _send_void(context, encoder, cstr("endEncoding"))
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_dispatch_sync")
+def pcc_metal_device_dispatch_sync(
+    context,
+    pipeline,
+    bindings,
+    binding_count: i64,
+    grid,
+    threads,
+) -> i64:
+    checked: i64 = _check_launch(
+        context, pipeline, bindings, binding_count, grid, threads
+    )
+    if checked != STATUS_OK:
+        return checked
+    pool = _pool_push(context)
+    command_buffer = _send(
+        context, load_ptr(context, CONTEXT_QUEUE), cstr("commandBuffer")
+    )
+    if ptr_is_null(command_buffer):
+        _pool_pop(context, pool)
+        return STATUS_ENCODER_UNAVAILABLE
+    encoded: i64 = _encode_dispatch(
+        context, command_buffer, pipeline, bindings, binding_count, grid, threads
+    )
+    if encoded != STATUS_OK:
+        _pool_pop(context, pool)
+        return encoded
     _send_void(context, command_buffer, cstr("commit"))
     _send_void(context, command_buffer, cstr("waitUntilCompleted"))
     state: i64 = _send_word(context, command_buffer, cstr("status"))
     _pool_pop(context, pool)
+    if state != COMMAND_BUFFER_COMPLETED:
+        return STATUS_COMMAND_FAILED
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_event_create")
+def pcc_metal_device_event_create(context, event_out) -> i64:
+    if ptr_is_null(context) or ptr_is_null(event_out):
+        return STATUS_BAD_ARGUMENT
+    store_ptr(event_out, 0, null())
+    event = _send(context, load_ptr(context, CONTEXT_DEVICE), cstr("newSharedEvent"))
+    if ptr_is_null(event):
+        return STATUS_EVENT_UNAVAILABLE
+    store_ptr(event_out, 0, event)
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_event_release")
+def pcc_metal_device_event_release(context, event) -> i64:
+    if ptr_is_null(context) or ptr_is_null(event):
+        return STATUS_BAD_ARGUMENT
+    _send_void(context, event, cstr("release"))
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_event_value")
+def pcc_metal_device_event_value(context, event, value_out) -> i64:
+    """Read the signaled value without blocking."""
+    if ptr_is_null(context) or ptr_is_null(event) or ptr_is_null(value_out):
+        return STATUS_BAD_ARGUMENT
+    store_i64(value_out, 0, _send_word(context, event, cstr("signaledValue")))
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_event_wait")
+def pcc_metal_device_event_wait(
+    context, event, value: i64, timeout_ms: i64
+) -> i64:
+    if ptr_is_null(context) or ptr_is_null(event):
+        return STATUS_BAD_ARGUMENT
+    if value < 0 or timeout_ms < 0:
+        return STATUS_BAD_ARGUMENT
+    if _send_word(context, event, cstr("signaledValue")) >= value:
+        return STATUS_OK
+    wait = _selector(context, cstr("waitUntilSignaledValue:timeoutMS:"))
+    # respondsToSelector: returns a BOOL; only its low byte is defined.
+    responds: i64 = _send_word1(
+        context, event, cstr("respondsToSelector:"), wait
+    )
+    if responds & 255 == 0:
+        return STATUS_EVENT_UNAVAILABLE
+    # The BOOL result is not read: the signaled value below is the answer.
+    _send_void_word2(
+        context, event, cstr("waitUntilSignaledValue:timeoutMS:"),
+        value, timeout_ms,
+    )
+    if _send_word(context, event, cstr("signaledValue")) >= value:
+        return STATUS_OK
+    return STATUS_EVENT_TIMEOUT
+
+
+@c_abi_export("pcc_metal_device_dispatch_async")
+def pcc_metal_device_dispatch_async(
+    context,
+    pipeline,
+    bindings,
+    binding_count: i64,
+    grid,
+    threads,
+    fence,
+    command_out,
+) -> i64:
+    if ptr_is_null(command_out):
+        return STATUS_BAD_ARGUMENT
+    store_ptr(command_out, 0, null())
+    if ptr_is_null(fence):
+        return STATUS_BAD_ARGUMENT
+    wait_event = load_ptr(fence, FENCE_WAIT_EVENT)
+    wait_value: i64 = load_i64(fence, FENCE_WAIT_VALUE)
+    signal_event = load_ptr(fence, FENCE_SIGNAL_EVENT)
+    signal_value: i64 = load_i64(fence, FENCE_SIGNAL_VALUE)
+    if ptr_is_null(signal_event) or signal_value < 1:
+        return STATUS_BAD_ARGUMENT
+    if not ptr_is_null(wait_event) and wait_value < 1:
+        return STATUS_BAD_ARGUMENT
+    checked: i64 = _check_launch(
+        context, pipeline, bindings, binding_count, grid, threads
+    )
+    if checked != STATUS_OK:
+        return checked
+    pool = _pool_push(context)
+    command_buffer = _send(
+        context, load_ptr(context, CONTEXT_QUEUE), cstr("commandBuffer")
+    )
+    if ptr_is_null(command_buffer):
+        _pool_pop(context, pool)
+        return STATUS_ENCODER_UNAVAILABLE
+    if not ptr_is_null(wait_event):
+        _send_void_ptr_word(
+            context, command_buffer, cstr("encodeWaitForEvent:value:"),
+            wait_event, wait_value,
+        )
+    encoded: i64 = _encode_dispatch(
+        context, command_buffer, pipeline, bindings, binding_count, grid, threads
+    )
+    if encoded != STATUS_OK:
+        _pool_pop(context, pool)
+        return encoded
+    _send_void_ptr_word(
+        context, command_buffer, cstr("encodeSignalEvent:value:"),
+        signal_event, signal_value,
+    )
+    # The handle outlives this pool; command_finish releases it.
+    _send(context, command_buffer, cstr("retain"))
+    _send_void(context, command_buffer, cstr("commit"))
+    _pool_pop(context, pool)
+    store_ptr(command_out, 0, command_buffer)
+    return STATUS_OK
+
+
+@c_abi_export("pcc_metal_device_command_finish")
+def pcc_metal_device_command_finish(context, command) -> i64:
+    if ptr_is_null(context) or ptr_is_null(command):
+        return STATUS_BAD_ARGUMENT
+    _send_void(context, command, cstr("waitUntilCompleted"))
+    state: i64 = _send_word(context, command, cstr("status"))
+    _send_void(context, command, cstr("release"))
     if state != COMMAND_BUFFER_COMPLETED:
         return STATUS_COMMAND_FAILED
     return STATUS_OK
