@@ -400,6 +400,16 @@
       "id": "conv.array",
       "title": "conv.array",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/conv.array"
+    },
+    {
+      "id": "cmath.syn",
+      "title": "29.9.1 Header <cmath> synopsis",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/cmath.syn"
+    },
+    {
+      "id": "depr.c.headers",
+      "title": "D.5 C standard library headers",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/depr.c.headers"
     }
   ],
   "features": [
@@ -4174,6 +4184,21 @@
       "diagnostics": [
         "cpp.unsupported.string-literals"
       ],
+      "evidence": []
+    },
+    {
+      "id": "cpp.standard-library.cmath",
+      "title": "Owned floating unary declarations and C compatibility spelling",
+      "chapter_ids": [
+        "cmath.syn",
+        "depr.c.headers"
+      ],
+      "scope": "The owned C++17 search path supplies <cmath> and <math.h> for the binary64 fabs, floor, ceil, rint, sqrt, exp, log, log2, log10, sin, cos and tan providers. Global and std floating overloads remain typed; float and long-double calls cannot be silently substituted with binary64. Integral forwarding, other math functions and macros, missing precision-specific providers, full C++17, native pcc1 and NumPy acceptance remain open.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_cmath_header.py"
+      ],
+      "diagnostics": [],
       "evidence": []
     }
   ],

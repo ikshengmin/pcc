@@ -1,0 +1,29 @@
+// PCC-owned C++17 floating unary declarations, N4659 [c.math], [cmath.syn].
+// The binary64 definitions live in runtime/py/freestanding_libc_numeric.py.
+// Float and long-double are distinct overloads: never silently call a double
+// provider through a different ABI. Missing definitions remain link errors.
+// Integral overloads, classification functions and the rest of <cmath> are
+// not implemented here. No host libm, errno policy or float ABI is implied.
+#ifndef _PCC_CXX_CMATH
+#define _PCC_CXX_CMATH
+#define __PCC_CMATH_UNARY(name)      \
+    extern "C" double name(double);  \
+    extern "C" float name##f(float); \
+    extern "C" long double name##l(long double); \
+    float name(float);               \
+    long double name(long double);   \
+    namespace std { using ::name; using ::name##f; using ::name##l; }
+__PCC_CMATH_UNARY(fabs)
+__PCC_CMATH_UNARY(floor)
+__PCC_CMATH_UNARY(ceil)
+__PCC_CMATH_UNARY(rint)
+__PCC_CMATH_UNARY(sqrt)
+__PCC_CMATH_UNARY(exp)
+__PCC_CMATH_UNARY(log)
+__PCC_CMATH_UNARY(log2)
+__PCC_CMATH_UNARY(log10)
+__PCC_CMATH_UNARY(sin)
+__PCC_CMATH_UNARY(cos)
+__PCC_CMATH_UNARY(tan)
+#undef __PCC_CMATH_UNARY
+#endif

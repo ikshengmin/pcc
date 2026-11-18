@@ -3107,6 +3107,14 @@
           "Calls check_originals_reference on unchanged grouped-this source and a separate observer. Only the selected JDK executes the class and reports language rejections; this is not PCC native object execution."
         ]
       }
+    },
+    "tests/cpp/test_cpp_cmath_header.py": {
+      "test_cmath_unmodified_program_against_actual_cpp17_system_headers": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles the unchanged twelve-function input with the C++17 system headers and explicit reference compiler. The separate owned-archive test does not call this oracle."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",
