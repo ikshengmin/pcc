@@ -536,10 +536,14 @@ class CDeclarationLoweringMixin:
                             if context[2] is None:
                                 context[2] = _function_lifetime_vla_declarations(context[0])
                             lifetime = context[2].get(id(node)) is node
-                        var_addr = self.builder.alloca(
-                            elem_ir_type, size=dynamic_dim_val, name=node.name,
-                            function_lifetime=lifetime,
-                        )
+                        if lifetime:
+                            var_addr = self.builder.alloca_function_lifetime(
+                                elem_ir_type, dynamic_dim_val, node.name,
+                            )
+                        else:
+                            var_addr = self.builder.alloca(
+                                elem_ir_type, size=dynamic_dim_val, name=node.name,
+                            )
                         self.define(node.name, (ir.PointerType(elem_ir_type), var_addr))
                         self._mark_vla_binding(var_addr, dynamic_dim_val)
                         if self._has_unsigned_scalar_pointee(node.type):

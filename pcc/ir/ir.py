@@ -2347,31 +2347,47 @@ class IRBuilder:
             return
         raise NotImplementedError("direct indexed IR does not represent counted alloca")
 
-    def alloca(self, ty: Type, size: Optional[Value] = None, name: str = "",
-               function_lifetime: bool = False) -> Value:
-        if function_lifetime and size is None:
+    def alloca(self, ty: Type, size: Optional[Value] = None, name: str = "") -> Value:
+        # This four-parameter method is a native scaffold ABI, including its
+        # receiver. Keep the ordinary fixed-slot path free of extra calls.
+        if size is not None:
+            return self._counted_alloca(ty, size, name, False)
+        v = self._next(name, PointerType(ty))
+        direct_builder = self._direct_builder_plane()
+        if self._direct_indexed_no_text and direct_builder is not None:
+            rec = self._emit_direct("alloca")
+        else:
+            rec = self._emit(str(v) + " = alloca " + str(ty))
+        if direct_builder is not None:
+            rec._direct_record_id = DirectIndexedFunctionBuilder.publish_alloca(
+                direct_builder, v, ty,
+            )
+        return v
+
+    def alloca_function_lifetime(self, ty: Type, size: Value, name: str) -> Value:
+        """Counted allocation whose caller proved it lives until function exit."""
+        if size is None:
             raise ValueError("a counted-allocation lifetime needs an element count")
-        # The direct producer currently records a type but has no count field.
-        # Never publish a one-element fixed slot for a counted allocation.
-        if size is not None and self._direct_indexed_capture:
+        return self._counted_alloca(ty, size, name, True)
+
+    def _counted_alloca(self, ty: Type, size: Value, name: str, function_lifetime: bool) -> Value:
+        # The direct producer records a type but has no count field. Retain
+        # its exact-unit admission; the lifetime proof does not relax it.
+        if self._direct_indexed_capture:
             self._require_direct_unit_alloca_count(size)
         v = self._next(name, PointerType(ty))
         direct_builder = self._direct_builder_plane()
         if self._direct_indexed_no_text and direct_builder is not None:
             rec = self._emit_direct("alloca")
         else:
-            size_text = ""
-            if size is not None:
-                size_text = ", " + str(size.type) + " " + str(size)
+            size_text = ", " + str(size.type) + " " + str(size)
             rec = self._emit(str(v) + " = alloca " + str(ty) + size_text)
             if function_lifetime:
                 proof = self._fn.module.add_metadata(["pcc.alloca.function_lifetime.v1"])
                 rec.set_metadata("pcc.alloca.function_lifetime", proof)
         if direct_builder is not None:
             rec._direct_record_id = DirectIndexedFunctionBuilder.publish_alloca(
-                direct_builder,
-                v,
-                ty,
+                direct_builder, v, ty,
             )
         return v
 

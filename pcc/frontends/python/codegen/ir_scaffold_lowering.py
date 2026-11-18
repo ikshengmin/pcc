@@ -265,6 +265,7 @@ _IR_BUILDER_METHODS = frozenset(
         "store",
         "load",
         "alloca",
+        "alloca_function_lifetime",
         # branches / control flow
         "branch",
         "cbranch",
@@ -403,6 +404,7 @@ _IR_SCAFFOLD_SIMPLE_METHODS: dict = {
     # Pointer-returning (handle to an LLVM IR value)
     "load": ("ptr", 1),
     "alloca": ("ptr", 1),
+    "alloca_function_lifetime": ("ptr", 3),
     "bitcast": ("ptr", 2),
     "inttoptr": ("ptr", 2),
     "ptrtoint": ("ptr", 2),
@@ -584,6 +586,7 @@ _IR_SCAFFOLD_METHOD_IMPL: frozenset = frozenset(
         "add_incoming",
         "load",
         "alloca",
+        "alloca_function_lifetime",
         "bitcast",
         "inttoptr",
         "ptrtoint",
