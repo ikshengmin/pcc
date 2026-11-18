@@ -31,6 +31,8 @@ class CompileEnvironment:
     """Explicit compile-time environment for env!/option_env!."""
     variables: tuple[tuple[str, str], ...] = ()
     unavailable: tuple[tuple[str, str], ...] = ()  # (name, reason)
+    # A subset observed from a pinned manifest is not a closed process env.
+    unlisted_unknown: bool = False
 
     @classmethod
     def of(cls, variables=None, unavailable=None):
@@ -45,13 +47,22 @@ class CompileEnvironment:
             raise RustError(f'compile-time environment names {sorted(overlap)} are both defined and unavailable')
         return environment
 
+    @classmethod
+    def partial(cls, variables):
+        checked = cls.of(variables)
+        return cls(checked.variables, unlisted_unknown=True)
+
     def lookup(self, name, token):
         """The value of `name`, or None when it is not defined."""
         for key, reason in self.unavailable:
             if key == name:
                 raise token.error(f'environment variable {name!r} is unavailable in the explicit '
                                   f'compile-time environment: {reason}')
-        return dict(self.variables).get(name)
+        values = dict(self.variables)
+        if self.unlisted_unknown and name not in values:
+            raise token.error(f'compile-time environment variable {name!r} is unknown in the partial '
+                              'source configuration; absence has not been established')
+        return values.get(name)
 
 
 @dataclass(frozen=True)

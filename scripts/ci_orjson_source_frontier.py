@@ -7,6 +7,7 @@ all later extension/runtime stages remain explicitly UNRUN.
 from __future__ import annotations
 
 from pathlib import Path
+import platform
 import re
 import subprocess
 import sys
@@ -87,6 +88,23 @@ def load_inputs(directory=FIXTURE):
 
 def unrun(reason):
     return {"status": "UNRUN", "blocked_by": reason}
+
+
+def build_script_platform_record(system, machine, byteorder):
+    """Report only three observed ABI facts, not an authenticated host triple.
+
+    For example a musl and a glibc worker can have exactly the same inputs.
+    TARGET is the gate's selected Rust source target, not a libc observation.
+    """
+    machine = machine.lower()
+    matches = system == "linux" and machine in {"x86_64", "amd64"} and byteorder == "little"
+    return {
+        "declared_source_target": TARGET,
+        "observed_host": {"sys_platform": system, "machine": machine, "byteorder": byteorder},
+        "three_platform_facts_match": matches, "full_host_triple": None,
+        "cfg": {"target_arch": "x86_64", "target_os": "linux", "target_endian": "little"}
+               if matches else {},
+    }
 
 
 def initial_report():
@@ -202,7 +220,8 @@ def run_worker(directory):
     }
     save(receipt, report)
     # Imports are intentionally confined to the guarded CI worker.
-    from pcc.frontends.rust import RustError, compile_rust
+    from pcc.frontends.rust import CompileEnvironment, RustError, TargetPlatformFacts, compile_rust
+    from pcc.frontends.rust.configuration import OwnedRustConfiguration
     from pcc.frontends.rust.syntax import Parser
     from pcc.frontends.c.parse import make_c_parser
     from pcc.frontends.c.parse.plyparser import ParseError
@@ -216,17 +235,40 @@ def run_worker(directory):
     report["materialized_c_inputs"] = {name: sha256(value) for name, value in c_files.items()}
     save(receipt, report)
 
+    # Cargo compiles build.rs *for the host*. Bind only facts that this job
+    # observes independently of the build script and dependency/feature graph.
+    # The library crate's cfg may be emitted by the absent script: do not
+    # apply these inputs there, or infer absence from an empty feature list.
+    host_inputs = build_script_platform_record(sys.platform, platform.machine(), sys.byteorder)
+    version = tomllib.loads(files["Cargo.toml"].decode("utf-8"))["package"]["version"]
+    known_env = {"CARGO_PKG_VERSION": version}
+    report["options"]["build_script_source_inputs"] = {
+        **host_inputs,
+        "manifest_environment": known_env, "manifest_sha256": sha256(files["Cargo.toml"]),
+        "other_cfg_and_environment": "UNKNOWN", "applies_to": "build.rs only",
+    }
+
+    def bound_cfg(name):
+        if name != "build.rs":
+            return None
+        if not host_inputs["three_platform_facts_match"]:
+            raise RustError("unsupported build-script host: observed arch/OS/byte order do not match the declared target facts")
+        return TargetPlatformFacts()
+
     for name in RUST_ROOTS:
         source = files[name].decode("utf-8")
+        environment = CompileEnvironment.partial(known_env) if name == "build.rs" else None
         row = report["rust"][name]
         attempt(report, receipt, row, "source_parse",
-                lambda: Parser(source, source_path=name, edition=2024).parse(), (RustError,))
+                lambda: Parser(source, source_path=name, edition=2024,
+                               configuration=OwnedRustConfiguration(TARGET, 2024, bound_cfg(name))
+                               if name == "build.rs" else None, environment=environment).parse(), (RustError,))
         # Bind the locked edition at the real public gate, without a checking
         # flag/token. Edition identity does not grant Cargo/borrow admission.
         attempt(report, receipt, row, "public_frontend_admission",
                 lambda: compile_rust(source, module_name="original_extension_root",
                                      target_triple=TARGET, overflow_checks=False,
-                                     edition=2024), (RustError,))
+                                     edition=2024, cfg=bound_cfg(name), env=environment), (RustError,))
 
     def preprocess_original_c():
         verify_snapshot(c_snapshot, c_files)

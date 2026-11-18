@@ -16,7 +16,7 @@ from .external_check import (
     check_rust_source, compile_rust_checked,
 )
 from .builtin_macros import CompileEnvironment
-from .configuration import CfgOptions, OwnedRustConfiguration
+from .configuration import CfgOptions, OwnedRustConfiguration, TargetPlatformFacts
 from .moves import MoveChecker
 from .semantics import Checker
 from .syntax import Parser, RustError
@@ -68,13 +68,15 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                  module_name: str = "rust",
                  target_triple: str = DEFAULT_TARGET,
                  edition: int = 2021,
-                 cfg: CfgOptions | None = None,
+                 cfg: CfgOptions | TargetPlatformFacts | None = None,
                  env: CompileEnvironment | dict | None = None) -> RustCompilation:
     """Lower a rustc-checked, nonheap scalar/aggregate crate into PCC's public IR.
 
     `cfg` is an explicit owned cfg configuration (rustc's --cfg/--test/-C
     debug-assertions/-C panic) evaluated against PCC's record of the target's
-    built-in cfg; without it, cfg needs an actual CheckedRustSource command.
+    built-in cfg. TargetPlatformFacts admits just arch/OS/byte-order values,
+    never assuming package options are absent. Without cfg, configuration
+    still needs an actual CheckedRustSource command.
     `env` is the explicit compile-time environment env!/option_env! read
     (a CompileEnvironment or a str->str mapping); the host environment is
     never consulted.
@@ -113,8 +115,8 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                              overflow_checks=overflow_checks, edition=edition)
     configuration = None
     if cfg is not None:
-        if type(cfg) is not CfgOptions:
-            raise RustError('compile_rust cfg must be CfgOptions')
+        if type(cfg) not in (CfgOptions, TargetPlatformFacts):
+            raise RustError('compile_rust cfg must be CfgOptions or TargetPlatformFacts')
         configuration = OwnedRustConfiguration(target.triple, edition, cfg)
     environment = env
     if env is not None and type(env) is not CompileEnvironment:
@@ -148,6 +150,11 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                       module_resolution=resolution, crate_policy=parser.crate_policy)
     checker.traits.require_checked_context(rustc_check, source, target.triple, overflow_checks)
     checker.check()
+    # A syntactic macro expansion is not an implementation of std::io. Check
+    # even uninstantiated/unused functions before issuing an owned compilation.
+    for expansion in parser.macro_expansions:
+        if expansion.name in {'println', 'eprintln'}:
+            raise expansion.missing_runtime()
     if rustc_check is None:
         from .reference_admission import reject_unowned_reference_shapes
         reject_unowned_reference_shapes(checker)
@@ -180,4 +187,4 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
            "ExternalRustcLints",
            "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
-           "RustCompilation", "RustError", "compile_rust", "CfgOptions", "CompileEnvironment"]
+           "RustCompilation", "RustError", "compile_rust", "CfgOptions", "CompileEnvironment", "TargetPlatformFacts"]

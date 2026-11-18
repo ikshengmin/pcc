@@ -842,6 +842,9 @@ class Checker:
             ty = pointer.referent
             if not place_context and not self.copy_type(ty):
                 raise expr.token.error("cannot move a non-Copy value out of a shared reference")
+        elif kind == "std_output":
+            # Covers semantic entry points operating on module syntax directly.
+            raise expr.value.missing_runtime()
         elif kind == "bool":
             ty = "bool"
         elif kind == "variant" and self.constant_path(expr.value[0], expr.value[1], expr.token) is not None:

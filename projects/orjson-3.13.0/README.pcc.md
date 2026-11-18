@@ -110,6 +110,12 @@ Compiler and source identities are checked again after all attempted stages.
 The measured source frontiers are deliberately narrow:
 
 1. Original src/lib.rs and build.rs parsing with explicit edition 2024.
+   build.rs itself is a **host** crate. Only when the actual job is Linux,
+   x86-64 and little-endian do both Rust stages bind those three platform
+   facts and the pinned manifest's CARGO_PKG_VERSION. Other cfg and
+   environment values remain unknown, even under `not`. No Cargo profile,
+   CPU flags, interpreter configuration or build-script output is inferred.
+   These inputs do not select feature flags on the library crate.
 2. Their public compile_rust admission attempts with explicit `edition=2024`,
    no attestation and no external checker. The API's explicit
    overflow-checks-off option is recorded

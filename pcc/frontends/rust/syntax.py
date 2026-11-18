@@ -585,6 +585,7 @@ class Parser:
         # Explicit env!/option_env! input, and every built-in expansion made.
         self.environment = environment
         self.macro_expansions = []
+        self._macro_scope = ()
         self.source = source
         self.crate_policy = CratePolicy(edition)
         self.crate_aliases = []
@@ -1099,6 +1100,7 @@ class Parser:
         child = object.__new__(type(self))
         child.__dict__ = self.__dict__.copy()
         child.module_depth += 1
+        child._macro_scope = self._macro_scope + (self.pos,)
         child.records, child.enums, child.implementations, child.traits = [], [], [], []
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
         child.uses = []
@@ -1226,6 +1228,7 @@ class Parser:
 
     def parse(self, *, _module=False, _inline=False) -> list[Function]:
         functions: list[Function] = []
+        first_expansion = len(self.macro_expansions)
         crate_docs = []
         while True:
             crate_docs.extend(self.documentation(inner=True, crate=not _module))
@@ -1596,6 +1599,9 @@ class Parser:
             # Module crates validate each one against its owner in resolution.
             for restriction in self.visibility_restrictions:
                 restriction_components(restriction, (), self.crate_policy.edition)
+        if self.uses and len(self.macro_expansions) != first_expansion:
+            from .print_macros import require_unshadowed_output
+            require_unshadowed_output(self, first_expansion)
         return functions
 
     def validate_crate_policy(self):
@@ -2005,6 +2011,10 @@ class Parser:
         if self.core_prelude and token.text in {'env', 'option_env', 'matches'}:
             from .builtin_macros import expand_expression_macro, expand_matches
             return expand_matches(self, token) if token.text == 'matches' else expand_expression_macro(self, token)
+        if (self.core_prelude and self.crate_policy.implicit_library_import == 'std'
+                and token.text in {'println', 'eprintln'}):
+            from .print_macros import expand_std_output
+            return expand_std_output(self, token)
         raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
 
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:

@@ -147,22 +147,37 @@ class CfgOptions:
 
 
 @dataclass(frozen=True)
+class TargetPlatformFacts:
+    """Only the invariant architecture, OS and byte order of an explicit target.
+
+    Unlike CfgOptions this is an open world: a flag not provided by the
+    target (including features, profile and arbitrary --cfg) is unknown, not
+    evidence that its value is false. No toolchain-specific cfg snapshot.
+    """
+
+
+_PLATFORM_KEYS = frozenset({'target_arch', 'target_os', 'target_endian'})
+
+
+@dataclass(frozen=True)
 class OwnedRustConfiguration:
     """PCC-owned cfg evaluation for one explicit target and CfgOptions."""
     target_triple: str
     edition: int
-    options: CfgOptions
+    options: CfgOptions | TargetPlatformFacts
 
     def __post_init__(self):
         if self.target_triple not in TARGET_CFG:
             raise RustError(f'built-in cfg of target {self.target_triple!r} is not recorded; '
                             'owned cfg evaluation cannot guess it')
-        if type(self.options) is not CfgOptions:
-            raise RustError('owned cfg evaluation requires explicit CfgOptions')
+        if type(self.options) not in (CfgOptions, TargetPlatformFacts):
+            raise RustError('owned cfg evaluation requires explicit CfgOptions or TargetPlatformFacts')
 
     @property
     def entries(self):
         options = self.options
+        if type(options) is TargetPlatformFacts:
+            return frozenset(pair for pair in TARGET_CFG[self.target_triple] if pair[0] in _PLATFORM_KEYS)
         targets = _TARGET_CFG_PROFILES[options.target_cfg_profile]
         entries = set(targets[self.target_triple]) | set(options.entries())
         if options.test:
@@ -197,6 +212,11 @@ class OwnedRustConfiguration:
             if item.name in {'version', 'target'}:
                 raise item.token.error(f'cfg({item.name}(..)) is experimental (rustc E0658)')
             raise item.token.error(f'invalid cfg predicate {item.name!r} (rustc E0537)')
+        if type(self.options) is TargetPlatformFacts:
+            if item.form != 'value' or item.name not in _PLATFORM_KEYS:
+                raise item.token.error(f'unsupported cfg {item.name!r} in a target-platform-only context; '
+                                       'package, profile, CPU feature and custom flags are unknown')
+            return (item.name, item.value) in self.entries
         if item.name in _PROFILE_GATED[self.options.target_cfg_profile]:
             raise item.token.error(f'cfg({item.name}) is experimental (rustc E0658)')
         if item.name == 'debug_assertions' and self.options.debug_assertions is None:
