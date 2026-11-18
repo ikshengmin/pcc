@@ -13,7 +13,6 @@ import re
 
 import pytest
 
-from tests.owned_runtime_c_fixture import admitted_runtime, link_c_harness
 from tests.python.process_timeout import run_process_group_timeout
 
 
@@ -37,6 +36,8 @@ def _digest(path):
 
 @pytest.fixture(scope="module")
 def _verdict_binary(tmp_path_factory):
+    from tests.owned_runtime_c_fixture import admitted_runtime, link_c_harness
+
     # This generic owned C helper requires an explicit archive and verifies
     # runtime source/codegen/configuration, and denies external build tools.
     archive = admitted_runtime()
@@ -129,6 +130,8 @@ def test_pending_verdict_native(_verdict_binary, backend, mode, name, counts):
 
 @pytest.mark.integration
 def test_cycle_failure_diagnostic_branches_compile_and_keep_blocked_first(tmp_path):
+    from tests.owned_runtime_c_fixture import link_c_harness
+
     # Compile the actual C failure/snapshot/report branches. This scalar-only
     # probe is separate from the unchanged graph modes above and cannot prove
     # the cause of a GC failure or identify the five collected objects.
