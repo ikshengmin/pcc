@@ -244,6 +244,10 @@ and increment read the old value and are checked as forward reads.
 Primary-qualified constant fields (`this.K`) retain receiver-access identity
 and are not constant expressions for narrowing, case labels or reachability;
 simple `K` and type-qualified `Record.K` constant names remain distinct.
+The class model also binds fields and methods on a parenthesized current
+receiver, such as `((this)).f(x)`. Its original receiver expression is checked
+before the arguments or assignment RHS and is kept separate from them. This
+does not add native object dispatch or authorize aliases or call-result receivers.
 It retains every body and initializer and rejects invalid receiver contexts,
 constructor cycles and unassigned locals. Primitive payload slots have a
 header-free layout plan; no object, tracing descriptor or vtable is registered.

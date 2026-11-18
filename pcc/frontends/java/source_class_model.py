@@ -178,6 +178,20 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
         # Neither a mutable field nor a final array reference is a constant variable.
         return None
 
+    def bind_explicit_receiver(self, node, assigned):
+        if node.current_receiver is None:
+            self.require_receiver(node.token)
+            return
+        # Typecheck the original grouped receiver before any RHS/argument,
+        # retaining the normal static-context and constructor-prefix errors.
+        self.expression(node.current_receiver, assigned)
+        primary = node.current_receiver
+        while primary.kind == "group":
+            primary = primary.children[0]
+        if primary.kind != "this" or primary.symbol is not self.program:
+            node.token.error("general reference member access requires the managed receiver domain",
+                             code="java.unsupported.object-expressions")
+
     def field_read(self, node, field, *, explicit_receiver=False):
         if ("static" in field.modifiers and not explicit_receiver and "." not in node.value
                 and field.owner == self.program.name):
@@ -243,7 +257,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             node.symbol = self.program
             return
         if node.kind == "receiver_field":
-            self.require_receiver(node.token)
+            self.bind_explicit_receiver(node, assigned)
             field = self.fields.get(node.value)
             if field is None:
                 node.token.error("undefined instance field " + node.value)
@@ -256,7 +270,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             self.field_read(node, field)
             return
         if node.kind == "receiver_call":
-            self.require_receiver(node.token)
+            self.bind_explicit_receiver(node, assigned)
             for argument in node.children:
                 self.expression(argument, assigned)
                 if argument.dtype == "void":
@@ -321,7 +335,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             if implicit_field and "static" in field.modifiers:
                 # Every static field here is final (JLS 8.3.1.2), in any context.
                 node.token.error("cannot assign a final constant field " + node.token.text)
-            self.require_receiver(node.token)
+            self.bind_explicit_receiver(node, assigned)
             if field is None:
                 node.token.error("undefined instance field " + node.token.text)
             if "static" in field.modifiers or "final" in field.modifiers:

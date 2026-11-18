@@ -3091,6 +3091,14 @@
           "Calls reference_rejection on unchanged valid and invalid defer originals, invoking the selected development Go toolchain build command and checking compiler outcomes and diagnostics. This optional oracle does not execute binaries or provide an owned production fallback."
         ]
       }
+    },
+    "tests/java/test_source_grouped_current_receiver.py": {
+      "test_complete_grouped_receiver_program_executes_on_selected_jdk_only": {
+        "activity": "external-reference",
+        "reason": [
+          "Calls check_originals_reference on unchanged grouped-this source and a separate observer. Only the selected JDK executes the class and reports language rejections; this is not PCC native object execution."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

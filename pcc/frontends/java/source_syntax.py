@@ -82,6 +82,7 @@ class Node:
     managed_value: object = None  # Compiler-only requirements, never a runtime reference.
     arithmetic_plan: object = None  # Nonlowering checked arithmetic, never exception code.
     inference_token: Token | None = None  # Original local 'var', never a native type.
+    current_receiver: object = None  # Original grouped this primary; not an argument or RHS.
 
 
 @dataclass
@@ -313,6 +314,18 @@ def tokenize(source, filename):
                 raise UnsupportedJava("Java source exceeds the initial token budget", code="java.unsupported.token-limit")
     tokens.append(token_at("<eof>", pos))
     return tokens
+
+
+def _is_grouped_this(node):
+    # Parenthesized expressions preserve their value (JLS 15.8.5). Only a
+    # primary built exclusively from parentheses and the current receiver can
+    # use the existing this-member binder: an alias, call, cast or conditional
+    # may have a different receiver, evaluate code, or complete abruptly.
+    if node.kind != "group":
+        return False
+    while node.kind == "group":
+        node = node.children[0]
+    return node.kind == "this"
 
 
 class SourceParser:
@@ -1027,7 +1040,8 @@ class SourceParser:
                 # retarget this.field; neither is an array-component access.
                 rhs = [] if operation.text in {"++", "--"} else [self.expression()]
                 kind = "field_assign" if target.kind == "receiver_field" else "assign"
-                return Node(kind, target.token, operation.text, rhs)
+                return Node(kind, target.token, operation.text, rhs,
+                            current_receiver=target.current_receiver)
             if expression.kind not in {"array_access", "array_length", "group", "name"}:
                 operation.error("array assignment requires an array component variable")
             children = [expression] + ([] if operation.text in {"++", "--"} else [self.expression()])
@@ -1250,6 +1264,17 @@ class SourceParser:
                 node = Node("array_access", postfix, children=[node, index])
             else:
                 member = self.identifier()
+                if self.class_model and _is_grouped_this(node):
+                    # Retain the original primary separately; do not put it
+                    # among the Java method arguments or discard it on stores.
+                    primary = node
+                    if self.accept("("):
+                        node = Node("receiver_call", member, member.text, self.arguments(),
+                                    current_receiver=primary)
+                    else:
+                        node = Node("receiver_field", member, member.text,
+                                    current_receiver=primary)
+                    continue
                 if self.peek().text == "(" and self.class_model:
                     # JLS 15.12 Primary . Identifier ( args ): a method of the
                     # value's (reference) type; the checker owns the boundary.

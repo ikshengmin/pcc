@@ -28,7 +28,13 @@ def original(members, body):
     return "class ArrayExample{" + members + "int run(){" + body + "}}"
 
 
+# Exact formerly unavailable source below is also executed by the independent
+# selected-JDK observer. It still is not a PCC native object program.
+PARENTHESIZED_RECEIVER_REBIND = original("int[] values;", "(this).values=new int[]{42};return values[0];")
+
+
 PROGRAMS = [
+    ("parenthesized-receiver-array-field-rebind", PARENTHESIZED_RECEIVER_REBIND),
     ("default-null", original("int[] values;", "return values==null?42:0;")),
     ("explicit-null", original("int[] values=null;", "return this.values==null?42:0;")),
     ("array-initializer", original("int[] values={7,35,};", "return values[0]+this.values[1];")),
@@ -176,14 +182,24 @@ def test_grouped_receiver_keeps_field_identity_and_component_store_distinct():
     assert model.payload_size is None and not model.runtime_registered
 
 
-@pytest.mark.parametrize("body,code", [
-    ("(this).values=new int[]{42};return values[0];", "java.unsupported.array-model-shape"),
-    ("int[] other=(this.values=new int[]{42});return other[0];", "java.unsupported.assignment-expression-target"),
-])
-def test_grouped_field_statement_fix_does_not_admit_new_receiver_or_expression_forms(body, code):
+def test_parenthesized_current_receiver_rebinds_the_declared_array_reference():
+    text = PARENTHESIZED_RECEIVER_REBIND
+    model = analyze_class_sources({"ArrayExample.java": text}).models["ArrayExample"]
+    store, ret = model.source.methods[0].body.children
+    field = model.fields[0].field
+    assert store.kind == "field_assign" and store.symbol is field
+    assert store.current_receiver.kind == "group" and store.current_receiver.children[0].symbol is model.source
+    assert store.children[0].kind == "array_initializer" and store.children[0].dtype == field.dtype
+    assert ret.children[0].children[0].symbol is field and not model.runtime_registered
+    with pytest.raises(UnsupportedJava):
+        compile_source(text, filename="ArrayExample.java")
+
+
+def test_grouped_field_statement_fix_does_not_admit_assignment_expression_values():
+    body = "int[] other=(this.values=new int[]{42});return other[0];"
     with pytest.raises(UnsupportedJava) as caught:
         analyze_class_sources({"ArrayExample.java": original("int[] values;", body)})
-    assert caught.value.code == code
+    assert caught.value.code == "java.unsupported.assignment-expression-target"
 
 
 def test_field_types_reference_identity_and_initialization_plan_are_retained():
