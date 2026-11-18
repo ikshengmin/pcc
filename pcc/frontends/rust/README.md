@@ -333,6 +333,15 @@ closure needs them. Progress is reported against these steps.
 - Block/tail expressions, `if`/`else`, `while`, `break`, `continue`, `return`;
   short-circuit `&&`/`||`; integer arithmetic/bitwise/comparison operators,
   boolean bitwise/comparison operators; integer casts and bool-to-integer casts.
+  The unsigned byte type also accepts ASCII `b'A'`, `b'\xFF'` (one escape),
+  and `u8` numeric suffixes, including in literal patterns. `u8 as char`
+  widens a byte to its Unicode scalar. Nominal types and type parameters can
+  shadow the type spelling; an ordinary module named `u8` can still prefix
+  item paths alongside bare byte types. Direct prelude imports such as
+  `use u8 as Byte` remain outside the import model. Byte strings, slices, external `u8` ABI
+  and `repr(u8)` are not qualified by this feature. The Rust lexical and cast
+  rules are [byte literals](https://doc.rust-lang.org/reference/tokens.html#byte-literals)
+  and [u8-to-char casts](https://doc.rust-lang.org/reference/expressions/operator-expr.html#u8-to-char-cast).
 - Named-field construction (including shorthand), source-order initializer
   effects, field mutation, tuple indexing, and private by-value aggregate
   parameters/returns. Aggregate temporaries are allocated once in function entry.

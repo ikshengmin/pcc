@@ -6,7 +6,7 @@ a borrow checker, or a replacement for Rust's trait solver.
 """
 from .semantics import INTEGERS, InferredType, bounds, resolve, unify
 from .syntax import Enumeration
-from .types import FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import INTEGER_SUFFIXES, RUST_U8, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
 
 MAX_PATTERN_ROWS = 512
 MAX_COVERAGE_STEPS = 65536
@@ -27,7 +27,7 @@ def check_enums(checker, declarations=None):
                     # typed source constant must not masquerade as isize.
                     def unsuffixed(node):
                         if node.kind == "integer":
-                            if any(str(node.value).endswith(ty) for ty in INTEGERS):
+                            if str(node.value).endswith(INTEGER_SUFFIXES):
                                 raise node.token.error("default enum discriminants currently require unsuffixed integer constants; typed discriminant expressions are not implemented")
                         elif node.kind not in {"group", "unary", "binary"}:
                             raise node.token.error("default enum discriminants currently require unsuffixed integer constant expressions")
@@ -299,7 +299,11 @@ def validate_match(checker, expr):
             constructors = [("literal", value, ()) for value in (False, True)]
         elif ty in INTEGERS:
             values = {row[0].value for row in matrix if row[0].kind == "literal"}
-            constructors = [("literal", value, ()) for value in values] + [("literal", object(), ())]
+            constructors = [("literal", value, ()) for value in values]
+            # These literals were already typed and range-checked. Only u8
+            # can exhaust its entire integer domain within the matrix budget.
+            if ty != RUST_U8 or len(values) < 256:
+                constructors.append(("literal", object(), ()))
         else:
             constructors = [("unit", None, ())]
         for kind, tag, fields in constructors:

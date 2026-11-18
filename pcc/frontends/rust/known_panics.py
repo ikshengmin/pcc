@@ -166,8 +166,8 @@ class KnownPanics:
             return base.get(expr.value, UNKNOWN) if isinstance(base, dict) else UNKNOWN
         if kind == "cast":
             value = self.value(children[0])
-            from .types import RUST_CHAR
-            if expr.ty == RUST_CHAR and children[0].ty == RUST_CHAR:
+            from .types import RUST_CHAR, RUST_U8
+            if expr.ty == RUST_CHAR and children[0].ty in {RUST_CHAR, RUST_U8}:
                 return value
             if type(value) is bool:
                 value = int(value)

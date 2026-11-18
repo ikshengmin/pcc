@@ -20,14 +20,14 @@ def test_each_character_is_one_token_with_the_original_codepoint_span(source,val
 
 @pytest.mark.parametrize('source',["''","'''","'AB'","'e\u0301'","'\udfff'","'\t'","'\n'","'\r'",
     r"'\xFF'",r"'\x4'",r"'\x0z'",r"'\u{d800}'",r"'\u{110000}'",r"'\u{_41}'",
-    r"'\u{}'",r"'\u{0000000}'",r"'\q'", "'\\\n'", "'A'foo", "b'A'"])
+    r"'\u{}'",r"'\u{0000000}'",r"'\q'", "'\\\n'", "'A'foo"])
 def test_malformed_or_different_literal_kinds_never_lower_as_char(source):
     with pytest.raises(RustError):
         compile_rust('fn code()->u32{'+source+' as u32}')
 
 
 @pytest.mark.parametrize('src',[
-    "fn f()->u32{'A'}","fn f()->char{65u32}","fn f()->char{65u32 as char}",
+    "fn f()->char{b'A'}", "fn f()->u32{'A'}","fn f()->char{65u32}","fn f()->char{65u32 as char}",
     "fn f()->bool{'a'==97u32}","fn f()->char{'a'+'a'}","fn f()->char{'a'&'b'}",
     "fn f()->bool{!'a'}","fn f()->u32{'a'&&'b';0}",
     "fn f(){let mut a='a'; a+= 'a';}",

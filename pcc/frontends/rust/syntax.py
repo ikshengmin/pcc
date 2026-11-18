@@ -20,7 +20,7 @@ class Token:
     column: int
     source_start: int | None = None
     source_end: int | None = None
-    literal_value: str | None = None
+    literal_value: str | int | None = None
     source_path: str | None = None
 
     def error(self, message: str) -> RustError:
@@ -105,7 +105,11 @@ def lex(source: str) -> list[Token]:
             advance(end)
             continue
         if source.startswith("b'", i):
-            raise Token("b'", "", ln, column).error("byte literals are not implemented")
+            from .character_literals import scan_byte
+            value, end = scan_byte(source, i, Token("b'", "", ln, column))
+            tokens.append(Token(source[start:end], "byte", ln, column, start, end, value))
+            advance(end)
+            continue
         if char == '"' or char == 'r' and i + 1 < len(source) and source[i + 1] in '#"':
             from .attribute_strings import scan_string
             scanned = scan_string(source, i, Token(char, "", ln, column))
@@ -167,6 +171,13 @@ class Expr:
     type_arguments: tuple[object, ...] | None = None
     # Parser identity survives raw-template deepcopy and semantic rewriting.
     source_call_id: int | None = None
+
+
+def integer_expression(token):
+    # Byte literals are exactly unsigned 8-bit integers; retain the original
+    # token and span while sharing all integer range/inference/pattern logic.
+    value = f"{token.literal_value}u8" if token.kind == "byte" else token.text
+    return Expr("integer", token, value)
 
 
 @dataclass
@@ -2091,8 +2102,8 @@ class Parser:
         text = token.text
         if token.kind in {"doc_inner", "doc_outer"}:
             raise token.error("documentation attributes on statements and nested block expressions are not implemented")
-        if token.kind == "integer":
-            expr = Expr("integer", token, text)
+        if token.kind in {"integer", "byte"}:
+            expr = integer_expression(token)
         elif token.kind == "character":
             expr = Expr("character", token, ord(token.literal_value))
         elif token.kind == "string":
@@ -2419,7 +2430,7 @@ class Parser:
                             break
                         self.expect(",")
                     result = Pattern("tuple", token, children=children)
-        elif token.kind == "integer" or token.text in {"-", "true", "false"}:
+        elif token.kind in {"integer", "byte"} or token.text in {"-", "true", "false"}:
             self.pos -= 1
             # A literal pattern is not an arbitrary constant expression.
             if token.text == "-":
@@ -2428,9 +2439,8 @@ class Parser:
                 if literal.kind != "integer":
                     raise literal.error("negative literal pattern requires an integer")
                 value = Expr("unary", token, "-", [Expr("integer", literal, literal.text)])
-            elif token.kind == "integer":
-                literal = self.take()
-                value = Expr("integer", literal, literal.text)
+            elif token.kind in {"integer", "byte"}:
+                value = integer_expression(self.take())
             else:
                 self.take()
                 value = Expr("bool", token, token.text == "true")

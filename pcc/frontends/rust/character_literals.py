@@ -50,3 +50,33 @@ def scan_quote(source,start,token):
     if end<len(source) and source[end].isidentifier():
         raise token.error("character literal suffixes are not implemented")
     return "character",value,end
+
+
+def scan_byte(source, start, token):
+    """Read b'…' without using the char/lifetime or UTF-8 encoding rules."""
+    i = start + 2
+    c = source[i:i + 1]
+    if c == "\\":
+        code = source[i + 1:i + 2]
+        if code == "x":
+            digits = source[i + 2:i + 4]
+            if len(digits) != 2 or any(ch not in _HEX for ch in digits):
+                raise token.error("byte escape requires exactly two hexadecimal digits")
+            value = int(digits, 16)
+            i += 4
+        elif code in _ESCAPES:
+            value = ord(_ESCAPES[code])
+            i += 2
+        else:
+            raise token.error("invalid Rust byte escape")
+    else:
+        if not c or not c.isascii() or c in "'\r\n\t":
+            raise token.error("byte literal requires one ASCII byte or byte escape")
+        value = ord(c)
+        i += 1
+    if source[i:i + 1] != "'":
+        raise token.error("byte literal requires exactly one byte and a closing quote")
+    end = i + 1
+    if end < len(source) and source[end].isidentifier():
+        raise token.error("byte literal suffixes are not implemented")
+    return value, end

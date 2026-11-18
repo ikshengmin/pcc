@@ -9,13 +9,15 @@ from dataclasses import replace
 
 from pcc.support.instantiation import InstanceRegistry
 
-from .syntax import Enumeration
+from .syntax import CrateSelfAlias, Enumeration, Module
 from .types import (
-    INTEGER_TYPES, RUST_CHAR, SLICE_GAP, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
+    INTEGER_TYPES, RUST_CHAR, RUST_U8, SLICE_GAP, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
     TypeParameter, is_borrowed_str, is_static_str,
 )
 
-PRIMITIVES = INTEGER_TYPES | {"bool", "()"}
+# Source names that older consumers recognize before lexical lookup. The
+# separate unspellable u8 identity must never enter import/generic name checks.
+PRIMITIVES = (INTEGER_TYPES - {RUST_U8}) | {"bool", "()"}
 MAX_TYPE_NODES = 128
 MAX_LAYOUT_STEPS = 4096
 MAX_INSTANCES = 128
@@ -98,17 +100,24 @@ class GenericDeclarations:
         resolution = self.checker.module_resolution
         return resolution.type_name(name, self.checker.current_module, token) if resolution is not None else name
 
-    def primitive_str(self, token, scope=None):
-        """A primitive spelling loses to the lexical type namespace."""
+    def unshadowed_primitive(self, spelling, token, scope=None, *, allow_module=False):
+        """Ask the scoped namespace before choosing a built-in type."""
         scope = self.checker.type_scope if scope is None else scope
-        if "str" in scope:
+        if spelling in scope:
             return False
         resolution = self.checker.module_resolution
         if resolution is None:
-            return ("str" not in self.definitions
-                    and not any(trait.token.text == "str" for trait in self.checker.traits.declarations))
-        return resolution.resolve("str", "type", self.checker.current_module, token,
-                                  _optional_final=True) is None
+            return (spelling not in self.definitions
+                    and not any(trait.token.text == spelling for trait in self.checker.traits.declarations))
+        binding = resolution.resolve(spelling, "type", self.checker.current_module, token,
+                                     _optional_final=True)
+        # A module can be a qualified path prefix, but cannot itself be the
+        # bare type of a value. This fallback never resolves a qualified path
+        # and never overrides a nominal, trait, or generic parameter.
+        return binding is None or (allow_module and isinstance(binding.syntax, (Module, CrateSelfAlias)))
+
+    def primitive_str(self, token, scope=None):
+        return self.unshadowed_primitive("str", token, scope)
 
     def normalize(self, ty, token, scope=None, *, placeholder_context=None):
         scope = self.checker.type_scope if scope is None else scope
@@ -176,8 +185,10 @@ class GenericDeclarations:
             return ty
         if ty in scope:
             return scope[ty]
-        if ty in PRIMITIVES or ty == RUST_CHAR:
+        if ty in PRIMITIVES or ty in (RUST_CHAR, RUST_U8):
             return ty
+        if ty == 'u8' and self.unshadowed_primitive('u8', token, scope, allow_module=True):
+            return RUST_U8
         if ty == 'char' and ty not in self.definitions:
             resolution = self.checker.module_resolution
             if resolution is None or resolution.resolve('char', 'type', self.checker.current_module,
@@ -332,7 +343,7 @@ class GenericDeclarations:
                 if budget < 0 or len(stack) > 32:
                     raise declaration.token.error("recursive/growing generic layout exceeds implementation limit")
                 bounded_type(ty, declaration.token)
-                if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty in (STATIC_STR, RUST_CHAR):
+                if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty in (STATIC_STR, RUST_CHAR, RUST_U8):
                     return  # A `&'static str` field stores literal data only.
                 if isinstance(ty, SharedReference):
                     if len(stack) == 1:  # a direct field; nested declarations check their own

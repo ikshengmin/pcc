@@ -89,11 +89,16 @@ class TypeParameter:
 # char can shadow the primitive spelling, but never a literal’s intrinsic type.
 RUST_CHAR = "<primitive char>"
 
-INTEGER_TYPES = frozenset({'i32', 'i64', 'u32', 'u64', 'isize', 'usize'})
+# A literal/suffix can refer to this identity even inside a `struct u8` scope.
+RUST_U8 = "<primitive u8>"
+INTEGER_SUFFIXES = ('i32', 'i64', 'u8', 'u32', 'u64', 'isize', 'usize')
+INTEGER_TYPES = frozenset(RUST_U8 if name == 'u8' else name for name in INTEGER_SUFFIXES)
 
 
 def integer_bits(ty, pointer_bits=None):
     """Target-sized integers retain distinct semantic names, not u64 aliases."""
+    if ty == RUST_U8:
+        return 8
     if ty in {'isize', 'usize'}:
         if pointer_bits != 64:
             raise ValueError('Rust target-sized integers require a qualified 64-bit pointer contract')

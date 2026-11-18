@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, StaticItem, Token
 from .types import (
-    INTEGER_TYPES, RUST_CHAR, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+    INTEGER_TYPES, RUST_CHAR, RUST_U8, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
     is_borrowed_str, is_static_str,
 )
 
@@ -112,15 +112,16 @@ def unify(left: object, right: object, token: Token) -> object:
 
 
 def integer_literal(expr: Expr) -> tuple[int, object]:
-    match = re.fullmatch(r"(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i32|i64|u32|u64|isize|usize)?", str(expr.value))
+    match = re.fullmatch(r"(0x[0-9a-fA-F_]+|0o[0-7_]+|0b[01_]+|[0-9][0-9_]*)(i32|i64|u8|u32|u64|isize|usize)?", str(expr.value))
     if match is None:
-        raise expr.token.error("invalid or unsupported integer literal (supported suffixes: i32, i64, u32, u64, isize, usize)")
+        raise expr.token.error("invalid or unsupported integer literal (supported suffixes: i32, i64, u8, u32, u64, isize, usize)")
     raw = match.group(1).replace("_", "")
     try:
         value = int(raw, 0 if raw.startswith(("0x", "0o", "0b")) else 10)
     except ValueError as exc:
         raise expr.token.error("invalid integer literal") from exc
-    return value, match.group(2) or InferredInteger()
+    suffix = match.group(2)
+    return value, RUST_U8 if suffix == "u8" else (suffix or InferredInteger())
 
 
 def bounds(ty: str, pointer_bits=None) -> tuple[int, int]:
@@ -1596,7 +1597,7 @@ class Checker:
             if op == "!" and values[0] is not None:
                 return not values[0] if expr.ty == "bool" else cast_constant(~values[0], expr.ty, self.pointer_bits)
         if kind == "cast":
-            if expr.ty == RUST_CHAR and expr.children[0].ty == RUST_CHAR:
+            if expr.ty == RUST_CHAR and expr.children[0].ty in {RUST_CHAR, RUST_U8}:
                 return values[0]
             if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool", RUST_CHAR} and expr.children[0].ty not in self.enums):
                 raise expr.token.error("supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer")
