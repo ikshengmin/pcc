@@ -27,10 +27,22 @@ from pathlib import Path
 import sys
 from pcc.frontends.python.pipeline import compile_python
 assert sys.implementation.name == "cpython"
-implementation = Path(compile_python.__code__.co_filename).resolve()
-assert implementation == Path(sys.argv[4]).resolve()
+expected = Path(sys.argv[4]).resolve()
+entrypoint = Path(compile_python.__code__.co_filename).resolve()
+owner = compile_python
+if entrypoint != expected:
+    # The default profiling adapter keeps the real host owner in __wrapped__.
+    # Permit only that repository adapter, not an arbitrary routed wrapper.
+    assert entrypoint == expected.parents[3] / "pcc/diagnostics/wiring.py"
+    assert getattr(compile_python, "_pcc_profiled", False) is True
+    owner = compile_python.__wrapped__
+implementation = Path(owner.__code__.co_filename).resolve()
+assert implementation == expected
+assert not hasattr(owner, "__wrapped__")
 Path(sys.argv[5]).write_text(json.dumps({
     "executable": sys.executable,
+    "entrypoint": str(entrypoint),
+    "entrypoint_sha256": hashlib.sha256(entrypoint.read_bytes()).hexdigest(),
     "implementation": str(implementation),
     "implementation_sha256": hashlib.sha256(implementation.read_bytes()).hexdigest(),
     "python": sys.version,

@@ -202,3 +202,83 @@ def test_ci_weakset_receipt_records_execution_or_semantic_failure(
         assert receipt["runs"][0]["stdout"] == "partial\n"
         assert receipt["runs"][0]["stderr"] == "error\n"
         assert (directory / "compile.stdout").read_text() == ""
+
+
+@pytest.mark.parametrize("profiled", [False, True])
+@pytest.mark.parametrize("raises", [False, True])
+def test_ci_weakset_host_identity_calls_the_real_entrypoint(tmp_path, monkeypatch, profiled, raises):
+    """Exercise the actual diagnostic adapter with a tiny authored compile body."""
+    import sys
+    from pcc.frontends.python import pipeline
+    from pcc.diagnostics import wiring
+    expected = coverage.ROOT / "pcc/frontends/python/pipeline.py"
+    called = []
+    namespace = {"called": called, "raises": raises}
+    # Model just the pipeline implementation at its asserted source location.
+    exec(compile("def compile_python(*args, **kwargs):\n"
+                 "    called.append((args, kwargs))\n"
+                 "    if raises: raise RuntimeError('original compile failed')\n",
+                 str(expected), "exec"), namespace)
+    owner = namespace["compile_python"]
+    module = SimpleNamespace(compile_python=owner)
+    if profiled:
+        monkeypatch.setattr(wiring, "_ENABLED", True)
+        wiring._install_pipeline_profile(module)
+        assert module.compile_python is not owner
+    entrypoint = module.compile_python
+    monkeypatch.setattr(pipeline, "compile_python", entrypoint)
+    monkeypatch.setattr(sys, "argv", ["host", "input.py", "output", "runtime.a",
+                                      str(expected), str(tmp_path / "owner.json")])
+    profile_path = tmp_path / "profile.json"
+    if profiled:
+        monkeypatch.setenv("PCC_PROFILE_JSON", str(profile_path))
+    else:
+        monkeypatch.delenv("PCC_PROFILE_JSON", raising=False)
+    if raises:
+        with pytest.raises(RuntimeError, match="original compile failed"):
+            exec(coverage.HOST_COMPILE, {})
+    else:
+        exec(coverage.HOST_COMPILE, {})
+    assert called == [(("input.py", "output"), {
+        "backend": "self", "ir_scaffold_mode": "on", "runtime_archive": "runtime.a"})]
+    assert pipeline.compile_python is entrypoint
+    # The adapter's finally output proves it was executed, even on failure;
+    # calling the unwrapped owner directly must fail this regression.
+    assert profile_path.exists() is profiled
+    if profiled:
+        profile = json.loads(profile_path.read_text())
+        assert profile["metadata"]["entry"] == "pcc.frontends.python.pipeline.compile_python"
+    receipt = json.loads((tmp_path / "owner.json").read_text())
+    assert receipt["implementation"] == str(expected)
+    assert receipt["implementation_sha256"] == coverage.digest(expected)
+    entry_path = Path(entrypoint.__code__.co_filename).resolve()
+    assert receipt["entrypoint"] == str(entry_path)
+    assert receipt["entrypoint_sha256"] == coverage.digest(entry_path)
+
+
+@pytest.mark.parametrize("known_adapter", [False, True])
+def test_ci_weakset_host_identity_rejects_foreign_wrapper_before_call(tmp_path, monkeypatch, known_adapter):
+    import functools
+    import sys
+    from pcc.frontends.python import pipeline
+    called = []
+    @functools.wraps(pipeline.compile_python)
+    def foreign(*args, **kwargs):
+        called.append(True)
+    foreign._pcc_profiled = True
+    if known_adapter:
+        from pcc.diagnostics import wiring
+        # The authentic adapter cannot legitimize a foreign underlying owner.
+        del foreign._pcc_profiled
+        module = SimpleNamespace(compile_python=foreign)
+        monkeypatch.setattr(wiring, "_ENABLED", True)
+        wiring._install_pipeline_profile(module)
+        foreign = module.compile_python
+    monkeypatch.setattr(pipeline, "compile_python", foreign)
+    expected = coverage.ROOT / "pcc/frontends/python/pipeline.py"
+    monkeypatch.setattr(sys, "argv", ["host", "input.py", "output", "runtime.a",
+                                      str(expected), str(tmp_path / "owner.json")])
+    with pytest.raises(AssertionError):
+        exec(coverage.HOST_COMPILE, {})
+    assert called == []
+    assert not (tmp_path / "owner.json").exists()
