@@ -15,6 +15,9 @@ from .self_backend_aarch64_semantics import (
 # No instruction is rendered or parsed by these passes.
 def _branch(ctx, record_id):
     opcode = ctx.opcode(record_id)
+    # opcode() has validated this record; only branch operands are read.
+    if opcode != "b" and not opcode.startswith("b.") and opcode not in ("cbz", "cbnz"):
+        return None
     tokens = ctx.operands(record_id)
     if opcode == "b" or opcode.startswith("b."):
         if len(tokens) == 1 and tokens[0][0] == TOKEN_SYMBOL and tokens[0][2:] == (0, 0):
