@@ -1,0 +1,2 @@
+# The retained enum-rematch input is checked against its exact Git bytes.
+payload_partial_moves.rs -text
