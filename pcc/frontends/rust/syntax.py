@@ -99,15 +99,13 @@ def lex(source: str) -> list[Token]:
             advance(end)
             continue
         if char == "'":
-            end = i + 1
-            while end < len(source) and source[end].isascii() and (source[end].isalnum() or source[end] == "_"):
-                end += 1
-            if (end == i + 1 or source[i + 1].isdigit()
-                    or end < len(source) and source[end] == "'"):
-                raise Token(char, "", ln, column).error("character literals are not implemented")
-            tokens.append(Token(source[i:end], "lifetime", ln, column))
+            from .character_literals import scan_quote
+            kind, value, end = scan_quote(source, i, Token(char, "", ln, column))
+            tokens.append(Token(source[start:end], kind, ln, column, start, end, value))
             advance(end)
             continue
+        if source.startswith("b'", i):
+            raise Token("b'", "", ln, column).error("byte literals are not implemented")
         if char == '"' or char == 'r' and i + 1 < len(source) and source[i + 1] in '#"':
             from .attribute_strings import scan_string
             scanned = scan_string(source, i, Token(char, "", ln, column))
@@ -2053,6 +2051,8 @@ class Parser:
             raise token.error("documentation attributes on statements and nested block expressions are not implemented")
         if token.kind == "integer":
             expr = Expr("integer", token, text)
+        elif token.kind == "character":
+            expr = Expr("character", token, ord(token.literal_value))
         elif token.kind == "string":
             # A string literal is a `&'static str` value (see types.STATIC_STR).
             expr = Expr("string", token, token.literal_value)

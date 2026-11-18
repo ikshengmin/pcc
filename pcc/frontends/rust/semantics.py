@@ -8,7 +8,7 @@ from dataclasses import dataclass
 
 from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, StaticItem, Token
 from .types import (
-    INTEGER_TYPES, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+    INTEGER_TYPES, RUST_CHAR, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
     is_static_str,
 )
 
@@ -398,7 +398,7 @@ class Checker:
             # In a const item an elided `&str` lifetime is 'static.
             ty = STATIC_STR if is_static_str(const.ty, elided_is_static=True) else self.generics.normalize(const.ty, const.token)
             label = 'static' if isinstance(const, StaticItem) else 'const'
-            if ty not in INTEGERS | {"bool", STATIC_STR}:
+            if ty not in INTEGERS | {"bool", STATIC_STR, RUST_CHAR}:
                 raise const.token.error(f'{label} items of type {ty} are not implemented; integer, bool and &str {label} items are')
             pending, count = [const.expression], 0
             while pending:
@@ -406,7 +406,7 @@ class Checker:
                 count += 1
                 if count > 1024:
                     raise node.token.error('const initializer exceeds implementation limit (1024 nodes)')
-                if node.kind not in {'integer', 'bool', 'string', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const', 'static'}:
+                if node.kind not in {'integer', 'bool', 'character', 'string', 'group', 'unary', 'binary', 'cast', 'name', 'variant', 'const', 'static'}:
                     raise node.token.error('const initializers support literals, operators, casts and other const '
                                            'items; calls, blocks and other expressions are not implemented')
                 pending.extend(node.children)
@@ -492,7 +492,7 @@ class Checker:
         # only a validated `#[derive(Copy)]` makes one Copy.
         if ty in self.records or ty in self.enums:
             return "Copy" in self.declared_derives.get(ty, ())
-        return ty in INTEGERS | {"bool", "()", STATIC_STR}
+        return ty in INTEGERS | {"bool", "()", STATIC_STR, RUST_CHAR}
 
     def valid_type(self, ty: object, token: Token, stack: tuple[str, ...] = (), *, allow_reference=True, require_sized=True) -> None:
         if isinstance(ty, (InferredInteger, InferredType)):
@@ -530,7 +530,7 @@ class Checker:
             for item in ty.elements:
                 self.valid_type(item, token, stack, allow_reference=False)
             return
-        if ty in INTEGERS | {"bool", "()", STATIC_STR}:
+        if ty in INTEGERS | {"bool", "()", STATIC_STR, RUST_CHAR}:
             return
         if ty in self.enums:
             if ty in stack:
@@ -864,6 +864,8 @@ class Checker:
         elif kind == "std_output":
             # Covers semantic entry points operating on module syntax directly.
             raise expr.value.missing_runtime()
+        elif kind == "character":
+            ty = RUST_CHAR
         elif kind == "bool":
             ty = "bool"
         elif kind == "variant" and self.constant_path(expr.value[0], expr.value[1], expr.token) is not None:
@@ -1244,7 +1246,7 @@ class Checker:
                 ty = "bool"
                 from .call_inference import partial
                 operand = partial(common)
-                if expr.value in {"==", "!="} and not (operand in INTEGERS or operand == "bool"
+                if expr.value in {"==", "!="} and not (operand in INTEGERS or operand in {"bool", RUST_CHAR}
                                                     or isinstance(operand, (InferredInteger, InferredType))):
                     from .derives import equality_gap
                     gap = equality_gap(self, operand)
@@ -1527,7 +1529,7 @@ class Checker:
             return None
         if kind == "group":
             return values[0]
-        if kind == "bool":
+        if kind in {"bool", "character"}:
             return expr.value
         if kind == "block" and expr.value == 0 and values:
             return values[0]
@@ -1552,7 +1554,9 @@ class Checker:
             if op == "!" and values[0] is not None:
                 return not values[0] if expr.ty == "bool" else cast_constant(~values[0], expr.ty, self.pointer_bits)
         if kind == "cast":
-            if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool"} and expr.children[0].ty not in self.enums):
+            if expr.ty == RUST_CHAR and expr.children[0].ty == RUST_CHAR:
+                return values[0]
+            if expr.ty not in INTEGERS or (expr.children[0].ty not in INTEGERS | {"bool", RUST_CHAR} and expr.children[0].ty not in self.enums):
                 raise expr.token.error("supported casts are integer-to-integer, bool-to-integer and unit-only-enum-to-integer")
             if expr.children[0].ty in self.enums and self.enums[expr.children[0].ty].payloads:
                 raise expr.token.error("an enum with payload fields cannot be cast to an integer")
@@ -1570,6 +1574,8 @@ class Checker:
         if kind == "binary":
             operand_ty = expr.children[0].ty
             allowed = INTEGERS | {"bool"} if op in {"&", "|", "^", "==", "!=", "<", "<=", ">", ">=", "&&", "||"} else INTEGERS
+            if op in {"==", "!=", "<", "<=", ">", ">="}:
+                allowed = allowed | {RUST_CHAR}
             if operand_ty not in allowed:
                 raise expr.token.error(f"operator {op!r} does not accept {operand_ty}")
             if op in {"/", "%"}:

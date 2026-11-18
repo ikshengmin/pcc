@@ -23,6 +23,7 @@ data declarations (their impls carry trait bounds) and `Default` on enums
 """
 from __future__ import annotations
 
+from .types import RUST_CHAR
 from dataclasses import dataclass
 
 from .attribute_metadata import meta_list, offset
@@ -63,7 +64,7 @@ def implements(checker, ty, trait):
             return False
         return implements(checker, ty.element, trait)
     from .semantics import INTEGERS
-    return ty in INTEGERS | {'bool', '()', STATIC_STR}
+    return ty in INTEGERS | {'bool', '()', STATIC_STR, RUST_CHAR}
 
 
 def validate_derives(checker):
@@ -133,7 +134,7 @@ def equality_gap(checker, ty):
     if isinstance(ty, FixedArrayType):
         return equality_gap(checker, ty.element)
     from .semantics import INTEGERS
-    if ty in INTEGERS | {'bool', '()'}:
+    if ty in INTEGERS | {'bool', '()', RUST_CHAR}:
         return None
     return f"{ty} has no structural equality here"
 

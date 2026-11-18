@@ -113,7 +113,7 @@ class KnownPanics:
         kind, children = expr.kind, expr.children
         if kind == "integer":
             return expr.value if type(expr.value) is int else UNKNOWN
-        if kind == "bool":
+        if kind in {"bool", "character"}:
             return expr.value
         if kind == "group":
             return self.value(children[0])
@@ -166,6 +166,9 @@ class KnownPanics:
             return base.get(expr.value, UNKNOWN) if isinstance(base, dict) else UNKNOWN
         if kind == "cast":
             value = self.value(children[0])
+            from .types import RUST_CHAR
+            if expr.ty == RUST_CHAR and children[0].ty == RUST_CHAR:
+                return value
             if type(value) is bool:
                 value = int(value)
             if type(value) is int and isinstance(expr.ty, str) and expr.ty in INTEGERS:

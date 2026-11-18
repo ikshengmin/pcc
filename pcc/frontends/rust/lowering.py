@@ -9,12 +9,15 @@ from .iteration import OwnedArrayIteration, StandardIterator
 from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
+from .types import RUST_CHAR
 from .types import STATIC_STR, FixedArrayType, SharedReference, TupleType, integer_bits
 
 
 def ir_type(ty: str, pointer_bits=None):
     if ty == "()":
         return ir.VoidType()
+    if ty == RUST_CHAR:
+        return ir.IntType(32)
     if ty == "bool":
         return ir.IntType(1)
     return ir.IntType(integer_bits(ty, pointer_bits))
@@ -314,6 +317,8 @@ class Lowerer:
             return self.builder.load(storage)
         if kind in {"integer", "variant"}:
             return ir.Constant(self.type(expr.ty), expr.value)
+        if kind == "character":
+            return ir.Constant(ir.IntType(32), expr.value)
         if kind == "bool":
             return ir.Constant(ir.IntType(1), int(expr.value))
         if kind == "static":

@@ -11,7 +11,7 @@ from pcc.support.instantiation import InstanceRegistry
 
 from .syntax import Enumeration
 from .types import (
-    INTEGER_TYPES, SLICE_GAP, STATIC_STR, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
+    INTEGER_TYPES, RUST_CHAR, SLICE_GAP, STATIC_STR, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
     TypeParameter, is_static_str,
 )
 
@@ -157,8 +157,13 @@ class GenericDeclarations:
             return ty
         if ty in scope:
             return scope[ty]
-        if ty in PRIMITIVES:
+        if ty in PRIMITIVES or ty == RUST_CHAR:
             return ty
+        if ty == 'char' and ty not in self.definitions:
+            resolution = self.checker.module_resolution
+            if resolution is None or resolution.resolve('char', 'type', self.checker.current_module,
+                                                        token, _optional_final=True) is None:
+                return RUST_CHAR
         ty = self.canonical_name(ty, token, scope)
         declaration = self.definitions.get(ty)
         if declaration is None:
@@ -308,7 +313,7 @@ class GenericDeclarations:
                 if budget < 0 or len(stack) > 32:
                     raise declaration.token.error("recursive/growing generic layout exceeds implementation limit")
                 bounded_type(ty, declaration.token)
-                if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty == STATIC_STR:
+                if isinstance(ty, TypeParameter) or ty in PRIMITIVES or ty in (STATIC_STR, RUST_CHAR):
                     return  # A `&'static str` field stores literal data only.
                 if isinstance(ty, SharedReference):
                     if len(stack) == 1:  # a direct field; nested declarations check their own

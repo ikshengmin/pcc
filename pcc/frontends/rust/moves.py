@@ -726,7 +726,7 @@ class MoveChecker:
 
     def evaluate(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
-        if kind in {"integer", "bool", "unit", "variant", "const", "static", "string"}:
+        if kind in {"integer", "bool", "character", "unit", "variant", "const", "static", "string"}:
             return state
         if kind == "borrow":
             from .semantics import TWO_PHASE

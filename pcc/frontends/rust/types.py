@@ -78,6 +78,10 @@ class TypeParameter:
         return self.name
 
 
+# Unspellable semantic identity. A user's type or generic parameter named
+# char can shadow the primitive spelling, but never a literal’s intrinsic type.
+RUST_CHAR = "<primitive char>"
+
 INTEGER_TYPES = frozenset({'i32', 'i64', 'u32', 'u64', 'isize', 'usize'})
 
 
