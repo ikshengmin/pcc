@@ -274,9 +274,26 @@ def test_entrypoint_refuses_non_ci_before_output_or_compiler_work(tmp_path, monk
 def test_driver_has_no_external_certification_compiler_or_extension_execution_route():
     source = (ROOT / "scripts/ci_orjson_source_frontier.py").read_text()
     tree = ast.parse(source)
+    # Check the real object-stage owner too, not just a function name in the driver.
+    # The one authorized object call is the C evaluator with an explicit self backend.
+    c_owner = ROOT / "scripts/ci_orjson_c_object.py"
+    c_source = c_owner.read_text()
+    c_tree = ast.parse(c_source)
+    sites = [node for node in ast.walk(c_tree) if isinstance(node, ast.Call)]
+    emitter = [node for node in sites if isinstance(node.func, ast.Attribute) and node.func.attr=="emit_compiled_units"]
+    assert len(emitter) == 1 and "emit_obj" in {kw.arg for kw in emitter[0].keywords}
+    for node in ast.walk(c_tree):
+        if isinstance(node, ast.Import):
+            assert all(alias.name.split(".")[0] != "subprocess" for alias in node.names)
+        elif isinstance(node, ast.ImportFrom):
+            assert (node.module or "").split(".")[0] != "subprocess"
+    assert not any(isinstance(site.func, (ast.Name, ast.Attribute)) and
+                   (site.func.id if isinstance(site.func, ast.Name) else site.func.attr) in
+                   {"run", "Popen", "check_call", "check_output", "system", "popen"}
+                   for site in sites)
     forbidden = {"check_rust_source", "compile_rust_checked", "evaluate", "evaluate_translation_units",
                  "emit_object", "exec", "eval", "run_path", "run_module"}
-    for node in ast.walk(tree):
+    for node in (*ast.walk(tree), *ast.walk(c_tree)):
         if isinstance(node, ast.Call):
             name = node.func.id if isinstance(node.func, ast.Name) else (
                 node.func.attr if isinstance(node.func, ast.Attribute) else None

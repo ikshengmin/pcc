@@ -1,8 +1,8 @@
 """CI-only original orjson Rust/C source frontier, not an extension build/import.
 
 No Cargo, build.rs, procedural macro, external compiler, Python extension or
-upstream test is executed here. Owned parsing of locked originals is measured;
-all later extension/runtime stages remain explicitly UNRUN.
+upstream test is executed here. The complete locked C dependency can produce
+one owned ELF relocatable; later extension/runtime stages remain UNRUN.
 """
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ C_UNIT = "include/yyjson/yyjson.c"
 TARGET = "x86_64-unknown-linux-gnu"
 DRIVERS = (
     "scripts/ci_orjson_source_frontier.py",
+    "scripts/ci_orjson_c_object.py",
     "scripts/ci_source_frontier_support.py",
     "scripts/ci_validation_run.py",
     "scripts/run_process_tree_sample.py",
@@ -165,7 +166,7 @@ def initial_report():
             "path": C_UNIT,
             "preprocess": {"status": "UNRUN"},
             "source_parse": {"status": "UNRUN"},
-            "frontend_object": unrun("bounded dependency lane stops at owned preprocessing/parsing"),
+            "frontend_object": {"status": "UNRUN"},
         },
         "package_source_store": {"status": "UNRUN"},
         "locked_library_unit_plan": {"status": "UNRUN"},
@@ -345,10 +346,25 @@ def run_worker(directory):
         artifact = directory / "yyjson.preprocessed.c"
         artifact.write_bytes(preprocessed.encode("utf-8"))
         c_row["preprocess"].update(output_sha256=sha256(artifact.read_bytes()), artifact=artifact.name)
-        attempt(report, receipt, c_row, "source_parse",
-                lambda: make_c_parser().parse(preprocessed, filename=C_UNIT), (ParseError,))
+        parsed, ast = attempt(report, receipt, c_row, "source_parse",
+                              lambda: make_c_parser().parse(preprocessed, filename=C_UNIT), (ParseError,))
+        del ast, preprocessed  # The public C evaluator compiles the original, not this AST or a rewritten source.
+        if parsed:
+            from scripts.ci_orjson_c_object import emit_dependency
+            emitted, evidence = attempt(
+                report, receipt, c_row, "frontend_object",
+                lambda: emit_dependency(directory, c_snapshot, c_files,
+                                        unit_name=C_UNIT, target=TARGET, defines=DEFINES), (ValueError,))
+            if emitted:
+                c_row["frontend_object"].update(evidence)
+                report["rust_c_dependency_objects"]["blocked_by"] = (
+                    "one original C object is verified; no Rust object/build-script/compiler dependency closure"
+                )
+        else:
+            c_row["frontend_object"] = unrun("owned C parsing failed")
     else:
         c_row["source_parse"] = unrun("owned C preprocessing failed")
+        c_row["frontend_object"] = unrun("owned C preprocessing failed")
     save(receipt, report)
     try:
         verify_snapshot(c_snapshot, c_files)
