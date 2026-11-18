@@ -76,6 +76,11 @@ ABI_SPEC: dict[str, int] = {
     "object.class.metaclass_offset": _object_abi.PYCLASSOBJECT_METACLASS_OFFSET,
     "object.dict.entries_offset": _object_abi.PYDICTOBJECT_ENTRIES_OFFSET,
     "object.dict.entries_used_offset": _object_abi.PYDICTOBJECT_ENTRIES_USED_OFFSET,
+    # Coallocated generator frames: the GC slot visitor uses the same flag
+    # and flexible-array layout as the generator allocator, both from C.
+    "object.gen.inline_frame_flag": _object_abi.PY_FLAG_GEN_INLINE_FRAME,
+    "object.gen.inline_items_offset": _object_abi.PYINLINEGENOBJECT_ITEMS_OFFSET,
+    "object.gen.inline_length_offset": _object_abi.PYINLINEGENOBJECT_LENGTH_OFFSET,
     "object.list.items_offset": _object_abi.PYLISTOBJECT_ITEMS_OFFSET,
     "object.list.length_offset": _object_abi.PYLISTOBJECT_LENGTH_OFFSET,
     "object.memoryview.base_offset": _object_abi.PYMEMORYVIEWOBJECT_BASE_OFFSET,

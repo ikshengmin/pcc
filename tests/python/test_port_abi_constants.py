@@ -923,6 +923,22 @@ def test_frontend_type_tag_dispatch_does_not_copy_numeric_abi():
     )
 
 
+def test_inline_generator_gc_layout_is_preserved_by_regeneration():
+    from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS
+    from pcc.runtime.freestanding_abi_spec import ABI_SPEC
+    import pcc.runtime.py.py_abi_constants as abi
+
+    expected = {
+        "object.gen.inline_frame_flag": abi.PY_FLAG_GEN_INLINE_FRAME,
+        "object.gen.inline_items_offset": abi.PYINLINEGENOBJECT_ITEMS_OFFSET,
+        "object.gen.inline_length_offset": abi.PYINLINEGENOBJECT_LENGTH_OFFSET,
+    }
+    # Comparing generated maps only with one another could silently remove
+    # all three keys while their allocator and GC visitor still require them.
+    for table in (ABI_SPEC, ABI_CONSTANTS):
+        assert {key: table[key] for key in expected} == expected
+
+
 def test_freestanding_layout_aliases_project_generated_class_records():
     from pcc.runtime.freestanding_abi_spec import ABI_SPEC
     import pcc.runtime.py.py_abi_constants as abi
