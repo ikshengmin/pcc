@@ -16,6 +16,7 @@ original corpus matches a rustc 1.92.0 build, rustc staying a labeled
 reference.
 """
 import importlib
+import json
 from pathlib import Path
 import re
 import shutil
@@ -104,16 +105,72 @@ def test_listed_invalid_trait_programs_are_rejected_without_rustc(name, source, 
     assert named is None or named.group(1) == code, str(caught.value)
 
 
+def _reference_release(compiler):
+    # The complete-marker job invokes its selected rustc, which is not
+    # necessarily the pinned Source certification toolchain. Ask that executable.
+    run = subprocess.run([compiler, '-vV'], check=True, capture_output=True, text=True, timeout=30)
+    release = re.search(r'^release: (\d+)\.(\d+)\.(\d+)(?:[-+][^\n ]+)?$', run.stdout, re.M)
+    assert release, run.stdout
+    return tuple(map(int, release.groups())), run.stdout
+
+
+def _oracle_case(compiler, path, source):
+    path.write_text(source + '\n', encoding='utf-8')
+    run = subprocess.run([compiler, '--crate-type=lib', '--edition=2021', '--emit=metadata',
+                          '-A', 'warnings', '--error-format=json', str(path), '-o', str(path.with_suffix('.rmeta'))],
+                         capture_output=True, text=True, timeout=60)
+    try:
+        messages = [json.loads(line) for line in run.stderr.splitlines()]
+    except json.JSONDecodeError as error:
+        raise AssertionError(f'rustc did not emit diagnostics as JSON (exit {run.returncode}): {run.stderr}') from error
+    errors = [message for message in messages if message.get('level') == 'error' and message.get('code')]
+    return run.returncode, errors
+
+
+def _matches_listed_diagnostic(case, listed, release, messages, path, source):
+    if (case, listed) != ('where_bounds.INVALID.unknown-subject', 'E0412'):
+        return any(message['code']['code'] == listed for message in messages)
+    # Upstream rustc_resolve changed the missing-type error in 1.93:
+    # https://github.com/rust-lang/rust/blob/1.92.0/compiler/rustc_resolve/src/late/diagnostics.rs
+    # https://github.com/rust-lang/rust/blob/1.93.0/compiler/rustc_resolve/src/late/diagnostics.rs
+    # E0425 is broader (e.g. a missing value); accepting either code would
+    # silently excuse a different failure. Bind exact release, TYPE and span.
+    required = 'E0412' if release < (1, 93, 0) else 'E0425'
+    raw = source.encode('utf-8')
+    for message in messages:
+        if message['code']['code'] != required or message['message'] != 'cannot find type `U` in this scope':
+            continue
+        for span in message.get('spans', []):
+            lo, hi = span.get('byte_start'), span.get('byte_end')
+            if (span.get('is_primary') and Path(span['file_name']) == path
+                    and type(lo) is int and type(hi) is int and 0 <= lo < hi <= len(raw)
+                    and raw[lo:hi] == b'U'):
+                return True
+    return False
+
+
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=None if shutil.which('rustc') else 'development-only rustc is not installed')
 def test_rustc_reports_the_listed_codes(tmp_path):
+    compiler = shutil.which('rustc')
+    release, version = _reference_release(compiler)
     for index, (name, source, code) in enumerate(INVALID):
         path = tmp_path / f'case{index}.rs'
-        path.write_text(source + '\n')
-        run = subprocess.run([shutil.which('rustc'), '--crate-type=lib', '--edition=2021', '--emit=metadata',
-                              '-A', 'warnings', str(path), '-o', str(tmp_path / f'case{index}.rmeta')],
-                             capture_output=True, text=True, timeout=60)
-        assert run.returncode != 0 and code in re.findall(r'error\[(E\d+)\]', run.stderr), (name, run.stderr)
+        status, diagnostics = _oracle_case(compiler, path, source)
+        assert status != 0 and _matches_listed_diagnostic(name, code, release, diagnostics, path, source), (
+            name, code, version, diagnostics)
+
+    # Real nearby controls: declaring U fixes the original where clause;
+    # an unresolved VALUE named U is never an unresolved TYPE, even if the
+    # compiler assigns both the same numeric code.
+    path = tmp_path / 'declared.rs'
+    assert _oracle_case(compiler, path, 'fn unused<T,U>(x:T)where U:Copy{}') == (0, [])
+    path = tmp_path / 'value.rs'
+    source = 'fn unused(){let _=U;}'
+    status, messages = _oracle_case(compiler, path, source)
+    assert status != 0 and any(x['code']['code'] == 'E0425' for x in messages), (version, messages)
+    assert not _matches_listed_diagnostic('where_bounds.INVALID.unknown-subject', 'E0412',
+                                          release, messages, path, source)
 
 
 S = 'pub struct S { pub a: u64 } '
