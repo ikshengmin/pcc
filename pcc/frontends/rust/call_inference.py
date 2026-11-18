@@ -8,7 +8,7 @@ concrete type. Unresolved variables fail before any instance is registered.
 from dataclasses import replace
 
 from .generics import children, substitute
-from .types import FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
+from .types import STATIC_STR, is_borrowed_str, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter
 
 
 def partial(ty):
@@ -60,6 +60,8 @@ def infer(checker, function, arguments, token, *, fixed_arguments=()):
         elif isinstance(pattern, TupleType) and isinstance(actual, TupleType) and len(pattern.elements) == len(actual.elements):
             for p, a in zip(pattern.elements, actual.elements):
                 constrain(p, a)
+        elif is_borrowed_str(pattern) and actual == STATIC_STR:
+            return  # A literal-backed 'static slice coerces at the actual call.
         elif isinstance(pattern, SharedReference) and isinstance(actual, SharedReference):
             constrain(pattern.referent, actual.referent)
         elif (isinstance(pattern, TypeApplication) and isinstance(actual, TypeApplication)

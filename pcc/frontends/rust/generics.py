@@ -11,8 +11,8 @@ from pcc.support.instantiation import InstanceRegistry
 
 from .syntax import Enumeration
 from .types import (
-    INTEGER_TYPES, RUST_CHAR, SLICE_GAP, STATIC_STR, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
-    TypeParameter, is_static_str,
+    INTEGER_TYPES, RUST_CHAR, SLICE_GAP, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, SliceType, TupleType, TypeApplication,
+    TypeParameter, is_borrowed_str, is_static_str,
 )
 
 PRIMITIVES = INTEGER_TYPES | {"bool", "()"}
@@ -98,6 +98,18 @@ class GenericDeclarations:
         resolution = self.checker.module_resolution
         return resolution.type_name(name, self.checker.current_module, token) if resolution is not None else name
 
+    def primitive_str(self, token, scope=None):
+        """A primitive spelling loses to the lexical type namespace."""
+        scope = self.checker.type_scope if scope is None else scope
+        if "str" in scope:
+            return False
+        resolution = self.checker.module_resolution
+        if resolution is None:
+            return ("str" not in self.definitions
+                    and not any(trait.token.text == "str" for trait in self.checker.traits.declarations))
+        return resolution.resolve("str", "type", self.checker.current_module, token,
+                                  _optional_final=True) is None
+
     def normalize(self, ty, token, scope=None, *, placeholder_context=None):
         scope = self.checker.type_scope if scope is None else scope
         bounded_type(ty, token)
@@ -113,8 +125,15 @@ class GenericDeclarations:
         if isinstance(ty, TupleType):
             return TupleType(tuple(self.normalize(t, token, scope, placeholder_context=placeholder_context)
                                    for t in ty.elements))
-        if is_static_str(ty):
-            return STATIC_STR
+        if is_borrowed_str(ty):
+            return ty  # concrete generic replay: already in the internal pointee namespace
+        if (isinstance(ty, SharedReference) and ty.referent == "str"
+                and self.primitive_str(token, scope)):
+            if ty.mutable:
+                raise token.error("mutable str references and writable UTF-8 views are not implemented")
+            if is_static_str(ty):
+                return STATIC_STR
+            return SharedReference(STR_POINTEE, False, ty.lifetime)
         if isinstance(ty, SliceType):
             raise (ty.token or token).error(SLICE_GAP)
         if isinstance(ty, SharedReference):

@@ -8,8 +8,8 @@ from dataclasses import dataclass
 
 from .syntax import ConstItem, Enumeration, Expr, Function, Record, RustError, StaticItem, Token
 from .types import (
-    INTEGER_TYPES, RUST_CHAR, STATIC_STR, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
-    is_static_str,
+    INTEGER_TYPES, RUST_CHAR, STATIC_STR, STR_POINTEE, FixedArrayType, SharedReference, TupleType, TypeApplication, TypeParameter, integer_bits,
+    is_borrowed_str, is_static_str,
 )
 
 INTEGERS = INTEGER_TYPES
@@ -396,7 +396,8 @@ class Checker:
             if const.item_identity is not None:
                 self.current_module = const.item_identity.module
             # In a const item an elided `&str` lifetime is 'static.
-            ty = STATIC_STR if is_static_str(const.ty, elided_is_static=True) else self.generics.normalize(const.ty, const.token)
+            ty = (STATIC_STR if is_static_str(const.ty, elided_is_static=True) and self.generics.primitive_str(const.token)
+                  else self.generics.normalize(const.ty, const.token))
             label = 'static' if isinstance(const, StaticItem) else 'const'
             if ty not in INTEGERS | {"bool", STATIC_STR, RUST_CHAR}:
                 raise const.token.error(f'{label} items of type {ty} are not implemented; integer, bool and &str {label} items are')
@@ -516,6 +517,8 @@ class Checker:
                 self.require_lifetime(ty.lifetime, token)
             if not allow_reference:
                 raise token.error("reference returns and aggregate reference storage require lifetime analysis, which is not implemented")
+            if is_borrowed_str(ty):
+                return  # Sized descriptor; the pointee never has standalone storage.
             if ty.referent == "()" or isinstance(ty.referent, SharedReference):
                 raise token.error("unit and nested references require additional reference layout/lifetime support")
             self.valid_type(ty.referent, token, stack, allow_reference=False, require_sized=False)
@@ -599,6 +602,8 @@ class Checker:
         """`&mut T` where `&T` is expected: a reference coercion."""
         from .call_inference import partial
         ty, target = partial(ty), partial(target)
+        if ty == STATIC_STR and is_borrowed_str(target):
+            return True  # 'static outlives the destination, never the reverse.
         if (isinstance(ty, SharedReference) and isinstance(target, SharedReference)
                 and ty.mutable and not target.mutable):
             unify(target.referent, ty.referent, token)
@@ -859,6 +864,8 @@ class Checker:
             if not isinstance(pointer, SharedReference):
                 raise expr.token.error("dereference requires an admitted shared reference; raw pointers are not implemented")
             ty = pointer.referent
+            if ty == STR_POINTEE:
+                raise expr.token.error("dereferencing an unsized str place is not implemented")
             if not place_context and not self.copy_type(ty):
                 raise expr.token.error("cannot move a non-Copy value out of a shared reference")
         elif kind == "std_output":
@@ -908,7 +915,10 @@ class Checker:
                     annotation = self.generics.normalize(
                         annotation, expr.token, placeholder_context="local")
                     self.valid_type(annotation, expr.token)
-                    unify(annotation, init_ty, expr.token)
+                    if init_ty == STATIC_STR and is_borrowed_str(annotation):
+                        children[0] = Expr("reference_coerce", children[0].token, children=[children[0]], ty=annotation)
+                    else:
+                        unify(annotation, init_ty, expr.token)
                     from .call_inference import partial
                     init_ty = partial(annotation)
                     children[0] = self.implicit_reborrow(children[0], init_ty) or children[0]
@@ -1077,6 +1087,12 @@ class Checker:
                     # receiver, exact for PCC's heap-free admitted types.
                     expr.kind, expr.value, expr.children, expr.ty = "clone", None, [receiver], receiver_type
                     return receiver_type
+                if (receiver_type == STATIC_STR or is_borrowed_str(receiver_type)) and callee.value in {"len", "is_empty"}:
+                    if explicit_arguments is not None or len(children) != 1:
+                        raise callee.token.error("str::" + callee.value + " needs no generic or value arguments")
+                    result = "usize" if callee.value == "len" else "bool"
+                    expr.kind, expr.value, expr.children, expr.ty = "str_length", callee.value, [receiver], result
+                    return result
                 if isinstance(array_type, FixedArrayType) and callee.value == "len":
                     if explicit_arguments:
                         raise callee.token.error("array len is not a generic method")
@@ -1213,7 +1229,9 @@ class Checker:
             expr.binding = fn
             for index, (arg, (_, param_ty, _)) in enumerate(zip(children[1:], fn.params)):
                 arg_ty = arg.ty if arguments_checked or receiver_checked and index == 0 else self.expression(arg, allow_borrow=isinstance(param_ty, SharedReference))
-                if (isinstance(param_ty, SharedReference) and isinstance(arg_ty, SharedReference)
+                if arg_ty == STATIC_STR and is_borrowed_str(param_ty):
+                    children[index + 1] = Expr("reference_coerce", arg.token, children=[arg], ty=param_ty)
+                elif (isinstance(param_ty, SharedReference) and isinstance(arg_ty, SharedReference)
                         and not param_ty.mutable and arg_ty.mutable):
                     unify(param_ty.referent, arg_ty.referent, arg.token)
                     children[index + 1] = self.implicit_reborrow(arg, param_ty) or Expr(
@@ -1275,7 +1293,9 @@ class Checker:
             if not self.mutable_place(lhs):
                 raise lhs.token.error("cannot assign through a shared reference" if self.through_reference(lhs) else f"cannot assign to immutable binding {place[0].name!r}")
             value = self.expression(children[1])
-            if expr.value[:-1] not in SHIFTS:
+            if expr.value == "=" and value == STATIC_STR and is_borrowed_str(target):
+                children[1] = Expr("reference_coerce", children[1].token, children=[children[1]], ty=target)
+            elif expr.value[:-1] not in SHIFTS:
                 unify(target, value, expr.token)
             if expr.value == "=":
                 children[1] = self.implicit_reborrow(children[1], target) or children[1]

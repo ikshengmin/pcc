@@ -40,9 +40,16 @@ SLICE_GAP = "slice types and array-to-slice unsizing are not implemented"
 
 # `&'static str`: string-literal data. It is a plain Copy value type here:
 # literals are its only source and no borrow of a local can produce one, so
-# it needs no lifetime analysis. `&str` with any other lifetime is still an
-# ordinary reference behind the checked-source boundary.
+# it needs no lifetime analysis. A nonstatic shared string reference still
+# carries a real region; equal target representation does not equate lifetimes.
 STATIC_STR = "&'static str"
+# Unsized primitive identity, not a source spelling that could alias a user's
+# record, type parameter or imported type called str. There is no value layout.
+STR_POINTEE = "<unsized primitive str>"
+
+
+def is_borrowed_str(ty):
+    return isinstance(ty, SharedReference) and not ty.mutable and ty.referent == STR_POINTEE
 
 
 def is_static_str(ty, *, elided_is_static=False):

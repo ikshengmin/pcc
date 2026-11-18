@@ -328,6 +328,10 @@ class MoveChecker:
         kind = expr.kind
         if kind in {"group", "unsafe", "reference_coerce"}:
             child = expr.children[0]
+            if kind == "reference_coerce":
+                from .types import STATIC_STR, is_borrowed_str
+                if child.ty == STATIC_STR and is_borrowed_str(expr.ty):
+                    return frozenset()  # Only permanently live literal-backed data is shortened.
             if id(child) in self.produced:
                 return self.produced.pop(id(child))
             return self.reference_value(child, state)
@@ -773,7 +777,7 @@ class MoveChecker:
                 else:
                     state = self.expression(child, state)
             return state
-        if kind in {"index", "array_len"}:
+        if kind in {"index", "array_len", "str_length"}:
             target = expr if kind == "index" else children[0]
             if self.checker.place(target) is not None:
                 self.read_place(target, state, consume=kind == "index")

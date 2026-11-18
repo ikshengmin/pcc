@@ -10,7 +10,7 @@ from .semantics import Binding, Checker, NEVER
 from .syntax import Expr, Function
 from .targets import RustTarget
 from .types import RUST_CHAR
-from .types import STATIC_STR, FixedArrayType, SharedReference, TupleType, integer_bits
+from .types import STATIC_STR, is_borrowed_str, FixedArrayType, SharedReference, TupleType, integer_bits
 
 
 def ir_type(ty: str, pointer_bits=None):
@@ -59,7 +59,7 @@ class Lowerer:
         self.function = None
 
     def type(self, ty):
-        if ty == STATIC_STR:
+        if ty == STATIC_STR or is_borrowed_str(ty):
             # (data pointer, byte length): two integer words, as rustc passes
             # and returns a `&str` scalar pair on these targets.
             return ir.LiteralStructType([ir.IntType(8).as_pointer(), ir.IntType(self.target.pointer_bits)])
@@ -274,6 +274,13 @@ class Lowerer:
                 return None
             equal = self.equal_values(left, right, children[0].ty)
             return equal if expr.value == "==" else self.builder.xor(equal, ir.Constant(ir.IntType(1), 1))
+        if kind == "str_length":
+            value = self.expression(children[0])  # evaluate the receiver exactly once
+            if self.builder.block.is_terminated:
+                return None
+            length = self.builder.extract_value(value, 1)
+            return (length if expr.value == "len" else
+                    self.builder.icmp_unsigned("==", length, ir.Constant(self.type("usize"), 0)))
         if kind == "array_len":
             base = children[0]
             if self.checker.place(base) is not None:

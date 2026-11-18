@@ -5,10 +5,9 @@ https://doc.rust-lang.org/reference/types/textual.html
 A string literal (and env!) is a `&'static str`: PCC stores its UTF-8 bytes
 once in private readonly data and passes a (pointer, length) pair, the pair
 rustc returns in the first two integer registers. Literals are the only
-source of such a value and no borrow of a local can produce one, so this
-exact type needs no lifetime analysis; `&str` with an elided or named
-lifetime, `&mut str` and borrows stay behind the checked-source boundary.
-Operations needing core (`==`, `len`, slicing) remain explicit gaps.
+source of such a value and no borrow of a local can produce one. Other
+shared string slices carry lifetimes; content equality and slicing still
+require separate support. See test_rust_borrowed_str.py.
 """
 import shutil
 from pathlib import Path
@@ -62,13 +61,9 @@ def test_former_runtime_string_rows_now_compile(source):
 
 
 @pytest.mark.parametrize('source,message', [
-    # Other str reference forms keep explicit owned boundaries.
-    ('pub fn g(s: &str) -> u64 { 1 }', "unsupported Rust type 'str'"),
-    ('pub fn g<\'a>(s: &\'a str) -> u64 { 1 }', "unsupported Rust type 'str'"),
     ('pub fn g() -> u64 { let s = &"x"; 1 }', 'shared borrowing of temporaries requires'),
     # Operations that need core's str/PartialEq model.
     ('pub fn g() -> bool { "a" == "a" }', "operator '==' does not accept &'static str"),
-    ('pub fn g() -> u64 { "abc".len() as u64 }', 'unknown inherent or concrete trait method'),
     ('pub fn g() -> u64 { "abc" as u64 }', 'supported casts'),
     ('pub fn g() -> u64 { match "a" { "a" => 1, _ => 2 } }', 'reference, range'),
 ])
@@ -99,3 +94,11 @@ def test_rustc_prints_the_same_bytes(function, tmp_path):
 @pytest.mark.parametrize('target', ['x86_64-unknown-linux-gnu', 'arm64-apple-darwin'])
 def test_fixture_cross_emits_both_targets(target):
     assert compile_source(FIXTURE, target_triple=target).emit_object()
+
+@pytest.mark.parametrize("source", [
+    "pub fn g(s: &str) -> u64 { 1 }",
+    "pub fn g<'a>(s: &'a str) -> u64 { 1 }",
+    'pub fn g() -> u64 { "abc".len() as u64 }',
+])
+def test_unchanged_shared_str_sources_now_produce_owned_objects(source):
+    assert compile_rust(source).emit_object().startswith(b'\x7fELF')

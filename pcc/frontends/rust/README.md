@@ -1,5 +1,20 @@
 # Experimental Rust frontend: owned scalar and aggregate slices
 
+### Shared UTF-8 string slices
+
+PCC passes an immutable primitive `&str` as a data pointer and a target-sized
+byte count, not a C string or a thin pointer. A literal's `&'static str` can
+be borrowed for a shorter region at scalar call arguments, annotated local
+initializers, assignments and returns; other strings cannot be promoted to
+`'static`. Mixed literal/borrowed control-flow joins and aggregate member
+coercions are not implemented. Function inputs/results use the same checked lifetime and elision
+rules as other shared references. `.len()` counts bytes including embedded
+NULs, and `.is_empty()` inspects the same byte count. User types and type
+parameters called `str` keep their lexical identity. Mutable string views,
+unsized by-value access, content comparison, indexing/slicing, String/Deref
+coercions and an external C string ABI are outside this implementation.
+
+
 `compile_rust(source, experimental_rustc_checked=True, overflow_checks=False)`
 returns a `RustCompilation` containing the public PCC IR module, IR text and
 source-function-to-symbol map. The frontend has its own lexer, parser, name
