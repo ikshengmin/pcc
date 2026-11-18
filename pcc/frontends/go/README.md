@@ -1352,3 +1352,19 @@ The unchanged Go 1.27.3 `bytes/iter.go` is a syntax check, not execution of
 host-PCC/self Linux native and official-reference programs with real nested
 indirect calls. Neither this nor a component closure qualifies go-enry, the
 complete math/bits test binary, or native pcc1.
+
+## Opt-in, pinned source plans
+
+`compile_go_packages(..., standard_library=plan)` can supplement explicit
+project units with a target-locked source snapshot. Build a plan with
+`pcc.frontends.go.source_plan.load_go_source_plan`, an explicitly chosen
+Go release installation, manifest bytes, and a separately trusted SHA-256.
+Without a plan the frontend does not read GOROOT or invent missing packages.
+Changing a file after loading cannot change the compiled bytes.
+
+The go-enry default-build recipe is for Go 1.27.3 linux/amd64 v1, cgo off,
+default experiments, no tags. Its 49 packages select 396 original Go units,
+31 assembly units, five package headers, and named support files. It is an
+original-source inventory, not evidence of assembled Go ABI objects, generated
+layout headers, or a PCC implementation of the Go runtime. A pending owner is
+not satisfied by a Go file or header with the same name.

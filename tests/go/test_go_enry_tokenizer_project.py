@@ -101,7 +101,17 @@ def test_original_tokenizer_packages_compile_with_the_owned_go_frontend(monkeypa
     _, files = load_inputs()
     before = {name: hashlib.sha256(data).hexdigest() for name, data in files.items()}
     monkeypatch.setattr(subprocess, "Popen", lambda *a, **k: pytest.fail("owned compile launched a tool"))
-    module = compile_go_packages(owned_inputs(files), target_triple="x86_64-unknown-linux-gnu")
+    # Only explicit original source inputs are added. All existing project
+    # sources, negative process guard, real IR and source hashes remain
+    # mandatory. Reading a Go assembly source does not implement it.
+    from pcc.frontends.go.source_plan import load_go_source_plan
+    root = os.environ.get("PCC_GO_STDLIB_GOROOT") or os.environ.get("PCC_GO_MATH_BITS_GOROOT")
+    if not root:
+        pytest.fail("strict owned source build requires the explicit Go 1.27.3 source installation (PCC_GO_STDLIB_GOROOT)")
+    plan = load_go_source_plan(root, (PROJECT / "pcc-go1.27.3-linux-amd64-stdlib.json").read_bytes(),
+                               expected_sha256="5bbd292ccfe72450743154637f8abfabcd2d90954a6712d5d2edcfd4f6f44f3a")
+    module = compile_go_packages(owned_inputs(files), target_triple="x86_64-unknown-linux-gnu",
+                                 standard_library=plan)
     assert "define" in str(module)
     assert {name: hashlib.sha256(data).hexdigest() for name, data in load_inputs()[1].items()} == before
 

@@ -39,3 +39,15 @@ First observed blocker (local Mac, PCC master at the runtime-owned-linkname
 round): `tokenize.go:16:23`, the `[]byte`/`[]string` slice types of `Tokenize`
 (`go.unsupported.slice-storage`: slice types require shared-runtime backing
 storage).
+
+The owned admission additionally supplies the fixed default-target originals
+for `bytes` and `regexp` from Go 1.27.3. The pinned receipt is
+`pcc-go1.27.3-linux-amd64-stdlib.json`; maintenance tool:
+`scripts/pin_go_enry_linux_stdlib.py`. Supply the existing installation as
+`PCC_GO_STDLIB_GOROOT` (the source-validation lane already binds the same
+installation as `PCC_GO_MATH_BITS_GOROOT`). No compiler, selector, downloaded
+object or prebuilt archive is used by the owned call. Original go-enry
+selection, original-source byte hashes, default target, and required real IR
+are unchanged. The recipe inventories native assembly, literal include files
+and generated layout-header requests. Their PCC build ownership, runtime and
+the separate upstream test dependency testify are not supplied by those bytes.

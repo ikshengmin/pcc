@@ -15,13 +15,18 @@ from pcc.frontends.go.diagnostics import UnsupportedGo
 DEFAULT_TARGET = "x86_64-unknown-linux-gnu"
 
 
-def compile_go_packages(packages, *, main_package="main", target_triple=DEFAULT_TARGET):
+def compile_go_packages(packages, *, main_package="main", target_triple=DEFAULT_TARGET, standard_library=None):
     """Compile an explicit import-path -> original source-unit package graph.
 
     Each package contains (filename, original_source) pairs. The caller selects
     files; no module fetch, host tool, alternate standard library, or source
-    preprocessing is hidden here. Only imported packages are compiled.
+    preprocessing is hidden here. Only imported packages are compiled. An
+    explicit LockedGoSourcePlan may supplement the graph with authenticated
+    original inputs. This never provides a native/runtime implementation.
     """
+    if standard_library is not None:
+        return compile_packages(packages, main_package=main_package, target_triple=target_triple,
+                                standard_library=standard_library)
     return compile_packages(packages, main_package=main_package, target_triple=target_triple)
 
 

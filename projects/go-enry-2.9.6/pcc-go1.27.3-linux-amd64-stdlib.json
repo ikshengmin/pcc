@@ -1,0 +1,3085 @@
+{
+  "assembly_includes": {
+    "internal/abi": [
+      {
+        "from": "src/internal/abi/abi_test.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/bytealg": [
+      {
+        "from": "src/internal/bytealg/compare_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/bytealg/compare_amd64.s",
+        "original": "pkg/include/asm_amd64.h"
+      },
+      {
+        "from": "src/internal/bytealg/compare_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/bytealg/count_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/bytealg/count_amd64.s",
+        "original": "pkg/include/asm_amd64.h"
+      },
+      {
+        "from": "src/internal/bytealg/count_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/bytealg/equal_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/bytealg/equal_amd64.s",
+        "original": "pkg/include/asm_amd64.h"
+      },
+      {
+        "from": "src/internal/bytealg/equal_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/bytealg/index_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/bytealg/index_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/bytealg/indexbyte_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/bytealg/indexbyte_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/chacha8rand": [
+      {
+        "from": "src/internal/chacha8rand/chacha8_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/cpu": [
+      {
+        "from": "src/internal/cpu/cpu_x86.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/runtime/atomic": [
+      {
+        "from": "src/internal/runtime/atomic/atomic_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/runtime/gc/scan": [
+      {
+        "from": "src/internal/runtime/gc/scan/expand_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/runtime/gc/scan/expand_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/runtime/gc/scan/filter_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/runtime/gc/scan/filter_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/runtime/gc/scan/scan_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/internal/runtime/gc/scan/scan_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/runtime/maps": [
+      {
+        "from": "src/internal/runtime/maps/memhash_amd64.s",
+        "original": "pkg/include/textflag.h"
+      },
+      {
+        "from": "src/internal/runtime/maps/memhash_nosimd_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "internal/runtime/syscall/linux": [
+      {
+        "from": "src/internal/runtime/syscall/linux/asm_linux_amd64.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ],
+    "runtime": [
+      {
+        "from": "src/runtime/asm.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/asm_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/asm_amd64.s",
+        "original": "src/runtime/cgo/abi_amd64.h"
+      },
+      {
+        "from": "src/runtime/asm_amd64.s",
+        "original": "src/runtime/funcdata.h"
+      },
+      {
+        "from": "src/runtime/asm_amd64.s",
+        "original": "src/runtime/go_tls.h"
+      },
+      {
+        "from": "src/runtime/asm_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/ints.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/memclr_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/memclr_amd64.s",
+        "original": "src/runtime/asm_amd64.h"
+      },
+      {
+        "from": "src/runtime/memclr_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/memmove_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/memmove_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/preempt_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/preempt_amd64.s",
+        "original": "src/runtime/asm_amd64.h"
+      },
+      {
+        "from": "src/runtime/preempt_amd64.s",
+        "original": "src/runtime/go_tls.h"
+      },
+      {
+        "from": "src/runtime/preempt_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/rt0_linux_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/secret_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/secret_amd64.s",
+        "original": "src/runtime/funcdata.h"
+      },
+      {
+        "from": "src/runtime/secret_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/sys_linux_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/sys_linux_amd64.s",
+        "original": "src/runtime/cgo/abi_amd64.h"
+      },
+      {
+        "from": "src/runtime/sys_linux_amd64.s",
+        "original": "src/runtime/go_tls.h"
+      },
+      {
+        "from": "src/runtime/sys_linux_amd64.s",
+        "original": "src/runtime/textflag.h"
+      },
+      {
+        "from": "src/runtime/time_linux_amd64.s",
+        "generated": "go_asm.h"
+      },
+      {
+        "from": "src/runtime/time_linux_amd64.s",
+        "original": "src/runtime/go_tls.h"
+      },
+      {
+        "from": "src/runtime/time_linux_amd64.s",
+        "original": "src/runtime/textflag.h"
+      }
+    ],
+    "sync/atomic": [
+      {
+        "from": "src/sync/atomic/asm.s",
+        "original": "pkg/include/textflag.h"
+      }
+    ]
+  },
+  "distribution": "go1.27.3.linux-amd64.tar.gz",
+  "distribution_sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40",
+  "files": {
+    "LICENSE": [
+      1453,
+      "911f8f5782931320f5b8d1160a76365b83aea6447ee6c04fa6d5591467db9dad"
+    ],
+    "VERSION": [
+      35,
+      "49b1651ee92b70282766993b556905e9464050a811572e047a74f95534ee9ce6"
+    ],
+    "pkg/include/asm_amd64.h": [
+      631,
+      "85fc2d5bb80e6db36cef4da5e5c02278d0dcaa6103e5660629b4b713cff15d54"
+    ],
+    "pkg/include/textflag.h": [
+      1501,
+      "a9d761d03aecdcc117691b6a55eacd43eb7d47d9ad9ca7510b8669ac403b380e"
+    ],
+    "src/bytes/buffer.go": [
+      16932,
+      "11cf45edaaf49b6dd6ece3d1a7c7779bb6623b705283e691c66c137336aa62de"
+    ],
+    "src/bytes/bytes.go": [
+      37592,
+      "e0695206833688b57e9d26014dcd28e3379fc09aafb4c702a82b90563cc11b23"
+    ],
+    "src/bytes/iter.go": [
+      3642,
+      "628f8dc51af2c70325050c0125340ec01c6a7da84c53f2f5ae3ec040c7e5fc6f"
+    ],
+    "src/bytes/reader.go": [
+      3977,
+      "5b42a3100971836c10b1e0d3699b46cffd41c8be23d09e1642ee42ff795dc6ab"
+    ],
+    "src/cmp/cmp.go": [
+      2063,
+      "9d8e18366a1a20d2a1981b7f6a0fe53362e801d9ca20eeee56d65536124dd91b"
+    ],
+    "src/errors/errors.go": [
+      3091,
+      "865b9cce008bf68d4d2cc4146455a9c5692756bbe57be29ee1ef0de345dafe1e"
+    ],
+    "src/errors/join.go": [
+      1397,
+      "87da7c120f71d17e37f110ae1dc6af6493ec841a22ee825e13a6a8024a014dba"
+    ],
+    "src/errors/wrap.go": [
+      6124,
+      "098116636610ae87dd80e49c4dbe6a2b6c37918d7e1af35ded005be621d68a40"
+    ],
+    "src/internal/abi/abi.go": [
+      3374,
+      "0da16138388dd2675ca8aac385667fde079780fbce86c390a3c24cf7e7663493"
+    ],
+    "src/internal/abi/abi_amd64.go": [
+      399,
+      "b8d763278ba88322c8a7eb1b0aec4ec04063e0a86c2940eeee865a04b12b78c7"
+    ],
+    "src/internal/abi/abi_test.s": [
+      603,
+      "28a2adea62ff2469766d52f89bfe67674e388a9ecd7c41f04bf4be063517b8d8"
+    ],
+    "src/internal/abi/bounds.go": [
+      2945,
+      "ea44135b94ceb854b298437fd4e6766dc7ebfeee51f9d1c9dae9cb273cc17134"
+    ],
+    "src/internal/abi/compiletype.go": [
+      2186,
+      "2da8a691f7e8eb3385d058734494a56567e528dfd94134f98de061ad8dd2f4d8"
+    ],
+    "src/internal/abi/escape.go": [
+      2097,
+      "494d85e5231a20cd88b56fbcf02028e927a56e62c8d4f7212c08156bbed58457"
+    ],
+    "src/internal/abi/funcpc.go": [
+      1200,
+      "40daff47ea7abc00e83c99c6256ed7c3af618589568d477125c050cd36fb9af7"
+    ],
+    "src/internal/abi/iface.go": [
+      1513,
+      "77d2ebbef46f0e23651df634cf018ef79bb17fd83a26300875f2ef8f0d181b11"
+    ],
+    "src/internal/abi/map.go": [
+      2525,
+      "39edc7935b336065e2702a2f5c35a375e0cf6297b31e531d7928fe655dd03e77"
+    ],
+    "src/internal/abi/rangefuncconsts.go": [
+      940,
+      "b0350d4021e6e279675e082416cc9280c296cfff6a123863ed7f2d693c82a14f"
+    ],
+    "src/internal/abi/runtime.go": [
+      254,
+      "4e5e32bebcb05a34756123a330e4c4a79c0e4eb2fba3e81253fd3e616aca50ec"
+    ],
+    "src/internal/abi/stack.go": [
+      1282,
+      "f21cd3ca6d133b7ab87010b42aa03ff0970742e1b3f1593dd33a5fdb63ec4edf"
+    ],
+    "src/internal/abi/stub.s": [
+      340,
+      "c24d5e3798ef3ae5d80f2b6049d30b2d5a7f5d6f531b093cfb1b6bfa8fbefc01"
+    ],
+    "src/internal/abi/switch.go": [
+      1560,
+      "d2b5f220dd726af671f4f04bd5851188d280084a2d55f46df6ab623d136094f6"
+    ],
+    "src/internal/abi/symtab.go": [
+      5099,
+      "2f3d299e58f35669206f58a0e637a27e3d2a49a5e07dbbe8ad62a0155051fe91"
+    ],
+    "src/internal/abi/type.go": [
+      24728,
+      "f485a7ac76228ee3a40d5d7d5e06c5f94abb7328ebdc947f2688fac16cc703ee"
+    ],
+    "src/internal/asan/doc.go": [
+      460,
+      "dfd59da21a8923944fe984eb6d64ae87ccc9eb3b9bc895240c20ec7db6115e81"
+    ],
+    "src/internal/asan/noasan.go": [
+      333,
+      "7de9002b9b667f10f43cab22616ad65348a8e35d0a1c29ef871f817c27211143"
+    ],
+    "src/internal/bytealg/bytealg.go": [
+      3318,
+      "909eb739257ce166c6bbb67358978d8c63461068ef2f717677189287406def6c"
+    ],
+    "src/internal/bytealg/compare_amd64.s": [
+      4398,
+      "9e9482d340d3ff9a4b2aae6350fe02e80938d2cffea2ddf7f209d9c77ea93c15"
+    ],
+    "src/internal/bytealg/compare_native.go": [
+      726,
+      "a5de9fede104ba03d3c627fbb837ff870896d8a730359056c5e870147ea47023"
+    ],
+    "src/internal/bytealg/count_amd64.s": [
+      4785,
+      "c8a0ddfc1cc2c278d3076003a2b4fc7c7786669cdcee9f782bd9ecfaa0bb07cc"
+    ],
+    "src/internal/bytealg/count_native.go": [
+      676,
+      "d3eff88a61aafe415c85c0e9856bf1a22a3a0806ac116569cbc3451e8e01826f"
+    ],
+    "src/internal/bytealg/equal_amd64.s": [
+      2842,
+      "d5c88b17e90ab21582c77774684d90ca244f3224f09d05625de4d9c2d56b2b21"
+    ],
+    "src/internal/bytealg/equal_generic.go": [
+      628,
+      "d6c5c106505c972fab2400024c14e04aa7eee1f972826e3b56787ee09f169247"
+    ],
+    "src/internal/bytealg/equal_native.go": [
+      789,
+      "1db4aa0b4f804a208dbe4e8894fe05949d72e9b4492ef9fcac517e00571fe02f"
+    ],
+    "src/internal/bytealg/index_amd64.go": [
+      617,
+      "77d0b48b8915657b09447ba36b163134a0e3fd08a776668dbf2dadfda6915bb4"
+    ],
+    "src/internal/bytealg/index_amd64.s": [
+      5174,
+      "f475516c44e8a0bcffbef3a08daec4842d42f0f5eb211857e8af0a81d2bdad8e"
+    ],
+    "src/internal/bytealg/index_native.go": [
+      601,
+      "885de0c47293c3e4d7083972be04e365e66cc4e9411a59393b2b835fba3e3105"
+    ],
+    "src/internal/bytealg/indexbyte_amd64.s": [
+      3213,
+      "362335dc6a582b92f6def9f118dbdbb492194862b322b94dcedde6d90717549f"
+    ],
+    "src/internal/bytealg/indexbyte_native.go": [
+      438,
+      "3f9ee9987e6f71d2e7729feece762016488547d3762db2aa20030fe449898331"
+    ],
+    "src/internal/bytealg/lastindexbyte_generic.go": [
+      440,
+      "632273eb2537352d9c14c6f37bf531bf95ff98431e212a24ce3777f436331c2d"
+    ],
+    "src/internal/byteorder/byteorder.go": [
+      3550,
+      "c31dade373ba9a6970fdec0943cdf95b2a8ae1f0e057fdd581e50165aca26fbb"
+    ],
+    "src/internal/chacha8rand/chacha8.go": [
+      4733,
+      "6c460d84955fac536cbe55935c19d6c3df77b25122018013fab90c7f78731698"
+    ],
+    "src/internal/chacha8rand/chacha8_amd64.s": [
+      4692,
+      "ff54f61cfe85d12f67df5dd374635784a9899458242cfd867be325c9a0bdcbba"
+    ],
+    "src/internal/chacha8rand/chacha8_generic.go": [
+      6413,
+      "3202dcb9bb0750e7ec3ecff529a09331a9145a090a8c3b5fed57ff5c34e602b2"
+    ],
+    "src/internal/coverage/rtcov/rtcov.go": [
+      3180,
+      "896d5a0053f85c64b2dac75934580e39576ba558b94eefe6fba1f66599c4e1a8"
+    ],
+    "src/internal/cpu/cpu.go": [
+      9708,
+      "9af4310772f84d92f2a98e9f16e6553fdbefc4ce6286e0f508121e6c8819faf7"
+    ],
+    "src/internal/cpu/cpu.s": [
+      276,
+      "39594514f3cb069cecfc6782f81385cbb3570a2ca1b0f3028db1dfa75fd5837e"
+    ],
+    "src/internal/cpu/cpu_x86.go": [
+      8698,
+      "395ce0d3004df63df376585519bc1b46303b206415c1915ab80b7bead155e26a"
+    ],
+    "src/internal/cpu/cpu_x86.s": [
+      831,
+      "ee4dca9916b29475e600d85f71f0dfd134496d153c77d20a643b139cc6e18fed"
+    ],
+    "src/internal/cpu/cpu_x86_other.go": [
+      248,
+      "f24c84fc53bb2b8b067fdb462d6ac56594c371163527fba998f45c0f65c0c2f9"
+    ],
+    "src/internal/cpu/datacache_x86.go": [
+      3548,
+      "bbd50f64070d9497f062de27710a17d1aead867054d7dd9143bf063cdcd4fbea"
+    ],
+    "src/internal/goarch/goarch.go": [
+      2372,
+      "4ba164d62956cbf38638637453837789c39761e739aeff267702b33bdf5908a9"
+    ],
+    "src/internal/goarch/goarch_amd64.go": [
+      329,
+      "a6cbffd95eb55c437ecec11276cc4d3b8dd30e99a45f0e225d660b117a9e88ae"
+    ],
+    "src/internal/goarch/zgoarch_amd64.go": [
+      578,
+      "e066117a2c61ae2aa5f4bcc817d75e91506094ba7cb721deb644bca314eeb1b6"
+    ],
+    "src/internal/godebugs/table.go": [
+      7240,
+      "f553e4132bf714192eb887d5c10ee9c3f490d5f1f1294cec34b9b77a69bfde76"
+    ],
+    "src/internal/goexperiment/exp_arenas_off.go": [
+      144,
+      "e6c5b2e6db9255b60f72e33b8a77b6e4548cc113026bcda0152d2f6f1ec2ab3f"
+    ],
+    "src/internal/goexperiment/exp_boringcrypto_off.go": [
+      162,
+      "16b49265c64076d8393931f515b223b77a0c9fe21174a4d59d335190a4a35bcb"
+    ],
+    "src/internal/goexperiment/exp_cgocheck2_off.go": [
+      153,
+      "5960935acda11260add09ba60ccc51c14ac3e51ab2efdc7374d545f6777d4764"
+    ],
+    "src/internal/goexperiment/exp_dwarf5_on.go": [
+      142,
+      "a9225add21fc2dfcea24544669f3d02b8c0af14d96eaf35f7d060fc171a6bc01"
+    ],
+    "src/internal/goexperiment/exp_fieldtrack_off.go": [
+      156,
+      "b0e65c4112795de54d49c1dd3aa756fc8e95ae5538ab8b47cf82c4599ac6b17b"
+    ],
+    "src/internal/goexperiment/exp_greenteagc_on.go": [
+      154,
+      "e25ab84a07cb748d87a516437cfd0b9da727c0690c74e7c63c958d146b7f1417"
+    ],
+    "src/internal/goexperiment/exp_heapminimum512kib_off.go": [
+      177,
+      "c738b4c562cdca3e83d4c0e80c47e818cf06c9c50f0ffead2c1a426dc2203d7c"
+    ],
+    "src/internal/goexperiment/exp_jsonv2_on.go": [
+      142,
+      "3e5097ac5bc401eaad13fc08335c5283aca44ab74dcc6b5c4b8353ad3934f1aa"
+    ],
+    "src/internal/goexperiment/exp_loopvar_off.go": [
+      147,
+      "198e0a786a576b4c8e7a1bce95c0b2cc3c419697378da1fdfbeecb1ebebe049a"
+    ],
+    "src/internal/goexperiment/exp_mapsplitgroup_off.go": [
+      165,
+      "255654c094d95615d87cc91396c82c3c8d4cfabcba79d408f16c2db63aeb46c1"
+    ],
+    "src/internal/goexperiment/exp_newinliner_off.go": [
+      156,
+      "8ee934bcd8ba25e215a5d56caae1fa86dd04a641af089307f3b5766165f0f0db"
+    ],
+    "src/internal/goexperiment/exp_preemptibleloops_off.go": [
+      174,
+      "12902c71ca8b3dd65602fcbec723e0a7694c4c16c381e3873fda32d04d2023aa"
+    ],
+    "src/internal/goexperiment/exp_randomizedheapbase64_on.go": [
+      184,
+      "71295cf54d62b18092297cb8e2598396664fe5c57c51aceb80f8a7a4069e35ee"
+    ],
+    "src/internal/goexperiment/exp_regabiargs_on.go": [
+      154,
+      "6027d3f2cae3525793989865ac043c8b32fca872535a9fd4c6271141b26a8a43"
+    ],
+    "src/internal/goexperiment/exp_regabiwrappers_on.go": [
+      166,
+      "51216cec77c680feb6b2b5798efe8f4a17b7ce982121da92d8e6a9bf4c81b6b0"
+    ],
+    "src/internal/goexperiment/exp_runtimefreegc_off.go": [
+      165,
+      "0893b2ebb13d257e1380d1f0216b608dc1e297659456be1b0518468fcb9d5d07"
+    ],
+    "src/internal/goexperiment/exp_runtimesecret_off.go": [
+      165,
+      "88926be0cf16a6a8a12bdaa5955208dc14a71b59e91f75de84f21ba6ef38c7aa"
+    ],
+    "src/internal/goexperiment/exp_simd_off.go": [
+      138,
+      "20a9d05e20d1510b9a3c6e362da8bcd56d4d9bf9d7c0bc297249b1f724b4b120"
+    ],
+    "src/internal/goexperiment/exp_sizespecializedmalloc_on.go": [
+      187,
+      "2ce19f310cb7a908138beb2008912078fcae55c28955bb77bb1408925edfd7e2"
+    ],
+    "src/internal/goexperiment/exp_staticlockranking_off.go": [
+      177,
+      "41dbd27e7b4fc0244d08226032a88219dd56ed8d9df93c024105aeab503d9ca8"
+    ],
+    "src/internal/goexperiment/flags.go": [
+      4744,
+      "e25f1ee2052c37f6f80d9cdb80570b565d886fb13e44c4b33e080cf285cc0121"
+    ],
+    "src/internal/goos/goos.go": [
+      534,
+      "2594d66acfc7136883b255809773c23c44f67d22c9fd7ca849a653991081f27e"
+    ],
+    "src/internal/goos/unix.go": [
+      211,
+      "e1f33ee1746ab75f8fa813645d2e36a0b1dba2bb0b9c5974e7fe658f210b32bd"
+    ],
+    "src/internal/goos/zgoos_linux.go": [
+      465,
+      "5feca66bd7d6b109a6148fa229713908ca12ea80501895777684c6502f89fb4f"
+    ],
+    "src/internal/msan/doc.go": [
+      406,
+      "eed9a5e6933f2adc99ebc4486a0e22bc044dc4ca71c4f3df3d2cba3131f70fad"
+    ],
+    "src/internal/msan/nomsan.go": [
+      483,
+      "a93262f02003de244b1490022bd6e8765c0efad5a25372450bf87f9fbedb8470"
+    ],
+    "src/internal/profilerecord/profilerecord.go": [
+      820,
+      "2bffc9f49e567eb53966e5d3a996e95c8ccb7eac96773f5491e141fd31a5ef38"
+    ],
+    "src/internal/race/doc.go": [
+      448,
+      "4e6670414ce0c94fffd41e26536671f0122f8ac54bdfe65277de014a8d1fd4dd"
+    ],
+    "src/internal/race/norace.go": [
+      899,
+      "d195ef03f406d7a3e636709cccf6fc55e0fc99aa4a6a5291800364b4c308d828"
+    ],
+    "src/internal/reflectlite/asm.s": [
+      199,
+      "f92c821a60f978ed528d1bfe5846212b5047eba1628f7735abcd95e9f444e9e5"
+    ],
+    "src/internal/reflectlite/swapper.go": [
+      2026,
+      "9e94a5d672db8bf6e0b3a4dba575e0345e069a0d2fefafc7c98ac9a93e126f64"
+    ],
+    "src/internal/reflectlite/type.go": [
+      16566,
+      "5ce048cf76070f0c0734694bc5c15e96886bd44f726c32f5f72ca33a1c5f94dd"
+    ],
+    "src/internal/reflectlite/value.go": [
+      13725,
+      "a234b87d88cee2662ab85b9f820f0a5d457c5f8299b46f2dc86d08ed5c2d81c1"
+    ],
+    "src/internal/runtime/atomic/atomic_amd64.go": [
+      2448,
+      "311767cd970f6db1499a8a133177b8e881b479355d50004522d8955e12be23a5"
+    ],
+    "src/internal/runtime/atomic/atomic_amd64.s": [
+      5562,
+      "5b8ab1a7f5ef5aef1dc268d1a29b9cac53feaa271b995b99613506f3dc20371c"
+    ],
+    "src/internal/runtime/atomic/doc.go": [
+      771,
+      "9e0cfe8821fb34bd0511f55b7e269c6b74dc9956e5d2b2db367349d1aa7695b6"
+    ],
+    "src/internal/runtime/atomic/linkname.go": [
+      875,
+      "3f4d73110ea9e75e4c005fbf08f45b6045acb03bdd98e2fd8ef72d049e2e726c"
+    ],
+    "src/internal/runtime/atomic/stubs.go": [
+      1255,
+      "5dd8e4ce65dc4f6359ab8f18873dd1903f06d95a3fdcc5e184ffc2624a300e75"
+    ],
+    "src/internal/runtime/atomic/types.go": [
+      14575,
+      "5296242a02223a60f714e9358ea58aae52dbef7a4fdf1f90cd479b86360d0c70"
+    ],
+    "src/internal/runtime/atomic/types_64bit.go": [
+      1123,
+      "1ea374803ac8f483de8a3efa9e065157a7d2352652a4ac7bcb0dc17756daffb6"
+    ],
+    "src/internal/runtime/atomic/unaligned.go": [
+      246,
+      "4c788293b984be07a34492f389d27b707b97016e8e5c6eef2b055f0e800d05e0"
+    ],
+    "src/internal/runtime/atomic/xchg8.go": [
+      791,
+      "9ebd5173979bd1c231f8a1c807820a83c27064ce03c0b57d732611d5e4fb8c7e"
+    ],
+    "src/internal/runtime/cgroup/cgroup.go": [
+      13357,
+      "e928d9fa44e1d758cfa38a7f4f140bca8c3e2698dd6e1f79b2eeecf40c5c94d4"
+    ],
+    "src/internal/runtime/cgroup/cgroup_linux.go": [
+      7929,
+      "9f192b16192c9176b5c1bc100e786f5c726359d86782aa86a32221bebb07d031"
+    ],
+    "src/internal/runtime/cgroup/line_reader.go": [
+      5099,
+      "14ae28a739829f8e3139fd77152bd9c94a940a3c33102bda7eb43cdaa2406529"
+    ],
+    "src/internal/runtime/cgroup/runtime.go": [
+      298,
+      "3bc58574f37162ffc7519b72bcfb81614a831547a2fc2d85cd3ea960763df597"
+    ],
+    "src/internal/runtime/exithook/hooks.go": [
+      2141,
+      "b556d5f8f155e67b840b233adb291655279c8c510e9634f5213fefd161716b49"
+    ],
+    "src/internal/runtime/gc/malloc.go": [
+      2397,
+      "889e4ee48345fd246b261a9352a0f8b9deb2c595ab59629c0ca70f7eaf06462c"
+    ],
+    "src/internal/runtime/gc/scan.go": [
+      545,
+      "f3cb2baab1c1df77fedd8904d9def2f19c92d628111d9fb026b70d48690cc987"
+    ],
+    "src/internal/runtime/gc/scan/expand_amd64.go": [
+      780,
+      "7e2a099fab42af62a4e7340425ffdb9cfb9b2a91b3886d29ee018e1ddddbbb84"
+    ],
+    "src/internal/runtime/gc/scan/expand_amd64.s": [
+      136470,
+      "17f53567f6e395bbd03006cd912fb05d6ad4832b384c0f08ece1d10d5e483d1e"
+    ],
+    "src/internal/runtime/gc/scan/expand_reference.go": [
+      1548,
+      "58e336c9e78a10fb5200451ca52a991b6c5663f224954af6b6ede0a6cec3efff"
+    ],
+    "src/internal/runtime/gc/scan/filter.go": [
+      703,
+      "87b9607d74699084abe2df8be62f7eb97793132d6a1bb97cc99e851900372230"
+    ],
+    "src/internal/runtime/gc/scan/filter_amd64.go": [
+      312,
+      "21e405b81d2200a049db1131aa6891d58cfd86aea41e3b3d2560dfa164e23e9c"
+    ],
+    "src/internal/runtime/gc/scan/filter_amd64.s": [
+      1841,
+      "d75bc88f985ffca0e5d1fa0ea53ebc69478b8a4db4bd4618babda1a0f510ab75"
+    ],
+    "src/internal/runtime/gc/scan/scan_amd64.go": [
+      1242,
+      "310d5ce0828d619645236caeba957118b1b232e35d8c2baa95176c2d84397dcb"
+    ],
+    "src/internal/runtime/gc/scan/scan_amd64.s": [
+      3573,
+      "bb791b67d854cf352a0edd432cf86026b9dd8ae1d405105bc874ed27b93150a2"
+    ],
+    "src/internal/runtime/gc/scan/scan_go.go": [
+      3695,
+      "6cd00f9633cc841915f402fe0fbb96a377fb1860da9cd1da499f966d52bd3686"
+    ],
+    "src/internal/runtime/gc/scan/scan_reference.go": [
+      1523,
+      "41e1bc4eea7370d1d37989a0c87c441f56e27701beec979425bb5800c21bdcba"
+    ],
+    "src/internal/runtime/gc/sizeclasses.go": [
+      9532,
+      "7626b00bbb416c25c5279b29aa73a072d74ace3444e58b178a6ff855a2deec2c"
+    ],
+    "src/internal/runtime/maps/group.go": [
+      11497,
+      "d182d037f6dd8c78436feff4f33495f14a0237b8bd275608f42a9279ae854916"
+    ],
+    "src/internal/runtime/maps/map.go": [
+      27201,
+      "db25c2600bef3dc809cb4d0a09d31a93867a104ea234ec2b085cb6c1ec60197d"
+    ],
+    "src/internal/runtime/maps/memhash_aes.go": [
+      784,
+      "907a8100331ede983708a08e94e40b30815246e99bcb626e3eb1791caefa08aa"
+    ],
+    "src/internal/runtime/maps/memhash_aes_asm.go": [
+      520,
+      "37c056629aadeb2c59fb1eede28618ea0d7faff44fade7684b525a9af88f4d87"
+    ],
+    "src/internal/runtime/maps/memhash_align_check.go": [
+      274,
+      "d1e08e5804751942792307779a793cd6ab6d11bf458cfb3b4a987b035a4444bb"
+    ],
+    "src/internal/runtime/maps/memhash_amd64.s": [
+      9462,
+      "a56cd4208a307a96aa1076b8e413a2692ec175dc438f6e7a30dc8f3d56dee47d"
+    ],
+    "src/internal/runtime/maps/memhash_nosimd_amd64.s": [
+      922,
+      "304d060eb5320f8cd8c5c80e1d625ed3dc86a04322aeeecc9f073682357650a8"
+    ],
+    "src/internal/runtime/maps/runtime.go": [
+      7770,
+      "12b1858f429f30586d11df63e1977d158fb2382554da7884241a73aa78178b1b"
+    ],
+    "src/internal/runtime/maps/runtime_alg.go": [
+      2365,
+      "67587da3e7b8800883b3db62e51e860e9476cb75ca07888a2e3bf752a95c9209"
+    ],
+    "src/internal/runtime/maps/runtime_fast32.go": [
+      12166,
+      "f58aac1c0ddfbbc2140592cc97eab12b36fddff53c81073af1b5ba0e05b61713"
+    ],
+    "src/internal/runtime/maps/runtime_fast64.go": [
+      13443,
+      "62657dae1b54df57b711aaf6cfb83cb3033920641d61315f87ebc60ac1e0d446"
+    ],
+    "src/internal/runtime/maps/runtime_faststr.go": [
+      11032,
+      "c682da05b9b640a54883e08302671f3bb745eee8e537584c77ab68d4c71ad38f"
+    ],
+    "src/internal/runtime/maps/runtime_hash64.go": [
+      1910,
+      "8fdd2f08ae7b713747a15d8ede319edfbfb854d9ec167feb22a35bb185fa2a92"
+    ],
+    "src/internal/runtime/maps/table.go": [
+      41137,
+      "428772bd5cac322c142e387b4efd43feabc2d905dd14f5fbf798c458152a09db"
+    ],
+    "src/internal/runtime/maps/table_debug.go": [
+      3280,
+      "6e693977c479085d77611f3c3b482e5fb27146c8fa1dbbb299482ad2eb11430d"
+    ],
+    "src/internal/runtime/math/math.go": [
+      1346,
+      "d5c322c1cac60f9766bc6c6d1f9768ed1c2584f111b84aadad2d8dbd392784e9"
+    ],
+    "src/internal/runtime/pprof/label/labelset.go": [
+      772,
+      "248d89e463db994678c7fec529fc5e523dda82c579ba7305a51b056292e7df58"
+    ],
+    "src/internal/runtime/sys/consts.go": [
+      1488,
+      "c3ae3566bde7c7eb00d06996ce28080c6e2ef2d1d6517538e9d27bbd07a3474d"
+    ],
+    "src/internal/runtime/sys/consts_norace.go": [
+      208,
+      "f813bc3694d70c2f77b868cb52789fec13efe5c1308f71674ef16edd54e9c058"
+    ],
+    "src/internal/runtime/sys/empty.s": [
+      70,
+      "32739e4bc1976eef25587d54c56618f2912f6477e068419a0659b738081d89a2"
+    ],
+    "src/internal/runtime/sys/intrinsics.go": [
+      9342,
+      "b7e4af48817954e8b86ff1a0c48b8c94b42e6d7c70230cf2c9ee3ad4d8f80be7"
+    ],
+    "src/internal/runtime/sys/nih.go": [
+      1789,
+      "62b649628d68a23ecd28ac18c01de4a7117b0edbec150cb33bc99abdd7d01ab9"
+    ],
+    "src/internal/runtime/sys/no_dit.go": [
+      324,
+      "144597c72d957b854ca514bd0f1e47893f5fb76c62fabc2e95162c32067e90d4"
+    ],
+    "src/internal/runtime/sys/sys.go": [
+      283,
+      "15c88e2f32c3e0cd3a04a273c89372b2382430a6093741dbd03122f7f38eadf2"
+    ],
+    "src/internal/runtime/sys/zversion.go": [
+      61,
+      "f69c03727973664529c2e6fa2d2c53b2d3440c887938d0d9b22254f7984052f2"
+    ],
+    "src/internal/runtime/syscall/linux/asm_linux_amd64.s": [
+      1135,
+      "dd6191356bf0c18b3c9862b19e4014f06e217987b225823612b6da56fb6e193a"
+    ],
+    "src/internal/runtime/syscall/linux/defs_linux.go": [
+      570,
+      "29b7f85c166cdb36e21b60ba259ab76cc560bb67dfaf452656393d90190a1d6e"
+    ],
+    "src/internal/runtime/syscall/linux/defs_linux_amd64.go": [
+      625,
+      "814cb91b8ede5df93740a4da08d74e52ace283f60d811a3e5dc64df949852216"
+    ],
+    "src/internal/runtime/syscall/linux/syscall_linux.go": [
+      3116,
+      "3efac6fc31e689e3c3073e82aa7f66014fd224ae237e205140eca924c749ec23"
+    ],
+    "src/internal/strconv/atob.go": [
+      954,
+      "6938f9a33a3daf57d7bada9b6c38b4cc26487c3e613c42c3512a055bed10d6f9"
+    ],
+    "src/internal/strconv/atoc.go": [
+      2663,
+      "b64c4e2aab7fc61aca026d5709a8be703cde3dfd42c78f25489e4687e41785bb"
+    ],
+    "src/internal/strconv/atof.go": [
+      16734,
+      "b3322257fd15836b2ed9355599a767915382c040665391e01a6af35548b9b643"
+    ],
+    "src/internal/strconv/atoi.go": [
+      6629,
+      "bd69756b79c2f007ce7900bea400051f9f9da600c9c6bad656e46900331663d8"
+    ],
+    "src/internal/strconv/ctoa.go": [
+      1454,
+      "12e247aedfb8b2ede713f28aed0717770463e103886d63d595bf8fe09f445155"
+    ],
+    "src/internal/strconv/decimal.go": [
+      11299,
+      "23bd45989d0b5a7b441c45873bf43f210fdf8381132fc74424d381216ac3a8b4"
+    ],
+    "src/internal/strconv/deps.go": [
+      866,
+      "052459732bddd00d8584351fb6a906566fc664ea40cbb125a6084c266ec32238"
+    ],
+    "src/internal/strconv/ftoa.go": [
+      13235,
+      "93b2dbb223f9c8928ab3c3b6f44a74de0378cf64f56e978c3431c9554de5d9be"
+    ],
+    "src/internal/strconv/itoa.go": [
+      5878,
+      "d84e249b4334bab64a916061a45366a2d77becf6f4e5cf9d917527efddfc245f"
+    ],
+    "src/internal/strconv/pow10tab.go": [
+      43375,
+      "aae7690406fa6f2295cdc98d5a164a2ecd97ad92d5b828ca418c78ba2a48fe36"
+    ],
+    "src/internal/strconv/uscale.go": [
+      8371,
+      "bd6b0f22f08b35182c18103b1dad93590bb54f007da1eda908daf44f4331a8b8"
+    ],
+    "src/internal/stringslite/strings.go": [
+      2684,
+      "3ed7df2eeabb5427d44b95e6cfe66ef03e13f1c969ad08050a4a0e89d43b8af2"
+    ],
+    "src/internal/sync/hashtriemap.go": [
+      21697,
+      "ac36cd5db5c5c659b17255056d88b25c132ed1550bc35c1437be70e0e7d537cc"
+    ],
+    "src/internal/sync/mutex.go": [
+      7403,
+      "0535ca03e44cb62cf3e4a511b989ffd0f08ec899d864e2a817b77c4025bec48c"
+    ],
+    "src/internal/sync/runtime.go": [
+      1714,
+      "e3445cf3a17f6b322cb3136e30a28eab7a70c0f37fac44ba5dc7912a19930a17"
+    ],
+    "src/internal/synctest/synctest.go": [
+      2473,
+      "3291fd3debb2430be3017c9a3cd783ad4d1a2791d8b4133b473a11a29e250449"
+    ],
+    "src/internal/trace/tracev2/doc.go": [
+      413,
+      "021b396705a18015e433d99bf1883bc64ccfc838bb487b4133a423306cb4e075"
+    ],
+    "src/internal/trace/tracev2/events.go": [
+      17266,
+      "974fd42b0931defeab34507eee8cd866075fdfa633232035110d534e455ed2b8"
+    ],
+    "src/internal/trace/tracev2/spec.go": [
+      3766,
+      "cf99c4a8b18901f580b3e221fde6c912519a7fd84025a7d3f42991c42c9dfb01"
+    ],
+    "src/internal/unsafeheader/unsafeheader.go": [
+      1160,
+      "aeb2bf9d6c18b361ef4d2830dd63675960268432a4c5dd6131a374d654094da4"
+    ],
+    "src/io/io.go": [
+      23003,
+      "3945d328a9072e4f5970b7d4bc0eb834eec29fd22889a1ed9f3fb76ad41c3274"
+    ],
+    "src/io/multi.go": [
+      3419,
+      "acb61a128d4e49dcc8b5dcd268ee1bd61008fd97af0e459f839166e3ae51384e"
+    ],
+    "src/io/pipe.go": [
+      5239,
+      "75ef56f505592fcffb188bf7660c6ea6abede3f2701b500d6946fa519c37e233"
+    ],
+    "src/iter/iter.go": [
+      14414,
+      "e868b6ef54b1c4f437444e10bc455479dfc6e936540e738016a3447bd244f249"
+    ],
+    "src/math/bits/bits.go": [
+      18317,
+      "694e0114bda396589e8c993a3d7880a0b461da23ee64c272929a3a5b69c2acf2"
+    ],
+    "src/math/bits/bits_errors.go": [
+      368,
+      "1341283973609b16798176456337e3a0cbff9bfb32f79673a45197223471d7c6"
+    ],
+    "src/math/bits/bits_tables.go": [
+      4791,
+      "c4cb4a05dab6d395d9d51720893a42f0a9d1cdf8a0c2383d87268e49acb73f7f"
+    ],
+    "src/regexp/backtrack.go": [
+      8977,
+      "ac5a1e4cf49b1c7f4372c0a7c2e8d156100c17d3a114fcf9539f55d223d06092"
+    ],
+    "src/regexp/exec.go": [
+      12544,
+      "5b6b8516900648fdd657d7fc464b7c51bd358012fa632aa5e73a4daa9831df74"
+    ],
+    "src/regexp/onepass.go": [
+      14307,
+      "fd0e29803438c6ea3021c78227d4f69de163f693e82c155dc62d721eaacbd24b"
+    ],
+    "src/regexp/regexp.go": [
+      41551,
+      "a3e6d904aba2f2e5e4fb8fbbdbe817b317f9ce4bd1e1f1edfe4bcb0b0c552fcc"
+    ],
+    "src/regexp/syntax/compile.go": [
+      6991,
+      "2e1f753be77bf1fa54aed2a7f98932394324b82c91109e19d93283f482f7ee01"
+    ],
+    "src/regexp/syntax/doc.go": [
+      5508,
+      "d61fed6f5a70cb4a0883f2c70da086d52edc80faf79ecb33a95393f28f24711e"
+    ],
+    "src/regexp/syntax/op_string.go": [
+      1274,
+      "391e4d0f59334da7c36c0a32f0a661139f181aecb2f7c209ca63280b030dfa0a"
+    ],
+    "src/regexp/syntax/parse.go": [
+      56202,
+      "f93b85f4b63a6f6ecb5c1452a6c0ded1fef5953f9c73e5d814dfc08207e7d1b6"
+    ],
+    "src/regexp/syntax/perl_groups.go": [
+      2369,
+      "d060a0645b60b210eaec7c3dba6d554dc297c14fe71cdbcc9c25b4fc7562c3a4"
+    ],
+    "src/regexp/syntax/prog.go": [
+      7837,
+      "7a24ebd22eec504ceaeffbd33641ae330d3ca666d54f6a29ce6d96fc127e6c64"
+    ],
+    "src/regexp/syntax/regexp.go": [
+      11892,
+      "72fad4645d96cf8b0ef0ea4a9dae21f09e7bea090d1bdd500732d811982b2192"
+    ],
+    "src/regexp/syntax/simplify.go": [
+      4299,
+      "d22b48ecde668bc22cd8998492c752ec088da5d027d61b7f04f7a9298796eec0"
+    ],
+    "src/runtime/alg.go": [
+      11084,
+      "a27ab6828f49944fabafd794c4951610c4cabdf98596670df24ae52ec6ac1699"
+    ],
+    "src/runtime/arena.go": [
+      39249,
+      "6853cba54c24b766409f3523774a537bc2b562d5083638d3d86d8de4938badd8"
+    ],
+    "src/runtime/asan0.go": [
+      1013,
+      "34ffa01d044c5abbf40f0fcfa7634e94a7d7320070822fdd874c8c288e114f7e"
+    ],
+    "src/runtime/asm.s": [
+      386,
+      "cd39f9e3a6d7ed158abadedaffcb7eebbcb1bccf5dcca5f05972f8f4de7f79f7"
+    ],
+    "src/runtime/asm_amd64.h": [
+      631,
+      "85fc2d5bb80e6db36cef4da5e5c02278d0dcaa6103e5660629b4b713cff15d54"
+    ],
+    "src/runtime/asm_amd64.s": [
+      50394,
+      "71da1bf81ac9a5972ab4ddaccb0f2bab4c9272a888991a34721e520513f458bd"
+    ],
+    "src/runtime/asm_ppc64x.h": [
+      1487,
+      "8396b3e0d10ddfa90ee7bd1fa3c6b201416844e2be2ef44e71918305bc4bbf54"
+    ],
+    "src/runtime/atomic_pointer.go": [
+      4075,
+      "364e60036abead10a020d763add8fe57fc493624c0b8f4a1c2e70de4edf21a3a"
+    ],
+    "src/runtime/badlinkname.go": [
+      661,
+      "172c02155463385704c6f873e8d05e4bb3a04054cca508b158c203b54ee205ea"
+    ],
+    "src/runtime/badlinkname_linux.go": [
+      506,
+      "3defa450ca9d61ab27d61d28308c36e35a554f759f4e3fd444632aba37b8c0ae"
+    ],
+    "src/runtime/cgo.go": [
+      3944,
+      "8e2ba362ad55f640c319a8171d95805a6fa41824e6ced0bd0b1eae6291b82aab"
+    ],
+    "src/runtime/cgo/abi_amd64.h": [
+      2795,
+      "7832f3b0a3d91852a53705f3df6d16d69e1e785cfd1d733ee33229411cd26717"
+    ],
+    "src/runtime/cgo_mmap.go": [
+      2481,
+      "45f6998ad658f078d5b8800f62b60c407d8c637a8be69330579c82a26a3a5db2"
+    ],
+    "src/runtime/cgo_sigaction.go": [
+      3488,
+      "39b0b0434afb4bcab2fcaafb2d406bddcd90d43972547fd470ed2b9208b820d9"
+    ],
+    "src/runtime/cgocall.go": [
+      28614,
+      "80b9f707f90189e5eb2b8c9db4940c0fc63630e2f69757866764d77a1c54b0c6"
+    ],
+    "src/runtime/cgocallback.go": [
+      317,
+      "82d38f6a32c4f8763af62ee77eb3aa6e8f52ba9c2077e7491b109e6530c2b067"
+    ],
+    "src/runtime/cgocheck.go": [
+      4891,
+      "0f201428e80a9b221653431811cf7e894049602c26ce1efb54a8717cb0faccc4"
+    ],
+    "src/runtime/cgroup_linux.go": [
+      3668,
+      "a2237d59862ebb1fd5f85750663cfe03965463a6d6bf21e5a411df26504f5f7f"
+    ],
+    "src/runtime/chan.go": [
+      27319,
+      "dbe8d02ebb1b554b28263c8f34747c0b6d796b3e7040a2f6a625c472e9ce9a42"
+    ],
+    "src/runtime/checkptr.go": [
+      3660,
+      "f38f5a588ddfcc3d528e7b807e5176adb2abc8a82469110fce783e432879cf7a"
+    ],
+    "src/runtime/compiler.go": [
+      410,
+      "bfe09a6aed85f21db093649c9b431f76353794d3b630b2f788859ea96a2ff6a2"
+    ],
+    "src/runtime/complex.go": [
+      1629,
+      "acb03107a1de5df055c14f0fefe0a5c8e33ff6658445d10e1eb23e8e99e1d8ad"
+    ],
+    "src/runtime/coro.go": [
+      8521,
+      "7196b52866a8e774feb1b67e6a71f6409c9c7ea2c0b5639ad7d5a99f8f7c62cf"
+    ],
+    "src/runtime/covercounter.go": [
+      740,
+      "4e2ede89b4fe9e9ea8429a773db441a8dab3cd4962159f842080e97d2ef8d64d"
+    ],
+    "src/runtime/covermeta.go": [
+      603,
+      "765117a0c617fe622ac461bf1ee7dd3ed075d95ae80cdfc6bf91d280a5609300"
+    ],
+    "src/runtime/cpuflags.go": [
+      1155,
+      "f4cf3826f4b1383a7b849ec0a8792c62681cec086209b01926a2a986a641e13c"
+    ],
+    "src/runtime/cpuflags_amd64.go": [
+      1118,
+      "b9aa3542d35b84d5279030a603acfade2563c67b970e99d5d89ebf64742383f6"
+    ],
+    "src/runtime/cpuprof.go": [
+      8728,
+      "d90aebaa1a719f339fde318cc8ec98e7312824ec2e2ad469a84fcbc6b5511c5e"
+    ],
+    "src/runtime/cputicks.go": [
+      437,
+      "661b4602a411e850016ea45ebdab6453ce8de5d479ebc5f67758062aa8da1517"
+    ],
+    "src/runtime/create_file_unix.go": [
+      368,
+      "96f29670074191bc32702674ea155fc105b2e4175fc48fa1a5a170662f8cf9c5"
+    ],
+    "src/runtime/debug.go": [
+      8438,
+      "01d5f04213a154af89bee99c8acfafa16ff116b83765126ad970c55f4df1d222"
+    ],
+    "src/runtime/debugcall.go": [
+      7127,
+      "7a58a26d625f01faea2a378b489155c77c3e72b255d29083fbfa4b208fa9168b"
+    ],
+    "src/runtime/debuglog.go": [
+      21548,
+      "6f450a47651e81c6cc175cd7ef521d0dc95bfb5b7b2499a473f583c89231be28"
+    ],
+    "src/runtime/debuglog_off.go": [
+      442,
+      "2403e8ab6ce05543e5ac6e54120c6f21733aca66e99d5f3be803f20933e9f649"
+    ],
+    "src/runtime/defs_linux_amd64.go": [
+      4832,
+      "15bcd6fb6f553ae473d79f703eed62d7abf005c5f5f7ec232674eb767a0e666c"
+    ],
+    "src/runtime/dit.go": [
+      556,
+      "bed2939b60746bcbf728179c67cdde90b56af3b0b2bbc6dfe7ab052c58a01d4e"
+    ],
+    "src/runtime/env_posix.go": [
+      2182,
+      "351f359fab6974c595ab72454ee246b0ebd82c3ca8bec599e33f49d6d9cefeb1"
+    ],
+    "src/runtime/error.go": [
+      10118,
+      "da287add1d9aa3db925d52fb38d669cf5f5cfc930dc3ed7f376aef158a7f8b85"
+    ],
+    "src/runtime/extern.go": [
+      20019,
+      "b39fabc12fa98559ef2999cb2b0090eaed18cf88939709985baf0d8798733277"
+    ],
+    "src/runtime/fastlog2.go": [
+      1249,
+      "4e03110f81e7323d3924fda1b76e3522e0631cf3d107f5c29de8be0b124a14a2"
+    ],
+    "src/runtime/fastlog2table.go": [
+      904,
+      "4729d9b0a9023b5c3b8e27d81943d692154499c6c3eec80a1663d47865eaa65c"
+    ],
+    "src/runtime/fds_unix.go": [
+      1300,
+      "82e2d0c6f73403b973c29c24e0e8aea8ad848f1c20c22cc1172a08ced04481de"
+    ],
+    "src/runtime/fipsbypass.go": [
+      561,
+      "fb6c3947c6662d94abbd0a328a7ca40f9266dd0d8ce6240d7508abb27e4fa791"
+    ],
+    "src/runtime/float.go": [
+      2992,
+      "3bbaefbb410e01afc0e82477b8d26470ce3bd1b2237776604a3fd85abc478b05"
+    ],
+    "src/runtime/funcdata.h": [
+      2616,
+      "bd73b7c27a4d3f8560a5a9dd1a5da54e0e48572311a744cf7843e709b7f2a015"
+    ],
+    "src/runtime/go_tls.h": [
+      366,
+      "253985b0412d66fd6657b0fcfa54eef45d036c66a7cd00b0ac37a3da2166a4e1"
+    ],
+    "src/runtime/heapdump.go": [
+      18298,
+      "8004416f8600176342746ba9efc5c3c4e494ff0abdfab26608590f5622d63204"
+    ],
+    "src/runtime/hexdump.go": [
+      6692,
+      "0e089a44ff2b7cee6a2d603ee9af805672b69d443ac5b3a58314ac949e0eceaa"
+    ],
+    "src/runtime/histogram.go": [
+      7472,
+      "7e9c532f80d134298db85fee79a1e251de00507d996976f2ff62060c45486818"
+    ],
+    "src/runtime/iface.go": [
+      22605,
+      "9c8005e792d0363d3b027975af8f07f2ea2f8d591fccfcb1cd117b29d3e2c8b3"
+    ],
+    "src/runtime/ints.s": [
+      10100,
+      "b7a34cb11c9d0fe5ff9ed575b74b2716f3e86fc44c4044589770baf93b52c867"
+    ],
+    "src/runtime/lfstack.go": [
+      2255,
+      "2ca3c8998179a3212375e432618c6a7321ba17bb591a58e26f9b501e97abe50d"
+    ],
+    "src/runtime/libinit.go": [
+      1499,
+      "945d59ca388462334ad851cd69c20ef856c77176bf6b0e2ac6165c4b7e66be6b"
+    ],
+    "src/runtime/linkname.go": [
+      805,
+      "4165304e269d11107daef57cb81cb1e7fdb2e5a061d882330d42cb5a9c84138f"
+    ],
+    "src/runtime/linkname_shim.go": [
+      6735,
+      "bc081a57b4608944b79c16c5bb02c5eba258fa6ee5635c427ffd1ec8081891ae"
+    ],
+    "src/runtime/linkname_unix.go": [
+      266,
+      "e77e8fc214ad311a5a74b48585d60ab46a91514049e6c66697bc1e873ced9922"
+    ],
+    "src/runtime/list.go": [
+      2964,
+      "70f32c4b73984ea5a269f73e5e4ffa743cb9ae840b02e3e234f32ea542098972"
+    ],
+    "src/runtime/list_manual.go": [
+      3480,
+      "8ccc132ba4d8e698b50ab7536aed0c1d9a99001bde89bab41223c0e5f0fcef8f"
+    ],
+    "src/runtime/lock_futex.go": [
+      3151,
+      "c411429c46c093a5214ceebb3557f66de31056826fc2ab234ebfae70c0a2efb5"
+    ],
+    "src/runtime/lock_spinbit.go": [
+      15314,
+      "a814e056b003ceecb224bf3f1ed41d09a2e83592b30de037ebae5b2727259941"
+    ],
+    "src/runtime/lockrank.go": [
+      26913,
+      "8c99e298bf603f6f0ad4f12c30b0400b9e632660a5321249aab85a69140ab669"
+    ],
+    "src/runtime/lockrank_off.go": [
+      1439,
+      "8ab37993c6aad3711d5dfcee952908bb29ef2ae0ae70f2fa8eeac6fbc841b25b"
+    ],
+    "src/runtime/malloc.go": [
+      90202,
+      "69e2dc64c34699e7fb8dcaae3eafd396834f42755ef3ad0b1e287ae43198bcea"
+    ],
+    "src/runtime/malloc_generated.go": [
+      49197,
+      "bda5678062f42e63fad29b4cc4b45776be3c2600251fe475955f1e1255d97ce2"
+    ],
+    "src/runtime/malloc_stubs.go": [
+      21422,
+      "c7864a8cf1a9184c6dab845a726584a53777cb708ab3efd715bb36b928a7c2f9"
+    ],
+    "src/runtime/malloc_tables_generated.go": [
+      4622,
+      "7379a09e8c5ff73a5e3ae45c4ddc69983d4116d941a70621ab594ad0b244cd41"
+    ],
+    "src/runtime/map.go": [
+      9845,
+      "be06a9901396919a866be5b8b8b2d165d9aaa1fec5cb09dd41abc62719ca16a3"
+    ],
+    "src/runtime/map_fast32.go": [
+      1694,
+      "fdce83b7862d1a746f524b5892d4c56312cc534ac9620352bacc428b1a3f714a"
+    ],
+    "src/runtime/map_fast64.go": [
+      1728,
+      "60f77c9c503734b2ec0c9418c2b0ce9f1ad42fd5fd108659834f390dd994ef45"
+    ],
+    "src/runtime/map_faststr.go": [
+      1305,
+      "d7e8512385e72ed212d37422a4a4fffc85eb979c4d45b56f1cd1e0dc006128b3"
+    ],
+    "src/runtime/mbarrier.go": [
+      15626,
+      "a7a24f880adbf607fa8997ac7f14b6999ba466b395a99ce01baaf39e361a0122"
+    ],
+    "src/runtime/mbitmap.go": [
+      64740,
+      "7b37b6496357b8d5e07c56c7a9e5099a32af960fc26ec6f120f46ea172bdf770"
+    ],
+    "src/runtime/mcache.go": [
+      12534,
+      "9c27d457c7464565dccc3ad1900f0c177c57eec3cd35b7465c00971b6339da0b"
+    ],
+    "src/runtime/mcentral.go": [
+      8025,
+      "07fdadf8d90bc514805131fed9de5c8e00cd87580a6bf40f55f83353aae7247c"
+    ],
+    "src/runtime/mcheckmark.go": [
+      9481,
+      "fa147698389ed989047a0f10f64823117e55a023d2df5764c385cd8422583672"
+    ],
+    "src/runtime/mcleanup.go": [
+      26788,
+      "bda3732f12dc16750994d6ce6b10b6844beb2ea1aa854c3407be757097f04207"
+    ],
+    "src/runtime/mem.go": [
+      10862,
+      "49e0c4f6a9c422ce69eb2768442bfef7ed4df20f460141439afb503a5cfe9c88"
+    ],
+    "src/runtime/mem_linux.go": [
+      5421,
+      "08cc392d6b540338b966c9593691a700d8ac99ce4081f444f792b994e37b52c7"
+    ],
+    "src/runtime/mem_nonsbrk.go": [
+      352,
+      "975fb2b84c6f9cba872fd6e3f77726ea297959a7373d75794a58194860ac07e7"
+    ],
+    "src/runtime/memclr_amd64.s": [
+      5024,
+      "826fb9aef6f97dda8e5a994e21ec692479712f69fefcf1469b756bdff29739ef"
+    ],
+    "src/runtime/memmove_amd64.s": [
+      13183,
+      "1d239c1a965baf43cbdfb82a5144d33aadd95d20ff95becf8347a93ddf08985d"
+    ],
+    "src/runtime/metrics.go": [
+      32077,
+      "d8f30958cdf6fe0d7f496204a49919cf8017a0038388599e871162748b02bca3"
+    ],
+    "src/runtime/mfinal.go": [
+      20192,
+      "49d40539afdd927355c9cfbfabc7130c561d0a19e68ca5e621082e58e9d96cd7"
+    ],
+    "src/runtime/mfixalloc.go": [
+      3202,
+      "4469bf858ac16f58c41adab050c5243d0dd8c5aad9d2e1c62b135635f7bc6f04"
+    ],
+    "src/runtime/mgc.go": [
+      79497,
+      "b1cb75ff1b5da577a1af442d5c52da2a08328510e4e70f66cb88d92e02a5b33e"
+    ],
+    "src/runtime/mgclimit.go": [
+      17655,
+      "fd175a6304a6d4e1f26822cdaa0f94d4959b2d1f5c315f6a0b1c342bda8ae6a7"
+    ],
+    "src/runtime/mgcmark.go": [
+      56759,
+      "80d35ae198caf048dbc306cf17ea754012f1c764811b195aea197ca3481c608b"
+    ],
+    "src/runtime/mgcmark_greenteagc.go": [
+      44095,
+      "d1bac109ef0de67d43a14e4b5fdfe9e766c9296ea2a0a0456321f0de1ed4d2f6"
+    ],
+    "src/runtime/mgcpacer.go": [
+      59457,
+      "7ec384f9fed18e54efa9b4ac2759102715125f1ee664cfe71f4ac81147c785c1"
+    ],
+    "src/runtime/mgcscavenge.go": [
+      53513,
+      "8d462284b9cc551410de1d19b910e4d263d29869596314c0a8dc4af8f8afa25b"
+    ],
+    "src/runtime/mgcstack.go": [
+      10839,
+      "c25628e388174f391c889daa770731336f6240900fe4c668af7ee0608cd8c090"
+    ],
+    "src/runtime/mgcsweep.go": [
+      33692,
+      "81139b39aeacd63e86bdadb6e921882e871bb30c87479b454aa5d82adc0c91aa"
+    ],
+    "src/runtime/mgcwork.go": [
+      15821,
+      "f475a9e19f9f361d76421b991bc331ee9f7c0b4d6ea375fa6a17c4d44bbd188b"
+    ],
+    "src/runtime/mheap.go": [
+      102387,
+      "848cedd74ae1d10af65eb3beed88ddd7d22d184a64a5a7477251c4886e8a459d"
+    ],
+    "src/runtime/minmax.go": [
+      1493,
+      "3740bf87388f301a2a05c6d31e8d7160c9cf54dd970dcb365d4f8816e92ba084"
+    ],
+    "src/runtime/mpagealloc.go": [
+      41788,
+      "63b48da72491a71b0f4103d2f27183f17732d6d2f9b4c9360dde1e97cb3af36c"
+    ],
+    "src/runtime/mpagealloc_64bit.go": [
+      9530,
+      "7b813530b97d23615798cd2359170ee9e1afd8c6e4ffc93d53903f0db0727a75"
+    ],
+    "src/runtime/mpagecache.go": [
+      5727,
+      "ad1427cbe7bb0a07746323b403093f484f750dfdf6f89df876cbe5720cec9c4e"
+    ],
+    "src/runtime/mpallocbits.go": [
+      12827,
+      "8996a481943b5054af0962241b3f16f8ac13d79b5de7b62af904213a7f8b6ccb"
+    ],
+    "src/runtime/mprof.go": [
+      57340,
+      "aff7088637fe33bcf9827315f522933ed9651901decbc6dc9bbcf9f74508411c"
+    ],
+    "src/runtime/mranges.go": [
+      14802,
+      "a9a4f58b3d28a047b9b097b507833f78c96b085e48ae6c8b35bd28db97cb1aca"
+    ],
+    "src/runtime/msan0.go": [
+      725,
+      "a53ed6335e7b05d189b422b3503d2421203362754eaa7b0b73c7bab4780fc2e4"
+    ],
+    "src/runtime/msize.go": [
+      1383,
+      "0164d15295726608812842b429e241f553a314985a7c6aa48cb1ad24346a52dd"
+    ],
+    "src/runtime/mspanset.go": [
+      14165,
+      "85faad45efe16dc88c72253e6279f58e2cb161d948534dda5c47672243ad367a"
+    ],
+    "src/runtime/mstats.go": [
+      34711,
+      "4a33458ef51ba74a46f63d66244c55d93356cdad9a2eafe7062c1f1800710ed4"
+    ],
+    "src/runtime/mwbbuf.go": [
+      8380,
+      "f738c769f502a9073bcacb4c4db473ebb44dcbe91453135c4c21a26356288794"
+    ],
+    "src/runtime/nbpipe_pipe2.go": [
+      344,
+      "29976eeaa240c5b1ff32866263a1e701831b6fc70a06bf79d6aabc999ab45e4d"
+    ],
+    "src/runtime/netpoll.go": [
+      21309,
+      "f7c606d3fa0a3b9499fd5f42b81918a98f0b99a6029fca2010cabc710fc9ea65"
+    ],
+    "src/runtime/netpoll_epoll.go": [
+      5343,
+      "e4b6d6acbb1cc36a552cd64f7fcbc7f21962f2edf88ca6e75193f673c4e4ae92"
+    ],
+    "src/runtime/nonwindows_stub.go": [
+      962,
+      "e7e55cd09500be799d09d7e21338f6fd18840c813b5e753e39b9f4371a84cbc3"
+    ],
+    "src/runtime/note_other.go": [
+      1220,
+      "8f910c2a6c624eba7f47275cb2917de934ead4300b5de64bea5637b5de1ee7a2"
+    ],
+    "src/runtime/os_linux.go": [
+      30358,
+      "f211c96802c315ffa23343fc3a672f38713418f46658681da1f4d8187d9462a1"
+    ],
+    "src/runtime/os_linux64.go": [
+      545,
+      "3414c91c0566e953cc5de08191d73fc99a69fa2d156152269032e4351399dd01"
+    ],
+    "src/runtime/os_linux_generic.go": [
+      870,
+      "ed08e83bbb13787a044b1f12e952bc54f57085d9f5b4e80067c2c1e2d8527167"
+    ],
+    "src/runtime/os_linux_noauxv.go": [
+      337,
+      "7c2485a784ea54d6a6d1af5644f0ee241b8faad42d38f46f0e40c512a6d197e2"
+    ],
+    "src/runtime/os_nonopenbsd.go": [
+      437,
+      "ee262ac265c43fa6826127530808e2b316bfb86bf3d226dbbebea428266f2b8c"
+    ],
+    "src/runtime/os_unix.go": [
+      436,
+      "7a8d6fa105fa250c70b4cb9c90f46deef34d14449baaaafacb70c0f248067afe"
+    ],
+    "src/runtime/panic.go": [
+      52256,
+      "55bf157a0922d2474c4c04526eed90eec4c5a48ad92d649d0c97887760b53e11"
+    ],
+    "src/runtime/pinner.go": [
+      12153,
+      "6f638fb797edb1ed42601f11a086c8f6a34f095d7c85b9f53773e59528ff38bd"
+    ],
+    "src/runtime/plugin.go": [
+      4457,
+      "dc8fe89798d4110afd342e7c3dd2afbeec95b0d67a9fe73e4a74718ca5697755"
+    ],
+    "src/runtime/preempt.go": [
+      17566,
+      "c50342a043676dab55b58ea9aabc90a04cfb0c0cdd9a70e475239ba9460f5ce3"
+    ],
+    "src/runtime/preempt_amd64.go": [
+      632,
+      "ffcbf24ffda018928a87580daeaad675fd90e7631a82332f9b6c016a0ea8ae28"
+    ],
+    "src/runtime/preempt_amd64.s": [
+      5048,
+      "c212219956aeeaccaa17a7b37b4943df9e6e9104ed1b73f8e61ff380e7084ba4"
+    ],
+    "src/runtime/preempt_nonwindows.go": [
+      290,
+      "4aae15044bdee656cbb361b9c06c9ab2f14b25d28c4ba6c407e27c225e7a6d2a"
+    ],
+    "src/runtime/preempt_xreg.go": [
+      5283,
+      "817f29c0e53cf71d62494354bf8234a6583f8639402daf896f9d27fc3a7e2225"
+    ],
+    "src/runtime/print.go": [
+      6860,
+      "5029d55582c4beef3158d2bed78687639ef27ad8dd7206b2b0ebdd196074a169"
+    ],
+    "src/runtime/proc.go": [
+      243217,
+      "40d15ce858cf058cff92606001a29ee1689db88c121a2f0c283163a0d64a7375"
+    ],
+    "src/runtime/profbuf.go": [
+      19855,
+      "aad42f919f9fca2a5685fc2989e56cb2a71beeab1690d6e7fcece9aea953a7db"
+    ],
+    "src/runtime/proflabel.go": [
+      2108,
+      "dd18006615fac877fb74bf06e2003833c2222e447a752ad25983a35ba3d09426"
+    ],
+    "src/runtime/race0.go": [
+      2963,
+      "40cacda94f0feb4ffb47516bd5d88ac4c7bf988bad78ba375c749900c743ed96"
+    ],
+    "src/runtime/rand.go": [
+      9923,
+      "2cad544cf8ffabfb8fcf88e4687b6f6452d9f0ba5bb6aca570aa69bee6a167d0"
+    ],
+    "src/runtime/rdebug.go": [
+      550,
+      "39a5f8ec7012b69997d9e25c6a7f303b128f821c155ac2f3bd5e04b7a45ef796"
+    ],
+    "src/runtime/retry.go": [
+      760,
+      "64afd0c6d11790a6324caf058795ca4c61295d03b947637165a764b8d34c0b13"
+    ],
+    "src/runtime/rt0_linux_amd64.s": [
+      307,
+      "60586230585acae1beb5f9a821ac07381c3fd8b8c262f7fc8798fa3f7d0d854f"
+    ],
+    "src/runtime/runtime.go": [
+      10002,
+      "fe478d164989b5cd5783c9820d99879623780ba353f836f499238e76efb24fd8"
+    ],
+    "src/runtime/runtime1.go": [
+      22134,
+      "3eee37fa8927b469e4f746598d79a6df3efc58f85e0ccd2ecddc88075ad75dd1"
+    ],
+    "src/runtime/runtime2.go": [
+      57123,
+      "7d66ed912f68b1259947807ca1bdf79ee7e54c6a61a716d88db663d570af66da"
+    ],
+    "src/runtime/runtime_boring.go": [
+      458,
+      "b66676b383e1baaf34b9482c50e2af4e6b9fe3178af6fff638368dbd6547e0c5"
+    ],
+    "src/runtime/runtime_clearenv.go": [
+      653,
+      "055ee6d0789f8031ffcc1c806e135c678adadcc3e2458fd6fbb844cc7c0f74d1"
+    ],
+    "src/runtime/rwmutex.go": [
+      5104,
+      "7ab5f917f2d92166e7a2a1db37fd1ad59724ebe9cb2763fa55aa16bc1e78c8fe"
+    ],
+    "src/runtime/secret.go": [
+      4417,
+      "9c250acaa95d9849e2804daa5511e89cb1ea22d231843dfc6b9075f18ae8e7d1"
+    ],
+    "src/runtime/secret_amd64.s": [
+      2419,
+      "9b61f272835c56f61f26bd9b1e3f5f976c779dc5ada377cadb3742c68c34071e"
+    ],
+    "src/runtime/secret_asm.go": [
+      232,
+      "a946d8499d78b76ae8ebe3e7082c511602518501bddf924449ab8889c8c8276e"
+    ],
+    "src/runtime/security_linux.go": [
+      335,
+      "575dba66b2595e08b4cd7bb998a2f0d1040b3fb0c4410ce5d73b43f9e19dc2c1"
+    ],
+    "src/runtime/security_unix.go": [
+      866,
+      "d570c7ee6b36cca9a0c270d641b2af4bd2b4e0f64e49dee7831019f04fc841d3"
+    ],
+    "src/runtime/select.go": [
+      15792,
+      "93977178a5c507d2bd0bbd990613fa0c8a1d6d18b974fcbcd6c9edce6bd8b5bf"
+    ],
+    "src/runtime/sema.go": [
+      21269,
+      "451de314f2db754e318c0ab7857ec3b808d604845e6306eed064a57b8b2cd52b"
+    ],
+    "src/runtime/set_vma_name_linux.go": [
+      956,
+      "d4360e1d3e9ca42ec05150de6820e5ac551b4cb6ad669a4eac50e5da0090659c"
+    ],
+    "src/runtime/signal_amd64.go": [
+      2791,
+      "131fc8cdf581e82194de1afa3a7d3d982f056f35e30fcd23d412bae669d0b90f"
+    ],
+    "src/runtime/signal_linux_amd64.go": [
+      2918,
+      "ff548a1eff11973181b47df60959ec41a9ea3613c58fbb44b471368a58f92ec0"
+    ],
+    "src/runtime/signal_unix.go": [
+      47002,
+      "a9dd82ee8b8089ec69dc90cc8a2d3553839db41b3f01807311507c7fc117a3e0"
+    ],
+    "src/runtime/sigqueue.go": [
+      7801,
+      "4b645a4e6f3cdf78932195e8ff28f3b79b47bc4d6df7167acb19ade6c17366db"
+    ],
+    "src/runtime/sigqueue_note.go": [
+      648,
+      "84a465db62b4f99d10ecf64310a081840d22727bc1c0a5203e5c4dba627d6a77"
+    ],
+    "src/runtime/sigtab_linux_generic.go": [
+      3602,
+      "0e618e00f7d446bc55e03083f76a276e481652603d10c96e7662e943d5101513"
+    ],
+    "src/runtime/slice.go": [
+      18985,
+      "ac595f1a822620fdc52271ef84f06b19c1f0abc0e53c0eb049dbad90b86abdbd"
+    ],
+    "src/runtime/softfloat64.go": [
+      12177,
+      "647b9366905a529ac7cb4d65c4289c7d9ef61021d2be888717988111e83c72d0"
+    ],
+    "src/runtime/stack.go": [
+      46093,
+      "0225942ade2eed1e4ec5a0e813c66b3ed06c142c33c987b2fd9e031a0b871d3d"
+    ],
+    "src/runtime/stkframe.go": [
+      10029,
+      "29bfc22b96fdaa16c25c0a1db9778a56f6daa3d4f15622dc1d9bc4faced5ed53"
+    ],
+    "src/runtime/string.go": [
+      14094,
+      "7e42368d5ba47af61c75e48334d9001ec0c17905cb9163d00f923d4cba3d3a69"
+    ],
+    "src/runtime/stubs.go": [
+      18936,
+      "49564c42276b7a0ab86f48bfbb2c9be8fa27c6976bcb2836d38e476cb2254998"
+    ],
+    "src/runtime/stubs2.go": [
+      1173,
+      "afd9900bba6bd678c9217918847144cf5fed035b1035081756770bf092fcdc5a"
+    ],
+    "src/runtime/stubs3.go": [
+      324,
+      "8cbbe3b1cff1e5265bfe4f54184a665bc12ded904f5d923a4aa8beeaafc681ca"
+    ],
+    "src/runtime/stubs_amd64.go": [
+      1477,
+      "25564d340e0bee44f50789542606b441a9b1129e7ef8fb9bb8f245f103b5b4f7"
+    ],
+    "src/runtime/stubs_linux.go": [
+      650,
+      "a93986261d9225c7c06c813037f0cc81209c8851631a74796b6e3854d7f21415"
+    ],
+    "src/runtime/stubs_nonwasm.go": [
+      277,
+      "b5e6633be53365857e330e367fede63060e8ec23139850f2a643a63972873034"
+    ],
+    "src/runtime/symtab.go": [
+      42138,
+      "50ce6d14b3885a8847086281a221ace995603c2b942e06c46935a15c0d66e17d"
+    ],
+    "src/runtime/symtabinl.go": [
+      4635,
+      "64bbd9ed4f94111659b89fc55c0764fb1f9a4202453ebb8646f7c6aef98c4edf"
+    ],
+    "src/runtime/synctest.go": [
+      13072,
+      "3277f8cc4ba6cba7cb997c6ee7e9e2f431e4ae9751b8e4d2b5b054363f7ca1d9"
+    ],
+    "src/runtime/sys_linux_amd64.s": [
+      17416,
+      "ea8ddc487eaf3dde2b48e53f469a8e59c6447ba7af0f7609b5d91431a10c1f94"
+    ],
+    "src/runtime/sys_nonppc64x.go": [
+      245,
+      "fa63b093b68b24b280878384269e4ef7c9791216991e616ab3537a1484c07947"
+    ],
+    "src/runtime/sys_x86.go": [
+      552,
+      "f9c1c32030a7fb02db5abced4c69f250bf8bd341ac6a24b71a781908bf20c42c"
+    ],
+    "src/runtime/tagptr.go": [
+      912,
+      "4b46ea3f7fc1ea740de027c57ff42273b8b57ff76c692041ba43b8f78ee6caf2"
+    ],
+    "src/runtime/tagptr_64bit.go": [
+      3589,
+      "8788f7013736b8a86e9014e22362af25fed406f381febae17a0f6ce41024e322"
+    ],
+    "src/runtime/test_amd64.go": [
+      196,
+      "432c8025a7a10b45e23f8e825244ca027e8dfc7cc123f1c8b58ea3a630923ead"
+    ],
+    "src/runtime/test_amd64.s": [
+      316,
+      "58ce05d3481714aec7b75abcf188137fb580c5ab671d62eedf4c9667b7d4ad25"
+    ],
+    "src/runtime/textflag.h": [
+      1501,
+      "a9d761d03aecdcc117691b6a55eacd43eb7d47d9ad9ca7510b8669ac403b380e"
+    ],
+    "src/runtime/time.go": [
+      43649,
+      "cf2ae4e953a3315c226499f553a8e8e1529d27ceac166b4fb75e8d7b3a4fa682"
+    ],
+    "src/runtime/time_linux_amd64.s": [
+      2268,
+      "328970a6fb6973b917bc914931bb32d001f698b6a399b4d8d5f7c1939051f612"
+    ],
+    "src/runtime/time_nofake.go": [
+      1606,
+      "d42faad51f376b9d43b4944620b4208a24bcb48ce7c0d9ef1d7786e3467b1f42"
+    ],
+    "src/runtime/timeasm.go": [
+      418,
+      "5c060a9c53fedf7c36023bbac52589626972ecad66b43a9672f8985eb43a7344"
+    ],
+    "src/runtime/tls_stub.go": [
+      260,
+      "1596177a6668e35fea9dadebfa93dbe057a601886081665107e32fcec5fab2cb"
+    ],
+    "src/runtime/trace.go": [
+      46966,
+      "c4a410adcf39a2a822b1b268ad93df9b1515928161bf65a458e1bbbdd127bc51"
+    ],
+    "src/runtime/traceallocfree.go": [
+      6134,
+      "096a01883b7179bc9789b2f92bcca9b6314641c2406cc42e3333852adb32ef49"
+    ],
+    "src/runtime/traceback.go": [
+      62423,
+      "ed3f2f022fb238610e1423ea4768c5abadd1376fdcb6f1092c2d43566641583e"
+    ],
+    "src/runtime/tracebuf.go": [
+      10636,
+      "ccd95094ef66367da61d82a82ffcb7b51ce537748666550811e650fc01f7c742"
+    ],
+    "src/runtime/tracecpu.go": [
+      9003,
+      "449de707b2c323a11f0aba7b9e3669ce18f0635247be664b01f3bf365156d670"
+    ],
+    "src/runtime/traceevent.go": [
+      4020,
+      "f8e91b49a351e77b59d28d5667a30a2df8e62c9270cf8eb47d0e983da17a4775"
+    ],
+    "src/runtime/tracemap.go": [
+      4963,
+      "41f2e3d3f6a34700495214e15e12f33da2500c61706161c593f39915e126118f"
+    ],
+    "src/runtime/traceregion.go": [
+      3536,
+      "cf11eda780960ff31169a1011a3304d721d2b1c21ac6d20d45332adbb96a4b5b"
+    ],
+    "src/runtime/traceruntime.go": [
+      26281,
+      "9cc5ffc359ac31558fdc2cf721ce70df38f9cfe0c28aef9755f71250a56ae0cb"
+    ],
+    "src/runtime/tracestack.go": [
+      11792,
+      "ce2e80a74992de3a2de6c23e77cc58009aff5cdf646b4e46b9cf1829e1fef63f"
+    ],
+    "src/runtime/tracestatus.go": [
+      7169,
+      "4db02b2b49c5bc682913d8265b0c4f4ce2913d3b2997c6722b1a9f1345140843"
+    ],
+    "src/runtime/tracestring.go": [
+      2848,
+      "c89dd1d719d64a9d3daccba6d8d3ea26f659c6ab460cef5562543737df796f84"
+    ],
+    "src/runtime/tracetime.go": [
+      3921,
+      "cfbb13de9ff44421db13f43ab22780f9da3a878982ea5671834b8ff0ee4c196f"
+    ],
+    "src/runtime/tracetype.go": [
+      2285,
+      "54a26cb246bb29e52b6fc267df3c0125ce1788816d543318ed1333708199313f"
+    ],
+    "src/runtime/type.go": [
+      19526,
+      "4e8526f01eeec54b6ca974bb99982fa05fe63c20216593baa11e835ffa92321a"
+    ],
+    "src/runtime/unsafe.go": [
+      3246,
+      "129ae3ace83e83b36edabaa2e3e5ac168475cd8d9a3cc02c81a08b1438b9f98b"
+    ],
+    "src/runtime/utf8.go": [
+      3475,
+      "3c0f7651a4c0e9ce7a680afa73c663ae4ca7b6b2ada0926710057f1a2efff79c"
+    ],
+    "src/runtime/valgrind0.go": [
+      1143,
+      "a5ba5f53f63ee9b41dffe9003a5c9fffba1530d4397ebe2a4164dbf0e49c1aa4"
+    ],
+    "src/runtime/vdso_elf64.go": [
+      2904,
+      "759cda62ff78474fe0ef376c713171e23304bb961c013f0f78b44344a965e0ff"
+    ],
+    "src/runtime/vdso_linux.go": [
+      7973,
+      "2667f1d8d2ba2b1bb8ee01c809208c04662819a7eb7e0ef8b041c18e6b7cf5f6"
+    ],
+    "src/runtime/vdso_linux_amd64.go": [
+      909,
+      "6763e3a583e07d928cc9a54d9b1d682969883c9e38be457309748c09b1243908"
+    ],
+    "src/runtime/vgetrandom_linux.go": [
+      4143,
+      "fda3cf62391408d701c497a0dbbea92ae7ebddc99347a9efa9e0915afce90fd2"
+    ],
+    "src/runtime/write_err.go": [
+      296,
+      "fb40f33137552d750419154b3a19a346328eeac38dc9186f6450040ceaf89686"
+    ],
+    "src/slices/iter.go": [
+      3109,
+      "986cce7d58c65e6f87987544908ec138ae664c4bf5c8868d2177a425f6fa2bbc"
+    ],
+    "src/slices/slices.go": [
+      15003,
+      "f31f8ff279a51850aa90f3cbf60f06eaf6d5452889e2b015043c91ccb3e5d403"
+    ],
+    "src/slices/sort.go": [
+      6103,
+      "e6cd273b637e7dd2f547596c22e6236b92ae9b376f31ceb7b3c3269dd60a38df"
+    ],
+    "src/slices/zsortanyfunc.go": [
+      13069,
+      "50398783e085ac9cc1d7c6249ebe75a5cc4425dcdc6a4cc448ea6e7179126492"
+    ],
+    "src/slices/zsortordered.go": [
+      12682,
+      "f6d8d5df558075ca8299a89f9b5beda3ca7d1ddc7858dc2e52eee44e4dfdd7a9"
+    ],
+    "src/sort/search.go": [
+      5809,
+      "78418580ae0329bd5e5b33e91223f62c42010a3d16c17f37ff953ac094611686"
+    ],
+    "src/sort/slice.go": [
+      1850,
+      "842b1095d5a97a239e0d88726de1e7a7bbcf5bb7417e2d6a4dd7706dd6645ae9"
+    ],
+    "src/sort/sort.go": [
+      10503,
+      "100e49103d23dd6b8335a50b17ae6e9db2b056cb1217d964dcf58852c3c6f8a1"
+    ],
+    "src/sort/zsortfunc.go": [
+      11768,
+      "35cdbcbc3a63372e12eebc815c249adfd420e9d783a99b0405998a7ccb00ac1a"
+    ],
+    "src/sort/zsortinterface.go": [
+      11485,
+      "8978a49cc4174b0c35a84a2ddf73175d41254eb340ebeda29f21d3e546088a3b"
+    ],
+    "src/strconv/bytealg.go": [
+      389,
+      "210ed5dd413d26575dabbb917c047ba52a144d133414f5e06b9595a4b30d3c60"
+    ],
+    "src/strconv/doc.go": [
+      1957,
+      "aea030aeaf555c48ae648dad6421aca2cb9df369265ab31bb1cdf956dac8ce97"
+    ],
+    "src/strconv/isprint.go": [
+      12394,
+      "e6f4b35fbf38f9c9c8b251e5d3cf94daa880789cb89825f11f9734ba4a42e9ff"
+    ],
+    "src/strconv/number.go": [
+      11360,
+      "dda43e8c91d95f9dea0c46b2fec6637e5520cae099e40c5965dca0e41bbaab9e"
+    ],
+    "src/strconv/quote.go": [
+      16945,
+      "6602960ec8777de9926c1d02fbf5cb0828d4aefa38083865f4af17b6892c09a2"
+    ],
+    "src/strings/builder.go": [
+      3589,
+      "ffe3e09dbe0d4ce455964566a825dcd0a99fa7a2488f04c9dc22aefb0ee37735"
+    ],
+    "src/strings/clone.go": [
+      809,
+      "5c18eb3b45b7d9ae63d0cc43f9e337c077de05dd47fd5a1ea49dafeb7e1b862b"
+    ],
+    "src/strings/compare.go": [
+      630,
+      "af4e0fa7dfe63018d9808f89a4c511eeb8d773bd6f3b030f1c9592a1e0de7a85"
+    ],
+    "src/strings/iter.go": [
+      3456,
+      "067603fe06f2cec8ec607f9c9d469493901820f76af7f9e3e51136824fe8b04a"
+    ],
+    "src/strings/reader.go": [
+      3940,
+      "cceec92b1c65a8b3b2b5fc2991ea0a54b1bf6c5fb75981de5fa91c7b2dadbb6d"
+    ],
+    "src/strings/replace.go": [
+      14875,
+      "fbe8467c532ea7e5cdb848577423c4f218cbe2776907fb5c8c091006c786cdba"
+    ],
+    "src/strings/search.go": [
+      4227,
+      "4fdef1f79f6e854789d9140b17ce2c2bbdbf0d4067a801e42607cf7877698cd1"
+    ],
+    "src/strings/strings.go": [
+      34265,
+      "a81bdf73a308277c322e35d0c602e3813f57b6f769c091f8f8962c8884a45ea3"
+    ],
+    "src/sync/atomic/asm.s": [
+      3072,
+      "0d82e9b2a1e68008568b03a6eda89769a33d141beac22d20124e89e951d452d4"
+    ],
+    "src/sync/atomic/doc.go": [
+      8717,
+      "e558512a6b1e65679c5fb7576927785391bbf3ff23685f9c35ab60fa609eda6c"
+    ],
+    "src/sync/atomic/doc_64.go": [
+      4368,
+      "0434f660a650bc6a1eaf9b8c48205ed0ce8c18b53001e949dde7662d04bde9ea"
+    ],
+    "src/sync/atomic/type.go": [
+      9004,
+      "448abbf2d0dfe655fc8d096d2aed2fa37e43b10558c2132f1d0b17c8e4de69b9"
+    ],
+    "src/sync/atomic/value.go": [
+      5906,
+      "e87f0ad5c37b11b69effbb2c58b34b3fd7d4d4300b9e83a63847ff3b4835b8cc"
+    ],
+    "src/sync/cond.go": [
+      4354,
+      "1159ffd7688160d8ff85b63a280eccd7ca52defde347cb443b0a3d1d1eb0519a"
+    ],
+    "src/sync/map.go": [
+      4643,
+      "ea2b7b418426ba83ed9b77c5926dcb28a6a94dc84b26ea7b581c782a36a646b4"
+    ],
+    "src/sync/mutex.go": [
+      1995,
+      "3dec4264678744c4ce15a05ba0cc88e5e8b155f071b71d74eb7ed229ca72c114"
+    ],
+    "src/sync/once.go": [
+      2525,
+      "3bc00bab32acd134ddf50c87fdbd1dd70502f224b7684a801a077dfe0a05eb3f"
+    ],
+    "src/sync/oncefunc.go": [
+      2343,
+      "0853c1ad885c593d2810e601c495f00abe197b10d12b679f94badf3efe5fa365"
+    ],
+    "src/sync/pool.go": [
+      9240,
+      "288ad32bc150faf519eecf277f79ce5b91de7f2bd3839273068b86e40cc07992"
+    ],
+    "src/sync/poolqueue.go": [
+      8533,
+      "25b900ffeb803a9ecd4c1926a5faaa3ba8d7b4adcd71bbfbd373cb8606910dae"
+    ],
+    "src/sync/runtime.go": [
+      2253,
+      "a2be85512b59e11270b099f264581343cc1589bb782e03a476102406defd5f33"
+    ],
+    "src/sync/runtime2.go": [
+      465,
+      "5bc4014718a892af6591e26e6c87105a001b7d1d1f93c3ec4c289128c80f6ba4"
+    ],
+    "src/sync/rwmutex.go": [
+      7598,
+      "4ecc9b2fa7771cbe37e1670e4caefd7a28939683bfe1614fcf5e9d545261d17f"
+    ],
+    "src/sync/waitgroup.go": [
+      8166,
+      "274e43a7cbc76eb0da4635a2680785200dfaf94d85e2d55cdd5122c76a4791d9"
+    ],
+    "src/unicode/casetables.go": [
+      755,
+      "b70c5009086ffaef3d8191924481b9b2a39108afb42d9f2b979ecf670c77670c"
+    ],
+    "src/unicode/digit.go": [
+      352,
+      "dfb14dbbcb918a6c7ee9be15293327d022f9d64a4c1a90f9c8049b682e799761"
+    ],
+    "src/unicode/graphic.go": [
+      4503,
+      "46a43107a87c88cf17a05a557e00dbf6b0f4bb53ebcd7d3035e02f1e67c428be"
+    ],
+    "src/unicode/letter.go": [
+      10702,
+      "b35a6d259313cef88d07e9e4027b8bd72c60ae140418f5be2c41a2ecea6074fe"
+    ],
+    "src/unicode/tables.go": [
+      256788,
+      "ac0e5d5d1b58ed4b02d7cb4a0085bdefbdb4f7aae6fadddbc9477f8463da8bd8"
+    ],
+    "src/unicode/utf8/utf8.go": [
+      17440,
+      "3c145ee25fd7631ebbc670fd1236e8c163ca30ae8913c796489efbf3f267ad54"
+    ],
+    "src/unsafe/unsafe.go": [
+      12391,
+      "139f79859cb2c690b63b56afe5c385b694ca418ce2dead0ab9d6b1568fad933c"
+    ]
+  },
+  "packages": {
+    "bytes": {
+      "files": {
+        "asm": [],
+        "go": [
+          "buffer.go",
+          "bytes.go",
+          "iter.go",
+          "reader.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "errors",
+        "internal/bytealg",
+        "io",
+        "iter",
+        "math/bits",
+        "unicode",
+        "unicode/utf8",
+        "unsafe"
+      ]
+    },
+    "cmp": {
+      "files": {
+        "asm": [],
+        "go": [
+          "cmp.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "errors": {
+      "files": {
+        "asm": [],
+        "go": [
+          "errors.go",
+          "join.go",
+          "wrap.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/reflectlite",
+        "unsafe"
+      ]
+    },
+    "internal/abi": {
+      "files": {
+        "asm": [
+          "abi_test.s",
+          "stub.s"
+        ],
+        "go": [
+          "abi.go",
+          "abi_amd64.go",
+          "bounds.go",
+          "compiletype.go",
+          "escape.go",
+          "funcpc.go",
+          "iface.go",
+          "map.go",
+          "rangefuncconsts.go",
+          "runtime.go",
+          "stack.go",
+          "switch.go",
+          "symtab.go",
+          "type.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch",
+        "unsafe"
+      ]
+    },
+    "internal/asan": {
+      "files": {
+        "asm": [],
+        "go": [
+          "doc.go",
+          "noasan.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "internal/bytealg": {
+      "files": {
+        "asm": [
+          "compare_amd64.s",
+          "count_amd64.s",
+          "equal_amd64.s",
+          "index_amd64.s",
+          "indexbyte_amd64.s"
+        ],
+        "go": [
+          "bytealg.go",
+          "compare_native.go",
+          "count_native.go",
+          "equal_generic.go",
+          "equal_native.go",
+          "index_amd64.go",
+          "index_native.go",
+          "indexbyte_native.go",
+          "lastindexbyte_generic.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/cpu",
+        "unsafe"
+      ]
+    },
+    "internal/byteorder": {
+      "files": {
+        "asm": [],
+        "go": [
+          "byteorder.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/chacha8rand": {
+      "files": {
+        "asm": [
+          "chacha8_amd64.s"
+        ],
+        "go": [
+          "chacha8.go",
+          "chacha8_generic.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/byteorder",
+        "internal/cpu",
+        "internal/goarch",
+        "unsafe"
+      ]
+    },
+    "internal/coverage/rtcov": {
+      "files": {
+        "asm": [],
+        "go": [
+          "rtcov.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "internal/cpu": {
+      "files": {
+        "asm": [
+          "cpu.s",
+          "cpu_x86.s"
+        ],
+        "go": [
+          "cpu.go",
+          "cpu_x86.go",
+          "cpu_x86_other.go",
+          "datacache_x86.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "internal/goarch": {
+      "files": {
+        "asm": [],
+        "go": [
+          "goarch.go",
+          "goarch_amd64.go",
+          "zgoarch_amd64.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/godebugs": {
+      "files": {
+        "asm": [],
+        "go": [
+          "table.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/goexperiment": {
+      "files": {
+        "asm": [],
+        "go": [
+          "exp_arenas_off.go",
+          "exp_boringcrypto_off.go",
+          "exp_cgocheck2_off.go",
+          "exp_dwarf5_on.go",
+          "exp_fieldtrack_off.go",
+          "exp_greenteagc_on.go",
+          "exp_heapminimum512kib_off.go",
+          "exp_jsonv2_on.go",
+          "exp_loopvar_off.go",
+          "exp_mapsplitgroup_off.go",
+          "exp_newinliner_off.go",
+          "exp_preemptibleloops_off.go",
+          "exp_randomizedheapbase64_on.go",
+          "exp_regabiargs_on.go",
+          "exp_regabiwrappers_on.go",
+          "exp_runtimefreegc_off.go",
+          "exp_runtimesecret_off.go",
+          "exp_simd_off.go",
+          "exp_sizespecializedmalloc_on.go",
+          "exp_staticlockranking_off.go",
+          "flags.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/goos": {
+      "files": {
+        "asm": [],
+        "go": [
+          "goos.go",
+          "unix.go",
+          "zgoos_linux.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/msan": {
+      "files": {
+        "asm": [],
+        "go": [
+          "doc.go",
+          "nomsan.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "internal/profilerecord": {
+      "files": {
+        "asm": [],
+        "go": [
+          "profilerecord.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/race": {
+      "files": {
+        "asm": [],
+        "go": [
+          "doc.go",
+          "norace.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/abi",
+        "unsafe"
+      ]
+    },
+    "internal/reflectlite": {
+      "files": {
+        "asm": [
+          "asm.s"
+        ],
+        "go": [
+          "swapper.go",
+          "type.go",
+          "value.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/abi",
+        "internal/goarch",
+        "internal/unsafeheader",
+        "runtime",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/atomic": {
+      "files": {
+        "asm": [
+          "atomic_amd64.s"
+        ],
+        "go": [
+          "atomic_amd64.go",
+          "doc.go",
+          "linkname.go",
+          "stubs.go",
+          "types.go",
+          "types_64bit.go",
+          "unaligned.go",
+          "xchg8.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/cgroup": {
+      "files": {
+        "asm": [],
+        "go": [
+          "cgroup.go",
+          "cgroup_linux.go",
+          "line_reader.go",
+          "runtime.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/bytealg",
+        "internal/runtime/syscall/linux",
+        "internal/strconv",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/exithook": {
+      "files": {
+        "asm": [],
+        "go": [
+          "hooks.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/runtime/atomic",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/gc": {
+      "files": {
+        "asm": [],
+        "go": [
+          "malloc.go",
+          "scan.go",
+          "sizeclasses.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch"
+      ]
+    },
+    "internal/runtime/gc/scan": {
+      "files": {
+        "asm": [
+          "expand_amd64.s",
+          "filter_amd64.s",
+          "scan_amd64.s"
+        ],
+        "go": [
+          "expand_amd64.go",
+          "expand_reference.go",
+          "filter.go",
+          "filter_amd64.go",
+          "scan_amd64.go",
+          "scan_go.go",
+          "scan_reference.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/cpu",
+        "internal/goarch",
+        "internal/runtime/gc",
+        "internal/runtime/sys",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/maps": {
+      "files": {
+        "asm": [
+          "memhash_amd64.s",
+          "memhash_nosimd_amd64.s"
+        ],
+        "go": [
+          "group.go",
+          "map.go",
+          "memhash_aes.go",
+          "memhash_aes_asm.go",
+          "memhash_align_check.go",
+          "runtime.go",
+          "runtime_alg.go",
+          "runtime_fast32.go",
+          "runtime_fast64.go",
+          "runtime_faststr.go",
+          "runtime_hash64.go",
+          "table.go",
+          "table_debug.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/abi",
+        "internal/asan",
+        "internal/byteorder",
+        "internal/cpu",
+        "internal/goarch",
+        "internal/goexperiment",
+        "internal/msan",
+        "internal/race",
+        "internal/runtime/math",
+        "internal/runtime/sys",
+        "math/bits",
+        "unsafe"
+      ]
+    },
+    "internal/runtime/math": {
+      "files": {
+        "asm": [],
+        "go": [
+          "math.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch"
+      ]
+    },
+    "internal/runtime/pprof/label": {
+      "files": {
+        "asm": [],
+        "go": [
+          "labelset.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/runtime/sys": {
+      "files": {
+        "asm": [
+          "empty.s"
+        ],
+        "go": [
+          "consts.go",
+          "consts_norace.go",
+          "intrinsics.go",
+          "nih.go",
+          "no_dit.go",
+          "sys.go",
+          "zversion.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch",
+        "internal/goos"
+      ]
+    },
+    "internal/runtime/syscall/linux": {
+      "files": {
+        "asm": [
+          "asm_linux_amd64.s"
+        ],
+        "go": [
+          "defs_linux.go",
+          "defs_linux_amd64.go",
+          "syscall_linux.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/goarch",
+        "unsafe"
+      ]
+    },
+    "internal/strconv": {
+      "files": {
+        "asm": [],
+        "go": [
+          "atob.go",
+          "atoc.go",
+          "atof.go",
+          "atoi.go",
+          "ctoa.go",
+          "decimal.go",
+          "deps.go",
+          "ftoa.go",
+          "itoa.go",
+          "pow10tab.go",
+          "uscale.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "math/bits",
+        "unsafe"
+      ]
+    },
+    "internal/stringslite": {
+      "files": {
+        "asm": [],
+        "go": [
+          "strings.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/bytealg",
+        "unsafe"
+      ]
+    },
+    "internal/sync": {
+      "files": {
+        "asm": [],
+        "go": [
+          "hashtriemap.go",
+          "mutex.go",
+          "runtime.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/abi",
+        "internal/goarch",
+        "internal/race",
+        "sync/atomic",
+        "unsafe"
+      ]
+    },
+    "internal/synctest": {
+      "files": {
+        "asm": [],
+        "go": [
+          "synctest.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/abi",
+        "unsafe"
+      ]
+    },
+    "internal/trace/tracev2": {
+      "files": {
+        "asm": [],
+        "go": [
+          "doc.go",
+          "events.go",
+          "spec.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "internal/unsafeheader": {
+      "files": {
+        "asm": [],
+        "go": [
+          "unsafeheader.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "io": {
+      "files": {
+        "asm": [],
+        "go": [
+          "io.go",
+          "multi.go",
+          "pipe.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "errors",
+        "sync"
+      ]
+    },
+    "iter": {
+      "files": {
+        "asm": [],
+        "go": [
+          "iter.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/race",
+        "runtime",
+        "unsafe"
+      ]
+    },
+    "math/bits": {
+      "files": {
+        "asm": [],
+        "go": [
+          "bits.go",
+          "bits_errors.go",
+          "bits_tables.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "regexp": {
+      "files": {
+        "asm": [],
+        "go": [
+          "backtrack.go",
+          "exec.go",
+          "onepass.go",
+          "regexp.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "bytes",
+        "io",
+        "iter",
+        "regexp/syntax",
+        "slices",
+        "strconv",
+        "strings",
+        "sync",
+        "unicode",
+        "unicode/utf8"
+      ]
+    },
+    "regexp/syntax": {
+      "files": {
+        "asm": [],
+        "go": [
+          "compile.go",
+          "doc.go",
+          "op_string.go",
+          "parse.go",
+          "perl_groups.go",
+          "prog.go",
+          "regexp.go",
+          "simplify.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "slices",
+        "sort",
+        "strconv",
+        "strings",
+        "sync",
+        "unicode",
+        "unicode/utf8"
+      ]
+    },
+    "runtime": {
+      "files": {
+        "asm": [
+          "asm.s",
+          "asm_amd64.s",
+          "ints.s",
+          "memclr_amd64.s",
+          "memmove_amd64.s",
+          "preempt_amd64.s",
+          "rt0_linux_amd64.s",
+          "secret_amd64.s",
+          "sys_linux_amd64.s",
+          "test_amd64.s",
+          "time_linux_amd64.s"
+        ],
+        "go": [
+          "alg.go",
+          "arena.go",
+          "asan0.go",
+          "atomic_pointer.go",
+          "badlinkname.go",
+          "badlinkname_linux.go",
+          "cgo.go",
+          "cgo_mmap.go",
+          "cgo_sigaction.go",
+          "cgocall.go",
+          "cgocallback.go",
+          "cgocheck.go",
+          "cgroup_linux.go",
+          "chan.go",
+          "checkptr.go",
+          "compiler.go",
+          "complex.go",
+          "coro.go",
+          "covercounter.go",
+          "covermeta.go",
+          "cpuflags.go",
+          "cpuflags_amd64.go",
+          "cpuprof.go",
+          "cputicks.go",
+          "create_file_unix.go",
+          "debug.go",
+          "debugcall.go",
+          "debuglog.go",
+          "debuglog_off.go",
+          "defs_linux_amd64.go",
+          "dit.go",
+          "env_posix.go",
+          "error.go",
+          "extern.go",
+          "fastlog2.go",
+          "fastlog2table.go",
+          "fds_unix.go",
+          "fipsbypass.go",
+          "float.go",
+          "heapdump.go",
+          "hexdump.go",
+          "histogram.go",
+          "iface.go",
+          "lfstack.go",
+          "libinit.go",
+          "linkname.go",
+          "linkname_shim.go",
+          "linkname_unix.go",
+          "list.go",
+          "list_manual.go",
+          "lock_futex.go",
+          "lock_spinbit.go",
+          "lockrank.go",
+          "lockrank_off.go",
+          "malloc.go",
+          "malloc_generated.go",
+          "malloc_stubs.go",
+          "malloc_tables_generated.go",
+          "map.go",
+          "map_fast32.go",
+          "map_fast64.go",
+          "map_faststr.go",
+          "mbarrier.go",
+          "mbitmap.go",
+          "mcache.go",
+          "mcentral.go",
+          "mcheckmark.go",
+          "mcleanup.go",
+          "mem.go",
+          "mem_linux.go",
+          "mem_nonsbrk.go",
+          "metrics.go",
+          "mfinal.go",
+          "mfixalloc.go",
+          "mgc.go",
+          "mgclimit.go",
+          "mgcmark.go",
+          "mgcmark_greenteagc.go",
+          "mgcpacer.go",
+          "mgcscavenge.go",
+          "mgcstack.go",
+          "mgcsweep.go",
+          "mgcwork.go",
+          "mheap.go",
+          "minmax.go",
+          "mpagealloc.go",
+          "mpagealloc_64bit.go",
+          "mpagecache.go",
+          "mpallocbits.go",
+          "mprof.go",
+          "mranges.go",
+          "msan0.go",
+          "msize.go",
+          "mspanset.go",
+          "mstats.go",
+          "mwbbuf.go",
+          "nbpipe_pipe2.go",
+          "netpoll.go",
+          "netpoll_epoll.go",
+          "nonwindows_stub.go",
+          "note_other.go",
+          "os_linux.go",
+          "os_linux64.go",
+          "os_linux_generic.go",
+          "os_linux_noauxv.go",
+          "os_nonopenbsd.go",
+          "os_unix.go",
+          "panic.go",
+          "pinner.go",
+          "plugin.go",
+          "preempt.go",
+          "preempt_amd64.go",
+          "preempt_nonwindows.go",
+          "preempt_xreg.go",
+          "print.go",
+          "proc.go",
+          "profbuf.go",
+          "proflabel.go",
+          "race0.go",
+          "rand.go",
+          "rdebug.go",
+          "retry.go",
+          "runtime.go",
+          "runtime1.go",
+          "runtime2.go",
+          "runtime_boring.go",
+          "runtime_clearenv.go",
+          "rwmutex.go",
+          "secret.go",
+          "secret_asm.go",
+          "security_linux.go",
+          "security_unix.go",
+          "select.go",
+          "sema.go",
+          "set_vma_name_linux.go",
+          "signal_amd64.go",
+          "signal_linux_amd64.go",
+          "signal_unix.go",
+          "sigqueue.go",
+          "sigqueue_note.go",
+          "sigtab_linux_generic.go",
+          "slice.go",
+          "softfloat64.go",
+          "stack.go",
+          "stkframe.go",
+          "string.go",
+          "stubs.go",
+          "stubs2.go",
+          "stubs3.go",
+          "stubs_amd64.go",
+          "stubs_linux.go",
+          "stubs_nonwasm.go",
+          "symtab.go",
+          "symtabinl.go",
+          "synctest.go",
+          "sys_nonppc64x.go",
+          "sys_x86.go",
+          "tagptr.go",
+          "tagptr_64bit.go",
+          "test_amd64.go",
+          "time.go",
+          "time_nofake.go",
+          "timeasm.go",
+          "tls_stub.go",
+          "trace.go",
+          "traceallocfree.go",
+          "traceback.go",
+          "tracebuf.go",
+          "tracecpu.go",
+          "traceevent.go",
+          "tracemap.go",
+          "traceregion.go",
+          "traceruntime.go",
+          "tracestack.go",
+          "tracestatus.go",
+          "tracestring.go",
+          "tracetime.go",
+          "tracetype.go",
+          "type.go",
+          "unsafe.go",
+          "utf8.go",
+          "valgrind0.go",
+          "vdso_elf64.go",
+          "vdso_linux.go",
+          "vdso_linux_amd64.go",
+          "vgetrandom_linux.go",
+          "write_err.go"
+        ],
+        "header": [
+          "asm_amd64.h",
+          "asm_ppc64x.h",
+          "funcdata.h",
+          "go_tls.h",
+          "textflag.h"
+        ]
+      },
+      "imports": [
+        "internal/abi",
+        "internal/bytealg",
+        "internal/byteorder",
+        "internal/chacha8rand",
+        "internal/coverage/rtcov",
+        "internal/cpu",
+        "internal/goarch",
+        "internal/godebugs",
+        "internal/goexperiment",
+        "internal/goos",
+        "internal/profilerecord",
+        "internal/runtime/atomic",
+        "internal/runtime/cgroup",
+        "internal/runtime/exithook",
+        "internal/runtime/gc",
+        "internal/runtime/gc/scan",
+        "internal/runtime/maps",
+        "internal/runtime/math",
+        "internal/runtime/pprof/label",
+        "internal/runtime/sys",
+        "internal/runtime/syscall/linux",
+        "internal/strconv",
+        "internal/stringslite",
+        "internal/trace/tracev2",
+        "math/bits",
+        "unsafe"
+      ]
+    },
+    "slices": {
+      "files": {
+        "asm": [],
+        "go": [
+          "iter.go",
+          "slices.go",
+          "sort.go",
+          "zsortanyfunc.go",
+          "zsortordered.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "cmp",
+        "iter",
+        "math/bits",
+        "unsafe"
+      ]
+    },
+    "sort": {
+      "files": {
+        "asm": [],
+        "go": [
+          "search.go",
+          "slice.go",
+          "sort.go",
+          "zsortfunc.go",
+          "zsortinterface.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/reflectlite",
+        "math/bits",
+        "slices"
+      ]
+    },
+    "strconv": {
+      "files": {
+        "asm": [],
+        "go": [
+          "bytealg.go",
+          "doc.go",
+          "isprint.go",
+          "number.go",
+          "quote.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "errors",
+        "internal/bytealg",
+        "internal/strconv",
+        "internal/stringslite",
+        "unicode/utf8"
+      ]
+    },
+    "strings": {
+      "files": {
+        "asm": [],
+        "go": [
+          "builder.go",
+          "clone.go",
+          "compare.go",
+          "iter.go",
+          "reader.go",
+          "replace.go",
+          "search.go",
+          "strings.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "errors",
+        "internal/abi",
+        "internal/bytealg",
+        "internal/stringslite",
+        "io",
+        "iter",
+        "math/bits",
+        "sync",
+        "unicode",
+        "unicode/utf8",
+        "unsafe"
+      ]
+    },
+    "sync": {
+      "files": {
+        "asm": [],
+        "go": [
+          "cond.go",
+          "map.go",
+          "mutex.go",
+          "once.go",
+          "oncefunc.go",
+          "pool.go",
+          "poolqueue.go",
+          "runtime.go",
+          "runtime2.go",
+          "rwmutex.go",
+          "waitgroup.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "internal/race",
+        "internal/runtime/atomic",
+        "internal/sync",
+        "internal/synctest",
+        "runtime",
+        "sync/atomic",
+        "unsafe"
+      ]
+    },
+    "sync/atomic": {
+      "files": {
+        "asm": [
+          "asm.s"
+        ],
+        "go": [
+          "doc.go",
+          "doc_64.go",
+          "type.go",
+          "value.go"
+        ],
+        "header": []
+      },
+      "imports": [
+        "unsafe"
+      ]
+    },
+    "unicode": {
+      "files": {
+        "asm": [],
+        "go": [
+          "casetables.go",
+          "digit.go",
+          "graphic.go",
+          "letter.go",
+          "tables.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "unicode/utf8": {
+      "files": {
+        "asm": [],
+        "go": [
+          "utf8.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    },
+    "unsafe": {
+      "files": {
+        "asm": [],
+        "go": [
+          "unsafe.go"
+        ],
+        "header": []
+      },
+      "imports": []
+    }
+  },
+  "release": "go1.27.3",
+  "roots": [
+    "bytes",
+    "regexp"
+  ],
+  "schema": 1,
+  "selector_sha256": "5f5eb6d0b2fb6aa0bb5d5f8c5f1c944e0de955c925f0111af92a9d8f79680b5b",
+  "target": {
+    "build_tags": [],
+    "cgo": false,
+    "goamd64": "v1",
+    "goarch": "amd64",
+    "goexperiment": "",
+    "goos": "linux",
+    "triple": "x86_64-unknown-linux-gnu"
+  }
+}

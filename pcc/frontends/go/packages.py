@@ -66,7 +66,16 @@ def parse_package(units, *, require_main):
     return program
 
 
-def compile_packages(packages, *, main_package, target_triple):
+def compile_packages(packages, *, main_package, target_triple, standard_library=None):
+    standard_used=set()
+    if standard_library is not None:
+        from .source_plan import GoSourcePlanError, LockedGoSourcePlan, runtime_owner
+        if type(standard_library) is not LockedGoSourcePlan:
+            raise GoSourcePlanError("expected a checked original Go source plan")
+        standard_library.check_target(target_triple)
+        conflicts=set(packages).intersection(standard_library.packages)
+        if conflicts:
+            raise GoSourcePlanError("project input replaces locked standard package: "+min(conflicts))
     if main_package not in packages:
         raise ValueError("Go main package source is missing")
     analyzed, active, order = {}, set(), []
@@ -77,16 +86,34 @@ def compile_packages(packages, *, main_package, target_triple):
             raise GoDiagnostic(import_token, "import cycle involving " + path)
         if path in analyzed:
             return analyzed[path]
+        locked = standard_library is not None and path in standard_library.packages
+        if locked:
+            standard_used.add(path)
         owned = path not in packages and path in OWNED_PACKAGES
-        if path not in packages and not owned:
+        if owned:
+            # Never substitute the host runtime, an assembly implementation or
+            # a package's same-named original Go file for PCC's source owner.
+            units=OWNED_PACKAGES[path]
+        elif locked:
+            if runtime_owner(path):
+                raise UnsupportedGo(import_token, "go.unsupported.owned-runtime-surface",
+                                    "original source is supplied but PCC runtime/intrinsic owner is unavailable: "+path)
+            units=standard_library.units(path)
+        elif path in packages:
+            units=packages[path]
+        else:
             raise GoDiagnostic(import_token, "import source unavailable: " + path + "; provide original package sources")
-        program = parse_package(OWNED_PACKAGES[path] if owned else packages[path], require_main=path == main_package)
+        program = parse_package(units, require_main=path == main_package)
+        if locked and not owned:
+            standard_library.check_imports(path, (item.path for item in program.imports))
         if path != main_package and program.token.text == "main":
             raise GoDiagnostic(program.token, "cannot import a main package")
         active.add(path)
         imports = {}
         for imported in program.imports:
             if imported.path == "unsafe":
+                if standard_library is not None and "unsafe" in standard_library.packages:
+                    standard_used.add("unsafe")
                 # A compiler-owned pseudo-package, never supplied source.
                 if imported.alias != "_":
                     raise UnsupportedGo(imported.token, "go.unsupported.unsafe-operations",
@@ -135,4 +162,6 @@ def compile_packages(packages, *, main_package, target_triple):
     linked = Program(main.token, [function for program in order for function in program.functions], [],
                      variables=[variable for program in order for variable in program.variables])
     linked.functions = [function for function in linked.functions if not function.type_parameters]
+    if standard_library is not None:
+        standard_library.check_completion(standard_used, main_package)
     return Lowerer(linked, target_triple, main.token.filename).lower()
