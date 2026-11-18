@@ -248,17 +248,23 @@ class AArch64EmissionFragments:
         complete module event sequence, never an instruction-only projection.
         """
         self._require_open()
-        self.start_cursor(fragment)
-        result = self.new_fragment()
-        empty_ids = CompilerIntArena()
+        source = CompilerIntArena()
         try:
-            pending_id = self.next_record_id()
-            while pending_id >= 0:
+            kept = CompilerIntArena()
+        except Exception:
+            source.close()
+            raise
+        try:
+            self.spans.copy_ids(fragment, source)
+            result = self.new_fragment()
+            count = len(source)
+            index = 0
+            while index < count:
+                pending_id = source.get_unchecked(index)
                 if pending_id >= len(self.records) // 4:
                     raise EncodeError("emission fragment record ID is invalid")
                 pending: CompilerInt4 = self.records.get4_unchecked(pending_id)
-                next_id = self.next_record_id()
-                empty_ids.clear()
+                next_index = index + 1
                 candidate = (
                     pending.first == 0x14000000
                     and pending.second == EMITTED_INSTRUCTION_SCALAR
@@ -268,7 +274,8 @@ class AArch64EmissionFragments:
                 if candidate:
                     if pending.fourth < 0 or pending.fourth >= len(self.symbol_names):
                         raise EncodeError("emission fragment branch symbol ID is invalid")
-                    while next_id >= 0:
+                    while next_index < count:
+                        next_id = source.get_unchecked(next_index)
                         if next_id >= len(self.records) // 4:
                             raise EncodeError("emission fragment record ID is invalid")
                         following: CompilerInt4 = self.records.get4_unchecked(next_id)
@@ -277,10 +284,9 @@ class AArch64EmissionFragments:
                             or following.first != 0 or following.third != 0 or following.fourth != -1
                         ):
                             break
-                        empty_ids.append(next_id)
-                        next_id = self.next_record_id()
-                    if next_id >= 0:
-                        following: CompilerInt4 = self.records.get4_unchecked(next_id)
+                        next_index += 1
+                    if next_index < count:
+                        following: CompilerInt4 = self.records.get4_unchecked(source.get_unchecked(next_index))
                         drop = (
                             following.second == EMISSION_RECORD_LABEL
                             and following.first == pending.fourth
@@ -288,15 +294,16 @@ class AArch64EmissionFragments:
                             and self.symbol_names[pending.fourth].startswith("L_")
                         )
                 if not drop:
-                    self.spans.append(result, pending_id)
-                index = 0
-                while index < len(empty_ids):
-                    self.spans.append(result, empty_ids.get_unchecked(index))
-                    index += 1
-                pending_id = next_id
+                    kept.append(pending_id)
+                # Every skipped empty event is retained in order.
+                if next_index > index + 1:
+                    kept.extend_from(source, index + 1, next_index - index - 1)
+                index = next_index
+            self.spans.append_ids(result, kept)
             return result
         finally:
-            empty_ids.close()
+            kept.close()
+            source.close()
 
     def append_nop(self, fragment: CompilerInt2) -> None:
         if self.semantics is None:
@@ -381,6 +388,11 @@ class AArch64EmissionFragments:
     def start_cursor(self, fragment: CompilerInt2) -> None:
         self._require_open()
         self.spans.start_cursor(fragment, self.cursor)
+
+    def copy_record_ids(self, fragment: CompilerInt2, out: CompilerIntArena) -> None:
+        """Append the fragment's record IDs to ``out`` without a shared cursor."""
+        self._require_open()
+        self.spans.copy_ids(fragment, out)
 
     def next_record_id(self) -> int:
         self._require_open()

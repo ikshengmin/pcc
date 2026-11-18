@@ -342,6 +342,7 @@ def test_each_noop_pass_keeps_fresh_handle_without_node_copies(mode, count, shap
         try:
             before = _ids(owner, source)
             nodes = len(owner.spans.nodes)
+            runs = len(owner.spans.runs)
             headers = len(owner.spans.spans)
             records = len(owner.records)
             result = run(owner, semantics, source, mode)
@@ -349,9 +350,10 @@ def test_each_noop_pass_keeps_fresh_handle_without_node_copies(mode, count, shap
             assert _ids(owner, source) == _ids(owner, result) == before
             assert len(owner.records) == records
             assert len(owner.spans.spans) == headers + 4  # staging root and result root
-            assert len(owner.spans.nodes) - nodes == (
-                0 if snapshot or not before else 6 * len(before) - 3
-            )
+            # A rebuild is one run node over a copy of every record ID; a
+            # no-op snapshot copies neither.
+            assert len(owner.spans.nodes) - nodes == (0 if snapshot or not before else 3)
+            assert len(owner.spans.runs) - runs == (0 if snapshot else len(before))
             assert owner.spans.projection_count == 0
             semantics.require_complete(owner.records, len(owner.symbol_names))
             outcomes.append(before)
@@ -439,6 +441,7 @@ def test_fourteen_noop_passes_do_not_retain_fourteen_record_trees(count):
         try:
             before = _ids(owner, source)
             nodes = len(owner.spans.nodes)
+            runs = len(owner.spans.runs)
             headers = len(owner.spans.spans)
             if snapshot:
                 result = typed.run_aarch64_typed_peepholes(owner, semantics, source)
@@ -448,7 +451,8 @@ def test_fourteen_noop_passes_do_not_retain_fourteen_record_trees(count):
                 run = _legacy_run()
                 for mode in range(1, 15):
                     result = run(owner, semantics, result, mode)
-            assert len(owner.spans.nodes) - nodes == (0 if snapshot else 14 * (6 * len(before) - 3))
+            assert len(owner.spans.nodes) - nodes == (0 if snapshot or not before else 14 * 3)
+            assert len(owner.spans.runs) - runs == (0 if snapshot else 14 * len(before))
             assert len(owner.spans.spans) == headers + 56
             assert _ids(owner, result) == _ids(owner, source) == before
             assert owner.spans.projection_count == 0
@@ -470,11 +474,14 @@ def test_corrupt_root_count_keeps_old_normalizing_rebuild(mode, stored_length):
             assert stored_length != len(before)
             owner.spans.spans.set2_unchecked(source.first * 2, root.first, stored_length)
             nodes = len(owner.spans.nodes)
+            runs = len(owner.spans.runs)
             result = run(owner, semantics, source, mode)
             assert _ids(owner, result) == before
             assert owner.spans.length(result) == len(before)
             assert owner.spans.length(source) == stored_length
-            assert len(owner.spans.nodes) - nodes == 6 * len(before) - 3
+            # The normalizing rebuild still copies every record ID, as one run.
+            assert len(owner.spans.nodes) - nodes == 3
+            assert len(owner.spans.runs) - runs == len(before)
             outcomes.append(_ids(owner, result))
         finally:
             owner.close()

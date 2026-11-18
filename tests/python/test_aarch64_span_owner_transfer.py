@@ -93,12 +93,13 @@ def test_failures_preserve_owner_and_primary(monkeypatch, fault):
         f, s, span = sink.fragments, sink.fragments.semantics, sink.module_span
         old = f.spans; before = ids(old, span); new = []; scratch = []
         primary = MemoryError('transfer primary'); secondary = RuntimeError('cleanup secondary')
-        append = CompilerRecordSpanArena.append; close = CompilerRecordSpanArena.close; passclose = p._Pass.close
-        def failappend(owner, handle, rid):
+        append = CompilerRecordSpanArena.append_ids; close = CompilerRecordSpanArena.close; passclose = p._Pass.close
+        # The new owner's root is built from the output IDs as one run.
+        def failappend(owner, handle, output):
             if owner is not old:
                 if owner not in new: new.append(owner)
                 if fault != 'scratch_close': raise primary
-            return append(owner, handle, rid)
+            return append(owner, handle, output)
         def failclose(pass_):
             scratch.extend((pass_.ids, pass_.output)); passclose(pass_)
             if fault == 'scratch_close': raise primary
@@ -106,7 +107,7 @@ def test_failures_preserve_owner_and_primary(monkeypatch, fault):
             close(owner)
             if owner is not old and fault == 'double_cleanup': raise secondary
         with monkeypatch.context() as patch:
-            patch.setattr(CompilerRecordSpanArena, 'append', failappend)
+            patch.setattr(CompilerRecordSpanArena, 'append_ids', failappend)
             patch.setattr(CompilerRecordSpanArena, 'close', cleanup)
             patch.setattr(p._Pass, 'close', failclose)
             with pytest.raises(MemoryError) as caught: p._run_owned_stack(f, s, span, 1, cap)

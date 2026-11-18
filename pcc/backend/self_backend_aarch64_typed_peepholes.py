@@ -116,16 +116,19 @@ class _Pass:
             self.ids.close()
             raise
         try:
-            fragments.start_cursor(span)
-            record_id = fragments.next_record_id()
-            while record_id >= 0:
-                if record_id >= len(fragments.records) // 4:
+            # One bulk span copy; every record is still validated per pass.
+            fragments.copy_record_ids(span, self.ids)
+            records = fragments.records
+            record_count = len(records) // 4
+            index = 0
+            while index < len(self.ids):
+                record_id = self.ids.get_unchecked(index)
+                if record_id >= record_count:
                     raise EncodeError("AArch64 fragment record ID is invalid")
-                encoded = fragments.records.get4_unchecked(record_id)
+                encoded = records.get4_unchecked(record_id)
                 if encoded.second >= 0:
                     semantics.require_header(record_id)
-                self.ids.append(record_id)
-                record_id = fragments.next_record_id()
+                index += 1
             self.result = fragments.new_fragment()
         except Exception:
             self.output.close()
@@ -385,8 +388,7 @@ class _Pass:
         # New records were transactionally staged on result; the returned root
         # is rebuilt from selected IDs so staging cannot duplicate instructions.
         result = self.fragments.new_fragment()
-        for i in range(len(self.output)):
-            self.fragments.spans.append(result, self.output.get_unchecked(i))
+        self.fragments.spans.append_ids(result, self.output)
         return result
 
 
@@ -880,8 +882,7 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
             pending = CompilerRecordSpanArena()
             pending.generation = old_owner.generation + 1
             result = pending.new_span()
-            for output_index in range(len(p.output)):
-                pending.append(result, p.output.get_unchecked(output_index))
+            pending.append_ids(result, p.output)
         finally:
             p.close()
     except Exception:

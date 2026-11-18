@@ -13,7 +13,7 @@ from .self_backend_aarch64_fragments import (
 from .self_backend_aarch64_semantics import (
     FORM_CANONICAL, OPCODE_NAMES, append_semantic_instruction, semantic_opcode_id,
 )
-from .self_backend_value_arena import CompilerInt4
+from .self_backend_value_arena import CompilerInt4, CompilerIntArena
 
 
 class TypedPassContext:
@@ -110,24 +110,26 @@ class TypedPassContext:
         )
 
     def validate_span(self, span):
-        self.fragments.start_cursor(span)
-        record_id = self.fragments.next_record_id()
-        while record_id >= 0:
-            self.record(record_id)
-            record_id = self.fragments.next_record_id()
+        self.read_span(span)
 
     def read_span(self, span):
-        self.fragments.start_cursor(span)
-        records = []
-        record_id = self.fragments.next_record_id()
-        while record_id >= 0:
-            self.record(record_id)
-            records.append(record_id)
-            record_id = self.fragments.next_record_id()
-        return records
+        # One bulk span copy; every record is still validated by record().
+        ids = CompilerIntArena()
+        try:
+            self.fragments.copy_record_ids(span, ids)
+            records = []
+            index = 0
+            while index < len(ids):
+                record_id = ids.get_unchecked(index)
+                self.record(record_id)
+                records.append(record_id)
+                index += 1
+            return records
+        finally:
+            ids.close()
 
     def write_span(self, records):
+        # The captured output becomes one run node, never a node per record.
         span = self.fragments.new_fragment()
-        for record_id in records:
-            self.fragments.spans.append(span, record_id)
+        self.fragments.spans.append_id_list(span, records)
         return span
