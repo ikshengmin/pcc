@@ -1,0 +1,48 @@
+// PCC's bounded C++17 <complex> surface, N4659 [complex.syn],
+// [complex.value.ops], [cmplx.over]. The class is deliberately incomplete:
+// pointers and references retain their true specialization identity, but a
+// program requiring storage, constructors or complex arithmetic is rejected.
+// norm of a real scalar is its squared magnitude. Integral arguments first
+// convert to double; multiplying in the integer type would be wrong.
+#ifndef _PCC_CXX_COMPLEX
+#define _PCC_CXX_COMPLEX
+namespace std {
+template<class T> class complex;
+// A conversion to bool (e.g. from a pointer) does not make the source an
+// arithmetic type. Exact scalar overloads below win against this template;
+// conversion-only matches must not silently produce 0 or 1.
+template<class _PccNonArithmetic> void norm(_PccNonArithmetic) = delete;
+// Leave a true declaration instead of emitting multiple strong definitions
+// on an owned target that cannot coalesce externally linked inline functions.
+#ifdef __PCC_CXX_NO_EXTERNAL_ODR
+#define __PCC_REAL_NORM_FP(type) type norm(type);
+#define __PCC_REAL_NORM(type) double norm(type);
+#else
+#define __PCC_REAL_NORM_FP(type) inline type norm(type x) { return x*x; }
+#define __PCC_REAL_NORM(type) inline double norm(type x) { double v = static_cast<double>(x); return v*v; }
+#endif
+__PCC_REAL_NORM_FP(float)
+__PCC_REAL_NORM_FP(double)
+#undef __PCC_REAL_NORM_FP
+// No long-double implementation is claimed, including on extended-ABI targets.
+long double norm(long double);
+__PCC_REAL_NORM(bool)
+__PCC_REAL_NORM(char)
+__PCC_REAL_NORM(signed char)
+__PCC_REAL_NORM(unsigned char)
+__PCC_REAL_NORM(wchar_t)
+#if defined(__cpp_unicode_characters) && __cpp_unicode_characters >= 200704L
+__PCC_REAL_NORM(char16_t)
+__PCC_REAL_NORM(char32_t)
+#endif
+__PCC_REAL_NORM(short)
+__PCC_REAL_NORM(unsigned short)
+__PCC_REAL_NORM(int)
+__PCC_REAL_NORM(unsigned int)
+__PCC_REAL_NORM(long)
+__PCC_REAL_NORM(unsigned long)
+__PCC_REAL_NORM(long long)
+__PCC_REAL_NORM(unsigned long long)
+#undef __PCC_REAL_NORM
+}
+#endif

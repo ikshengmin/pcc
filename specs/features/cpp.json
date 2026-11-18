@@ -410,6 +410,21 @@
       "id": "depr.c.headers",
       "title": "D.5 C standard library headers",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/depr.c.headers"
+    },
+    {
+      "id": "cmplx.over",
+      "title": "29.5.9 Additional overloads",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/cmplx.over"
+    },
+    {
+      "id": "depr.ccomplex.syn",
+      "title": "D.4.1 Header <ccomplex> synopsis",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/depr.ccomplex.syn"
+    },
+    {
+      "id": "dcl.fct.def.delete",
+      "title": "11.4.3 Deleted definitions",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.delete"
     }
   ],
   "features": [
@@ -4197,6 +4212,23 @@
       "status": "missing",
       "tests": [
         "tests/cpp/test_cpp_cmath_header.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "cpp.standard-library.complex",
+      "title": "C++17 complex compatibility headers and real-scalar norm",
+      "chapter_ids": [
+        "cmplx.over",
+        "depr.ccomplex.syn",
+        "depr.c.headers",
+        "dcl.fct.def.delete"
+      ],
+      "scope": "The owned header chain supplies the genuine incomplete std::complex class template and its scalar norm overload set. On targets with the shared external-ODR function definition contract, float and double compute their own squared magnitude and the supported integer types convert to double before multiplication. Program-defined inline functions in named namespaces use the same weak ODR owner; namespace variables, local static storage, separately qualified inline definitions and targets without shared ODR remain gated. The C++ parser does not implement char16_t or char32_t; on a compiler that advertises Unicode character types the header also provides their exact overloads. An unqualified namespace function-template deleted definition is retained as an overload, never a linkable body; selection of it diagnoses even in unevaluated calls. This blocks conversion-only matches to arithmetic overloads. Object storage/construction, complex arithmetic, long-double norm and full C++17/NumPy/native-pcc1 acceptance remain unqualified.",
+      "status": "missing",
+      "tests": [
+        "tests/cpp/test_cpp_complex_header.py"
       ],
       "diagnostics": [],
       "evidence": []

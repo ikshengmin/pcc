@@ -32,6 +32,7 @@ class Symbol:
         self.noreturn = False
         self.overloads = []
         self.template_parameters = ()
+        self.deleted_template = False
         self.template_origin = None
         self.template_arguments = ()
         self.pattern = None
@@ -522,6 +523,9 @@ class Scope:
                 if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
+                if symbol.deleted_template:
+                    raise CppDiagnostic("cpp.deleted-definition-not-first",
+                                        "a deleted definition must be the first declaration", symbol.coord)
                 if definition and candidate.defined:
                     raise CppDiagnostic("cpp.redefinition",
                                         f"redefinition of '{symbol.name}'", symbol.coord)
@@ -750,4 +754,10 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                                 "function-template partial ordering is not implemented", coord)
         raise CppDiagnostic("cpp.ambiguous-overload",
                             f"ambiguous overload for '{group.name}'", coord)
-    return best[0]
+    selected = best[0]
+    if selected.template_origin is not None and selected.template_origin.deleted_template:
+        # [dcl.fct.def.delete]/2: even in unevaluated expressions, but
+        # only *after* normal overload resolution has selected the function.
+        raise CppDiagnostic("cpp.use-of-deleted-function",
+                            f"use of deleted function '{selected.name}'", coord)
+    return selected

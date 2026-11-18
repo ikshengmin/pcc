@@ -13,6 +13,8 @@ def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
                    target_triple=None, source_name=None):
     import os
 
+    from pcc.backend.definition_linkage import supports_external_odr_function_definitions
+    from pcc.frontends.c.c_abi_layout import c_target_triple
     from pcc.driver.paths import resolve_pcc_dir_from_environment
     from pcc.frontends.c.preprocessor import preprocess
 
@@ -25,6 +27,10 @@ def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
                            "frontends", "cpp", "include")
     arguments = ["-nostdinc", "-isystem", headers, "-U__STDC__",
                  "-U__STDC_VERSION__", "-D__cplusplus=201703L"]
+    # Keep declarations available to targets whose own object/linker has no
+    # weak-ODR definitions. Do not use host architecture as a capability.
+    if not supports_external_odr_function_definitions(c_target_triple(target_triple)):
+        arguments.append("-D__PCC_CXX_NO_EXTERNAL_ODR=1")
     values = list(cpp_args or ())
     index = 0
     while index < len(values):

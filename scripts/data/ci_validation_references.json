@@ -3123,6 +3123,14 @@
           "Runs the explicitly selected JDK compiler and runtime on the unchanged managed-call sources with separate observers. Native ABI and root restoration are independent PCC-only checks."
         ]
       }
+    },
+    "tests/cpp/test_cpp_complex_header.py": {
+      "test_scalar_complex_originals_match_separate_system_cxx17": {
+        "activity": "external-reference",
+        "reason": [
+          "Compiles the identical pair of source files with the selected C++17 system compiler/headers. The independent PCC object/link test forbids external processes during compilation."
+        ]
+      }
     }
   },
   "method": "AST/source-reviewed direct reference calls and helper edges; no test bodies or imports executed. Function registry is classification only, never a prerequisite waiver or certification token. Unknown functions remain selected in ordinary/integration.",

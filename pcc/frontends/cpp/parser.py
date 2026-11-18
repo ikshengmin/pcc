@@ -229,13 +229,14 @@ class CppParser:
             if self._accept(";"):
                 continue
             value = self._peek().value
-            if value == "inline" and self.cursor.tokens[self.cursor.position + 1].value != "namespace":
+            if (value == "inline" and self.cursor.tokens[self.cursor.position + 1].value != "namespace"
+                    and (not self.scope.namespace_path() or self.scope.internal_linkage)):
                 raise CppDiagnostic("cpp.unsupported.inline-declarations",
                                     "inline object/function ODR emission is not implemented", self._peek().coord)
             if (value == "extern" and
                     self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
                 declarations.extend(self._linkage_specification())
-            elif value == "namespace" or value == "inline":
+            elif value == "namespace" or (value == "inline" and self.cursor.tokens[self.cursor.position + 1].value == "namespace"):
                 declarations.extend(self._namespace())
             elif value in ("class", "struct", "union"):
                 declaration = parse_class(self)
@@ -1004,10 +1005,14 @@ class CppParser:
             self._expect("]")
             noreturn = True
         storage = None
-        inline_specifiers = [] if member_definition is not None else None
+        named_scope = (member_definition is None and self.scope.kind == "namespace"
+                       and bool(self.scope.namespace_path()) and not self.scope.internal_linkage
+                       and not template_parameters and self.language_linkage is None)
+        inline_specifiers = [] if member_definition is not None or named_scope else None
         virtual_specifier = None
         while (self._peek().value in ("extern", "static")
-               or inline_specifiers is not None and self._peek().value in ("inline", "virtual")):
+               or inline_specifiers is not None and self._peek().value == "inline"
+               or member_definition is not None and self._peek().value == "virtual"):
             if self._peek().value == "virtual":
                 from pcc.frontends.cpp.virtual_functions import take_virtual
                 virtual_specifier = take_virtual(self, virtual_specifier)
@@ -1137,6 +1142,11 @@ class CppParser:
             from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
             check_result(result_type, name.coord,
                          allow_class=not template_parameters and ordinary_class_result_context(self))
+        if named_scope and inline_specifiers and (not is_function or member_owner is not None
+                or namespace_owner is not None or storage is not None or self._peek().value != "{"):
+            raise CppDiagnostic("cpp.unsupported.inline-declarations",
+                                "named namespace inline currently requires an unqualified function definition",
+                                name.coord)
         if not is_function:
             if inline_specifiers:
                 code = ("cpp.unsupported.inline-declarations" if storage is not None
@@ -1183,7 +1193,14 @@ class CppParser:
                 and (not function_scope.namespace_path() or self.language_linkage == "C")):
             raise CppDiagnostic("cpp.main-language-linkage",
                                 "main cannot have a language linkage specification", name.coord)
-        definition = self._peek().value == "{"
+        # A deleted namespace function template participates in overload
+        # resolution; it has no executable body or linker definition.
+        # Other forms of '= ...' retain their original context-specific owner.
+        deleted_template = bool(template_parameters and member_owner is None
+                                and namespace_owner is None and declaration_scope is not None
+                                and declaration_scope.kind == "namespace" and self._peek().value == "="
+                                and self.cursor.tokens[self.cursor.position + 1].value == "delete")
+        definition = self._peek().value == "{" or deleted_template
         if inline_specifiers and not definition:
             raise CppDiagnostic("cpp.unsupported.inline-member-declarations",
                                 "explicit inline member declarations without an in-class body need separate ODR tracking", name.coord)
@@ -1235,6 +1252,7 @@ class CppParser:
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.explicit_inline = bool(inline_specifiers)
+        new_symbol.deleted_template = deleted_template
         new_symbol.variadic = bool(variadic)
         new_symbol.nonthrowing = bool(exception_specification)
         new_symbol.noreturn = noreturn
@@ -1285,6 +1303,11 @@ class CppParser:
         from pcc.frontends.cpp.default_arguments import merge
         merge(self, symbol, default_arguments, member_owner.scope if member_owner is not None else registry)
         if template_parameters:
+            if deleted_template:
+                self._expect("=")
+                self._expect("delete")
+                self._expect(";")
+                return None
             if not definition:
                 self._expect(";")
                 return None
@@ -1338,6 +1361,15 @@ class CppParser:
                 this_symbol, collect_body(self), name.coord,
             ))
             return declaration
+        if named_scope and inline_specifiers:
+            from pcc.backend.definition_linkage import supports_external_odr_function_definitions
+            if not supports_external_odr_function_definitions(self.types.target_triple):
+                raise CppDiagnostic("cpp.unsupported.inline-declarations",
+                                    "named namespace inline functions require external-ODR definition linkage", name.coord)
+            # The block-static owner consults the canonical symbol while binding
+            # the body: do not turn one inline static local into one per TU.
+            symbol.explicit_inline = True
+            symbol.definition_linkage = declaration.definition_linkage = "external_odr"
         return self._bind_function_body(symbol, result_type, parameter_scope, parameter_symbols,
                                         declaration, this_symbol, member_owner, name.coord)
 

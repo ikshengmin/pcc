@@ -1,0 +1,5 @@
+// N4659 [depr.ccomplex.syn]: the C++17 compatibility header includes <complex>.
+#ifndef _PCC_CXX_CCOMPLEX
+#define _PCC_CXX_CCOMPLEX
+#include <complex>
+#endif
