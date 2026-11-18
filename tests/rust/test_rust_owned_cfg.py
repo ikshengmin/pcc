@@ -178,6 +178,7 @@ def test_cargo_cfg_snapshot_is_explicit_not_inferred_from_manifest_msrv():
     assert (modern, selection) == (replace(old, target_cfg_profile='rustc-1.97'), old_selection)
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 @pytest.mark.parametrize('profile', ['rustc-1.92', 'rustc-1.97'])
 def test_profile_selected_atomic_branches_execute_owned(profile, tmp_path, monkeypatch):

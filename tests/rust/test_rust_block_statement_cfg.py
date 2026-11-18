@@ -66,6 +66,7 @@ def test_original_scope_metadata_target_selection_and_owned_object(target, secon
     assert not result.externally_checked
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 @pytest.mark.parametrize('source,expected', [
     (SOURCE, 43 if HOST_TARGET == DARWIN else 42),

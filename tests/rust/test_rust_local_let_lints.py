@@ -66,6 +66,7 @@ def test_lint_is_not_a_codegen_effect_or_checked_source(edition):
     assert not tagged.externally_checked and tagged.external_rustc_lints is None
 
 
+@pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=UNAVAILABLE)
 @pytest.mark.parametrize('body', [
     'let mut n=40u64; @ let ignored={n+=2u64;9u64}; n',
