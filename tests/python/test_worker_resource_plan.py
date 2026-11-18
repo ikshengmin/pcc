@@ -692,8 +692,9 @@ def test_failure_retires_running_peers_and_does_not_launch_tail(tmp_path, monkey
     assert pool._HOST_WORKERS == {}
 
 
-def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path, monkeypatch):
+def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path, monkeypatch, capsys):
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "1")
     ready = [tmp_path / "ready0", tmp_path / "ready1"]
     counts = [tmp_path / "starts0", tmp_path / "starts1"]
     commands = []
@@ -728,6 +729,15 @@ def test_overlapping_growth_cancels_and_requeues_one_peer_with_same_cap(tmp_path
     with pytest.raises(ProcessLookupError):
         require_process_running(int(cancelled[0][2]))
     assert pool._HOST_WORKERS == {}
+    # The same original, successfully completed real process run must also
+    # identify local accounting. Do not repeat this pressure fixture after
+    # a different test has deliberately inflated the parent's RSS history.
+    trims = [s for s in capsys.readouterr().err.splitlines() if s.startswith("pcc worker trim ")]
+    assert len(trims) == 1
+    r = {k: int(v) for k, v in (field.split("=") for field in trims[0].split()[3:])}
+    assert (r["synchronized"], r["position"], r["count_before"], r["task"], r["previous_task"]) == (0, 0, 2, 1, 0)
+    assert r["first_pid"] == r["pid"] and r["first_bytes"] == r["removed_bytes"]
+    assert r["before_bytes"] > r["available_bytes"] >= r["after_bytes"]
 
 
 def _progressive_retry_pressure_plan(available, leader_peak, peer_peak):
@@ -2185,3 +2195,140 @@ def test_resource_diagnostics_complete_can_explain_original_peak_equality_failur
     assert result["complete"]  # Complete evidence, NOT a passing fixture assertion.
     assert result["verified_observations"][0]["accepted_maximum"] == 130
     assert result["accepted"][1]["phase"] == "complete" and result["accepted"][1]["peak"] == 125
+
+
+def test_trim_numeric_receipt_declines_opaque_and_does_not_propagate_writer_failures(monkeypatch):
+    from io import StringIO
+
+    class Opaque(int):
+        def __str__(self):
+            raise AssertionError("untrusted representation")
+        def __add__(self, other):
+            raise AssertionError("untrusted sum")
+        def __lt__(self, other):
+            raise AssertionError("untrusted comparison")
+    class Broken:
+        def write(self, data):
+            raise OSError("extra receipt is unavailable")
+    log = StringIO()
+    monkeypatch.setattr(pool.sys, "stderr", log)
+    args = [1, 2, 10, 3, 20, 0, 3, 10, 20, 30, [(0, 11, 15, False, 2)], True]
+    monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
+    pool._resource_trim_diagnostic(*args)
+    assert log.getvalue() == ""
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "true")
+    for pos, value in ((0, Opaque(1)), (3, -1), (8, Opaque(20)), (9, 10**1000),
+                       (10, [(0, 11, Opaque(15), False, 2)]), (10, []), (11, 1),
+                       (10, [(0, 11, 2**63-1, False, 2)])):
+        trial = list(args)
+        trial[pos] = value
+        pool._resource_trim_diagnostic(*trial)
+    assert log.getvalue() == ""
+    pool._resource_trim_diagnostic(*args)
+    assert log.getvalue() == ("pcc worker trim owner_pid=1 decision=2 first_pid=10 first_task=3 first_bytes=20 position=0 "
+                              "task=3 pid=10 count_before=2 available_bytes=30 before_bytes=35 "
+                              "removed_bytes=20 after_bytes=15 previous_task=0 previous_bytes=15 "
+                              "synchronized=1\n")
+    monkeypatch.setattr(pool.sys, "stderr", Broken())
+    pool._resource_trim_diagnostic(*args)
+
+
+@pytest.mark.parametrize("same", [False, True])
+@pytest.mark.parametrize("synchronized", [False, True])
+@pytest.mark.parametrize("timing", [False, True])
+def test_trim_receipt_distinguishes_identical_lifo_actions_without_reordering(
+    tmp_path, monkeypatch, capsys, same, synchronized, timing,
+):
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch, count=4)
+    for i, (item, w) in enumerate(zip(tasks, (142, 230, 138, 135))):
+        item.update(estimate_bytes=w*MIB, inputs=[4-i], **{"class": "class" + str(i)})
+    if timing:
+        monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "1")
+    else:
+        monkeypatch.delenv("PCC_PY_FRONTEND_WORKER_TIMING", raising=False)
+    if synchronized:
+        monkeypatch.setenv(policy.TREE_STATE_ENV, str(tmp_path / "state"))
+    monkeypatch.delenv(policy.TREE_RECOVERY_ENV, raising=False)
+    retired = []
+    def index_for(pid):
+        return next(i for i, p, _ in state["starts"] if p == pid)
+    def read(path, pid, token):
+        i = index_for(pid)
+        assert token == next(t for _, p, t in state["starts"] if p == pid)
+        peak = (140*MIB if (same or state["stopped"]) else 60*MIB) if i == 0 and len(state["starts"]) >= 3 else MIB
+        return ("complete" if pid in retired else "live", peak, peak)
+    def poll(pid):
+        if len(state["stopped"]) < 2:
+            return pool._WORKER_RUNNING
+        retired.append(pid)
+        return 0
+    def snapshot(path, cap, owner_pid, pids, fresh_after, **kw):
+        assert bool(path) == synchronized
+        return (0, {p: MIB for p in [owner_pid, *pids]}) if synchronized else None
+    monkeypatch.setattr(policy, "read_tree_state", snapshot)
+    monkeypatch.setattr(policy, "read_worker_resource", read)
+    monkeypatch.setattr(pool, "_poll_resource_worker", poll)
+    budget = (1+128+512)*MIB
+    trace = tmp_path / "admission.tsv"
+    observed = []
+    pool.run_resource_worker_processes(commands, tasks, 3, budget, observed, str(trace))
+    assert [i for i, _, _ in state["starts"]] == [0,1,2,1,2,3]
+    assert [index_for(p) for p in state["stopped"]] == [2,1]
+    assert len(observed) == 4 and len(set(t for _, _, t in state["starts"])) == 6
+    original = [r.split("\t") for r in trace.read_text().splitlines()]
+    assert [int(r[1]) for r in original if r[0] == "cancel"] == [2,1]
+    assert all(int(r[3]) == int(r[4]) == 512*MIB for r in original
+               if r[0]=="start" and int(r[2]) in [p for _,p,_ in state["starts"]][3:5])
+    err = capsys.readouterr().err.splitlines()
+    log = [dict((k,int(v)) for k,v in (s.split("=") for s in line.split()[3:]))
+           for line in err if line.startswith("pcc worker trim ")]
+    if not timing:
+        assert not log
+        return
+    assert [r["task"] for r in log] == [2,1]
+    assert [r["previous_task"] for r in log] == [1,0]
+    assert [r["count_before"] for r in log] == [3,2]
+    assert [r["decision"] for r in log] == ([1,1] if same else [1,2])
+    assert [r["position"] for r in log] == ([0,1] if same else [0,0])
+    assert all(r["synchronized"] == int(synchronized) and r["owner_pid"] == os.getpid() for r in log)
+    assert all(r["before_bytes"] == r["after_bytes"] + r["removed_bytes"] > r["available_bytes"]
+               for r in log)
+    assert (log[0]["after_bytes"] > log[0]["available_bytes"]) == same
+    assert (log[0]["first_pid"] == log[1]["first_pid"]) == same
+    assert (log[0]["after_bytes"] == log[1]["before_bytes"]) == same
+    second = log[1]
+    if same:
+        # This ONE row, even if surrounding rows were missing, proves two
+        # successful stops at that decision and the one-stop arithmetic.
+        assert second["position"] == 1 and (second["first_task"], second["task"]) == (2, 1)
+        assert second["before_bytes"] > second["available_bytes"]
+        assert second["after_bytes"] + second["first_bytes"] <= second["available_bytes"]
+    else:
+        assert second["position"] == 0 and second["first_task"] == second["task"]
+
+
+def test_trim_receipt_does_not_mask_single_worker_high_water_refusal(tmp_path, monkeypatch, capsys):
+    # A prior high-water mark can put the surviving worker above the same
+    # local limit after the original LIFO trim. Recording after_bytes must
+    # not convert that into success, and no exclusive retry may start.
+    state, commands, tasks = _spec_lifetime_fixture(tmp_path, monkeypatch, count=2)
+    monkeypatch.setenv("PCC_PY_FRONTEND_WORKER_TIMING", "1")
+    for i, item in enumerate(tasks):
+        item.update(estimate_bytes=8*MIB, inputs=[2-i])
+    peak = 205131776
+    demand = policy.peak_reservation(peak)
+    assert demand == 390632448
+    monkeypatch.setattr(policy, "read_worker_resource", lambda *args:
+                        ("live", peak, peak) if len(state["starts"]) == 2 else None)
+    monkeypatch.setattr(pool, "_poll_resource_worker", lambda pid: pool._WORKER_RUNNING)
+    available = 330*MIB
+    budget = MIB + policy.RSS_HEADROOM_BYTES + available
+    with pytest.raises(policy.WorkerMemoryError, match="worker memory budget cannot admit task=0") as error:
+        pool.run_resource_worker_processes(commands, tasks, 2, budget, observations=[])
+    assert "worker_reservation_bytes=390632448 available_worker_bytes=346030080" in str(error.value)
+    assert [i for i, _, _ in state["starts"]] == [0,1]
+    lines = [s for s in capsys.readouterr().err.splitlines() if s.startswith("pcc worker trim ")]
+    assert len(lines) == 1
+    r = dict((k, int(v)) for k, v in (field.split("=") for field in lines[0].split()[3:]))
+    assert (r["count_before"], r["position"], r["first_task"], r["task"]) == (2,0,1,1)
+    assert r["available_bytes"] == available < r["after_bytes"] == demand

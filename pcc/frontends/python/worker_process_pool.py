@@ -232,6 +232,50 @@ def _resource_diagnostic(task, event, index, pid, reservation, available, peak, 
     sys.stderr.flush()
 
 
+def _resource_trim_diagnostic(owner, decision, first_pid, first_task, first_bytes,
+                              position, index, pid, removed, available, survivors, synchronized):
+    """Only already accepted integer charges from a successful cancellation."""
+    try:
+        if str(os.environ.get("PCC_PY_FRONTEND_WORKER_TIMING", "") or "").strip().lower() not in (
+            "1", "true", "yes", "on",
+        ):
+            return
+        values = (owner, decision, first_pid, first_task, first_bytes, position, index, pid,
+                  removed, available)
+        if (type(synchronized) is not bool or type(survivors) is not list or not survivors
+                or any(type(v) is not int or v < 0 or v > 9223372036854775807 for v in values)):
+            return
+        # The caller owns this post-pop list of snapshotted worker tuples.
+        # Don't serialize tasks or call comparison/arithmetic hooks on their
+        # data; a nonordinary charge simply has no optional receipt.
+        remaining = 0
+        for item in survivors:
+            if (type(item) is not tuple or len(item) != 5 or type(item[0]) is not int
+                    or type(item[2]) is not int or item[2] < 0 or item[0] < 0
+                    or item[0] > 9223372036854775807):
+                return
+            if item[2] > 9223372036854775807 - removed - remaining:
+                return
+            remaining += item[2]
+        previous = survivors[-1]
+        sys.stderr.write(
+            "pcc worker trim owner_pid=" + str(owner) + " decision=" + str(decision)
+            + " first_pid=" + str(first_pid) + " first_task=" + str(first_task)
+            + " first_bytes=" + str(first_bytes) + " position=" + str(position)
+            + " task=" + str(index) + " pid=" + str(pid)
+            + " count_before=" + str(len(survivors) + 1)
+            + " available_bytes=" + str(available) + " before_bytes=" + str(remaining + removed)
+            + " removed_bytes=" + str(removed) + " after_bytes=" + str(remaining)
+            + " previous_task=" + str(previous[0]) + " previous_bytes=" + str(previous[2])
+            + " synchronized=" + ("1" if synchronized else "0") + "\n"
+        )
+        sys.stderr.flush()
+    except Exception:
+        # Unlike the original stop/queue/report operations this optional
+        # receipt can neither fail the pool nor replace a prior exception.
+        pass
+
+
 def run_resource_worker_processes(commands, tasks, width, tree_budget,
                                  observations=None, trace_path="", diagnostics=None):
     """Use one byte-admission loop on CPython and owned native process APIs.
@@ -302,6 +346,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
     completed = set()
     completed_tokens = {}
     handoff_slots = set()
+    trim_decision = 0
     unavailable_since = -1.0
     outage_expiry = -1.0
     fresh_after = time.monotonic()
@@ -516,6 +561,7 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
             # calibration. Its unfinished peak is only a lower bound, not a
             # completed demand estimate. Drain peers before that retry and
             # keep the process-tree cap and one-retry limit unchanged.
+            trim_position = 0
             while len(active) > 1 and sum(item[2] for item in active) > available:
                 index, pid, reservation, exclusive, observed_peak = active[-1]
                 if not tasks[index].get("restartable", False):
@@ -535,6 +581,19 @@ def run_resource_worker_processes(commands, tasks, width, tree_budget,
                         int(tasks[index].get("incomplete_peak_bytes", 0)), observed_peak,
                     )
                 pending.insert(0, index)
+                if trim_position == 0:
+                    trim_decision += 1
+                    # Keep only ordinary scalars. Each subsequent line can
+                    # prove this loop's two stops without joining processes
+                    # or guessing whether adjacent messages share a snapshot.
+                    trim_first_pid = pid if (type(pid) is int and 0 <= pid <= 9223372036854775807) else -1
+                    trim_first_task = index if (type(index) is int and 0 <= index <= 9223372036854775807) else -1
+                    trim_first_bytes = reservation if (type(reservation) is int and 0 <= reservation <= 9223372036854775807) else -1
+                _resource_trim_diagnostic(
+                    owner_pid, trim_decision, trim_first_pid, trim_first_task, trim_first_bytes,
+                    trim_position, index, pid, reservation, available, active, state is not None,
+                )
+                trim_position += 1
             if not preflight_done:
                 for index in pending:
                     demand = (minimum_task_bytes(tasks[index]) if state is not None
