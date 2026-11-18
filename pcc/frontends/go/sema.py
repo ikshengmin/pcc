@@ -1417,6 +1417,11 @@ class Analyzer:
         if expr.type is not None:
             return
         kind = expr.kind
+        if kind == "call" and expr.spread is not None:
+            # Preserve the final expansion operand rather than treating the
+            # call as if the slice were a single ordinary value.
+            raise UnsupportedGo(expr.spread, 'go.unsupported.slice-storage',
+                                "variadic slice expansion requires a backed slice value")
         literal = expr.callee if kind == "call" and expr.callee is not None else expr
         if literal.kind == "func_literal":
             raise UnsupportedGo(literal.token, 'go.unsupported.function-values',
@@ -1511,6 +1516,63 @@ class Analyzer:
                         item.elided_type = dtype.element
                     self.expression(item)
                     coerce(item, dtype.element)
+            if self.function is not None:
+                self.function.temporaries.append(expr)
+            return
+        if kind == "slice":
+            base, *provided = expr.args
+            self.expression(base)
+            values = iter(provided)
+            low, high, maximum = (next(values) if present else None for present in expr.slice_bounds)
+            for operand in provided:
+                self.expression(operand)
+                integral_constant(operand)
+                if not is_integer(operand.type):
+                    raise GoDiagnostic(operand.token, "slice index must be an integer")
+                if operand.constant is not None and not 0 <= operand.constant <= (1 << 63) - 1:
+                    raise GoDiagnostic(operand.token, "slice index must be nonnegative and representable as int")
+                coerce(operand, default_type(operand.type))
+            if not is_string(base.type):
+                dtype = underlying(base.type)
+                if isinstance(dtype, PointerType):
+                    dtype = underlying(dtype.element)
+                    valid = isinstance(dtype, ArrayType)
+                else:
+                    valid = isinstance(dtype, (ArrayType, SliceType))
+                if not valid:
+                    raise GoDiagnostic(base.token, "cannot slice a value of type " + str(base.type))
+                if isinstance(underlying(base.type), ArrayType) and not base.addressable:
+                    raise GoDiagnostic(base.token, "cannot slice an unaddressable array")
+                raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
+                                    "slicing arrays and slices requires a backed slice value")
+            if maximum is not None:
+                raise GoDiagnostic(maximum.token, "three-index slicing is not valid for strings")
+            # Owned strings currently have immutable, process-lifetime byte
+            # backing. A slice only changes the {data,len} view. Prove that
+            # no bounds panic is needed; never emit an unchecked unproved GEP.
+            const_extent = len(base.constant) if base.constant is not None else None
+            extent = base.value if const_extent is None and base.kind == "string_slice" else const_extent
+            lo = 0 if low is None else low.constant
+            hi = extent if high is None else high.constant
+            if (lo is not None and hi is not None and lo > hi
+                    and (high is not None or const_extent is not None)):
+                raise GoDiagnostic(expr.token, "slice indices are not in ascending order")
+            if const_extent is not None and any(v is not None and v > const_extent for v in (lo, hi)):
+                raise GoDiagnostic(expr.token, "string slice index out of bounds")
+            # If checking high against unknown len is required, only constant
+            # zero is universally valid. Omitted high denotes the exact len.
+            max_lo = 0 if low is None else self.index_upper_bound(low)
+            max_hi = None if high is None else self.index_upper_bound(high)
+            safe_hi = high is None or (max_hi is not None and max_hi <= (extent or 0))
+            # A dynamic proven nonnegative high can be bounded below by zero,
+            # but not by its upper bound. Keep low <= high as a separate proof.
+            lower_hi = hi if hi is not None else 0
+            if not safe_hi or max_lo is None or max_lo > lower_hi:
+                raise UnsupportedGo(expr.token, 'go.unsupported.string-bounds-panic',
+                                    "unproven string slice bounds require shared-runtime bounds-panic support")
+            expr.kind, expr.type = "string_slice", default_type(base.type)
+            # This is a length fact, not a Go constant expression.
+            expr.value = hi - lo if hi is not None and lo is not None else None
             if self.function is not None:
                 self.function.temporaries.append(expr)
             return

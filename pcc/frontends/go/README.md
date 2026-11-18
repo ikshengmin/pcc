@@ -247,9 +247,18 @@ Indexing a constant-backed string produces a nonconstant `byte` value. Constant
 bounds are checked, and dynamic indices require the same generic unsigned/mask/
 shift proof as arrays. Other string indexing fails with the missing shared
 bounds-panic contract. Dynamic concatenation, nonconstant integer conversion,
-slices, string-element arrays, range iteration and dynamic package initializers
-remain explicit gaps; no allocator, panic substitute or package-specific rule
+mutable slice backing, string-element arrays, range iteration and dynamic package
+initializers remain explicit gaps; no allocator, panic substitute or package-specific rule
 is introduced.
+
+[Simple string slicing](https://go.dev/ref/spec#Slice_expressions) produces
+another nonconstant byte descriptor of the same string type (or `string` for an
+untyped literal). The operand and bounds are evaluated once, in source order.
+Omitted and provably in-range bounds need neither allocation nor a panic
+provider. The frontend still refuses unproven runtime bounds, substring writes,
+three-index strings, and unowned array/slice storage. Parsing slice expressions
+and final `...` arguments in a package is not evidence that its backing storage,
+variadic calls, or standard-library dependencies can execute.
 
 The complete original Go 1.27.3 `bits_tables.go` is preserved with its pinned
 commit/blob/SHA and BSD license. An independently authored component reader and

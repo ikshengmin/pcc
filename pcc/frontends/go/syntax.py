@@ -307,6 +307,10 @@ class Expr:
     indirect_receiver: bool = False
     # Set by the checker for an element literal whose type was elided.
     elided_type: object = None
+    # Bound roles are kept separate from args so generic expression walks
+    # see actual operands in source order, never placeholder expressions.
+    slice_bounds: tuple = ()
+    spread: object = None
 
 
 @dataclass
@@ -1205,20 +1209,44 @@ class GoParser:
                 if left.kind not in ("name", "selector", "type", "index", "type_apply", "func_literal") and not (left.kind == "unary" and left.value == "*"):
                     self.fail(token, "only named function calls/conversions are supported")
                 previous, self.named_literals = self.named_literals, True
-                args = [] if self.at(")") else self.expression_list(terminator=")")
+                args, spread = [], None
+                while not self.at(")"):
+                    args.append(self.expression())
+                    if self.at("..."):
+                        spread = self.take("...")
+                        self.accept(",")
+                        break
+                    if not self.accept(","):
+                        break
                 self.take(")")
                 self.named_literals = previous
                 qualifier = left.args[0].value if left.kind == "selector" and left.args[0].kind == "name" else None
-                left = Expr("call", left.token, left.value, args, qualifier=qualifier, callee=left)
-            elif self.accept("["):
-                arguments = self.expression_list(terminator="]")
-                self.take("]")
-                # A final comma does not add another argument. Keep the
-                # single-argument form ambiguous until Sema resolves its base
-                # as an indexable value or a directly instantiated function.
-                left = (Expr("index", arguments[0].token, args=[left, arguments[0]])
-                        if len(arguments) == 1 else
-                        Expr("type_apply", left.token, args=arguments, callee=left))
+                left = Expr("call", left.token, left.value, args, qualifier=qualifier,
+                            callee=left, spread=spread)
+            elif self.at("["):
+                opening = self.take("[")
+                first = None if self.at(":") else self.expression()
+                if self.accept(":"):
+                    high = None if self.at("]") or self.at(":") else self.expression()
+                    maximum = None
+                    if self.at(":"):
+                        colon = self.take(":")
+                        if high is None or self.at("]"):
+                            self.fail(colon, "three-index slice requires both high and maximum indices")
+                        maximum = self.expression()
+                    self.take("]")
+                    bounds = (first, high, maximum)
+                    left = Expr("slice", opening, args=[left, *(arg for arg in bounds if arg is not None)],
+                                slice_bounds=tuple(arg is not None for arg in bounds))
+                else:
+                    arguments = [first]
+                    while self.accept(",") and not self.at("]"):
+                        arguments.append(self.expression())
+                    self.take("]")
+                    # A final comma does not add another argument. Keep the
+                    # single-argument form ambiguous until Sema resolves it.
+                    left = (Expr("index", first.token, args=[left, first]) if len(arguments) == 1 else
+                            Expr("type_apply", left.token, args=arguments, callee=left))
             else:
                 break
         while BINARY_PRECEDENCE.get(self.current.kind, 0) >= minimum:

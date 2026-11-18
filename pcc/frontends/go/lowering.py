@@ -501,6 +501,36 @@ class Lowerer:
             self.builder.store(right, right_copy)
             equal = self.aggregate_equal(expr.args[0].type, left_copy, right_copy)
             return self.builder.not_(equal) if expr.value == "!=" else equal
+        if expr.kind == "string_slice":
+            base, *provided = expr.args
+            header = self.expression(base)
+            values = iter(provided)
+            bounds = []
+            for present in expr.slice_bounds[:2]:
+                if not present:
+                    bounds.append(None)
+                    continue
+                operand = next(values)
+                number = self.expression(operand)
+                if number.type.width < 64:
+                    extend = self.builder.sext if integer_signed(operand.type) else self.builder.zext
+                    number = extend(number, ir.IntType(64))
+                bounds.append(number)
+            low, high = bounds
+            if low is None and high is None:
+                return header
+            data = self.builder.extract_value(header, 0)
+            if high is None:
+                high = self.builder.extract_value(header, 1)
+            length = high
+            if low is not None:
+                data = self.builder.gep(data, [low])
+                length = self.builder.sub(high, low)
+            tmp = self.temps[id(expr)]
+            zero = ir.Constant(ir.IntType(32), 0)
+            self.builder.store(data, self.builder.gep(tmp, [zero, zero]))
+            self.builder.store(length, self.builder.gep(tmp, [zero, ir.Constant(ir.IntType(32), 1)]))
+            return self.builder.load(tmp)
         if expr.kind == "string_len":
             return self.builder.extract_value(self.expression(expr.args[0]), 1)
         if expr.kind == "array_len":
