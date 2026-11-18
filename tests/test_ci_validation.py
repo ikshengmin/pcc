@@ -1244,6 +1244,7 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
     monkeypatch.setattr(run, "modules", lambda domain: ["a.py", "b.py"])
     rows = [row("a.py", 0), row("b.py", 0)]
     monkeypatch.setattr(run, "batches", lambda collected, lane, **policy: [[entry] for entry in collected])
+    monkeypatch.setenv("PCC_MARKER_REPORT_DIR", str(tmp_path / "stale-reports"))
     attempts = []
 
     def guarded(directory, command, environment, original):
@@ -1251,6 +1252,9 @@ def test_campaign_saves_failed_batch_before_deciding_independent_continuation(tm
             files = json.loads((directory / "modules.json").read_text())
             return _collection_reports(directory, files, [entry for entry in rows if entry["file"] in files])[2]
         attempts.append(directory.name)
+        # Each guarded execution owns durable receipts, never an inherited
+        # marker directory from a previous campaign/batch.
+        assert environment["PCC_MARKER_REPORT_DIR"] == str(directory / "marker-reports")
         expected = json.loads((directory / "selection.json").read_text())
         node = expected[0]
         failing = directory.name == "batch-000"

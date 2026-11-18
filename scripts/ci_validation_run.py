@@ -598,7 +598,8 @@ def run(args):
             expected = [row["canonical_nodeid"] for row in batch]
             save(directory / "selection.json", expected)
             env.update(PCC_VALIDATION_SELECTION=str(directory / "selection.json"),
-                       PCC_VALIDATION_INVENTORY=str(directory / "inventory"))
+                       PCC_VALIDATION_INVENTORY=str(directory / "inventory"),
+                       PCC_MARKER_REPORT_DIR=str(directory / "marker-reports"))
             code, guard_error = None, None
             try:
                 code = run_guard(directory, pytest_command(directory, sorted({row["file"] for row in batch})), env, original)
