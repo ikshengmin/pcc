@@ -208,11 +208,6 @@ def test_unused_defaults_are_checked_but_not_emitted_as_abstract_self_functions(
 ])
 def test_every_default_body_compiles_with_owned_admission(text, monkeypatch):
     # Owned trait admission (stage 7 of README "Replacing the rustc admission gate"): no flag, no rustc.
-    if '#[inline' in text:
-        # Inline attributes keep their own gate (stage 8).
-        with pytest.raises(RustError, match='inline attribute admission requires an actual'):
-            compile_rust(text)
-        return
     assert not compile_rust(text).externally_checked
 
 

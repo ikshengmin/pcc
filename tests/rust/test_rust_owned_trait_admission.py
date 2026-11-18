@@ -192,8 +192,6 @@ def test_rustc_builds_give_the_same_verdicts(tmp_path):
     (S + 'pub trait Get { type Out; fn get(&self) -> Self::Out; } impl Get for S { type Out = u64; fn get(&self) -> u64 { self.a } } pub fn g<X: Get>(x: &X) -> X::Out { x.get() } pub fn f() -> u64 { let s = S { a: 9 }; g(&s) }', 'require projection normalization, which is not implemented'),
     ('pub struct Box1<T> { pub v: T } pub trait Val { fn val(&self) -> u64; } impl Val for u64 { fn val(&self) -> u64 { *self } } impl<T: Val> Box1<T> { pub fn get(&self) -> u64 { self.v.val() } } pub fn f() -> u64 { Box1 { v: 3u64 }.get() }', 'trait impl requires a concrete local nominal struct or enum'),
     ('pub trait Half { fn half(&self) -> u64; } impl Half for u64 { fn half(&self) -> u64 { *self / 2 } } pub fn f() -> u64 { 8u64.half() }', 'trait impl requires a concrete local nominal struct or enum'),
-    # Inline attributes keep their own gate (stage 8).
-    ('pub trait T { #[inline] fn f(&self) -> u64 { 1 } }', 'inline attribute admission requires an actual'),
 ])
 def test_trait_shapes_beyond_owned_admission_keep_explicit_boundaries(source, boundary):
     with pytest.raises(RustError, match=boundary):

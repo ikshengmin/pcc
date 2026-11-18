@@ -1702,11 +1702,14 @@ class Parser:
                 del getattr(self, name)[length:]
 
     def require_checked_crate_lint(self, attribute):
-        # A successful check of the exact source owns all lint-level effects,
-        # including suppression, errors and forbidden overrides. Parsing this
-        # finite metadata family is not permission to ignore any other attribute.
+        # Without an actual check, the owned missing_docs lint
+        # (pcc/frontends/rust/missing_docs.py) decides the crate's lint level
+        # once the whole crate is parsed. A supplied check of the exact
+        # source owns all lint-level effects and must still match it.
         from .external_check import CheckedRustSource
         checked = self._rustc_check
+        if checked is None:
+            return
         if type(checked) is not CheckedRustSource:
             raise attribute.token.error('missing_docs lint semantics require an actual source/options-bound CheckedRustSource; owned Rust lint checking is not implemented')
         record = checked.provenance

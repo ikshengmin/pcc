@@ -71,7 +71,8 @@ in the named modules; locate them with
 | One lifetime parameter on a struct/enum and `impl<'a> W<'a>`; references and such data types in their fields | `regions.py` (slots), `moves.py` (inner slot, writes through `&mut`), `generics.py`, `semantics.py` | E0106, E0107, E0261, E0392, E0597, E0621, implied bounds | **owned** (stage 6, second part) |
 | Several lifetime parameters or lifetimes beside type parameters, outlives bounds (`'a: 'b`), references in tuples/arrays, regions nested beyond `&'s W<'a>`, explicit lifetimes in bodies, generic reference arguments | `generics.py`, `semantics.py`, `function_generics.py` | region inference across type arguments and outlives constraints | open |
 | Default trait methods, standard marker bounds, local trait bounds and where clauses, supertraits, associated types | `default_methods.py`, `standard_markers.py`, `traits.py`, `associated_types.py` | trait well-formedness, marker solving, E0034/E0046/E0053/E0119/E0201/E0276/E0277/E0404/E0407/E0428/E0437/E0599 | **owned** (stage 7); projections through generic bounds, `Trait::method(x)` without a Self type, impls on primitives or generic types stay explicit gaps |
-| Crate lint attributes (`#![deny(missing_docs)]`), certified `cfg`/`cfg_attr`, inline attributes | `syntax.py`, `configuration.py`, `__init__.py` | rustc lint passes and the build's cfg | open (stage 8); owned cfg already exists via `CfgOptions` |
+| Crate `missing_docs` level, `#[inline]` attributes, explicit receiver types | `missing_docs.py`, `inline_attributes.py`, `semantics.py` | rustc's MissingDoc pass (exports, re-exports, `#[doc(hidden)]`, E0453), E0539/E0805, receivers | **owned** (stage 8, first part) |
+| Item-level lint attributes, other lints and groups, `cfg` without explicit `CfgOptions` | `syntax.py`, `attribute_metadata.py`, `configuration.py` | rustc lint passes and the build's cfg | open; owned cfg exists via `CfgOptions` |
 
 Design. The owned checker extends the existing flow analysis in `moves.py`
 over `pcc.analysis.ownership` places (`Place`, `Field`, `Index`): move states
@@ -173,8 +174,19 @@ Migration order:
    is rejected without rustc, with the listed code whenever PCC names one, and
    a rustc node confirms those codes; an original corpus matches a rustc
    1.92.0 `-O` build.
-8. Owned lints for the attributes a crate denies, then multi-file crates on the
-   same path (DataSketches Rust stops at `#![deny(missing_docs)]`).
+8. Lints and attributes. First part (done): `missing_docs.py` owns the crate
+   `missing_docs` level as rustc's MissingDoc pass does (the crate root and
+   every exported item, reached through `pub` modules or `pub use`, with its
+   named `pub` fields, variants, trait items and `pub` inherent-impl items;
+   `#[doc(hidden)]` items and anything defined inside a hidden one exempt;
+   E0453 for overriding `forbid`; a test build skips it), in single-file and
+   multi-file crates alike; `#[inline]` is validated as rustc does and stays
+   advisory; explicit receiver types are the implicit receivers. Verdicts in
+   `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
+   a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
+   `#![deny(missing_docs)]` and stops at its first shift operator
+   (`bloom/sketch.rs:33:31`). Open: item-level lint attributes and other
+   lints, then the multi-file crate path through sema and lowering.
 
 ### Certified crate lint transition
 

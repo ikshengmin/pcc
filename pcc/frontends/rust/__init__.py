@@ -129,6 +129,11 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
         consts = resolution.consts + resolution.statics
+    if rustc_check is None and parser.crate_lint_attributes:
+        from .missing_docs import check_missing_docs
+        from .module_resolution import inline_crate
+        check_missing_docs(resolution.crate if resolution is not None else inline_crate(parser, functions),
+                           parser.crate_lint_attributes, test=cfg is not None and cfg.test)
     from .inline_attributes import collect_inline_hints
     inline_hints = collect_inline_hints(functions, parser.traits)
     if rustc_check is None:
@@ -138,10 +143,6 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         # owned layout yet.
         from .reference_admission import reject_slices
         reject_slices(functions, records, enums, parser.implementations, parser.traits)
-        if inline_hints:
-            raise inline_hints[0].attributes[0].token.error(
-                'inline attribute admission requires an actual source/options-bound '
-                'CheckedRustSource; caller attestation is not certification')
     checker = Checker(functions, records, enums, parser.implementations, parser.traits, consts=consts,
                       externally_checked=rustc_check is not None, pointer_bits=target.pointer_bits,
                       module_resolution=resolution, crate_policy=parser.crate_policy)

@@ -127,11 +127,12 @@ def test_generic_instances_preserve_the_declarations_original_attribute_tuple():
 
 @pytest.mark.parametrize('text', [*(source(name) for name in PROGRAMS), FOREIGN_DECLARATION,
     '#[inline]fn unused(){}fn answer()->u64{42}', 'trait T{#[inline]fn unused(self);}'])
-def test_every_inline_context_needs_actual_certification_before_ir(text, monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified inline source reached IR'))
-    with pytest.raises(RustError, match='actual source/options-bound CheckedRustSource'):
-        compile_rust(text, experimental_rustc_checked=True)
+def test_every_inline_context_compiles_with_owned_admission(text):
+    # Inline attributes are validated by PCC and stay advisory (stage 8 of
+    # README "Replacing the rustc admission gate"): no flag, no rustc.
+    result = compile_rust(text)
+    assert not result.externally_checked
+    assert all(not hint.applied_by_owned_codegen for hint in result.function_inline_hints)
 
 
 def test_metadata_descriptors_are_not_certification_tokens(monkeypatch):
@@ -144,11 +145,11 @@ def test_metadata_descriptors_are_not_certification_tokens(monkeypatch):
 
 
 INVALID = (
-    ('unknown', '#[inline(unknown)]fn f(){}', 'inline requires', 'E0539'),
-    ('empty', '#[inline()]fn f(){}', 'inline requires', 'E0805'),
-    ('multiple', '#[inline(always,never)]fn f(){}', 'inline requires', 'E0805'),
-    ('required-method', 'trait T{#[inline(unknown)]fn f(self);}', 'inline requires', 'E0539'),
-    ('provided-method', 'struct R{x:u64}impl R{#[inline(unknown)]fn f(self){}}', 'inline requires', 'E0539'),
+    ('unknown', '#[inline(unknown)]fn f(){}', r'malformed `inline` attribute input.*\(rustc E0539\)', 'E0539'),
+    ('empty', '#[inline()]fn f(){}', r'malformed `inline` attribute input.*\(rustc E0805\)', 'E0805'),
+    ('multiple', '#[inline(always,never)]fn f(){}', r'malformed `inline` attribute input.*\(rustc E0805\)', 'E0805'),
+    ('required-method', 'trait T{#[inline(unknown)]fn f(self);}', r'malformed `inline` attribute input.*\(rustc E0539\)', 'E0539'),
+    ('provided-method', 'struct R{x:u64}impl R{#[inline(unknown)]fn f(self){}}', r'malformed `inline` attribute input.*\(rustc E0539\)', 'E0539'),
 )
 
 
@@ -159,7 +160,7 @@ def test_malformed_inline_metadata_fails_in_its_original_location(name, text, me
 
 
 @pytest.mark.parametrize('text,message', [
-    ('#[inline="always"]fn f(){}', 'name-value metadata is not implemented'),
+    ('#[inline="always"]fn f(){}', 'valid forms for the attribute are'),
     ('#[inline(always="yes")]fn f(){}', 'nested inline metadata is not implemented'),
     ('#[inline(always())]fn f(){}', 'nested inline metadata is not implemented'),
 ])
@@ -178,7 +179,9 @@ def test_noncanonical_metadata_stays_an_explicit_unqualified_parser_boundary(tex
     'trait T{#[inline]type Item;}', 'trait T{type Item;}struct R{x:u64}impl T for R{#[inline]type Item=u64;}',
 ])
 def test_non_function_placements_fail_without_silently_dropping_the_attribute(text):
-    with pytest.raises(RustError, match='target or qualifier is not implemented'):
+    # rustc's "cannot be used on" error, or an explicit boundary for targets
+    # PCC does not parse with the attribute.
+    with pytest.raises(RustError, match='attribute cannot be used on|target or qualifier is not implemented'):
         Parser(text).parse()
 
 

@@ -7,7 +7,7 @@ https://doc.rust-lang.org/reference/expressions/method-call-expr.html
 https://doc.rust-lang.org/reference/expressions.html#evaluation-order-of-operands
 https://doc.rust-lang.org/reference/expressions.html#moved-and-copied-types
 
-Reference autoref/autoderef, traits and explicit receiver types remain gated.
+Reference autoref/autoderef and traits remain gated.
 """
 import platform
 import shutil
@@ -46,7 +46,6 @@ def compile_source(source):
     ('struct R{x:i64} impl R{fn f(self){}} impl R{fn f(self){}}', 'duplicate inherent'),
     ('struct R{x:i64} impl R{fn f(x:i64,self){}}', 'first parameter'),
     ('fn f(self){}', 'inherent method'),
-    ('struct R{x:i64} impl R{fn f(self:Self){}}', 'explicit receiver'),
     ('struct R{x:i64} impl Trait for R{}', 'trait impls'),
     # Exact bounded impl source is a certified positive in test_rust_inherent_impl_bounds.
     ('struct R{x:i64} impl R{fn f(self){self.x=1;}}', 'immutable'),

@@ -30,13 +30,17 @@ def inline_attribute(parser, token, start):
     mode = 'hint'
     if parser.token.text == '(':
         items = meta_list(parser)
-        if len(items) != 1 or items[0].name not in {'always', 'never'}:
-            raise token.error('inline requires no argument or one always/never word')
+        if len(items) != 1:
+            raise token.error('malformed `inline` attribute input: expected a single argument (rustc E0805)')
+        if items[0].name not in {'always', 'never'}:
+            raise token.error('malformed `inline` attribute input: valid arguments are `always` and `never` '
+                              '(rustc E0539)')
         if items[0].form != 'word':
             raise token.error('nested inline metadata is not implemented; only always/never words are admitted')
         mode = items[0].name
     elif parser.token.text == '=':
-        raise token.error('inline name-value metadata is not implemented')
+        raise token.error('valid forms for the attribute are `#[inline(always)]`, `#[inline(never)]`, and '
+                          '`#[inline]`')
     elif parser.token.text != ']':
         raise token.error('inline requires no argument or one always/never word')
     end = parser.expect(']')
@@ -69,6 +73,14 @@ def require_function_target(parser, attributes):
         if parser.tokens[position].kind == 'string':
             position += 1
     if parser.tokens[position].text != 'fn':
+        word = parser.tokens[position].text
+        if position + 1 < len(parser.tokens) and parser.tokens[position + 1].text == 'fn':
+            word = None  # a qualified function (`const fn`, `async fn`): not implemented here
+        target = {'struct': 'structs', 'enum': 'enums', 'const': 'constants', 'static': 'statics',
+                  'trait': 'traits', 'mod': 'modules', 'impl': 'impl blocks', 'type': 'type aliases or associated types',
+                  'use': 'use statements'}.get(word)
+        if target is not None:
+            raise attributes[0].token.error(f'`#[inline]` attribute cannot be used on {target}')
         raise attributes[0].token.error('inline attributes require an admitted function item; this target or qualifier is not implemented')
 
 

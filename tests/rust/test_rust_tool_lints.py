@@ -56,8 +56,8 @@ def test_tool_lints_are_retained_as_original_syntax():
     ('#![deny(core::x)]', "unknown tool name 'core'"),
     # E0452: malformed lint attribute input
     ('#![deny(clippy::print_stdout = "x")]', 'malformed lint attribute input'),
-    # Builtin lints beside tool lints keep their checked-source requirement.
-    ('#![deny(clippy::print_stdout, missing_docs)]', 'missing_docs lint semantics require an actual'),
+    # A builtin lint beside tool lints is owned: this body has no crate docs.
+    ('#![deny(clippy::print_stdout, missing_docs)]', 'missing documentation for the crate'),
     # Accepted by rustc (a bare `clippy` is an unknown builtin lint, a warning;
     # reasons are metadata) but not implemented here.
     ('#![deny(clippy)]', 'only missing_docs word metadata and tool-scoped lints'),

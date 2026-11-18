@@ -77,13 +77,12 @@ def test_function_owner_observer_distinguishes_parent_and_inline_child(monkeypat
     assert 'finish_configured_item' not in child.__dict__
 
 
-def test_uncertified_lints_retain_original_syntax_but_cannot_authorize_lowering(monkeypatch):
-    from pcc.frontends.rust.lowering import Lowerer
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('uncertified lint reached IR'))
+def test_owned_lints_retain_original_syntax(monkeypatch):
+    # Without an actual check the owned missing_docs lint decides the level
+    # (stage 8, tests/rust/test_rust_owned_lints.py); `warn` never rejects.
     source = '//! crate\n#![warn(missing_docs,)]\n' + BODY
     parser = Parser(source, source_path='original.rs')
-    with pytest.raises(RustError, match='original.rs: 2:4: missing_docs lint semantics require an actual'):
-        parser.parse()
+    parser.parse()
     attribute, = parser.crate_lint_attributes
     assert attribute.level == 'warn' and attribute.lints[0].name == 'missing_docs'
     assert source[slice(*attribute.source_span)] == '#![warn(missing_docs,)]'
@@ -93,8 +92,8 @@ def test_uncertified_lints_retain_original_syntax_but_cannot_authorize_lowering(
         attribute.level = 'allow'
     with pytest.raises(FrozenInstanceError):
         attribute.lints[0].name = 'dead_code'
-    with pytest.raises(RustError, match='missing_docs lint semantics require an actual'):
-        compile_rust(source, experimental_rustc_checked=True)
+    assert not compile_rust(source).externally_checked
+    # A supplied record still has to be an actual CheckedRustSource.
     with pytest.raises(RustError, match='missing_docs lint semantics require an actual'):
         Parser(source, rustc_check=True).parse()
 

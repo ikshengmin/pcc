@@ -70,7 +70,7 @@ def test_upstream_symbolic_links_stay_links_inside_the_pin(tmp_path):
         load_project('rust', copy)
 
 
-def test_rust_crate_stops_at_its_crate_level_lint_attribute():
+def test_rust_crate_stops_at_its_first_shift_operator():
     from pcc.frontends.rust import RustError
     from pcc.frontends.rust.configuration import CfgOptions, OwnedRustConfiguration
     from pcc.frontends.rust.crate_context import parse_crate_sources
@@ -80,9 +80,9 @@ def test_rust_crate_stops_at_its_crate_level_lint_attribute():
     options = CfgOptions(cfg=tuple(f'feature="{name}"' for name in RUST_FEATURES),
                          debug_assertions=False, panic='unwind')
     configuration = OwnedRustConfiguration('aarch64-apple-darwin', 2024, options)
-    # `#![deny(missing_docs)]`: lint semantics need an actual rustc check,
-    # which multi-file crates do not have yet.
-    with pytest.raises(RustError, match=r'^src/lib\.rs: 63:4: missing_docs lint semantics require an actual '):
+    # Past the owned `#![deny(missing_docs)]` lint (stage 8): shift operators
+    # are not parsed yet.
+    with pytest.raises(RustError, match=r"^src/lib\.rs: src/bloom/mod\.rs: src/bloom/sketch\.rs: 33:31: expected ';', found '<<'"):
         parse_crate_sources('src/lib.rs', units, crate_name='datasketches', edition=2024,
                             configuration=configuration)
 

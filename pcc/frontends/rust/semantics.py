@@ -717,8 +717,6 @@ class Checker:
         for fn in declarations:
             if fn.item_identity is not None:
                 self.current_module = fn.item_identity.module
-            if fn.explicit_receiver and not self.externally_checked:
-                raise fn.token.error("explicit receiver types require a matching external rustc check record")
             self.type_scope = self.function_generics.prepare(fn)
             self.abstract_function = bool(fn.type_parameters)
             # Written types keep the lifetimes normalization erases (regions.py).

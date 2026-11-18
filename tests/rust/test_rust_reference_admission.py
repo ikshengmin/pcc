@@ -26,7 +26,7 @@ REFERENCE_FORMS = (
     ('fn unused(x:&mut u64){}', None),
     ("fn unused<'a>(x:&'a u64){}", None),
     ('struct R{x:u64} impl R{fn read(&self)->u64{self.x}} fn f(){let r=R{x:1};r.read();}', None),
-    ('struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}', 'explicit receiver types require'),
+    ('struct R{x:u64} impl R{fn read(self:&Self)->u64{self.x}}', None),
     ('fn unused<T>(x:&T){}', None),
     ('fn f(){let x=1;let p=&x;let q=p;}', None),
     ('fn f(){let x=1;if false {let p=&x;}}', None),

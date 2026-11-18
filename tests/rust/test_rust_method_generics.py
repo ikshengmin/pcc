@@ -118,12 +118,8 @@ def test_invalid_ambiguous_or_out_of_scope_methods_fail_before_ir(text, message,
 @pytest.mark.parametrize('name', REFERENCE_PROGRAMS)
 def test_method_generics_never_turn_reference_flag_into_certification(name, monkeypatch):
     from pcc.frontends.rust.lowering import Lowerer
-    if name != 'method_generic_mutable':
-        assert 'define' in compile_source(source(name)).ir_text  # owned loans (stages 4-5)
-        return
-    monkeypatch.setattr(Lowerer, 'lower', lambda *args: pytest.fail('uncertified method reference reached IR'))
-    with pytest.raises(RustError, match='explicit receiver types require'):
-        compile_source(source(name))
+    # Owned loans (stages 4-5) and explicit receivers (stage 8).
+    assert 'define' in compile_source(source(name)).ir_text
 
 
 def test_reference_in_method_type_arguments_is_structurally_detected(monkeypatch):

@@ -269,4 +269,14 @@ def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_typ
     identity = CrateId(crate_name, root, edition, digest.hexdigest())
     loader = _Loader(frozen, parser_type, configuration, environment)
     graph = loader.parse_file(root, ModuleId(identity, ()), PurePosixPath(root).parent)
-    return CrateSyntax(graph, edition, frozen), loader.context_parsers
+    crate = CrateSyntax(graph, edition, frozen)
+    root_parser = loader.context_parsers[0]
+    if root_parser.crate_lint_attributes and getattr(root_parser, '_rustc_check', None) is None:
+        # The owned missing_docs lint needs every module of the crate.
+        from .missing_docs import check_missing_docs
+        test = configuration is not None and configuration.options.test
+        try:
+            check_missing_docs(crate, root_parser.crate_lint_attributes, test=test)
+        except RustError as exc:
+            raise RustError(f'{root}: {exc}') from exc
+    return crate, loader.context_parsers
