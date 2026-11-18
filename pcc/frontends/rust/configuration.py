@@ -270,6 +270,25 @@ class ConfiguredItemAttribute:
 
 
 @dataclass(frozen=True)
+class ConfiguredBlockStatement:
+    """One whole statement in its original block, including an attached ';'.
+
+    Decisions belong to the source-ordered outer cfg predicates. A predicate
+    after the first false one was not evaluated; it isn't a guessed false.
+    Disabled bodies have no names, macro expansions or value in the live AST.
+    """
+    syntax: tuple[ConditionalItemAttribute, ...]
+    configuration: OwnedRustConfiguration
+    decisions: tuple[bool | None, ...]
+    kind: str
+    source_span: tuple[int, int]
+
+    @property
+    def enabled(self):
+        return all(value is True for value in self.decisions)
+
+
+@dataclass(frozen=True)
 class ConfiguredItem:
     """Retained original syntax; only enabled items enter name/IR owners."""
     attributes: tuple[ConfiguredItemAttribute, ...]

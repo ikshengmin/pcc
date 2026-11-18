@@ -175,6 +175,30 @@ class AttributedLet(Expr):
     source_span: tuple[int, int] | None = None
 
 
+@dataclass
+class ConfiguredBlock(Expr):
+    """Only blocks with cfg statements carry this original-source metadata."""
+    conditional_statements: tuple = ()
+
+
+class _InactiveStatementTokens:
+    """Share lexed source; isolate the parser's contextual '>>' token splits."""
+    def __init__(self, original):
+        self.original = original
+        self.splits = {}
+
+    def __len__(self):
+        return len(self.original)
+
+    def __getitem__(self, index):
+        if isinstance(index, slice):
+            return [self[i] for i in range(*index.indices(len(self)))]
+        return self.splits.get(index, self.original[index])
+
+    def __setitem__(self, index, token):
+        self.splits[index] = token
+
+
 @dataclass(frozen=True)
 class Implementation:
     token: Token
@@ -540,6 +564,7 @@ class Parser:
     # from core; lang-item context inspection (a crate defining core items
     # itself) turns them off.
     core_prelude = True
+    _inactive_cfg_statement = False
 
     def __init__(self, source: str, *, source_path=None, edition=2021, rustc_check=None,
                  configuration=None, environment=None):
@@ -1800,11 +1825,70 @@ class Parser:
                         where_token=where_token, where_predicates=where_predicates,
                         self_bounds=self_bounds, inline_attributes=inline_attributes)
 
+    def local_cfg_start(self):
+        return (self.token.text == '#' and self.pos + 2 < len(self.tokens)
+                and self.tokens[self.pos + 1].text == '[' and self.tokens[self.pos + 2].text == 'cfg')
+
+    def local_cfg_statement(self):
+        """Stable outer cfg on a direct if/if-let or a semicolon-terminated macro.
+
+        Parse the body even when removed, but do not expand macros, resolve
+        names, or give its call IDs or type-token mutations to the live parser.
+        Rust's configure-before-expansion ordering is in rustc_expand's
+        config.rs / expand.rs; required operand positions are not this owner.
+        """
+        from .attribute_metadata import offset
+        from .configuration import ConfiguredBlockStatement, item_cfg_attribute
+        attributes = []
+        while self.local_cfg_start():
+            start = self.take()
+            self.expect('[')
+            attributes.append(item_cfg_attribute(self, self.take(), start))
+        target = self.token
+        is_if = target.text == 'if'
+        is_macro = target.kind == 'name' and self.tokens[self.pos + 1].text == '!'
+        if not (is_if or is_macro):
+            raise target.error('unsupported local statement attribute target: cfg currently applies '
+                               'only to a direct if or a semicolon-terminated macro statement')
+        context = self._configuration
+        if context is None:
+            raise attributes[0].token.error('local statement cfg requires an explicit OwnedRustConfiguration; '
+                                             'a checked command or the host is not this owner')
+        enabled = not self._inactive_cfg_statement
+        decisions = []
+        for attribute in attributes:
+            decision = context.predicate(attribute.predicate) if enabled else None
+            decisions.append(decision)
+            enabled = decision is True
+        reader = self
+        if not enabled and not self._inactive_cfg_statement:
+            reader = object.__new__(type(self))
+            reader.__dict__ = self.__dict__.copy()
+            reader.tokens = _InactiveStatementTokens(self.tokens)
+            reader.macro_expansions = []
+            reader._inactive_cfg_statement = True
+        head = reader.take()
+        expr = reader.if_expression(head) if is_if else reader.expression_macro(head)
+        if is_if and reader.token.text == '.':
+            raise reader.token.error('local cfg on a postfix expression is not supported; '
+                                     'the conditional statement must be a direct if')
+        semi = reader.accept(';')
+        if is_macro and not semi:
+            raise reader.token.error("a cfg macro statement requires its own ';'")
+        last = reader.tokens[reader.pos - 1]
+        self.pos = reader.pos
+        span = (attributes[0].source_span[0], offset(reader, last) + len(last.text))
+        info = ConfiguredBlockStatement(tuple(attributes), context, tuple(decisions),
+                                        'if' if is_if else 'macro', span)
+        return expr if enabled else None, semi, info
+
     def block(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")
         inner_docs = self.documentation(inner=True) if function_inner_docs else ()
         statements: list[Expr] = []
         tail = None
+        conditionals = None
+        last_can_be_tail = False
         while self.token.text != "}":
             if self.token.kind == "eof":
                 raise self.token.error("unterminated block")
@@ -1813,12 +1897,22 @@ class Parser:
             if self.token.text in {'const', 'static'}:
                 raise self.token.error('block-scoped const/static items and inline const blocks require lexical item scopes, which are not implemented')
             if self.accept(";"):
+                last_can_be_tail = False  # An empty statement survives cfg.
                 continue
             attributes = ()
-            if self.token.text == '#':
+            configured = self.token.text == '#' and self.local_cfg_start()
+            if configured:
+                expr, semi, info = self.local_cfg_statement()
+                if conditionals is None:
+                    conditionals = []
+                conditionals.append(info)
+                if expr is None:
+                    continue
+            elif self.token.text == '#':
                 from .attribute_metadata import local_let_lints
                 attributes = local_let_lints(self)
-            if self.accept("let"):
+            last_can_be_tail = False
+            if not configured and self.accept("let"):
                 mutable = self.accept("mut")
                 if self.token.text == "[":
                     raise self.token.error("array destructuring patterns are not implemented")
@@ -1851,20 +1945,31 @@ class Parser:
                     node = Expr(kind, binding, value, [init])
                 statements.append(node)
                 continue
-            expr = self.expression(complete_block=True)
-            if self.accept(";"):
+            if not configured:
+                expr = self.expression(complete_block=True)
+                semi = self.accept(';')
+            if semi:
                 statements.append(Expr("discard", expr.token, children=[expr]))
             elif self.token.text == "}":
                 tail = expr
                 break
             elif expr.kind in {"if", "if_let", "block", "while", "while_let", "for", "for_range", "for_range_inclusive", "loop", "unsafe", "match"}:
                 statements.append(Expr("statement", expr.token, children=[expr]))
+                last_can_be_tail = True
             else:
                 raise self.token.error("expected ';' or end of block")
         self.expect("}")
+        # rustc lowers the last remaining semicolon-free expression to the
+        # block value *after* cfg removal. An explicit ';' stays a discard.
+        if tail is None and last_can_be_tail:
+            tail, = statements.pop().children
         if function_inner_docs:
             self.last_function_documentation = inner_docs
-        return Expr("block", token, len(statements), statements + ([tail] if tail else []))
+        children = statements + ([tail] if tail else [])
+        if conditionals is not None:
+            return ConfiguredBlock('block', token, len(statements), children,
+                                   conditional_statements=tuple(conditionals))
+        return Expr("block", token, len(statements), children)
 
     def if_expression(self, token: Token) -> Expr:
         pattern = None
@@ -1886,6 +1991,18 @@ class Parser:
             children.append(self.if_expression(self.take()) if self.token.text == "if" else self.block())
         return Expr("if_let" if pattern is not None else "if", token,
                     value=pattern, children=children)
+
+    def expression_macro(self, token):
+        if self._inactive_cfg_statement:
+            self.expect('!')
+            if self.token.text not in {'(', '[', '{'}:
+                raise self.token.error('expected a delimited macro input')
+            self.skip_token_tree()
+            return Expr('unexpanded_cfg_macro', token)
+        if self.core_prelude and token.text in {'env', 'option_env', 'matches'}:
+            from .builtin_macros import expand_expression_macro, expand_matches
+            return expand_matches(self, token) if token.text == 'matches' else expand_expression_macro(self, token)
+        raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
 
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()
@@ -2009,15 +2126,8 @@ class Parser:
             expr = Expr("trait_path", token, (owner, trait.text, method.text))
         elif text in {"|", "||"} or (text == "move" and self.token.text in {"|", "||"}):
             expr = self.closure_expression(token)
-        elif (token.kind == "name" and self.token.text == "!" and text in {"env", "option_env", "matches"}
-                and self.core_prelude):
-            # Core's expression macros; no macro_rules! can shadow them here,
-            # since macro definitions are not admitted.
-            from .builtin_macros import expand_expression_macro, expand_matches
-            expr = (expand_matches(self, token) if text == "matches"
-                    else expand_expression_macro(self, token))
         elif token.kind == "name" and self.token.text == "!":
-            raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
+            expr = self.expression_macro(token)
         elif (token.kind == "name" and text != "_") or text in {"self", "Self", "super", "crate"}:
             owner, variant = self.expression_path(token)
             if variant is not None:

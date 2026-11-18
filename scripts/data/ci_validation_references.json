@@ -2081,6 +2081,14 @@
         ]
       }
     },
+    "tests/rust/test_rust_block_statement_cfg.py": {
+      "test_actual_rustc_statement_cfg_tail_removal_and_inactive_macro_frontiers": {
+        "activity": "external-reference",
+        "reason": [
+          "Runs an actual development rustc on unchanged cfg-statement inputs to check acceptance and E0308 tail boundaries; the independent owned cfg/compiler tests never use rustc."
+        ]
+      }
+    },
     "tests/rust/test_rust_certified_lints.py": {
       "test_actual_check_cannot_admit_other_lints_or_semantic_attributes": {
         "activity": "mandatory-same-input-certification-and-owned-contract",
