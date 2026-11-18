@@ -159,11 +159,11 @@ def test_remaining_class_initialization_shapes_stay_explicit(members, code):
 
 
 @pytest.mark.parametrize("name,text", PROGRAMS[:2], ids=[row[0] for row in PROGRAMS[:2]])
-def test_native_domain_still_rejects_static_array_fields(name, text, monkeypatch):
+def test_native_domain_emits_owned_static_array_fields(name, text, monkeypatch):
     forbid_bytecode_or_external_owner(monkeypatch)
-    with pytest.raises(UnsupportedJava) as caught:
-        compile_source(text, filename="ArrayExample.java")
-    assert caught.value.code == "java.unsupported.array-storage"
+    program = compile_source(text, filename="ArrayExample.java")
+    assert program.managed_runtime and program.emit_object().startswith(b"\x7fELF")
+    assert "pcc_rt_java_class_publish" in str(program.module)
 
 
 @pytest.mark.integration

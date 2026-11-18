@@ -30,6 +30,11 @@ def test_java_abi_observer_and_independent_jdk_each_have_one_real_owner():
         requested=plan.select([("M",path)])["domains"]
         assert "java" in requested
         assert ("shared" in requested) == (path in plan.JAVA_MANAGED_ABI_INPUTS)
+    for path in ("pcc/frontends/java/source_native_statics.py", "tests/java/StaticArrayObserve.c",
+                 "tests/java/test_source_native_static_arrays.py", "tests/java/test_source_constants.py",
+                 "tests/java/test_source_class_initialization_model.py", "tests/java/test_source_native_arrays.py",
+                 "tests/java/test_source_static_member_classes.py"):
+        assert {"java", "shared"} <= set(plan.select([("M", path)])["domains"])
 
 
 def test_native_reservation_stops_the_new_explicit_producer_before_any_output(tmp_path, monkeypatch):

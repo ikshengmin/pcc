@@ -62,6 +62,9 @@ PROGRAMS = [
     # Keep the former managed-plan negative's exact original as a runtime/JDK obligation.
     ("explicit-singleton", original("int[] a=new int[]{42};return a[0];")),
 ]
+# Same previously unsupported original, now separately owned by the native
+# static-field + JDK gates rather than the per-frame retirement invariant.
+STATIC_FIELD_ORIGINAL = ("static-array-field", "class ArrayExample{static final int[] V={42};static int run(){return V[0];}}")
 # Valid Java with an explicit native capability code (JDK accepts, no run).
 GAPS = [
     ("nonconstant-index", original("int[] a={42};int i=0;return a[i];"), "java.unsupported.array-index-exception"),
@@ -85,8 +88,6 @@ GAPS = [
     ("increment-component", original("int[] a={41};a[0]++;return a[0];"),
      "java.unsupported.assignment-expression-target"),
     ("array-parameter", original("return f(new int[]{42});", "static int f(int[] a){return a[0];}"),
-     "java.unsupported.array-storage"),
-    ("static-array-field", "class ArrayExample{static final int[] V={42};static int run(){return V[0];}}",
      "java.unsupported.array-storage"),
     ("float-components", original("float[] a={42f};return 42;"), "java.unsupported.array-model-shape"),
 ]
@@ -211,5 +212,5 @@ def test_invalid_array_originals_are_java_errors(name, text):
 def test_native_array_originals_against_selected_jdk(tmp_path, request):
     """JDK runs every positive original (42) and accepts the gap originals."""
     from tests.java.test_source_array_model import check_originals_reference
-    check_originals_reference(tmp_path, request, PROGRAMS, [row[:2] for row in GAPS],
+    check_originals_reference(tmp_path, request, PROGRAMS + [STATIC_FIELD_ORIGINAL], [row[:2] for row in GAPS],
                               [(*row, None) for row in INVALID])

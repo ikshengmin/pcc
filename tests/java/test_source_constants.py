@@ -101,6 +101,18 @@ def test_invalid_constant_source_fails_before_ir(fields, body, message, monkeypa
         compile_source(original(fields, body))
 
 
+# The same former gap also runs in the native static-root and JDK observers.
+FORMER_STATIC_ARRAY = original("static final int[] VALUES={2,3,5};", "return 42;")
+
+
+def test_unused_static_array_is_not_dropped_when_its_class_is_active(monkeypatch):
+    from tests.java.test_source_frontend import forbid_bytecode_or_external_owner
+    forbid_bytecode_or_external_owner(monkeypatch)
+    result = compile_source(FORMER_STATIC_ARRAY)
+    assert result.managed_runtime and result.emit_object().startswith(b"\x7fELF")
+    assert "pcc_rt_java_class_enter" in str(result.module)
+
+
 @pytest.mark.parametrize("text,message", [
     (original("static int VALUE=42;", "return 42;"), "mutable static fields"),
     (original("static final int VALUE;", "return 42;"), "blank final fields"),
@@ -108,7 +120,6 @@ def test_invalid_constant_source_fails_before_ir(fields, body, message, monkeypa
     (original("static final boolean VALUE=false&&f();", "return 42;", helpers="static boolean f(){return true;}"), "nonconstant static initialization"),
     (original("static final int VALUE=Constants.VALUE;", "return 42;"), "cyclic field initialization"),
     (original("static final int A=Constants.B,B=Constants.A;", "return 42;"), "cyclic field initialization"),
-    (original("static final int[] VALUES={2,3,5};", "return 42;"), "array fields"),
     # String tokens are owned. Static final String constant variables fold
     # without storage (test_source_string_constant_fields.py); other declared
     # String typing remains an explicit gap.

@@ -9,6 +9,7 @@ from .artifact import JavaCompilation, method_symbol
 from .diagnostics import UnsupportedJava
 from .integer_semantics import emit_binary, emit_narrow, emit_nonzero_division
 from .source_native_arrays import NativeArrayLowering
+from .source_native_statics import NativeStatics, StaticBinding, array_length
 from .source_native_references import NativeReferenceLowering, reference
 from .source_types import FLOATING, ArrayType
 from .source_static_constructors import check_static_constructor_declarations
@@ -29,6 +30,7 @@ class SourceLowerer:
         self.control_blocks = {}
         self.arrays = NativeArrayLowering(self)
         self.references = NativeReferenceLowering(self)
+        self.statics = NativeStatics(self)
 
     @staticmethod
     def scalar_type(dtype):
@@ -110,6 +112,7 @@ class SourceLowerer:
                 return self.references.pointer if reference(dtype) else self.abi_type(dtype)
             signature = ir.FunctionType(lane(method.result), [lane(dtype) for dtype in method.parameter_types])
             self.functions[key] = ir.Function(self.module, signature, method_symbol(*key))
+        self.statics.prepare()
         for method in methods:
             self.function = self.functions[method.owner, method.token.text, method.descriptor]
             self.result_type = method.result
@@ -127,6 +130,7 @@ class SourceLowerer:
                                 if reference(binding.dtype)]
             for argument, binding in zip(self.function.args, method.locals):
                 self.builder.store(self.from_abi(argument, binding.dtype), self.slots[binding])
+            self.statics.trigger(method.owner)
             self.statement(method.body)
             if not self.builder.block.is_terminated:
                 if method.result == "void":
@@ -139,7 +143,11 @@ class SourceLowerer:
                                tuple(self.functions), managed_runtime=self.arrays.used)
 
     def array_index(self, node):
-        return ir.Constant(ir.IntType(64), node.constant)
+        # Bounds are proved in sema, but an expression such as Other.a.length
+        # still triggers the declaring class before its numerical value is used.
+        if node.constant is not None:
+            return ir.Constant(ir.IntType(64), int(node.constant))
+        return self.coerce(self.expression(node), "long")
 
     def expression(self, node):
         if node.constant is not None:
@@ -153,16 +161,20 @@ class SourceLowerer:
             if target.kind == "array_place":
                 # JLS 15.26.1: the constant in-range place cannot fail; the
                 # stored value is the converted right-hand side.
+                slot = self.statics.slot(target.symbol)
+                index = self.array_index(target.children[1])
                 value = self.coerce(self.expression(node.children[1]), target.dtype)
-                self.arrays.store(self.slots[target.symbol], target.dtype, self.array_index(target.children[1]), value)
+                self.arrays.store(slot, target.dtype, index, value)
                 return value
             return self.assignment(node, node.children[1:])
         if kind == "array_length":
-            return ir.Constant(self.i32, self.method.array_lengths[node.symbol])
+            if isinstance(node.symbol, StaticBinding):
+                self.statics.trigger(node.symbol.field.owner)
+            return ir.Constant(self.i32, array_length(self.method, node.symbol))
         if kind == "array_access":
-            return self.arrays.load(self.slots[node.symbol], node.dtype, self.array_index(node.children[1]))
+            return self.arrays.load(self.statics.slot(node.symbol), node.dtype, self.array_index(node.children[1]))
         if kind == "name":
-            return self.builder.load(self.slots[node.symbol])
+            return self.builder.load(self.statics.slot(node.symbol))
         if kind == "call":
             result = self.references.call(node)
             return self.from_abi(result, node.dtype)
@@ -416,7 +428,8 @@ class SourceLowerer:
     def enhanced_for(self, node):
         """JLS 14.14.2 over a non-null top-level array local of constant length."""
         variable, _, body = node.children
-        length = self.method.array_lengths[node.symbol]
+        slot = self.statics.slot(node.symbol)
+        length = array_length(self.method, node.symbol)
         component = node.symbol.dtype.component
         i64 = ir.IntType(64)
         # Frame storage belongs in the entry block, so a nested loop does not
@@ -434,7 +447,7 @@ class SourceLowerer:
         current = self.builder.load(index)
         self.builder.cbranch(self.builder.icmp_signed("<", current, ir.Constant(i64, length)), body_block, done)
         self.builder.position_at_end(body_block)
-        element = self.arrays.load(self.slots[node.symbol], component, self.builder.load(index))
+        element = self.arrays.load(slot, component, self.builder.load(index))
         self.builder.store(self.coerce(element, variable.symbol.dtype), self.slots[variable.symbol])
         self.control_blocks[id(node)] = (update, done)
         self.statement(body)

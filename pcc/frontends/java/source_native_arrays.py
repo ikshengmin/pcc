@@ -29,6 +29,7 @@ from pcc.ir.compat import ir
 from .diagnostics import UnsupportedJava
 from .source_types import ArrayType, widening
 from .source_native_references import reference
+from .source_native_statics import StaticBinding, array_length, proven_index, start_node
 
 # Component storage widths, the PCC ABI types of the native scalar lowering.
 COMPONENT_BYTES = {"boolean": 1, "byte": 1, "short": 2, "char": 2, "int": 4, "long": 8}
@@ -75,8 +76,11 @@ class NativeArrayAnalyzer:
                                      "requires shared NullPointerException support", code="java.unsupported.array-storage")
                 return binding
         if node.kind == "name":
-            node.token.error("static array fields require shared Java class initialization",
-                             code="java.unsupported.static-initialization")
+            self.expression(node, assigned)
+            if isinstance(node.symbol, StaticBinding) and isinstance(node.symbol.dtype, ArrayType) and node.symbol.length is not None:
+                return node.symbol
+            node.token.error("array operand must be a non-null array binding with a proven extent",
+                             code="java.unsupported.array-storage")
         node.token.error("array expressions other than a top-level initialized local require shared "
                          "NullPointerException support and managed root ownership", code="java.unsupported.array-storage")
 
@@ -92,7 +96,9 @@ class NativeArrayAnalyzer:
         origin = initializer
         while origin.kind == "group":
             origin = origin.children[0]
-        if origin.kind == "name" and origin.symbol in self.method.array_lengths:
+        if origin.kind == "name" and isinstance(origin.symbol, StaticBinding) and origin.symbol.length is not None:
+            self.method.array_lengths[node.symbol] = origin.symbol.length
+        elif origin.kind == "name" and origin.symbol in self.method.array_lengths:
             self.method.array_lengths[node.symbol] = self.method.array_lengths[origin.symbol]
         assigned.add(node.symbol)
         return assigned
@@ -122,7 +128,7 @@ class NativeArrayAnalyzer:
                 origin = origin.children[0]
             # An immutable local's length is known here, but is NOT a JLS
             # constant expression. Do not set node.constant on the source AST.
-            length = (self.method.array_lengths[origin.symbol] if origin.kind == "array_length"
+            length = (array_length(self.method, origin.symbol) if origin.kind == "array_length"
                       else dimension.constant)
             if length is None or length < 0 or length > MAX_INITIALIZER_COMPONENTS:
                 dimension.token.error("native array dimension needs a proven nonnegative length within "
@@ -145,22 +151,22 @@ class NativeArrayAnalyzer:
     def array_index(self, node, binding):
         if node.dtype not in {"byte", "short", "char", "int"}:
             node.token.error("array index or dimension must promote to int")
-        if node.constant is None or not 0 <= node.constant < self.method.array_lengths[binding]:
+        index = proven_index(node, self.method)
+        if index is None or not 0 <= index < array_length(self.method, binding):
             node.token.error("nonconstant or out-of-range array index requires shared "
                              "ArrayIndexOutOfBoundsException support", code="java.unsupported.array-index-exception")
 
     def native_array_expression(self, node, assigned):
         """Type admitted array expressions; False leaves scalar typing alone."""
         if node.kind == "name" and "." in node.value:
-            root, suffix = node.value.split(".", 1)
-            if self.local_array_binding(root) is None:
+            base = start_node(self, node)
+            if base is None:
+                if self.local_array_binding(node.value.split(".",1)[0]) is not None:
+                    node.token.error("array members other than length require the next reference domain",
+                                     code="java.unsupported.array-model-shape")
                 return False
-            if suffix != "length":
-                node.token.error("array members other than length require the next reference domain",
-                                 code="java.unsupported.array-model-shape")
-            token = type(node.token)(root, node.token.filename, node.token.line, node.token.column)
             node.kind, node.value = "array_length", None
-            node.children = [type(node)("name", token, root)]
+            node.children = [base]
         if node.kind == "array_length":
             node.symbol = self.array_operand(node.children[0], assigned)
             # JLS 15.28: an array length is never a constant expression.
@@ -286,17 +292,19 @@ class NativeArrayLowering:
     def allocate(self, node, slot):
         """JLS 15.10.2/10.6: evaluate a dimension before allocation, or
         initialize the allocated array with its values in source order."""
-        self.require_target(node.token)
+        self.allocate_initializer(node.token, node.value, node.children[0], slot)
+
+    def allocate_initializer(self, token, dtype, initializer, slot):
+        self.require_target(token)
         self.used = True
         lowerer = self.lowerer
         builder = lowerer.builder
         pointer = ir.IntType(8).as_pointer()
-        component = node.value.component
+        component = dtype.component
         allocate = self.external("pcc_rt_managed_alloc", ir.IntType(32),
                                  [pointer, ir.IntType(64), pointer.as_pointer()])
         fatal = self.external("pcc_debug_fatal_py", ir.VoidType(), [pointer])
         descriptor = builder.bitcast(self.descriptor(component), pointer)
-        initializer, = node.children
         if initializer.kind == "array_new":
             # JLS 15.10.2: evaluate the dimension before allocating the zeroed
             # array. Unlike an initializer list it performs no element stores.
@@ -310,6 +318,8 @@ class NativeArrayLowering:
         ready = lowerer.function.append_basic_block("java_array_allocated")
         builder.cbranch(builder.icmp_unsigned("!=", status, ir.Constant(ir.IntType(32), 0)), failed, ready)
         builder.position_at_end(failed)
+        if lowerer.statics.initializing is not None:
+            lowerer.statics.publish(False)
         message = self.failure_message()
         builder.call(fatal, [builder.gep(message, [ir.Constant(ir.IntType(32), 0), ir.Constant(ir.IntType(32), 0)])])
         builder.unreachable()

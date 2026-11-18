@@ -35,6 +35,8 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_TUPLE,
 )
 from pcc.unsafe import (
+    atomic_cas_i64,
+    atomic_load_i64,
     free,
     load_i32,
     load_i64,
@@ -59,6 +61,55 @@ py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 root_register = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 root_unregister = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
+
+# The limited native Java lane uses one statically aligned word per class.
+# Dynamic thread IDs are the existing kernel's real registered identities.
+class_thread_registered = extern("pcc_thread_registered", (), c_int64)
+class_thread_id = extern("pcc_current_thread_id", (), c_int64)
+class_thread_safepoint = extern("pcc_thread_safepoint_gate", (), c_void)
+class_wait_yield = extern("sched_yield", (), c_int64)
+
+
+@c_abi_typed_export("pcc_rt_java_class_enter", "i32", ("ptr",))
+def pcc_rt_java_class_enter(state) -> int:
+    """1: this carrier owns initialization, 0: already ready/reentrant,
+    -1: previously erroneous or invalid execution context. No user code runs
+    while competing on the word. An acquire pairs with the owner's release.
+    """
+    if ptr_is_null(state) or pcc_gc_backend() != 0 or class_thread_registered() == 0:
+        return -1
+    owner: int = class_thread_id()
+    if owner <= 0:
+        return -1
+    while True:
+        old: int = atomic_load_i64(state, 0, "acquire")
+        if old == -1 or old == owner:
+            return 0
+        if old < 0:
+            return -1
+        if old == 0:
+            if atomic_cas_i64(state, 0, 0, owner, "acq_rel", "acquire") == 0:
+                return 1
+        else:
+            # Cooperate with the existing stopped-world mechanism while
+            # waiting, never create a second thread table or GC coordinator.
+            class_thread_safepoint()
+            class_wait_yield()
+
+
+@c_abi_typed_export("pcc_rt_java_class_publish", "i32", ("ptr", "i32"))
+def pcc_rt_java_class_publish(state, succeeded: int) -> int:
+    if (ptr_is_null(state) or pcc_gc_backend() != 0 or class_thread_registered() == 0
+            or (succeeded != 0 and succeeded != 1)):
+        return -1
+    owner: int = class_thread_id()
+    if owner <= 0:
+        return -1
+    final_state: int = -1 if succeeded == 1 else -2
+    if atomic_cas_i64(state, 0, owner, final_state, "release", "relaxed") != owner:
+        return -1
+    return 0
+
 
 OK = 0
 OOM = 1

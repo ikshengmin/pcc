@@ -11,6 +11,7 @@ import pytest
 from pcc.frontends.java import compile_source, compile_sources
 from pcc.frontends.java.artifact import method_symbol
 from tests.java.test_source_managed_reference_calls import ARRAY, DECLARED, NOMINAL, TAG
+from tests.java.test_source_native_static_arrays import SOURCE as STATIC_PROGRAM, upstream_declarations_program
 
 ROOT=Path(__file__).resolve().parents[2]
 TARGET="x86_64-unknown-linux-gnu"
@@ -35,7 +36,9 @@ def test_managed_reference_native_abi_restores_real_roots(tmp_path,monkeypatch):
     with monkeypatch.context() as patch:
         forbid_bytecode_or_external_owner(patch)
         programs=[compile_source(ARRAY,filename="References.java"),compile_sources({"RefOps.java":NOMINAL},
-            entry_class="observer.RefOps",descriptor=TAG),compile_source(DECLARED,filename="Declared.java")]
+            entry_class="observer.RefOps",descriptor=TAG),compile_source(DECLARED,filename="Declared.java"),
+            compile_sources(STATIC_PROGRAM,entry_class="Entry"),
+            compile_source(upstream_declarations_program(),filename="PrimeTableProbe.java")]
         objects=[]
         for i,program in enumerate(programs):
             assert program.managed_runtime
@@ -79,13 +82,44 @@ def test_managed_reference_native_abi_restores_real_roots(tmp_path,monkeypatch):
         local=tmp_path/selected.name
         local.write_bytes(payload)
         evaluator=CEvaluator(backend="self",target_triple=TARGET)
-        units=evaluator.compile_translation_units([TranslationUnit(observer.name,str(observer),code)],
+        statics=ROOT/"tests/java/StaticArrayObserve.c"
+        static_code=statics.read_text().replace("PRIME_TABLE_RUN",programs[4].entry_symbol)
+        for name in ("cold","use","run","last","sum","other","get","pick","nums"):
+            static_code=static_code.replace("STATIC_"+name.upper(),method_symbol("Entry",name,"()[I" if name=="get" else "()I"))
+        units=evaluator.compile_translation_units([TranslationUnit(observer.name,str(observer),code),
+                TranslationUnit(statics.name,str(statics),static_code)],
                 use_system_cpp=False,use_compile_cache=False,
                 include_dirs=[str(ROOT/"pcc/runtime/include"),str(ROOT/"utils/fake_libc_include")])
         exe=tmp_path/"observe"
         evaluator.emit_executable(units,str(exe),link_args=[*objects,str(local),str(archive)])
+        # Three old gap witnesses have the same source owner and exported
+        # symbol. Preserve every input byte and link them in separate executables.
+        from tests.java.test_source_class_initialization_model import PROGRAMS as CLASS_ORIGINALS
+        from tests.java.test_source_native_arrays import STATIC_FIELD_ORIGINAL
+        from tests.java.test_source_constants import FORMER_STATIC_ARRAY
+        from tests.java.test_source_static_member_classes import FORMER_NESTED_STATIC
+        executables = [exe]
+        cases = [(label, {"ArrayExample.java": original}, "ArrayExample", 1)
+                 for label, original in [*CLASS_ORIGINALS[:2], STATIC_FIELD_ORIGINAL]]
+        cases += [("active-owner", {"Constants.java": FORMER_STATIC_ARRAY}, "Constants", 1),
+                  ("passive-nested-owner", FORMER_NESTED_STATIC, "p.Outer", 0)]
+        for label, inputs, owner, roots in cases:
+            compilation=compile_sources(inputs, entry_class=owner)
+            assert compilation.managed_runtime
+            observer_text = ("extern int "+compilation.entry_symbol+"(void);"
+                "extern long pcc_gc_scheduler_root_count(void);int main(void){"
+                "long initial=pcc_gc_scheduler_root_count();"
+                "return ("+compilation.entry_symbol+"()==42 && "
+                +compilation.entry_symbol+"()==42 && pcc_gc_scheduler_root_count()==initial+"+str(roots)+")?0:66;}")
+            path=tmp_path/(label+".o"); path.write_bytes(compilation.emit_object())
+            client=evaluator.compile_translation_units([TranslationUnit("observe.c","observe.c",observer_text)],
+                use_system_cpp=False,use_compile_cache=False)
+            executable=tmp_path/label
+            evaluator.emit_executable(client,str(executable),link_args=[str(path),str(local),str(archive)])
+            executables.append(executable)
     def limit():
         resource.setrlimit(resource.RLIMIT_AS,(64*1024*1024,64*1024*1024))
-    result=subprocess.run([str(exe)],capture_output=True,timeout=8,preexec_fn=limit,
-                          env={**os.environ,"PCC_GC_BACKEND":"0"})
-    assert (result.returncode,result.stdout,result.stderr)==(0,b"",b"")
+    for executable in executables:
+        result=subprocess.run([str(executable)],capture_output=True,timeout=8,preexec_fn=limit,
+                              env={**os.environ,"PCC_GC_BACKEND":"0"})
+        assert (result.returncode,result.stdout,result.stderr)==(0,b"",b""), (executable.name,result)

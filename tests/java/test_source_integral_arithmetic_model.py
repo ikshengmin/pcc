@@ -644,8 +644,8 @@ def test_complete_primes_original_keeps_modulo_site_and_existing_project_boundar
         compile_sources(sources, **ENTRY)
     # Primes now parses in native mode. Do not confuse the real next field
     # initialization boundary with generic collection or whole-project support.
-    assert native_error.value.code == "java.unsupported.array-storage"
-    assert PRODUCTION[1] + ":39:18:" in str(native_error.value)
+    assert native_error.value.code == "java.unsupported.declared-result-type"
+    assert str(native_error.value) == PRODUCTION[1] + ":90:18: reference fields require shared Java storage and class initialization"
     assert sources == before
     assert all(sources[name].encode("utf-8") == files[name] for name in sources)
 

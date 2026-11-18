@@ -49,6 +49,15 @@ int32_t pcc_rt_managed_ref_store(pcc_rt_managed_handle *, uint64_t index,
                                pcc_rt_managed_handle *child);
 int32_t pcc_rt_managed_ref_load(pcc_rt_managed_handle *, uint64_t index,
                               pcc_rt_managed_handle **out);
+/* Per-class initialization, for the selected Linux x86-64 GC0 source lane.
+ * State storage is an eight-byte aligned, zero-initialized process-lifetime
+ * word, accessed only by these functions. No class unload / alternate GC.
+ * enter: 1 owns initialization, 0 initialized or recursive on this carrier,
+ * -1 erroneous/invalid. publish(owner only, 1 success / 0 failure): 0 on
+ * success, -1 on misuse. Waiting cooperates with the PCC thread safepoint.
+ * This serializes class initialization, not arbitrary managed mutator use. */
+int32_t pcc_rt_java_class_enter(int64_t *state);
+int32_t pcc_rt_java_class_publish(int64_t *state, int32_t succeeded);
 /* Actual existing GC0 cycle collection; negative UNSUPPORTED otherwise. */
 int64_t pcc_rt_managed_collect(void);
 #ifdef __cplusplus

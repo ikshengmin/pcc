@@ -166,9 +166,9 @@ def test_original_primes_lexing_preserves_the_next_parser_boundary(monkeypatch):
     with pytest.raises(UnsupportedJava) as caught:
         compile_sources(sources, **ENTRY)
     # The declarations now parse in the unchanged Primes unit. The complete
-    # source map next needs real shared initialization for the original array field.
-    assert caught.value.code == "java.unsupported.array-storage"
-    assert str(caught.value).startswith(PRODUCTION[1] + ":39:18:")
+    # source map now reaches the blank static generic Entry<Set<Integer>,int[]>.
+    assert caught.value.code == "java.unsupported.declared-result-type"
+    assert str(caught.value) == PRODUCTION[1] + ":90:18: reference fields require shared Java storage and class initialization"
     assert {name: sha256(data) for name, data in files.items()} == before
     # The independent original-project test still requires every actual stage
     # to PASS. Reaching a later capability boundary is not project acceptance.

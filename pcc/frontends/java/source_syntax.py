@@ -118,6 +118,7 @@ class SourceField:
     ordinal: int
     constant: int | float | bool | None = None
     string_constant: object = None
+    native_storage: object = None  # Typed nonconstant class-variable binding, never a folded value.
 
 
 @dataclass
@@ -533,6 +534,22 @@ class SourceParser:
         self.expect("}")
         return Node("array_initializer", token, dtype, values)
 
+    def declarator_initializer(self, dtype, *, field=False):
+        """Initializer after '=' in a field/local declaration, not a new expression domain."""
+        if isinstance(dtype, ArrayType) and self.peek().text == "{":
+            return self.array_initializer(dtype)
+        if (not self.class_model and isinstance(dtype, ArrayType) and self.peek().text == "new"
+                and self.peek(1).text in ARRAY_COMPONENTS):
+            node = self.primitive_array_creation(self.take())
+            if node.kind == "array_new" and self.peek().text == "{":
+                self.peek().error("an array creation with a dimension cannot also have an initializer")
+            if self.peek().text not in {",", ";"}:
+                where = "a final static field" if field else "a local"
+                self.peek().error("only direct array creation into " + where + " has native root ownership",
+                                  code="java.unsupported.array-storage")
+            return node
+        return self.expression()
+
     def primitive_array_creation(self, token):
         """One-dimensional explicit new; caller owns its admission context."""
         component = self.take()
@@ -740,7 +757,8 @@ class SourceParser:
             method_name = self.identifier()
             if self.peek().text != "(":
                 self.require_no_override("a field")
-                if not self.class_model and isinstance(result_type, ArrayType):
+                if (not self.class_model and isinstance(result_type, ArrayType) and
+                        not {"static", "final"} <= mods):
                     result.error("array fields require shared Java storage and class initialization",
                                  code="java.unsupported.array-storage")
                 if (not self.class_model and isinstance(result_type, NamedType) and
@@ -757,10 +775,9 @@ class SourceParser:
                 if not instance and "final" not in mods:
                     result.error("mutable static fields require shared Java class initialization", code="java.unsupported.static-initialization")
                 while True:
-                    # Native mode rejects array fields in array_suffix; the
-                    # class model checks static final array fields as class
-                    # variables initialized by class initialization.
-                    field_type = self.array_suffix(common_type)
+                    # A declarator may carry its own brackets (JLS 10.2).
+                    # Only final static arrays can receive the native class root.
+                    field_type = self.array_suffix(common_type, signature={"static", "final"} <= mods)
                     initialized = bool(self.accept("="))
                     if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
                         result.error("final instance fields require constructor definite-unassignment semantics",
@@ -769,9 +786,7 @@ class SourceParser:
                         # The class model checks blank static finals against
                         # its static initializers (JLS 8.3.1.2, 16.8).
                         method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
-                    initializer = ((self.array_initializer(field_type)
-                                    if isinstance(field_type, ArrayType) and self.peek().text == "{" else self.expression())
-                                   if initialized else None)
+                    initializer = self.declarator_initializer(field_type, field=True) if initialized else None
                     field = SourceField(method_name, field_type, initializer, frozenset(mods), owner, len(fields))
                     fields.append(field)
                     if instance and initialized:
@@ -996,20 +1011,7 @@ class SourceParser:
                 # its scope starts only in the body, never in that expression.
                 return Node("enhanced_var", name, dtype, is_final=is_final)
             if self.accept("="):
-                if isinstance(dtype, ArrayType) and self.peek().text == "{":
-                    initializer = self.array_initializer(dtype)
-                elif (not self.class_model and isinstance(dtype, ArrayType) and self.peek().text == "new"
-                      and self.peek(1).text in ARRAY_COMPONENTS):
-                    # A direct allocation into this declaration, not a general
-                    # permission to pass an array, return it or discard its root.
-                    initializer = self.primitive_array_creation(self.take())
-                    if initializer.kind == "array_new" and self.peek().text == "{":
-                        self.peek().error("an array creation with a dimension cannot also have an initializer")
-                    if self.peek().text not in {",", ";"}:
-                        self.peek().error("only direct array creation into a local has native root ownership",
-                                          code="java.unsupported.array-storage")
-                else:
-                    initializer = self.expression()
+                initializer = self.declarator_initializer(dtype)
                 children = [initializer]
             else:
                 children = []

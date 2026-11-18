@@ -608,3 +608,34 @@ attempt, runtime archive, object provenance and before/after bytes. Missing
 input fails that mandatory ABI observation; it cannot mask the ordinary
 shared tests. The selected-JDK reference partition independently compiles and
 runs the identical originals with its own observers.
+
+### Active use of final primitive-array class fields
+
+On the Linux x86-64 GC0 target, a supplied static-only class may declare
+one-dimensional `static final` boolean or integral array fields. A first
+active use (a call to its static method or a read of a nonconstant field)
+runs the initializers in declaration order. Reading a primitive constant
+variable does not trigger this initialization. A registered PCC carrier
+owns initialization; a competing registered carrier waits and acquires the
+published fields. The same owner may reenter without reinitializing.
+Primitive arrays and immutable aliases use actual persistent GC0 handles:
+their components remain mutable. A later `LAST = A[A.length - 1]` reads the
+component once, not after every future write. Supported bounded indices use a
+proof for bounds, not for dropping the active use or the access evaluation.
+
+This is not a general JVM class loader. The supported initializers are closed
+over primitive constants and earlier non-null fields of the same class, without
+arbitrary Java callbacks or potentially throwing array accesses. Classes with
+general static blocks, blank or reassignable statics, object constructors,
+unknown/superclass initialization, and user exception delivery remain
+unsupported. A failed managed allocation marks the class erroneous and takes
+the existing fatal boundary; it does not create a Java exception. Persistent
+roots are process-lifetime; concurrent application mutation and class
+unloading are outside the owning, serialized GC0 ABI. Concurrent first use
+of different classes must be externally serialized whenever the managed
+initializations could overlap; contenders waiting for the same class make no
+managed mutation until publication. The immutable Commons
+Numbers input supplies the two declarations used by a separate native/JDK
+component probe. It does not make the full Commons module or ZXing pass.
+
+[JLS first active use and initialization procedure](https://docs.oracle.com/javase/specs/jls/se21/html/jls-12.html#jls-12.4).

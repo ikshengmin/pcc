@@ -410,6 +410,17 @@ def test_invalid_member_originals_fail_as_java_errors_before_lowering(name, sour
     assert sources == before
 
 
+# An unused nested declaration is emitted but must not initialize when Outer runs.
+FORMER_NESTED_STATIC = outer("public static int run(){return 42;}" +
+                             "static class Inner{static final int[] VALUES={42};}")
+
+
+def test_unused_nested_static_array_does_not_disappear_from_the_project():
+    result = compile_sources(FORMER_NESTED_STATIC, entry_class="p.Outer")
+    assert result.managed_runtime and result.emit_object().startswith(b"\x7fELF")
+    assert "pcc_rt_java_class_enter" in str(result.module)
+
+
 BOUNDARIES = [
     ("nonstatic-inner", "class Inner{}", "member-types"),
     ("member-interface", "static interface Inner{}", "member-types"),
@@ -428,7 +439,6 @@ BOUNDARIES = [
     ("unused-anonymous-class", "static class Inner{static int unused(){new Inner(){};return 42;}}", "member-types"),
     ("unused-local-class", "static class Inner{static int unused(){class Local{}return 42;}}", "local-types"),
     ("unused-string", 'static class Inner{static int unused(){return "text";}}', "string-literals"),
-    ("nested-array-state", "static class Inner{static final int[] VALUES={42};}", "array-storage"),
     ("cross-owner-constant-cycle", "static final int VALUE=Inner.VALUE;static class Inner{static final int VALUE=Outer.VALUE;}", "cyclic-initialization"),
 ]
 

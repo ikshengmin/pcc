@@ -29,6 +29,10 @@ JAVA_MANAGED_ABI_INPUTS = frozenset({
     "pcc/frontends/java/source_native_references.py", "pcc/frontends/java/source_project.py",
     "pcc/frontends/java/source_sema.py", "pcc/frontends/java/source_syntax.py",
     "tests/java/ManagedReferenceObserve.c", "tests/java/test_source_managed_reference_calls.py",
+    "pcc/frontends/java/source_native_statics.py", "tests/java/StaticArrayObserve.c",
+    "tests/java/test_source_native_static_arrays.py", "tests/java/test_source_constants.py",
+    "tests/java/test_source_class_initialization_model.py", "tests/java/test_source_native_arrays.py",
+    "tests/java/test_source_static_member_classes.py",
 })
 CI_FILES = ("scripts/ci_validation", "scripts/data/ci_validation", ".github/workflows/")
 NATIVE_PLATFORMS = (

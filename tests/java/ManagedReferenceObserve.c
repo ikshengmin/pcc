@@ -11,6 +11,7 @@ extern pcc_rt_managed_handle *ARRAY_RELAY(int);
 extern pcc_rt_managed_handle *TOKEN_FORWARD(pcc_rt_managed_handle *);
 extern int TOKEN_ENTRY(pcc_rt_managed_handle *,pcc_rt_managed_handle *);
 static const pcc_rt_managed_descriptor_v1 opaque = {1, 0, 0, 1, 0, 0};
+extern int observe_static_arrays(int64_t roots);
 int main(void) {
     pcc_rt_managed_handle *left=0,*right=0,*returned=0,*array=0;
     int64_t roots;
@@ -38,5 +39,5 @@ int main(void) {
     if (TOKEN_ENTRY(returned,right)!=42 || pcc_gc_scheduler_root_count()!=roots+2) return 80;
     pcc_rt_managed_drop(right);pcc_rt_managed_drop(returned);
     if (TOKEN_FORWARD(0)!=0 || pcc_gc_scheduler_root_count()!=roots) return 81;
-    return 0;
+    return observe_static_arrays(roots);
 }

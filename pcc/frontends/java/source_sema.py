@@ -12,7 +12,8 @@ from .integer_semantics import evaluate_division, wrap_integer
 from .floating_semantics import converted_constant, floating_binary, floating_literal
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
-from .source_native_arrays import NativeArrayAnalyzer
+from .source_native_arrays import MAX_INITIALIZER_COMPONENTS, NativeArrayAnalyzer
+from .source_native_statics import StaticBinding, analyze_array_field, before_runtime_field, read_only_initializer
 from .source_native_references import reference, resolve_named
 from .source_blank_final import check_blank_final_locals
 from .source_static_constructors import check_static_constructor_declarations
@@ -120,9 +121,17 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         previous = self.current_field
         self.current_field = field
         try:
+            if self.native_array_domain and isinstance(field.dtype, ArrayType):
+                analyze_array_field(self, field, MAX_INITIALIZER_COMPONENTS)
+                self.field_states[field.token.text] = "complete"
+                return None
             self.expression(field.initializer, set())
             self.assignment_value(field.initializer, field.dtype)
             if field.initializer.constant is None:
+                if self.native_array_domain and read_only_initializer(field.initializer):
+                    field.native_storage = StaticBinding(field, "scalar")
+                    self.field_states[field.token.text] = "complete"
+                    return None
                 field.token.error("nonconstant static initialization requires the shared Java initialization contract", code="java.unsupported.static-initialization")
             field.constant = converted_constant(field.initializer.constant, field.initializer.dtype, field.dtype)
             self.field_states[field.token.text] = "complete"
@@ -471,6 +480,9 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                 node.token.error("illegal forward or self reference in a static field initializer")
             node.symbol, node.dtype = field, field.dtype
             node.constant = self.project.analyzers[field.owner].evaluate_field(field)
+            if self.native_array_domain and field.native_storage is not None:
+                before_runtime_field(self, field, node)
+                node.symbol = field.native_storage
             return
         if kind == "call":
             for argument in node.children:

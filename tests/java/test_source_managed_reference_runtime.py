@@ -21,16 +21,31 @@ def test_unchanged_managed_reference_originals_in_selected_jdk(tmp_path):
                "A.java":STATIC_QUALIFIED}
     for path,text in originals.items():
         (tmp_path/path).write_bytes(text.encode())
+    from tests.java.test_source_native_static_arrays import SOURCE as STATIC_PROGRAM, upstream_declarations_program
+    from tests.java.test_source_constants import FORMER_STATIC_ARRAY
+    from tests.java.test_source_static_member_classes import FORMER_NESTED_STATIC
+    added = {**STATIC_PROGRAM, "PrimeTableProbe.java": upstream_declarations_program(),
+             "Constants.java": FORMER_STATIC_ARRAY, **FORMER_NESTED_STATIC}
+    for path,text in added.items():
+        (tmp_path/path).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path/path).write_bytes(text.encode())
+    originals.update(added)
     observers={"ObserveArray.java":"class ObserveArray{public static void main(String[] a){System.out.print(References.run());}}",
                "ObserveDeclared.java":"class ObserveDeclared{public static void main(String[] a){System.out.print(Declared.run());}}",
                "ObserveToken.java":"package observer;class ObserveToken{public static void main(String[] a){System.out.print(RefOps.run(new Token(),new Token()));}}"}
     observers["ObserveStatic.java"]="class ObserveStatic{public static void main(String[] a){System.out.print(A.f(null));}}"
+    observers["ObserveStatics.java"]="""class ObserveStatics{public static void main(String[] x){
+       if(Entry.cold()!=42||Entry.use()!=42||Entry.last()!=5||Entry.sum()!=10)throw new AssertionError();
+       int[] a=Entry.get();a[0]=17;
+       if(Entry.sum()!=25||Entry.run()!=42||a[0]!=37||Entry.last()!=5||Entry.other()!=7)throw new AssertionError();
+       if(Entry.pick()!=3 || Entry.nums()!=42 || PrimeTableProbe.run()!=42 || Constants.run()!=42 || p.Outer.run()!=42)throw new AssertionError();
+       System.out.print(Entry.use());}}"""
     for path,text in observers.items():
         (tmp_path/path).write_bytes(text.encode())
     command=(str(java),*JVM_LIMITS,"-m","jdk.compiler/com.sun.tools.javac.Main",
              "-proc:none","-encoding","UTF-8","-source",level,"-target",level,"-classpath",str(tmp_path),"-d",str(tmp_path),*(str(tmp_path/n) for n in (*originals,*observers)))
     assert record_process(command,tmp_path,"compile")[0]==0
-    for name in ("ObserveArray","observer.ObserveToken","ObserveDeclared","ObserveStatic"):
+    for name in ("ObserveArray","observer.ObserveToken","ObserveDeclared","ObserveStatic","ObserveStatics"):
         result=record_process((str(java),*JVM_LIMITS,"-cp",str(tmp_path),name),tmp_path,name)
         assert result==(0,b"42",b"")
     bad_dir=tmp_path/"invalid"; bad_dir.mkdir()

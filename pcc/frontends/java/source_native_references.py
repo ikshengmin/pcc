@@ -74,6 +74,8 @@ class NativeReferenceLowering:
         bad = lower.function.append_basic_block("java_root_clone_failed")
         builder.cbranch(builder.icmp_unsigned("==", result, ir.Constant(lower.i32, 0)), ok, bad)
         builder.position_at_end(bad)
+        if lower.statics.initializing is not None:
+            lower.statics.publish(False)
         if self.message is None:
             text = b"pcc: Java reference root acquisition failed (shared Java exceptions unavailable)\n\0"
             self.message = ir.GlobalVariable(lower.module, ir.ArrayType(ir.IntType(8), len(text)),
@@ -120,7 +122,7 @@ class NativeReferenceLowering:
         if node.kind == "null":
             return ir.Constant(self.pointer, None), False
         if node.kind == "name":
-            return lower.builder.load(lower.slots[node.symbol]), False
+            return lower.builder.load(lower.statics.slot(node.symbol)), False
         if node.kind == "call":
             return self.call(node), True
         if node.kind == "conditional":
