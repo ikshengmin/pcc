@@ -27,7 +27,7 @@ class BitwiseMemory(BinaryMemory):
     def __init__(self, phase='register', source=PORT, **kwargs):
         self.operation_active = False
         super().__init__(phase, **kwargs)
-        names = {'_set_binary_owned', 'py_set_intersection', 'py_set_union',
+        names = {'_set_hold_binary_operands', '_set_binary_owned', 'py_set_intersection', 'py_set_union',
                  'py_set_symmetric_difference', '_set_call_apply'}
         body = [node for node in ast.parse(Path(source).read_text()).body
                 if isinstance(node, ast.FunctionDef) and node.name in names]

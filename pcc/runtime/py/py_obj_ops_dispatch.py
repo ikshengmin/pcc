@@ -206,6 +206,7 @@ py_set_clear = extern("py_set_clear", (c_ptr,), c_void)
 py_set_contains = extern("py_set_contains", (c_ptr, c_ptr), c_int64)
 py_set_issubset = extern("py_set_issubset", (c_ptr, c_ptr), c_int64)
 py_set_issuperset = extern("py_set_issuperset", (c_ptr, c_ptr), c_int64)
+py_set_isdisjoint = extern("py_set_isdisjoint", (c_ptr, c_ptr), c_int64)
 py_set_call_method_slots = extern(
     "py_set_call_method_slots", (c_ptr, c_int64, c_ptr, c_ptr, c_ptr), c_int64
 )
@@ -920,8 +921,8 @@ def py_obj_truthy(o) -> int:
         if load_i64(o, 16) != 0:
             return 1
         return 0
-    if tag == PY_TYPE_SET:  # PY_TYPE_SET — size@16
-        if load_i64(o, 16) != 0:
+    if tag == PY_TYPE_SET:  # public leaf reads the atomically published size
+        if py_set_len(o) != 0:
             return 1
         return 0
     # A class's truth is its metaclass's __bool__/__len__: the special lookup
@@ -973,10 +974,12 @@ def py_obj_truthy_rooted(slot) -> int:
             return 1
         return 0
     if (tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_STR
-            or tag == PY_TYPE_DICT or tag == PY_TYPE_SET):
+            or tag == PY_TYPE_DICT):
         if load_i64(o, 16) != 0:
             return 1
         return 0
+    if tag == PY_TYPE_SET:
+        return 1 if py_set_len(o) != 0 else 0
     held = pcc_gc_retain(o)
     pcc_gc_pin(held)
     truth: int = py_obj_truthy(held)
@@ -3685,22 +3688,29 @@ def _py_dict_pop_bound_entry(captures, args):
 
 
 def _py_set_pop_bound_entry(captures, args):
-    s = py_tuple_get(captures, 0)
-    if ptr_is_null(s) != 0:
-        return null()
-    nargs: int = 0
-    if ptr_is_null(args) == 0:
-        if is_tagged_int(args) == 0:
-            if load_i32(args, 8) == PY_TYPE_TUPLE:  # PY_TYPE_TUPLE
-                nargs = py_tuple_len(args)
-    if nargs > 0:
-        py_decref(s)
-        exc = py_exc_new(3, cstr("set.pop expected no arguments"))
-        py_raise_owned(exc)
-        return null()
-    out = py_set_pop(s)
-    py_decref(s)
-    return out
+    # Each NEW owner is published before retiring the previous one. In
+    # particular receiver cleanup may finalize a key or trigger moving GC.
+    borrowed = stack_alloc(_BOUND_LIST_INPUT_COUNT * C_POINTER_SIZE)
+    store_ptr(borrowed, _BOUND_LIST_INPUT0 * C_POINTER_SIZE, captures)
+    store_ptr(borrowed, _BOUND_LIST_INPUT1 * C_POINTER_SIZE, args)
+    slots = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_BOUND_LIST_SLOT_COUNT * C_POINTER_SIZE)
+    status: int = _bound_list_begin(borrowed, slots, tokens)
+    if status == 0:
+        actual = load_ptr(slots, _BOUND_LIST_INPUT1 * C_POINTER_SIZE)
+        if ptr_is_null(actual) == 0 and is_tagged_int(actual) == 0 and load_i32(actual, 8) == PY_TYPE_TUPLE:
+            if py_tuple_len(actual) != 0:
+                py_raise_owned(py_exc_new(3, cstr("set.pop expected no arguments")))
+                status = -1
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE,
+                  py_tuple_get(load_ptr(slots, _BOUND_LIST_INPUT0 * C_POINTER_SIZE), 0))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_VALUE)
+    if status == 0:
+        store_ptr(slots, _BOUND_LIST_RESULT * C_POINTER_SIZE,
+                  py_set_pop(load_ptr(slots, _BOUND_LIST_VALUE * C_POINTER_SIZE)))
+        status = _bound_list_adopt(slots, tokens, _BOUND_LIST_RESULT)
+    return _bound_list_finish(borrowed, slots, tokens, status)
 
 
 def _py_list_pop_bound(o):
@@ -4233,25 +4243,22 @@ def _bound_method_body(slots, tokens) -> int:
         returns_none = 1
     elif operation == 44:
         py_set_clear(receiver)
+        if py_err_occurred() != 0:
+            return -1
         returns_none = 1
     elif operation == 45:
         result = py_set_from_iterable(receiver)
-    elif operation == 46 or operation == 47:
+    elif operation == 46 or operation == 47 or operation == 48:
         contained: int = 0
         if operation == 46:
             contained = py_set_issubset(receiver, argument)
-        else:
+        elif operation == 47:
             contained = py_set_issuperset(receiver, argument)
+        else:
+            contained = py_set_isdisjoint(receiver, argument)
         if py_err_occurred() != 0:
             return -1
         result = py_bool_from_bit(1 if contained != 0 else 0)
-    elif operation == 48:
-        common = py_set_intersection(receiver, argument)
-        if ptr_is_null(common) != 0 or py_err_occurred() != 0:
-            return -1
-        shared: int = py_set_len(common)
-        py_decref(common)
-        result = py_bool_from_bit(1 if shared == 0 else 0)
     elif operation == 49:
         member: int = py_set_contains(receiver, argument)
         if py_err_occurred() != 0:

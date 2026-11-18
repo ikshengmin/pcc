@@ -64,6 +64,7 @@ class Memory:
         self.depth, self.moves, self.copies, self.collections = 0, 0, 0, 0
         self.roots, self.objects, self.error = {}, [], None
         self.root_groups = {}
+        self.pending_frames = {}
         self.on_equal = None
         self.fail_register, self.fail_allocation = fail_register, fail_allocation
         self.registrations, self.allocations = 0, 0
@@ -96,6 +97,15 @@ class Memory:
             "pcc_gc_foreign_lease_acquire": self.acquire,
             "pcc_gc_foreign_lease_release": self.release,
             "pcc_gc_store_root": self.store_root,
+            "pcc_gc_root_copy_owned_prepare_locked": self.copy_owned_prepare,
+            "pcc_gc_store_root_plan_finish": self.copy_finish,
+            "pcc_gc_note_store": lambda: self.require_lock(),
+            "atomic_store_i64": lambda p, o, v, order: self.write(p, o, v),
+            "py_set_len": lambda obj: self.read(obj, 16),
+            "pcc_gc_note_slot_write_barrier": self.exchange_barrier,
+            "global_addr": lambda name: 1 if name == "pcc_set_bulk_pending_map" else None,
+            "pcc_gc_frame_enter": self.pending_enter, "pcc_gc_frame_leave": self.pending_leave,
+            "py_tls_exc_swap_slot": self.pending_swap,
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
             "pcc_gc_note_root_slot_barrier": lambda slot: locked_root_slot_barrier(ns)(slot),
@@ -242,6 +252,46 @@ class Memory:
         self.depth -= 1
         assert self.depth >= 0
 
+    def pending_enter(self, count, base):
+        assert count == 1 and self.read(base, 0) is None
+        handle = object()
+        self.roots[handle] = base
+        self.pending_frames[base] = handle
+        self.collect("register")
+
+    def pending_leave(self, base):
+        self.collect("unregister")
+        self.unregister(self.pending_frames.pop(base))
+
+    def pending_swap(self, slot):
+        value = self.read(slot, 0)
+        self.write(slot, 0, self.error)
+        self.error = value
+
+    def require_lock(self):
+        assert self.depth > 0
+
+    def exchange_barrier(self, owner, slot, value):
+        self.require_lock()
+        if isinstance(value, Object):
+            assert value.alive
+        if owner is None:
+            location = self.location(slot, 0)
+            assert any(location == self.location(root, 0) for root in self.roots.values())
+        else:
+            assert owner.alive and owner.leases > 0
+
+    def copy_owned_prepare(self, destination, source, plan):
+        self.require_lock()
+        # Production retain-only preparation is not an address lease.
+        assert self.read(destination, 0) is None
+        value = self.ns["pcc_gc_resolve_root_slot_unlocked"](source, 0)
+        if isinstance(value, Object):
+            assert value.alive
+            value.refs += 1
+        self.write(destination, 0, value)
+        return 0
+
     def copy(self, destination, source):
         assert self.depth == 0, "copy finish must not run in an outer graph transaction"
         return self.copy_impl(destination, source)
@@ -312,6 +362,7 @@ class Memory:
             return None
         obj = self.make(None, abi.PY_TYPE_SET)
         obj.fields.update({16: 0, 24: 32, 32: 0, 40: Block()})
+        self.write(obj.fields[40], 32 * 16, 0)  # private table version
         return obj
 
     def iterate(self, obj):
@@ -414,7 +465,8 @@ class Memory:
             "i64": int,
             "pcc_gc_object_is_known_no_lock": lambda value: int(value is new),
             "pcc_gc_forwarding_index_find": lambda value: forwarding if value is old else None,
-            "global_addr": lambda name: population if name == "pcc_gc_forwarding_population" else selected,
+            "global_addr": lambda name: (population if name == "pcc_gc_forwarding_population"
+                                           else 1 if name == "pcc_set_bulk_pending_map" else selected),
             "py_incref": lambda value: change_ref(value, 1),
             "py_decref": lambda value: change_ref(value, -1),
             "pcc_gc_load_ptr": borrowed_load,
@@ -426,7 +478,8 @@ class Memory:
         })
         for name, functions in (
             ("freestanding_gc_root_operations.py", {"pcc_gc_resolve_root_slot_unlocked"}),
-            ("py_obj.py", {"pcc_gc_root_copy_lease_prepare_locked", "pcc_gc_root_copy_lease_finish"}),
+            ("py_obj.py", {"pcc_gc_root_copy_lease_prepare_locked", "pcc_gc_root_copy_lease_finish",
+                            "pcc_gc_root_copy_owned_prepare_locked"}),
         ):
             load_functions(PORT.with_name(name), functions, self.ns)
         return transfers

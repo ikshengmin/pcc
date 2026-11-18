@@ -802,6 +802,7 @@ def _runtime_signatures_part_16():
     "py_set_symmetric_difference_update": (_VOID, [_PYOBJ, _PYOBJ], False),
     "py_set_issubset": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_set_issuperset": (_I64, [_PYOBJ, _PYOBJ], False),
+    "py_set_isdisjoint": (_I64, [_PYOBJ, _PYOBJ], False),
     "py_set_pop": (_PYOBJ, [_PYOBJ], False),
     "py_set_clear": (_VOID, [_PYOBJ], False),
     "py_set_contains": (_I64, [_PYOBJ, _PYOBJ], False),

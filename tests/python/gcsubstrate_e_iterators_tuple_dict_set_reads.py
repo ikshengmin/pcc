@@ -575,13 +575,20 @@ def test_set_contains_uses_rooted_restartable_hash_equality_lookup():
         "hash_known: int) -> int:",
         1,
     )[1].split("def _rehash_find_empty_slot", 1)[0]
-    # A caller that already hashed the item passes the hash in; otherwise
-    # the lookup hashes the item first.
-    hash_at = py_read.index("hash_val = py_obj_hash(item)")
-    assert py_read.index("if hash_known == 0:") < hash_at
-    eq_at = py_read.index("equal: int = py_obj_eq(entry_key, item)")
-    assert hash_at < eq_at
-    assert "if stable == 0:" in py_read
+    # The legacy ABI now enters the same leased lookup as variadic methods.
+    assert "return _set_scalar_rooted(s, item, mode, hash_val, hash_known)" in py_read
+    scalar = py_source.split("def _set_scalar_rooted(", 1)[1].split("def _set_pop_owned(", 1)[0]
+    guard = scalar.index("if hash_known == 0:")
+    hashed = scalar.index("hash_value = py_obj_hash(_set_call_load(slots, 7))", guard)
+    lookup = scalar.index("_set_call_lookup(slots, tokens, 0, hash_value, mode)", hashed)
+    assert scalar.index("_set_hold_binary_operands(") < guard < hashed < lookup
+    core = py_source.split("def _set_call_lookup(", 1)[1].split("def _set_call_bulk_register", 1)[0]
+    candidate = core.index("_set_call_copy_prepare(")
+    unlock = core.index("pcc_py_gc_minor_graph_unlock()", candidate)
+    eq = core.index("py_obj_eq(_set_call_load(slots, 9), _set_call_load(slots, 7))", unlock)
+    lock = core.index("pcc_py_gc_minor_graph_lock()", eq)
+    stable = core.index("load_i64(entries, capacity * 16) != version", lock)
+    assert candidate < unlock < eq < lock < stable
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])
@@ -744,7 +751,7 @@ def test_set_remove_commits_tombstone_and_size_before_decref_finish():
     plan = py_remove.index("pcc_gc_store_ptr_plan_init")
     lock = py_remove.index("pcc_py_gc_minor_graph_lock()", plan)
     commit = py_remove.index("pcc_gc_store_ptr_plan_commit_sentinel_aware_locked", lock)
-    size = py_remove.index("store_i64(s, 16, size - 1)", commit)
+    size = py_remove.index('atomic_store_i64(s, 16, size - 1, "release")', commit)
     unlock = py_remove.index("pcc_py_gc_minor_graph_unlock()", size)
     finish = py_remove.index("pcc_gc_store_ptr_plan_finish", unlock)
     assert plan < lock < commit < size < unlock < finish
@@ -753,17 +760,21 @@ def test_set_remove_commits_tombstone_and_size_before_decref_finish():
 def test_set_add_commits_key_hash_and_counters_under_graph_lock():
 
     py_source = (RUNTIME_DIR / "py" / "py_set.py").read_text(encoding="utf-8")
-    py_add = py_source.split("def _set_add_rooted_slot(", 1)[1].split(
-        "def _set_lookup_rooted", 1
-    )[0]
-    plan = py_add.index("pcc_gc_store_ptr_plan_init")
-    lock = py_add.index("pcc_py_gc_minor_graph_lock()", plan)
-    commit = py_add.index("pcc_gc_store_ptr_plan_commit_sentinel_aware_locked", lock)
-    entry_hash = py_add.index("store_i64(entries, slot_off, hash_val)", commit)
-    size = py_add.index("store_i64(s, 16, size + 1)", entry_hash)
-    unlock = py_add.index("pcc_py_gc_minor_graph_unlock()", size)
-    finish = py_add.index("pcc_gc_store_ptr_plan_finish", unlock)
-    assert plan < lock < commit < entry_hash < size < unlock < finish
+    lookup = py_source.split("def _set_call_lookup(", 1)[1].split("def _set_call_bulk_register(", 1)[0]
+    lock = lookup.index("pcc_py_gc_minor_graph_lock()")
+    prepare = lookup.index("_set_call_insert_prepare(", lock)
+    unlock = lookup.index("pcc_py_gc_minor_graph_unlock()", prepare)
+    finish = lookup.index("_set_call_insert_finish(", unlock)
+    assert lock < prepare < unlock < finish
+    insert = py_source.split("def _set_call_insert_prepare(", 1)[1].split("def _set_call_insert_finish(", 1)[0]
+    plan = insert.index("pcc_gc_store_ptr_plan_init")
+    commit = insert.index("pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(", plan)
+    entry_hash = insert.index("store_i64(entries, position * 16, hash_value)", commit)
+    size = insert.index('atomic_store_i64(s, 16, load_i64(s, 16) + 1, "release")', entry_hash)
+    fill = insert.index("store_i64(s, 32, load_i64(s, 32) + 1)", size)
+    assert plan < commit < entry_hash < size < fill
+    assert "pcc_py_gc_minor_graph_unlock()" not in insert[:fill]
+
 
 
 @pytest.mark.parametrize("kind", ["pcc_python"])

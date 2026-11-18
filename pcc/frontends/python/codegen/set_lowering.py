@@ -468,6 +468,16 @@ class SetLoweringMixin:
             return None
         if attr.name in _SET_ALGEBRA_METHODS:
             return self._emit_set_algebra_call(expr, dynamic=True)
+        if attr.name == "pop":
+            # Ordinary dynamic list/dict pop shapes have already dispatched.
+            # The remaining shape may be valid on a user receiver. Resolve its
+            # actual method before evaluating arguments, using caller slots.
+            if self._expr_looks_cpython(attr.obj):
+                return self._emit_cpy_method_call_src(
+                    self._emit_expr(attr.obj), attr.name, expr.args,
+                    kwargs=expr.kwargs, operand_order=expr.operand_order,
+                )
+            return self._emit_slot_call_object(expr, label="set.pop")
         # Name alone does not make the receiver a set: a user class with an
         # ``add``/``update``/``pop`` method reaching py_set_* silently did
         # nothing.  Test the runtime tag and send anything else to generic
@@ -509,15 +519,27 @@ class SetLoweringMixin:
             return self._emit_set_algebra_call(
                 expr, algebra_method=_SET_ALGEBRA_METHODS["union"],
             )
+        if attr.name in ("pop", "clear") and not expr.args and not expr.kwargs:
+            if recv is not None:
+                raise L1CodegenError("set mutation requires an authoritative receiver")
+            if self._expr_looks_cpython(attr.obj):
+                return self._emit_cpy_method_call_src(
+                    self._emit_expr(attr.obj), attr.name, expr.args, kwargs=expr.kwargs,
+                )
+            # Use the actual bound method. Its frame owns this receiver;
+            # py_obj_call_slots publishes a popped key before checking TLS or
+            # destroying a temporary receiver. Clear's pending error likewise
+            # crosses operand cleanup in a registered exception slot.
+            return self._emit_slot_call_object(expr, label="set." + attr.name)
         if expr.kwargs:
             return None
         name = attr.name
         if name not in (
             "add", "remove", "discard", "issubset", "issuperset",
-            "isdisjoint", "copy", "pop", "clear",
+            "isdisjoint", "copy",
         ):
             return None
-        if name in ("copy", "pop", "clear"):
+        if name == "copy":
             if expr.args:
                 return None
         elif len(expr.args) != 1:
@@ -531,10 +553,8 @@ class SetLoweringMixin:
                 expr.args,
                 kwargs=expr.kwargs,
             )
-        if name in ("issubset", "issuperset"):
-            fn_name = (
-                "py_set_issubset" if name == "issubset" else "py_set_issuperset"
-            )
+        if name in ("issubset", "issuperset", "isdisjoint"):
+            fn_name = "py_set_" + name
             # The release below must own its reference. A borrowed receiver
             # (the dyn tag guard releases its own) takes one here as well.
             if recv_borrowed or not self._owned_release_needed(recv, attr.obj):
@@ -565,37 +585,6 @@ class SetLoweringMixin:
             self.builder.call(self.runtime["py_set_update"], [new_set, recv])
             self._emit_post_call_err_check(expr.span)
             return new_set
-        if name == "clear":
-            self.builder.call(self.runtime["py_set_clear"], [recv])
-            if not recv_borrowed:
-                self._gc_release_if_owned(recv, attr.obj)
-            self._emit_post_call_err_check(expr.span)
-            return self._emit_none_literal()
-        if name == "pop":
-            result = self.builder.call(
-                self.runtime["py_set_pop"],
-                [recv],
-                name=self._fresh("set.pop"),
-            )
-            self._emit_post_call_err_check(expr.span)
-            return result
-        if name == "isdisjoint":
-            inter = self.builder.call(
-                self.runtime["py_set_intersection"],
-                [recv, self._emit_as_object(expr.args[0])],
-                name=self._fresh("set.isdisjoint.inter"),
-            )
-            n_val = self.builder.call(
-                self.runtime["py_obj_len"],
-                [inter],
-                name=self._fresh("set.isdisjoint.len"),
-            )
-            return self.builder.icmp_signed(
-                "==",
-                n_val,
-                ir.Constant(_I64, 0),
-                name=self._fresh("set.isdisjoint.i1"),
-            )
         # Borrowed receiver: the dyn tag guard evaluated it and releases it
         # on every path.  See the same note in _emit_owned_dict_get -- taking
         # ownership here as well freed the set one reference early.

@@ -444,10 +444,17 @@ def pcc_gc_relocation_payload_raw_snapshot_locked(
         if capacity == 0:
             return 1
         entries = load_ptr(from_obj, 40)
-        if ptr_is_null(entries) != 0 or capacity > 576460752303423487:
+        if ptr_is_null(entries) != 0 or capacity > 576460752303423486:
             return 0
+        # The table has a private scalar mutation version after its last
+        # entry. Preserve it across a physical payload copy, but never index
+        # it as a possible owning/remembered slot. Validate it on reacquire
+        # as well: equal size/fill/table address do not imply equal contents.
+        entry_bytes: i64 = capacity * 16
+        physical_bytes: i64 = entry_bytes + 8
+        store_i64(ctx, 112, load_i64(entries, entry_bytes))
         return _relocate_raw_add_descriptor(
-            ctx, entries, capacity * 16, capacity * 16, 40, capacity * 16, 0
+            ctx, entries, physical_bytes, physical_bytes, 40, entry_bytes, 0
         )
 
     if tag == abi_constant("object.type.list"):

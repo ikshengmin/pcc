@@ -22,9 +22,9 @@ class BinaryMemory(Memory):
         self.pins = set()
         self.cleanup_error = False
         tree = ast.parse(PORT.read_text())
-        names = {'_set_binary_owned', 'py_set_difference', '_set_constructor_drop', '_set_constructor_pin'}
+        names = {'_set_hold_binary_operands', '_set_binary_owned', 'py_set_difference', '_set_constructor_drop', '_set_constructor_pin'}
         body = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name in names]
-        assert len(body) == 4
+        assert len(body) == 5
         for node in body:
             node.decorator_list = []
         constants = {node.targets[0].id: ast.literal_eval(node.value)
@@ -35,7 +35,8 @@ class BinaryMemory(Memory):
                 for node in tree.body if isinstance(node, ast.Expr)
                 and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
                 and node.value.func.id == 'define_global_i32'
-                and ast.literal_eval(node.value.args[0]).startswith('pcc_set_binary_')}
+                and (ast.literal_eval(node.value.args[0]).startswith('pcc_set_binary_')
+                     or ast.literal_eval(node.value.args[0]) == 'pcc_set_bulk_pending_map')}
         assert maps['pcc_set_binary_owned_map'] == constants['_SET_BINARY_SLOT_COUNT']
         assert maps['pcc_set_binary_borrowed_map'] == -constants['_SET_BINARY_INCOMING_COUNT']
         assert constants['_SET_BINARY_ERROR'] >= 10  # Core slot9 is a live equality candidate.

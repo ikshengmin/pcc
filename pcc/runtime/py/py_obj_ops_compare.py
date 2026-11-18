@@ -90,6 +90,7 @@ py_tuple_len         = extern("py_tuple_len",         (c_ptr,),                 
 py_dict_contains     = extern("py_dict_contains",     (c_ptr, c_ptr),              c_int64)
 py_dict_get          = extern("py_dict_get",          (c_ptr, c_ptr),              c_ptr)
 py_set_contains      = extern("py_set_contains",      (c_ptr, c_ptr),              c_int64)
+py_set_tables_equal = extern("py_set_tables_equal", (c_ptr, c_ptr), c_int64)
 
 py_obj_len           = extern("py_obj_len",           (c_ptr,),                    c_int64)
 py_err_occurred      = extern("py_err_occurred",      (),                          c_int64)
@@ -267,15 +268,6 @@ def _dict_value(d, entries, off: int):
     if ptr_is_null(v) != 0:
         return v
     return pcc_gc_load_ptr(d, ptr_add(entries, off + DICTENTRY_VALUE_OFFSET))
-
-
-def _set_key(s, entries, off: int):
-    k = load_ptr(entries, off + DICTENTRY_KEY_OFFSET)
-    if ptr_is_null(k) != 0:
-        return k
-    if ptr_eq(k, global_load_ptr("py_set_dummy")) != 0:
-        return k
-    return pcc_gc_load_ptr(s, ptr_add(entries, off + DICTENTRY_KEY_OFFSET))
 
 
 def _bytes_cmp(a, b) -> int:
@@ -798,22 +790,8 @@ def py_obj_eq_value(a, b) -> int:
                 i = i + 1
             return 1
 
-    if ta == PY_TYPE_SET:                       # SET
-        if tb == PY_TYPE_SET:
-            if load_i64(a, 16) != load_i64(b, 16):
-                return 0
-            entries = load_ptr(a, 40)
-            capacity: int = load_i64(a, 24)
-            dummy = global_load_ptr("py_set_dummy")
-            i: int = 0
-            while i < capacity:
-                key = _set_key(a, entries, i * 16)
-                if ptr_is_null(key) == 0:
-                    if ptr_eq(key, dummy) == 0:
-                        if py_set_contains(b, key) == 0:
-                            return 0
-                i = i + 1
-            return 1
+    if ta == PY_TYPE_SET and tb == PY_TYPE_SET:
+        return py_set_tables_equal(a, b)
 
     if ta == PY_TYPE_VALUEBOX:                     # VALUEBOX
         if tb == PY_TYPE_VALUEBOX:
@@ -2698,24 +2676,7 @@ def py_obj_sorted(x):
             pcc_gc_scheduler_root_unregister_handle(x_handle)
         return null()
     pcc_gc_pin(out)
-    if _type_of(x) == PY_TYPE_SET:
-        dummy = global_load_ptr("py_set_dummy")
-        i: int = 0
-        set_done: int = 0
-        while set_done == 0:
-            if ptr_is_null(x_handle) == 0:
-                x = pcc_gc_load_ptr(null(), x_slot)
-            entries = load_ptr(x, 40)
-            capacity: int = load_i64(x, 24)
-            if i >= capacity:
-                set_done = 1
-                continue
-            key = _set_key(x, entries, i * 16)
-            if ptr_is_null(key) == 0:
-                if ptr_eq(key, dummy) == 0:
-                    py_list_append(out, key)
-            i = i + 1
-    elif _type_of(x) == PY_TYPE_DICT:
+    if _type_of(x) == PY_TYPE_DICT:
         # dict -> sort its keys. py_obj_getitem(dict, int) would look up the
         # int as a KEY (returns NULL -> [<null>,...]); use py_dict_keys instead.
         # (The C py_obj_sorted uses the iterator protocol for all non-indexables;

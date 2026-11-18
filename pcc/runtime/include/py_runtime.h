@@ -1383,7 +1383,9 @@ void      py_set_intersection_update(PyObject *dst, PyObject *other);
 void      py_set_difference_update(PyObject *dst, PyObject *other);
 void      py_set_symmetric_difference_update(PyObject *dst, PyObject *other);
 int64_t   py_set_issubset(PyObject *a, PyObject *b);
+int64_t   py_set_tables_equal(PyObject *a, PyObject *b);
 int64_t   py_set_issuperset(PyObject *a, PyObject *b);
+int64_t   py_set_isdisjoint(PyObject *a, PyObject *b);
 PyObject *py_set_items(PyObject *s);                 /* new list ref */
 PyObject *py_set_pop(PyObject *s);                   /* set.pop(); KeyError if empty */
 /* Returns 1 if item is in the set, 0 otherwise. Returns int64_t so the
