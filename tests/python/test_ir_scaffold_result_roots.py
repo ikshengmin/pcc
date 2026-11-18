@@ -49,6 +49,7 @@ def test_scaffold_object_result_is_published_at_return(tmp_path, monkeypatch, ex
 
 def _assert_scaffold_object_result_is_published_at_return(
     tmp_path, monkeypatch, expression, suffix, contextual, caller_sink=True,
+    *, zero_arguments=False,
 ):
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
@@ -111,7 +112,23 @@ def _assert_scaffold_object_result_is_published_at_return(
     cleanup_unpins = re.findall(r"@pcc_gc_unpin\(ptr ([^)]+)\)", cleanup.group(1))
     success_unpins = re.findall(r"@pcc_gc_unpin\(ptr ([^)]+)\)", success.group(1))
     assert sorted(cleanup_unpins) == sorted(success_unpins)
-    assert not contextual or cleanup_unpins
+    if zero_arguments:
+        assert not cleanup_unpins
+    else:
+        assert not contextual or cleanup_unpins
+
+
+@pytest.mark.parametrize("contextual", [False, True])
+@pytest.mark.parametrize("expression,caller_sink", [
+    ("ir.Context()", True), ("[ir.Context()]", True), ("ir.Context()", False),
+])
+def test_context_factory_publishes_its_fresh_owner_without_argument_pins(
+    tmp_path, monkeypatch, contextual, expression, caller_sink,
+):
+    _assert_scaffold_object_result_is_published_at_return(
+        tmp_path, monkeypatch, expression, "scaffold_Context", contextual,
+        caller_sink=caller_sink, zero_arguments=True,
+    )
 
 
 @pytest.mark.parametrize("expression,suffix", [
@@ -137,6 +154,7 @@ def test_scaffold_rejects_provider_raw_or_manual_pointer_result(tmp_path, monkey
         ("scaffold_IntType", "ir.IntType(64)"),
         ("scaffold_Constant_none", "ir.Constant(operand, None)"),
         ("scaffold_Constant_obj", "ir.Constant(operand, operand)"),
+        ("scaffold_Context", "ir.Context()"),
     ):
         _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
             tmp_path, monkeypatch, manual, symbol, expression,
@@ -150,7 +168,8 @@ def _assert_scaffold_rejects_provider_raw_or_manual_pointer_result(
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "0")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "0")
     provider = tmp_path / "provider.py"
-    parameter = ("width: int" if symbol == "scaffold_IntType" else
+    parameter = ("" if symbol == "scaffold_Context" else
+                 "width: int" if symbol == "scaffold_IntType" else
                  "ty, value" if symbol == "scaffold_Constant_obj" else "ty")
     raw_value = "width" if symbol == "scaffold_IntType" else "0"
     provider.write_text("from pcc.extern import c_ptr\nfrom pcc.unsafe import int_to_ptr\n"
@@ -241,6 +260,35 @@ def _assert_builder_call_result_sinks(tmp_path, monkeypatch, contextual):
     _assert_builder_sink_publication_and_cleanup(lambdas[0], "IRBuilder_call2")
 
 
+def _pending_exception_edge(publication):
+    # Bind the first pending-exception probe, its comparison and branch. A
+    # later, unrelated call must not satisfy the current provider's contract.
+    probe = publication.find("@py_err_occurred(")
+    assert probe >= 0
+    start = publication.rfind("\n", 0, probe) + 1
+    edge = re.match(
+        r"  (?P<flag>%[-.\w]+) = call i64(?: \(\))? @py_err_occurred\(\)\n"
+        r"  (?P<cmp>%[-.\w]+) = icmp ne i64 (?P=flag), 0\n"
+        r"  br i1 (?P=cmp), label %(?P<error>[^,\s]+), label %(?P<success>[^,\s]+)\n",
+        publication[start:],
+    )
+    assert edge is not None
+    return start, edge["error"], edge["success"]
+
+
+@pytest.mark.parametrize("signature", ["", " ()"])
+def test_pending_exception_edge_requires_first_probe_ssa(signature):
+    edge = (f"  %flag.1 = call i64{signature} @py_err_occurred()\n"
+            "  %cmp.1 = icmp ne i64 %flag.1, 0\n"
+            "  br i1 %cmp.1, label %failure, label %resume\n")
+    assert _pending_exception_edge(edge) == (0, "failure", "resume")
+    for original, wrong in (("i64 %flag.1,", "i64 %other,"),
+                            ("br i1 %cmp.1,", "br i1 %other,"),
+                            ("icmp ne", "icmp eq")):
+        with pytest.raises(AssertionError):
+            _pending_exception_edge(edge.replace(original, wrong) + edge)
+
+
 def _assert_builder_sink_publication_and_cleanup(body, suffix):
     calls = list(re.finditer(r"(%[^\s]+) = call ptr [^\n]*@user_pcc_ir_ir_" + suffix + r"\([^\n]*\)\n", body))
     assert len(calls) == 1
@@ -248,19 +296,17 @@ def _assert_builder_sink_publication_and_cleanup(body, suffix):
     store = re.match(r"\s*store ptr " + re.escape(calls[0][1]) + r", ptr (%[^\s,]+)", publication)
     assert store is not None
     slot = store[1]
-    error_check = re.search(r"call i64 @py_err_occurred\(\).*?br i1 %err\.cmp[^,\n]*, label %([^,\s]+), label %([^,\s]+)",
-                            publication, re.S)
-    assert error_check is not None
-    assert "@pcc_gc_foreign_lease_release" in publication[:error_check.start()]
-    assert re.search(r"%scaffold\.current[^\s]* = load ptr, ptr " + re.escape(slot),
-                     publication[error_check.end():])
+    check_start, error, success = _pending_exception_edge(publication)
+    assert "@pcc_gc_foreign_lease_release" in publication[:check_start]
     blocks = dict(re.findall(r"^([^\s:]+):\n(.*?)(?=^[^\s:]+:\n|^}|\Z)", body, re.M | re.S))
+    assert re.search(r"%scaffold\.current[^\s]* = load ptr, ptr " + re.escape(slot) + r"(?:,|$)",
+                     blocks[success], re.M)
     # Publication status failures and the provider's pending native exception
     # must retire this existing caller output root exactly once. No argument
     # pinning/release protocol is added by this result-only change.
     failure_targets = re.findall(r"br i1 [^,\n]+, label %([^,\s]+), label %[^,\s]+",
-                                 publication[:error_check.start()])
-    failure_targets.append(error_check[1])
+                                 publication[:check_start])
+    failure_targets.append(error)
     for target in failure_targets:
         pending = [(target, (), 0)]
         counts = []

@@ -2218,15 +2218,15 @@ class IrScaffoldLoweringMixin:
     def _emit_scaffold_context_ctor(self, expr: Call) -> ir.Value:
         if expr.kwargs or expr.args:
             raise ScaffoldUnsupportedError("ir.Context scaffold expects no args")
-        fn = self._declare_external_function(
-            f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Context",
-            _CSTR,
-            [],
-        )
-        return self.builder.call(
-            fn,
-            [],
-            name=self._fresh("scaffold.Context"),
+        # The owned provider returns a fresh Context instance, not the module's
+        # shared global_context. Publish that result at the call before any
+        # attribute/container operand or pending-error cleanup can park it.
+        # Keep the provider's actual ABI authoritative (including a raw/manual
+        # override); a pointer-shaped result alone is not an object owner.
+        return _scaffold_emit_declared_call(
+            self, f"{self._IR_TOPLEVEL_SYMBOL_PREFIX}scaffold_Context",
+            _CSTR, expr.args, call_expr=expr,
+            owned_result=not getattr(self, "_freestanding_module", False),
         )
 
     def _emit_scaffold_identified_struct_type(self, expr: Call) -> ir.Value:
