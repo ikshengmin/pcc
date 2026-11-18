@@ -273,6 +273,47 @@ owned-native, target-certified Darwin cross-only and actual rustc runtime/reject
 in `test_rust_shared_loans.py`. Missing target std/core is an explicit unavailable
 prerequisite, not permission to reuse a Linux token; unrun tests are not support.
 
+## Plan: the DataSketches Rust arm
+
+Goal: the unchanged `datasketches` 0.6.0 crate and the benchmark driver
+`benchmarks/datasketches/workload.rs` compiled, assembled, linked and run by
+PCC alone, then timed against the rustc reference arm
+(`scripts/datasketches_bench.py`). Scope is the workload's module closure,
+not the whole crate: `hll`, `thetafamily`, `kll`, `common`, `hash`, `codec`,
+`error` and `lib.rs` (about 21,500 lines). Other modules (`bloom`, `cpc`,
+`countmin`, `frequencies`, `req`, `tdigest`) must still parse and check but
+are not milestones. Inventory of that closure (lines that use the form,
+2026-11-19): f64/f32 about 300; Option/Result/`?` about 460;
+Vec/`vec!`/Box/String/`format!` about 185; slices `&[T]` about 180;
+`.iter()`/`.map()` about 80, plus closures; u8/u16/i8/i16 throughout. None
+of these exist in the frontend yet, and a multi-file crate stops after
+parsing.
+
+Steps, in dependency order; each ends in an executed milestone compared with
+a local rustc build's result:
+
+1. Multi-file crate through sema and lowering (one item graph over the module
+   tree, crate-relative paths, `pub use`). Milestone: an original multi-file
+   crate compiles, links and runs, matching rustc.
+2. Scalar types u8/u16/i8/i16 and f32/f64: literals, arithmetic, comparisons,
+   casts (Rust float/int cast saturation), wrapping and bit operations.
+3. Owned panics (abort), slices `&[T]`/`&mut [T]` and checked dynamic
+   indexing. Milestone M1: the crate's `hash` module (murmur3, xxhash64)
+   gives rustc's hashes.
+4. core `Option`/`Result` and `?` (owned core model, no std).
+5. alloc `Vec`/`Box`/`String` over the shared pcc-Python allocator.
+6. Closures and iterators (`iter`, `iter_mut`, `zip`, `map`, borrowed `for`).
+7. The trait and generic shapes the closure uses, as each milestone needs
+   them. Milestones M2 HLL_8, M3 Theta, M4 KLL<f64>: each family's update
+   loop and estimate match rustc.
+8. The driver: `println!`/`format!` for its JSON line, `Instant`,
+   `env::args`. Milestone M5: the Rust arm runs and is timed.
+
+Out of scope until M5: parse blockers outside the closure, Linux execution,
+and the remaining rustc admission gates (several lifetime parameters and
+outlives bounds, item-level lint attributes), which are taken up when the
+closure needs them. Progress is reported against these steps.
+
 ## Admitted language
 
 - A crate of functions and named-field structs (including the bounded generic
