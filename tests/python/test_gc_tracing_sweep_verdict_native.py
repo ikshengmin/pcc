@@ -92,6 +92,39 @@ def test_pending_verdict_native(_verdict_binary, backend, mode, name, counts):
         f"sweep-verdict:ok backend={backend} mode={mode} finalizers={finalizers} "
         f"weak_callbacks={weak_callbacks} gc_callbacks={gc_callbacks}\n"
     ), receipt
+    if mode != 7:
+        return
+    # Same verified executable, fresh process for each root lifetime. The
+    # original two-dead oracle MUST reject these schedules. Verify the exact
+    # rejection, per-object observations and separately checked live graph;
+    # a timeout signal or an arbitrary exit 142 cannot satisfy this control.
+    receipt["retained_root_controls"] = []
+    receipt["retained_root_status"] = "INCOMPLETE"
+    path = binary.parent / f"gc{backend}-{name}.json"
+    path.write_text(json.dumps(receipt, indent=2) + "\n")
+    for option, root in (("r", "registered"), ("s", "caller-stack")):
+        command = [str(binary), "7", option]
+        control = run_process_group_timeout(command, env=environment, timeout=15)
+        receipt["retained_root_controls"].append(dict(
+            root=root, command=command, returncode=control.returncode,
+            stdout=control.stdout, stderr=control.stderr,
+        ))
+        expected = (
+            r"sweep-verdict:blocked status=142 phase=4 mode=7\n"
+            r"sweep-verdict:detail status=142 check=1 phase=4 mode=7 "
+            r"final_callback_error=9 expected_callback_error=0 finalizers=1 weak_callbacks=1 "
+            r"finalizer_first=1 finalizer_second=0 weak_first=1 weak_second=0\n"
+            r"sweep-verdict:before-first-weak rechecks=[1-9][0-9]* candidates_cleared=1\n"
+            rf"sweep-verdict:retained root={root} backend={backend} collected=1 first=dead second=live\n"
+        )
+        ok = (control.returncode == 142 and control.stderr == ""
+              and re.fullmatch(expected, control.stdout) is not None)
+        if not ok:
+            receipt["retained_root_status"] = "FAILED"
+        elif option == "s":
+            receipt["retained_root_status"] = "PASS"
+        path.write_text(json.dumps(receipt, indent=2) + "\n")
+        assert ok, receipt
 
 
 @pytest.mark.integration
