@@ -4270,8 +4270,14 @@ class CCodeGenerator(
             raise CodegenError(f"Field '{field_name}' not found in aggregate")
         return self._get_aggregate_field_info_by_path(aggregate_type, field_path)
 
+    def _is_offsetof_callee(self, name):
+        # The reserved builtin cannot be shadowed by an ordinary declaration.
+        return name == "__builtin_offsetof" or (
+            name == "offsetof" and "offsetof" not in self.env
+        )
+
     def _offsetof_keyword_value(self, node):
-        """``offsetof(type, member)`` spelled as the keyword.
+        """``offsetof(type, member)`` or its reserved builtin spelling.
 
         The parser turns ``offsetof`` (a keyword token) into
         ``FuncCall(ID("offsetof"), ExprList([Typename, ID]))``; only the
@@ -5474,7 +5480,7 @@ class CCodeGenerator(
         callee = None
         if isinstance(node.name, c_ast.ID):
             callee = node.name.name
-            if callee == "offsetof" and "offsetof" not in self.env:
+            if self._is_offsetof_callee(callee):
                 offset = self._offsetof_keyword_value(node)
                 return self._tag_unsigned(ir.Constant(int64_t, offset)), None
             if callee == "__builtin_va_start":
@@ -8206,7 +8212,7 @@ class CCodeGenerator(
                 self._validate_integer_constant_operands(expr, evaluated=False)
             return
         if isinstance(node, c_ast.FuncCall) and isinstance(node.name, c_ast.ID):
-            if node.name.name == "offsetof" and "offsetof" not in self.env:
+            if self._is_offsetof_callee(node.name.name):
                 self._offsetof_keyword_value(node)
                 return
         raise CodegenError("invalid operand in integer constant expression: " + type(node).__name__)
@@ -8345,7 +8351,7 @@ class CCodeGenerator(
                 if isinstance(binding, ir.Constant) and isinstance(binding.type, ir.IntType):
                     return make_int(0, binding.type.width, self._is_unsigned_val(binding))
             if isinstance(expr, c_ast.FuncCall) and isinstance(expr.name, c_ast.ID):
-                if expr.name.name == "offsetof" and "offsetof" not in self.env:
+                if self._is_offsetof_callee(expr.name.name):
                     return make_int(0, 64, True)
             ir_type = self._infer_sizeof_operand_ir_type(expr)
             if self._is_floating_ir_type(ir_type):
@@ -8556,7 +8562,7 @@ class CCodeGenerator(
         elif isinstance(node, c_ast.FuncCall):
             if isinstance(node.name, c_ast.ID):
                 callee = node.name.name
-                if callee == "offsetof" and "offsetof" not in self.env:
+                if self._is_offsetof_callee(callee):
                     return make_int(self._offsetof_keyword_value(node), 64, True)
                 if not integer_constant and callee in ("__builtin_inf", "__builtin_inff", "__builtin_infl"):
                     return float("inf")

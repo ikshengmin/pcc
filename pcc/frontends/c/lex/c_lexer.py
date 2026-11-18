@@ -159,6 +159,7 @@ class CLexer(object):
     keyword_map['__alignof'] = '_ALIGNOF'
     keyword_map['__alignof__'] = '_ALIGNOF'
     keyword_map['__builtin_va_arg'] = 'BUILTIN_VA_ARG'
+    keyword_map['__builtin_offsetof'] = 'OFFSETOF'
     keyword_map['__thread'] = '_THREAD_LOCAL'
     keyword_map.pop('int128', None)
     keyword_map['__attribute__'] = '__ATTRIBUTE__'
