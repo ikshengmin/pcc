@@ -144,19 +144,35 @@ def test_original_iterator_ownership_rejections_belong_to_actual_checker(source,
     ('fn f<T>(a:[T;2]){for _ in a{}}', 'unknown generic element destruction'),
     ('fn f(a:&[u64;2]){for _ in a{}}', 'concrete owned arrays only'),
     ('fn f(){for (1,y) in [(1u64,2u64)]{}}', 'require irrefutability checking'),
+    # With only one enum variant this pattern is irrefutable for rustc, but
+    # PCC still lacks this pattern form. Exercise the actual checked stage.
+    ('enum Only{V(u64)} fn f(a:[Only;1]){for Only::V(x) in a{}}', 'require irrefutability checking'),
     ('fn f(d:u64){for x in [10u64]{x/d;}}', 'panic-capable division'),
     ('fn f(x:i64){for _ in [1]{x%-1;}}', 'panic-capable division'),
     ('fn f(i:usize){for a in [[1u64,2]]{a[i];}}', 'closed scalar constant'),
 ])
 def test_actual_check_does_not_replace_owned_capability_and_panic_checks(source, message, tmp_path, monkeypatch):
+    from pcc.frontends.rust import RustExternalCheckError
     from pcc.frontends.rust.lowering import Lowerer
     from tests.rust.test_rust_certified_references import certify
     path = tmp_path / 'original.rs'
     path.write_text(source)
-    checked = certify(path, tmp_path / 'certifier')
-    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unsupported checked source reached IR'))
-    with pytest.raises(RustError, match=message):
-        compile_rust(source, rustc_check=checked)
+    evidence = tmp_path / 'certifier'
+    monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('unsupported source reached IR'))
+    if source == 'fn f(){for (1,y) in [(1u64,2u64)]{}}':
+        # A one-element array does not make a literal pattern irrefutable.
+        # The original source cannot produce a checked Rust source token.
+        with pytest.raises(RustExternalCheckError, match=r'error\[E0005\]: refutable pattern in `for` loop binding'):
+            certify(path, evidence)
+        assert not (evidence / 'checked.rmeta').exists()
+        assert not (evidence / 'external-check.json').exists()
+        # Run the independent owned admission path on the exact same text.
+        with pytest.raises(RustError, match=message):
+            compile_rust(source)
+    else:
+        checked = certify(path, evidence)
+        with pytest.raises(RustError, match=message):
+            compile_rust(source, rustc_check=checked)
     assert path.read_text() == source
 
 
