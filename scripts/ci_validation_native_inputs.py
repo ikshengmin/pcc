@@ -47,6 +47,8 @@ def admit(root, directory, *, domain, lane, environ=None):
             'PCC_THREADED_RUNTIME_ARCHIVE', 'PCC_CI_STAGE1_MANIFEST',
             'PCC_CI_STAGE1_MANIFEST_SHA256')):
         raise ValueError('refuse inherited native source-test input overrides')
+    if domain == 'rust' and env.get('PCC_REQUIRE_CURRENT_PCC1'):
+        raise ValueError('refuse inherited native source-test input overrides')
     root, directory = Path(root).resolve(strict=True), Path(directory).resolve(strict=True)
     source = source_identity()
     lease = bundle.workflow_lease(env)
@@ -65,12 +67,17 @@ def admit(root, directory, *, domain, lane, environ=None):
     state = {'source': source, 'lease': lease, 'bundle': str(directory),
              'manifest_sha256': manifest_sha, 'compiler': str(compiler),
              'runtime': str(runtime), 'owner': 'same_workflow_stage1_producer'}
-    updates = {'PCC_RUNTIME_ARCHIVE': str(runtime), 'PCC_THREADED_RUNTIME_ARCHIVE': str(runtime),
-               'PCC_CURRENT_PCC1': str(compiler), 'PCC_PLATFORM_TEST_COMPILER': str(compiler),
-               'PCC_REQUIRE_CURRENT_PCC1': '1',
+    # Rust integration needs the archive for the real yyjson C ABI, not a
+    # substitute executable for the Rust compiler or reference observers.
+    # Transport still authenticates the entire producer and rechecks all bytes.
+    updates = {'PCC_RUNTIME_ARCHIVE': str(runtime),
                'PCC_NO_AUTO_PCC1': '1', 'PCC_TEST_NO_NATIVE_PROVISIONING': '1',
                'PCC_CI_STAGE1_MANIFEST': str(manifest_path),
                'PCC_CI_STAGE1_MANIFEST_SHA256': manifest_sha}
+    if domain != 'rust':
+        updates.update(PCC_THREADED_RUNTIME_ARCHIVE=str(runtime),
+                       PCC_CURRENT_PCC1=str(compiler), PCC_PLATFORM_TEST_COMPILER=str(compiler),
+                       PCC_REQUIRE_CURRENT_PCC1='1')
     return state, updates
 
 

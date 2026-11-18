@@ -149,7 +149,7 @@ def tool_evidence(directory, obligations, platform):
 
 
 def native_evidence(directory, receipt, domain, lane, platform, current):
-    needed = requires_native_inputs(domain, lane)
+    needed = requires_native_inputs(domain, lane, platform=platform)
     paths = [directory / ('native-inputs-' + stage + '.json') for stage in ('before', 'after')]
     if not needed:
         require('native_inputs' not in receipt and not any(path.exists() for path in paths), 'unexpected native inputs')

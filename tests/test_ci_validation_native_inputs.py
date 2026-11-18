@@ -51,12 +51,49 @@ def test_native_source_adopts_exact_existing_stage1_and_runtime_without_global_r
     assert checked == [runtime, runtime]
 
 
+def test_rust_integration_binds_only_runtime_and_transport_receipts(product, monkeypatch):
+    directory, root, manifest, originals, checked = prepare(product, monkeypatch)
+    state, updates = native.admit(root, directory, domain='rust', lane='integration', environ=environment())
+    runtime = root / manifest['paths']['runtime']
+    assert updates == {
+        'PCC_RUNTIME_ARCHIVE': str(runtime),
+        'PCC_NO_AUTO_PCC1': '1', 'PCC_TEST_NO_NATIVE_PROVISIONING': '1',
+        'PCC_CI_STAGE1_MANIFEST': str(directory / 'manifest.json'),
+        'PCC_CI_STAGE1_MANIFEST_SHA256': native.digest(directory / 'manifest.json'),
+    }
+    assert all((root / name).read_bytes() == data for name, data in originals.items())
+    assert native.verify_after(root, state) == state and checked == [runtime, runtime]
+
+
+def test_rust_platform_owner_does_not_silently_accept_or_require_a_foreign_archive(tmp_path):
+    from scripts import ci_validation_coverage as coverage
+
+    assert planner.requires_native_inputs('rust', 'integration')
+    assert planner.requires_native_inputs('rust', 'integration', platform='linux-x86_64')
+    assert not planner.requires_native_inputs('rust', 'integration', platform='macos-arm64')
+    # Default owner requires native evidence, additional host must not claim it.
+    with pytest.raises(FileNotFoundError):
+        coverage.native_evidence(tmp_path, {}, 'rust', 'integration', 'linux-x86_64', {})
+    coverage.native_evidence(tmp_path, {}, 'rust', 'integration', 'macos-arm64', {})
+    with pytest.raises(ValueError, match='unexpected native inputs'):
+        coverage.native_evidence(tmp_path, {'native_inputs': {}}, 'rust', 'integration', 'macos-arm64', {})
+
+
+def test_rust_runtime_consumer_cannot_inherit_a_forced_compiler(tmp_path, monkeypatch):
+    monkeypatch.setattr(native.bundle, 'host_platform', lambda: 'linux-x86_64')
+    monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('compiler override admitted'))
+    with pytest.raises(ValueError, match='inherited native source-test input overrides'):
+        native.admit(tmp_path, tmp_path, domain='rust', lane='integration',
+                     environ={'PCC_REQUIRE_CURRENT_PCC1': '1'})
+
+
 @pytest.mark.parametrize('domain,lane,directory', [
     ('shared', 'ordinary', None), ('cpp', 'integration', None),
     ('ci-contracts', 'integration', None),
     ('ci-contracts', 'ordinary', Path('.')), ('ci-contracts', 'reference', Path('.')),
     ('cpp', 'ordinary', Path('.')), ('cpp', 'reference', Path('.')),
-    ('rust', 'integration', Path('.')), ('shared', 'unknown', Path('.')),
+    ('rust', 'integration', None), ('rust', 'ordinary', Path('.')), ('rust', 'reference', Path('.')),
+    ('shared', 'unknown', Path('.')),
 ])
 def test_missing_or_wrong_lane_never_admits_or_provisions(domain, lane, directory, tmp_path, monkeypatch):
     monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('unexpected admission'))
@@ -68,7 +105,7 @@ def test_missing_or_wrong_lane_never_admits_or_provisions(domain, lane, director
     'PCC_CURRENT_PCC1', 'PCC_TEST_COMPILER', 'PCC_PLATFORM_TEST_COMPILER', 'PCC_RUNTIME_ARCHIVE',
     'PCC_THREADED_RUNTIME_ARCHIVE', 'PCC_CI_STAGE1_MANIFEST', 'PCC_CI_STAGE1_MANIFEST_SHA256',
 ])
-@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration'), ('rust', 'integration')])
 def test_inherited_native_inputs_cannot_replace_this_run_bundle(name, tmp_path, monkeypatch, domain, lane):
     monkeypatch.setattr(native.bundle, 'host_platform', lambda: 'linux-x86_64')
     monkeypatch.setattr(native.bundle, 'import_bundle', lambda *a: pytest.fail('override reached admission'))
@@ -80,7 +117,7 @@ def test_inherited_native_inputs_cannot_replace_this_run_bundle(name, tmp_path, 
     ('GITHUB_SHA', 'c' * 40), ('GITHUB_RUN_ID', '999'), ('GITHUB_RUN_ATTEMPT', '99'),
     ('GITHUB_REPOSITORY', 'other/pcc'),
 ])
-@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration'), ('rust', 'integration')])
 def test_bundle_from_another_source_run_attempt_or_repository_is_rejected(field, value, product, monkeypatch, domain, lane):
     directory, root, _manifest, _originals, checked = prepare(product, monkeypatch)
     env = dict(environment(), **{field: value})
@@ -89,7 +126,7 @@ def test_bundle_from_another_source_run_attempt_or_repository_is_rejected(field,
     assert checked == []
 
 
-@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration'), ('rust', 'integration')])
 def test_runtime_provenance_failure_cannot_publish_fixture_environment(product, monkeypatch, domain, lane):
     directory, root, _manifest, _originals, _checked = prepare(product, monkeypatch)
     def reject(_archive):
@@ -100,7 +137,7 @@ def test_runtime_provenance_failure_cannot_publish_fixture_environment(product, 
 
 
 @pytest.mark.parametrize('target', ['manifest', 'runtime', 'compiler', 'source'])
-@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration')])
+@pytest.mark.parametrize('domain,lane', [('shared', 'ordinary'), ('ci-contracts', 'integration'), ('rust', 'integration')])
 def test_consumed_native_inputs_cannot_change_during_source_campaign(target, product, monkeypatch, domain, lane):
     directory, root, manifest, _originals, _checked = prepare(product, monkeypatch)
     state, _updates = native.admit(root, directory, domain=domain, lane=lane, environ=environment())
@@ -158,7 +195,7 @@ def test_source_job_matrices_are_an_exact_disjoint_partition(changes, scope):
     assert set(identity(independent)).isdisjoint(identity(native_rows))
     assert sorted(identity(independent) + identity(native_rows)) == sorted(identity(complete))
     required = {('shared', lane) for lane in planner.LANES} | {
-        ('cpp', 'integration'), ('ci-contracts', 'integration')}
+        ('cpp', 'integration'), ('rust', 'integration'), ('ci-contracts', 'integration')}
     assert independent == [row for row in complete if (row['domain'], row['lane']) not in required]
     assert native_rows == [row for row in complete if (row['domain'], row['lane']) in required]
     assert result['source_independent'] is bool(independent)
@@ -171,11 +208,11 @@ def test_source_job_matrices_are_an_exact_disjoint_partition(changes, scope):
 def test_frontend_only_native_requirements_do_not_enable_legacy_qualification(language):
     result = planner.select([('M', f'pcc/frontends/{language}/parser.py')])
     assert not result['legacy'] and result['source_independent']
-    if language == 'cpp':
+    if language in {'cpp', 'rust'}:
         assert result['source_native'] and result['native_stage1']
-        assert result['matrix_native'] == {'include': [{'domain': 'cpp', 'lane': 'integration'}]}
+        assert result['matrix_native'] == {'include': [{'domain': language, 'lane': 'integration'}]}
         assert result['matrix_independent']['include'] == [
-            {'domain': 'cpp', 'lane': lane} for lane in ('ordinary', 'reference')]
+            {'domain': language, 'lane': lane} for lane in ('ordinary', 'reference')]
         assert result['matrix_native_stage1'] == {'include': [planner.NATIVE_PLATFORMS[0]]}
     else:
         assert not result['source_native'] and not result['native_stage1']
@@ -211,6 +248,14 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
     assert 'name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}' in consumer
     assert '--stage1-bundle "$RUNNER_TEMP/source-native-input"' in consumer
     assert consumer.index('actions/download-artifact@v7') < consumer.index('scripts/ci_validation_run.py')
+    # Rust keeps the exact official compiler and both authenticated reference
+    # targets when its integration partition moves to the existing bundle owner.
+    install = consumer.split('      - name: Install the pinned official Rust compiler and both checked targets', 1)[1]
+    install = install.split('      - name: Bind actual available reference tools', 1)[0]
+    assert "if: ${{ matrix.domain == 'shared' || matrix.domain == 'rust' }}" in install
+    assert 'rustup toolchain install 1.91.1 --profile minimal' in install
+    assert '--target x86_64-unknown-linux-gnu --target aarch64-apple-darwin' in install
+    assert 'PCC_CI_RUST_TOOLCHAIN=1.91.1' in install
     for job in (independent, consumer):
         assert 'PCC_TEST_NO_NATIVE_PROVISIONING: "1"' in job
         assert 'PCC_NO_AUTO_PCC1: "1"' in job
@@ -239,7 +284,8 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
 
 
 @pytest.mark.parametrize('path,native_required', [
-    ('pcc/frontends/cpp/parser.py', True), ('pcc/frontends/rust/parser.py', False),
+    ('pcc/frontends/cpp/parser.py', True), ('pcc/frontends/rust/parser.py', True),
+    ('pcc/frontends/java/parser.py', False), ('pcc/frontends/go/parser.py', False),
     ('pcc/runtime/py/owner.py', True), ('docs/status.md', False),
 ])
 def test_producer_preserves_full_chain_exclusion_for_every_plan(path, native_required):
@@ -271,6 +317,10 @@ def test_dispatch_planner_validates_full_chain_before_any_job_output(
                                           'pytest_selection': selection}}))
     out, outputs = tmp_path / 'plan.json', tmp_path / 'outputs'
     monkeypatch.setattr('sys.argv', ['ci_validation_plan.py', '--out', str(out)])
+    # This is an isolated planner unit test with inert source discovery, not
+    # admission of a runtime or evidence of a real hosted workflow lease.
+    for key in ('GITHUB_REPOSITORY', 'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT'):
+        monkeypatch.setenv(key, environment()[key])
     monkeypatch.setenv('GITHUB_EVENT_PATH', str(event))
     monkeypatch.setenv('GITHUB_EVENT_NAME', 'workflow_dispatch')
     monkeypatch.setenv('GITHUB_SHA', COMMIT)
@@ -303,7 +353,7 @@ def test_dispatch_planner_validates_full_chain_before_any_job_output(
             {'domain': domain, 'lane': lane} for domain in result['domains'] for lane in planner.LANES]
     else:
         assert not result['legacy'] and result['domains'] == [language]
-        expected = list(planner.NATIVE_PLATFORMS[:1]) if language == 'cpp' else []
+        expected = list(planner.NATIVE_PLATFORMS[:1]) if language in {'cpp', 'rust'} else []
         assert result['matrix_native_stage1']['include'] == expected
 
 

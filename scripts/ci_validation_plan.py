@@ -38,8 +38,14 @@ NATIVE_PLATFORMS = (
 )
 
 
-def requires_native_inputs(domain, lane):
-    """Only these source lanes consume the existing same-run native artifacts."""
+def requires_native_inputs(domain, lane, *, platform=None):
+    """Only these source owners consume the same-run Linux Stage1 inputs.
+
+    A lane without an explicit platform is the original default campaign.
+    Additional Rust owners do not consume the Linux yyjson ABI fixture.
+    """
+    if domain == "rust":
+        return lane == "integration" and platform in (None, "linux-x86_64")
     return lane in LANES and (
         domain == "shared" or (lane == "integration" and domain in {"cpp", "ci-contracts"})
     )

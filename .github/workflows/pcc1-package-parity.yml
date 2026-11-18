@@ -795,7 +795,7 @@ jobs:
       - name: Install frozen host test dependencies only
         run: uv sync --frozen --dev --no-install-project
       - name: Install the pinned official Rust compiler and both checked targets
-        if: ${{ matrix.domain == 'shared' }}
+        if: ${{ matrix.domain == 'shared' || matrix.domain == 'rust' }}
         shell: bash
         run: |
           set -euo pipefail

@@ -499,7 +499,8 @@ def run(args):
             from . import ci_validation_native_inputs
         except ImportError:
             import ci_validation_native_inputs
-        if ci_validation_native_inputs.requires_native_inputs(args.domain, args.lane) or native_bundle is not None:
+        if (ci_validation_native_inputs.requires_native_inputs(args.domain, args.lane, platform=platform)
+                or native_bundle is not None):
             native_inputs, native_updates = ci_validation_native_inputs.admit(
                 ROOT, native_bundle, domain=args.domain, lane=args.lane)
             receipt["native_inputs"] = native_inputs
