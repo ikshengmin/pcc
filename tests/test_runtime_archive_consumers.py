@@ -227,6 +227,8 @@ def test_hatch_verifies_archive_without_importing_an_installed_pcc(tmp_path, mon
     assert result["member_count"] == 1
     reader_source = module._provenance.read_members.__globals__["__file__"]
     assert Path(reader_source).resolve() == (REPO / "pcc/backend/ar.py").resolve()
+    digest_reader = module._provenance.read_member_digests.__globals__["__file__"]
+    assert Path(digest_reader).resolve() == (REPO / "pcc/backend/ar.py").resolve()
 
 
 def test_hatch_target_stamp_uses_owned_host_abi_without_cc(tmp_path, monkeypatch):

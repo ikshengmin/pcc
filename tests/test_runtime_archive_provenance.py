@@ -1194,3 +1194,53 @@ def test_makefile_requests_emitter_receipts_for_pcc_python_objects() -> None:
         in threaded_emitter
     )
     assert "--source py/freestanding_thread_kernel_pthread.py" in threaded_emitter
+
+
+def test_whole_file_pin_and_format_error_precedence(tmp_path):
+    data = b"!<arch>\n" + b"x" * 100000
+    path = tmp_path / "bad.a"
+    path.write_bytes(data)
+    for digest in ("0" * 64, "not-a-hash"):
+        with pytest.raises(ProvenanceError, match="differs from its expected verified snapshot"):
+            provenance_module._extract_archive_members(path, ar="unused", expected_archive_sha256=digest)
+    for digest in (None, hashlib.sha256(data).hexdigest()):
+        with pytest.raises(ProvenanceError, match="bad archive member header magic"):
+            provenance_module._extract_archive_members(path, ar="unused", expected_archive_sha256=digest)
+
+
+def test_runtime_archive_pin_and_object_use_one_forward_stream(tmp_path, monkeypatch):
+    import io
+    from tests.python.test_ar_archive import _member
+
+    path = tmp_path / "objects.a"
+    content = b"right:" + b"p" * (3 * 65536)
+    old = b"!<arch>\n" + _member(b"member.o/", content)
+    replaced = old.replace(b"right:", b"wrong:")
+    path.write_bytes(old)
+    opened = []
+
+    class BoundFile(io.BytesIO):
+        def read(self, n=-1):
+            # Do not allow validation to retain a complete payload or reopen
+            # the current pathname once this descriptor's snapshot was chosen.
+            assert 0 < n <= 65536
+            data = super().read(min(n, 10003))
+            self.consumed += len(data)
+            return data
+
+    def selected(name, mode):
+        assert name == str(path) and mode == "rb"
+        # The legacy magic probe is not a payload read. Only once an actual
+        # payload read began can a later open select different file bytes.
+        changed = any(handle.consumed > 8 for handle in opened)
+        handle = BoundFile(replaced if changed else old)
+        handle.consumed = 0
+        opened.append(handle)
+        return handle
+
+    monkeypatch.setattr(provenance_module, "open", selected, raising=False)
+    result = provenance_module._extract_archive_members(
+        path, ar="no-external-tool", expected_archive_sha256=hashlib.sha256(old).hexdigest(),
+    )
+    assert result == {"member.o": hashlib.sha256(content).hexdigest()}
+    assert [handle.consumed for handle in opened] in ([len(old)], [8, len(old)])

@@ -18,12 +18,12 @@ import tempfile
 from typing import Iterable, Sequence
 
 if __package__:
-    from ..backend.ar import ArchiveFormatError, read_members
+    from ..backend.ar import ArchiveFormatError, read_member_digests, read_members
 else:
     # Direct file-spec consumers already running from an installed/source pcc
     # keep the same canonical reader. Isolated wheel hooks supply a private
     # package rooted at their own source artifact instead.
-    from pcc.backend.ar import ArchiveFormatError, read_members
+    from pcc.backend.ar import ArchiveFormatError, read_member_digests, read_members
 
 RECEIPT_SCHEMA = "pcc.runtime-object-provenance.v1"
 MANIFEST_SCHEMA = "pcc.runtime-archive-provenance.v2"
@@ -501,27 +501,39 @@ def _archive_members(archive_path: Path, *, ar: str) -> list[str]:
 
 def _extract_archive_members(
     archive_path: Path, *, ar: str, expected_archive_sha256: str | None = None,
-) -> dict[str, bytes]:
-    # Keep the former tool-selection argument source-compatible while callers
-    # migrate. Archive verification always uses the owned parser in process.
-    del ar
+) -> dict[str, str]:
+    """Return the ordered names and measured digests, never all object bytes."""
+    del ar  # Retained for source compatibility; no external archiver.
     _require_regular_archive(archive_path)
-    try:
-        archive_bytes = archive_path.read_bytes()
-        if expected_archive_sha256 is not None:
-            if (not _is_sha256(expected_archive_sha256)
-                    or _sha256_bytes(archive_bytes) != expected_archive_sha256):
-                raise ProvenanceError("runtime archive differs from its expected verified snapshot")
-        members = read_members(archive_bytes)
-        del archive_bytes
-    except ArchiveFormatError as exc:
-        raise ProvenanceError(str(exc)) from exc
-    extracted: dict[str, bytes] = {}
-    for member, payload in members:
+    archive_hash = None if expected_archive_sha256 is None else hashlib.sha256()
+    # Integrity of a pinned archive precedes framing/name errors, as when the
+    # entire archive was retained in memory. On invalid input consume the
+    # remaining bytes of this same open stream before choosing that error.
+    with open(str(archive_path), "rb") as stream:
+        try:
+            members = read_member_digests(stream, hashlib.sha256, archive_hash)
+        except ArchiveFormatError as exc:
+            if archive_hash is not None:
+                while True:
+                    block = stream.read(65536)
+                    if not block:
+                        break
+                    archive_hash.update(block)
+                if (not _is_sha256(expected_archive_sha256)
+                        or archive_hash.hexdigest() != expected_archive_sha256):
+                    raise ProvenanceError("runtime archive differs from its expected verified snapshot") from exc
+            raise ProvenanceError(str(exc)) from exc
+    if archive_hash is not None and (
+        not _is_sha256(expected_archive_sha256)
+        or archive_hash.hexdigest() != expected_archive_sha256
+    ):
+        raise ProvenanceError("runtime archive differs from its expected verified snapshot")
+    extracted: dict[str, str] = {}
+    for member, digest in members:
         _validate_archive_member_name(member)
         if member in extracted:
             raise ProvenanceError("runtime archive contains duplicate member names")
-        extracted[member] = payload
+        extracted[member] = digest
     return extracted
 
 
@@ -561,6 +573,18 @@ def _validate_member_record(
     member_bytes: bytes,
     runtime_root: Path,
 ) -> str:
+    return _validate_hashed_member_record(
+        record, member=member, object_sha256=_sha256_bytes(member_bytes), runtime_root=runtime_root,
+    )
+
+
+def _validate_hashed_member_record(
+    record: dict[str, object],
+    *,
+    member: str,
+    object_sha256: str,
+    runtime_root: Path,
+) -> str:
     if (
         not _RECEIPT_REQUIRED_FIELDS.issubset(record)
         or not set(record).issubset(_RECEIPT_FIELDS)
@@ -595,7 +619,7 @@ def _validate_member_record(
         or any(ord(character) < 32 for character in target_triple)
     ):
         raise ProvenanceError(f"{member}: target triple is missing")
-    if record.get("object_sha256") != _sha256_bytes(member_bytes):
+    if record.get("object_sha256") != object_sha256:
         raise ProvenanceError(f"{member}: archived object does not match its receipt")
     source = _source_from_logical_path(record.get("source"), runtime_root)
     if not os.path.isfile(str(source)):
@@ -673,14 +697,14 @@ def assemble_runtime_archive_manifest(
     for object_path, member in zip(object_paths, expected, strict=True):
         object_path = Path(object_path)
         receipt = _load_json_object(receipt_path_for_object(object_path))
-        object_bytes = object_path.read_bytes()
-        if _sha256_bytes(object_bytes) != _sha256_bytes(extracted[member]):
+        object_sha256 = _sha256_bytes(object_path.read_bytes())
+        if object_sha256 != extracted[member]:
             raise ProvenanceError(f"{member}: archive member differs from build object")
         target_triples.add(
-            _validate_member_record(
+            _validate_hashed_member_record(
                 receipt,
                 member=member,
-                member_bytes=object_bytes,
+                object_sha256=object_sha256,
                 runtime_root=runtime_root,
             )
         )
@@ -772,10 +796,10 @@ def verify_runtime_archive_manifest(
     target_triples: set[str] = set()
     for record, member in zip(typed_records, members, strict=True):
         target_triples.add(
-            _validate_member_record(
+            _validate_hashed_member_record(
                 record,
                 member=member,
-                member_bytes=extracted[member],
+                object_sha256=extracted[member],
                 runtime_root=runtime_root,
             )
         )
