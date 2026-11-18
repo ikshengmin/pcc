@@ -1327,7 +1327,15 @@ class Preprocessor:
         # identifier scan finds every identifier token (and some spellings
         # inside literals), so a line naming none of them rescans unchanged.
         names = IDENTIFIER_RE.findall(line)
-        if self.macros.keys().isdisjoint(names) and _EXPANDING_BUILTINS.isdisjoint(names):
+        # Macro names and regex matches are strings. Test the mapping itself:
+        # the native compiler currently lowers keys() to an iterable snapshot,
+        # not the Python set-like keys view needed by isdisjoint().
+        macro_free = True
+        for name in names:
+            if name in self.macros:
+                macro_free = False
+                break
+        if macro_free and _EXPANDING_BUILTINS.isdisjoint(names):
             result = self._serialize_macro_fragments((line,))
             self._expand_cache[line] = result
             return result

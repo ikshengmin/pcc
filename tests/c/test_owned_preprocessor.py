@@ -2,7 +2,7 @@
 
 import pytest
 
-from pcc.frontends.c.preprocessor import preprocess
+from pcc.frontends.c.preprocessor import Preprocessor, preprocess
 from pcc.frontends.c.evaluator.c_evaluator import CEvaluator, TranslationUnit
 
 
@@ -512,3 +512,109 @@ def test_block_storage_class_follows_target_and_blocks_options():
     assert "__block int counter;" in preprocess(
         source, target_triple=darwin, cpp_args=["-fno-blocks"],
     )
+
+
+# Real C inputs for the macro-free expansion decision.
+
+
+@pytest.mark.parametrize(
+    "line",
+    [
+        "",
+        "   ",
+        "int n = 3;",
+        "int n = 3;  ",
+        "name name other",
+        '"text with macro spellings"',
+    ],
+)
+def test_expand_line_unchanged_lines_match_serialization(line):
+    pp = Preprocessor()
+    expected = pp._serialize_macro_fragments((line,))
+    assert pp._expand_line(line) == expected
+    assert pp._expand_cache[line] == expected
+    assert pp._expand_line(line) == expected
+
+
+@pytest.mark.parametrize(
+    "source,expected",
+    [
+        ("#define VALUE 23\nVALUE VALUE\n", "23 23"),
+        ("#define VALUE 23\n#undef VALUE\nVALUE\n", "VALUE"),
+        ('#define VALUE 23\n"VALUE"\n', '"VALUE"'),
+        ("#define F(x) x + 1\nF(4)\n", "4 + 1"),
+        ("#define F(x) F(x)\nF(4)\n", "F(4)"),
+    ],
+)
+def test_expand_line_actual_c_macro_sources(source, expected):
+    pp = Preprocessor()
+    assert pp.preprocess(source).strip() == expected
+
+
+def test_expand_line_macro_hit_preserves_builtin_short_circuit(monkeypatch):
+    import pcc.frontends.c.preprocessor as module
+
+    class MustNotRun:
+        def isdisjoint(self, names):
+            raise AssertionError("right operand must be short-circuited")
+
+    pp = Preprocessor(defines={"VALUE": "7"})
+    monkeypatch.setattr(module, "_EXPANDING_BUILTINS", MustNotRun())
+    assert pp._expand_line("VALUE").strip() == "7"
+
+
+def test_expand_line_macro_free_propagates_builtin_exception(monkeypatch):
+    import pcc.frontends.c.preprocessor as module
+
+    class Fails:
+        def isdisjoint(self, names):
+            raise ValueError("right operand error")
+
+    pp = Preprocessor()
+    monkeypatch.setattr(module, "_EXPANDING_BUILTINS", Fails())
+    with pytest.raises(ValueError, match="right operand error"):
+        pp._expand_line("ordinary")
+    assert "ordinary" not in pp._expand_cache
+
+
+def test_expand_line_line_file_and_pragma_stay_on_rescan_path():
+    pp = Preprocessor()
+    pp._line_no = 42
+    pp._file = "sample.c"
+    assert pp._expand_line("__LINE__ __FILE__").strip() == '42 "sample.c"'
+    pp.preprocess(
+        '#define VALUE 1\n#pragma push_macro("VALUE")\n#undef VALUE\n#define VALUE 2\n'
+    )
+    assert pp._expand_line('_Pragma("pop_macro(\\"VALUE\\")") VALUE').strip() == "1"
+
+
+def test_expand_line_complete_preprocessor_expand_line_is_owned_under_strict_aot():
+    """Compile the real module, not a reduced copy of the fast-path helper."""
+    import re
+    from pathlib import Path
+
+    from pcc.frontends.c import preprocessor
+    from pcc.frontends.python import type_infer
+    from pcc.frontends.python.py_lift import parse_and_lift
+    from pcc.frontends.python.codegen.layer1 import L1CodeGen
+
+    path = Path(preprocessor.__file__)
+    module = type_infer.infer_module(
+        parse_and_lift(
+            path.read_text(encoding="utf-8"),
+            str(path),
+            "pcc.frontends.c.preprocessor",
+        )
+    )
+    generator = L1CodeGen(module, ir_scaffold_mode="on")
+    generator._strict_no_libpython = True
+    output = str(generator.generate(module))
+    bodies = re.findall(
+        r"^define[^\n]*@user_pcc_frontends_c_preprocessor_Preprocessor__expand_line\([^\n]*\) \{\n.*?^\}",
+        output,
+        re.MULTILINE | re.DOTALL,
+    )
+    assert len(bodies) == 1
+    body = bodies[0]
+    assert "strict.nolib.stub" not in body
+    assert "@py_cpy_" not in body
