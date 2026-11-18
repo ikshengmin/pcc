@@ -3,6 +3,8 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
+from tests.ir_function_body import function_body
+
 
 def test_cross_module_valueclass_method_keeps_direct_aggregate_abi(tmp_path) -> None:
     from pcc.frontends.python.pipeline import compile_python_multi
@@ -65,9 +67,7 @@ def pick(source: Source) -> int:
         rf"define external {aggregate} @user_provider_Source_read\(",
         ir_text,
     )
-    pick_start = ir_text.index("@user_consumer_pick")
-    pick_end = ir_text.index("\n}", pick_start)
-    pick_ir = ir_text[pick_start:pick_end]
+    pick_ir = function_body(ir_text, "user_consumer_pick")
     assert re.search(
         rf"call {aggregate} \(ptr\) @user_provider_Source_read\(",
         pick_ir,
@@ -156,9 +156,7 @@ def pick(source: Source) -> int:
         rf"define external {aggregate} @user_provider_Source_read\(",
         ir_text,
     )
-    pick_start = ir_text.index("@user_consumer_pick")
-    pick_end = ir_text.index("\n}", pick_start)
-    pick_ir = ir_text[pick_start:pick_end]
+    pick_ir = function_body(ir_text, "user_consumer_pick")
     assert re.search(
         rf"call {aggregate} \(ptr\) @user_provider_Source_read\(",
         pick_ir,
@@ -226,17 +224,13 @@ def use_span() -> int:
         rf"define external ptr @user_pcc_backend_consumer_read_span\({aggregate} %span, ptr %index\)",
         ir_text,
     ), ir_text
-    read_start = ir_text.index("@user_pcc_backend_consumer_read_span")
-    read_end = ir_text.index("\n}", read_start)
-    read_ir = ir_text[read_start:read_end]
+    read_ir = function_body(ir_text, "user_pcc_backend_consumer_read_span")
     assert re.search(
         rf"call i64 \({aggregate}, i64\) "
         rf"@user_pcc_backend_records_Triple_get_unchecked\({aggregate}",
         read_ir,
     ), read_ir
-    use_start = ir_text.index("@user_pcc_backend_consumer_use_span")
-    use_end = ir_text.index("\n}", use_start)
-    use_ir = ir_text[use_start:use_end]
+    use_ir = function_body(ir_text, "user_pcc_backend_consumer_use_span")
     assert re.search(
         rf"call ptr \({aggregate}, ptr\) @user_pcc_backend_consumer_read_span\({aggregate}",
         use_ir,
@@ -313,9 +307,7 @@ def pick(source: Source) -> int:
         rf"define external {aggregate} @user_pkg_provider_Source_read\(",
         ir_text,
     )
-    pick_start = ir_text.index("@user_pkg_consumer_pick")
-    pick_end = ir_text.index("\n}", pick_start)
-    pick_ir = ir_text[pick_start:pick_end]
+    pick_ir = function_body(ir_text, "user_pkg_consumer_pick")
     assert re.search(
         rf"call {aggregate} \(ptr\) @user_pkg_provider_Source_read\(",
         pick_ir,

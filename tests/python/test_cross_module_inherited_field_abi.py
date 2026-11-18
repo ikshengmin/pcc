@@ -5,6 +5,8 @@ import subprocess
 
 import pytest
 
+from tests.ir_function_body import function_body
+
 
 def test_export_field_order_matches_nested_method_control_flow(tmp_path):
     from pcc.frontends.python.pipeline_context import build_closed_world_context
@@ -191,11 +193,7 @@ def read_base(seed: Seed) -> int:
     ), body
     assert "i32 14)" not in body
 
-    base_symbol = ir_text.index("@user_consumer_read_base")
-    base_start = ir_text.rfind("define external", 0, base_symbol)
-    assert base_start >= 0
-    base_end = ir_text.index("\n}", base_start)
-    base_body = ir_text[base_start:base_end]
+    base_body = function_body(ir_text, "user_consumer_read_base")
     assert re.search(
         r"@py_instance_get_field\(ptr %[^,]+, i32 6\)",
         base_body,
@@ -347,9 +345,7 @@ def touch_nested(arena: Arena | None) -> int:
         target_triple="arm64-apple-darwin23.6.0",
     )
     ir_text = output.read_text(encoding="utf-8")
-    start = ir_text.index("@user_consumer_touch")
-    end = ir_text.index("\n}", start)
-    body = ir_text[start:end]
+    body = function_body(ir_text, "user_consumer_touch")
     assert "@user_owner_Arena_append4" in body, body
     assert "@py_obj_getattr" not in body, body
     nested_start = ir_text.index(
