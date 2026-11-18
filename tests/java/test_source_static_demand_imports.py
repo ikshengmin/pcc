@@ -5,8 +5,8 @@ https://docs.oracle.com/javase/specs/jls/se21/html/jls-7.html#jls-7.5.4
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-6.html#jls-6.4.1
 https://docs.oracle.com/javase/specs/jls/se21/html/jls-15.html#jls-15.12
 
-Single method imports shadow matching signatures. Mixed unshadowed overloads
-remain an explicit frontier because the selected JDK21 disagrees with the JLS.
+Single method imports shadow matching signatures. The owned primitive overload
+tests follow the JLS even where the unchanged selected-JDK obligations disagree.
 On-demand types, inherited declarations and managed execution stay separate.
 All original maps are shared unchanged with actual native/JDK obligations.
 """
@@ -60,6 +60,12 @@ CASES = [
         "return VALUE;", {**FIELDS, "chosen.C": "public static final int VALUE=42;"})),
     ("single-signature-shadows-demand-conflict", project(TWO_IMPORTS + "import static chosen.C.f;",
         "return f(1);", {**METHODS, "chosen.C": "public static int f(int n){return 42;}"})),
+    ("mixed-most-specific-single", project(IMPORT + "import static chosen.C.f;", "return f(1);",
+        {"provider.Values": "public static int f(long n){return 7;}",
+         "chosen.C": "public static int f(int n){return 42;}"})),
+    ("mixed-only-single-applicable", project("import static chosen.C.f;" + IMPORT, "return f(1);",
+        {"provider.Values": "public static int f(boolean n){return 7;}",
+         "chosen.C": "public static int f(long n){return 42;}"})),
     ("unused-mixed-overloads", project(IMPORT + "import static chosen.C.f;", "return 42;",
         {"provider.Values": "public static int f(long n){return 7;}",
          "chosen.C": "public static int f(int n){return 9;}"})),
@@ -194,21 +200,45 @@ def test_static_demand_tables_preserve_tokens_and_declaration_identity():
     assert set(demand) == {("provider/Values", ("int",)), ("provider/Values", ("long",))}
     for (owner, parameters), method in {**single, **demand}.items():
         assert method is analyzed.analyzers[owner].methods["f", parameters]
-    with pytest.raises(UnsupportedJava, match="mixed single-static and on-demand") as caught:
-        analyzed.imported_methods(caller, "f", caller.token)
-    assert caught.value.code == "java.unsupported.static-imports"
+    actual = analyzed.imported_methods(caller, "f", caller.token)
+    assert set(actual) == {("chosen/C", ("int",)), ("provider/Values", ("long",))}
+    assert all(method is analyzed.analyzers[owner].methods["f", parameters]
+               for (owner, parameters), method in actual.items())
 
 
 @pytest.mark.parametrize("name,sources", MIXED_METHOD_FRONTIERS, ids=[row[0] for row in MIXED_METHOD_FRONTIERS])
-def test_mixed_static_demand_overloads_keep_explicit_source_frontier(name, sources, monkeypatch):
-    from pcc.frontends.java.source_lowering import SourceLowerer
-    monkeypatch.setattr(SourceLowerer, "__init__", lambda *a: pytest.fail("mixed import frontier reached lowering"))
-    original = dict(sources)
-    for inputs in (sources, dict(reversed(tuple(sources.items())))):
-        with pytest.raises(UnsupportedJava, match="mixed single-static and on-demand") as caught:
-            compile_sources(inputs, entry_class="app.Main")
-        assert caught.value.code == "java.unsupported.static-imports"
-    assert sources == original
+def test_mixed_static_demand_overloads_bind_original_declarations(name, sources):
+    owners = (("chosen/C", "provider/Values") if name == "single-narrow-keeps-demand-wide"
+              else ("provider/Values", "chosen/C"))
+    for inputs in (sources.items(), reversed(tuple(sources.items()))):
+        resolved = SourceProject([SourceParser(text, path).parse() for path, text in inputs]).analyze()
+        body = resolved.analyzers["app/Main"].methods["run", ()].body
+        left, right = body.children[0].children[0].children
+        for call, owner, params in ((left, owners[0], ("int",)), (right, owners[1], ("long",))):
+            assert call.kind == "call" and call.symbol is resolved.analyzers[owner].methods["f", params]
+
+
+@pytest.mark.parametrize("body,chosen,demand,diagnostic", [
+    ("return f(1,1);", "public static int f(int a,long b){return 1;}",
+     "public static int f(long a,int b){return 2;}", "ambiguous primitive method"),
+    ("return f(true);", "public static int f(int n){return 1;}",
+     "public static int f(long n){return 2;}", "unresolved same-class static method"),
+])
+def test_mixed_overloads_keep_applicability_and_ambiguity_errors(body, chosen, demand, diagnostic):
+    sources = project(IMPORT + "import static chosen.C.f;", body,
+                      {"provider.Values": demand, "chosen.C": chosen})
+    with pytest.raises(JavaError, match=diagnostic) as caught:
+        compile_sources(sources, entry_class="app.Main")
+    assert type(caught.value) is JavaError
+
+
+def test_mixed_reference_parameters_are_not_admitted_by_primitive_import_lookup():
+    sources = project(IMPORT + "import static chosen.C.f;", "return f(null);",
+                      {"provider.Values": "public static int f(Values n){return 2;}",
+                       "chosen.C": "public static int f(int n){return 1;}"})
+    with pytest.raises(UnsupportedJava, match="reference parameters") as caught:
+        analyze_class_sources(sources)
+    assert caught.value.code == "java.unsupported.static-imports"
 
 
 @pytest.mark.parametrize("name,sources,message", INVALID, ids=[row[0] for row in INVALID])
@@ -260,7 +290,8 @@ def test_model_static_demand_skips_instance_members_without_runtime_admission():
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(unavailable=NATIVE_REASON)
-@pytest.mark.parametrize("name,sources", CASES, ids=[row[0] for row in CASES])
+@pytest.mark.parametrize("name,sources", CASES + MIXED_METHOD_FRONTIERS,
+                         ids=[row[0] for row in CASES + MIXED_METHOD_FRONTIERS])
 def test_same_static_demand_originals_execute_owned_native_bytes(name, sources, tmp_path, monkeypatch):
     with monkeypatch.context() as denied:
         forbid_bytecode_or_external_owner(denied)
@@ -321,7 +352,7 @@ def test_static_demand_type_frontier_originals_are_jdk_valid(sources, tmp_path, 
 def test_mixed_static_demand_originals_retain_jdk_conformance_obligation(name, sources, tmp_path, request):
     # This is intentionally not waived or changed to the selected JDK's
     # observed rejection/result. Preserve the normative JLS expectation and
-    # original bytes while the owned mixed-overload capability stays closed.
+    # original bytes independently of the owned native result.
     java, classes, compiler = prepare_reference(sources, tmp_path, request,
         observer=observer_source("app.Main", "I", ()))
     assert compiler[0] == 0, compiler

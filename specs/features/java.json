@@ -2440,11 +2440,11 @@
         "JLS-7",
         "JLS-15"
       ],
-      "scope": "JLS 6.3,6.4.1,6.5.6.1,6.6.1,7.5.4,15.12.1-2. Static-import-on-demand declarations retain original star tokens and bind accessible declared static fields and methods from supplied canonical source owners. Preserve source identities, repeated-import deduplication, unused ambiguity, lexical shadowing and independent namespaces. Single fields shadow on-demand fields by name; single methods shadow matching on-demand signatures. Calling mixed single/on-demand same-name methods with unshadowed signatures remains explicitly unavailable because the selected JDK21 disagrees with normative overload lookup; exact conflicting originals retain their JDK conformance obligations. Empty accessible owners are legal. Accessible on-demand member types remain an explicit capability boundary, as do ordinary type-on-demand imports, missing sources, inheritance and managed execution. Implementation/test binding only; execution and full-feature acceptance are unrecorded.",
+      "scope": "JLS 6.3,6.4.1,6.5.6.1,6.6.1,7.5.4,15.12.1-2. Static-import-on-demand declarations retain original star tokens and bind accessible declared static fields and methods from supplied canonical source owners. Preserve source identities, repeated-import deduplication, unused ambiguity, lexical shadowing and independent namespaces. Single fields shadow on-demand fields by name; single methods shadow matching on-demand signatures. Mixed primitive calls select applicable methods among single imports and unshadowed demand signatures; reference-parameter mixtures remain unavailable. The exact originals retain independent normative JDK conformance obligations even when the selected JDK differs. Empty accessible owners are legal. Accessible on-demand member types remain an explicit capability boundary, as do ordinary type-on-demand imports, missing sources, inheritance and managed execution. Implementation/test binding only; execution and full-feature acceptance are unrecorded.",
       "tests": [
         "tests/java/test_source_static_demand_imports.py::test_static_demand_originals_retain_all_declarations_and_owned_ir",
         "tests/java/test_source_static_demand_imports.py::test_static_demand_tables_preserve_tokens_and_declaration_identity",
-        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_overloads_keep_explicit_source_frontier",
+        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_overloads_bind_original_declarations",
         "tests/java/test_source_static_demand_imports.py::test_invalid_static_demand_originals_fail_before_lowering",
         "tests/java/test_source_static_demand_imports.py::test_accessible_static_demand_types_are_not_silently_dropped",
         "tests/java/test_source_static_demand_imports.py::test_static_demand_preserves_missing_and_noncanonical_dependencies",
@@ -2455,21 +2455,23 @@
         "tests/java/test_source_static_demand_imports.py::test_same_invalid_static_demand_originals_have_jdk_rejections",
         "tests/java/test_source_static_demand_imports.py::test_static_demand_type_frontier_originals_are_jdk_valid",
         "tests/java/test_source_static_imports.py::test_original_unused_static_demand_import_now_keeps_its_source_owner",
-        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_originals_retain_jdk_conformance_obligation"
+        "tests/java/test_source_static_demand_imports.py::test_mixed_static_demand_originals_retain_jdk_conformance_obligation",
+        "tests/java/test_source_static_demand_imports.py::test_mixed_overloads_keep_applicability_and_ambiguity_errors",
+        "tests/java/test_source_static_demand_imports.py::test_mixed_reference_parameters_are_not_admitted_by_primitive_import_lookup"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:12f88eac634cbddf709c3c46fc9bd9888e6021ba6fedf547f450ed13cd7eaa99",
+        "source_revision": "sha256:a79827835bb3e0e75b15a7219eaf48b75ccb7162fedfbd83304adcf77b84d871",
         "sources": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+            "sha256": "f55bb48cc83a193656d009218143ec4c1eb4d15603438b45901c423ff9d537c9"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
-            "sha256": "366dd2c4320a457f9d0d4707ec172312119965101e2af5c91affbd3208ed5b29"
+            "sha256": "e82cef21a9fd241236a3f2405fe14ba32b43ea03810042acc22f57e9c4238021"
           },
           {
             "path": "tests/java/test_source_static_imports.py",
@@ -2477,11 +2479,11 @@
           },
           {
             "path": "tests/java/test_source_static_demand_imports.py",
-            "sha256": "5d9eaa8046adf83ef3594aaa2d99b9251c89b7f995681f0ebe973c1f20c063b6"
+            "sha256": "615d882acc84dce7b54a92164f9706630a6b0aca48348be5e754aae215cdc954"
           },
           {
             "path": "tests/java/test_source_static_member_classes.py",
-            "sha256": "404c9776d66d1ec711785f363205c45af7a55829f8272a6846f4bf23f1f449e3"
+            "sha256": "7878577872334d02b78317a206b5390fc47208dd12338978a3ab67b28f8747be"
           }
         ]
       },
@@ -2494,7 +2496,7 @@
         "JLS-6",
         "JLS-7"
       ],
-      "scope": "JLS 7.5.2,7.5.4. Ordinary type-on-demand imports and static on-demand imports exposing accessible member types and mixed single/on-demand method calls with unshadowed overload signatures remain unavailable. Single-static imports and static field/method on-demand imports have separate source-bound implementation and test slices; no full type-import or inherited-member acceptance.",
+      "scope": "JLS 7.5.2,7.5.4. Ordinary type-on-demand imports and static on-demand imports exposing accessible member types and mixed single/on-demand method overloads involving reference parameters remain unavailable. Single-static imports and static field/method on-demand imports have separate source-bound implementation and test slices; no full type-import or inherited-member acceptance.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/java/test_source_project.py::test_source_project_lookup_gaps_are_not_ignored",
@@ -3637,7 +3639,7 @@
           },
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+            "sha256": "f55bb48cc83a193656d009218143ec4c1eb4d15603438b45901c423ff9d537c9"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -3781,7 +3783,7 @@
           },
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+            "sha256": "f55bb48cc83a193656d009218143ec4c1eb4d15603438b45901c423ff9d537c9"
           }
         ]
       },
@@ -3863,7 +3865,7 @@
           },
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+            "sha256": "f55bb48cc83a193656d009218143ec4c1eb4d15603438b45901c423ff9d537c9"
           },
           {
             "path": "pcc/frontends/java/source_syntax.py",
@@ -3909,7 +3911,7 @@
         "source_sites": [
           {
             "path": "pcc/frontends/java/source_project.py",
-            "sha256": "7aff761107923c11fce853efde03ae556ced0ea7227867280a45c93c1fde72b4"
+            "sha256": "f55bb48cc83a193656d009218143ec4c1eb4d15603438b45901c423ff9d537c9"
           }
         ]
       },

@@ -56,8 +56,12 @@ classes. Imports are validated even when unused, repeated declarations retain on
 identity, and distinct owners stay distinct overload candidates. Own members and
 local values retain their separate Java shadowing rules; ambiguous imported fields
 are rejected at use. Imported fields also obscure expression-name qualifiers.
-On-demand imports, static-imported member types, inner classes, generics and
-inheritance remain unavailable.
+For accessible static methods of supplied owners, single imports shadow
+matching on-demand signatures, not the whole method name. Mixed primitive
+overloads compete by applicability and specificity. The two unchanged mixed
+originals retain independent JDK checks even where the selected javac disagrees.
+Mixed overloads involving reference parameters, ordinary type-on-demand imports,
+inner classes, generics and inheritance are not admitted by this change.
 The new single-static-import ordinary, native-byte and exact-original JDK obligations
 are execution-UNRUN until CI validates this source. This lookup capability does not
 supply JUnit, String objects, class initialization or any managed-runtime acceptance.

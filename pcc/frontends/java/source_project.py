@@ -9,7 +9,7 @@ remain explicit unsupported domains.
 """
 from .diagnostics import UnsupportedJava
 from .source_sema import SourceAnalyzer
-from .source_types import select_method
+from .source_types import DECLARED, select_method
 from .source_member_types import StaticMemberTypes
 
 
@@ -176,16 +176,16 @@ class SourceProject(StaticMemberTypes):
 
     def imported_methods(self, program, name, token):
         single = self.static_methods[program.name].get(name, {})
-        # JLS 6.4.1 shadows by signature, not name. The selected JDK21
-        # reference instead excludes other demand overloads when a single
-        # import supplies this name. Do not silently adopt that disagreement
-        # as source semantics: retain the mixed domain as an explicit gap.
+        # JLS 6.4.1: a single import shadows on-demand methods only at
+        # matching signatures. Keep distinct owners for ambiguity at the call.
         signatures = {method.parameter_types for method in single.values()}
         imported = {key: method for key, method in
                     self.static_demand_methods[program.name].get(name, {}).items()
                     if method.parameter_types not in signatures}
-        if single and imported:
-            token.error("mixed single-static and on-demand method overload lookup requires the next source/reference domain",
+        if single and imported and any(
+                dtype not in DECLARED for group in (single, imported)
+                for method in group.values() for dtype in method.parameter_types):
+            token.error("mixed single-static and on-demand overloads with reference parameters require reference lookup",
                         code="java.unsupported.static-imports")
         imported.update(single)
         return imported

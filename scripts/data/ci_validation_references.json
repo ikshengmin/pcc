@@ -383,7 +383,7 @@
       "test_mixed_static_demand_originals_retain_jdk_conformance_obligation": {
         "activity": "external-reference",
         "reason": [
-          "Runs the same complete mixed-import overload originals with the actual selected JDK compiler and runtime. Normative compile acceptance and raw result 42 remain strict, preserving the observed tool/specification disagreement as a failure rather than waiving or adapting the oracle. Owned mixed-overload execution stays explicitly unavailable."
+          "Runs the same complete mixed-import overload originals with the actual selected JDK compiler and runtime. Normative compile acceptance and raw result 42 remain strict, preserving the observed tool/specification disagreement as a failure rather than waiving or adapting the oracle. The independent owned-native checks do not satisfy this external-reference obligation."
         ]
       }
     },
