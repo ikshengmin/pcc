@@ -1098,6 +1098,14 @@ def _decode_parenthesized_constant_cast(token: str, *, type_context=None) -> str
                 # A double's bit pattern is already the token LLVM writes.
                 return "0x%016X" % bits
             if src_type.width == 32:
+                if ((bits >> 23) & 255) == 255:
+                    # Widen the encoding, not a host NaN: arithmetic NaN
+                    # construction can flip its sign and erase its payload.
+                    # LLVM float tokens carry the binary32 fraction shifted
+                    # into the high 23 bits of the binary64 fraction field.
+                    widened = ((bits >> 31) << 63) | (2047 << 52)
+                    widened |= (bits & ((1 << 23) - 1)) << 29
+                    return "0x%016X" % widened
                 return "0x%016X" % float64_to_bits(bits_to_float32(bits))
             return None
         return None
