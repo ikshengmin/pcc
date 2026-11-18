@@ -18,6 +18,7 @@ from .self_backend_aarch64_darwin_mem import (
 from .self_backend_aarch64_darwin_regalloc import (
     aarch64_zero_test_operand,
     allocated_scalar_register_indexed,
+    callee_saved_registers_enabled,
     callee_saved_area_size,
     emit_callee_saved_frame,
 )
@@ -28,8 +29,8 @@ from .self_backend_aarch64_darwin_regs import (
     emit_const_to_reg_bits,
 )
 from .self_backend_aarch64_darwin_symbols import block_edge_label, block_label
-from .self_backend_ir import I1, ParsedFunction, TypeDesc
-from .self_backend_kernel import IndexedFunctionKernel
+from .self_backend_ir import I1, PARSED_INSTRUCTION_KIND_ICMP, ParsedFunction, TypeDesc
+from .self_backend_kernel import TYPE_KIND_INT, IndexedFunctionKernel
 from .self_backend_module_symbols import PreparedModuleSymbols
 from .self_backend_value_arena import CompilerInt2, CompilerInt4, CompilerIntArena
 
@@ -135,6 +136,45 @@ def emit_cond_branch_terminator(
     return lines
 
 
+def _spilled_terminal_icmp_flags(
+    func: ParsedFunction, kernel: IndexedFunctionKernel, block_id: int, condition_ref: int,
+) -> str:
+    """NZCV for an immediately preceding scalar compare with a live i1 spill.
+
+    This does not grant the exclusive-use optimization: keep the original
+    CSET, byte spill, and condition load (including its register write).
+    The small frame-slot form uses only STURB/LDURB; neither changes flags.
+    An inline edge or a different last instruction is never evidence.
+    """
+    if condition_ref < 0 or not func.indexed_slot_projection or func.is_vararg:
+        return ""
+    block: CompilerInt4 = kernel.block_fact(block_id)
+    if block.second < 1:
+        return ""
+    last = block.first + block.second - 1
+    metadata: CompilerInt4 = kernel.instruction_metadata_by_id(last)
+    if metadata.first != PARSED_INSTRUCTION_KIND_ICMP:
+        return ""
+    fact: CompilerInt4 = kernel.instruction_fact_by_id(last)
+    if fact.first != condition_ref:
+        return ""
+    edges: CompilerInt2 = kernel.inline_error_edge_span(block_id)
+    if edges.second or not callee_saved_registers_enabled():
+        return ""
+    # Scope the proof to the production scalar spill form, not register,
+    # rematerialized, alloca, or synthesized large-offset addressing.
+    slot = kernel.value_slot_id(condition_ref)
+    if slot < 0 or kernel.value_register(condition_ref) is not None:
+        return ""
+    if kernel.alloca_offset(condition_ref) >= 0 or not 0 <= kernel.slot_offset(slot) <= 255:
+        return ""
+    cmp: CompilerInt4 = kernel.instruction_record(metadata.second)
+    kind: CompilerInt4 = kernel.type_header(cmp.second)
+    if kind.first != TYPE_KIND_INT or kind.second not in (32, 64):
+        return ""
+    return kernel.call_texts[cmp.first]
+
+
 def emit_cond_branch_terminator_indexed(
     func: ParsedFunction,
     *,
@@ -198,6 +238,10 @@ def emit_cond_branch_terminator_indexed(
             module_symbols,
             value_id=condition_ref,
         )
+        if len(lines) == 1:
+            fused_predicate = _spilled_terminal_icmp_flags(
+                func, kernel, block_id, condition_ref,
+            )
     # Direct instruction capture records each emitted instruction when its
     # helper is called and the native sink consumes those records in line
     # order, so every helper below is called in output order.  The shape is

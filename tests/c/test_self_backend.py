@@ -116,6 +116,7 @@ from pcc.backend.self_backend_aarch64_darwin import (
     _fold_mov_zero_branch_source,
     _fold_mov_arith_self_update,
     _fold_mov_mov_chain,
+    _fold_cset_zero_branch,
     _fold_zero_test_branch,
     _fold_cond_branch_to_fallthrough,
     _drop_fallthrough_uncond_branches,
@@ -8710,6 +8711,24 @@ no:
     assert any(line.startswith("  sturb w11, [x29, #-") for line in lines)
     assert any(line.startswith("  ldurb w9, [x29, #-") for line in lines)
     assert any(line.startswith("  b.ge ") for line in lines)
+    # The condition is also used on the yes edge. Keep the store, its
+    # later load, and the scratch definition while branching on CMP's NZCV.
+    compare = lines.index("  cmp x0, x1")
+    store = lines[compare + 2]
+    assert store.startswith("  sturb w11, [x29, #-")
+    assert lines[compare + 1:compare + 5] == [
+        "  cset w11, lt", store, "  and w9, w11, #0xff", "  b.ge L_main_no",
+    ]
+    yes, no = lines.index("L_main_yes:"), lines.index("L_main_no:")
+    assert compare + 4 < yes < no
+    assert store.replace("sturb w11", "ldurb w9") in lines[yes:no]
+    assert "  and w1, w9, #1" in lines[yes:no]
+    assert "  movz w0, #0" in lines[no:]
+
+    # A genuinely direct test of the CSET register still gets b.ge,
+    # without sacrificing the store needed by the second use.
+    direct = ["  cmp x0, x1", "  cset w11, lt", store, "  cbz w11, L_main_no"]
+    assert _fold_cset_zero_branch(direct) == [*direct[:3], "  b.ge L_main_no"]
 
 
 def test_self_backend_aarch64_forwards_one_intervening_stack_store_load(monkeypatch):
@@ -9310,6 +9329,8 @@ def test_self_backend_aarch64_folds_dead_mov_compare_source():
 
 
 def test_self_backend_aarch64_folds_dead_mov_zero_branch_source():
+    # The branch can read the original source, but its absent target might
+    # read x10. Scratch-register ABI status does not imply dead at an edge.
     assert _fold_mov_zero_branch_source(
         [
             "  mov w10, w9",
@@ -9317,6 +9338,7 @@ def test_self_backend_aarch64_folds_dead_mov_zero_branch_source():
             "  b L_true",
         ]
     ) == [
+        "  mov w10, w9",
         "  cbz w9, L_false",
         "  b L_true",
     ]
@@ -9328,6 +9350,7 @@ def test_self_backend_aarch64_folds_dead_mov_zero_branch_source():
             "  ret",
         ]
     ) == [
+        "  mov w10, w9",
         "  cbnz w9, L_true",
         "  ret",
     ]
@@ -9430,6 +9453,8 @@ def test_self_backend_aarch64_folds_dead_mov_mov_chain():
             "  movz w10, #5, lsl #0",
         ]
     ) == [
+        # Unlike MOV X9, X9 this 32-bit write clears X9[63:32].
+        "  mov w9, w9",
         "  movz w10, #5, lsl #0",
     ]
 
@@ -9482,6 +9507,8 @@ def test_self_backend_aarch64_folds_zero_test_branch():
             "L_fallthrough:",
         ]
     ) == [
+        # The taken target is not in this fragment. It may observe x10.
+        "  movz w10, #0",
         "  b L_done",
         "L_fallthrough:",
     ]

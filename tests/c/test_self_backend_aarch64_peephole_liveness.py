@@ -15,10 +15,12 @@ from pcc.backend.self_backend_aarch64_darwin import (
     _can_drop_zero_mov_after_store,
     _fold_mov_compare_source,
     _fold_mov_mov_chain,
+    _fold_mov_zero_branch_source,
     _fold_mov_store_source,
     _fold_scratch_def_into_move,
     _fold_zero_compare_immediate,
     _fold_zero_store_source,
+    _fold_zero_test_branch,
     _line_defines_reg_alias,
     _line_uses_reg_alias,
     _scratch_dead_after,
@@ -85,6 +87,102 @@ def _rmw(opcode, width):
     if opcode == 'movk':
         return f'  movk {width}10, #1, lsl #16'
     return f'  {opcode} {width}10, {width}11, #8, #8'
+
+
+def _observed_x1(lines):
+    # The shared scalar word interpreter models these MOVZ/MOV/B/CBZ/CBNZ
+    # instructions, not assembly strings. This is a host check, not CPU execution.
+    from tests.python.test_aarch64_branch_live_registers import execute
+    words = struct.iter_unpack('<I', assemble_text('\n'.join(lines)).code)
+    return execute([word for (word,) in words])['X1']
+
+
+@pytest.mark.parametrize('branch', ['cbz', 'cbnz'])
+@pytest.mark.parametrize('source', [0, 19])
+def test_forwarded_branch_keeps_destination_on_both_successors(branch, source):
+    pre = ['  movz x10, #7', f'  movz x9, #{source}']
+    body = ['  mov w10, w9', f'  {branch} w10, L_take', '  b L_fall',
+            'L_take:', '  mov x1, x10', '  b L_done',
+            'L_fall:', '  mov x1, x10', 'L_done:']
+    actual = _fold_mov_zero_branch_source(body)
+    assert actual == [body[0], f'  {branch} w9, L_take', *body[2:]]
+    assert _observed_x1(pre + body) == _observed_x1(pre + actual) == source
+    assert _observed_x1(pre + actual[1:]) == 7  # Wrong if the MOV is removed.
+
+
+def test_folded_zero_branch_preserves_taken_target_value_in_machine_words():
+    pre = ['  movz x10, #7']
+    body = ['  movz w10, #0', '  cbz w10, L_done', '  movz x1, #3',
+            'L_done:', '  mov x1, x10']
+    actual = _fold_zero_test_branch(body)
+    assert actual == [body[0], '  b L_done', *body[2:]]
+    assert _observed_x1(pre + body) == _observed_x1(pre + actual) == 0
+    assert _observed_x1(pre + actual[1:]) == 7
+
+
+def test_folded_w_self_move_clears_the_live_x_upper_half_in_machine_words():
+    pre = ['  movz x9, #1, lsl #32']
+    body = ['  mov w10, w9', '  mov w9, w10', '  movz w10, #5, lsl #0',
+            '  mov x1, x9']
+    actual = _fold_mov_mov_chain(body)
+    assert actual == ['  mov w9, w9', *body[2:]]
+    assert _observed_x1(pre + body) == _observed_x1(pre + actual) == 0
+    assert _observed_x1(pre + actual[1:]) == 1 << 32
+
+
+@pytest.mark.parametrize('predicate,inverse', [
+    ('eq', 'ne'), ('ne', 'eq'), ('slt', 'ge'), ('sle', 'gt'), ('sgt', 'le'),
+    ('sge', 'lt'), ('ult', 'hs'), ('ule', 'hi'), ('ugt', 'ls'), ('uge', 'lo'),
+])
+@pytest.mark.parametrize('width', ['i32', 'i64'])
+def test_live_terminal_comparison_uses_its_flags_in_both_real_output_paths(tmp_path, predicate, inverse, width):
+    from pcc.backend.arm64_asm_driver import assemble_file
+    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.self_backend_indexed_codec import encode_indexed_module_file
+    from pcc.backend.self_backend_indexed_emit import emit_indexed_module_file
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    ir = f'''target triple = "arm64-apple-darwin"
+define i32 @probe({width} %x, {width} %y) {{
+entry:
+  %q = icmp {predicate} {width} %x, %y
+  br i1 %q, label %yes, label %no
+yes:
+  %v = zext i1 %q to i32
+  ret i32 %v
+no:
+  ret i32 0
+}}
+'''
+    indexed, asm, pco = (tmp_path / name for name in ('input.pidx', 'out.s', 'out.pco'))
+    encode_indexed_module_file(str(indexed), parse_self_backend_module(ir))
+    emit_indexed_module_file(str(indexed), str(asm), 'ASM', optimize=True)
+    text = asm.read_text()
+    assert '  cset w11, ' in text and '  sturb w11, ' in text and '  ldurb w9, ' in text
+    assert f'  b.{inverse} L_probe_no\n' in text
+    sections, undefined = assemble_file(text)
+    emit_indexed_module_file(str(indexed), str(pco), 'PCO', optimize=True)
+    assert pco.read_bytes() == encode_native_object_from_sections(sections, undefined=undefined)
+
+
+def test_branch_on_earlier_condition_cannot_borrow_later_cmp_flags():
+    from pcc.backend.self_backend import emit_aarch64_darwin_asm
+    ir = '''target triple = "arm64-apple-darwin"
+define i32 @probe(i64 %x, i64 %y) {
+entry:
+  %q = icmp slt i64 %x, %y
+  %other = icmp sgt i64 %x, %y
+  br i1 %q, label %yes, label %no
+yes:
+  %v = zext i1 %other to i32
+  ret i32 %v
+no:
+  ret i32 7
+}
+'''
+    lines = emit_aarch64_darwin_asm(ir).splitlines()
+    assert '  cset w11, lt' in lines and '  cset w11, gt' in lines
+    assert '  cbz w9, L_probe_no' in lines
+    assert not any(x.startswith('  b.') and x.endswith(' L_probe_no') for x in lines)
 
 
 @pytest.mark.parametrize('opcode', ['movk', 'bfi', 'bfxil'])

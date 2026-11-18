@@ -180,7 +180,8 @@ def test_owned_returns_fresh_independent_mapping_for_each_call():
 def test_actual_fresh_indexed_worker_pco_bytes_equal(tmp_path, monkeypatch, shape):
     sidecar = _sidecar(tmp_path, shape)
     source = sidecar.read_bytes()
-    old, new = tmp_path / 'old.pco', tmp_path / 'new.pco'
+    old, owned_asm, new = (tmp_path / name for name in
+                           ('public.s', 'owned.s', 'worker.pco'))
     measured = []
     candidate = driver._measure_owned_text_layout
     def owned(*args, **kwargs):
@@ -188,14 +189,21 @@ def test_actual_fresh_indexed_worker_pco_bytes_equal(tmp_path, monkeypatch, shap
         measured.append(result)
         return result
     monkeypatch.setattr(emitter, '_measure_owned_text_layout', driver.measure_text_layout)
-    worker.emit_indexed_module_file(str(sidecar), str(old), 'PCO', optimize=True)
+    # The ASM path needs a separate layout measurement. The default PCO
+    # path finalizes its permanent native builder, not a throwaway builder.
+    worker.emit_indexed_module_file(str(sidecar), str(old), 'ASM', optimize=True)
     monkeypatch.setattr(emitter, '_measure_owned_text_layout', owned)
-    worker.emit_indexed_module_file(str(sidecar), str(new), 'PCO', optimize=True)
+    worker.emit_indexed_module_file(str(sidecar), str(owned_asm), 'ASM', optimize=True)
     assert len(measured) == 1 and measured[0][1] > 0
-    assert new.read_bytes() == old.read_bytes()
+    assert owned_asm.read_bytes() == old.read_bytes()
+    sections, undefined = driver.assemble_file(old.read_text())
+    reference_pco = encode_native_object_from_sections(sections, undefined=undefined)
+    worker.emit_indexed_module_file(str(sidecar), str(new), 'PCO', optimize=True)
+    assert len(measured) == 1  # No second line-layout pass for PCO.
+    assert new.read_bytes() == reference_pco
     assert sidecar.read_bytes() == source
-    assert not (tmp_path / 'old.pco.tmp').exists()
-    assert not (tmp_path / 'new.pco.tmp').exists()
+    for path in (old, owned_asm, new):
+        assert not Path(str(path) + '.tmp').exists()
 
 
 def test_measurement_builder_closed_before_metadata_error(tmp_path, monkeypatch):
@@ -207,10 +215,57 @@ def test_measurement_builder_closed_before_metadata_error(tmp_path, monkeypatch)
         raise RuntimeError('metadata control failure')
     monkeypatch.setattr(emitter, '_append_compact_unwind', fail)
     sidecar = _sidecar(tmp_path, 'scalar')
-    output = tmp_path / 'failed.pco'
+    # The private *measurement* builder belongs to the ordinary ASM lane.
+    output = tmp_path / 'failed.s'
     with pytest.raises(RuntimeError, match='metadata control failure'):
-        worker.emit_indexed_module_file(str(sidecar), str(output), 'PCO', optimize=True)
-    assert not output.exists() and not (tmp_path / 'failed.pco.tmp').exists()
+        worker.emit_indexed_module_file(str(sidecar), str(output), 'ASM', optimize=True)
+    assert not output.exists() and not Path(str(output) + '.tmp').exists()
+
+
+@pytest.mark.parametrize('previous', [None, b'previous object'])
+def test_indexed_pco_metadata_error_is_atomic_and_next_emission_succeeds(tmp_path, monkeypatch, previous):
+    sidecar = _sidecar(tmp_path, 'scalar')
+    source = sidecar.read_bytes()
+    output = tmp_path / 'failed.pco'
+    if previous is not None:
+        output.write_bytes(previous)
+    error = RuntimeError('metadata control failure')
+    events = []
+    layout_identity = []
+    original_close = driver.AArch64ModuleBuilder.close
+    def close_actual_builder(builder):
+        assert events == ['metadata'] and not builder.closed
+        # Match the actual owning builder to the layout used at the fault.
+        # Keep only an identity, not a builder or a reference to its labels.
+        assert [id(builder.text_label_offsets())] == layout_identity
+        original_close(builder)
+        assert builder.closed
+        text = builder.buffers[('__TEXT', '__text')].text_builder
+        assert text.closed and text.entries._closed and text.structured_relocations._closed
+        events.append('builder closed')
+    def fail(lines, functions, symbols, offsets, text_size):
+        assert not events and offsets['_probe'] == 0 and text_size > 0
+        layout_identity.append(id(offsets))
+        events.append('metadata')
+        raise error
+    with monkeypatch.context() as patch:
+        # Patch the existing method, not the class or the selected sink type.
+        patch.setattr(driver.AArch64ModuleBuilder, 'close', close_actual_builder)
+        patch.setattr(emitter, '_append_compact_unwind', fail)
+        with pytest.raises(RuntimeError) as caught:
+            worker.emit_indexed_module_file(str(sidecar), str(output), 'PCO', optimize=True)
+    assert caught.value is error and events == ['metadata', 'builder closed']
+    if previous is None:
+        assert not output.exists()
+    else:
+        assert output.read_bytes() == previous
+    assert not Path(str(output) + '.tmp').exists() and sidecar.read_bytes() == source
+    worker.emit_indexed_module_file(str(sidecar), str(output), 'PCO', optimize=True)
+    asm = tmp_path / 'reference.s'
+    worker.emit_indexed_module_file(str(sidecar), str(asm), 'ASM', optimize=True)
+    sections, undefined = driver.assemble_file(asm.read_text())
+    assert output.read_bytes() == encode_native_object_from_sections(sections, undefined=undefined)
+    assert not Path(str(output) + '.tmp').exists() and sidecar.read_bytes() == source
 
 
 @pytest.mark.parametrize('point', ['text_size', 'close'])
