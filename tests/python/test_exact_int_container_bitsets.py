@@ -38,11 +38,67 @@ main()
 '''
 
 
-def test_container_bitsets_scaffold_ir_keeps_object_operands(tmp_path):
+def _mark_standalone_project(directory):
+    # This standalone program imports a compiler-consumed declaration to
+    # select raw-int scaffold semantics. It is not part of the compiler's own
+    # Python package. CI puts --basetemp under the compiler checkout, so give
+    # the program the same project boundary it has outside that checkout.
+    (directory / "pyproject.toml").write_text(
+        '[project]\nname = "container-bitsets"\nversion = "0"\n', encoding="utf-8",
+    )
+
+
+@pytest.fixture
+def bitsets_project(tmp_path):
+    _mark_standalone_project(tmp_path)
+    return tmp_path
+
+
+def test_bitsets_project_does_not_adopt_an_enclosing_checkout(
+    bitsets_project, monkeypatch,
+):
+    from pcc.frontends.python.pipeline_dependency_closure import (
+        _collect_relative_module_closure,
+    )
+
+    # Model the hosted --basetemp placement without symlinks or relying on
+    # this test's own location. The checkout package is unrelated to the
+    # standalone project; sibling files and installed dependencies are not.
+    checkout = bitsets_project / "checkout"
+    extern = checkout / "pcc" / "extern"
+    extern.mkdir(parents=True)
+    (extern.parent / "__init__.py").write_text("", encoding="utf-8")
+    (extern / "__init__.py").write_text("", encoding="utf-8")
+    nested = checkout / "build" / "tests" / "case"
+    nested.mkdir(parents=True)
+    site = bitsets_project / "package-site"
+    site.mkdir()
+    (site / "installed_dep.py").write_text("value = 2\n", encoding="utf-8")
+    monkeypatch.setenv("PCC_PACKAGE_SITE", str(site))
+    monkeypatch.setenv("PCC_ENVIRONMENT", str(bitsets_project / "empty-environment"))
+
+    def modules(root, imports=""):
+        entry = root / "program.py"
+        entry.write_text(imports + PROGRAM, encoding="utf-8")
+        return _collect_relative_module_closure(str(entry))[1]
+
+    # An unmarked nested entry reaches the enclosing compiler package.
+    assert "pcc.extern" in modules(nested)
+    _mark_standalone_project(nested)
+    assert modules(nested) == modules(bitsets_project) == ["program"]
+    imports = "from sibling_dep import value\nfrom installed_dep import value as other\n"
+    for project in (nested, bitsets_project):
+        (project / "sibling_dep.py").write_text("value = 1\n", encoding="utf-8")
+        assert set(modules(project, imports)) == {
+            "program", "sibling_dep", "installed_dep",
+        }
+
+
+def test_container_bitsets_scaffold_ir_keeps_object_operands(bitsets_project):
     from pcc.frontends.python.pipeline import compile_python
 
-    source = tmp_path / "container_bitsets.py"
-    output = tmp_path / "container_bitsets.ll"
+    source = bitsets_project / "container_bitsets.py"
+    output = bitsets_project / "container_bitsets.ll"
     source.write_text(PROGRAM, encoding="utf-8")
     compile_python(str(source), str(output), emit_llvm_only=True)
     text = output.read_text(encoding="utf-8")
@@ -67,12 +123,12 @@ def bitsets_owned_runtime(request, monkeypatch):
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
 def test_container_bitsets_owned_native_five_gc(
-    python_program_compiler, request, bitsets_owned_runtime, tmp_path, capfd,
+    python_program_compiler, request, bitsets_owned_runtime, bitsets_project, capfd,
 ):
     from tests.python.owned_regression_support import assert_owned_program
 
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(
-        PROGRAM, "CONTAINER_BITSETS_OK\n", tmp_path,
+        PROGRAM, "CONTAINER_BITSETS_OK\n", bitsets_project,
         python_program_compiler, mode, bitsets_owned_runtime, capfd,
     )
