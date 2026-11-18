@@ -25,6 +25,70 @@ def _workflow_job(workflow, name):
     return bodies[0]
 
 
+def _workflow_step(job, name):
+    # Stop at the next step (named or unnamed), not at some later gate.
+    bodies = re.findall(r'(?ms)^      - name: ' + re.escape(name)
+                        + r'\n(.*?)(?=^      - |\Z)', job)
+    assert len(bodies) == 1, name
+    return bodies[0]
+
+
+def _stage1_handoff_contract(job, *, mac):
+    platform = 'macos-arm64' if mac else '${{ matrix.platform }}'
+    source = ("steps.mac_stage1.outcome == 'success'" if mac else
+              "steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outputs.ready == 'true'")
+    legacy = '' if mac else "needs.validation-plan.outputs.legacy == 'true' && "
+    selection = ("(inputs.full_chain || inputs.pytest_selection != 'not integration')" if mac else
+                 "!inputs.full_chain && inputs.pytest_selection != 'not integration'")
+    revision = '-${{ github.sha }}-${{ github.run_attempt }}'
+
+    def step(name, condition, *, identity=None):
+        body = _workflow_step(job, name)
+        # Exactly one top-level condition at the owning step. A different
+        # platform restriction (not just a Linux equality), a failure-only
+        # branch or an unrelated companion's outcome must not gate it.
+        assert re.findall(r'^        if: (.+)$', body, re.M) == ["${{ !cancelled() && " + condition + " }}"], name
+        if identity is not None:
+            assert re.findall(r'^        id: (.+)$', body, re.M) == [identity], name
+        return body
+
+    def field(body, key, value, indent=8):
+        assert re.findall('^' + ' ' * indent + key + r': (.+)$', body, re.M) == [value], key
+
+    export = step('Export the admitted native Stage1 identity', source, identity='stage1_export')
+    field(export, 'run', 'uv run --frozen --no-sync python scripts/ci_stage1_artifact_export.py --platform ' + platform)
+    if not mac:
+        field(export, 'PCC_RUNTIME_ARCHIVE', '${{ steps.platform_runtime.outputs.archive }}', 10)
+        field(export, 'PCC_STAGE1_EXPORT_SOURCE_SHA256', '${{ steps.platform_runtime.outputs.source_sha256 }}', 10)
+    bundle = step('Preserve the existing native Stage1 bundle',
+                  "steps.stage1_export.outcome == 'success'", identity='stage1_bundle')
+    owner = step('Stage2 to Stage3 / five original bootstrap owners',
+                 legacy + "steps.stage1_export.outcome == 'success' && " + selection, identity='bootstrap_owner')
+    field(owner, 'run', 'uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration '
+          '--partition bootstrap --in-place --platform ' + platform + ' --bundle build/stage1-native-export '
+          '--out build/bootstrap-owner')
+    report = step('Preserve platform-local bootstrap owner and consumed budget', legacy
+                  + "(steps.bootstrap_owner.outcome == 'success' || steps.bootstrap_owner.outcome == 'failure')")
+    for item, prefix in ((bundle, 'stage1-native-'), (report, 'bootstrap-owner-')):
+        field(item, 'uses', 'actions/upload-artifact@v6')
+        field(item, 'name', prefix + platform + revision, 10)
+        field(item, 'if-no-files-found', 'error', 10)
+    assert ('          path: |\n            build/stage1-native-export/stage1-native.tar.gz\n'
+            '            build/stage1-native-export/manifest.json\n') in bundle
+    field(report, 'path', 'build/bootstrap-owner', 10)
+    assert job.index(export) < job.index(bundle) < job.index(owner) < job.index(report)
+
+    if not mac:
+        java = step('Produce the separately bound Java GC0 ABI object',
+                    "matrix.platform == 'linux-x86_64' && steps.stage1_bundle.outcome == 'success' && "
+                    "contains(fromJSON(needs.validation-plan.outputs.matrix_native).include.*.domain, 'shared')",
+                    identity='java_managed_product')
+        java_upload = step('Preserve the optional Java GC0 object and its binding',
+                           "steps.java_managed_product.outcome == 'success'")
+        field(java_upload, 'name', 'java-managed-gc0-linux-x86_64' + revision, 10)
+        assert job.index(bundle) < job.index(java) < job.index(java_upload) < job.index(owner)
+
+
 def _frozen_baseline_checkout_contract():
     workflow = (gate.ROOT / '.github/workflows/pcc1-package-parity.yml').read_text()
     job = _workflow_job(workflow, 'pytest-markers')
@@ -330,10 +394,22 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     for selection in ('both', 'integration'):
         assert not (not True or selection == 'not integration')
     nonmac = workflow.split('\n  other-platform-native-wheel:', 1)[1].split('\n  pcc1-package-parity:', 1)[0]
-    export = nonmac.split('      - name: Export the admitted native Stage1 identity', 1)[1].split('      - name: Verify the compiled sibling', 1)[0]
-    assert "matrix.platform == 'linux-x86_64'" not in export
-    assert 'steps.platform_qualification.outcome' in export
     mac = workflow.split('\n  pcc1-package-parity:', 1)[1].split('\n  pytest-markers:', 1)[0]
+    for body, is_mac in ((nonmac, False), (mac, True)):
+        _stage1_handoff_contract(body, mac=is_mac)
+        for name in ('Export the admitted native Stage1 identity', 'Preserve the existing native Stage1 bundle',
+                     'Stage2 to Stage3 / five original bootstrap owners',
+                     'Preserve platform-local bootstrap owner and consumed budget'):
+            original = _workflow_step(body, name)
+            condition = "if: ${{ !cancelled() && "
+            assert original.count(condition) == 1
+            # Even a platform exclusion the former literal check never saw
+            # must fail. A valid, independently Linux-only Java step cannot
+            # mask a restriction on any of these four real steps.
+            exclusion = "runner.os != 'macOS' && " if is_mac else "runner.os != 'Windows' && "
+            changed = original.replace(condition, condition + exclusion, 1)
+            with pytest.raises(AssertionError):
+                _stage1_handoff_contract(body.replace(original, changed, 1), mac=is_mac)
     assert mac.index('Preserve the existing native Stage1 bundle') < mac.index('Verify the new pcc1 on native prior worker shapes')
     assert '--platform macos-arm64' in mac
     ci_plan = re.search(r"(?ms)^  ci-plan:\n(.*?)(?=^  [A-Za-z0-9_-]+:|\Z)", workflow)
