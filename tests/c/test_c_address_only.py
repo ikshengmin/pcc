@@ -3,6 +3,7 @@
 This checks no-read address semantics, not complete volatile access semantics.
 GNU statement expressions are labeled separately from the standard C cases.
 """
+import io
 import json
 import os
 import re
@@ -438,9 +439,43 @@ def test_struct_initializer_default_normalization_keeps_recursive_contract():
     implicit = generator._normalize_struct_init_list(declaration.init, dtype)
     explicit = generator._normalize_struct_init_list(declaration.init, dtype, recursive=True)
     shallow = generator._normalize_struct_init_list(declaration.init, dtype, recursive=False)
-    assert repr(implicit) == repr(explicit)
+    # Node inherits object.__repr__; two separately constructed but
+    # equivalent InitLists do not have the same address. Compare the owned
+    # AST's named, ordered children and scalar attributes instead.
+    def ast_text(node):
+        out = io.StringIO()
+        node.show(out, attrnames=True, nodenames=True, showcoord=True)
+        return out.getvalue()
+
+    assert ast_text(implicit) == ast_text(explicit)
     assert shallow.exprs[0] is declaration.init.exprs[0]
     assert shallow.exprs[1] is declaration.init.exprs[1]
+
+
+def test_struct_initializer_default_groups_brace_elided_array_rows():
+    # The original designated-pointer/array fixture can retain its child
+    # objects in both modes. Here recursion must actually regroup the same
+    # four source constants; a default that silently becomes shallow fails.
+    from pcc.frontends.c.ast import c_ast
+
+    generator = CCodeGenerator(translation_unit_name='normalization-rows.c',
+                              pass_ctx=PassContext(opt_level=0, target_triple=TARGET))
+    tree = make_c_parser().parse('struct S{int a[2][2];int tag;};'
+                                 'struct S value={{1,2,3,4},5};')
+    declaration = tree.ext.pop()
+    generator.generate_code(tree)
+    dtype = generator._resolve_ast_type(declaration.type)
+    source_array, source_tag = declaration.init.exprs
+    constants = tuple(source_array.exprs)
+    assert [item.value for item in constants] == ['1', '2', '3', '4']
+    for options in ({}, {'recursive': True}):
+        array, tag = generator._normalize_struct_init_list(declaration.init, dtype, **options).exprs
+        assert len(array.exprs) == 2 and all(isinstance(row, c_ast.InitList) for row in array.exprs)
+        assert [[item.value for item in row.exprs] for row in array.exprs] == [['1','2'], ['3','4']]
+        assert tag.value == '5'
+    shallow = generator._normalize_struct_init_list(declaration.init, dtype, recursive=False)
+    assert shallow.exprs[0] is source_array and shallow.exprs[1] is source_tag
+    assert tuple(source_array.exprs) == constants
 
 
 @pytest.mark.parametrize('qualifier', ('', 'const '))
