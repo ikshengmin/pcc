@@ -1321,7 +1321,8 @@ and shared runtime/GC boundaries remain unchanged.
 The unchanged Go 1.27.3 math/bits test declarations `entry` and `tab [256]entry`
 are retained verbatim in an authored standalone observer. That observer is not
 the complete upstream package, init function or its own tests. The original
-whole-package linkname/runtime/dependency/test-entry gate remains unchanged.
+whole-package runtime and target-dependency gates remain open. The original
+Go test entry can now be generated and checked independently; see below.
 Four exact formerly rejected record-array programs are retained as positive
 source/native/reference obligations in `test_record_arrays.py`; no historical
 result is relabeled. Current candidate execution and official-reference results
@@ -1368,3 +1369,25 @@ default experiments, no tags. Its 49 packages select 396 original Go units,
 original-source inventory, not evidence of assembled Go ABI objects, generated
 layout headers, or a PCC implementation of the Go runtime. A pending owner is
 not satisfied by a Go file or header with the same name.
+
+## Verifying the Go 1.27.3 math/bits test entry
+
+The strict Linux/amd64 gate uses the pinned, unchanged package and test
+files. Run it with an absolute path to the official Go 1.27.3 release:
+
+```sh
+export PCC_GO_MATH_BITS_GOROOT=/absolute/path/to/go
+export PCC_GO_MATH_BITS_REFERENCE="$PCC_GO_MATH_BITS_GOROOT/bin/go"
+python -m pytest -m integration tests/go/test_math_bits_project.py::test_whole_math_bits_project_owned_and_original_tests
+```
+
+Read the separate rows in the gate's `frontier.json`. PCC generates the test
+entry from the source declarations; the official toolchain independently
+generates a reference. The complete entry token stream must agree, including
+the 26 tests, 43 benchmarks and 36 examples. The official reference executes
+the 62 tests and examples, not the benchmarks.
+
+An owned `test_entry: PASS` proves source generation only. The current test
+build reports missing dependency source `os` at `_testmain.go:4:2`; no owned
+test executable has run. A passing reference or a successful normal-package
+IR build does not satisfy the strict gate.
