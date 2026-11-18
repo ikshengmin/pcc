@@ -25,6 +25,7 @@ def test_posix_explicit_environment_and_case_sensitivity_are_unchanged():
         'PATH': 'native', 'HOME': 'h', 'MyValue': 'explicit'}
 
 
+@pytest.mark.xdist_group(name="rust-native-reference")
 def test_reference_failure_retains_actual_stage_and_tool_diagnostic():
     with pytest.raises(subprocess.CalledProcessError) as caught:
         _reference_command('rustc observer executable', [sys.executable, '-c',
