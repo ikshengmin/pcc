@@ -2073,6 +2073,14 @@
         ]
       }
     },
+    "tests/rust/test_rust_local_let_lints.py": {
+      "test_reference_rustc_keeps_the_unannotated_sibling_warning": {
+        "activity": "external-reference",
+        "reason": [
+          "Compares the audited rustc diagnostics for the local suppression and unannotated control; ordinary parsing, semantic and native execution tests run without rustc."
+        ]
+      }
+    },
     "tests/rust/test_rust_certified_lints.py": {
       "test_actual_check_cannot_admit_other_lints_or_semantic_attributes": {
         "activity": "mandatory-same-input-certification-and-owned-contract",

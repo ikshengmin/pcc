@@ -60,6 +60,50 @@ def crate_lint_attribute(parser, token, start):
 
 
 @dataclass(frozen=True)
+class LetLintAttribute:
+    """A lexical suppression on one let, not a crate-wide lint setting."""
+    token: object
+    lint: MetaItem
+    reason: MetaItem | None
+    source_span: tuple[int, int]
+
+
+def local_let_lints(parser):
+    """Finite owned case of OuterAttribute* on a LetStatement.
+
+    With the public compiler's fixed lint options, allow(unused_variables)
+    only suppresses a warning in this declaration's subtree. Enclosing
+    forbid/groups and other levels are not admitted by the owned parser.
+    Never discard an unknown rule, diagnose/evaluate the initializer here,
+    or use this metadata as evidence that rustc checked the program.
+    """
+    result = []
+    while parser.token.text == '#':
+        start = parser.take()
+        if parser.token.text == '!':
+            raise start.error('inner attributes are not outer let-statement attributes')
+        parser.expect('[')
+        level = parser.name()
+        if level.text != 'allow':
+            raise level.error('unsupported local statement attribute; only allow(unused_variables) on a let is implemented')
+        items = meta_list(parser, paths=True)
+        if not items or items[0].name != 'unused_variables' or items[0].form != 'word':
+            culprit = items[0].token if items else level
+            raise culprit.error('local allow implements only the unused_variables lint word')
+        reason = None
+        if len(items) > 1:
+            reason = items[1]
+            if reason.name != 'reason' or reason.form != 'value' or len(items) != 2:
+                raise reason.token.error('local allow supports one lint followed by an optional literal reason')
+        end = parser.expect(']')
+        result.append(LetLintAttribute(level, items[0], reason,
+                                      (offset(parser, start), offset(parser, end) + 1)))
+    if parser.token.text != 'let':
+        raise parser.token.error('local lint attribute must apply immediately to a let statement')
+    return tuple(result)
+
+
+@dataclass(frozen=True)
 class StableMetadata:
     token: object
     feature: str

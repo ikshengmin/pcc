@@ -168,6 +168,13 @@ class Expr:
     source_call_id: int | None = None
 
 
+@dataclass
+class AttributedLet(Expr):
+    """Only an attributed local carries metadata; ordinary AST nodes stay small."""
+    lint_attributes: tuple = ()
+    source_span: tuple[int, int] | None = None
+
+
 @dataclass(frozen=True)
 class Implementation:
     token: Token
@@ -1807,6 +1814,10 @@ class Parser:
                 raise self.token.error('block-scoped const/static items and inline const blocks require lexical item scopes, which are not implemented')
             if self.accept(";"):
                 continue
+            attributes = ()
+            if self.token.text == '#':
+                from .attribute_metadata import local_let_lints
+                attributes = local_let_lints(self)
             if self.accept("let"):
                 mutable = self.accept("mut")
                 if self.token.text == "[":
@@ -1818,23 +1829,27 @@ class Parser:
                         raise self.token.error("`mut` must be attached to each individual binding")
                     pattern = self.pattern(alternatives=False)
                     annotation = self.type() if self.accept(":") else None
-                    self.expect("=")
-                    init = self.expression()
-                    if self.token.text == "else":
-                        raise self.token.error("let-else statements are not implemented")
-                    self.expect(";")
-                    statements.append(Expr("pattern_let", pattern.token, (pattern, annotation), [init]))
-                    continue
-                wildcard = self.token.text == "_"
-                name = self.take() if wildcard else self.name()
-                if wildcard and mutable:
-                    raise name.error("wildcard let patterns cannot be mutable")
-                annotation = self.type() if self.accept(":") else None
+                    kind, binding, value = "pattern_let", pattern.token, (pattern, annotation)
+                else:
+                    wildcard = self.token.text == "_"
+                    binding = self.take() if wildcard else self.name()
+                    if wildcard and mutable:
+                        raise binding.error("wildcard let patterns cannot be mutable")
+                    annotation = self.type() if self.accept(":") else None
+                    kind, value = ("wildcard_let" if wildcard else "let"), (annotation, mutable)
                 self.expect("=")
                 init = self.expression()
-                self.expect(";")
-                statements.append(Expr("wildcard_let" if wildcard else "let", name,
-                                       (annotation, mutable), [init]))
+                if kind == "pattern_let" and self.token.text == "else":
+                    raise self.token.error("let-else statements are not implemented")
+                end = self.expect(";")
+                if attributes:
+                    from .attribute_metadata import offset
+                    span = (attributes[0].source_span[0], offset(self, end) + 1)
+                    node = AttributedLet(kind, binding, value, [init],
+                                         lint_attributes=attributes, source_span=span)
+                else:
+                    node = Expr(kind, binding, value, [init])
+                statements.append(node)
                 continue
             expr = self.expression(complete_block=True)
             if self.accept(";"):
