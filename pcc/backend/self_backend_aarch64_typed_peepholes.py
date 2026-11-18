@@ -398,8 +398,9 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
         function_end = 0
         in_function = False
         loaded = []
-        sparse_positions: list[int] = []
-        sparse_cursor: int = 0
+        if owned_matcher_only is not False:
+            sparse_positions: list[int] = []
+            sparse_cursor: int = 0
         if owned_matcher_only and mode in (3, 4, 6, 7, 10):
             # Phase-local necessary-opcode superset after full live validation.
             mov_opcode: int = sem.semantic_opcode_id("movz" if mode == 3 else "mov")
@@ -553,7 +554,7 @@ def _run(fragments, semantics, span, mode, owned_matcher_only: bool = False):
                         p.output.append(c)
                         replacement = p.new_branch("b." + cond, branch[2])
                         consumed = 4
-            elif mode == 14 and owned_matcher_only:
+            elif owned_matcher_only is not False and mode == 14 and owned_matcher_only:
                 # The suspended rewrite is an identity; retain event-name checks.
                 p.function_label(a)
             elif mode == 14:

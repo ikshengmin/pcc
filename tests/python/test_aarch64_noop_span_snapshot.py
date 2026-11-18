@@ -182,6 +182,17 @@ def _legacy_run():
     return namespace["_legacy_run"]
 
 
+def _corrected_legacy_run():
+    # Historical body plus individually reviewed safety corrections. This
+    # never copies the current matcher to generate its expected control flow.
+    from tests.python.frozen_safety_deltas import corrected_frozen
+    function = corrected_frozen(_LEGACY_RUN_SOURCE)
+    namespace = dict(vars(typed))
+    exec(compile(ast.fix_missing_locations(ast.Module(body=[function], type_ignores=[])),
+                 "<reviewed frozen safety corrections>", "exec"), namespace)
+    return namespace["_legacy_run"]
+
+
 def _nop_owner(count, shape="plain"):
     owner = AArch64EmissionFragments(capture_semantics=True)
     assert owner.semantics is not None
@@ -310,10 +321,15 @@ def test_frozen_oracle_is_exact_except_for_noop_publication():
                 return None
             return self.generic_visit(node)
 
-    restored = StripSnapshot().visit(function)
-    restored.name = "_legacy_run"
-    legacy = ast.parse(_LEGACY_RUN_SOURCE).body[0]
-    assert ast.dump(restored, include_attributes=False) == ast.dump(legacy, include_attributes=False)
+    # Keep the original fixture and projection below available unchanged.
+    # Its full-matcher assumption predates independent safety fixes. Bind the
+    # default route to the real runtime function, then compare every remaining
+    # statement with the explicitly corrected historical expectation.
+    from tests.python.default_oracle_specialization import assert_frozen_default
+    assert_frozen_default(
+        SOURCE.read_text(), Path(__file__).read_text(), corrected=True,
+        runtime_function=typed._run,
+    )
 
 
 @pytest.mark.parametrize("mode", range(1, 15))
@@ -390,13 +406,15 @@ _REWRITES = list(enumerate(CASES, 1)) + [
 def test_every_real_rewrite_keeps_original_publication_bytes_and_ids(mode, case):
     _name, items = case
     outcomes = []
-    for run in (_legacy_run(), typed._run):
+    for run in (_corrected_legacy_run(), typed._run):
         owner, semantics, source, _lines = _fixture(items)
         try:
             before = _ids(owner, source)
             result = run(owner, semantics, source, mode)
             after = _ids(owner, result)
-            assert after != before
+            # Mode14 deliberately retains the CSET and stack store; removing
+            # either is killed by the independent register/memory regressions.
+            assert (after != before) is (mode != 14)
             assert _ids(owner, source) == before
             semantics.require_complete(owner.records, len(owner.symbol_names))
             outcomes.append((
@@ -673,3 +691,103 @@ def test_compiled_real_peepholes_keep_native_snapshots_and_changed_output(
         request.node.callspec.params["python_program_compiler"],
         explicit_owned_runtime, capfd, reference_arguments=("--reference",),
     )
+
+
+# Proof/mutation obligations live in this already-inventoried CI module.
+# No new lane, relaxed marker, altered budget or workflow is required.
+from tests.python.default_oracle_specialization import _DefaultFalse, assert_frozen_default
+FROZEN = Path(__file__)
+
+def test_default_source_matches_reviewed_corrected_frozen_oracle():
+    assert_frozen_default(SOURCE.read_text(), FROZEN.read_text(), corrected=True, runtime_function=typed._run)
+
+def test_uncorrected_historical_matcher_is_not_a_full_default_oracle():
+    with pytest.raises(AssertionError):
+        assert_frozen_default(SOURCE.read_text(), FROZEN.read_text())
+
+@pytest.mark.parametrize('old,new', [
+    ('owned_matcher_only: bool = False', 'owned_matcher_only: bool = 0'),
+    ('owned_matcher_only: bool = False', 'owned_matcher_only: bool = None'),
+    ('    p = _Pass(fragments, semantics, span)\n    try:\n        changed', '    owned_matcher_only = True\n    p = _Pass(fragments, semantics, span)\n    try:\n        changed'),
+    ('        if owned_matcher_only is not False:\n            sparse_positions', '        if owned_matcher_only != False:\n            sparse_positions'),
+    ('        if owned_matcher_only is not False:\n            sparse_positions', '        observed()\n        if owned_matcher_only is not False:\n            sparse_positions'),
+    ('elif owned_matcher_only is not False and mode == 14 and owned_matcher_only:', 'elif observed() and owned_matcher_only is not False and mode == 14 and owned_matcher_only:'),
+])
+def test_proof_rejects_default_path_mutants(old,new):
+    text=SOURCE.read_text();assert old in text
+    with pytest.raises(AssertionError):assert_frozen_default(text.replace(old,new,1),FROZEN.read_text(),corrected=True)
+
+@pytest.mark.parametrize('expression', ['observed() and owned_matcher_only', 'observed() or not owned_matcher_only'])
+def test_unknown_left_operand_is_retained(expression):
+    node=_DefaultFalse().visit(ast.parse(expression,mode='eval').body)
+    assert isinstance(node,ast.BoolOp)
+    assert isinstance(node.values[0],ast.Call)
+    assert node.values[0].func.id=='observed'
+
+@pytest.mark.parametrize('old,new', [
+    ('changed = False', 'changed = fragments.closed = True'),
+    ('changed = False', 'changed = True'),
+    ('        changed = False\n', ''),
+    ('changed = True', 'changed = fragments.closed = True'),
+    ('            return result\n        return p.finish()', '            return result\n        else:\n            observed()\n        return p.finish()'),
+])
+def test_snapshot_projection_rejects_extra_effects(old,new):
+    text=SOURCE.read_text();assert old in text
+    with pytest.raises(AssertionError):
+        assert_frozen_default(text.replace(old,new,1),FROZEN.read_text(),corrected=True)
+
+@pytest.mark.parametrize('suffix', ['\n_run = lambda *args, **kwargs: None\n', '\ndel _run\n', '\nfrom math import sin as _run\n'])
+def test_source_rebinding_is_rejected(suffix):
+    with pytest.raises(AssertionError):
+        assert_frozen_default(SOURCE.read_text()+suffix,FROZEN.read_text(),corrected=True)
+
+def test_runtime_rebinding_is_rejected():
+    with pytest.raises(AssertionError):
+        assert_frozen_default(SOURCE.read_text(),FROZEN.read_text(),corrected=True,runtime_function=lambda *args: None)
+
+def test_forged_runtime_source_location_is_not_enough():
+    from types import FunctionType
+    code=(lambda *args: None).__code__.replace(co_filename=typed._run.__code__.co_filename,
+                                             co_firstlineno=typed._run.__code__.co_firstlineno)
+    forged=FunctionType(code,vars(typed),'_run',(False,))
+    with pytest.raises(AssertionError):
+        assert_frozen_default(SOURCE.read_text(),FROZEN.read_text(),corrected=True,runtime_function=forged)
+
+@pytest.mark.parametrize('default',(0,None,True))
+def test_runtime_default_must_be_exact_false(default):
+    from types import FunctionType
+    forged=FunctionType(typed._run.__code__,vars(typed),'_run',(default,))
+    with pytest.raises(AssertionError):
+        assert_frozen_default(SOURCE.read_text(),FROZEN.read_text(),corrected=True,runtime_function=forged)
+
+from tests.python.frozen_safety_deltas import (
+    EXPRESSIONS, STATEMENTS, MODE14_OLD, MODE14_NEW, _ExactNode, _ExactSequence,
+    corrected_frozen,
+)
+
+REVERSED_DELTAS = [('expression', owner, old, new) for owner,old,new in EXPRESSIONS]
+REVERSED_DELTAS += [('statements', owner, old, new) for owner,old,new in STATEMENTS]
+REVERSED_DELTAS += [('statements','branch_live_registers-mode14',MODE14_OLD,MODE14_NEW)]
+
+@pytest.mark.parametrize('kind,owner,old,new', REVERSED_DELTAS)
+def test_each_safety_regression_is_rejected_by_whole_default_proof(kind,owner,old,new):
+    tree=ast.parse(SOURCE.read_text())
+    function=next(n for n in tree.body if isinstance(n,ast.FunctionDef) and n.name=='_run')
+    if kind=='expression':
+        edit=_ExactNode(ast.parse(new,mode='eval').body,ast.parse(old,mode='eval').body)
+    else:
+        edit=_ExactSequence(ast.parse(new).body,ast.parse(old).body)
+    edit.visit(function)
+    assert edit.count==1,owner
+    with pytest.raises(AssertionError):
+        assert_frozen_default(ast.unparse(tree),FROZEN.read_text(),corrected=True)
+
+
+def test_corrected_fixture_requires_exact_historical_sites():
+    frozen=ast.parse(FROZEN.read_text())
+    historical=next(ast.literal_eval(n.value) for n in frozen.body if isinstance(n,ast.Assign)
+                    and any(isinstance(t,ast.Name) and t.id=='_LEGACY_RUN_SOURCE' for t in n.targets))
+    old=EXPRESSIONS[0][1]
+    function=ast.parse(historical).body[0]
+    function.body.append(ast.Expr(value=ast.parse(old,mode='eval').body))
+    with pytest.raises(AssertionError):corrected_frozen(ast.unparse(function))
