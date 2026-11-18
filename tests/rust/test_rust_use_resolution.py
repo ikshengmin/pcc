@@ -214,8 +214,8 @@ INVALID = (
     # Exact independent-review counterexample. Rust's imported Number type
     # shadows the language-prelude u64; it is not the primitive return type.
     ('primitive-shadow-return', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as u64; fn answer()->u64{42}', 'primitive-shadowing type use', 'E0308'),
-    ('record-shadows-Copy', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Copy; fn id<T:Copy>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
-    ('record-shadows-Sized', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Sized; fn id<T:Sized>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
+    ('record-shadows-Copy', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Copy; fn id<T:Copy>(value:T)->T{value}', r'expected trait, found `Copy` \(rustc E0404\)', 'E0404'),
+    ('record-shadows-Sized', 'mod provider{pub struct Number{pub x:u64}} use provider::Number as Sized; fn id<T:Sized>(value:T)->T{value}', r'expected trait, found `Sized` \(rustc E0404\)', 'E0404'),
     ('module-shadows-core-marker', 'mod provider{pub mod marker{pub struct Copy{pub x:u64}}} use provider as core; fn id<T:core::marker::Copy>(value:T)->T{value}', 'local/user trait bounds', 'E0404'),
     ('unresolved-import', 'mod a{} use a::missing; fn answer()->u64{42}', 'unknown use target', 'E0432'),
     ('unused-private-target', 'mod a{fn hidden(){}} use a::hidden; fn answer()->u64{42}', 'private item', 'E0603'),

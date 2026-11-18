@@ -233,6 +233,8 @@ class Checker:
         its own item module, or its impl's."""
         if fn.item_identity is not None:
             return fn.item_identity.module
+        if fn.scope_module is not None:
+            return fn.scope_module
         if fn.implementation is not None:
             return fn.implementation.module
         return None

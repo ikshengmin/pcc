@@ -358,6 +358,9 @@ class Function:
     written_signature: tuple | None = None
     # Synthesized concrete body inherited from this declaration-owned default.
     default_source: tuple[str, str] | None = None
+    # In a resolved module crate, a trait method's ModuleId: its signature
+    # and default body resolve in the trait's module.
+    scope_module: object = None
 
     @property
     def effective_parameter_bounds(self):

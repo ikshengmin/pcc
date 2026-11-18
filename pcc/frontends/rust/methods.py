@@ -161,6 +161,19 @@ class InherentMethods:
             # Method where/suffix predicates remain post-selection checks.
             inherent = None
         traits = self.checker.traits.candidates(owner, name)
+        resolution = self.checker.module_resolution
+        if resolution is not None and not isinstance(owner, TypeParameter):
+            # Method syntax sees only traits in scope (a type parameter's
+            # bounds bring theirs): rustc E0599 names the missing import.
+            def trait_of(candidate):
+                if candidate.implementation is not None:
+                    return candidate.implementation.trait
+                return candidate.bound_trait[0] if candidate.bound_trait else None
+            hidden = [f for f in traits if not resolution.trait_in_scope(trait_of(f), self.checker.current_module)]
+            traits = [f for f in traits if f not in hidden]
+            if hidden and not traits and inherent is None:
+                raise token.error(f"no method named `{name}` in scope: items from traits can only be used if "
+                                  f"the trait is in scope; import `{trait_of(hidden[0])}` (rustc E0599)")
         function = None
         if receiver:
             # The admitted receiver graph has one nominal value and at most

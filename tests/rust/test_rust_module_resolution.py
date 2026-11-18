@@ -115,9 +115,8 @@ def test_outlined_reference_context_never_treats_root_as_complete_certification(
 
 
 @pytest.mark.parametrize('text,message', [
-    ('mod a{pub trait T{fn f();}}', 'module-scoped trait'),
-    ('mod a{pub trait T{fn f(&self);} struct R{x:u64} impl T for R{fn f(&self){}}}', 'module-scoped trait'),
-    ('mod a{struct R{x:u64} trait U{} impl U for R{}}', 'module-scoped trait'),
+    ('mod a{pub trait T{fn f();}} mod b{pub trait T{fn g();}}', 'several traits named `T` in one crate'),
+    ('mod a{pub trait T{fn f();}} trait T{}', 'several traits named `T` in one crate'),
     ('mod a{pub extern "C" fn f(){}}', 'foreign/export ABI'),
     ('mod a{} use a::f;', "unknown use target"),
     ('mod a;', 'module source missing'),

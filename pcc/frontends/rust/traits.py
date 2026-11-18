@@ -262,8 +262,8 @@ class StaticTraits:
                     raise bound.token.error('local/user trait bounds cannot be relaxed; only canonical ?Sized is supported')
                 if self.associated.has_types(bound.path):
                     raise bound.token.error('associated types through generic trait bounds require projection normalization, which is not implemented')
-                if self.checker.module_resolution is not None:
-                    raise bound.token.error('module-scoped local trait bounds are not implemented')
+                # In a module crate, ModuleResolution already resolved the
+                # bound where it is written to the crate trait's name.
                 local.add(bound.path)
                 local.update(self.hierarchy.ancestors[bound.path])
             if local and any(bound.relaxed for bound in markers):

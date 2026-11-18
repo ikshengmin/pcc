@@ -155,6 +155,85 @@ def test_module_scoped_inherent_impls_run_and_match_rustc(tmp_path, monkeypatch)
     assert owned == int.from_bytes(reference, 'little') == 0xfedcba9876543210
 
 
+TRAITS = {
+    'src/lib.rs': """\
+mod shapes;
+
+use shapes::circle::Circle;
+use shapes::square::Square;
+use shapes::{Named, Shape};
+
+pub fn answer() -> u64 {
+    let mut bad = 0u64;
+    let c = Circle::new(2);
+    let s = Square::new(3);
+    if c.area() != 12 || s.area() != 9 || shapes::total(&c, &s) != 21 { bad |= 1 << 0; }
+    if c.scaled(2) != 24 || s.scaled(2) != 6 { bad |= 1 << 1; }
+    if c.describe() != 1012 || s.describe() != 2009 { bad |= 1 << 2; }
+    if bad == 0 { 0xfedcba9876543210 } else { bad }
+}
+""",
+    'src/shapes/mod.rs': """\
+pub mod circle;
+pub mod square;
+
+pub trait Shape {
+    fn area(&self) -> u64;
+    fn scaled(&self, k: u64) -> u64 { self.area() * k }
+}
+
+pub trait Named: Shape {
+    fn id(&self) -> u64;
+    fn describe(&self) -> u64 { self.id() * 1000 + self.area() }
+}
+
+pub fn total<A: Shape, B: Shape>(a: &A, b: &B) -> u64 { a.area() + b.area() }
+""",
+    'src/shapes/circle.rs': """\
+use super::{Named, Shape};
+
+pub struct Circle { r: u64 }
+
+impl Circle {
+    pub fn new(r: u64) -> Self { Circle { r } }
+}
+
+impl Shape for Circle {
+    fn area(&self) -> u64 { 3 * self.r * self.r }
+}
+
+impl Named for Circle {
+    fn id(&self) -> u64 { 1 }
+}
+""",
+    'src/shapes/square.rs': """\
+pub struct Square { side: u64 }
+
+impl Square {
+    pub fn new(side: u64) -> Square { Square { side } }
+}
+
+impl super::Shape for Square {
+    fn area(&self) -> u64 { self.side * self.side }
+    fn scaled(&self, k: u64) -> u64 { self.side * k }
+}
+
+impl crate::shapes::Named for Square {
+    fn id(&self) -> u64 { 2 }
+}
+""",
+}
+
+
+@pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(unavailable=UNAVAILABLE or (None if shutil.which('rustc') else
+                                                  'development-only rustc is not installed'))
+def test_module_scoped_traits_run_and_match_rustc(tmp_path, monkeypatch):
+    owned = run_owned_crate_u64_function('src/lib.rs', TRAITS, 'answer', tmp_path, monkeypatch, crate_name='demo')
+    reference = run_rustc_crate_function('src/lib.rs', TRAITS, 'answer', tmp_path)
+    assert owned == int.from_bytes(reference, 'little') == 0xfedcba9876543210
+
+
 def test_module_functions_get_their_crate_paths_as_symbol_names():
     result = compile_rust_crate('src/lib.rs', PROGRAM, crate_name='demo')
     assert {'answer', 'total', 'hash::mix', 'stats::summarize', 'util::depth', 'util::bits::ones'} <= set(result.symbols)
@@ -162,6 +241,7 @@ def test_module_functions_get_their_crate_paths_as_symbol_names():
 
 
 S_MOD = 'pub struct S { pub v: u64 }\n'
+AREA = 'pub trait Area { fn area(&self) -> u64; }'
 
 
 def crate(lib, **files):
@@ -203,6 +283,31 @@ CORPUS = (
     ('impl-in-other-module-ok', crate('mod a;\nmod b;\npub fn g() -> u64 { let s = a::S { v: 1 }; s.get() }',
                                       a='pub struct S { pub v: u64 }',
                                       b='impl crate::a::S { pub fn get(&self) -> u64 { self.v } }'), 'ok'),
+    ('trait-used-via-use', crate('mod m;\nuse m::Area;\npub fn g() -> u64 { let s = m::S { v: 3 }; s.area() }',
+                                 m=S_MOD + AREA + '\nimpl Area for S { fn area(&self) -> u64 { self.v * 2 } }'), 'ok'),
+    ('trait-not-in-scope', crate('mod m;\npub fn g() -> u64 { let s = m::S { v: 3 }; s.area() }',
+                                 m=S_MOD + AREA + '\nimpl Area for S { fn area(&self) -> u64 { self.v * 2 } }'), 'E0599'),
+    ('trait-via-alias', crate('mod m;\nuse m::Area as Measure;\npub fn g() -> u64 { let s = m::S { v: 3 }; s.area() }',
+                              m=S_MOD + AREA + '\nimpl Area for S { fn area(&self) -> u64 { self.v } }'), 'ok'),
+    ('trait-via-glob', crate('mod m;\nuse m::*;\npub fn g() -> u64 { let s = S { v: 3 }; s.area() }',
+                             m=S_MOD + AREA + '\nimpl Area for S { fn area(&self) -> u64 { self.v } }'), 'ok'),
+    ('trait-impl-in-other-module', crate('mod a;\nmod b;\nuse a::Area;\npub fn g() -> u64 { let s = b::S { v: 4 }; s.area() }',
+                                         a=AREA, b=S_MOD + 'impl crate::a::Area for S { fn area(&self) -> u64 { self.v } }'),
+     'ok'),
+    ('trait-call-in-impl-module-without-use', crate('mod a;\nmod b;\npub fn g() -> u64 { let s = b::S { v: 4 }; b::f(&s) }',
+                                                    a=AREA, b=S_MOD + 'impl crate::a::Area for S { fn area(&self) -> u64 { self.v } }\n'
+                                                                      'pub fn f(s: &S) -> u64 { s.area() }'), 'E0599'),
+    ('trait-bound-brings-methods', crate('mod a;\nmod b;\npub fn g() -> u64 { let s = b::S { v: 4 }; a::twice(&s) }',
+                                         a=AREA + '\npub fn twice<T: Area>(t: &T) -> u64 { t.area() * 2 }',
+                                         b=S_MOD + 'impl crate::a::Area for S { fn area(&self) -> u64 { self.v } }'), 'ok'),
+    ('private-trait', crate('mod a;\npub struct S { v: u64 }\nimpl a::Area for S { fn area(&self) -> u64 { self.v } }',
+                            a='trait Area { fn area(&self) -> u64; }'), 'E0603'),
+    ('struct-as-trait', crate('mod a;\npub struct S { v: u64 }\nimpl a::N for S {}', a='pub struct N { pub v: u64 }'), 'E0404'),
+    ('supertrait-across-modules', crate('mod a;\nuse a::{Base, Derived};\npub struct S { v: u64 }\n'
+                                        'impl Base for S { fn b(&self) -> u64 { self.v } }\nimpl Derived for S {}\n'
+                                        'pub fn g() -> u64 { let s = S { v: 2 }; s.d() }',
+                                        a='pub trait Base { fn b(&self) -> u64; }\n'
+                                          'pub trait Derived: Base { fn d(&self) -> u64 { self.b() + 1 } }'), 'ok'),
 )
 
 MESSAGES = {
@@ -211,6 +316,8 @@ MESSAGES = {
     'E0451': 'private',
     'E0425': 'unresolved|cannot find|not found|unknown',
     'E0624': r'(method|associated function) `(get|make)` is private \(rustc E0624\)',
+    'E0599': r'no method named `area` in scope: .*import `Area` \(rustc E0599\)',
+    'E0404': r'expected trait, found `a::N` \(rustc E0404\)',
 }
 
 
@@ -240,8 +347,9 @@ def test_rustc_builds_give_the_same_verdicts(tmp_path):
 
 
 @pytest.mark.parametrize('sources,boundary', [
-    (crate('mod m;\npub fn g() -> u64 { 1 }', m='pub trait T { fn t(&self) -> u64; }'),
-     'module-scoped traits and trait implementations are not implemented'),
+    (crate('mod a;\nmod b;\npub fn g() -> u64 { 1 }', a='pub trait T { fn t(&self) -> u64; }',
+           b='pub trait T { fn u(&self) -> u64; }'),
+     'several traits named `T` in one crate require path-qualified trait identities'),
     (crate('mod m;\npub fn g() -> u64 { 1 }'), r'module source missing from supplied closure: src/m\.rs or src/m/mod\.rs'),
 ])
 def test_crate_forms_beyond_step_one_keep_explicit_boundaries(sources, boundary):

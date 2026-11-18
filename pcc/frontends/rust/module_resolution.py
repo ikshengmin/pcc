@@ -6,6 +6,7 @@ checks. They are never searched as a flattened source namespace. Private and
 External crates and module-scoped trait/method candidate sets remain explicit
 gaps; no import synthesizes source or supplies library definitions.
 """
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import PurePosixPath
 from types import MappingProxyType
@@ -266,22 +267,38 @@ class ModuleResolution(ModuleNamespaces):
         super().__init__(crate)
         self.functions, self.records, self.enums, self.consts, self.statics = [], [], [], [], []
         # Every module's impls and traits (each resolved in its own module).
+        # A trait keeps its written name as its identity, so trait names must
+        # be unique in the crate; every trait reference is resolved where it
+        # is written and rewritten to that name.
         self.implementations, self.traits = [], []
+        self.trait_declarations = {}
         for module in self.modules.values():
-            trait_impls = [item for item in module.body.implementations if item.trait is not None]
-            if module.body.traits or trait_impls:
-                item = (module.body.traits or trait_impls)[0]
-                raise item.token.error('module-scoped traits and trait implementations are not implemented')
-            resolved = {id(implementation): self.inherent_impl(implementation, module.identity)
+            for trait in module.body.traits:
+                if trait.token.text in self.trait_declarations:
+                    raise trait.token.error(f"several traits named `{trait.token.text}` in one crate require "
+                                            "path-qualified trait identities, which are not implemented")
+                self.trait_declarations[trait.token.text] = module.items['type', trait.token.text]
+                self.traits.append(trait)
+        for module in self.modules.values():
+            resolved = {id(implementation): self.impl(implementation, module.identity)
                         for implementation in module.body.implementations}
             for function in module.body.functions:
                 if function.implementation is not None:
                     function.implementation = resolved[id(function.implementation)]
                     self.functions.append(function)
+                self.function_bounds(function, module.identity)
+            for trait in module.body.traits:
+                trait.supertraits = tuple((token, self.trait_name(path, module.identity, token))
+                                          for token, path in trait.supertraits)
+                trait.associated_types = [replace(associated, bounds=self.bounds(associated.bounds, module.identity))
+                                          for associated in trait.associated_types]
+                for function in trait.methods:
+                    function.scope_module = module.identity
+                    self.function_bounds(function, module.identity)
             for declaration in module.items.values():
                 item = declaration.syntax
-                if isinstance(item, (Module, CrateSelfAlias)):
-                    continue
+                if isinstance(item, (Module, CrateSelfAlias, Trait)):
+                    continue  # traits are collected with their module above
                 if isinstance(item, Record) and declaration.identity.namespace == 'value':
                     continue  # a tuple struct's constructor; the type entry owns its identity
                 item.item_identity = declaration.identity
@@ -298,21 +315,73 @@ class ModuleResolution(ModuleNamespaces):
                         raise item.token.error('foreign/export ABI in a resolved module crate is not implemented')
                     self.functions.append(item)
 
-    def inherent_impl(self, implementation, module):
-        """An inherent impl's owner names a local struct or enum as seen from
-        the impl's module (items/implementations.html#inherent-implementations);
-        its canonical identity keys the methods for every module."""
-        from dataclasses import replace
+    def impl(self, implementation, module):
+        """An impl resolved from its module (items/implementations.html): an
+        inherent impl's owner names a local struct or enum, whose canonical
+        identity keys its methods for every module; a trait impl's trait and
+        local owner are resolved the same way (a primitive owner stays)."""
         owner = implementation.owner
         name = owner.name if isinstance(owner, TypeApplication) else owner
-        declaration = self.resolve(name, 'type', module, implementation.token)
-        if not isinstance(declaration.syntax, (Record, Enumeration)):
-            raise implementation.token.error('inherent impl requires a local nominal struct or enum')
-        canonical = declaration.identity.binding_key
-        owner = replace(owner, name=canonical) if isinstance(owner, TypeApplication) else canonical
-        implementation = replace(implementation, owner=owner, module=module)
+        trait = implementation.trait
+        if trait is None:
+            declaration = self.resolve(name, 'type', module, implementation.token)
+            if not isinstance(declaration.syntax, (Record, Enumeration)):
+                raise implementation.token.error('inherent impl requires a local nominal struct or enum')
+        else:
+            trait = self.trait_name(trait, module, implementation.token)
+            declaration = (self.resolve(name, 'type', module, implementation.token, _optional_final=True)
+                           if isinstance(name, str) and name not in PRIMITIVES else None)
+        if declaration is not None and isinstance(declaration.syntax, (Record, Enumeration)):
+            canonical = declaration.identity.binding_key
+            owner = replace(owner, name=canonical) if isinstance(owner, TypeApplication) else canonical
+        implementation = replace(implementation, owner=owner, trait=trait, module=module,
+                                 parameter_bounds=tuple((token, self.bounds(bounds, module))
+                                                        for token, bounds in implementation.parameter_bounds),
+                                 where_predicates=tuple(replace(predicate, bounds=self.bounds(predicate.bounds, module))
+                                                        for predicate in implementation.where_predicates))
         self.implementations.append(implementation)
         return implementation
+
+    def trait_name(self, path, module, token):
+        """The crate trait a written trait path denotes from `module`, by its
+        (crate-unique) name. A path naming no item stays as written: a
+        standard trait, or an unknown one the checker rejects."""
+        if not isinstance(path, str):
+            return path
+        if path.lstrip(':').split('::', 1)[0] in {'std', 'core', 'alloc'}:
+            return path  # a standard library trait path: the checker's standard markers own it
+        declaration = self.resolve(path, 'type', module, token, _optional_final=True)
+        if declaration is None:
+            return path
+        if not isinstance(declaration.syntax, Trait):
+            raise token.error(f"expected trait, found `{path}` (rustc E0404)")
+        return declaration.syntax.token.text
+
+    def bounds(self, bounds, module):
+        return tuple(bound if bound.relaxed or bound.callable is not None
+                     else replace(bound, path=self.trait_name(bound.path, module, bound.token))
+                     for bound in bounds)
+
+    def function_bounds(self, function, module):
+        function.parameter_bounds = tuple((token, self.bounds(bounds, module))
+                                          for token, bounds in function.parameter_bounds)
+        function.where_predicates = tuple(replace(predicate, bounds=self.bounds(predicate.bounds, module))
+                                          for predicate in function.where_predicates)
+        function.self_bounds = self.bounds(function.self_bounds, module)
+
+    def trait_in_scope(self, name, module):
+        """Whether a crate trait's methods are callable by method syntax in
+        `module`: declared there, or imported by a use or glob. Standard
+        traits are in the prelude."""
+        target = self.trait_declarations.get(name)
+        if target is None or target.identity.module == module:
+            return True
+        for binding in self._uses.get(module, {}):
+            if any(declaration.identity == target.identity
+                   for declaration in self._bind_use(module, binding).values()):
+                return True
+        return any(declaration.identity == target.identity
+                   for declaration, _ in self.globs.weak(module, 'type', name).values())
 
     def method_visible(self, function, requester):
         """An impl item's visibility is scoped from the impl's module."""
