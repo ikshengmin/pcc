@@ -177,10 +177,10 @@ def test_missing_else_is_unit_even_when_the_pattern_is_irrefutable():
 
 CAPABILITY = (
     ('or-bindings', 'enum E{A(u64),B(u64)}fn f(e:E)->u64{if let E::A(x)|E::B(x)=e{x}else{0}}', 'bindings inside or-patterns'),
-    ('reference-scrutinee', 'fn f(value:&u64)->u64{if let item=value{*item}else{0}}', 'not reference matching'),
+    ('reference-default-binding-mode', 'fn f(value:&u64)->u64{if let 5=value{1}else{0}}', 'needs default binding modes'),
     ('array-scrutinee', 'fn f()->u64{if let _=[1u64]{42}else{0}}', 'array match coverage'),
     ('diverging-scrutinee', 'fn f(){if let _=loop{}{}}', 'diverging if let scrutinees'),
-    ('reference-pattern', 'fn f()->u64{if let ref value=42u64{*value}else{0}}', 'reference, range'),
+    ('ref-binding-pattern', 'fn f()->u64{if let ref value=42u64{*value}else{0}}', 'ref binding patterns are not implemented'),
 )
 
 

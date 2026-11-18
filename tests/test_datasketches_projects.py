@@ -70,7 +70,7 @@ def test_upstream_symbolic_links_stay_links_inside_the_pin(tmp_path):
         load_project('rust', copy)
 
 
-def test_rust_crate_stops_at_a_for_reference_pattern():
+def test_rust_crate_stops_at_a_range_expression_argument():
     from pcc.frontends.rust import RustError
     from pcc.frontends.rust.configuration import CfgOptions, OwnedRustConfiguration
     from pcc.frontends.rust.crate_context import parse_crate_sources
@@ -81,11 +81,12 @@ def test_rust_crate_stops_at_a_for_reference_pattern():
                          debug_assertions=False, panic='unwind')
     configuration = OwnedRustConfiguration('aarch64-apple-darwin', 2024, options)
     # Past the owned `#![deny(missing_docs)]` lint (stage 8), the shift
-    # operators (bloom/sketch.rs:33:31), `fn union` (185:12, a weak keyword)
-    # and the `for` tuple pattern with its `|=` (194:13, 195:19):
-    # `for &word in &self.bit_array` is a reference pattern.
-    with pytest.raises(RustError, match=r"^src/lib\.rs: src/bloom/mod\.rs: src/bloom/sketch\.rs: 434:17: "
-                                        r"reference, range, named-field and rest patterns are not implemented"):
+    # operators (bloom/sketch.rs:33:31), `fn union` (185:12, a weak keyword),
+    # the `for` tuple pattern with its `|=` (194:13, 195:19) and the
+    # reference pattern of `for &word in` (434:17): a `..=` range expression
+    # is passed as an argument (RangeInclusive values are not parsed).
+    with pytest.raises(RustError, match=r"^src/lib\.rs: src/bloom/mod\.rs: src/bloom/sketch\.rs: 486:46: "
+                                        r"expected ',', found '\.\.='"):
         parse_crate_sources('src/lib.rs', units, crate_name='datasketches', edition=2024,
                             configuration=configuration)
 

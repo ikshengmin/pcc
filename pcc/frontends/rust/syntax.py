@@ -571,6 +571,9 @@ _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 # The element a destructuring `for` binds before its pattern: not a Rust
 # identifier (no `.`), so no source name can refer to or shadow it.
 FOR_ELEMENT = "for.element"
+# Pattern kinds irrefutable whenever their parts are, for every type they
+# check against (a reference pattern has the one constructor `&`).
+IRREFUTABLE_PATTERNS = frozenset({"tuple", "reference", "binding", "wildcard", "unit"})
 
 
 class Parser:
@@ -1978,9 +1981,10 @@ class Parser:
                 mutable = self.accept("mut")
                 if self.token.text == "[":
                     raise self.token.error("array destructuring patterns are not implemented")
-                if self.token.text == "(":
-                    # `let (a, mut b) = init;` (Rust Reference statements.html#let-statements):
-                    # an irrefutable pattern, checked and bound like a match arm.
+                if self.token.text in {"(", "&", "&&"}:
+                    # `let (a, mut b) = init;` / `let &x = r;` (Rust Reference
+                    # statements.html#let-statements): an irrefutable pattern,
+                    # checked and bound like a match arm.
                     if mutable:
                         raise self.token.error("`mut` must be attached to each individual binding")
                     pattern = self.pattern(alternatives=False)
@@ -2157,9 +2161,9 @@ class Parser:
                 pending = [pattern]
                 while pending:
                     item = pending.pop()
-                    if item.kind not in {"tuple", "binding", "wildcard", "unit"}:
-                        raise item.token.error("for patterns other than tuple, binding and wildcard patterns "
-                                               "require irrefutability checking, which is not implemented")
+                    if item.kind not in IRREFUTABLE_PATTERNS:
+                        raise item.token.error("for patterns other than tuple, reference, binding and wildcard "
+                                               "patterns require irrefutability checking, which is not implemented")
                     pending.extend(item.children)
                 destructure = pattern
                 pattern = Pattern("binding", replace(pattern.token, text=FOR_ELEMENT), False)
@@ -2485,8 +2489,21 @@ class Parser:
                 # A top-level `|` after it belongs to the enclosing pattern.
                 result.kind = "at"
                 result.children.append(self.pattern(alternatives=False))
+        elif token.text == "ref":
+            raise token.error("ref binding patterns are not implemented")
+        elif token.kind == "string":
+            raise token.error("string literal patterns are not implemented")
+        elif token.text in {"&", "&&"}:
+            # Rust Reference patterns.html#reference-patterns:
+            # `(& | &&) mut? PatternWithoutRange`. `&&` is two reference
+            # patterns, and `mut` belongs to the innermost one: `&mut x`
+            # matches `&mut T` and binds x by value.
+            mutable = self.accept("mut")
+            result = Pattern("reference", token, mutable, children=[self.pattern(alternatives=False)])
+            if token.text == "&&":
+                result = Pattern("reference", token, False, children=[result])
         else:
-            raise token.error("reference, range, named-field and rest patterns are not implemented")
+            raise token.error("range, named-field and rest patterns are not implemented")
         if alternatives and self.accept("|"):
             options = [result, self.pattern(alternatives=False)]
             while self.accept("|"):

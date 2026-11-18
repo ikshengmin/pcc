@@ -804,6 +804,9 @@ class Lowerer:
             return true
         if pattern.kind == "at":
             return self.pattern_test(pattern.children[0], value)
+        if pattern.kind == "reference":
+            # `&p` tests p against the referent the matched pointer addresses.
+            return self.pattern_test(pattern.children[0], self.referent(pattern, value))
         if pattern.kind == "literal":
             return self.builder.icmp_unsigned("==", value, ir.Constant(self.type(pattern.ty), int(pattern.value)))
         if pattern.kind in {"variant", "payload"}:
@@ -843,6 +846,13 @@ class Lowerer:
             result = self.builder.and_(result, self.pattern_test(child, field))
         return result
 
+    def referent(self, pattern, pointer):
+        """The value a reference pattern's subpattern sees (none for `()`)."""
+        child = pattern.children[0]
+        if child.kind in {"wildcard", "unit"} or child.ty == "()":
+            return None
+        return self.builder.load(pointer)
+
     def bind_pattern(self, pattern, value):
         from .patterns import contains_binding
 
@@ -854,6 +864,8 @@ class Lowerer:
             if pattern.kind == "at":
                 # The subpattern binds parts of the same (unchanged) value.
                 self.bind_pattern(pattern.children[0], value)
+        elif pattern.kind == "reference":
+            self.bind_pattern(pattern.children[0], self.referent(pattern, value))
         elif pattern.kind in {"tuple", "payload"}:
             if pattern.kind == "payload":
                 value = self.payload_value(pattern, value)

@@ -276,15 +276,19 @@ class Checker:
         go into the enclosing block scope (and may shadow earlier locals), but
         a name may occur once in the pattern (E0416)."""
         from .patterns import check_pattern
+        from .syntax import IRREFUTABLE_PATTERNS
         pattern, annotation = expr.value
         pending = [pattern]
         while pending:
             item = pending.pop()
-            if item.kind not in {"tuple", "binding", "wildcard", "unit"}:
-                raise item.token.error("let patterns other than tuple, binding and wildcard patterns require "
-                                       "irrefutability checking, which is not implemented")
+            if item.kind not in IRREFUTABLE_PATTERNS:
+                raise item.token.error("let patterns other than tuple, reference, binding and wildcard patterns "
+                                       "require irrefutability checking, which is not implemented")
             pending.extend(item.children)
-        init_ty = self.expression(init)
+        # A place initializer is matched in place, as a match scrutinee is:
+        # only the parts bound by value move (statements.html#let-statements).
+        place = self.place(init) is not None
+        init_ty = self.expression(init, place_context=place)
         if init_ty == NEVER:
             raise expr.token.error("diverging let initializers are not implemented")
         if annotation is not None:
@@ -296,6 +300,8 @@ class Checker:
         self.scopes.append({})
         try:
             check_pattern(self, pattern, init_ty)
+            if place:
+                self.binding_moves(init, pattern)
         finally:
             bound = self.scopes.pop()
         self.scopes[-1].update(bound)

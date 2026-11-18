@@ -7,8 +7,10 @@ it with `let PATTERN = element;` around the body, so tuple, nested tuple,
 unit, `mut`-binding and wildcard patterns are checked, moved, lowered and
 linted exactly like `let` patterns: shape mismatches are E0308, a repeated
 name E0416, assigning an immutable pattern binding E0384, moving a part twice
-E0382. Patterns that need irrefutability checking (struct, enum, literal,
-reference patterns) keep explicit boundaries. Every corpus row and program is
+E0382. Patterns that need irrefutability checking (struct, enum, literal)
+keep explicit boundaries; reference patterns parse and check
+(test_rust_reference_patterns.py), but borrowed iteration (`for &x in &a`)
+keeps its own boundary. Every corpus row and program is
 original; verdicts and results were compared with a local rustc 1.92.0 build
 (-O), which stays a labeled reference.
 """
@@ -155,11 +157,11 @@ def test_for_pattern_program_runs_with_owned_admission_and_matches_rustc(tmp_pat
 
 @pytest.mark.parametrize('source,boundary', [
     ('pub enum E { A(u32) }\npub fn f(a: [E; 1]) -> u32 { let mut s = 0; for E::A(x) in a { s += x; } s }',
-     'for patterns other than tuple, binding and wildcard patterns require irrefutability checking'),
+     'for patterns other than tuple, reference, binding and wildcard patterns require irrefutability checking'),
     ('pub fn f(a: [(u32, u32); 1]) -> u32 { let mut s = 0; for (1, b) in a { s += b; } s }',
-     'for patterns other than tuple, binding and wildcard patterns require irrefutability checking'),
+     'for patterns other than tuple, reference, binding and wildcard patterns require irrefutability checking'),
     ('pub fn f(a: [u32; 2]) -> u32 { let mut s = 0; for &x in &a { s += x; } s }',
-     'reference, range, named-field and rest patterns are not implemented'),
+     'for supports concrete owned arrays only; borrowed/custom iterators'),
 ])
 def test_refutable_and_reference_for_patterns_keep_explicit_boundaries(source, boundary):
     with pytest.raises(RustError, match=boundary):

@@ -821,8 +821,19 @@ class MoveChecker:
                 self.declare(result, expr.binding, held)
             return result
         if kind == "pattern_let":
-            # The initializer value is moved into the pattern's bindings.
             from .patterns import pattern_bindings
+            init, pattern = children[0], expr.value[0]
+            place = self.checker.place(init)
+            if place is not None:
+                # Matched in place like a match scrutinee: by-value bindings
+                # take (move or copy) their parts, the rest stays usable.
+                target = self.loan_target(init)
+                held = self.scrutinee_loans(init, place, state)
+                self.pattern_access(pattern, state, place, target=target)
+                self.pattern_access(pattern, state, place, bind=True, target=target)
+                self.hold_pattern(state, pattern, held)
+                return state
+            # A value initializer is moved into the pattern's bindings.
             result = self.expression(children[0], state)
             if result is not None:
                 for binding in pattern_bindings(expr.value[0]):

@@ -199,9 +199,9 @@ Migration order:
    advisory; explicit receiver types are the implicit receivers. Verdicts in
    `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
    a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
-   `#![deny(missing_docs)]`, its shift operators, `fn union` and a `for`
-   tuple pattern, and stops at a `for` reference pattern
-   (`bloom/sketch.rs:434:17`). Open:
+   `#![deny(missing_docs)]`, its shift operators, `fn union` and `for`
+   tuple and reference patterns, and stops at a `..=` range expression
+   argument (`bloom/sketch.rs:486:46`). Open:
    item-level lint attributes and other lints, then the multi-file crate path
    through sema and lowering.
 
@@ -1039,7 +1039,14 @@ type (tuple, unit, `mut` binding, wildcard) bind each element to
 `let PATTERN = element;` around the body, so let-pattern checking, moves,
 lowering and the overflow lint apply unchanged
 (`tests/rust/test_rust_for_patterns.py`, 17 originals matching rustc 1.92.0);
-patterns that need irrefutability checking and reference patterns remain gaps.
+patterns that need irrefutability checking remain gaps. Reference patterns
+(`&p`, `&mut p`, `&&p`) match a reference of the same mutability (E0308
+otherwise) and copy out of the referent (a non-Copy binding is E0507); match
+coverage treats a reference type as the one constructor `&`. A `let` pattern
+with a place initializer is matched in place like a match scrutinee, so only
+by-value bound parts move (`tests/rust/test_rust_reference_patterns.py`, 34
+originals matching rustc 1.92.0). Default binding modes, referents holding
+references and borrowed iteration (`for &x in &a`) remain gaps.
 
 Every new `for` requires a source/options-bound token minted by the actual
 external `check_rust_source` transition. The caller-attestation flag is not

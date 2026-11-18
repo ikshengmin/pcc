@@ -2665,10 +2665,25 @@
         "rust.ref.8.2.13",
         "rust.ref.9"
       ],
-      "scope": "Qualification missing, not implementation missing: `for PATTERN in iter` with tuple, nested tuple, one-element tuple, unit, `mut`-binding and wildcard patterns over owned arrays (and integer ranges, where a tuple pattern is the E0308 rustc reports). The parser binds each element to syntax.FOR_ELEMENT, a name no source can spell, and destructures it with `let PATTERN = element;` around the body, so the existing let-pattern checking, moves, lowering and arithmetic_overflow lint apply unchanged: shape mismatches are E0308, a repeated name E0416 (both pattern diagnostics now carry their rustc codes), assigning an immutable pattern binding E0384 and moving a part twice E0382. Replaces the former message-only boundary rust.capability.d70994f47d79. 17 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:194:13 (and its `|=` at 195:19) and stops at bloom/sketch.rs:434:17, the reference pattern of `for &word in &self.bit_array`. Patterns needing irrefutability checking (struct, enum, literal) keep an explicit boundary; reference patterns, borrowed and custom iterators keep theirs. Local Mac.",
+      "scope": "Qualification missing, not implementation missing: `for PATTERN in iter` with tuple, nested tuple, one-element tuple, unit, `mut`-binding and wildcard patterns over owned arrays (and integer ranges, where a tuple pattern is the E0308 rustc reports). The parser binds each element to syntax.FOR_ELEMENT, a name no source can spell, and destructures it with `let PATTERN = element;` around the body, so the existing let-pattern checking, moves, lowering and arithmetic_overflow lint apply unchanged: shape mismatches are E0308, a repeated name E0416 (both pattern diagnostics now carry their rustc codes), assigning an immutable pattern binding E0384 and moving a part twice E0382. Replaces the former message-only boundary rust.capability.d70994f47d79. 17 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:194:13 (and its `|=` at 195:19). Patterns needing irrefutability checking (struct, enum, literal) keep an explicit boundary; borrowed and custom iterators keep theirs. Local Mac.",
       "status": "missing",
       "tests": [
         "tests/rust/test_rust_for_patterns.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.patterns.reference-patterns",
+      "title": "Reference patterns and let patterns matched in place",
+      "chapter_ids": [
+        "rust.ref.9",
+        "rust.ref.8.1"
+      ],
+      "scope": "Qualification missing, not implementation missing: `&p`, `&mut p` and `&&p` in let, match, if let, while let and for patterns. A reference pattern matches a reference of the same mutability and checks p against the referent (otherwise E0308); bindings in p copy out of the referent, so a non-Copy one is E0507. Match scrutinees may be references to admitted owned values; coverage treats a reference type as the one constructor `&`, or-pattern alternatives are checked before the default-binding-mode gap, and lowering loads the referent for the subpattern's tests and bindings. A `let` pattern whose initializer is a place is now matched in place like a match scrutinee: only the parts bound by value move (`let (a, _) = t;` leaves t.1 usable, `let &mut x = r;` leaves r usable), and moving through a reference or out of an array index is E0507/E0508. `ref` bindings and string literal patterns get their own explicit messages. Replaces the former message-only boundary rust.capability.551845180510; range, named-field and rest patterns keep a message-only boundary. 34 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:434:17 (`for &word in &self.bit_array` parses; borrowed iteration stays a semantic gap) and stops at bloom/sketch.rs:486:46, a `..=` range expression argument. Default binding modes, referents holding references, nested and unit references keep explicit boundaries. Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_reference_patterns.py"
       ],
       "diagnostics": [],
       "evidence": []
@@ -4155,18 +4170,6 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.551845180510",
-      "title": "reference, range, named-field and rest patterns are not implemented",
-      "chapter_ids": [
-        "rust.ref.10.1.14"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
       "id": "rust.capability.ed147b2399ee",
       "title": "range iterators are not implemented",
       "chapter_ids": [
@@ -5014,15 +5017,6 @@
       {
         "message": "unsupported representation; enum repr supports i32/i64/u32/u64",
         "feature_id": "rust.capability.e6d5b211f058",
-        "source": {
-          "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"
-        },
-        "reason": "Current source-bound message-only boundary; no stable diagnostic code is claimed."
-      },
-      {
-        "message": "reference, range, named-field and rest patterns are not implemented",
-        "feature_id": "rust.capability.551845180510",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
           "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"

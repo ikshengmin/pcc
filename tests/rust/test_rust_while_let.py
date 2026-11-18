@@ -127,7 +127,7 @@ def test_invalid_while_let_obligations_reject_in_owned_model(name, text, message
 
 CAPABILITY = (
     ('or-bindings', 'enum E{A(u64),B(u64)}fn f(e:E){while let E::A(x)|E::B(x)=e{break;}}', 'bindings inside or-patterns'),
-    ('reference-scrutinee', 'fn f(value:&u64){while let item=value{break;}}', 'not reference matching'),
+    ('reference-default-binding-mode', 'fn f(value:&u64){while let 5=value{break;}}', 'needs default binding modes'),
     ('array-scrutinee', 'fn f(){while let _=[1u64]{break;}}', 'array match coverage'),
     ('diverging-scrutinee', 'fn f(){while let _=loop{}{}}', 'diverging while let scrutinees'),
     ('label', "fn f(){'outer:while let true=true{break 'outer;}}", 'unsupported expression'),

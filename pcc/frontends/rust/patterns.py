@@ -78,16 +78,20 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
             # `x @ p`: p is checked against the same scrutinee type and its
             # own bindings share this pattern's scope (E0416 on reuse).
             check_pattern(checker, pattern.children[0], ty, allow_inferred=allow_inferred)
+    elif pattern.kind == "reference":
+        check_reference_pattern(checker, pattern, _partial(ty), allow_inferred)
+    elif pattern.kind == "or":
+        # Each alternative is checked on its own (a reference scrutinee
+        # still needs every alternative to be a reference pattern).
+        if contains_binding(pattern):
+            raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
+        for child in pattern.children:
+            check_pattern(checker, child, ty, allow_inferred=allow_inferred)
     elif isinstance(_partial(ty), SharedReference):
         # A constructor/literal pattern against a reference dereferences it
         # with default binding modes (by-reference bindings).
         raise pattern.token.error("matching a reference against a non-reference pattern needs default binding "
                                   "modes, which are not implemented")
-    elif pattern.kind == "or":
-        if contains_binding(pattern):
-            raise pattern.token.error("bindings inside or-patterns require alternative binding unification, which is not implemented")
-        for child in pattern.children:
-            check_pattern(checker, child, ty, allow_inferred=allow_inferred)
     elif pattern.kind == "tuple":
         from .call_inference import partial
         ty = partial(ty)
@@ -141,6 +145,29 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
         pattern.value = enum.discriminants[variant]
     else:
         raise pattern.token.error("unsupported pattern")
+
+
+def check_reference_pattern(checker, pattern, ty, allow_inferred):
+    """`&p` / `&mut p` (patterns.html#reference-patterns) matches a reference
+    of the same mutability and p its referent. Bindings in p copy out of the
+    referent: a non-Copy one would move out of a reference (rustc E0507)."""
+    from .reference_admission import has_regions
+    written = "&mut _" if pattern.value else "&_"
+    if not isinstance(ty, SharedReference):
+        raise pattern.token.error(f"mismatched types: expected `{ty}`, found `{written}` (rustc E0308)")
+    if ty.mutable != pattern.value:
+        raise pattern.token.error(f"mismatched types: expected `{'&mut' if ty.mutable else '&'} {ty.referent}`, "
+                                  f"found `{written}`: types differ in mutability (rustc E0308)")
+    if has_regions(ty.referent, checker):
+        raise pattern.token.error("reference patterns over referents that hold references need region slots "
+                                  "for pattern parts, which are not implemented")
+    child = pattern.children[0]
+    check_pattern(checker, child, ty.referent, allow_inferred=allow_inferred)
+    for binding in binding_patterns(child):
+        if not checker.copy_type(binding.binding.ty):
+            kind = "mutable" if ty.mutable else "shared"
+            raise binding.token.error(f"cannot move out of a {kind} reference: binding "
+                                      f"{binding.token.text!r} is not Copy (rustc E0507)")
 
 
 def binding_patterns(pattern):
@@ -210,9 +237,15 @@ def validate_pattern_scrutinee(checker, ty, token):
             return True
         if isinstance(ty, TupleType):
             return all(admitted(item) for item in ty.elements)
+        if isinstance(ty, SharedReference):
+            # Matched by binding the reference or by `&p`: no default
+            # binding modes. A referent holding references stays a gap.
+            from .reference_admission import has_regions
+            return not has_regions(ty.referent, checker) and admitted(ty.referent)
         return ty in INTEGERS | {"bool", "()"} or ty in checker.enums or ty in checker.records
     if not admitted(ty):
-        raise token.error("match currently supports owned scalar/aggregate values, not reference matching")
+        raise token.error("match currently supports owned scalar/aggregate values and references to "
+                          "them; this scrutinee type is not implemented")
 
 
 def validate_match(checker, expr):
@@ -255,7 +288,9 @@ def validate_match(checker, expr):
         if any(all(p.kind in {"wildcard", "binding"} for p in row) for row in matrix):
             return True
         ty = types[0]
-        if isinstance(ty, TupleType):
+        if isinstance(ty, SharedReference):
+            constructors = [("reference", None, (ty.referent,))]
+        elif isinstance(ty, TupleType):
             constructors = [("tuple", None, ty.elements)]
         elif ty in checker.enums:
             enum = checker.enums[ty]
@@ -273,7 +308,7 @@ def validate_match(checker, expr):
                 head, tail = row[0], row[1:]
                 if head.kind in {"wildcard", "binding"}:
                     specialized.append(wildcards(fields) + tail)
-                elif kind == "tuple" and head.kind == "tuple":
+                elif kind in {"tuple", "reference"} and head.kind == kind:
                     specialized.append(tuple(head.children) + tail)
                 elif kind == "enum" and head.kind in {"variant", "payload"} and head.variant == tag:
                     specialized.append(tuple(head.children) + tail)
