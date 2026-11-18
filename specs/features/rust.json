@@ -2650,10 +2650,25 @@
         "rust.ref.8.2.4",
         "rust.ref.2.3"
       ],
-      "scope": "Qualification missing, not implementation missing: `&=`, `|=` and `^=` on integers and on bool (core's bool BitAndAssign, BitOrAssign and BitXorAssign), and `/=` and `%=` with the same divisor rule as `/` and `%` (a known nonzero divisor, not signed -1, until owned panics exist). Known `&=`, `|=` and `^=` results propagate in the owned arithmetic_overflow lint; `/=` and `%=` end a basic block like rustc's divisor check. `union` is a weak keyword: it starts an item only before a non-reserved identifier (rustc is_union_item) and otherwise names functions, methods, locals, parameters, fields and modules; union items keep an explicit boundary. 21 original programs get a rustc 1.92.0 -O build's verdict without rustc running (for `x |= 1u64` rustc reports E0277 and E0308, PCC a type mismatch) and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:185:12 (`fn union`) and stops at bloom/sketch.rs:194:13, a tuple pattern in `for`. Dynamic divisors and union items keep explicit boundaries. Local Mac.",
+      "scope": "Qualification missing, not implementation missing: `&=`, `|=` and `^=` on integers and on bool (core's bool BitAndAssign, BitOrAssign and BitXorAssign), and `/=` and `%=` with the same divisor rule as `/` and `%` (a known nonzero divisor, not signed -1, until owned panics exist). Known `&=`, `|=` and `^=` results propagate in the owned arithmetic_overflow lint; `/=` and `%=` end a basic block like rustc's divisor check. `union` is a weak keyword: it starts an item only before a non-reserved identifier (rustc is_union_item) and otherwise names functions, methods, locals, parameters, fields and modules; union items keep an explicit boundary. 21 original programs get a rustc 1.92.0 -O build's verdict without rustc running (for `x |= 1u64` rustc reports E0277 and E0308, PCC a type mismatch) and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:185:12 (`fn union`). Dynamic divisors and union items keep explicit boundaries. Local Mac.",
       "status": "missing",
       "tests": [
         "tests/rust/test_rust_union_and_compound_assignment.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
+      "id": "rust.expressions.for-destructuring-patterns",
+      "title": "Destructuring patterns in for loops",
+      "chapter_ids": [
+        "rust.ref.8.2.13",
+        "rust.ref.9"
+      ],
+      "scope": "Qualification missing, not implementation missing: `for PATTERN in iter` with tuple, nested tuple, one-element tuple, unit, `mut`-binding and wildcard patterns over owned arrays (and integer ranges, where a tuple pattern is the E0308 rustc reports). The parser binds each element to syntax.FOR_ELEMENT, a name no source can spell, and destructures it with `let PATTERN = element;` around the body, so the existing let-pattern checking, moves, lowering and arithmetic_overflow lint apply unchanged: shape mismatches are E0308, a repeated name E0416 (both pattern diagnostics now carry their rustc codes), assigning an immutable pattern binding E0384 and moving a part twice E0382. Replaces the former message-only boundary rust.capability.d70994f47d79. 17 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program runs with owned compile, assemble and link and matches rustc. DataSketches Rust passes bloom/sketch.rs:194:13 (and its `|=` at 195:19) and stops at bloom/sketch.rs:434:17, the reference pattern of `for &word in &self.bit_array`. Patterns needing irrefutability checking (struct, enum, literal) keep an explicit boundary; reference patterns, borrowed and custom iterators keep theirs. Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_for_patterns.py"
       ],
       "diagnostics": [],
       "evidence": []
@@ -4152,18 +4167,6 @@
       "evidence": []
     },
     {
-      "id": "rust.capability.d70994f47d79",
-      "title": "for destructuring/refutable patterns are not implemented; use an identifier or wildcard",
-      "chapter_ids": [
-        "rust.ref.6.12"
-      ],
-      "scope": "Exact message-only fail-closed boundary in pcc/frontends/rust/syntax.py. Not a stable diagnostic code; broad fallback diagnostics do not establish a complete invalid-vs-unimplemented taxonomy.",
-      "status": "explicitly_unimplemented",
-      "tests": [],
-      "diagnostics": [],
-      "evidence": []
-    },
-    {
       "id": "rust.capability.ed147b2399ee",
       "title": "range iterators are not implemented",
       "chapter_ids": [
@@ -5020,15 +5023,6 @@
       {
         "message": "reference, range, named-field and rest patterns are not implemented",
         "feature_id": "rust.capability.551845180510",
-        "source": {
-          "path": "pcc/frontends/rust/syntax.py",
-          "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"
-        },
-        "reason": "Current source-bound message-only boundary; no stable diagnostic code is claimed."
-      },
-      {
-        "message": "for destructuring/refutable patterns are not implemented; use an identifier or wildcard",
-        "feature_id": "rust.capability.d70994f47d79",
         "source": {
           "path": "pcc/frontends/rust/syntax.py",
           "sha256": "4c95eedfc1e73347a4d0101c32fe03470d2799b05ff1cd0dc4915d5c393a0216"

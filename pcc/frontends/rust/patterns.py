@@ -72,7 +72,7 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
         return
     if pattern.kind in BINDING_KINDS:
         if pattern.token.text in checker.scopes[-1]:
-            raise pattern.token.error("duplicate binding in pattern")
+            raise pattern.token.error("duplicate binding in pattern: identifier is bound more than once in the same pattern (rustc E0416)")
         pattern.binding = checker.bind(pattern.token, ty, pattern.value)
         if pattern.kind == "at":
             # `x @ p`: p is checked against the same scrutinee type and its
@@ -98,7 +98,7 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
                              for child in pattern.children)
             ty = unify(ty, TupleType(elements), pattern.token)
         if not isinstance(ty, TupleType) or len(ty.elements) != len(pattern.children):
-            raise pattern.token.error("tuple pattern shape does not match scrutinee")
+            raise pattern.token.error("tuple pattern shape does not match scrutinee: mismatched types (rustc E0308)")
         for child, element in zip(pattern.children, ty.elements):
             check_pattern(checker, child, element, allow_inferred=allow_inferred)
     elif pattern.kind == "unit":

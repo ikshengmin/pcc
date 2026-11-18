@@ -184,8 +184,9 @@ Migration order:
    advisory; explicit receiver types are the implicit receivers. Verdicts in
    `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
    a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
-   `#![deny(missing_docs)]`, its shift operators and `fn union`, and stops
-   at a `for` tuple pattern (`bloom/sketch.rs:194:13`). Open:
+   `#![deny(missing_docs)]`, its shift operators, `fn union` and a `for`
+   tuple pattern, and stops at a `for` reference pattern
+   (`bloom/sketch.rs:434:17`). Open:
    item-level lint attributes and other lints, then the multi-file crate path
    through sema and lowering.
 
@@ -1014,10 +1015,16 @@ The first iterator-loop domain accepts concrete owned `[T; N]` values only
 when the full element graph has proven-empty destruction in the currently
 admitted type system. This is not the same as Copy: ordinary non-Copy records
 are consumed, while Copy arrays snapshot their values before the first body.
-Unknown generic elements, Drop implementations, arbitrary iterator traits,
-ranges, borrowed-array iterators and destructuring patterns remain explicit
-capability gaps. Generic functions with fully concrete iteration elements may
-still use the existing shared instantiation mechanism.
+Unknown generic elements, Drop implementations, arbitrary iterator traits and
+borrowed-array iterators remain explicit capability gaps. Generic functions
+with fully concrete iteration elements may still use the existing shared
+instantiation mechanism. Destructuring patterns that are irrefutable for every
+type (tuple, unit, `mut` binding, wildcard) bind each element to
+`syntax.FOR_ELEMENT`, a name no source can spell, and destructure it with
+`let PATTERN = element;` around the body, so let-pattern checking, moves,
+lowering and the overflow lint apply unchanged
+(`tests/rust/test_rust_for_patterns.py`, 17 originals matching rustc 1.92.0);
+patterns that need irrefutability checking and reference patterns remain gaps.
 
 Every new `for` requires a source/options-bound token minted by the actual
 external `check_rust_source` transition. The caller-attestation flag is not

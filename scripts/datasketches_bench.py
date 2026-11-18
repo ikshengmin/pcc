@@ -44,7 +44,7 @@ RUST_FEATURES = ("bloom", "countmin", "cpc", "frequencies", "hll", "kll", "req",
 # The owned frontends' current first blockers (tests/test_datasketches_projects.py).
 PCC_FRONTIERS = {
     "cpp-pcc": "owned C++ headers lack <cstdint> (common/include/common_defs.hpp:23)",
-    "rust-pcc": "multi-file crate stops at a `for` tuple pattern (datasketches/src/bloom/sketch.rs:194:13)",
+    "rust-pcc": "multi-file crate stops at a `for` reference pattern (datasketches/src/bloom/sketch.rs:434:17)",
     "go-pcc": "instantiated generic type CompareFn[float64] (common/item_sketch_double.go:33:58)",
     "java-pcc": "374 production units exceed the 256-unit source input limit",
     "python-pcc": "nanobind is not pinned (src/datasketches.cpp:20)",

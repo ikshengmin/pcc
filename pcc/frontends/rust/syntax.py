@@ -565,6 +565,9 @@ _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "&=": 1, "|=
                "==": 4, "!=": 4, "<": 4, "<=": 4, ">": 4, ">=": 4, "|": 5, "^": 6, "&": 7,
                "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
+# The element a destructuring `for` binds before its pattern: not a Rust
+# identifier (no `.`), so no source name can refer to or shadow it.
+FOR_ELEMENT = "for.element"
 
 
 class Parser:
@@ -1997,6 +2000,15 @@ class Parser:
                                    conditional_statements=tuple(conditionals))
         return Expr("block", token, len(statements), children)
 
+    def for_body(self, destructure) -> Expr:
+        """The loop body; with a destructuring pattern, `{ let PAT = element; body }`."""
+        body = self.block()
+        if destructure is None:
+            return body
+        element = Expr("name", replace(destructure.token, text=FOR_ELEMENT), FOR_ELEMENT)
+        bind = Expr("pattern_let", destructure.token, (destructure, None), [element])
+        return Expr("block", body.token, 1, [bind, body])
+
     def if_expression(self, token: Token) -> Expr:
         pattern = None
         if self.accept("let"):
@@ -2099,8 +2111,23 @@ class Parser:
             expr = Expr("loop", token, children=[self.block()])
         elif text == "for":
             pattern = self.pattern()
+            destructure = None
             if pattern.kind not in {"binding", "wildcard"}:
-                raise pattern.token.error("for destructuring/refutable patterns are not implemented; use an identifier or wildcard")
+                # `for PAT in src { body }` binds each element to PAT
+                # (Rust Reference expressions/loop-expr.html#iterator-loops):
+                # the element is bound to FOR_ELEMENT, which no source can
+                # name, then destructured like `let PAT = element;` around
+                # the body. Only patterns that are irrefutable for every type
+                # they check against are admitted, as for `let`.
+                pending = [pattern]
+                while pending:
+                    item = pending.pop()
+                    if item.kind not in {"tuple", "binding", "wildcard", "unit"}:
+                        raise item.token.error("for patterns other than tuple, binding and wildcard patterns "
+                                               "require irrefutability checking, which is not implemented")
+                    pending.extend(item.children)
+                destructure = pattern
+                pattern = Pattern("binding", replace(pattern.token, text=FOR_ELEMENT), False)
             self.expect("in")
             source = self.expression(allow_struct=False)
             if self.token.text in {"..", "..="}:
@@ -2111,9 +2138,9 @@ class Parser:
                     raise operator.error("unbounded range iteration (RangeFrom) is not implemented")
                 end = self.expression(allow_struct=False)
                 kind = "for_range_inclusive" if operator.text == "..=" else "for_range"
-                expr = Expr(kind, operator, pattern, [source, end, self.block()])
+                expr = Expr(kind, operator, pattern, [source, end, self.for_body(destructure)])
             else:
-                expr = Expr("for", token, pattern, [source, self.block()])
+                expr = Expr("for", token, pattern, [source, self.for_body(destructure)])
         elif text == "match":
             scrutinee = self.expression(allow_struct=False)
             self.expect("{")
