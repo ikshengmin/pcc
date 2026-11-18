@@ -556,16 +556,25 @@ class _MacroReplacement:
         self.paste = paste
 
 
+def _unique_include_dirs(directories, seen):
+    selected = []
+    for name in directories:
+        key = os.path.normcase(os.path.realpath(name))
+        if key not in seen:
+            selected.append(name)
+            seen.add(key)
+    return selected
+
+
 class Preprocessor:
-    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c"):
+    def __init__(self, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c", default_system_dirs=None):
         if language not in ("c", "c++17"):
             raise ValueError("unsupported owned preprocessor language: " + language)
         self.language = language
         self.base_dir = base_dir or "."
         self.include_dirs = list(include_dirs or [])
-        self.system_include_dirs = [os.path.join(
-            os.path.dirname(resolve_pcc_dir_from_environment(__file__)),
-            "utils", "fake_libc_include",
+        self.system_include_dirs = list(default_system_dirs) if default_system_dirs is not None else [os.path.join(
+            os.path.dirname(resolve_pcc_dir_from_environment(__file__)), "utils", "fake_libc_include",
         )]
         self.forced_includes = []
         self.macros = {}
@@ -579,8 +588,8 @@ class Preprocessor:
         self._line_no = 0
         self._file = "<string>"
         self._physical_file = "<string>"
-        # Opt-in GNU line markers for the shared lexer; C output never has
-        # them. source_name is the main file's presumed name in markers.
+        # Opt-in GNU line markers for the shared lexer. The initial presumed
+        # main-file name is also used when markers are disabled.
         self.line_markers = False
         self.source_name = None
         self._marker_next = None
@@ -785,6 +794,7 @@ class Preprocessor:
         self._invalidate_expand_cache()
 
     def _apply_cpp_args(self, args):
+        explicit_system = []
         i = 0
         while i < len(args):
             arg = args[i]
@@ -820,11 +830,23 @@ class Preprocessor:
             elif option == "-I":
                 self.include_dirs.append(value)
             elif option == "-isystem":
-                self.system_include_dirs.insert(0, value)
+                explicit_system.append(value)
             else:
                 self.forced_includes.append(value)
+        # -isystem directories follow -I in command-line order; -nostdinc
+        # disables defaults, not directories explicitly supplied by the caller.
+        self.system_include_dirs[:0] = explicit_system
+        # A directory listed in both classes stays a system directory. Retain
+        # the first spelling within each class, including directory symlinks.
+        if self.include_dirs or explicit_system:
+            seen = set()
+            self.system_include_dirs = _unique_include_dirs(self.system_include_dirs, seen)
+            self.include_dirs = _unique_include_dirs(self.include_dirs, seen)
 
     def preprocess(self, source):
+        # The logical main file name participates in __FILE__ and #line,
+        # independently of marker emission and of physical header lookup.
+        self._file = "<string>" if self.source_name is None else self.source_name
         self._expand_cache.clear()
         self._identifier_cache.clear()
         prefix = []
@@ -832,18 +854,12 @@ class Preprocessor:
             self._include('"' + filename + '"', prefix, self.base_dir)
         if self.line_markers and not self.forced_includes:
             # A main file that never leaves its own lines needs no marker.
-            self._marker_next = (self._marker_file(self._file), 1)
+            self._marker_next = (self._file, 1)
         prefix.append(self._process_lines(_source_line_records(source), self.base_dir))
         return "\n".join(prefix)
 
-    def _marker_file(self, filename):
-        if filename == "<string>" and self.source_name is not None:
-            return self.source_name
-        return filename
-
     def _mark(self, text, filename, line):
         """Prefix a GNU line marker unless text continues the last output line."""
-        filename = self._marker_file(filename)
         prefix = ""
         if self._marker_next != (filename, line):
             # The shared lexer reads the name up to the next quote, unescaped.
@@ -1590,13 +1606,14 @@ class Preprocessor:
 
 
 def preprocess(source, base_dir=None, defines=None, include_dirs=None, cpp_args=None, target_triple=None, language="c",
-               line_markers=False, source_name=None):
+               line_markers=False, source_name=None, default_system_dirs=None):
     """Preprocess source in the explicitly selected language (C by default).
 
     line_markers adds a GNU line marker at each discontinuity of presumed file
-    or line; source_name names the main file in those markers.
+    or line; source_name is the main file's initial presumed name.
     """
-    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args, target_triple=target_triple, language=language)
+    pp = Preprocessor(base_dir=base_dir, defines=defines, include_dirs=include_dirs, cpp_args=cpp_args,
+                      target_triple=target_triple, language=language, default_system_dirs=default_system_dirs)
     pp.line_markers = line_markers
     pp.source_name = source_name
     return pp.preprocess(source)

@@ -10,7 +10,7 @@ def is_cpp_path(path):
 
 
 def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
-                   target_triple=None, source_name=None):
+                   target_triple=None, source_name=None, *, line_markers=True):
     import os
 
     from pcc.backend.definition_linkage import supports_external_odr_function_definitions
@@ -25,7 +25,7 @@ def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
     # A caller's later -nostdinc still disables this default search directory.
     headers = os.path.join(resolve_pcc_dir_from_environment(__file__),
                            "frontends", "cpp", "include")
-    arguments = ["-nostdinc", "-isystem", headers, "-U__STDC__",
+    arguments = ["-U__STDC__",
                  "-U__STDC_VERSION__", "-D__cplusplus=201703L"]
     # Keep declarations available to targets whose own object/linker has no
     # weak-ODR definitions. Do not use host architecture as a capability.
@@ -51,4 +51,4 @@ def preprocess_cpp(source, base_dir=None, include_dirs=None, cpp_args=None,
     # for C++ diagnostics; source_name names the main file in them.
     return preprocess(source, base_dir=base_dir, include_dirs=include_dirs,
                       cpp_args=arguments, target_triple=target_triple, language="c++17",
-                      line_markers=True, source_name=source_name)
+                      line_markers=line_markers, source_name=source_name, default_system_dirs=[headers])

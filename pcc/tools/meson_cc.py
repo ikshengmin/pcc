@@ -6,6 +6,7 @@ an external compiler, assembler, linker, archiver or math library.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from dataclasses import dataclass
 import os
 from pathlib import Path
 import sys
@@ -86,11 +87,26 @@ def archive(args) -> None:
         draft.write_bytes(write_archive(members))
 
 
-def parse(lang, args):
+@dataclass(frozen=True)
+class _Invocation:
+    flags: list[str]
+    names: list[str]
+    # Stock Meson sends preprocessed tokens to stdout, not to an object path.
+    output: Path | None
+    object_only: bool
+    level: int
+
+    @property
+    def inputs(self):
+        return [Path(name) for name in self.names]
+
+
+def _parse(lang, args):
     if lang not in _SOURCE:
         raise ValueError("expected explicit c or cpp language")
     flags, inputs = [], []
     output, obj, level = None, False, 0
+    preprocess = no_markers = False
     operands = {"-I", "-D", "-U", "-isystem", "-include"}
     dialect = "-std=" + ("c11" if lang == "c" else "c++17")
     sequence = iter(args)
@@ -100,6 +116,10 @@ def parse(lang, args):
             if obj:
                 raise ValueError("duplicate -c")
             obj = True
+        elif arg == "-E":
+            preprocess = True
+        elif arg == "-P":
+            no_markers = True
         elif arg == "-o" or arg in operands:
             value = next(sequence, None)
             if not value:
@@ -127,12 +147,53 @@ def parse(lang, args):
             if category < last_category:
                 raise ValueError("PCC requires sources, then objects, then archives in their original order")
             last_category = category
-            inputs.append(path)
+            inputs.append(arg)
     if not inputs:
         raise ValueError("no compiler inputs")
-    if obj and (len(inputs) != 1 or inputs[0].suffix not in _SOURCE[lang]):
+    first = Path(inputs[0])
+    if preprocess or no_markers:
+        # Do not ignore -P during compilation, replace linking with preprocessing,
+        # synthesize GCC line markers, or overwrite a file named by -o.
+        if not (preprocess and no_markers) or obj or output is not None:
+            raise ValueError("PCC Meson preprocessing requires -E -P to stdout, without -c or -o")
+        if len(inputs) != 1 or first.suffix not in _SOURCE[lang]:
+            raise ValueError("preprocess-only requires one source of the selected language")
+        return _Invocation(flags, inputs, None, False, level)
+    if obj and (len(inputs) != 1 or first.suffix not in _SOURCE[lang]):
         raise ValueError("compile-only requires one source of the selected language")
-    return flags, inputs, output or (inputs[0].with_suffix(".o") if obj else Path("a.out")), obj, level
+    return _Invocation(flags, inputs, output or (first.with_suffix(".o") if obj else Path("a.out")), obj, level)
+
+
+def parse(lang, args):
+    """Return flags, input paths, destination, object-only flag and optimization level."""
+    req = _parse(lang, args)
+    return req.flags, req.inputs, req.output, req.object_only, req.level
+
+
+def _preprocess_stdout(lang, name, flags, target):
+    from pcc.driver.project import _collect_input_units
+
+    if not Path(name).is_file():
+        raise ValueError("missing compiler input: " + name)
+    # Do not resolve a symlinked source before searching for its quoted headers.
+    # Keep the command-line spelling (even ./) for the main file's __FILE__.
+    (unit,), directory = _collect_input_units(os.path.abspath(name))
+    if lang == "cpp":
+        from pcc.frontends.cpp.driver import preprocess_cpp
+        result = preprocess_cpp(unit.source, base_dir=directory, cpp_args=flags, target_triple=target,
+                                source_name=name, line_markers=False)
+    else:
+        from pcc.frontends.c.preprocessor_compat import _OWNED_C_EXTENSION_COMPAT_DEFINES
+        from pcc.frontends.c.preprocessor import preprocess
+        result = preprocess(unit.source, base_dir=directory,
+                            cpp_args=[*_OWNED_C_EXTENSION_COMPAT_DEFINES, *flags],
+                            target_triple=target, source_name=name)
+    # A successfully preprocessed empty TU is valid. Do not parse, link, or
+    # write anything (including partial stdout) before all directives succeed.
+    sys.stdout.write(result)
+    if result and not result.endswith("\n"):
+        sys.stdout.write("\n")
+    return 0
 
 
 @contextmanager
@@ -169,10 +230,13 @@ def _run(tool, args):
         print(banner(tool)); return 0
     if tool == "ar":
         archive(args); return 0
-    flags, inputs, output, obj, level = parse(tool, args)
+    req = _parse(tool, args)
+    target = _target()
+    if req.output is None:
+        return _preprocess_stdout(tool, req.names[0], req.flags, target)
+    flags, inputs, output, obj, level = req.flags, req.inputs, req.output, req.object_only, req.level
     from pcc.driver.project import _collect_input_units
     from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
-    target = _target()
     ev = CEvaluator(backend="self", target_triple=target)
     runtime = None
     if not obj:
