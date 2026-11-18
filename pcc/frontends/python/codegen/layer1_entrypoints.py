@@ -61,11 +61,21 @@ class L1CodeGenEntrypointMixin:
         # A failed attempt is not a fresh instance, including failures during
         # target/trace setup. Public generate() consumes this capability too.
         self._initial_ir_available = False
-        if self._target_triple:
-            self.module.triple = self._target_triple
-        elif sys.platform.startswith("linux") or sys.platform == "win32":
-            from pcc.frontends.python.pipeline_targets import host_target_triple
-            self.module.triple = host_target_triple()
+        if self._target_triple == "unknown-unknown-unknown":
+            raise L1CodegenError("explicit codegen target must be concrete")
+        if (self._target_triple
+                and self.module.triple not in ("", "unknown-unknown-unknown")
+                and self.module.triple != self._target_triple):
+            raise L1CodegenError("codegen owner target conflicts with module target")
+        if not self._target_triple:
+            # Intrinsic lowering and IR emission must observe one target.
+            # Preserve a caller's explicit module target before using the host.
+            target = self.module.triple
+            if target in ("", "unknown-unknown-unknown"):
+                from pcc.frontends.python.pipeline_targets import host_target_triple
+                target = host_target_triple()
+            self._target_triple = target
+        self.module.triple = self._target_triple
         if self._codegen_trace_is_enabled():
             target_module = self.ast_module if module is None else module
             self._codegen_trace_push(
