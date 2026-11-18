@@ -194,7 +194,7 @@ class Lowerer:
 
     def statement(self, statement):
         kind = statement.kind
-        if kind in ("const", "empty"):
+        if kind in ("const", "empty", "type"):
             return
         if kind == "label":
             target = self.labels[id(statement)]

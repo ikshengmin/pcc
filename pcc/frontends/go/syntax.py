@@ -334,6 +334,7 @@ class Stmt:
     evaluate_range: bool = True
     label: Token | None = None
     control_target: object = None
+    type_declarations: list = field(default_factory=list)
 
 
 @dataclass
@@ -1072,7 +1073,9 @@ class GoParser:
             return Stmt("for", token, exprs=[] if condition is None else [condition],
                         body=self.block(), init=init, post=post)
         if token.kind == "type":
-            self.unsupported(token, 'go.unsupported.local-type-declarations', "function-local type declarations are not implemented")
+            # One declaration statement, including an empty group. Specs in
+            # a group acquire their lexical names one at a time in Sema.
+            return Stmt("type", token, type_declarations=self.type_declarations())
         if self.accept("defer"):
             # https://go.dev/ref/spec#Defer_statements: "defer" Expression,
             # a function or method call that is not parenthesized.

@@ -1429,11 +1429,11 @@
     },
     {
       "id": "go.capability.local-type-declarations",
-      "title": "Local type declarations",
+      "title": "Local types in generic functions",
       "chapter_ids": [
         "type-declarations"
       ],
-      "scope": "Explicitly rejected capability: local type declarations. No broader implementation or runtime support is claimed.",
+      "scope": "Definitions inside generic function bodies need per-instantiation identity and dependent local layouts. Ordinary non-generic block-local definitions and aliases have their separate implementation record.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
@@ -3546,6 +3546,103 @@
           ],
           "evidence": [],
           "reason": "Local Mac evidence only: owned arm64 Darwin execution of four observers matched a local development go1.23.6 reference, and five rejections matched its positions; the Linux owned observers and the pinned go1.27.3 official comparison are UNRUN."
+        }
+      ]
+    },
+    {
+      "id": "go.types.block-local",
+      "title": "Lexical local type definitions and aliases",
+      "chapter_ids": [
+        "type-declarations",
+        "blocks",
+        "declarations"
+      ],
+      "scope": "Block-local type declarations and aliases in ordinary non-generic function bodies: lexical point of declaration, grouped declarations, shadowing the outer namespace, distinct nominal identity and generic-call symbols, canonical aliases, ordinary RHS and goto checks; unchanged official bug167 and three historical programs are direct native/reference obligations. No new slice, heap, generic-body or upstream-project acceptance.",
+      "tests": [
+        "tests/go/test_local_types.py::test_original_upstream_and_all_previously_unimplemented_programs_keep_their_bytes",
+        "tests/go/test_local_types.py::test_grouped_declarations_use_the_current_ordinary_block",
+        "tests/go/test_local_types.py::test_invalid_lexical_declarations_fail_before_ir",
+        "tests/go/test_local_types.py::test_checked_rhs_and_generic_owner_frontiers_are_not_runtime_support",
+        "tests/go/test_local_types.py::test_import_name_and_type_qualifier_obey_the_lexical_cut",
+        "tests/go/test_local_types.py::test_owned_native_uses_distinct_generic_symbols_and_returns_full_width_result",
+        "tests/go/test_local_types.py::test_identical_upstream_graduated_and_scoped_programs_run_both_owners",
+        "tests/go/test_local_types.py::test_invalid_declarations_have_normal_source_attributed_official_rejections"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:40ca2748ce442790b8bdab1ab554bfc723aa71914d96d3702d42e86e104957b8",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "e4e6012b18cb559d87ea7b7044627e3a305bd03f7dd11229ad984322ec67b514"
+          },
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "e0de996e2ae4c5c33c23b7339f7e1a1fb0542efc1fc52cbd902aa13892cf089c"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "35392e459f4e1eabc0f2dc26e2620d1974694e19d70d3a1c4b8a55f2a8bcfbd4"
+          },
+          {
+            "path": "pcc/frontends/go/branches.py",
+            "sha256": "61b14de6258cb8d3dca49a6a47f86090fda7d2ea57155882b12a23d8f744c0e5"
+          },
+          {
+            "path": "pcc/frontends/go/generics.py",
+            "sha256": "878f3cb4e78f75156307fc851d86e1332061fbbefe895ce40f78fa78ef4536cc"
+          },
+          {
+            "path": "pcc/frontends/go/lowering.py",
+            "sha256": "03a488cb3205232b027b57e75d43238653a2d17ac6fa533416be62d645aee342"
+          },
+          {
+            "path": "tests/go/test_local_types.py",
+            "sha256": "7e6bdc6df73c7a70b1902b471962cf6b319e46e29b7040a0a8c1856a0059eb8d"
+          },
+          {
+            "path": "tests/go/test_diagnostics.py",
+            "sha256": "b99c2bb841d7003c8a22f67edc9a099963f9651d60c5346c515d4dbac552deba"
+          },
+          {
+            "path": "tests/go/test_records.py",
+            "sha256": "cbb36ed1079b4b67f1ebf3d48c01b32d206f4ce6820867bff62c14818d0e81c9"
+          },
+          {
+            "path": "tests/go/test_blank_types.py",
+            "sha256": "0df64a285158f56e2fbc8a488c597ada040b7eb9496fbcd68ea05718dd29dcd4"
+          },
+          {
+            "path": "tests/go/upstream/go1.27.3/test/fixedbugs/bug167.go",
+            "sha256": "f369705a4bf4a26779be67b80d63c07e37a8169ff943baac5df24e88973328d9"
+          }
+        ]
+      },
+      "acceptance": [
+        {
+          "id": "local-types-linux-pcc0-self",
+          "kind": "full-feature",
+          "scope": "Block-local type declarations and aliases in ordinary non-generic function bodies: lexical point of declaration, grouped declarations, shadowing the outer namespace, distinct nominal identity and generic-call symbols, canonical aliases, ordinary RHS and goto checks; unchanged official bug167 and three historical programs are direct native/reference obligations. No new slice, heap, generic-body or upstream-project acceptance.",
+          "status": "unrun",
+          "source_revision": "sha256:40ca2748ce442790b8bdab1ab554bfc723aa71914d96d3702d42e86e104957b8",
+          "mode": "pcc0",
+          "platform": "linux-x86_64",
+          "backend": "self",
+          "gc": "not_applicable",
+          "required_tests": [
+            "tests/go/test_local_types.py::test_original_upstream_and_all_previously_unimplemented_programs_keep_their_bytes",
+            "tests/go/test_local_types.py::test_grouped_declarations_use_the_current_ordinary_block",
+            "tests/go/test_local_types.py::test_invalid_lexical_declarations_fail_before_ir",
+            "tests/go/test_local_types.py::test_checked_rhs_and_generic_owner_frontiers_are_not_runtime_support",
+            "tests/go/test_local_types.py::test_import_name_and_type_qualifier_obey_the_lexical_cut",
+            "tests/go/test_local_types.py::test_owned_native_uses_distinct_generic_symbols_and_returns_full_width_result",
+            "tests/go/test_local_types.py::test_identical_upstream_graduated_and_scoped_programs_run_both_owners",
+            "tests/go/test_local_types.py::test_invalid_declarations_have_normal_source_attributed_official_rejections"
+          ],
+          "evidence": [],
+          "reason": "This source record carries no hosted CI acceptance receipt."
         }
       ]
     }

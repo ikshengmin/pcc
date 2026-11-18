@@ -100,6 +100,8 @@ def type_code(dtype):
     if interface_type(dtype) is not None or isinstance(dtype, SliceType):
         raise AssertionError('interface/signature-only type reached Go symbol encoding')
     if isinstance(dtype, DefinedType):
+        if dtype.local_site:
+            return ['local', dtype.package, dtype.name, *dtype.local_site]
         return ['defined', dtype.package, dtype.name]
     if isinstance(dtype, ArrayType):
         return ['array', dtype.count, type_code(dtype.element)]

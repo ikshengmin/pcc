@@ -52,7 +52,10 @@ def flattened(packages):
     return tuple((path+'/'+name, text) for path, original in packages.items() for name, text in original)
 
 
+GRADUATED_LOCAL_BLANK = 'package main;func main(){type _ int}'
+
 VALID = (
+    GRADUATED_LOCAL_BLANK,
     GRADUATED_BLANK_TYPE_CASE[1], GRADUATED_BLANK_TYPE_ORIGINAL,
     'package main;type _ int;type _ string;type _ = int;func main(){}',
     'package main;type (_ int;_ = int);func main(){}',
@@ -83,7 +86,6 @@ FRONTIERS = (
     ('package main;type _ interface{~int};func main(){}', 'go.unsupported.generic-boundaries'),
     ('package main;type _[T any] struct{};func main(){}', 'go.unsupported.generic-boundaries'),
     ('package main;type _ struct{_ int};func main(){}', 'go.unsupported.blank-struct-fields'),
-    ('package main;func main(){type _ int}', 'go.unsupported.local-type-declarations'),
     ('package main;type _ int;var _=7;func main(){}', 'go.unsupported.blank-package-variables'),
 )
 IMPORT_GRAPHS = tuple({

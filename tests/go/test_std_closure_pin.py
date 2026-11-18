@@ -13,7 +13,7 @@ import shutil
 
 import pytest
 
-from pcc.frontends.go import GoDiagnostic, compile_go_packages
+from pcc.frontends.go import UnsupportedGo, compile_go, compile_go_packages
 from scripts import ci_go_math_bits_project as project
 from scripts.go_std_closure import FIXTURE, LOCK, load_std_closure
 from scripts.pin_go_std_closure import evaluate, name_ok, selected
@@ -79,8 +79,53 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
     })
     # Formerly bits_test.go:10:2, `import "testing"` without its sources, then
     # allocs.go:20:44, AllocsPerRun's float64 result (tests/go/test_floating_types.py).
-    # The original testing package now parses until benchmark.go's slice
-    # expression `s[:len(s)-1]`, which the parser does not read yet.
-    with pytest.raises(GoDiagnostic, match=r"^benchmark.go:53:32: Go: unsupported expression token ':'$"):
-        compile_go_packages(packages, target_triple='x86_64-unknown-linux-gnu')
+    # benchmark.go:53:32 used to stop at the colon in s[:len(s)-1].
+    # Check the next exact rejection of the same whole, hash-verified graph.
+    # This frontier is not the separate whole math/bits acceptance gate.
+    with pytest.raises(UnsupportedGo, match=r"^benchmark\.go:95:2: Go: embedded fields require method/promotion support "
+                                             r"\[go\.unsupported\.embedded-fields\]$") as caught:
+        compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
+    assert caught.value.code == 'go.unsupported.embedded-fields'
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 95, 2)
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
+
+
+def test_pinned_benchmark_method_keeps_the_real_previously_blocked_bound():
+    from pcc.frontends.go.syntax import GoParser
+
+    _, std = load_std_closure()
+    benchmark = dict(std['testing'])['benchmark.go']
+    # Examine the complete unchanged Set declaration; the extra package line
+    # only makes it an independent parser input, not a compiled package.
+    begin = benchmark.index('func (f *durationOrCountFlag) Set(s string) error {')
+    end = benchmark.index('\n}\n', begin) + len('\n}\n')
+    method = benchmark[begin:end]
+    assert 'strconv.ParseInt(s[:len(s)-1], 10, 0)' in method
+    parsed = GoParser().parse('package testing\n'+method, 'benchmark.go', require_main=False)
+    call = parsed.functions[0].body[0].body[0].exprs[0]
+    assert (call.kind, call.value, call.callee.args[0].value) == ('call', 'ParseInt', 'strconv')
+    view = call.args[0]
+    assert view.kind == 'slice' and view.slice_bounds == (False, True, False)
+    base, high = view.args
+    length, one = high.args
+    assert (base.value, high.kind, high.value) == ('s', 'binary', '-')
+    assert (length.kind, length.value, length.args[0].value, one.value) == ('call', 'len', 's', '1')
+
+
+@pytest.mark.integration
+def test_previous_benchmark_bound_executes_when_proven_and_stays_closed_otherwise(tmp_path, monkeypatch):
+    from tests.go.owned_execution import Execution, compile_owned, run, write_artifact
+    from tests.go.test_execution import forbid_external_compiler
+
+    # Same spelling, known nonempty constant input: this is a slice behavior
+    # check, not a claim that the complete dynamic testing.Set can execute.
+    original = 'package main;func Result()int{const s="314x";v:=s[:len(s)-1];if v=="314"{return 42};return 0};func main(){}'
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned((('bound.go', original),), observe_result=True)
+        with pytest.raises(UnsupportedGo) as unproven:
+            compile_go('package main;func F(s string)string{return s[:len(s)-1]};func main(){}')
+        assert unproven.value.code == 'go.unsupported.string-bounds-panic'
+    native = tmp_path / 'known-bound'
+    write_artifact(artifact, native)
+    assert run(native) == Execution(0, (42).to_bytes(8, 'little'), b'')

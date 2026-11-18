@@ -6,6 +6,7 @@ pointer proof and IR owners as structured loops and expression switches.
 """
 
 from pcc.frontends.go.diagnostics import GoDiagnostic
+from pcc.frontends.go.syntax import TypeDeclaration
 
 
 def walk(statements):
@@ -94,7 +95,7 @@ class Branches:
         # Retain the actual dictionaries as identity-bearing block objects.
         # Snapshot symbols now, before later declarations mutate those dicts.
         variables = frozenset(symbol for scope in scopes for symbol in scope.values()
-                              if symbol.constant is None)
+                              if not isinstance(symbol, TypeDeclaration) and symbol.constant is None)
         barriers = frozenset(id(declaration) for scope, declaration in self.declarations
                              if any(scope is current for current in scopes))
         self.snapshots[id(statement)] = tuple(scopes), variables, barriers

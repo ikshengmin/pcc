@@ -21,7 +21,7 @@ from pcc.frontends.go.interface_values import (
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
-    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeName,
+    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration, TypeName,
 )
 from pcc.frontends.go.records import (
     DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, StructType,
@@ -467,6 +467,7 @@ class Analyzer:
         self.abstract_function = False
         self.functions = {}
         self.types = {}
+        self.declarations_by_identity = {}
         self.globals = {}
         self.scopes = []
         self.function = None
@@ -497,7 +498,7 @@ class Analyzer:
             if name != "_":
                 self.types[name] = declaration
             if not declaration.alias:
-                declaration.identity = DefinedType(name, self.package_path or "")
+                self.define_type_identity(declaration)
         for index, function in enumerate(self.program.functions):
             if function.receiver is not None:
                 continue
@@ -667,10 +668,23 @@ class Analyzer:
         if token.text in PREDECLARED and not (local_value and token.text in PREDECLARED_FUNCTIONS):
             raise UnsupportedGo(token, "go.unsupported.predeclared-shadowing", "shadowing predeclared names is not implemented in this binding: " + token.text)
 
+    def define_type_identity(self, declaration, *, local_site=()):
+        # Complete recursion against the exact defining declaration, not
+        # whichever lexical binding happens to share its spelling.
+        identity = DefinedType(declaration.token.text, self.package_path or "", local_site=local_site)
+        declaration.identity = identity
+        self.declarations_by_identity[identity] = declaration
+
+    def lexical_binding(self, name):
+        for scope in reversed(self.scopes):
+            if name in scope:
+                return scope[name]
+        return None
+
     def complete_named_identity(self, dtype):
         if isinstance(dtype, DefinedType) and dtype.underlying is None:
-            declaration = self.types.get(dtype.name)
-            if declaration is None or declaration.identity is not dtype:
+            declaration = self.declarations_by_identity.get(dtype)
+            if declaration is None:
                 raise AssertionError("incomplete foreign Go declaration identity")
             self.resolve_type_declaration(declaration)
         return dtype
@@ -795,7 +809,10 @@ class Analyzer:
             if dtype.qualifier is not None:
                 owner = self.imported(dtype.qualifier, dtype.token)
             else:
-                if any(dtype.token.text in scope for scope in self.scopes):
+                local = self.lexical_binding(dtype.token.text)
+                if isinstance(local, TypeDeclaration):
+                    return self.resolve_type_declaration(local, signature=signature)
+                if local is not None:
                     raise GoDiagnostic(dtype.token, "identifier is not a type: " + dtype.token.text)
                 if dtype.token.text in self.type_bindings:
                     return self.type_bindings[dtype.token.text]
@@ -963,9 +980,11 @@ class Analyzer:
                             + " values require the owned runtime error object and interface values")
 
     def lookup(self, token):
-        for scope in reversed(self.scopes):
-            if token.text in scope:
-                return scope[token.text]
+        local = self.lexical_binding(token.text)
+        if isinstance(local, TypeDeclaration):
+            raise GoDiagnostic(token, "type is not an expression: " + token.text)
+        if local is not None:
+            return local
         owner = self.dot_imported(token) or self
         if token.text in owner.globals:
             result = owner.globals[token.text]
@@ -1108,6 +1127,27 @@ class Analyzer:
     def statement(self, statement):
         kind = statement.kind
         if kind == "empty":
+            return
+        if kind == "type":
+            for declaration in statement.type_declarations:
+                token = declaration.token
+                self.check_name(token)
+                if token.text != "_" and (token.text in self.scopes[-1] or
+                        len(self.scopes) == 1 and token.text in self.type_bindings):
+                    raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
+                if self.function.type_parameters:
+                    raise UnsupportedGo(token, 'go.unsupported.local-type-declarations',
+                                        "local types in generic functions require instantiation-local identity")
+                if not declaration.alias:
+                    site = (self.function.abi_symbol, token.line, token.column)
+                    self.define_type_identity(declaration, local_site=site)
+                if token.text != "_":
+                    # Scope begins at the TypeSpec identifier, including its
+                    # own RHS, not at the beginning or end of the whole group.
+                    self.scopes[-1][token.text] = declaration
+                self.resolve_type_declaration(declaration)
+                validate_containment_cycles((declaration,))
+                require_value_type(declaration.resolved, token, declaration=True)
             return
         if kind in ("label", "goto"):
             self.branches.capture(statement, self.scopes)
@@ -1800,10 +1840,14 @@ class Analyzer:
                 self.call(expr, method, receiver=None if method_expression else base,
                           pointer_receiver_type=pointer_receiver_type if not pointer_method else None)
                 return
-            # Values in a lexical scope shadow builtin and package type/function names.
+            local = self.lexical_binding(name)
+            if isinstance(local, TypeDeclaration):
+                self.conversion(expr, self.resolve_type_declaration(local))
+                return
+            # Local values shadow builtin and package type/function names.
             owner = (self.dot_imported(expr.token) if name not in self.type_bindings
-                     and not any(name in scope for scope in self.scopes) else None) or self
-            if any(name in scope for scope in self.scopes) or name in owner.globals and name not in self.type_bindings:
+                     and local is None else None) or self
+            if local is not None or name in owner.globals and name not in self.type_bindings:
                 raise GoDiagnostic(expr.token, "cannot call non-function " + name)
             if name in ("min", "max"):
                 self.minmax(expr)
@@ -1925,7 +1969,10 @@ class Analyzer:
                                     "pointer-bearing pointees require a recursive lifetime/storage contract")
             return PointerType(element)
         if expr.kind == "name":
-            if any(expr.value in scope for scope in self.scopes):
+            local = self.lexical_binding(expr.value)
+            if isinstance(local, TypeDeclaration):
+                return self.resolve_type_declaration(local)
+            if local is not None:
                 return None
             if expr.value in self.type_bindings:
                 return self.type_bindings[expr.value]

@@ -251,6 +251,15 @@ mutable slice backing, string-element arrays, range iteration and dynamic packag
 initializers remain explicit gaps; no allocator, panic substitute or package-specific rule
 is introduced.
 
+[Local type declarations](https://go.dev/ref/spec#Declarations_and_scope)
+in non-generic functions use the ordinary block namespace. A type name is in
+scope from its own identifier, not from the beginning or end of its group.
+Separate local definitions stay distinct when passed to a generic function;
+aliases reuse the target identity. These declarations emit no instructions
+and do not introduce a variable that would prevent a forward `goto`.
+The existing type/storage checks still apply to every right-hand side,
+including blank declarations. Types in generic functions remain unsupported.
+
 [Simple string slicing](https://go.dev/ref/spec#Slice_expressions) produces
 another nonconstant byte descriptor of the same string type (or `string` for an
 untyped literal). The operand and bounds are evaluated once, in source order.
@@ -733,7 +742,8 @@ renew that historical qualification.
 | `go.capability.limit-string-bytes` | Explicitly unimplemented boundary: limit string bytes | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.limit-struct-fields` | Explicitly unimplemented boundary: limit struct fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.limit-type-expansion` | Explicitly unimplemented boundary: limit type expansion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.local-type-declarations` | Explicitly unimplemented boundary: local type declarations | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.types.block-local` | Non-generic block-local definitions and aliases with lexical identity | Same-source owned and reference obligations in `test_local_types.py` | Explicit implementation/acceptance |
+| `go.capability.local-type-declarations` | Local types inside generic function declarations need instantiation-specific identity | CAP-U checks the remaining generic-function boundary | `explicitly_unimplemented` |
 | `go.capability.defer` | Explicitly unimplemented boundary: deferred calls (`defer` statements parse and their call is checked; function-exit sequencing and panic/recover unwinding are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.owned-runtime-surface` | Explicitly unimplemented boundary: names of the owned runtime package other than `Error` | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.function-values` | Explicitly unimplemented boundary: function values (function types and literals parse; closures and indirect calls are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |

@@ -12,6 +12,9 @@ class DefinedType:
     package: str
     underlying: object = None
     methods: dict = field(default_factory=dict)
+    # Empty for package definitions. Lexically distinct local declarations
+    # may share their source name, representation and package.
+    local_site: tuple = ()
 
     def __deepcopy__(self, memo):
         # Declarations are canonical owners, not mutable syntax snapshots.
