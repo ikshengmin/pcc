@@ -265,6 +265,12 @@ class TypeName:
 
 
 @dataclass
+class TypeInstantiationSyntax:
+    base: TypeName
+    arguments: tuple
+
+
+@dataclass
 class StructSyntax:
     token: Token
     fields: list
@@ -281,6 +287,8 @@ class TypeDeclaration:
     pointer_depth: int = 0
     identity: object = None
     signature_depth: int = 0
+    type_parameters: list = field(default_factory=list)
+    template: object = None
 
 
 @dataclass
@@ -393,6 +401,7 @@ class GoParser:
         linknames = []
         self.tokens = scan(source, filename, linknames)
         self.index = 0
+        self.application_depth = 0
         self.named_literals = True
         self.take("package")
         package = self.take("name")
@@ -546,16 +555,23 @@ class GoParser:
         if qualifier is not None:
             token = self.take("name")
         if self.accept("["):
-            # An instantiated type is valid syntax even when this frontend
-            # cannot resolve its generic declaration. Consume its actual type
-            # arguments before reporting the capability frontier; malformed
-            # argument lists remain ordinary source syntax errors.
-            self.constraint_type()
-            while self.accept(",") and not self.at("]"):
-                self.constraint_type()
-            self.take("]")
-            self.unsupported(token, 'go.unsupported.generic-boundaries',
-                             "instantiated types require generic type resolution")
+            # Keep real, ordered type arguments and the qualifier. A signature
+            # may describe a slice without admitting a backing-store ABI.
+            self.application_depth += 1
+            if self.application_depth > 32:
+                self.unsupported(token, 'go.unsupported.limit-type-expansion',
+                                 "type application exceeds implementation limit (32 levels)")
+            try:
+                arguments = [self.datatype(signature=True)]
+                while self.accept(",") and not self.at("]"):
+                    if len(arguments) >= 256:
+                        self.unsupported(token, 'go.unsupported.limit-function-arity',
+                                         "type application exceeds implementation limit (256 arguments)")
+                    arguments.append(self.datatype(signature=True))
+                self.take("]")
+            finally:
+                self.application_depth -= 1
+            return TypeInstantiationSyntax(TypeName(token, qualifier.text if qualifier else None), tuple(arguments))
         if qualifier is not None:
             return TypeName(token, qualifier.text)
         if token.text in TYPE_NAMES:
@@ -656,13 +672,17 @@ class GoParser:
             # `[N]element` remains an ordinary array type declaration. The
             # supported generic-declaration frontier must not steal that
             # preexisting grammar merely because both begin with a bracket.
+            parameters = []
             if (self.at("[") and self.tokens[self.index + 1].kind == "name"
                     and self.tokens[self.index + 2].kind in
                     ("name", ",", "~", "interface", "[", "struct", "chan", "map", "func")):
-                self.unsupported(name, 'go.unsupported.generic-boundaries',
-                                 "generic type declarations require separate identity/layout checking")
+                self.take("[")
+                parameters = self.type_parameter_list()
             alias = bool(self.accept("="))
-            declarations.append(TypeDeclaration(name, self.datatype(), alias))
+            if parameters and (alias or not self.at("func")):
+                self.unsupported(name, 'go.unsupported.generic-boundaries',
+                                 "generic aliases and data type declarations require separate identity/layout checking")
+            declarations.append(TypeDeclaration(name, self.datatype(), alias, type_parameters=parameters))
             if not grouped:
                 break
             if not self.accept(";") and not self.at(")"):
@@ -946,7 +966,7 @@ class GoParser:
                 names.append(self.take("name"))
             # A VarSpec/ConstSpec uses Type, including its parenthesized form.
             # The declaration group's own parentheses were consumed above.
-            dtype = self.datatype() if self.current.kind in ("name", "[", "struct", "*", "interface", "(") else None
+            dtype = self.datatype() if self.current.kind in ("name", "[", "struct", "*", "interface", "func", "(") else None
             exprs = self.expression_list() if self.accept("=") else []
             if token.kind == "const" and not exprs:
                 if not grouped or previous is None or dtype is not None:
@@ -1209,7 +1229,7 @@ class GoParser:
                     dtype = TypeName(left.token)
                 left = self.composite_literal(left.token, dtype)
             elif self.accept("("):
-                if left.kind not in ("name", "selector", "type", "index", "type_apply", "func_literal") and not (left.kind == "unary" and left.value == "*"):
+                if left.kind not in ("name", "selector", "type", "index", "type_apply", "func_literal", "call") and not (left.kind == "unary" and left.value == "*"):
                     self.fail(token, "only named function calls/conversions are supported")
                 previous, self.named_literals = self.named_literals, True
                 args, spread = [], None

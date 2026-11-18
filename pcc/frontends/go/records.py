@@ -15,13 +15,18 @@ class DefinedType:
     # Empty for package definitions. Lexically distinct local declarations
     # may share their source name, representation and package.
     local_site: tuple = ()
+    # A named instantiation is not its underlying signature or an anonymous
+    # spelling. The template interns (declaration, exact type arguments).
+    template: object = None
+    type_arguments: tuple = ()
 
     def __deepcopy__(self, memo):
         # Declarations are canonical owners, not mutable syntax snapshots.
         return self
 
     def __str__(self):
-        return self.package + "." + self.name if self.package else self.name
+        name = self.package + "." + self.name if self.package else self.name
+        return name + ('[' + ', '.join(map(str, self.type_arguments)) + ']' if self.type_arguments else '')
 
 
 @dataclass(frozen=True)

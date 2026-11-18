@@ -31,7 +31,7 @@ PREDECLARED_CONSTRAINTS = {'any': ANY, 'comparable': COMPARABLE}
 
 @dataclass(frozen=True)
 class TypeParameter:
-    owner: str
+    owner: object
     index: int
     name: str
     constraint: ConstraintIdentity
@@ -41,6 +41,11 @@ class TypeParameter:
 
 
 def contains_parameter(dtype):
+    from .callables import CallableType
+    if isinstance(dtype, DefinedType) and dtype.template is not None:
+        return any(contains_parameter(a) for a in dtype.type_arguments)
+    if isinstance(dtype, CallableType):
+        return any(contains_parameter(a) for a in dtype.parameters + (dtype.result,))
     if isinstance(dtype, TypeParameter):
         return True
     if isinstance(dtype, (ArrayType, PointerType, SliceType)):
@@ -55,12 +60,25 @@ def contains_parameter(dtype):
     return False
 
 
-def substitute(dtype, bindings, token):
+def substitute(dtype, bindings, token, *, signature=False):
+    from .callables import CallableType
+    if isinstance(dtype, DefinedType) and dtype.template is not None:
+        return dtype.template.instantiate(tuple(substitute(a, bindings, token, signature=True)
+                                                for a in dtype.type_arguments), token)
+    if isinstance(dtype, CallableType):
+        return CallableType(tuple(substitute(a, bindings, token, signature=True) for a in dtype.parameters),
+                            substitute(dtype.result, bindings, token, signature=True))
+    if isinstance(dtype, SliceType):
+        return SliceType(substitute(dtype.element, bindings, token, signature=True))
+    if signature and isinstance(dtype, PointerType):
+        return PointerType(substitute(dtype.element, bindings, token, signature=True))
     if isinstance(dtype, TypeParameter):
         return bindings.get(dtype, dtype)
     if isinstance(dtype, Results):
-        return Results(tuple(substitute(item, bindings, token) for item in dtype.elements))
+        return Results(tuple(substitute(item, bindings, token, signature=signature) for item in dtype.elements))
     if isinstance(dtype, ArrayType):
+        if signature:
+            return ArrayType(dtype.count, substitute(dtype.element, bindings, token, signature=True))
         from pcc.frontends.go.sema import checked_array_type
         return checked_array_type(token, dtype.count, substitute(dtype.element, bindings, token))
     # Concrete nominal types retain declaration identity; dependent pointer
@@ -88,6 +106,25 @@ def infer_argument(formal, actual, token, parameters, explicit, bindings, *, exa
             else:
                 raise GoDiagnostic(token, 'conflicting inferred type arguments')
         return
+    from .callables import CallableType
+    if isinstance(formal, DefinedType) and formal.template is not None and contains_parameter(formal):
+        if not exact and isinstance(actual, CallableType):
+            # Loose assignment: an unnamed original function may implement
+            # the instantiated named signature. Named-vs-named remains exact.
+            infer_argument(underlying(formal), actual, token, parameters, explicit, bindings, exact=True)
+            return
+        if not isinstance(actual, DefinedType) or formal.template is not actual.template:
+            raise GoDiagnostic(token, 'cannot infer type arguments from a different named callable')
+        for a, b in zip(formal.type_arguments, actual.type_arguments):
+            infer_argument(a, b, token, parameters, explicit, bindings, exact=True)
+        return
+    if isinstance(formal, CallableType) and contains_parameter(formal):
+        other = actual if exact else underlying(actual)
+        if not isinstance(other, CallableType) or len(other.parameters) != len(formal.parameters):
+            raise GoDiagnostic(token, 'cannot infer type arguments from incompatible function')
+        for a, b in zip(formal.parameters + (formal.result,), other.parameters + (other.result,)):
+            infer_argument(a, b, token, parameters, explicit, bindings, exact=True)
+        return
     if isinstance(formal, ArrayType) and contains_parameter(formal):
         actual_array = underlying(actual) if not exact else actual
         if not isinstance(actual_array, ArrayType) or formal.count != actual_array.count:
@@ -96,23 +133,46 @@ def infer_argument(formal, actual, token, parameters, explicit, bindings, *, exa
                        bindings, exact=True)
 
 
-def type_code(dtype):
-    if interface_type(dtype) is not None or isinstance(dtype, SliceType):
-        raise AssertionError('interface/signature-only type reached Go symbol encoding')
+def type_code(dtype, token=None, remaining=None):
+    # A phantom parameter of a nominal callable can carry identity even when
+    # its signature does not store that parameter. Never conflate it with the
+    # underlying func(), or expand unlimited metadata to obtain an ABI name.
+    remaining = [4096] if remaining is None else remaining
+    remaining[0] -= 1
+    if remaining[0] < 0:
+        raise UnsupportedGo(token, 'go.unsupported.limit-type-expansion',
+                            'generic symbol type encoding exceeds 4096 nodes')
+    def code(t):
+        return type_code(t, token, remaining)
+    if isinstance(dtype, SliceType):
+        return ['slice', code(dtype.element)]
+    if isinstance(dtype, PointerType):
+        return ['ptr', code(dtype.element)]
+    if isinstance(dtype, Results):
+        return ['results', [code(t) for t in dtype.elements]]
+    if isinstance(dtype, InterfaceType):
+        return ['interface', [[m.name, m.package, m.signature.variadic,
+                [code(t) for t in m.signature.parameters], code(m.signature.result)]
+                for m in dtype.methods]]
+    from .callables import CallableType
+    if isinstance(dtype, CallableType):
+        return ['func', [code(a) for a in dtype.parameters], code(dtype.result)]
     if isinstance(dtype, DefinedType):
+        if dtype.template is not None:
+            return ['instance', dtype.package, dtype.name, [code(a) for a in dtype.type_arguments]]
         if dtype.local_site:
             return ['local', dtype.package, dtype.name, *dtype.local_site]
         return ['defined', dtype.package, dtype.name]
     if isinstance(dtype, ArrayType):
-        return ['array', dtype.count, type_code(dtype.element)]
+        return ['array', dtype.count, code(dtype.element)]
     if isinstance(dtype, StructType):
         # Keep existing untagged symbol spellings stable. Tag bytes and
         # embeddedness distinguish otherwise identical anonymous arguments.
         return ['struct', [
-            [field.name, field.package, type_code(field.type)] +
+            [field.name, field.package, code(field.type)] +
             ([field.embedded, field.tag.hex()] if field.embedded or field.tag else [])
             for field in dtype.fields]]
-    if isinstance(dtype, (TypeParameter, PointerType)):
+    if isinstance(dtype, TypeParameter):
         raise AssertionError('nonconcrete or pointer type argument reached Go symbol encoding')
     return ['scalar', dtype]
 
@@ -137,28 +197,33 @@ class GenericSession:
     """One explicit package graph's declarations, checks and shared worklist."""
     def __init__(self):
         self.instances = InstanceRegistry()
+        self.callable_instances = 0
         self.parameters = {}
         self.owners = {}
         self.raw_bodies = {}
         self.abstract_calls = []
 
-    def prepare(self, owner, function):
+    def parameter_scope(self, owner, specs, identity):
         scope = {}
         parameters = []
-        declared_names = {name.text for name, _ in function.type_parameters if name.text != '_'}
-        for index, (name, constraint) in enumerate(function.type_parameters):
+        declared_names = {name.text for name, _ in specs if name.text != '_'}
+        for index, (name, constraint) in enumerate(specs):
             resolved_constraint = self.resolve_constraint(owner, constraint, declared_names)
             owner.check_name(name)
             if name.text in scope:
                 raise GoDiagnostic(name, 'duplicate type parameter ' + name.text)
-            parameter = TypeParameter(function.abi_symbol, index, name.text, resolved_constraint)
+            parameter = TypeParameter(identity, index, name.text, resolved_constraint)
             parameters.append(parameter)
             # Blank slots retain their index, constraint and instance argument,
             # but never declare a source name (even when repeated).
             if name.text != '_':
                 scope[name.text] = parameter
+        return scope, tuple(parameters)
+
+    def prepare(self, owner, function):
+        scope, parameters = self.parameter_scope(owner, function.type_parameters, function.abi_symbol)
         if parameters:
-            self.parameters[id(function)] = tuple(parameters)
+            self.parameters[id(function)] = parameters
             self.owners[id(function)] = owner
             self.raw_bodies[id(function)] = deepcopy(function.body)
         function.type_bindings = scope
@@ -282,7 +347,7 @@ class GenericSession:
         if len(self.instances) >= MAX_FUNCTION_INSTANCES:
             raise UnsupportedGo(function.token, 'go.unsupported.limit-generic-instances',
                                 'generic function instances exceed implementation limit (128)')
-        spelling = json.dumps([type_code(argument) for argument in arguments],
+        spelling = json.dumps([type_code(argument, function.token) for argument in arguments],
                               ensure_ascii=True, separators=(',', ':')).encode('ascii').hex()
         instance = replace(function, params=params, result=result,
                            body=deepcopy(self.raw_bodies[id(function)]), locals=[], parameters=[],

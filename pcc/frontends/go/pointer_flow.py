@@ -304,6 +304,13 @@ class PointerFlow:
         if kind == 'binary' and expr.value in ('&&', '||'):
             self.branches(expr, state, check, saved)
             return UNPROVEN
+        if kind == 'indirect_call':
+            # Sema admits scalar/code-pointer transport only. Evaluate every
+            # argument (and the callee) with its normal lexical pointer checks.
+            self.evaluate(expr.callee, state, check, saved)
+            for argument in expr.args:
+                self.evaluate(argument, state, check, saved)
+            return UNPROVEN
         if kind == 'call':
             receiver = ([(expr.receiver, self.evaluate(expr.receiver, state, check, saved))]
                         if expr.receiver is not None else [])
@@ -517,7 +524,9 @@ def validate_pointer_flow(program):
             pending.extend(expr.args)
             if expr.receiver is not None:
                 pending.append(expr.receiver)
-            if expr.kind == 'call' and expr.symbol is not None:
+            if expr.kind == 'indirect_call':
+                pending.append(expr.callee)
+            if expr.kind in ('call', 'function_ref') and expr.symbol is not None:
                 if callees.get(expr.symbol.abi_symbol) is not expr.symbol:
                     raise UnsupportedGo(expr.token, 'go.unsupported.pointer-signatures',
                                         'call target lacks a checked original-source non-retention contract')

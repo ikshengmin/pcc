@@ -10,6 +10,7 @@ from pcc.support.managed_objects import (
     ManagedContractError, ManagedLayoutPlan, ManagedSpanPlan,
     ManagedTypeIdentity, ManagedValuePlan, ReferenceEdgePlan, ScalarFieldPlan,
 )
+from .callables import CallableType
 from .records import DefinedType, StructType, underlying
 from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, is_error_interface, is_string
 
@@ -21,6 +22,10 @@ def type_identity(dtype):
         return ManagedTypeIdentity('go', origin, dtype.name, declaration=dtype)
     if isinstance(dtype, str) and (dtype in INTEGER_TYPES or dtype in {'bool', 'string'}):
         return ManagedTypeIdentity('go', ('universe',), dtype)
+    if isinstance(dtype, CallableType):
+        # Function parameter names are not part of identity. Named signature
+        # members retain their exact declaration identity in the frozen value.
+        return ManagedTypeIdentity('go', ('structural',), 'func', declaration=dtype)
     if isinstance(dtype, PointerType):
         return ManagedTypeIdentity('go', ('structural',), 'pointer',
                                    declaration=(type_identity(dtype.element),))
@@ -50,6 +55,11 @@ def value_plan(dtype):
         size = 1 if base == 'bool' else INTEGER_TYPES[base][0] // 8
         layout = ManagedLayoutPlan(identity, size, size,
             (ScalarFieldPlan(('value',), base, 0, size, size),))
+    elif isinstance(base, CallableType):
+        # Compiler-only metadata: neither a language closure box nor an
+        # interface payload with a silently untracked environment field.
+        layout = None
+        requirements += ('go-function-value-and-environment-copy-plan',)
     elif isinstance(base, PointerType):
         layout = ManagedLayoutPlan(identity,
             references=(ReferenceEdgePlan(('value',), type_identity(base.element)),))

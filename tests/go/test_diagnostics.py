@@ -94,6 +94,7 @@ CASES = [
 # remaining original and its legacy name-index ID exactly; no skip/xfail or
 # filtering of a test result. Both exact originals have positive/native/
 # official-reference obligations in their corresponding feature tests.
+GRADUATED_FUNCTION_TYPE_CASE = ('function-values', original('func f(g func()int)int{return 1}'))
 GRADUATED_LOCAL_TYPE_CASE = ('local-type-declarations', original(body='type T int'))
 GRADUATED_RECEIVER_CASE = ('pointer-receivers', original('type T int;func(t *T)f(){}'))
 GRADUATED_ARRAY_RANGE_CASE = ('non-array-range', original('func f(p *[2]int){for range p{}}'))
@@ -120,7 +121,7 @@ GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
                   GRADUATED_STRUCT_TAG_CASE, GRADUATED_BLANK_FUNCTION_CASE, GRADUATED_BLANK_TYPE_CASE,
                   GRADUATED_RECORD_ARRAY_CASE, *GRADUATED_AGGREGATE_CASES, GRADUATED_DIVISION_CASE,
-                  GRADUATED_LOCAL_TYPE_CASE)
+                  GRADUATED_LOCAL_TYPE_CASE, GRADUATED_FUNCTION_TYPE_CASE)
 assert all(CASES.count(case) == 1 for case in GRADUATED_CASES)
 assert all(CASES.count(case) == 1 for case in RETIRED_CASES)
 ACTIVE_CASES = [(i, name, text) for i, (name, text) in enumerate(CASES)

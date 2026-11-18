@@ -12,6 +12,7 @@ import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.branches import Branches, unlabeled
+from pcc.frontends.go.callables import CallableType, CallableTemplate, callable_signature, require_callable_abi
 from pcc.frontends.go.interface_methods import (
     basic_interface, interface_type, method_set, require_implements,
 )
@@ -21,7 +22,7 @@ from pcc.frontends.go.interface_values import (
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
-    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration, TypeName,
+    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration, TypeInstantiationSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
     DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, StructType,
@@ -229,7 +230,7 @@ def has_evaluated_call(expr):
     """
     if expr.constant is not None:
         return False
-    if expr.kind == "call" and expr.symbol is not None:
+    if expr.kind == "indirect_call" or expr.kind == "call" and expr.symbol is not None:
         return True
     if expr.kind == "minmax":
         # A nonconstant builtin invocation counts for the array len/cap
@@ -291,7 +292,7 @@ def coerce(expr, dtype):
         failure.managed_plan = plan
         raise failure
     if expr.type == "untyped nil":
-        if not isinstance(underlying(dtype), PointerType):
+        if not isinstance(underlying(dtype), (PointerType, CallableType)):
             raise GoDiagnostic(expr.token, "cannot use untyped nil as " + str(dtype))
         expr.type = dtype
         return
@@ -352,12 +353,19 @@ def require_value_type(dtype, token, *, declaration=False):
             raise failure
         return
     base = underlying(dtype)
+    if isinstance(base, CallableType):
+        if not declaration:
+            require_callable_abi(base, token)
+        return
     if isinstance(base, SliceType):
         raise UnsupportedGo(token, 'go.unsupported.slice-storage',
                             "signature slice identity does not supply slice storage")
     if isinstance(base, ArrayType):
         checked_array_type(token, base.count, base.element)
     elif isinstance(base, PointerType):
+        if callable_signature(base.element) is not None:
+            raise UnsupportedGo(token, 'go.unsupported.function-values',
+                                'pointer-addressed function storage has not been qualified')
         if interface_type(base.element) is not None:
             raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                 "pointers to interface storage require a runtime storage contract")
@@ -370,6 +378,9 @@ def require_value_type(dtype, token, *, declaration=False):
         # revisiting their storage closures or constructing expanded IR types.
         require_bounded_value_layout(base, token)
         for field in base.fields:
+            if callable_signature(field.type) is not None:
+                raise UnsupportedGo(token, 'go.unsupported.function-values',
+                                    'function-valued record storage is not implemented')
             if isinstance(underlying(field.type), PointerType):
                 raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                     "pointer-bearing records require aggregate lifetime/storage analysis")
@@ -497,7 +508,7 @@ class Analyzer:
             # instead keep their canonical target without reserving "_".
             if name != "_":
                 self.types[name] = declaration
-            if not declaration.alias:
+            if not declaration.alias and not declaration.type_parameters:
                 self.define_type_identity(declaration)
         for index, function in enumerate(self.program.functions):
             if function.receiver is not None:
@@ -545,7 +556,10 @@ class Analyzer:
                     raise GoDiagnostic(binding.token, "import name conflicts with package declaration: " + alias)
         self.prepare_dot_imports(package_names)
         for declaration in self.program.types:
-            self.resolve_type_declaration(declaration)
+            if declaration.type_parameters:
+                self.prepare_callable_template(declaration)
+            else:
+                self.resolve_type_declaration(declaration)
         validate_containment_cycles(self.program.types)
         for declaration in self.program.types:
             require_value_type(declaration.resolved, declaration.token, declaration=True)
@@ -554,6 +568,15 @@ class Analyzer:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
         for function in self.program.functions:
+            if function.receiver is not None:
+                token, raw = function.receiver
+                receiver_base = raw.element if isinstance(raw, PointerSyntax) else raw
+                if isinstance(receiver_base, TypeInstantiationSyntax):
+                    # These identifiers declare fresh receiver type parameters
+                    # used in the method signature, not concrete arguments to
+                    # which per-instance method implementations may be attached.
+                    raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
+                                        'generic receiver declarations need receiver type-parameter scope')
             self.type_bindings = self.generics.prepare(self, function)
             function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
             function.result = self.resolve_type(function.result)
@@ -576,6 +599,8 @@ class Analyzer:
                 dtype = receiver_type.element if isinstance(receiver_type, PointerType) else receiver_type
                 if isinstance(underlying(dtype), PointerType):
                     raise GoDiagnostic(token, "method receiver base cannot be a defined pointer type")
+                if isinstance(dtype, DefinedType) and dtype.template is not None:
+                    raise GoDiagnostic(token, 'cannot define methods on an alias to an instantiated generic type')
                 if not isinstance(dtype, DefinedType) or dtype.package != (self.package_path or ""):
                     raise GoDiagnostic(token, "method receiver base must be a defined type in the same package")
                 name = function.token.text
@@ -689,7 +714,53 @@ class Analyzer:
             self.resolve_type_declaration(declaration)
         return dtype
 
+    def prepare_callable_template(self, declaration):
+        if declaration.template is not None:
+            return declaration.template
+        token = declaration.token
+        if declaration.resolving or self.type_depth >= 32:
+            raise UnsupportedGo(token, 'go.unsupported.limit-type-expansion',
+                                "recursive/overdeep generic callable expansion needs a nominal ABI anchor")
+        previous = self.type_bindings, self.scopes
+        declaration.resolving = True
+        self.type_depth += 1
+        try:
+            # The declaration has its own lexical type parameters, not the
+            # caller's local block or another generic's active bindings.
+            self.type_bindings, self.scopes = {}, []
+            key = ('type', self.package_path or '', token.text, token.filename, token.line, token.column)
+            self.type_bindings, parameters = self.generics.parameter_scope(self, declaration.type_parameters, key)
+            signature = self.resolve_type(declaration.type, signature=True)
+            assert isinstance(signature, CallableType)
+            declaration.template = CallableTemplate(token.text, self.package_path or '', parameters, signature, self.generics)
+        finally:
+            self.type_bindings, self.scopes = previous
+            declaration.resolving = False
+            self.type_depth -= 1
+        return declaration.template
+
+    def named_application(self, name, arguments, *, expressions=False):
+        token = name.token
+        if name.qualifier:
+            owner = self.imported(name.qualifier, token)
+        else:
+            local = self.lexical_binding(token.text)
+            if local is not None or token.text in self.type_bindings:
+                return None
+            owner = self.dot_imported(token) or self
+        declaration = owner.types.get(token.text)
+        if declaration is None or not declaration.type_parameters:
+            return None
+        template = owner.prepare_callable_template(declaration)
+        args = (tuple(self.type_operand(a) for a in arguments) if expressions else
+                tuple(self.resolve_type(a, signature=True) for a in arguments))
+        if any(a is None for a in args):
+            raise GoDiagnostic(token, "generic type arguments must denote types")
+        return template.instantiate(args, token)
+
     def resolve_type_declaration(self, declaration, *, signature=False):
+        if declaration.type_parameters:
+            raise GoDiagnostic(declaration.token, 'cannot use generic type without instantiation: '+declaration.token.text)
         # A named reference is a finite signature anchor, not proof that its
         # underlying type or embedded method set has completed successfully.
         if signature and not declaration.alias:
@@ -774,8 +845,19 @@ class Analyzer:
 
     def resolve_type(self, dtype, *, signature=False):
         if isinstance(dtype, FunctionTypeSyntax):
-            raise UnsupportedGo(dtype.token, 'go.unsupported.function-values',
-                                "function types require function values and an indirect-call ABI")
+            seen = set()
+            for name in dtype.names + dtype.result_names:
+                if name is not None and name.text != '_':
+                    if name.text in seen:
+                        raise GoDiagnostic(name, 'duplicate parameter name '+name.text)
+                    seen.add(name.text)
+            return CallableType(tuple(self.resolve_type(t, signature=True) for t in dtype.parameters),
+                                self.resolve_type(dtype.result, signature=True))
+        if isinstance(dtype, TypeInstantiationSyntax):
+            result = self.named_application(dtype.base, dtype.arguments)
+            if result is None:
+                raise GoDiagnostic(dtype.base.token, 'type application requires a generic type')
+            return result
         if isinstance(dtype, InterfaceSyntax):
             return self.resolve_interface(dtype)
         if isinstance(dtype, SliceSyntax):
@@ -1135,6 +1217,8 @@ class Analyzer:
                 if token.text != "_" and (token.text in self.scopes[-1] or
                         len(self.scopes) == 1 and token.text in self.type_bindings):
                     raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
+                if declaration.type_parameters:
+                    raise GoDiagnostic(token, 'local type cannot have type parameters')
                 if self.function.type_parameters:
                     raise UnsupportedGo(token, 'go.unsupported.local-type-declarations',
                                         "local types in generic functions require instantiation-local identity")
@@ -1237,7 +1321,7 @@ class Analyzer:
             self.expression(expr)
             if expr.kind == "builtin_io":
                 statement.terminates = expr.value == "panic"
-            elif expr.kind != "call" or expr.symbol is None:
+            elif expr.kind != "indirect_call" and (expr.kind != "call" or expr.symbol is None):
                 raise GoDiagnostic(expr.token, "only function calls may be expression statements")
             return
         if kind == "defer":
@@ -1247,7 +1331,7 @@ class Analyzer:
             # design; terminal panics assume no deferred call exists.
             expr = statement.exprs[0]
             self.expression(expr)
-            if expr.kind != "builtin_io" and (expr.kind != "call" or expr.symbol is None):
+            if expr.kind not in ("builtin_io", "indirect_call") and (expr.kind != "call" or expr.symbol is None):
                 raise GoDiagnostic(expr.token, "defer requires a function call")
             raise UnsupportedGo(statement.token, 'go.unsupported.defer',
                                 "deferred calls require function-exit sequencing and panic/recover unwinding, "
@@ -1685,6 +1769,9 @@ class Analyzer:
             if function is not None and function.type_parameters:
                 raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
                                     'generic function values require direct instantiation calls')
+            if function is not None:
+                self.function_reference(expr, function)
+                return
             if expr.value == "iota":
                 if self.iota is None:
                     raise GoDiagnostic(expr.token, "iota is only defined within a constant declaration")
@@ -1714,6 +1801,9 @@ class Analyzer:
                 if expr.value in imported.functions and imported.functions[expr.value].type_parameters:
                     raise UnsupportedGo(expr.token, 'go.unsupported.generic-boundaries',
                                         'generic function values require direct instantiation calls')
+                if expr.value in imported.functions:
+                    self.function_reference(expr, imported.functions[expr.value])
+                    return
                 symbol = imported.globals.get(expr.value)
                 if symbol is None:
                     raise GoDiagnostic(expr.token, "undefined imported constant or variable " + expr.value)
@@ -1773,9 +1863,16 @@ class Analyzer:
         if kind == "call":
             name = expr.value
             callee = expr.callee
+            if callee is not None and callee.kind == "call":
+                self.indirect_call(expr)
+                return
             if callee is not None and callee.kind in ("index", "type_apply"):
                 base = callee.args[0] if callee.kind == "index" else callee.callee
                 explicit = callee.args[1:] if callee.kind == "index" else callee.args
+                target = self.applied_operand(callee)
+                if target is not None:
+                    self.conversion(expr, target)
+                    return
                 function = self.direct_function(base)
                 if function is None:
                     raise GoDiagnostic(expr.token, "type application requires a direct generic function")
@@ -1802,6 +1899,9 @@ class Analyzer:
                         self.conversion(expr, owner.resolve_type_declaration(owner.types[name]))
                         return
                     function = owner.functions.get(name)
+                    if function is None and name in owner.globals:
+                        self.indirect_call(expr)
+                        return
                     if function is None:
                         raise GoDiagnostic(expr.token, "undefined imported function " + name)
                     self.call(expr, function)
@@ -1848,7 +1948,8 @@ class Analyzer:
             owner = (self.dot_imported(expr.token) if name not in self.type_bindings
                      and local is None else None) or self
             if local is not None or name in owner.globals and name not in self.type_bindings:
-                raise GoDiagnostic(expr.token, "cannot call non-function " + name)
+                self.indirect_call(expr)
+                return
             if name in ("min", "max"):
                 self.minmax(expr)
                 return
@@ -1951,7 +2052,24 @@ class Analyzer:
             return
         raise GoDiagnostic(expr.token, "unsupported expression " + kind)
 
+    def applied_operand(self, expr):
+        base = expr.args[0] if expr.kind == 'index' else expr.callee
+        if base.kind == 'name':
+            name = TypeName(base.token)
+        elif (base.kind == 'selector' and base.args[0].kind == 'name' and
+              base.args[0].value in self.imports.get(base.token.filename, {}) and
+              self.lexical_binding(base.args[0].value) is None):
+            if base.args[0].parenthesized:
+                raise GoDiagnostic(base.token, 'selector requires an unparenthesized imported package name')
+            name = TypeName(base.token, base.args[0].value)
+        else:
+            return None
+        return self.named_application(name, expr.args[1:] if expr.kind == 'index' else expr.args,
+                                      expressions=True)
+
     def type_operand(self, expr):
+        if expr.kind in ('index', 'type_apply'):
+            return self.applied_operand(expr)
         if expr.kind == "type":
             return self.resolve_type(expr.value)
         if expr.kind == "unary" and expr.value == "*":
@@ -2054,6 +2172,13 @@ class Analyzer:
             coerce(arg, target)
             expr.type = target
             return
+        if callable_signature(target) is not None:
+            if arg.type == 'untyped nil':
+                coerce(arg, target)
+            elif not same_underlying(target, arg.type):
+                raise GoDiagnostic(expr.token, f"invalid conversion from {arg.type} to {target}")
+            expr.type = target
+            return
         if isinstance(underlying(target), PointerType):
             if arg.type == "untyped nil":
                 coerce(arg, target)
@@ -2107,6 +2232,24 @@ class Analyzer:
                 return self.imported(base.value, expression.token).functions.get(expression.value)
         return None
 
+    def function_reference(self, expr, function):
+        sig = CallableType(tuple(t for _, t in function.params), function.result)
+        require_callable_abi(sig, expr.token)
+        expr.kind, expr.type, expr.symbol = "function_ref", sig, function
+
+    def indirect_call(self, expr):
+        self.expression(expr.callee)
+        sig = callable_signature(expr.callee.type)
+        if sig is None:
+            raise GoDiagnostic(expr.token, "cannot call non-function " + (expr.value or 'expression'))
+        require_callable_abi(sig, expr.token)
+        values = self.values(expr.args)
+        if len(values) != len(sig.parameters):
+            raise GoDiagnostic(expr.token, 'argument count mismatch for function value')
+        for argument, parameter in zip(values, sig.parameters):
+            coerce(argument, parameter)
+        expr.kind, expr.type = 'indirect_call', sig.result
+
     def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
         if function.type_parameters:
             function = self.generics.select(self, function, expr.args)
@@ -2132,6 +2275,15 @@ class Analyzer:
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if callable_signature(left.type) is not None or callable_signature(right.type) is not None:
+            if op not in ('==', '!=') or 'untyped nil' not in (left.type, right.type):
+                raise GoDiagnostic(expr.token, 'func can only be compared to nil')
+            if left.type == 'untyped nil':
+                coerce(left, right.type)
+            else:
+                coerce(right, left.type)
+            expr.kind, expr.type = 'func_nil_compare', 'untyped bool'
+            return
         if is_error_interface(left.type) or is_error_interface(right.type):
             if op not in ("==", "!="):
                 raise GoDiagnostic(expr.token, "interfaces permit only equality and inequality operators")

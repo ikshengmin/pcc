@@ -746,7 +746,7 @@ renew that historical qualification.
 | `go.capability.local-type-declarations` | Local types inside generic function declarations need instantiation-specific identity | CAP-U checks the remaining generic-function boundary | `explicitly_unimplemented` |
 | `go.capability.defer` | Explicitly unimplemented boundary: deferred calls (`defer` statements parse and their call is checked; function-exit sequencing and panic/recover unwinding are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.owned-runtime-surface` | Explicitly unimplemented boundary: names of the owned runtime package other than `Error` | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.function-values` | Explicitly unimplemented boundary: function values (function types and literals parse; closures and indirect calls are not implemented) | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.capability.function-values` | Explicit gap: captured functions, function literals and unqualified indirect-carrier ABIs; named static code values are separate | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.method-values` | Explicitly unimplemented boundary: method values | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.negative-shift-panic` | Explicitly unimplemented boundary: negative shift panic | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.string-range.utf8` | Source implementation: byte-offset/rune UTF-8 iteration on existing immutable strings | All new unit/native/same-source reference obligations UNRUN in CI | Implementation `supported`; acceptance `unrun` |
@@ -1326,3 +1326,29 @@ Four exact formerly rejected record-array programs are retained as positive
 source/native/reference obligations in `test_record_arrays.py`; no historical
 result is relabeled. Current candidate execution and official-reference results
 must be read separately from implementation availability.
+
+## Named callable types, static function values, and the project boundary
+
+The ordinary Go frontend preserves type application in qualified and local
+signature references. A package-defined `type Seq[V any] func(func(V) bool)`
+has a distinct nominal identity for each exact argument list; aliases reuse
+that identity. The graph admits 128 named signature instances, separately
+from the existing direct generic-function limit. Basic any/comparable
+constraints are checked before substitution. Generic data types, recursive
+generic signatures and generic aliases are not implemented.
+
+A qualified owned top-level non-generic function can be used as a value,
+returned, tested against nil, stored in a local/zero-initialized global, and
+called indirectly. Compatible unnamed and named signatures use a typed code
+pointer, never an erased heap pointer or closure environment. Parameter and
+result carriers are noncapturing functions or scalar numbers/bools. On a nil
+call the callee and real arguments are evaluated before the existing Linux
+terminal panic path. Raw Go-pointer arguments/results and aggregate or backed
+slice transport through indirect calls remain explicit gaps. Function
+literals, captures, stored methods and defer/recover remain unsupported.
+
+The unchanged Go 1.27.3 `bytes/iter.go` is a syntax check, not execution of
+`bytes.Lines`. The exact `iter.Seq`, `iter.Seq2` declarations also occur in
+host-PCC/self Linux native and official-reference programs with real nested
+indirect calls. Neither this nor a component closure qualifies go-enry, the
+complete math/bits test binary, or native pcc1.

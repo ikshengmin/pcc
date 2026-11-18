@@ -9,6 +9,7 @@ ordinary public IR, handled by the existing optimizer and self backend.
 from pcc.ir.compat import ir
 from pcc.frontends.go.branches import walk
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.callables import CallableType
 from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
@@ -39,6 +40,8 @@ def ir_type(dtype):
         # Only nil values inhabit this private transport. This is neither a
         # concrete interface box nor the official Go interface ABI.
         return ir.IntType(8).as_pointer()
+    if isinstance(dtype, CallableType):
+        return ir.FunctionType(ir_type(dtype.result), [ir_type(t) for t in dtype.parameters]).as_pointer()
     if isinstance(dtype, PointerType):
         return ir_type(dtype.element).as_pointer()
     if isinstance(dtype, StructType):
@@ -115,7 +118,7 @@ class Lowerer:
         return self.builder.load(self.string_descriptors[data])
 
     def zero(self, dtype):
-        null_zero = is_error_interface(dtype) or isinstance(underlying(dtype), (ArrayType, StructType, PointerType))
+        null_zero = is_error_interface(dtype) or isinstance(underlying(dtype), (ArrayType, StructType, PointerType, CallableType))
         if is_string(dtype):
             return self.string_constant(b"")
         return ir.Constant(ir_type(dtype), None) if null_zero else scalar_constant(dtype, 0)
@@ -472,7 +475,24 @@ class Lowerer:
             return self.address(expr.args[0])
         if expr.kind == "nil":
             return ir.Constant(ir_type(expr.type), None)
-        if expr.kind == "error_nil_compare":
+        if expr.kind == 'function_ref':
+            return self.functions[expr.symbol.abi_symbol]
+        if expr.kind == 'indirect_call':
+            if 'linux' not in self.module.triple.split('-'):
+                raise UnsupportedGo(expr.token, 'go.unsupported.builtin-io',
+                                    'nil function calls require the owned terminal-panic provider')
+            from pcc.frontends.go.runtime_provider import NIL_FUNCTION_ERROR
+            function = self.expression(expr.callee)
+            arguments = self.values(expr.args)
+            failed = self.function.append_basic_block('go.func.nil')
+            ready = self.function.append_basic_block('go.func.call')
+            nil = self.builder.icmp_unsigned('==', function, ir.Constant(function.type, None))
+            self.builder.cbranch(nil, failed, ready)
+            self.builder.position_at_end(failed)
+            self.builtin_io.runtime_panic(NIL_FUNCTION_ERROR)
+            self.builder.position_at_end(ready)
+            return self.builder.call(function, arguments)
+        if expr.kind in ("error_nil_compare", "func_nil_compare"):
             left, right = [self.expression(item) for item in expr.args]
             return self.builder.icmp_unsigned(expr.value, left, right)
         if expr.kind == "dereference":

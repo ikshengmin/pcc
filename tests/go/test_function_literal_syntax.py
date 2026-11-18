@@ -5,8 +5,8 @@ https://go.dev/ref/spec#Function_types https://go.dev/ref/spec#Function_literals
 `func(params) results { body }` wherever an operand may appear, including a
 called literal used as a statement. Function values need closures (captured
 variables live beyond their frame) and an indirect-call ABI, so the checker
-reports go.unsupported.function-values at the first type or literal it
-checks; nothing is lowered. math/bits' bits_test.go uses both from line 716.
+still rejects captured and unlowered literal expressions. Named static
+function values are separately exercised with both native compilers. math/bits' bits_test.go uses both from line 716.
 Original sources; acceptance of the valid ones was compared with a local
 development go1.23.6 reference.
 """
@@ -57,7 +57,12 @@ VALID = (
 )
 
 
-@pytest.mark.parametrize('source', VALID)
+# These unchanged programs now have both owned/official execution obligations
+# in test_named_callables. Merely declaring a multi-result type is not a
+# claim that an indirect call can carry aggregate results.
+GRADUATED_FUNCTION_TYPES = VALID[3:]
+
+@pytest.mark.parametrize('source', VALID[:3])
 def test_function_values_are_an_explicit_checker_gap(source):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(source, 'gap.go')

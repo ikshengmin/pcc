@@ -20,6 +20,10 @@ class RuntimeErrorValue:
         return "runtime error: " + self.text
 
 
+# Uses the runtime memoryError text; does not grant a new //go:linkname.
+NIL_FUNCTION_ERROR = RuntimeErrorValue('runtime.memoryError', 'invalid memory address or nil pointer dereference')
+
+
 RUNTIME_ERROR_VALUES = {
     value.symbol: value for value in (
         RuntimeErrorValue("runtime.divideError", "integer divide by zero"),

@@ -1468,12 +1468,13 @@
       "chapter_ids": [
         "function-types"
       ],
-      "scope": "Explicitly rejected capability: function values. Function types and function literals (including a called literal used as a statement) are parsed and retained, but closures, captured-variable storage and indirect calls are not implemented, so the checker rejects the first function type or literal it checks. No broader implementation or runtime support is claimed.",
+      "scope": "Explicitly rejected: function literals, captured-variable storage, and unqualified indirect ABI carriers. Noncapturing named source function values and qualified Linux code-pointer calls are separately admitted. No closure or external Go ABI is supplied.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
         "tests/go/test_diagnostics.py::test_registry_and_feature_ledger_are_bijective_and_source_hash_bound",
-        "tests/go/test_function_literal_syntax.py"
+        "tests/go/test_function_literal_syntax.py",
+        "tests/go/test_named_callables.py"
       ],
       "diagnostics": [
         "go.unsupported.function-values"
@@ -2283,7 +2284,7 @@
         "types",
         "function-types"
       ],
-      "scope": "General union/underlying/exact/method constraints and qualified constraint names, generic data and function values, dependent composite layouts and pointer type arguments remain explicit boundaries. Local and dot-imported named empty-interface constraints have bounded support in the direct-value-function feature. Existing predeclared-shadowing rules are preserved.",
+      "scope": "General union/underlying/exact/method constraints and qualified constraint names, generic data types and stored generic function instantiations, dependent composite layouts and pointer type arguments of value-function specialization remain explicit boundaries. Generic named function types have their own bounded declaration identity. Local and dot-imported named empty-interface constraints have bounded support in the direct-value-function feature. Existing predeclared-shadowing rules are preserved.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_generic_functions.py::test_generic_frontiers_preserve_constraint_and_pointer_contracts",
