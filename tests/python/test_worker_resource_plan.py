@@ -17,7 +17,7 @@ from pcc.frontends.python import pipeline_frontend_workers as workers
 from pcc.frontends.python import worker_process_pool as pool
 from pcc.frontends.python import worker_resource_plan as policy
 from tests.python.owned_regression_support import explicit_owned_runtime
-from tests.python.process_timeout import run_process_group_timeout
+from tests.python.process_timeout import run_process_group_timeout, run_process_tree_timeout
 from tests.python.process_liveness import require_process_running
 from tests.python.resource_worker_fixture import (
     live_forecast_pressure_plan,
@@ -319,6 +319,27 @@ def _uncalibrated_children_scenario(tmp_path):
 
 def test_live_peak_growth_backs_off_until_worker_retires(tmp_path, monkeypatch):
     monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+    if sys.platform.startswith("linux"):
+        # On Linux, forking from a resident pytest process can give the first
+        # child's real high-water report a reservation above all 250 MiB.
+        # That is a valid solo refusal, not the intended live peer backoff.
+        # Keep pytest under its outer tree cap; supervise the fresh coordinator
+        # and its workers (which create their own process groups) together.
+        result = run_process_tree_timeout(
+            [sys.executable, "-B", "-c",
+             "from pathlib import Path; import sys; "
+             "from tests.python.test_worker_resource_plan import _live_peak_growth_scenario; "
+             "_live_peak_growth_scenario(Path(sys.argv[1]))", str(tmp_path)],
+            cwd=Path(__file__).resolve().parents[2], evidence=tmp_path / "coordinator",
+            timeout=10,
+        )
+        assert result.returncode == 0, result.stdout + result.stderr
+    else:
+        _live_peak_growth_scenario(tmp_path)
+    assert pool._HOST_WORKERS == {}
+
+
+def _live_peak_growth_scenario(tmp_path):
     first, second = tmp_path / "first", tmp_path / "second"
     # The first input is deliberately underestimated; its real 48 MiB
     # allocation raises the reservation above the spare worker capacity.
@@ -333,18 +354,28 @@ def test_live_peak_growth_backs_off_until_worker_retires(tmp_path, monkeypatch):
             lambda: index != 0 or Path(tasks[index]["report_path"]).exists(), timeout=3,
         )
 
-    monkeypatch.setattr(pool, "_start_resource_worker", wait_for_report)
-    budget = workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + 250 * MIB
-    pool.run_resource_worker_processes(
-        [command(child_code(first, allocated=48 * MIB, delay=0.25)),
-         command(child_code(second))], tasks, 2, budget,
-        observations=[], trace_path=str(trace),
-    )
+    observations = []
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(pool, "_start_resource_worker", wait_for_report)
+        budget = workers._coordinator_rss_bytes() + policy.RSS_HEADROOM_BYTES + 250 * MIB
+        pool.run_resource_worker_processes(
+            [command(child_code(first, allocated=48 * MIB, delay=0.25)),
+             command(child_code(second))], tasks, 2, budget,
+            observations=observations, trace_path=str(trace),
+        )
     rows = [line.split("\t") for line in trace.read_text().splitlines()]
+    assert [row[:2] for row in rows if row[0] != "backoff"] == [
+        ["start", "0"], ["retire", "0"], ["start", "1"], ["retire", "1"],
+    ]
     first_retired = next(index for index, row in enumerate(rows) if row[:2] == ["retire", "0"])
-    second_started = next(index for index, row in enumerate(rows) if row[:2] == ["start", "1"])
-    assert any(row[0] == "backoff" for row in rows)
-    assert first_retired < second_started
+    # The first worker alone still fits, but its grown reservation plus the
+    # pending second task no longer does. Both must then finish under the cap.
+    assert any(row[0] == "backoff"
+               and tasks[0]["estimate_bytes"] < int(row[3]) <= int(row[4])
+               < int(row[3]) + tasks[1]["estimate_bytes"] for row in rows[:first_retired])
+    assert [sample[1] for sample in observations] == [[2], [1]]
+    assert observations[0][2] >= 48 * MIB
+    assert first.read_text() == second.read_text() == "started"
     assert pool._HOST_WORKERS == {}
 
 
