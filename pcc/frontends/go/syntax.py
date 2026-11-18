@@ -229,6 +229,7 @@ class FunctionTypeSyntax:
     names: list
     result: object
     result_names: list
+    variadic: bool = False
 
 
 @dataclass
@@ -319,6 +320,9 @@ class Expr:
     # see actual operands in source order, never placeholder expressions.
     slice_bounds: tuple = ()
     spread: object = None
+    variadic_use: bool = False
+    variadic_mode: str | None = None
+    pack_count: int = 0
 
 
 @dataclass
@@ -360,6 +364,10 @@ class Function:
     receiver: object = None
     type_parameters: list = field(default_factory=list)
     type_bindings: dict = field(default_factory=dict)
+    variadic: bool = False
+    pack_sites: list = field(default_factory=list)
+    variadic_alloc_sites: int = 0
+    variadic_frame_bytes: int = 0
 
 
 @dataclass
@@ -707,32 +715,42 @@ class GoParser:
             index += 1
         return False
 
-    def parameter_list(self):
-        types, names = [], []
+    def parameter_list(self, *, allow_variadic=False):
+        # In Go the final ...T parameter has type []T inside the body, but
+        # variadicness is also part of the signature. Never decay it to []T.
+        types, names, variadic = [], [], False
+        # The original declaration parser decides whether the parameter list
+        # declares names at its first group. Retain its source diagnostics
+        # for invalid named/unnamed mixes, including unmodified result lists.
         named = self.named_parameters()
         while not self.at(")"):
+            group = [self.take("name")] if named else [None]
             if named:
-                group = [self.take("name")]
                 while self.accept(","):
                     group.append(self.take("name"))
-                dtype = self.datatype()
-                types.extend([dtype] * len(group))
-                names.extend(group)
-            else:
-                types.append(self.datatype())
-                names.append(None)
+            dots = self.accept("...")
+            if dots and (not allow_variadic or len(group) != 1):
+                self.fail(dots, "variadic parameter must be one final input parameter")
+            dtype = self.datatype()
+            if dots:
+                variadic = True
+                dtype = SliceSyntax(dots, dtype)
+            types.extend([dtype] * len(group))
+            names.extend(group)
             if len(types) > 256:
                 self.unsupported(self.current, 'go.unsupported.limit-function-arity', "function exceeds implementation limit (256 results/parameters)")
             if not self.accept(","):
                 break
+            if variadic and not self.at(")"):
+                self.fail(self.current, "variadic parameter must be last")
         self.take(")")
-        return types, names
+        return types, names, variadic
 
     def function(self):
         self.take("func")
         receiver = None
         if self.accept("("):
-            receiver_types, receiver_names = self.parameter_list()
+            receiver_types, receiver_names, _ = self.parameter_list()
             if len(receiver_types) != 1:
                 self.fail(self.current, "method receiver must be exactly one non-variadic parameter")
             receiver = (receiver_names[0], receiver_types[0])
@@ -741,14 +759,14 @@ class GoParser:
         if receiver is not None and type_parameters:
             self.fail(name, "methods must not declare function type parameters")
         self.take("(")
-        types, names = self.parameter_list()
+        types, names, variadic = self.parameter_list(allow_variadic=True)
         blank = Token("name", "_", name.filename, name.line, name.column)
         params = [(token or blank, dtype) for token, dtype in zip(names, types)]
         if receiver is not None:
             receiver = (receiver[0] or blank, receiver[1])
         result, result_names = self.function_results()
         return Function(name, params, result, self.block(), result_names=result_names,
-                        receiver=receiver, type_parameters=type_parameters)
+                        receiver=receiver, type_parameters=type_parameters, variadic=variadic)
 
     def type_parameter_list(self):
         parameters = []
@@ -925,16 +943,16 @@ class GoParser:
     def function_type(self):
         token = self.take("func")
         self.take("(")
-        types, names = self.parameter_list()
+        types, names, variadic = self.parameter_list(allow_variadic=True)
         result, result_names = self.function_results()
-        return FunctionTypeSyntax(token, types, names, result, result_names)
+        return FunctionTypeSyntax(token, types, names, result, result_names, variadic)
 
     def function_results(self):
         if not self.accept("("):
             if self.current.kind in ("name", "[", "struct", "*", "interface", "func"):
                 return self.datatype(), [None]
             return "void", []
-        types, names = self.parameter_list()
+        types, names, _ = self.parameter_list()
         return (Results(tuple(types)) if len(types) > 1 else types[0] if types else "void"), names
 
     def block(self):

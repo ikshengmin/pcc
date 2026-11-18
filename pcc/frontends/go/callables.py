@@ -15,9 +15,13 @@ from .types import PointerType, Results, SliceType, is_integer, is_float
 class CallableType:
     parameters: tuple
     result: object
+    variadic: bool = False
 
     def __str__(self):
-        return 'func('+', '.join(map(str, self.parameters))+')'+(
+        parts = list(map(str, self.parameters))
+        if self.variadic:
+            parts[-1] = '...' + str(self.parameters[-1].element)
+        return 'func('+', '.join(parts)+')'+(
             '' if self.result == 'void' else ' '+str(self.result))
 
 
@@ -76,6 +80,9 @@ def require_callable_abi(sig, token):
                                 'indirect function type exceeds the bounded signature representation')
         q = underlying(t)
         if isinstance(q, CallableType):
+            if q.variadic:
+                raise UnsupportedGo(token, 'go.unsupported.slice-storage',
+                                    'indirect variadic calls lack an owned non-retention contract')
             if id(q) in active:
                 raise UnsupportedGo(token, 'go.unsupported.function-values',
                                     'recursive indirect function signatures require ABI type anchors')

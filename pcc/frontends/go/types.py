@@ -37,7 +37,7 @@ class PointerType:
 
 @dataclass(frozen=True)
 class SliceType:
-    """Signature identity only. No slice value or backing-store ABI is admitted."""
+    """Go []T identity; only call-bounded variadic formals currently have storage."""
     element: object
 
     def __str__(self):

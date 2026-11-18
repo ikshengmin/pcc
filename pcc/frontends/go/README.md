@@ -266,8 +266,24 @@ untyped literal). The operand and bounds are evaluated once, in source order.
 Omitted and provably in-range bounds need neither allocation nor a panic
 provider. The frontend still refuses unproven runtime bounds, substring writes,
 three-index strings, and unowned array/slice storage. Parsing slice expressions
-and final `...` arguments in a package is not evidence that its backing storage,
-variadic calls, or standard-library dependencies can execute.
+and final `...` arguments is not proof of an escaping slice or a complete standard library.
+
+[Direct variadic calls](https://go.dev/ref/spec#Passing_arguments_to_..._parameters)
+construct a typed `{data,len,cap}` slice over a bounded array in the caller's
+activation. Compiler-created pack backing and view descriptors have a combined
+limit of 256 allocation sites and 16 KiB per checked source function, separate
+from ordinary locals. Arguments are evaluated once in source order. Zero arguments and
+`nil...` pass a nil slice; forwarding an admitted slice passes its original
+data, length, and capacity. In the complete, checked source call graph these
+borrowed parameters may be ranged, cleared, compared to nil, queried with
+`len`/`cap`, forwarded, or viewed with `[:]`/`[:0]`. The last form does not
+turn nonnil empty slices into nil. Eligible elements are scalar numeric,
+boolean or the existing nil-only error representation. No stack address can
+be saved in a variable, returned, captured, boxed, or passed to an unchecked
+callee. Variadic methods, indirect variadic ABIs and managed escaping backing
+remain explicit gaps. The real standard-library `errors.Join` declaration
+is parsed untouched; that is not an executable implementation of its
+`joinError`, `unsafe.String`, or the whole go-enry project.
 
 The complete original Go 1.27.3 `bits_tables.go` is preserved with its pinned
 commit/blob/SHA and BSD license. An independently authored component reader and

@@ -13,7 +13,7 @@ from pcc.frontends.go.callables import CallableType
 from pcc.frontends.go.managed_objects import static_string_plan
 from pcc.frontends.go.records import StructType, underlying
 from pcc.frontends.go.types import (
-    ArrayType, PointerType, Results, result_types, integer_bits, integer_signed, is_string,
+    ArrayType, PointerType, SliceType, Results, result_types, integer_bits, integer_signed, is_string,
     is_error_interface, is_float, float_bits,
 )
 
@@ -42,6 +42,8 @@ def ir_type(dtype):
         return ir.IntType(8).as_pointer()
     if isinstance(dtype, CallableType):
         return ir.FunctionType(ir_type(dtype.result), [ir_type(t) for t in dtype.parameters]).as_pointer()
+    if isinstance(dtype, SliceType):
+        return ir.LiteralStructType([ir_type(dtype.element).as_pointer(), ir.IntType(64), ir.IntType(64)])
     if isinstance(dtype, PointerType):
         return ir_type(dtype.element).as_pointer()
     if isinstance(dtype, StructType):
@@ -159,6 +161,8 @@ class Lowerer:
             self.branch_targets = {}
             self.slots = dict(self.globals)
             self.temps = {}
+            from .variadics import entry_storage
+            self.pack_slots = entry_storage(self, source, ir, ir_type)
             for index, expr in enumerate(source.temporaries):
                 if id(expr) not in self.temps:
                     self.temps[id(expr)] = self.builder.alloca(ir_type(expr.type), name="array_temp_" + str(index))
@@ -334,20 +338,26 @@ class Lowerer:
             if pointer_range:
                 dtype = underlying(dtype.element)
             array_range = isinstance(dtype, ArrayType)
+            span_range = isinstance(dtype, SliceType)
             uses_element = len(statement.targets) == 2 and not (
                 statement.targets[-1].kind == "name" and statement.targets[-1].value == "_")
             if statement.evaluate_range or not array_range:
                 # Integer bounds are captured once, before any target address
                 # or body effects. Constants merely materialize a typed value.
                 value = self.expression(ranged)
-                if uses_element:
+                if uses_element and not span_range:
                     # Array values snapshot the entire array; pointer ranges
                     # capture only the pointer. Body rebinding of the source
                     # variable cannot redirect subsequent element reads.
                     self.builder.store(value, self.temps[id(ranged)])
             index_slot = self.temps[id(statement.range_index)]
             index_type = ir_type(statement.range_index.type)
-            limit = ir.Constant(index_type, dtype.count) if array_range else value
+            if span_range:
+                # Capture the original span before the first iteration.
+                limit = self.builder.extract_value(value,1)
+                data = self.builder.extract_value(value,0) if uses_element else None
+            else:
+                limit = ir.Constant(index_type, dtype.count) if array_range else value
             self.builder.store(ir.Constant(index_type, 0), index_slot)
             check = self.function.append_basic_block("range_check")
             body = self.function.append_basic_block("range_body")
@@ -357,7 +367,7 @@ class Lowerer:
             self.builder.branch(check)
             self.builder.position_at_end(check)
             index = self.builder.load(index_slot)
-            compare = (self.builder.icmp_signed if not array_range and integer_signed(ranged.type)
+            compare = (self.builder.icmp_signed if not (span_range or array_range) and integer_signed(ranged.type)
                        else self.builder.icmp_unsigned)
             self.builder.cbranch(compare("<", index, limit), body, done)
             self.builder.position_at_end(body)
@@ -367,10 +377,14 @@ class Lowerer:
                     if uses_element:
                         # The hidden induction value was checked above and is
                         # never exposed for user mutation. No panic shortcut.
-                        storage = self.temps[id(ranged)]
-                        if pointer_range:
-                            storage = self.builder.load(storage)
-                        address = self.array_element_address(storage, dtype.element, index)
+                        if span_range:
+                            # index is strictly below the captured length.
+                            address = self.builder.gep(data,[index])
+                        else:
+                            storage = self.temps[id(ranged)]
+                            if pointer_range:
+                                storage = self.builder.load(storage)
+                            address = self.array_element_address(storage, dtype.element, index)
                         values.append(self.builder.load(address))
                     else:
                         values.append(self.zero(dtype.element))
@@ -492,6 +506,28 @@ class Lowerer:
             self.builtin_io.runtime_panic(NIL_FUNCTION_ERROR)
             self.builder.position_at_end(ready)
             return self.builder.call(function, arguments)
+        if expr.kind == 'variadic_view':
+            base,*bounds=expr.args
+            span=self.expression(base)
+            for bound in bounds:
+                self.expression(bound)
+            if not expr.slice_bounds[1]:
+                return span
+            slot=self.temps[id(expr)]
+            self.builder.store(span,slot)
+            word=ir.IntType(32)
+            length=self.builder.gep(slot,[ir.Constant(word,0),ir.Constant(word,1)])
+            self.builder.store(ir.Constant(ir.IntType(64),0),length)
+            return self.builder.load(slot)
+        if expr.kind == 'variadic_clear':
+            from .variadics import clear_span
+            return clear_span(self, expr.args[0], ir, ir_type)
+        if expr.kind in ('variadic_len','variadic_cap'):
+            return self.builder.extract_value(self.expression(expr.args[0]),1 if expr.kind=='variadic_len' else 2)
+        if expr.kind == 'variadic_nil_compare':
+            view=next(a for a in expr.args if a.type!='untyped nil')
+            ptr=self.builder.extract_value(self.expression(view),0)
+            return self.builder.icmp_unsigned(expr.value,ptr,ir.Constant(ptr.type,None))
         if expr.kind in ("error_nil_compare", "func_nil_compare"):
             left, right = [self.expression(item) for item in expr.args]
             return self.builder.icmp_unsigned(expr.value, left, right)
@@ -578,7 +614,11 @@ class Lowerer:
             return self.builtin_io.emit(expr)
         if expr.kind == "call":
             receiver = [self.expression(expr.receiver)] if expr.receiver is not None else []
-            arguments = receiver + self.values(expr.args)
+            inputs=expr.args[:-1] if getattr(expr,'variadic_mode',None)=='nil-spread' else expr.args
+            arguments = receiver + self.values(inputs)
+            if getattr(expr, 'variadic_mode', None):
+                from .variadics import packed
+                arguments=packed(self, expr, arguments, ir, ir_type)
             if expr.indirect_receiver:
                 # (*T).M is a derived function: capture the pointer and all
                 # other argument values before its wrapper dereferences T.

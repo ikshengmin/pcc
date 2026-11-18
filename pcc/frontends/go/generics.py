@@ -67,7 +67,7 @@ def substitute(dtype, bindings, token, *, signature=False):
                                                 for a in dtype.type_arguments), token)
     if isinstance(dtype, CallableType):
         return CallableType(tuple(substitute(a, bindings, token, signature=True) for a in dtype.parameters),
-                            substitute(dtype.result, bindings, token, signature=True))
+                            substitute(dtype.result, bindings, token, signature=True), dtype.variadic)
     if isinstance(dtype, SliceType):
         return SliceType(substitute(dtype.element, bindings, token, signature=True))
     if signature and isinstance(dtype, PointerType):
@@ -120,7 +120,8 @@ def infer_argument(formal, actual, token, parameters, explicit, bindings, *, exa
         return
     if isinstance(formal, CallableType) and contains_parameter(formal):
         other = actual if exact else underlying(actual)
-        if not isinstance(other, CallableType) or len(other.parameters) != len(formal.parameters):
+        if (not isinstance(other, CallableType) or other.variadic != formal.variadic
+                or len(other.parameters) != len(formal.parameters)):
             raise GoDiagnostic(token, 'cannot infer type arguments from incompatible function')
         for a, b in zip(formal.parameters + (formal.result,), other.parameters + (other.result,)):
             infer_argument(a, b, token, parameters, explicit, bindings, exact=True)
@@ -156,7 +157,7 @@ def type_code(dtype, token=None, remaining=None):
                 for m in dtype.methods]]
     from .callables import CallableType
     if isinstance(dtype, CallableType):
-        return ['func', [code(a) for a in dtype.parameters], code(dtype.result)]
+        return ['func...' if dtype.variadic else 'func', [code(a) for a in dtype.parameters], code(dtype.result)]
     if isinstance(dtype, DefinedType):
         if dtype.template is not None:
             return ['instance', dtype.package, dtype.name, [code(a) for a in dtype.type_arguments]]
@@ -334,7 +335,8 @@ class GenericSession:
             # call. It never requests code or substitutes a favorable concrete
             # body for the independent declaration check.
             stub = replace(function, params=params, result=result, body=[], locals=[], parameters=[],
-                           temporaries=[], result_symbols=[], type_parameters=[], type_bindings={},
+                           temporaries=[], pack_sites=[], variadic_alloc_sites=0, variadic_frame_bytes=0,
+                           result_symbols=[], type_parameters=[], type_bindings={},
                            abi_symbol=function.abi_symbol + '_abstract_' + str(len(self.abstract_calls)))
             self.abstract_calls.append(stub)
             return stub
@@ -351,7 +353,8 @@ class GenericSession:
                               ensure_ascii=True, separators=(',', ':')).encode('ascii').hex()
         instance = replace(function, params=params, result=result,
                            body=deepcopy(self.raw_bodies[id(function)]), locals=[], parameters=[],
-                           temporaries=[], result_symbols=[], type_parameters=[],
+                           temporaries=[], pack_sites=[], variadic_alloc_sites=0, variadic_frame_bytes=0,
+                           result_symbols=[], type_parameters=[],
                            type_bindings={parameter.name: bindings[parameter] for parameter in parameters
                                           if parameter.name != '_'},
                            abi_symbol=function.abi_symbol + '_instance_' + spelling)

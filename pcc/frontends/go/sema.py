@@ -11,6 +11,8 @@ import re
 import unicodedata
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
+from pcc.frontends.go.variadics import (borrow as borrow_span, checked_span as require_variadic_element,
+                                        check_call as check_variadic_call, reserve as reserve_span)
 from pcc.frontends.go.branches import Branches, unlabeled
 from pcc.frontends.go.callables import CallableType, CallableTemplate, callable_signature, require_callable_abi
 from pcc.frontends.go.interface_methods import (
@@ -63,6 +65,7 @@ class Symbol:
     iota: int | None = None
     depth: int = 0
     iteration_binding: bool = False
+    variadic_formal: bool = False
     # The owned runtime object a //go:linkname directive bound, if any.
     linkname: object = None
 
@@ -232,7 +235,7 @@ def has_evaluated_call(expr):
         return False
     if expr.kind == "indirect_call" or expr.kind == "call" and expr.symbol is not None:
         return True
-    if expr.kind == "minmax":
+    if expr.kind in ("minmax", "variadic_len", "variadic_cap"):
         # A nonconstant builtin invocation counts for the array len/cap
         # unevaluated-operand rule, even when its inputs are only variables.
         return True
@@ -399,7 +402,10 @@ def validate_value_types(program):
             return
         seen.add(id(expr))
         # A type operand denotes metadata, not an evaluated value.
-        if expr.kind != "type":
+        if getattr(expr, 'variadic_use', False):
+            # Marked only at a specific borrow consumer, not on general loads.
+            borrow_span(expr)
+        elif expr.kind != "type":
             require_value_type(expr.type, expr.token)
         for child in expr.args:
             expression(child)
@@ -419,11 +425,17 @@ def validate_value_types(program):
             statement(stmt.post)
 
     for function in program.functions:
-        for _, dtype in function.params:
-            require_value_type(dtype, function.token)
+        for i, (_, dtype) in enumerate(function.params):
+            if function.variadic and i == len(function.params)-1:
+                require_variadic_element(dtype, function.token)
+            else:
+                require_value_type(dtype, function.token)
         require_value_type(function.result, function.token)
         for symbol in function.locals + function.result_symbols:
-            require_value_type(symbol.type, symbol.token)
+            if symbol.variadic_formal:
+                require_variadic_element(symbol.type, symbol.token)
+            else:
+                require_value_type(symbol.type, symbol.token)
         for expr in function.temporaries:
             expression(expr)
         for stmt in function.body:
@@ -578,7 +590,11 @@ class Analyzer:
                     raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
                                         'generic receiver declarations need receiver type-parameter scope')
             self.type_bindings = self.generics.prepare(self, function)
-            function.params = [(token, self.resolve_type(dtype)) for token, dtype in function.params]
+            if function.variadic and (function.type_parameters or function.receiver is not None):
+                raise UnsupportedGo(function.token, 'go.unsupported.slice-storage',
+                                    'variadic methods and generic variadic functions need a qualified call contract')
+            function.params = [(token, self.resolve_type(dtype, signature=(function.variadic and i == len(function.params)-1)))
+                               for i, (token, dtype) in enumerate(function.params)]
             function.result = self.resolve_type(function.result)
             if any(isinstance(underlying(dtype), PointerType)
                    for dtype in result_types(function.result)):
@@ -617,8 +633,11 @@ class Analyzer:
                 function.receiver = (token, receiver_type)
                 function.params.insert(0, (token, receiver_type))
                 function.abi_symbol = function_symbol(dtype.name + "." + name, self.package_path)
-            for _, dtype in function.params:
-                require_value_type(dtype, function.token)
+            for i, (_, dtype) in enumerate(function.params):
+                if function.variadic and i == len(function.params)-1:
+                    require_variadic_element(dtype, function.token)
+                else:
+                    require_value_type(dtype, function.token)
             require_value_type(function.result, function.token)
         self.type_bindings = {}
         for symbol in self.globals.values():
@@ -852,7 +871,7 @@ class Analyzer:
                         raise GoDiagnostic(name, 'duplicate parameter name '+name.text)
                     seen.add(name.text)
             return CallableType(tuple(self.resolve_type(t, signature=True) for t in dtype.parameters),
-                                self.resolve_type(dtype.result, signature=True))
+                                self.resolve_type(dtype.result, signature=True), dtype.variadic)
         if isinstance(dtype, TypeInstantiationSyntax):
             result = self.named_application(dtype.base, dtype.arguments)
             if result is None:
@@ -1084,12 +1103,16 @@ class Analyzer:
         self.allowed_fallthrough = None
         self.branches = Branches(function)
         require_value_type(function.result, function.token)
-        for token, dtype in function.params:
-            require_value_type(dtype, token)
+        for i, (token, dtype) in enumerate(function.params):
+            is_rest = function.variadic and i == len(function.params)-1
+            if is_rest:
+                require_variadic_element(dtype, token)
+            else:
+                require_value_type(dtype, token)
             self.check_name(token, local_value=True)
             if token.text in self.type_bindings:
                 raise GoDiagnostic(token, "parameter redeclares type parameter " + token.text)
-            symbol = Symbol(token, dtype, parameter=True, depth=1)
+            symbol = Symbol(token, dtype, parameter=True, depth=1, variadic_formal=is_rest)
             if token.text != "_":
                 if token.text in self.scopes[-1]:
                     raise GoDiagnostic(token, "duplicate parameter " + token.text)
@@ -1321,7 +1344,7 @@ class Analyzer:
             self.expression(expr)
             if expr.kind == "builtin_io":
                 statement.terminates = expr.value == "panic"
-            elif expr.kind != "indirect_call" and (expr.kind != "call" or expr.symbol is None):
+            elif expr.kind not in ("indirect_call", "variadic_clear") and (expr.kind != "call" or expr.symbol is None):
                 raise GoDiagnostic(expr.token, "only function calls may be expression statements")
             return
         if kind == "defer":
@@ -1456,6 +1479,12 @@ class Analyzer:
                     # pointer, never a snapshot of the pointed-to array.
                     self.function.temporaries.append(ranged)
                 value_types = ("int", array_type.element)
+            elif isinstance(dtype, SliceType):
+                borrow_span(ranged)
+                if len(statement.targets) > 2:
+                    raise GoDiagnostic(statement.token, "slice range permits at most two iteration variables")
+                statement.evaluate_range = True
+                value_types = ("int", dtype.element)
             elif is_string(ranged.type):
                 if len(statement.targets) > 2:
                     raise GoDiagnostic(statement.token, "string range permits at most two iteration variables")
@@ -1541,7 +1570,8 @@ class Analyzer:
         if expr.type is not None:
             return
         kind = expr.kind
-        if kind == "call" and expr.spread is not None:
+        if (kind == "call" and expr.spread is not None
+                and not getattr(self.direct_function(expr.callee), 'variadic', False)):
             # Preserve the final expansion operand rather than treating the
             # call as if the slice were a single ordinary value.
             raise UnsupportedGo(expr.spread, 'go.unsupported.slice-storage',
@@ -1665,6 +1695,16 @@ class Analyzer:
                     valid = isinstance(dtype, (ArrayType, SliceType))
                 if not valid:
                     raise GoDiagnostic(base.token, "cannot slice a value of type " + str(base.type))
+                if (isinstance(dtype, SliceType) and maximum is None and
+                        all(n is None or n.constant == 0 for n in (low,high))):
+                    # [:] and [:0] need no panic path on any slice, including
+                    # nil. Preserve a nonnil original data pointer and its cap.
+                    borrow_span(base)
+                    expr.type, expr.kind = base.type, 'variadic_view'
+                    if high is not None:
+                        reserve_span(self.function,0,expr.token)
+                        self.function.temporaries.append(expr)
+                    return
                 if isinstance(underlying(base.type), ArrayType) and not base.addressable:
                     raise GoDiagnostic(base.token, "cannot slice an unaddressable array")
                 raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
@@ -1953,6 +1993,13 @@ class Analyzer:
             if name in ("min", "max"):
                 self.minmax(expr)
                 return
+            if name == "clear" and len(expr.args) == 1:
+                arg = expr.args[0]
+                self.expression(arg)
+                if isinstance(underlying(arg.type), SliceType):
+                    borrow_span(arg)
+                    expr.kind, expr.type = "variadic_clear", "void"
+                    return
             if name in ("len", "cap"):
                 if len(expr.args) != 1:
                     raise GoDiagnostic(expr.token, name + " requires one argument")
@@ -1962,7 +2009,10 @@ class Analyzer:
                 if isinstance(dtype, PointerType):
                     dtype = underlying(dtype.element)
                 expr.type = "int"  # Both builtins are typed int, including constants.
-                if isinstance(dtype, ArrayType):
+                if isinstance(dtype, SliceType):
+                    borrow_span(arg)
+                    expr.kind = 'variadic_'+name
+                elif isinstance(dtype, ArrayType):
                     expr.kind = "array_len"
                     expr.constant = None if has_evaluated_call(arg) else dtype.count
                 elif name == "len" and is_string(arg.type):
@@ -2233,7 +2283,7 @@ class Analyzer:
         return None
 
     def function_reference(self, expr, function):
-        sig = CallableType(tuple(t for _, t in function.params), function.result)
+        sig = CallableType(tuple(t for _, t in function.params), function.result, function.variadic)
         require_callable_abi(sig, expr.token)
         expr.kind, expr.type, expr.symbol = "function_ref", sig, function
 
@@ -2259,6 +2309,10 @@ class Analyzer:
             # The derived (*T).M function has a *T source receiver, even
             # though the implementation uses the already-owned value ABI.
             parameters = [(parameters[0][0], pointer_receiver_type), *parameters[1:]]
+        if function.variadic:
+            check_variadic_call(self, expr, function, values, parameters)
+            expr.type, expr.symbol = function.result, function
+            return
         if len(values) != len(parameters):
             raise GoDiagnostic(expr.token, "argument count mismatch for " + expr.value)
         if receiver is not None:
@@ -2275,6 +2329,13 @@ class Analyzer:
     def binary(self, expr):
         left, right = expr.args
         op = expr.value
+        if isinstance(underlying(left.type), SliceType) or isinstance(underlying(right.type), SliceType):
+            if op not in ('==','!=') or 'untyped nil' not in (left.type,right.type):
+                raise GoDiagnostic(expr.token, 'slice can only be compared to nil')
+            view = right if left.type == 'untyped nil' else left
+            borrow_span(view)
+            expr.kind, expr.type = 'variadic_nil_compare', 'untyped bool'
+            return
         if callable_signature(left.type) is not None or callable_signature(right.type) is not None:
             if op not in ('==', '!=') or 'untyped nil' not in (left.type, right.type):
                 raise GoDiagnostic(expr.token, 'func can only be compared to nil')
