@@ -12,9 +12,11 @@ import errno
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import hashlib
 import json
+import mmap
 import os
 from pathlib import Path
 import struct
+import tempfile
 import subprocess
 import sys
 import threading
@@ -199,8 +201,29 @@ def normalized_image(data):
 
 
 def dependency_receipt(path):
-    data = Path(path).read_bytes()
-    if data.startswith(b"\x7fELF"):
+    # Preserve a single private byte snapshot while avoiding a full compiler
+    # image in each pytest worker's Python heap. Mapping the original file would
+    # let later writes change bytes between validator reads, unlike read_bytes.
+    # Use the qualification workspace, not a potentially RAM-backed /tmp.
+    # Like other bootstrap outputs this requires a writable checkout and space.
+    # On Windows the temporary file is named and visible. Keep it under the
+    # ignored build tree so concurrent source-identity checks stay clean.
+    snapshot_directory = ROOT / "build" / "native-image-snapshots"
+    snapshot_directory.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryFile(dir=snapshot_directory) as snapshot:
+        with Path(path).open("rb") as source:
+            while chunk := source.read(1024 * 1024):
+                snapshot.write(chunk)
+        size = snapshot.tell()
+        snapshot.flush()
+        if not size:
+            return _dependency_receipt_data(b"")
+        with mmap.mmap(snapshot.fileno(), 0, access=mmap.ACCESS_READ) as data:
+            return _dependency_receipt_data(data)
+
+
+def _dependency_receipt_data(data):
+    if data[:4] == b"\x7fELF":
         from pcc.backend.elf_x86_64 import parse_static_executable
         shape = parse_static_executable(data)
         return {"format": "ELF", "no_dynamic_dependencies": True,

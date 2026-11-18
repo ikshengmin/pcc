@@ -18,7 +18,16 @@ PROJECT = ROOT / "projects/tinyxml2-11.0.0"
 
 
 def sha256(path: Path) -> str:
-    return hashlib.sha256(path.read_bytes()).hexdigest()
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def _native_magic(path: Path) -> bool:
+    with path.open("rb") as stream:
+        return stream.read(4).startswith((b"\x7fELF", b"MZ"))
 
 
 @dataclass(frozen=True)
@@ -480,7 +489,7 @@ def compile_project_host(fixture: ProjectFixture, root: Path) -> Path:
         )
         receipt["returncode"] = 0
         assert output.is_file(), "host PCC returned success without an executable"
-        assert output.read_bytes().startswith((b"\x7fELF", b"MZ")), (
+        assert _native_magic(output), (
             "host PCC project output must be an ELF/PE executable, not a wrapper"
         )
         receipt["output_sha256"] = sha256(output)
@@ -529,9 +538,7 @@ def compile_project_native(compiler: Path, fixture: ProjectFixture, root: Path) 
     from tests.runtime_fixture_provenance import _verified_test_runtime_archive
 
     assert compiler.is_file(), f"native compiler missing: {compiler}"
-    assert compiler.read_bytes().startswith(
-        (b"\x7fELF", b"MZ")
-    ), "native compiler must be an executable artifact, not a shell/Python wrapper"
+    assert _native_magic(compiler), "native compiler must be an executable artifact, not a shell/Python wrapper"
     # A shell/Python wrapper or dynamically Python/LLVM-linked executable is not
     # accepted as the supplied native compiler. Static source ownership still
     # needs the compiler's build receipt; this header check alone is narrower.
