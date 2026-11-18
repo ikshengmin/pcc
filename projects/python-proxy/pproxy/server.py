@@ -10,6 +10,10 @@ UDP_LIMIT = 30
 UDP_ASSOCIATION_IDLE = 120
 ALIVE_PROBE = ('1.1.1.1', 443)
 ALIVE_PROBE_TIMEOUT = 3
+# RFC 8305 Connection Attempt Delay. getaddrinfo lists IPv6 first on a dual-stack
+# host, and a path that silently drops IPv6 SYNs would otherwise hold the whole
+# connection until SOCKET_TIMEOUT instead of falling back to the next address.
+HAPPY_EYEBALLS_DELAY = 0.25
 DUMMY = lambda s: s
 ACTIVE_CHANNEL_TASKS = []
 ACTIVE_CHANNEL_WRITERS = []
@@ -364,7 +368,8 @@ class ProxyDirect(object):
     def udp_prepare_connection(self, host, port, data):
         return data
     def wait_open_connection(self, host, port, local_addr, family):
-        return asyncio.open_connection(host=host, port=port, local_addr=local_addr, family=family)
+        return asyncio.open_connection(host=host, port=port, local_addr=local_addr, family=family,
+                                       happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY)
     async def open_connection(self, host, port, local_addr, lbind, timeout=SOCKET_TIMEOUT):
         try:
             local_addr = local_addr if self.lbind == 'in' else (self.lbind, 0) if self.lbind else \
@@ -500,7 +505,8 @@ class ProxySimple(ProxyDirect):
         if self.unix:
             return asyncio.open_unix_connection(path=self.bind)
         else:
-            return asyncio.open_connection(host=self.host_name, port=self.port, local_addr=local_addr, family=family)
+            return asyncio.open_connection(host=self.host_name, port=self.port, local_addr=local_addr, family=family,
+                                           happy_eyeballs_delay=HAPPY_EYEBALLS_DELAY)
     async def prepare_connection(self, reader_remote, writer_remote, host, port):
         reader_remote, writer_remote = proto.sslwrap(reader_remote, writer_remote, self.sslclient, False, self.host_name)
         _, writer_cipher_r = await prepare_ciphers(self.cipher, reader_remote, writer_remote, self.bind)

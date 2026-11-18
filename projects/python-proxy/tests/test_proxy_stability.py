@@ -402,6 +402,60 @@ def test_socks_ipv6_destination():
     run(scenario())
 
 
+BLACKHOLE_IPV6 = "2001:db8::1"
+
+
+def resolve_dual_stack_with_blackholed_ipv6(loop, attempts):
+    """Make "dual.test" resolve the way getaddrinfo orders a dual-stack name,
+    IPv6 first, then IPv4 loopback. Connecting to the IPv6 address never
+    completes, like a path that drops SYNs without any error; every other
+    address connects normally."""
+    original_getaddrinfo, original_connect = loop.getaddrinfo, loop.sock_connect
+
+    async def getaddrinfo(host, port, *, family=0, type=0, proto=0, flags=0):
+        if host != "dual.test":
+            return await original_getaddrinfo(host, port, family=family, type=type,
+                                              proto=proto, flags=flags)
+        infos = [(socket.AF_INET6, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                  (BLACKHOLE_IPV6, int(port), 0, 0)),
+                 (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "",
+                  ("127.0.0.1", int(port)))]
+        return [info for info in infos if family in (0, info[0])]
+
+    async def sock_connect(sock, address):
+        if address[0] == BLACKHOLE_IPV6:
+            attempts.append(address)
+            await asyncio.Event().wait()
+        return await original_connect(sock, address)
+
+    loop.getaddrinfo, loop.sock_connect = getaddrinfo, sock_connect
+
+
+@pytest.mark.parametrize("hop", ["target", "upstream"])
+def test_blackholed_ipv6_address_falls_back_to_ipv4(hop):
+    """RFC 8305 Happy Eyeballs: a silently dropped IPv6 attempt must not hold
+    the connection until the 60-second deadline. Covers both outbound hops:
+    the direct connection to the target and the connection to an upstream proxy."""
+    async def scenario():
+        loop, attempts = asyncio.get_running_loop(), []
+        resolve_dual_stack_with_blackholed_ipv6(loop, attempts)
+        async with network() as net:
+            target = await net.listen(echo)
+            if hop == "target":
+                proxy, host = await net.proxy(), "dual.test"
+            else:
+                exit_port = await net.proxy()
+                proxy = await net.proxy([server.proxies_by_uri(f"socks5://dual.test:{exit_port}")])
+                host = "127.0.0.1"
+            started = loop.time()
+            reader, writer = await asyncio.wait_for(
+                tunnel(net, proxy, target, "domain", b"dual", host=host), 5)
+            assert await reader.readexactly(4) == b"dual"
+            assert loop.time() - started < 2
+            assert attempts and attempts[0][0] == BLACKHOLE_IPV6
+    run(scenario())
+
+
 def test_builtin_echo_sends_socks_reply_before_payload():
     async def scenario():
         async with network() as net:
