@@ -312,9 +312,19 @@ def test_marker_shadow_query_counts_imported_types_but_not_value_only_names(name
     assert not values.has_local_type_binding(name, values.root)
 
 
+@pytest.mark.parametrize('source', ('mod a{pub fn value(){}} use a::*;',
+                                    'mod a{pub fn value(){}} use a::{*};'))
+def test_original_module_glob_sources_now_bind_and_emit(source):
+    resolver = ModuleNamespaces(graph(source))
+    item, = resolver.crate.root.body.uses
+    decl = resolver.resolve('value', 'value', resolver.root, item.glob)
+    assert (decl.identity.module.components, decl.identity.name) == (('a',), 'value')
+    assert compile_source(source).emit_object().startswith(b'\x7fELF')
+
+
 GAPS = (
-    ('glob', 'mod a{pub fn value(){}} use a::*;', 'glob use declarations'),
-    ('group-glob', 'mod a{pub fn value(){}} use a::{*};', 'glob use declarations'),
+    ('enum-glob', 'enum E{A,B} use E::*;', 'non-module or enum variants'),
+    ('group-private-glob', 'mod a{mod hidden{}} use a::hidden::{*};', 'private item'),
     ('group-self', 'mod a{pub fn value(){}} use a::{self};', 'duplicate imported type-namespace item'),
     ('empty-group', 'mod a{pub fn value(){}} use a::{};', 'empty use groups'),
     ('anonymous', 'mod a{pub fn value(){}} use a::value as _;', 'anonymous use'),

@@ -97,13 +97,18 @@ def require_unshadowed_output(parser, first):
     # Path-based use bindings are module-wide, even if they follow the call.
     # No import may silently be treated as an implicit std macro. Our resolver
     # lacks a macro namespace, so even a potentially value-only alias rejects.
-    # Glob, block-scoped use, macro_rules!, and macro_use remain unsupported.
+    # A glob can import a macro: the parser cannot assume its target has only
+    # value/type declarations before the supplied modules have been resolved.
     if not parser.uses:
         return
     # A brace-terminal self import is known to import only a TYPE binding;
     # unlike a simple import, it cannot shadow a macro of the same name.
-    names = {item.binding.text for item in parser.uses if item.group_self is None}
+    globs = any(item.glob is not None for item in parser.uses)
+    names = {item.binding.text for item in parser.uses
+             if item.glob is None and item.group_self is None}
     for plan in parser.macro_expansions[first:]:
+        if globs and (not isinstance(plan, StdOutputExpansion) or plan.module_scope == parser._macro_scope):
+            raise plan.token.error(f'{plan.name}! with a glob import needs owned macro namespace resolution')
         if (isinstance(plan, StdOutputExpansion) and plan.module_scope == parser._macro_scope
                 and plan.name in names):
             raise plan.token.error(f'{plan.name}! has a same-name import; explicit macro namespace '

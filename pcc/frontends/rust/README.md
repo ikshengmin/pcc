@@ -1505,3 +1505,24 @@ bindings keep ordinary move semantics. Reference-bearing source still requires
 actual certification; destructuring lets, uninitialized/diverging lets, Drop
 and general lifetime handling are not enabled. The unchanged earlier
 `enum_omitted_values.rs` fixture is now a positive native/reference obligation.
+
+
+### Closed-module wildcard imports
+
+For a supplied source closure, `use path::*` and a terminal star in a grouped
+use tree bind accessible type and value names from a real module. Declarations
+and explicit imports win separately in each namespace. A public wildcard does
+not make a private, crate-only or otherwise restricted name more visible.
+Aliases, duplicate paths to the same definition, and cycles of module globs
+retain the original declaration identity. A bare use of a name with distinct
+glob providers is rejected; source order does not choose one. This follows the
+[Rust Reference on glob imports](https://doc.rust-lang.org/reference/items/use-declarations.html#glob-imports)
+and its [visibility rules](https://doc.rust-lang.org/reference/visibility-and-privacy.html).
+
+This is not an inventory of an unsupplied external crate, enum variants or
+macros. A wildcard target currently needs a path resolvable through declared
+modules or explicit aliases without consulting another wildcard. A query that
+crosses an ambiguous intermediate glob, an ambiguous public wildcard under
+`deny(missing_docs)`, and primitive-shadowing nominal imports are conservative
+errors. The original source-side cfg, visibility, macro and resource checks
+still apply. No import supplies generated Cargo output or a linked library.

@@ -482,10 +482,12 @@ class UseDeclaration:
     # A terminal `self` inside braces imports its parent in the TYPE
     # namespace only. Keep the actual token for diagnostics and provenance.
     group_self: Token | None = None
+    # A star is a weak binding set, NOT a binding named after its module.
+    glob: Token | None = None
 
     @property
     def binding(self):
-        return self.alias if self.alias is not None else self.path[-1]
+        return None if self.glob is not None else (self.alias if self.alias is not None else self.path[-1])
 
 
 @dataclass
@@ -1161,7 +1163,7 @@ class Parser:
         declarations would. Every leaf keeps the declaration's `use` token,
         documentation and source span; resolution checks each one, used or
         not. A grouped `self` leaf binds only its parent type namespace.
-        Globs, absolute paths and empty groups remain gaps.
+        A terminal star retains its source module; absolute paths and empty groups remain gaps.
         A `pub use` re-export keeps `public`; resolution checks that every
         re-exported binding is itself public (rustc E0364/E0365).
         """
@@ -1172,12 +1174,13 @@ class Parser:
         self.use_tree(token, (), leaves, 0)
         end = self.expect(';')
         span = (offset(self, token), offset(self, end) + 1)
-        for path, alias, group_self in leaves:
-            self.uses.append(UseDeclaration(token, path, alias, documentation, span, public, group_self))
+        for path, alias, group_self, glob in leaves:
+            self.uses.append(UseDeclaration(token, path, alias, documentation, span, public, group_self, glob))
 
     def use_tree(self, token, prefix, leaves, depth):
         if self.token.text == '*':
-            raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
+            self.use_glob(token, prefix, leaves)
+            return
         if self.token.text == '{':
             self.use_group(token, prefix, leaves, depth)
             return
@@ -1204,7 +1207,8 @@ class Parser:
                 if not self.accept('::'):
                     break
                 if self.token.text == '*':
-                    raise self.token.error('glob use declarations require glob import resolution, which is not implemented')
+                    self.use_glob(token, tuple(path), leaves)
+                    return
                 if self.token.text == '{':
                     self.use_group(token, tuple(path), leaves, depth)
                     return
@@ -1217,7 +1221,17 @@ class Parser:
             raise path[-1].error('use paths naming a module qualifier alone are not implemented')
         if len(leaves) >= 4096:
             raise token.error('use declaration binding count exceeds implementation limit (4096)')
-        leaves.append((tuple(path), alias, group_self))
+        leaves.append((tuple(path), alias, group_self, None))
+
+    def use_glob(self, token, prefix, leaves):
+        star = self.expect('*')
+        if not prefix:
+            raise star.error('a glob use needs a supported explicit module path')
+        if len(prefix) + 1 > 128 or len(leaves) >= 4096:
+            raise star.error('glob use exceeds path or binding implementation limit')
+        if self.token.text not in {',', '}', ';'}:
+            raise star.error('a glob use is terminal and cannot be renamed')
+        leaves.append((tuple(prefix), None, None, star))
 
     def use_group(self, token, prefix, leaves, depth):
         opener = self.expect('{')

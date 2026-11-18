@@ -156,6 +156,9 @@ def check_missing_docs(crate, attributes, *, test=False):
                 for declaration in namespaces._bind_use(module_id, name).values():
                     consider(declaration)
 
+        for declaration in namespaces.globs.public_declarations(module_id):
+            consider(declaration)
+
     visit(crate.root.identity)
 
     # `pub` inherent-impl items of an exported, unhidden type.

@@ -232,12 +232,17 @@ def test_actual_disabled_nested_module_preserves_one_whole_token_boundary(tmp_pa
 @pytest.mark.pcc_gate(unavailable=ACTUAL_UNAVAILABLE)
 def test_actual_enabled_module_still_rejects_unsupported_contents(tmp_path, monkeypatch):
     source = '#[cfg(not(test))]mod active{use super::*;}' + BODY
+    # Preserve the exact original certified source as a positive. Then prove
+    # an enabled, valid Rust enum-variant wildcard still isn't skipped.
     checked = certify(source, tmp_path / 'actual-check')
+    gap = 'enum E{A,B} #[cfg(not(test))]mod active{use super::E::*;}' + BODY
+    checked_gap = certify(gap, tmp_path / 'actual-enum')
+    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool in owned cfg phase'))
+    assert compile_rust(source, rustc_check=checked).emit_object().startswith(b'\x7fELF')
     from pcc.frontends.rust.lowering import Lowerer
     monkeypatch.setattr(Lowerer, 'lower', lambda *a: pytest.fail('active unsupported module reached IR'))
-    monkeypatch.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool in owned cfg phase'))
-    with pytest.raises(RustError, match='glob use declarations'):
-        compile_rust(source, rustc_check=checked)
+    with pytest.raises(RustError, match='non-module or enum variants'):
+        compile_rust(gap, rustc_check=checked_gap)
 
 
 @pytest.mark.integration

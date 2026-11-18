@@ -47,6 +47,8 @@ class ModuleNamespaces:
             pending.extend(reversed(module.children))
             for declaration in module.items.values():
                 self.by_key[declaration.identity.binding_key] = declaration
+        from .glob_imports import ModuleGlobImports
+        self.globs = ModuleGlobImports(self)
         self._uses = {}
         self._resolved_uses = {}
         self._resolving_uses = set()
@@ -64,15 +66,28 @@ class ModuleNamespaces:
         for module in self.modules.values():
             imports = self._uses[module.identity] = {}
             for item in module.body.uses:
+                if item.glob is not None:
+                    self.globs.add(module.identity, item)
+                    continue
                 name = item.binding.text
                 if name in imports:
                     raise item.token.error('multiple use bindings sharing a spelling require namespace-merge resolution, which is not implemented')
                 imports[name] = item
+        self.globs.bind_targets()
         # Resolve even unused imports. A later call is never permission to
         # skip unavailable dependencies, privacy, conflicts or import cycles.
         for module, imports in self._uses.items():
             for name in imports:
                 self._bind_use(module, name)
+        # Avoid reinterpreting a glob-imported nominal type as a language
+        # primitive in earlier checker paths which still pick primitives first.
+        for module, items in self.globs.entries.items():
+            for name in sorted(PRIMITIVES):
+                if self._strong_binding(module, 'type', name) is not None:
+                    continue
+                if any(not isinstance(decl.syntax, (Module, CrateSelfAlias))
+                       for decl, _ in self.globs.weak(module, 'type', name).values()):
+                    raise items[0].glob.error('primitive-shadowing type glob bindings require scoped primitive lookup')
 
     @property
     def root(self):
@@ -101,7 +116,8 @@ class ModuleNamespaces:
     def has_local_type_binding(self, name, module):
         """Lexical items/imports only, excluding every implicit prelude."""
         return (('type', name) in self.modules[module].items or
-                'type' in self._resolved_uses.get((module, name), {}))
+                'type' in self._resolved_uses.get((module, name), {}) or
+                bool(self.globs.weak(module, 'type', name)))
 
     def _bind_use(self, module, name):
         key = (module, name)
@@ -153,20 +169,32 @@ class ModuleNamespaces:
         finally:
             self._resolving_uses.remove(key)
 
-    def _binding(self, module, namespace, name, requester, token):
-        """The declaration a name denotes in `module`, and the visibility
-        scope of that binding (the item itself, or the use binding naming it)."""
+    def _strong_binding(self, module, namespace, name):
         declaration = self.modules[module].items.get((namespace, name))
         if declaration is not None:
             return declaration, self._scope(declaration.public, module)
         item = self._uses[module].get(name)
-        # Its visibility never shadows or exports a value of the same name.
         if item is None or (item.group_self is not None and namespace != 'type'):
+            return None
+        declaration = self._bind_use(module, name).get(namespace)
+        return (declaration, self._scope(item.public, module)) if declaration is not None else None
+
+    def _binding(self, module, namespace, name, requester, token):
+        strong = self._strong_binding(module, namespace, name)
+        if strong is not None:
+            declaration, scope = strong
+            if not self._within(requester, scope) and (namespace, name) not in self.modules[module].items:
+                raise token.error(f'private use binding {name!r} is inaccessible from this module')
+            return declaration, scope
+        candidates = self.globs.weak(module, namespace, name)
+        if not candidates:
             return None, module
-        scope = self._scope(item.public, module)
+        if len(candidates) != 1:
+            raise token.error(f'ambiguous glob import of {namespace}-namespace name {name!r}')
+        declaration, scope = next(iter(candidates.values()))
         if not self._within(requester, scope):
-            raise token.error(f'private use binding {name!r} is inaccessible from this module')
-        return self._bind_use(module, name).get(namespace), scope
+            raise token.error(f'private glob binding {name!r} is inaccessible from this module')
+        return declaration, scope
 
     def _start(self, path, requester, token):
         parts = path.split('::')
@@ -195,6 +223,9 @@ class ModuleNamespaces:
             space = namespace if index == len(parts) - 1 else 'type'
             declaration, scope = self._binding(current, space, name, requester, token)
             implicit = index == 0 and space == 'type' and path.split('::', 1)[0] not in {'crate', 'self', 'super'}
+            if (declaration is None and implicit and self.globs.binding_targets
+                    and self.globs.entries.get(current) and name in self.extern_prelude):
+                raise token.error('a glob target using a possibly shadowed extern prelude alias is not implemented')
             if declaration is None and implicit:
                 declaration = self.extern_prelude.get(name)
                 if declaration is not None:

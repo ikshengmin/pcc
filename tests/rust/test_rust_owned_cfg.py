@@ -381,7 +381,7 @@ def test_disabled_items_with_unimplemented_forms_are_skipped(item):
 
 
 def test_an_enabled_item_keeps_every_explicit_boundary():
-    with pytest.raises(RustError, match='glob use declarations'):
+    with pytest.raises(RustError, match='implicit library/prelude source dependency is unavailable'):
         compile_source('#[cfg(feature="fast")] use std::collections::*; pub fn f(){}')
     with pytest.raises(RustError, match='environment variable `X` not defined'):
         compile_source('#[cfg(feature="fast")] const A: &str = env!("X"); pub fn f(){}', env={})
