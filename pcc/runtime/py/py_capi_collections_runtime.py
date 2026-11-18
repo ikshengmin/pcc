@@ -18,6 +18,7 @@ from pcc.extern import (
 )
 from pcc.unsafe import (
     cstr,
+    global_addr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -38,6 +39,7 @@ from pcc.unsafe import (
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_capi_pin_borrowed_result_gc4 = extern("pcc_capi_pin_borrowed_result_gc4", (c_ptr,), c_ptr)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -89,7 +91,10 @@ def PyTuple_GetItem(obj, index: int):
         _raise_collection(7, cstr("tuple index out of range"))
         return null()
     # py_tuple_get returns owned; PyTuple_GetItem returns borrowed.
-    pcc_gc_pin(item)
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        item = pcc_capi_pin_borrowed_result_gc4(item)
+    else:
+        pcc_gc_pin(item)
     py_decref(item)
     return item
 
@@ -195,7 +200,10 @@ def PyList_GetItem(obj, index: int):
         _raise_collection(7, cstr("list index out of range"))
         return null()
     # py_list_get returns owned; PyList_GetItem returns borrowed.
-    pcc_gc_pin(item)
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        item = pcc_capi_pin_borrowed_result_gc4(item)
+    else:
+        pcc_gc_pin(item)
     py_decref(item)
     return item
 

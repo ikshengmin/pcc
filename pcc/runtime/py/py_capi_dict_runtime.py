@@ -37,6 +37,7 @@ from pcc.extern import (
 )
 from pcc.unsafe import (
     cstr,
+    global_addr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -52,6 +53,7 @@ from pcc.unsafe import (
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_capi_pin_borrowed_result_gc4 = extern("pcc_capi_pin_borrowed_result_gc4", (c_ptr,), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -133,7 +135,10 @@ def PyDict_GetItem(dict, key):
     if ptr_is_null(item):
         return null()
     # py_dict_get returns owned; CPython PyDict_GetItem returns borrowed.
-    pcc_gc_pin(item)
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        item = pcc_capi_pin_borrowed_result_gc4(item)
+    else:
+        pcc_gc_pin(item)
     py_decref(item)
     return item
 
@@ -158,7 +163,10 @@ def PyDict_GetItemWithError(dict, key):
     item = py_dict_get(dict, key)
     if ptr_is_null(item):
         return null()
-    pcc_gc_pin(item)
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+        item = pcc_capi_pin_borrowed_result_gc4(item)
+    else:
+        pcc_gc_pin(item)
     py_decref(item)
     return item
 

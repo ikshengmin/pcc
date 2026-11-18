@@ -2158,6 +2158,23 @@ def pcc_gc_native_frame_enter(frame, ranges, capacity: int) -> int:
     return 0
 
 
+@c_abi_export("pcc_gc_native_frame_enter_borrowed_slot")
+def pcc_gc_native_frame_enter_borrowed_slot(frame, entry, slot) -> None:
+    """Publish one precise, caller-owned return slot before permitting a stop.
+
+    A conservative stack hit keeps an unforwarded address in place, but it
+    cannot rewrite this cell when a forwarding edge already exists. The
+    current, registered thread owns all three stack records through leave.
+    Ordinary bind_range's conservative fast path is deliberately unchanged.
+    """
+    if ptr_is_null(slot) or pcc_gc_native_frame_enter(frame, entry, 1) != 0:
+        pcc_platform_abort()
+        return
+    store_ptr(entry, 0, slot)
+    store_i64(entry, 8, -1)
+    store_i64(frame, _NATIVE_FRAME_USED, 1)
+
+
 @c_abi_export("pcc_gc_native_frame_leave")
 def pcc_gc_native_frame_leave(frame) -> int:
     # No poll, callback, allocation or deallocation after the last root leaves.

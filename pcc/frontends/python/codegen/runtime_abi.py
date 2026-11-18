@@ -2419,6 +2419,8 @@ def _cross_object_signatures_part_2():
     "pcc_gc_native_frame_bind_map": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_native_frame_unbind_map": (("c_ptr",), "c_void"),
     "pcc_gc_native_frame_enter": (("c_ptr", "c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_native_frame_enter_borrowed_slot": (("c_ptr", "c_ptr", "c_ptr"), "c_void"),
+    "pcc_capi_pin_borrowed_result_gc4": (("c_ptr",), "c_ptr"),
     "pcc_gc_native_frame_leave": (("c_ptr",), "c_int64"),
     "pcc_gc_native_root_bind_range": (("c_ptr", "c_int64"), "c_ptr"),
     "pcc_gc_native_root_unbind": (("c_ptr",), "c_void"),
