@@ -40,6 +40,8 @@ class RustCompilation:
     conditional_items: tuple = ()
     # Advisory source metadata only; owned codegen currently applies no hint.
     function_inline_hints: tuple = ()
+    # Per-module syntax, not a warning stream and not a checked-source token.
+    module_lint_attributes: tuple = ()
 
     @property
     def ir_text(self) -> str:
@@ -133,11 +135,12 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
         consts = resolution.consts + resolution.statics
         implementations, traits = resolution.implementations, resolution.traits
-    if rustc_check is None and parser.crate_lint_attributes:
-        from .missing_docs import check_missing_docs
+    from .missing_docs import check_missing_docs, scoped_module_lints
+    if rustc_check is None and (parser.crate_lint_attributes or
+                                resolution is not None and scoped_module_lints(resolution.crate)):
         from .module_resolution import inline_crate
         check_missing_docs(resolution.crate if resolution is not None else inline_crate(parser, functions),
-                           parser.crate_lint_attributes, test=cfg is not None and cfg.test)
+                           parser.crate_lint_attributes)
     parsed = _ParsedCrate(functions, records, enums, consts, implementations, traits,
                           resolution, parser.crate_policy, tuple(parser.macro_expansions),
                           parser.crate_lint_attributes, parser.crate_cfg_attributes, parser.conditional_items)
@@ -201,6 +204,8 @@ def _check_and_lower(parsed, *, rustc_check, source, target, overflow_checks, mo
 
     lowerer = Lowerer(functions, checker, module_name, target)
     module = lowerer.lower()
+    from .missing_docs import scoped_module_lints
+    scoped_lints = scoped_module_lints(parsed.resolution.crate) if parsed.resolution is not None else ()
     return RustCompilation(module, dict(lowerer.symbols), externally_checked=rustc_check is not None,
                            target_triple=target.triple, data_layout=target.data_layout,
                            standard_marker_contract=marker_context, edition=edition,
@@ -209,7 +214,7 @@ def _check_and_lower(parsed, *, rustc_check, source, target, overflow_checks, mo
                                rustc_check.provenance) if rustc_check is not None else None),
                            crate_cfg_attributes=parsed.crate_cfg_attributes,
                            conditional_items=parsed.conditional_items,
-                           function_inline_hints=inline_hints)
+                           function_inline_hints=inline_hints, module_lint_attributes=scoped_lints)
 
 
 def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: int = 2021,

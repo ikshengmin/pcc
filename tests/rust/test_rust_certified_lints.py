@@ -116,7 +116,7 @@ def test_other_semantic_attributes_and_lint_forms_are_not_stripped(attribute, me
 
 @pytest.mark.parametrize('source,message', [
     ('#[warn(missing_docs)]' + BODY, 'unsupported Rust attribute'),
-    ('mod m{#![allow(missing_docs)]fn f(){}}', 'semantic inner module attributes'),
+    ('mod m{#![expect(missing_docs)]fn f(){}}', 'semantic inner module attributes'),
     ('struct R{#[allow(missing_docs)]pub x:u64}', "expected an identifier"),
 ])
 def test_outer_module_and_member_lint_placement_remains_unimplemented(source, message):

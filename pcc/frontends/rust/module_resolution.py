@@ -473,7 +473,7 @@ def inline_crate(parser, functions):
     body = ModuleBody(functions, parser.records, parser.enums, parser.implementations,
                       parser.traits, parser.modules, parser.crate_documentation,
                       parser.crate_aliases, parser.crate_policy, parser.conditional_items,
-                      uses=parser.uses, consts=parser.consts, statics=parser.statics)
+                      uses=parser.uses, consts=parser.consts, statics=parser.statics, inner_lints=parser.crate_lint_attributes)
     graph = _Loader(files).load_body(file, body, ModuleId(identity, ()), PurePosixPath('.'), None, inline=False)
     return CrateSyntax(graph, edition, files)
 

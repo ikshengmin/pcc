@@ -155,7 +155,7 @@ class _Loader:
                               parser.implementations, parser.traits, parser.modules,
                               parser.crate_documentation, parser.crate_aliases, parser.crate_policy,
                               parser.conditional_items, uses=parser.uses, consts=parser.consts,
-                              statics=parser.statics)
+                              statics=parser.statics, inner_lints=parser.crate_lint_attributes)
             return self.load_body(source, body, identity, directory, declaration,
                                   inline=False)
         except RustError as exc:
@@ -271,12 +271,10 @@ def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_typ
     graph = loader.parse_file(root, ModuleId(identity, ()), PurePosixPath(root).parent)
     crate = CrateSyntax(graph, edition, frozen)
     root_parser = loader.context_parsers[0]
-    if root_parser.crate_lint_attributes and getattr(root_parser, '_rustc_check', None) is None:
-        # The owned missing_docs lint needs every module of the crate.
-        from .missing_docs import check_missing_docs
-        test = configuration is not None and configuration.options.test
+    from .missing_docs import check_missing_docs, scoped_module_lints
+    if (root_parser.crate_lint_attributes or scoped_module_lints(crate)) and getattr(root_parser, '_rustc_check', None) is None:
         try:
-            check_missing_docs(crate, root_parser.crate_lint_attributes, test=test)
+            check_missing_docs(crate, root_parser.crate_lint_attributes)
         except RustError as exc:
             raise RustError(f'{root}: {exc}') from exc
     return crate, loader.context_parsers

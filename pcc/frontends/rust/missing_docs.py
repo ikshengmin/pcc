@@ -1,9 +1,11 @@
 """Owned `missing_docs` lint: rustc's MissingDoc pass for a crate's lint level.
 
 https://doc.rust-lang.org/rustc/lints/listing/allowed-by-default.html#missing-docs
-The level comes from the crate-root `#![allow|warn|deny|forbid(missing_docs)]`
-attributes in order (a later one wins; overriding `forbid` is rustc E0453).
-Only `deny` and `forbid` reject; a test build (`--test`) skips the lint.
+Crate and module inner lint attributes apply where the item is defined.
+Nested scopes inherit their parent's level. `deny` inside `forbid` has no
+effect; attempting to lower it to `warn` or `allow` is rustc E0453.
+Only `deny` and `forbid` reject. `--test` configures which items exist; it
+does not exempt the resulting public declarations from missing_docs.
 
 Checked, as rustc does (verdicts in tests/rust/test_rust_owned_lints.py):
 the crate root, and every exported item: one reachable from the crate root
@@ -13,9 +15,10 @@ narrower excluded. Exported items need documentation, and so do their named
 fields, trait items, and `pub` inherent-impl items of an exported type. Trait
 impl items, `use` and impl blocks are never checked. Any doc comment (even
 empty), `#[doc = "..."]` or `#[doc(hidden)]` is documentation; a
-`#[doc(hidden)]` item, or one defined inside a hidden module, item or impl
-type, needs none, even when re-exported. Item-level lint attributes are
-rejected by the parser as unimplemented, so the crate level is the only one.
+`#[doc(hidden)]` item suppresses inherited checking; a lexically nested
+module can set a stricter level again. A same-scope hidden/strict conflict
+whose hard verdict differs needs the original source bound to rustc. Item-level lint attributes are
+still rejected; no lint group, cap, Clippy or rustdoc execution is inferred.
 """
 from __future__ import annotations
 
@@ -24,18 +27,18 @@ from .syntax import ConstItem, Enumeration, Module, Record, RustError, StaticIte
 LEVELS = ('allow', 'warn', 'deny', 'forbid')
 
 
-def missing_docs_level(attributes):
-    """The crate's missing_docs level and the attribute that set it."""
-    level, setter, forbidden = 'allow', None, None
+def missing_docs_level(attributes, inherited=('allow', None)):
+    """The effective level and the original attribute that owns it."""
+    level, setter = inherited
     for attribute in attributes:
         if not any(item.name == 'missing_docs' for item in attribute.builtin_lints):
             continue
-        if forbidden is not None and attribute.level != 'forbid':
+        if level == 'forbid':
+            if attribute.level in ('deny', 'forbid'):
+                continue  # do not remove the inherited prohibition
             raise attribute.token.error(f"{attribute.level}(missing_docs) incompatible with previous "
                                         "forbid (rustc E0453)")
         level, setter = attribute.level, attribute
-        if level == 'forbid':
-            forbidden = attribute
     return level, setter
 
 
@@ -76,29 +79,84 @@ def function_kind(function):
     return 'a method' if receiver else 'an associated function'
 
 
+def scoped_module_lints(crate):
+    """Stable lexical module, source and original attributes; not an admission token."""
+    result = []
+    pending = list(reversed(crate.root.children))
+    while pending:
+        node = pending.pop()
+        if node.body.inner_lints:
+            result.append((node.identity.components, node.source.path, node.body.inner_lints))
+        pending.extend(reversed(node.children))
+    return tuple(result)
+
+
 def check_missing_docs(crate, attributes, *, test=False):
-    """Reject the first exported item without documentation when the crate
-    denies or forbids missing_docs."""
-    level, setter = missing_docs_level(attributes)
-    if level not in ('deny', 'forbid') or test:
+    """Validate forbidden overrides in all live modules, then lint exports at definition."""
+    root = crate.root.identity
+    levels = {}
+    pending = [(crate.root, (('allow', None, root),))]
+    while pending:
+        module, before = pending.pop()
+        local = attributes if module.identity == root else module.body.inner_lints
+        doc_hidden = hidden(module.outer_documentation) or hidden(module.body.documentation)
+        reset = ('allow', None, module.identity)
+        # A hidden declaration suppresses inherited missing_docs (even an
+        # inherited forbid). At that SAME site two real compilers order its
+        # suppression differently relative to an explicit inner lint. Keep
+        # both possibilities, not a guessed compiler version from target cfg.
+        inner_hidden = tuple(entry.source_span[0] for entry in module.body.documentation
+                             if hidden((entry,)))
+        # Outer attributes precede the module body even when it comes from
+        # another file. A hidden inner attribute has a source position inside
+        # the same body as local lint attributes.
+        positions = ((attribute.source_span[0], attribute) for attribute in local)
+        events = sorted((*positions, *((offset, None) for offset in inner_hidden)),
+                        key=lambda entry: entry[0])
+        options, failures = [], []
+        for prior in before:
+            state = reset if hidden(module.outer_documentation) else prior
+            try:
+                for _, attribute in events:
+                    if attribute is None:
+                        state = reset
+                    else:
+                        level, setter, origin = state
+                        new_level, new_setter = missing_docs_level((attribute,), (level, setter))
+                        state = (new_level, new_setter, origin if setter is new_setter else module.identity)
+            except RustError as exc:
+                failures.append(exc)
+            else:
+                if state not in options:
+                    options.append(state)
+        if failures:
+            if options:
+                raise RustError('missing_docs and doc(hidden) override order requires a same-source rustc check')
+            raise failures[0]
+        if doc_hidden and reset not in options:
+            options.append(reset)
+        levels[module.identity] = tuple(options)
+        pending.extend((child, tuple(options)) for child in reversed(module.children))
+    # Live items were already determined by cfg; real --test does not cap lints.
+    if not any(level in ('deny', 'forbid') for choices in levels.values() for level, _, _ in choices):
         return
     from .module_resolution import ModuleNamespaces
     namespaces = ModuleNamespaces(crate)
 
-    def missing(token, what):
-        raise token.error(f"missing documentation for {what} (missing_docs, {level} at the crate root)")
+    def missing(token, what, module):
+        choices = levels[module]
+        strict = [choice for choice in choices if choice[0] in ('deny', 'forbid')]
+        if not strict:
+            return
+        if len(strict) != len(choices):
+            raise token.error('missing_docs and doc(hidden) override order requires a same-source rustc check')
+        level, _, origin = strict[0]
+        owner = 'at the crate root' if origin == root else 'in module ' + '::'.join(origin.components)
+        raise token.error(f"missing documentation for {what} (missing_docs, {level} {owner})")
 
-    if not has_doc(crate.root.body.documentation):
-        missing(setter.token, 'the crate')
-
-    # Modules defined inside a hidden module, or hidden themselves.
-    hidden_modules = {}
-    pending = [(crate.root, False)]
-    while pending:
-        module, inherited = pending.pop()
-        here = inherited or hidden(module.outer_documentation) or hidden(module.body.documentation)
-        hidden_modules[module.identity] = here
-        pending.extend((child, here) for child in module.children)
+    root_setter = next((s for _, s, _ in levels[root] if s is not None), None)
+    if not has_doc(crate.root.body.documentation) and root_setter is not None:
+        missing(root_setter.token, 'the crate', root)
 
     exported, seen = {}, set()
 
@@ -107,44 +165,45 @@ def check_missing_docs(crate, attributes, *, test=False):
         if id(syntax) in seen:
             return
         seen.add(id(syntax))
-        is_hidden = hidden_modules.get(declaration.identity.module, False)
         if isinstance(syntax, Module):
             child = namespaces.modules.get(declaration.identity.module.child(declaration.identity.name))
             documentation = syntax.documentation + (child.body.documentation if child is not None else ())
-            is_hidden = is_hidden or hidden(documentation)
-            if not is_hidden and not has_doc(documentation):
-                missing(syntax.token, 'a module')
+            if not has_doc(documentation):
+                # An inner attribute applies to the module declaration itself too.
+                owner = child.identity if child is not None else declaration.identity.module
+                missing(syntax.token, 'a module', owner)
             if child is not None:
                 visit(child.identity)
             return
         documentation = getattr(syntax, 'documentation', ())
-        is_hidden = is_hidden or hidden(documentation)
+        is_hidden = hidden(documentation)
         exported[id(syntax)] = is_hidden
         if is_hidden:
             return
+        scope = declaration.identity.module
         if not has_doc(documentation):
-            missing(syntax.token, describe(syntax))
+            missing(syntax.token, describe(syntax), scope)
         if isinstance(syntax, Record) and not syntax.tuple_fields:
             for (field, _), public, docs in zip(syntax.fields, syntax.field_public, syntax.field_documentation):
                 if public is True and not has_doc(docs):
-                    missing(field, 'a struct field')
+                    missing(field, 'a struct field', scope)
         if isinstance(syntax, Enumeration):
             for (variant, _), docs in zip(syntax.variants, syntax.variant_documentation):
                 if hidden(docs):
                     continue
                 if not has_doc(docs):
-                    missing(variant, 'a variant')
+                    missing(variant, 'a variant', scope)
                 for field, field_docs in zip(syntax.named_payloads.get(variant.text, ()),
                                              syntax.payload_documentation.get(variant.text, ())):
                     if not has_doc(field_docs):
-                        missing(field, 'a struct field')
+                        missing(field, 'a struct field', scope)
         if isinstance(syntax, Trait):
             for function in syntax.methods:
                 if not hidden(function.documentation) and not has_doc(function.documentation):
-                    missing(function.token, function_kind(function))
+                    missing(function.token, function_kind(function), scope)
             for associated in syntax.associated_types:
                 if not hidden(associated.documentation) and not has_doc(associated.documentation):
-                    missing(associated.token, 'an associated type')
+                    missing(associated.token, 'an associated type', scope)
 
     def visit(module_id):
         module = namespaces.modules[module_id]
@@ -165,7 +224,8 @@ def check_missing_docs(crate, attributes, *, test=False):
     for module_id, module in namespaces.modules.items():
         for function in module.body.functions:
             implementation = function.implementation
-            if implementation is None or implementation.trait is not None or function.public is not True:
+            if implementation is None or implementation.trait is not None or function.public is not True \
+                    or hidden(implementation.documentation):
                 continue
             owner = implementation.owner
             name = owner.name if hasattr(owner, 'name') else owner
@@ -178,4 +238,4 @@ def check_missing_docs(crate, attributes, *, test=False):
                     continue  # an unresolved owner is reported by semantic checking
             if exported.get(id(declaration.syntax), True) is False and not hidden(function.documentation) \
                     and not has_doc(function.documentation):
-                missing(function.token, function_kind(function))
+                missing(function.token, function_kind(function), module_id)

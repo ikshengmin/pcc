@@ -193,10 +193,17 @@ Migration order:
    `missing_docs` level as rustc's MissingDoc pass does (the crate root and
    every exported item, reached through `pub` modules or `pub use`, with its
    named `pub` fields, variants, trait items and `pub` inherent-impl items;
-   `#[doc(hidden)]` items and anything defined inside a hidden one exempt;
-   E0453 for overriding `forbid`; a test build skips it), in single-file and
+   `#[doc(hidden)]` exempts descendants from the inherited level; a child can set the level again;
+   E0453 for lowering `forbid` to warn/allow; inner deny cannot undo it), in single-file and
    multi-file crates alike; `#[inline]` is validated as rustc does and stays
-   advisory; explicit receiver types are the implicit receivers. Verdicts in
+   advisory; explicit receiver types are the implicit receivers. Module-inner
+   `missing_docs` levels inherit lexically, including the module declaration;
+   a re-export does not move the definition's lint scope. When the hard verdict
+   of overlapping hidden and explicit lint attributes depends on their override
+   order (rustc 1.91.1 and 1.99.1 differ), an actual same-source rustc check
+   is required; the owned path never guesses the compiler's version. `--test` determines
+   what exists, not whether an active, exported undocumented item is allowed.
+   Verdicts in
    `tests/rust/test_rust_owned_lints.py::CORPUS` (64 original programs) equal
    a rustc 1.92.0 `-O` build's. DataSketches Rust now passes its
    `#![deny(missing_docs)]`, its shift operators, `fn union` and `for`
@@ -207,11 +214,12 @@ Migration order:
 
 ### Certified crate lint transition
 
-Only crate-root `allow`, `warn`, `deny` and `forbid` lists naming
-`missing_docs` can use the actual checked-source route. PCC retains their
-immutable syntax, source spans and order. The successful same-source rustc
-check owns suppression, warnings, errors and forbidden overrides; this is not
-an owned lint implementation. The value-only flag does not authorize it.
+Crate-root and module-inner `allow`, `warn`, `deny` and `forbid` lists can
+name `missing_docs` or the recognized inactive tool lints. PCC retains their
+syntax, source spans and order. On the actual checked-source route, a check
+of those exact bytes supplies rustc's diagnostics. The value-only flag does
+not authorize it. On the owned route the defined `missing_docs` error
+verdicts apply; PCC does not synthesize a rustc warning transcript.
 `RustCompilation.external_rustc_lints` records the literal owner
 `external_rustc_lints`, original attributes, provenance and exact metadata-check
 stderr bytes. Those bytes are retained in memory and hash-checked against the
@@ -219,8 +227,10 @@ original provenance, not reconstructed from a digest or filtered into invented
 PCC warnings. This remains the trusted audited-checker boundary, not signed
 attestation.
 
-Other lints/groups, reasons, `expect`, and module/item/member lint attributes
-remain explicit unsupported boundaries. General `cfg`, macros and compiler
+Other lints/groups, reasons, `expect`, and outer item/member lint attributes
+remain explicit unsupported boundaries. Recognized module-inner lint syntax is
+recorded separately in `RustCompilation.module_lint_attributes`; only an actual
+same-source check supplies rustc warnings. General `cfg`, macros and compiler
 context attributes are not enabled by the token. The unchanged real-project
 object gate remains strict. The authored lint-bearing native
 program, real rustc checks and complete affected Rust lanes are **UNRUN pending

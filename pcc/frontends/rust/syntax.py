@@ -560,6 +560,7 @@ class ModuleBody:
     uses: list[UseDeclaration] = field(default_factory=list)
     consts: list[ConstItem] = field(default_factory=list)
     statics: list[StaticItem] = field(default_factory=list)
+    inner_lints: tuple = ()
 
 
 @dataclass
@@ -1158,7 +1159,8 @@ class Parser:
         return ModuleBody(functions, child.records, child.enums, child.implementations,
                           child.traits, child.modules, child.crate_documentation,
                           child.crate_aliases, child.crate_policy, child.conditional_items,
-                          uses=child.uses, consts=child.consts, statics=child.statics)
+                          uses=child.uses, consts=child.consts, statics=child.statics,
+                          inner_lints=child.crate_lint_attributes)
 
     def const_item(self, public, documentation):
         """`const NAME: Type = Expression;` (Rust Reference items/constant-items)."""
@@ -1306,7 +1308,7 @@ class Parser:
                 break
             start = self.take(); self.expect("!"); self.expect("[")
             attribute = self.take()
-            if _module:
+            if _module and attribute.text not in {'allow', 'warn', 'deny', 'forbid'}:
                 raise attribute.error("semantic inner module attributes require module context; this form is not implemented")
             if attribute.text in {'allow', 'warn', 'deny', 'forbid'}:
                 from .attribute_metadata import crate_lint_attribute

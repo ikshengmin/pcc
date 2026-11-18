@@ -142,12 +142,14 @@ def test_rustc_builds_give_the_same_verdicts(tmp_path):
         assert rustc_verdict(run.stderr, run.returncode) == verdict, (name, run.stderr)
 
 
-def test_a_test_build_skips_missing_docs():
+def test_a_test_build_lints_the_live_public_items_as_a_normal_build_does():
     from pcc.frontends.rust.configuration import CfgOptions
     source = H + 'pub fn f() {}'
     with pytest.raises(RustError, match=MESSAGES['missing_docs']):
         compile_rust(source, cfg=CfgOptions())
-    assert compile_rust(source, cfg=CfgOptions(test=True)).symbols
+    with pytest.raises(RustError, match=MESSAGES['missing_docs']):
+        compile_rust(source, cfg=CfgOptions(test=True))
+    assert compile_rust(H + '/// documentation\npub fn f() {}', cfg=CfgOptions(test=True)).symbols
 
 
 # Original programs: explicit receivers, and a crate that denies
