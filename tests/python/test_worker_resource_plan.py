@@ -279,8 +279,23 @@ def test_oversized_bytes_refuse_before_any_real_child_starts(tmp_path, monkeypat
     assert pool._HOST_WORKERS == {}
 
 
-def test_uncalibrated_task_retires_then_admits_multiple_real_children(tmp_path, monkeypatch):
-    monkeypatch.delenv(policy.TREE_STATE_ENV, raising=False)
+def test_uncalibrated_task_retires_then_admits_multiple_real_children(tmp_path):
+    # A long-lived pytest worker can retain compiler heaps exceeding this
+    # scenario's worker space. Forked children inherit that RSS high-water
+    # mark even after exec. Run the unchanged admission contract from a fresh
+    # coordinator, not by raising its budget or replacing resource readings.
+    environment = _resource_driver_environment("cpython", 3)
+    result = run_process_group_timeout(
+        [sys.executable, "-B", "-c",
+         "from pathlib import Path; import sys; "
+         "from tests.python.test_worker_resource_plan import _uncalibrated_children_scenario; "
+         "_uncalibrated_children_scenario(Path(sys.argv[1]))", str(tmp_path)],
+        cwd=Path(__file__).resolve().parents[2], env=environment, timeout=10,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def _uncalibrated_children_scenario(tmp_path):
     markers = [tmp_path / ("worker" + str(index)) for index in range(4)]
     tasks = [task(tmp_path / ("rss" + str(index)), inputs=(4 - index,))
              for index in range(4)]
