@@ -120,3 +120,24 @@ implemented" diagnostic. The list
 lives in `pcc/frontends/c/codegen/c_gnu_attributes.py`; the executed checks
 are `tests/c/test_c_gnu_attributes.py`, `tests/c/test_c_gnu_asm.py`,
 `tests/c/test_c_weak_functions.py` and `tests/c/test_c_constructor_attributes.py`.
+
+## GNU statement expressions and PCC address behavior
+
+In value context, a final array expression statement inside `({ ...; })`
+decays to a pointer before an outer `sizeof`. This differs from `sizeof`
+of a bare array. An explicit final `&array` retains a pointer to the array.
+
+PCC also preserves the address of the final object in certain statement
+expressions that GNU GCC rejects as operands of an outer `&`. These are
+**PCC acceptance cases, not a GNU C portability guarantee**. This does not
+extend a block-local object's lifetime. When an evaluated pointer must
+survive the block, take the address of a still-live outer object *inside*
+the block, for example `({ count++; &outer; })`.
+
+The Linux x86-64 address suite keeps each such original C source for independent
+owned ELF execution and for a real GNU rejection at its outer ampersand. A separate
+legal control for each original must execute on both PCC and the same GCC.
+`PCC_C_ORACLE` still chooses the normal reference driver (default: `cc`).
+If that driver is not GNU GCC, set `PCC_GNU_C_ORACLE` to the actual GCC
+driver for the GNU-specific tests. Failure to find GNU GCC, a crash or an
+unrelated diagnostic is not a successful negative result.

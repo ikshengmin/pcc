@@ -3,6 +3,7 @@
 This checks no-read address semantics, not complete volatile access semantics.
 GNU statement expressions are labeled separately from the standard C cases.
 """
+import hashlib
 import io
 import json
 import os
@@ -16,6 +17,7 @@ from pcc.frontends.c.codegen.c_codegen import CCodeGenerator
 from pcc.frontends.c.codegen.c_declaration_state import CodegenError
 from pcc.frontends.c.parse import make_c_parser
 from pcc.frontends.c.passes.context import PassContext
+from tests.c.c_statement_address_extensions import OUTER_ADDRESS_EXTENSIONS
 from tests.c.test_c_aggregate_identity import compile_unit
 
 TARGET = 'x86_64-unknown-linux-gnu'
@@ -157,6 +159,33 @@ PROGRAMS = (
 )
 
 
+# Never decide a program's oracle by running it and observing which branch
+# succeeds. Only these frozen originals have deliberately different results.
+GNU_COMPATIBLE_PROGRAMS = tuple(row for row in PROGRAMS if row[0] not in OUTER_ADDRESS_EXTENSIONS)
+EXTENSION_ORIGINALS = tuple(row for row in PROGRAMS if row[0] in OUTER_ADDRESS_EXTENSIONS)
+INNER_ADDRESS_CONTROLS = tuple((name + '-inner-address', OUTER_ADDRESS_EXTENSIONS[name][3])
+                              for name, _ in EXTENSION_ORIGINALS)
+
+
+def _check_extension_identity(name, source):
+    digest, line, column, _ = OUTER_ADDRESS_EXTENSIONS[name]
+    assert hashlib.sha256(source.encode('utf-8')).hexdigest() == digest, name
+    assert source.splitlines()[line - 1][column - 1:column + 2] == '&({', name
+    return digest, line, column
+
+
+def test_statement_address_oracles_cover_every_original_once():
+    original_names = [name for name, _ in PROGRAMS]
+    assert len(set(original_names)) == len(original_names)
+    assert len(OUTER_ADDRESS_EXTENSIONS) == len(EXTENSION_ORIGINALS) == len(INNER_ADDRESS_CONTROLS) == 16
+    assert {name for name, _ in EXTENSION_ORIGINALS} == set(OUTER_ADDRESS_EXTENSIONS)
+    assert len(GNU_COMPATIBLE_PROGRAMS) + len(EXTENSION_ORIGINALS) == len(PROGRAMS)
+    assert not set(original_names) & {name for name, _ in INNER_ADDRESS_CONTROLS}
+    for name, source in EXTENSION_ORIGINALS:
+        _check_extension_identity(name, source)
+        assert OUTER_ADDRESS_EXTENSIONS[name][3] != source
+
+
 # These unchanged positives reached the x86_64 dynamic-stack capability
 # boundary in CI. Keep their object/native obligations below; independent IR
 # checks qualify only frontend lowering, never backend execution support.
@@ -207,9 +236,8 @@ def test_invalid_address_is_not_emitted_after_effectful_fallback(source, message
     assert not re.search(r'\bcall\b[^\n]*@"?side', str(generator.module))
 
 
-@pytest.mark.integration
-@pytest.mark.parametrize('name,source', PROGRAMS, ids=[row[0] for row in PROGRAMS])
-def test_address_originals_match_explicit_real_c_reference(name, source, tmp_path, monkeypatch):
+
+def _compile_address_original(name, source, tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
     from pcc.backend.x86_64_asm_driver import assemble_file
 
@@ -230,21 +258,27 @@ def test_address_originals_match_explicit_real_c_reference(name, source, tmp_pat
     (tmp_path / 'owned.o').write_bytes(obj)
     original = tmp_path / (name+'.c')
     original.write_text(source, encoding='utf-8', newline='')
-    compiler = shutil.which(os.environ.get('PCC_C_ORACLE', 'cc'))
-    assert compiler, 'an explicit real C reference compiler is required'
+    return binary, original
+
+
+def _observe_address_run(executable, label, tmp_path):
+    run = subprocess.run([str(executable)], capture_output=True, timeout=10)
+    (tmp_path / (label + '.stdout.bin')).write_bytes(run.stdout)
+    (tmp_path / (label + '.stderr.bin')).write_bytes(run.stderr)
+    return run.returncode, run.stdout, run.stderr
+
+
+def _compare_address_positive(name, source, tmp_path, monkeypatch, compiler, env=None):
+    binary, original = _compile_address_original(name, source, tmp_path, monkeypatch)
     reference = tmp_path / 'reference'
     standard = 'gnu11' if name.startswith('gnu-') else 'c11'
     command = [compiler, '-std='+standard, '-O0', str(original), '-o', str(reference)]
-    built = subprocess.run(command, capture_output=True, timeout=30)
+    built = subprocess.run(command, capture_output=True, timeout=30, env=env)
     (tmp_path / 'reference-build.stdout.bin').write_bytes(built.stdout)
     (tmp_path / 'reference-build.stderr.bin').write_bytes(built.stderr)
     assert built.returncode == 0, built.stderr
-    observations = []
-    for label, executable in (('owned', binary), ('reference', reference)):
-        run = subprocess.run([str(executable)], capture_output=True, timeout=10)
-        (tmp_path / (label+'.stdout.bin')).write_bytes(run.stdout)
-        (tmp_path / (label+'.stderr.bin')).write_bytes(run.stderr)
-        observations.append((run.returncode, run.stdout, run.stderr))
+    observations = [_observe_address_run(executable, label, tmp_path)
+                    for label, executable in (('owned', binary), ('reference', reference))]
     (tmp_path / 'observations.json').write_text(json.dumps({
         'reference_command': command,
         'returncodes': [item[0] for item in observations],
@@ -252,6 +286,131 @@ def test_address_originals_match_explicit_real_c_reference(name, source, tmp_pat
         'stderr_hex': [item[2].hex() for item in observations],
     }, indent=2))
     assert observations == [(42, b'', b''), (42, b'', b'')]
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('name,source', GNU_COMPATIBLE_PROGRAMS, ids=[row[0] for row in GNU_COMPATIBLE_PROGRAMS])
+def test_address_originals_match_explicit_real_c_reference(name, source, tmp_path, monkeypatch):
+    compiler = shutil.which(os.environ.get('PCC_C_ORACLE', 'cc'))
+    assert compiler, 'an explicit real C reference compiler is required'
+    _compare_address_positive(name, source, tmp_path, monkeypatch, compiler)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('name,source', EXTENSION_ORIGINALS, ids=[row[0] for row in EXTENSION_ORIGINALS])
+def test_pcc_outer_statement_address_original_executes(name, source, tmp_path, monkeypatch, request):
+    digest, _, _ = _check_extension_identity(name, source)
+    binary, _original = _compile_address_original(name, source, tmp_path, monkeypatch)
+    observation = _observe_address_run(binary, 'owned', tmp_path)
+    request.node.user_properties.extend([('pcc_original_sha256', digest),
+                                         ('pcc_original_c', source), ('pcc_owned_returncode', observation[0])])
+    assert observation == (42, b'', b'')
+
+
+@pytest.fixture(scope='module')
+def gnu_address_reference():
+    # The ordinary cross-compiler positives still use PCC_C_ORACLE as before.
+    # For a GNU-specific diagnostic honor that same explicit driver unless
+    # an operator supplies a separate GNU reference. Never silently replace
+    # an explicitly selected non-GNU compiler or count its failure as GCC.
+    configured = os.environ.get('PCC_GNU_C_ORACLE') or os.environ.get('PCC_C_ORACLE', 'cc')
+    compiler = shutil.which(configured)
+    assert compiler, f'GNU C reference compiler not found: {configured!r}'
+    env = dict(os.environ, LC_ALL='C')
+    version = subprocess.run([compiler, '-v'], capture_output=True, timeout=10, env=env)
+    ident = version.stdout + version.stderr
+    assert version.returncode == 0 and re.search(rb'^gcc version [0-9]+\.', ident, re.MULTILINE), (
+        'PCC_GNU_C_ORACLE must identify a real GNU GCC driver; '
+        'PCC_C_ORACLE still controls the ordinary positive comparison', configured, ident)
+    return compiler, ident, env
+
+
+def _check_gnu_outer_address_rejection(built, original, line, column, reference):
+    assert built.returncode == 1 and built.stdout == b'' and not reference.exists(), (
+        built.returncode, built.stdout, built.stderr)
+    text = built.stderr.decode('utf-8', errors='replace')
+    expected = f"{original}:{line}:{column}: error: lvalue required as unary '&' operand"
+    rows = text.splitlines()
+    assert rows.count(expected) == 1, (expected, text)
+    # A matching primary diagnostic plus an ICE, linker complaint, or
+    # other unclassified failure is not the promised GNU rejection. Allow
+    # optional ordinary GCC source/caret context without fixing its spacing.
+    source_line = original.read_text(encoding='utf-8').splitlines()[line - 1]
+    for row in rows:
+        if row == expected or row == f"{original}: In function 'main':" or not row.strip():
+            continue
+        context = re.fullmatch(r'\s*([0-9]+)\s*\| (.*)', row)
+        if context is not None and int(context.group(1)) == line and context.group(2) == source_line:
+            continue
+        assert re.fullmatch(r'\s*\|[ ~^]*\^[ ~^]*', row), text
+
+
+@pytest.mark.parametrize('kind', ('wrong-column', 'wrong-file', 'wrong-error', 'extra-error',
+                                  'signal', 'success', 'linked-output', 'unexpected-stdout',
+                                  'ice', 'unimplemented', 'stray-linker', 'false-source-snippet'))
+def test_gnu_outer_address_rejection_is_not_any_failed_build(kind, tmp_path):
+    original = tmp_path / 'original.c'
+    reference = tmp_path / 'reference'
+    original.write_text('12345678&', encoding='utf-8')
+    expected = f"{original}:1:9: error: lvalue required as unary '&' operand"
+    diagnostic, code, stdout = expected, 1, b''
+    if kind == 'wrong-column':
+        diagnostic = diagnostic.replace(':1:9:', ':1:8:')
+    elif kind == 'wrong-file':
+        diagnostic = diagnostic.replace('original.c', 'other.c')
+    elif kind == 'wrong-error':
+        diagnostic = f'{original}:1:9: error: unknown type name'
+    elif kind == 'extra-error':
+        diagnostic += '\ncollect2: error: link failed'
+    elif kind == 'ice':
+        diagnostic += '\ncc1: internal compiler error: unexpected condition'
+    elif kind == 'unimplemented':
+        diagnostic += '\ncc1: sorry, unimplemented: unrelated expression'
+    elif kind == 'stray-linker':
+        diagnostic += '\n/usr/bin/ld: cannot find library'
+    elif kind == 'false-source-snippet':
+        diagnostic += '\n    1 | different source'
+    elif kind == 'signal':
+        code = -9
+    elif kind == 'success':
+        code = 0
+    elif kind == 'linked-output':
+        reference.write_bytes(b'output')
+    elif kind == 'unexpected-stdout':
+        stdout = b'unexpected'
+    built = subprocess.CompletedProcess(['gcc'], code, stdout, (diagnostic+'\n').encode())
+    with pytest.raises(AssertionError):
+        _check_gnu_outer_address_rejection(built, original, 1, 9, reference)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('name,source', EXTENSION_ORIGINALS, ids=[row[0] for row in EXTENSION_ORIGINALS])
+def test_gnu_rejects_frozen_outer_statement_address(name, source, tmp_path, gnu_address_reference, request):
+    digest, line, column = _check_extension_identity(name, source)
+    compiler, version, env = gnu_address_reference
+    original = tmp_path / (name + '.c')
+    original.write_bytes(source.encode('utf-8'))
+    reference = tmp_path / 'reference'
+    command = [compiler, '-std=gnu11', '-O0', str(original), '-o', str(reference)]
+    built = subprocess.run(command, capture_output=True, timeout=30, env=env)
+    (tmp_path / 'reference-build.stdout.bin').write_bytes(built.stdout)
+    (tmp_path / 'reference-build.stderr.bin').write_bytes(built.stderr)
+    # Keep the actual original and diagnostic even in CI artifacts that only
+    # retain the junit report, not arbitrary pytest temporary directories.
+    request.node.user_properties.extend([
+        ('gnu_original_sha256', digest), ('gnu_original_c', source),
+        ('gnu_driver_version', version.decode('utf-8', errors='replace')),
+        ('gnu_command', json.dumps(command)), ('gnu_returncode', built.returncode),
+        ('gnu_stdout_hex', built.stdout.hex()), ('gnu_stderr_hex', built.stderr.hex()),
+    ])
+    _check_gnu_outer_address_rejection(built, original, line, column, reference)
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize('name,source', INNER_ADDRESS_CONTROLS, ids=[row[0] for row in INNER_ADDRESS_CONTROLS])
+def test_inner_statement_address_control_matches_same_gnu_driver(name, source, tmp_path, monkeypatch, gnu_address_reference):
+    compiler, _version, env = gnu_address_reference
+    _compare_address_positive(name, source, tmp_path, monkeypatch, compiler, env=env)
 
 
 # Retain the exact originally authored whole-VLA pointer program as a legal
