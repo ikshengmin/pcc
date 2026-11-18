@@ -412,7 +412,10 @@ def _file_identity(path):
         return None
     result = {"path": os.path.abspath(os.fspath(path)), "sha256": None}
     try:
-        result["sha256"] = hashlib.sha256(Path(path).read_bytes()).hexdigest()
+        # The staged compiler can be hundreds of MiB. Its identity requires
+        # every byte, not a second resident copy in the pytest worker.
+        with Path(path).open("rb") as stream:
+            result["sha256"] = hashlib.file_digest(stream, "sha256").hexdigest()
     except OSError as error:
         result["read_error"] = str(error)
     return result
@@ -527,7 +530,9 @@ def test_exact_batch_boundary_with_native_owners_all_collectors(
     save_receipt()
     reference = subprocess.run(
         [sys.executable, str(source)], capture_output=True, text=True, timeout=20,
-        env=dict(os.environ, PCC_EXPECT_NATIVE_ARENAS="0"),
+        # Source CI installs test dependencies, not PCC. This script lives in
+        # pytest's temp directory and must import pcc.unsafe from this checkout.
+        env=dict(os.environ, PYTHONPATH=str(_ROOT), PCC_EXPECT_NATIVE_ARENAS="0"),
     )
     (tmp_path / "cpython.stdout").write_text(reference.stdout)
     (tmp_path / "cpython.stderr").write_text(reference.stderr)
