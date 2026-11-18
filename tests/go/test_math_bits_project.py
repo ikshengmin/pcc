@@ -69,7 +69,7 @@ def test_materialized_source_contains_all_original_tests_without_a_fake_main(tmp
     assert not (snapshot / project.PACKAGE_DIR / "main.go").exists()
 
 
-def test_only_source_admission_is_attempted_by_the_owned_stage(tmp_path):
+def test_owned_original_test_entry_and_actual_project_build_attempt(tmp_path):
     _, files = project.load_inputs()
     report = project.initial_report()
     project.run_owned(report, files, tmp_path)
@@ -81,9 +81,18 @@ def test_only_source_admission_is_attempted_by_the_owned_stage(tmp_path):
     assert row["ir_sha256"] == sha256((tmp_path / "package.ll").read_bytes())
     assert row["claim"] == "all normal production source files to IR only; NOT upstream tests"
     assert report["project_accepted"] is False
-    assert all(report["owned"][name]["status"] == "UNRUN" for name in (
-        "dependency_closure", "test_entry", "test_build", "tests_and_examples",
-    ))
+    own = report["owned"]
+    assert own["dependency_closure"]["status"] == own["tests_and_examples"]["status"] == "UNRUN"
+    entry = own["test_entry"]
+    assert entry["status"] == "PASS" and entry["sha256"] == sha256((tmp_path / "owned-testmain.go").read_bytes())
+    assert {name: len(items) for name, items in entry["registrations"].items()} == {
+        "tests": 26, "benchmarks": 43, "fuzzTargets": 0, "examples": 36,
+    }
+    assert entry["registrations"]["tests"] + entry["registrations"]["examples"] == project.load_inputs()[0]["test_entry"]["tests_and_examples"]
+    assert own["test_build"]["status"] == "BLOCKED" and own["test_build"]["filename"] == "_testmain.go"
+    assert own["test_build"]["source_packages"] == ["main", "math/bits", "math/bits_test"]
+    assert "import source unavailable: os" in own["test_build"]["diagnostic"]
+    assert not (tmp_path / "package-tests.ll").exists()
     assert (tmp_path / "admission-main.go").read_text() == project.ADMISSION_MAIN
 
 
@@ -246,7 +255,7 @@ def test_cli_is_ci_only_and_keeps_existing_guard_owner(tmp_path, monkeypatch):
     assert not (tmp_path / "not-created").exists()
     source = (project.ROOT / "scripts/ci_go_math_bits_project.py").read_text()
     assert "return run_ci(ROOT, FIXTURE," in source
-    assert "return 1  # Owned test build/execution is still UNRUN" in source
+    assert "return 1  # Owned native test binary/execution is still incomplete" in source
 
 
 @pytest.mark.integration

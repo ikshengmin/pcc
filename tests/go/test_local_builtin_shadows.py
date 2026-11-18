@@ -110,12 +110,20 @@ def test_original_math_bits_input_and_unrelated_runtime_frontier_are_preserved(t
     report = project.initial_report()
     project.run_owned(report, files, tmp_path)
     row = report['owned']['package_frontend']
-    # The normal package now lowers completely (runtime error panics); the
-    # upstream tests and their dependency closure remain unrun.
+    # The normal package lowers completely. A real test entry is generated,
+    # but its missing runtime closure still prevents building or running it.
     assert row['status'] == 'PASS' and (tmp_path / 'package.ll').is_file()
     assert report['project_accepted'] is False
-    assert all(report['owned'][name]['status'] == 'UNRUN' for name in (
-        'dependency_closure', 'test_entry', 'test_build', 'tests_and_examples'))
+    owned = report['owned']
+    assert owned['dependency_closure']['status'] == owned['tests_and_examples']['status'] == 'UNRUN'
+    entry = owned['test_entry']
+    assert entry['status'] == 'PASS'
+    assert entry['sha256'] == hashlib.sha256((tmp_path / 'owned-testmain.go').read_bytes()).hexdigest()
+    assert entry['registrations']['tests'] + entry['registrations']['examples'] == lock['test_entry']['tests_and_examples']
+    assert owned['test_build']['status'] == 'BLOCKED'
+    assert owned['test_build']['filename'] == '_testmain.go'
+    assert 'import source unavailable: os' in owned['test_build']['diagnostic']
+    assert not (tmp_path / 'package-tests.ll').exists()
     assert project.load_inputs()[1] == files
     # No slicing, fake testing/runtime/unsafe package, alternate bootstrap file
     # or a component result can satisfy the separate strict whole-project gate.

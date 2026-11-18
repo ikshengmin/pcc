@@ -47,6 +47,7 @@ TEST_COMMAND = ("test", "-json", "-count=1", "-timeout=60s", "-p=2", PACKAGE)
 ADMISSION_MAIN = 'package main;import "math/bits";func main(){_=bits.LeadingZeros(1)}'
 DRIVERS = (
     "scripts/ci_go_math_bits_project.py", "scripts/ci_source_frontier_support.py",
+    "scripts/go_package_test_entry.py",
     "scripts/cpython_conformance/run.py", "scripts/ci_validation_run.py",
     "scripts/run_process_tree_sample.py", "scripts/platform_process_watchdog.py",
 )
@@ -101,7 +102,7 @@ def initial_report():
         "owned": {
             "package_frontend": {"status": "UNRUN"},
             "dependency_closure": unrun("owned source/build closure is missing: " + ", ".join(DEPENDENCIES)),
-            "test_entry": unrun("owned package-test generation and testing.MainStart integration missing"),
+            "test_entry": unrun("original test declarations have not been registered"),
             "test_build": unrun("package admission, original dependency closure and test entry required"),
             "tests_and_examples": unrun("whole upstream test binary has not been built"),
         },
@@ -154,6 +155,55 @@ def run_owned(report, files, directory):
         (directory / "package.ll").write_bytes(raw)
         row["package_frontend"] = {"status": "PASS", "ir_sha256": sha256(raw),
                                    "claim": "all normal production source files to IR only; NOT upstream tests"}
+    save(directory / "frontier.json", report)
+    if row["package_frontend"]["status"] != "PASS":
+        return
+    from scripts.go_package_test_entry import build_entry
+    def units(names):
+        return tuple((name, files[PACKAGE_DIR + "/" + name].decode("utf-8")) for name in names)
+    row["test_entry"] = {"status": "RUNNING"}
+    save(directory / "frontier.json", report)
+    try:
+        with owned_compilation():
+            generated, entries = build_entry(PACKAGE, units(INTERNAL_TEST), units(EXTERNAL_TEST))
+            from pcc.frontends.go.syntax import GoParser
+            GoParser().parse(generated, "_testmain.go", require_main=True)
+    except ValueError as error:
+        row["test_entry"] = {"status": "UNSUPPORTED" if getattr(error, "kind", None) == "unsupported" else "FAIL",
+                             "diagnostic": str(error)}
+        save(directory / "frontier.json", report)
+        return
+    raw_entry = generated.encode()
+    (directory / "owned-testmain.go").write_bytes(raw_entry)
+    row["test_entry"] = {
+        "status": "PASS", "claim": "PCC-generated testing.MainStart source only, no test binary or execution",
+        "sha256": sha256(raw_entry), "registrations": {key: [item[0] for item in group]
+                                                       for key, group in entries.items()},
+        "inputs": {name: sha256(files[PACKAGE_DIR + "/" + name]) for name in INTERNAL_TEST + EXTERNAL_TEST},
+    }
+    save(directory / "frontier.json", report)
+    # Supply every original project file selected for this test build, not a
+    # handwritten main or fake os/testing implementation. The four-target
+    # union under pcc-std-closure-lock is NOT a Linux/amd64 build selection.
+    # Keep missing target-specific sources visible to the real compiler.
+    packages = {"main": (("_testmain.go", generated),), PACKAGE: units(NORMAL + INTERNAL_TEST),
+                PACKAGE + "_test": units(EXTERNAL_TEST)}
+    try:
+        with owned_compilation():
+            module = compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
+    except GoDiagnostic as error:
+        status = ("BLOCKED" if error.message.startswith("import source unavailable: ")
+                  else "UNSUPPORTED" if getattr(error, "kind", None) == "unsupported" else "FAIL")
+        row["test_build"] = {
+            "status": status, "phase": "original project graph to owned frontend",
+            "source_packages": list(packages), "diagnostic": str(error), "code": getattr(error, "code", None),
+            "filename": error.filename, "line": error.line, "column": error.column,
+        }
+    else:
+        test_ir = str(module).encode()
+        (directory / "package-tests.ll").write_bytes(test_ir)
+        row["test_build"] = {"status": "IR_ONLY", "ir_sha256": sha256(test_ir),
+                             "claim": "no native test binary or execution"}
     save(directory / "frontier.json", report)
 
 
@@ -209,6 +259,28 @@ def validate_graph(rows, goroot):
                 path = input_path(directory, name)
                 sources[path.relative_to(goroot).as_posix()] = sha256(path.read_bytes())
     return sources
+
+
+def reference_test_entry(rows, cache_root, own_path, expected_owned_sha256):
+    """Compare real cmd/go output only after owned discovery; never feed it to PCC."""
+    from pcc.frontends.go.syntax import scan
+    entries = [row for row in rows if row.get("ImportPath") == PACKAGE + ".test"]
+    if len(entries) != 1 or entries[0].get("Name") != "main" or len(entries[0].get("GoFiles", ())) != 1:
+        raise ValueError("official Go generated package-test entry is missing")
+    item = Path(entries[0]["GoFiles"][0])
+    if not item.is_absolute() or not item.is_relative_to(cache_root):
+        raise ValueError("official Go generated test source is outside its private cache")
+    raw = bounded_bytes(input_path(cache_root, item.relative_to(cache_root).as_posix()), 1024 * 1024)
+    own = bounded_bytes(input_path(own_path.parent, own_path.name), 1024 * 1024)
+    if sha256(own) != expected_owned_sha256:
+        raise ValueError("PCC generated test entry changed after source admission")
+    def projected(text):
+        return [(tok.kind, tok.text) for tok in scan(text.decode("utf-8"), "_testmain.go")]
+    tokens = projected(raw)
+    if tokens != projected(own):
+        raise ValueError("PCC generated package-test entry differs from the official Go token stream")
+    return {"status": "PASS", "owned_sha256": sha256(own), "official_sha256": sha256(raw),
+            "token_count": len(tokens), "claim": "identical complete Go tokens, not an owned execution"}
 
 
 def test_events(raw, expected):
@@ -306,6 +378,9 @@ def _run_reference(report, lock, files, directory, go, goroot, tools_before):
         return
     rows = decode_graph((directory / "reference-dependencies.stdout").read_bytes())
     before = validate_graph(rows, goroot)
+    if report["owned"]["test_entry"]["status"] == "PASS":
+        row["test_entry_comparison"] = reference_test_entry(
+            rows, Path(environment["GOCACHE"]), directory / "owned-testmain.go", report["owned"]["test_entry"]["sha256"])
     row["dependency_graph"].update(
         status="PASS", source_sha256=before,
         identity_scope="observed reference GOROOT closure; package originals are independently pinned",
@@ -322,6 +397,9 @@ def _run_reference(report, lock, files, directory, go, goroot, tools_before):
     if recheck["status"] != "PASS":
         raise ValueError("official dependency graph could not be rechecked")
     after_rows = decode_graph((directory / "reference-dependencies-after.stdout").read_bytes())
+    if report["owned"]["test_entry"]["status"] == "PASS" and reference_test_entry(
+            after_rows, Path(environment["GOCACHE"]), directory / "owned-testmain.go", report["owned"]["test_entry"]["sha256"]) != row["test_entry_comparison"]:
+        raise ValueError("official generated test entry changed during the upstream tests")
     if validate_graph(after_rows, goroot) != before:
         raise ValueError("official dependency source changed during whole-package tests")
     if result["status"] == "PASS":
@@ -346,6 +424,10 @@ def run_worker(directory):
     report["source_integrity"] = {"status": "PASS", "scope": "preflight", "package_inventory_complete": True}
     save(receipt, report)
     run_owned(report, files, directory)
+    if report["owned"]["test_entry"]["status"] == "PASS":
+        registrations = report["owned"]["test_entry"]["registrations"]
+        if registrations["tests"] + registrations["examples"] != lock["test_entry"]["tests_and_examples"]:
+            raise ValueError("owned test entry differs from pinned whole test/example inventory")
     try:
         run_reference(report, lock, files, directory)
     except (OSError, ValueError) as error:
@@ -365,7 +447,7 @@ def run_worker(directory):
     report["source_integrity"]["scope"] = "identical before and after all attempted stages"
     report["terminal"] = True
     save(receipt, report)
-    return 1  # Owned test build/execution is still UNRUN even if the oracle passes.
+    return 1  # Owned native test binary/execution is still incomplete even if the oracle passes.
 
 
 def main(argv=None):
