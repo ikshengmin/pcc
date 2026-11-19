@@ -74,6 +74,7 @@ py_set_len           = extern("py_set_len",           (c_ptr,),                 
 py_str_eq            = extern("py_str_eq",            (c_ptr, c_ptr),              c_int32)
 py_str_contains      = extern("py_str_contains",      (c_ptr, c_ptr),              c_int32)
 py_bytes_find        = extern("py_bytes_find",        (c_ptr, c_ptr),              c_int64)
+py_bytes_data_ptr    = extern("py_bytes_data_ptr",    (c_ptr,),                    c_ptr)
 py_str_len           = extern("py_str_len",           (c_ptr,),                    c_int64)
 
 py_list_new          = extern("py_list_new",          (c_int64,),                  c_ptr)
@@ -250,9 +251,14 @@ def _bytes_len(o) -> int:
 
 
 def _bytes_data_ptr(o):
-    if _type_of(o) == PY_TYPE_MEMORYVIEW:
+    tag: int = _type_of(o)
+    if tag == PY_TYPE_MEMORYVIEW:
         base = pcc_gc_load_ptr(o, ptr_add(o, PYMEMORYVIEWOBJECT_BASE_OFFSET))
         return _bytes_data_ptr(base)
+    if tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
+        return py_bytes_data_ptr(o)
+    # View construction does not yet validate every terminal exporter.
+    # Keep that pre-existing path separate from the exact-leaf accessor.
     return ptr_add(o, PYBYTESOBJECT_DATA_OFFSET)
 
 
