@@ -203,6 +203,40 @@ and `gap` on GC3 `str_concat` and `raise` at four workers to distinguish
 allocation from collection costs. No GET/C512, HTTP tail or maximum pause is
 reported here; these measurements alone do not select a collector route.
 
+## Stock GC0/GC3: Linux x86_64 primitive counters (2026-11-19)
+
+Eight native launches, eight CPython-matching checksums. One ELF (SHA-256
+`9d65bf2961bb`) used frozen `076fa37e` plus only the compiler cache fix from
+`fb2161d5`, with a freshly verified threaded/atomic runtime (`7734e6138294`).
+Neither the experimental GC3 compiler patch nor the young prototype was used.
+
+To reproduce the workload, compile the unchanged `op_str_concat` and `op_raise`
+bodies from `benchmarks/handler/primitive_ops.py` with the self backend
+(`ir_scaffold_mode="on"`). Queue four virtual jobs, open their start gate
+after `vt.carrier_pool_start(4)`,
+and call one body directly per job. Set `PCC_GC_BACKEND=0` or `3` in a fresh
+process for each batch size (1,024 or 4,096 iterations per job). Each job
+returned 7 × batch for concat or 1 × batch for raise. In every run, four
+distinct non-main `pcc_current_thread_id()` values were unchanged from entry
+to exit of each batch: participation, not proof of simultaneity. Read
+`pcc_gc_telemetry` once per counter after the pool stops; totals include
+setup and shutdown.
+
+Subtracting short from long adds 12,288 operations. All four pairs added
+24,576 counted allocations (#0), exactly 2/op. Concat recorded no contended
+graph-lock waits on either collector. Raise added 2,161 waits / 702 µs on
+GC0 and 246 / 249 µs on GC3 (#146–157): 57.13 vs 20.26 ns of accumulated
+wait per added op, not elapsed time. Collection-STW and local sweep counters
+(#119–145) were zero in all eight runs; GC3's CMS worker drained work (#13).
+One short/long pair per case, no timed throughput, gateway or HTTP: this
+does not explain the Mac ratios above or select a collector.
+
+Separately, the unchanged full `native_stats.py` initially reported a
+cross-filesystem cache publish error. With the cache fix and matched runtime
+it published a verified 25-module frontend IR bundle, then hit the 90 s
+watchdog (694.3 MiB peak, 1 GiB cap, 7 GiB host reserve). It produced no
+ELF and ran zero programs; the standalone runs are not an accepted `pcc_perf` arm.
+
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
 Since `cb7a3ec5d` (2026-11-13) optimized AArch64 code is captured as typed
