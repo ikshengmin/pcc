@@ -29,6 +29,10 @@ and failed. A separate assertion-message observation on GC1 found one event
 (`outer`) and a still-live inner weak referent after four collections. It did
 not identify which root retained the referent, or inspect the other modes.
 Tracked as [issue #3](https://github.com/ikshengmin/pcc/issues/3).
+Moving the callback setup into a normal function that returned before the
+four collects did not change this GC1 outcome. In a separate telemetry
+observation those calls returned `26, 0, 0, 0`; sweep passes 0, 1 and 2 each
+ran once. That rules out an entirely idle sweep, not a particular root.
 
 First-phase work still open: collector-owner root boundaries and retained
 roots across callbacks, and in-place amortized `bytearray.append`. The release integrator owns
@@ -68,6 +72,11 @@ destination allocation rather than using a pre-allocation source pointer.
 Both public controls matched CPython in all five modes. The latter's exact
 allocating-clear red/green witness is a host source-body model; neither
 change qualifies root-stack cropping or mutable-buffer concurrency broadly.
+Managed `bytearray.clear` and `pop` now protect the length, bytes and
+terminator with the same lock as snapshot copies. The integer parser uses
+the buffer accessor for mutable payloads and leaves exact bytes inline.
+Each change passed independently in all five Linux modes against CPython;
+other writers, live buffer exports and in-place append growth remain open.
 
 The unmodified four-thread field stress passed on Linux through the stock
 `pcc` console: one binary, five backend runs, 26,672 objects constructed in
