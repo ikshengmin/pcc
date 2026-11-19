@@ -23,6 +23,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PYBYTEARRAYOBJECT_DATA_OFFSET,
     PYBYTESOBJECT_BYTE_LEN_OFFSET,
     PYBYTESOBJECT_DATA_OFFSET,
     PY_TYPE_BOOL,
@@ -1293,9 +1294,13 @@ def _bytearray_new_raw(data, byte_len: int):
 
 
 def _bytes_data(obj):
+    # Borrow only: exact leaves need no view walk. Mutable writers resolve
+    # their receiver and consume this pointer within the same graph lock.
     tag: int = _type_of(obj)
-    if tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
-        return ptr_add(obj, 24)
+    if tag == PY_TYPE_BYTES:
+        return ptr_add(obj, PYBYTESOBJECT_DATA_OFFSET)
+    if tag == PY_TYPE_BYTEARRAY:
+        return ptr_add(obj, PYBYTEARRAYOBJECT_DATA_OFFSET)
     if tag == PY_TYPE_MEMORYVIEW:
         base = pcc_gc_load_ptr(obj, ptr_add(obj, 16))
         return _bytes_data(base)
@@ -2632,7 +2637,7 @@ def _bytearray_shrink(o, at: int, clear: int) -> int:
     pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
     pcc_py_gc_minor_graph_lock()
     current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
-    data = ptr_add(current, PYBYTESOBJECT_DATA_OFFSET)
+    data = _bytes_data(current)
     result: int = 0
     new_length: int = 0
     if clear == 0:
@@ -3667,7 +3672,7 @@ def py_bytearray_setitem(o, k, v) -> int:
     elif byte < 0 or byte > 255:
         status = _BYTEARRAY_BYTE_OUT_OF_RANGE
     else:
-        store_i8(current, PYBYTESOBJECT_DATA_OFFSET + i, byte)
+        store_i8(_bytes_data(current), i, byte)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave_local(slot)
     if status == _BYTEARRAY_INDEX_OUT_OF_RANGE:
@@ -3760,15 +3765,16 @@ def _bytearray_extended_commit(receiver, source, scratch, raw_lo: int, raw_hi: i
         if alias != 0 and count > reserved:
             result = count
         else:
-            data = ptr_add(leaf, PYBYTESOBJECT_DATA_OFFSET)
+            data = _bytes_data(leaf)
             if alias != 0:
-                tmp = ptr_add(load_ptr(scratch, 0), PYBYTESOBJECT_DATA_OFFSET)
+                tmp = _bytes_data(load_ptr(scratch, 0))
                 memcpy(tmp, data, count)
                 data = tmp
+            dst = _bytes_data(target)
             pos: int = start
             i: int = 0
             while i < count:
-                store_i8(target, PYBYTESOBJECT_DATA_OFFSET + pos, load_i8(data, i))
+                store_i8(dst, pos, load_i8(data, i))
                 i = i + 1
                 if i < count:
                     pos = pos + step  # Only compute a position in the validated slice.
@@ -3793,9 +3799,9 @@ def _bytearray_contiguous_commit(receiver, source, raw_lo: int, raw_hi: int) -> 
     if count > span:
         result = -1  # Existing inline representation cannot grow.
     elif ptr_eq(target, leaf) == 0:
-        data = ptr_add(target, PYBYTESOBJECT_DATA_OFFSET)
+        data = _bytes_data(target)
         if count > 0:
-            memcpy(ptr_add(data, start), ptr_add(leaf, PYBYTESOBJECT_DATA_OFFSET), count)
+            memcpy(ptr_add(data, start), _bytes_data(leaf), count)
         if count < span:
             if stop < length:
                 memmove(ptr_add(data, start + count), ptr_add(data, stop), length - stop)
