@@ -237,6 +237,20 @@ it published a verified 25-module frontend IR bundle, then hit the 90 s
 watchdog (694.3 MiB peak, 1 GiB cap, 7 GiB host reserve). It produced no
 ELF and ran zero programs; the standalone runs are not an accepted `pcc_perf` arm.
 
+A longer workload and an explicit-collection control passed 12/12 native
+launches with four distinct carriers each (same compiler/runtime, new ELF
+`c9bfdaaf138a`). At 16,384 iterations per carrier (65,536 total), with no
+constructed cycles or explicit collection, GC3 recorded one collection-STW
+window and one each of sweep passes 0/1/2 on both operations. Total (#120)
+and maximum (#121) were both 13,474 µs for concat and 34,164 µs for raise;
+GC0 recorded none. At 1,024 iterations per carrier, both GCs showed no STW
+after 32 self-referential lists became unreachable after joining. Adding one
+`gc.collect()` produced one STW on both: GC0 returned 32 in both runs; GC3
+returned 8,245 (concat) and 8,308 (raise), not just the 32 setup cycles.
+One process per condition, counters read after pool stop: the durations
+measure the owner's stopped-world window, not loop time or summed worker
+latency. They do not establish an allocation threshold or explain the Mac gap.
+
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
 Since `cb7a3ec5d` (2026-11-13) optimized AArch64 code is captured as typed
