@@ -2594,6 +2594,7 @@ def py_bytearray_insert(o, index, item):
 
 _BYTEARRAY_EMPTY = -1
 _BYTEARRAY_INDEX_OUT_OF_RANGE = -2
+_BYTEARRAY_BYTE_OUT_OF_RANGE = -3
 
 
 def _bytearray_shrink(o, at: int, clear: int) -> int:
@@ -3618,16 +3619,31 @@ def py_bytearray_setitem(o, k, v) -> int:
         return -1
     i: int = py_int_value_i64(k)
     byte: int = py_int_value_i64(v)
-    n: int = load_i64(o, 16)
+    # The writer must validate against the size of the same payload it
+    # updates: clear/pop can shrink it between an unlocked check and store.
+    slot = stack_alloc(_BUFFER_BYTES)
+    store_ptr(slot, 0, o)
+    pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
+    n: int = load_i64(current, PYBYTESOBJECT_BYTE_LEN_OFFSET)
     if i < 0:
         i = i + n
+    status: int = 0
     if i < 0 or i >= n:
+        status = _BYTEARRAY_INDEX_OUT_OF_RANGE
+    elif byte < 0 or byte > 255:
+        status = _BYTEARRAY_BYTE_OUT_OF_RANGE
+    else:
+        store_i8(current, PYBYTESOBJECT_DATA_OFFSET + i, byte)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave_local(slot)
+    if status == _BYTEARRAY_INDEX_OUT_OF_RANGE:
         py_raise_owned(py_exc_new(5, cstr("bytearray index out of range")))
         return -1
-    if byte < 0 or byte > 255:
+    if status == _BYTEARRAY_BYTE_OUT_OF_RANGE:
         py_raise_owned(py_exc_new(2, cstr("byte must be in range(0, 256)")))
         return -1
-    store_i8(o, 24 + i, byte)
     return 0
 
 
