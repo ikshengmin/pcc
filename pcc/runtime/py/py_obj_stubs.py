@@ -921,6 +921,7 @@ _BUFFER_COUNT = 6
 _BUFFER_BYTES = 8
 
 define_global_i32("pcc_buffer_borrowed_map", -1)
+define_global_i32("pcc_bytearray_append_borrowed_map", -2)
 define_global_i32("pcc_buffer_owned_map", 6)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
@@ -1143,28 +1144,23 @@ def _buffer_fill(slots, tokens, mode: int) -> int:
     return _buffer_payload_fill(slots, tokens, mode)
 
 
-def _buffer_convert_owned(obj, mode: int):
-    borrowed = stack_alloc(_BUFFER_BYTES)
-    store_ptr(borrowed, 0, obj)
-    pcc_gc_frame_enter(global_addr("pcc_buffer_borrowed_map"), borrowed)
-    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
-    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+def _buffer_open_owned(slots, tokens) -> None:
     memset(slots, 0, _BUFFER_COUNT * _BUFFER_BYTES)
     index: int = 0
     while index < _BUFFER_COUNT:
         store_i64(tokens, index * _BUFFER_BYTES, -1)
         index = index + 1
     pcc_gc_frame_enter(global_addr("pcc_buffer_owned_map"), slots)
-    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
-    if status == 0:
-        status = _buffer_fill(slots, tokens, mode)
+
+
+def _buffer_finish_owned(borrowed, borrowed_count: int, slots, tokens, status: int):
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
     error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
     py_tls_exc_swap_slot(error)
-    store_ptr(borrowed, 0, null())
+    memset(borrowed, 0, borrowed_count * _BUFFER_BYTES)
     if status != 0:
         _buffer_drop(slots, tokens, _BUFFER_RESULT)
-    index = _BUFFER_INDEX
+    index: int = _BUFFER_INDEX
     while index >= 0:
         _buffer_drop(slots, tokens, index)
         index = index - 1
@@ -1185,6 +1181,19 @@ def _buffer_convert_owned(obj, mode: int):
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
     return pcc_gc_take_pinned_slot(result, prior)
+
+
+def _buffer_convert_owned(obj, mode: int):
+    borrowed = stack_alloc(_BUFFER_BYTES)
+    store_ptr(borrowed, 0, obj)
+    pcc_gc_frame_enter(global_addr("pcc_buffer_borrowed_map"), borrowed)
+    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    _buffer_open_owned(slots, tokens)
+    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
+    if status == 0:
+        status = _buffer_fill(slots, tokens, mode)
+    return _buffer_finish_owned(borrowed, 1, slots, tokens, status)
 
 
 @c_abi_export("py_bytes_new")
@@ -2423,12 +2432,47 @@ def py_bytearray_append(o, item):
     if ptr_is_null(o) != 0 or _type_of(o) != PY_TYPE_BYTEARRAY:
         py_raise_owned(py_exc_new(3, cstr("bytearray.append target must be bytearray")))
         return null()
-    if ptr_is_null(item) != 0 or _type_of(item) != PY_TYPE_INT:
-        py_raise_owned(
-            py_exc_new(3, cstr("'object' object cannot be interpreted as an integer"))
+    # The normal compact-int path has no Python callback or narrowing.
+    if is_tagged_int(item) != 0:
+        return _bytearray_append_byte(o, py_int_value_i64(item))
+
+    # __index__ can run arbitrary Python, including a collection. Retain
+    # both inputs before conversion; read the receiver's size only after it.
+    borrowed = stack_alloc(2 * _BUFFER_BYTES)
+    store_ptr(borrowed, 0, o)
+    store_ptr(borrowed, _BUFFER_BYTES, item)
+    pcc_gc_frame_enter(global_addr("pcc_bytearray_append_borrowed_map"), borrowed)
+    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    _buffer_open_owned(slots, tokens)
+    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, borrowed, 1)
+    if status == 0:
+        status = _buffer_copy(slots, tokens, _BUFFER_ITEM, ptr_add(borrowed, _BUFFER_BYTES), 1)
+    if status == 0:
+        status = py_obj_index_slots(
+            ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES),
+            ptr_add(slots, _BUFFER_INDEX * _BUFFER_BYTES),
         )
-        return null()
-    byte: int = py_int_value_i64(item)
+    if status == 0:
+        status = _buffer_adopt(slots, tokens, _BUFFER_INDEX)
+    if status == 0:
+        overflow = stack_alloc(4)
+        store_i32(overflow, 0, 0)
+        byte: int = py_int_to_i64(load_ptr(slots, _BUFFER_INDEX * _BUFFER_BYTES), overflow)
+        if py_err_occurred() != 0:
+            status = -1
+        elif load_i32(overflow, 0) != 0:
+            # A narrowing overflow is ValueError; OverflowError raised by
+            # __index__ itself above must be left untouched.
+            status = _buffer_error(2, cstr("byte must be in range(0, 256)"))
+        else:
+            store_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES,
+                      _bytearray_append_byte(load_ptr(slots, _BUFFER_SOURCE * _BUFFER_BYTES), byte))
+            status = _buffer_adopt(slots, tokens, _BUFFER_RESULT)
+    return _buffer_finish_owned(borrowed, 2, slots, tokens, status)
+
+
+def _bytearray_append_byte(o, byte: int):
     if byte < 0 or byte > 255:
         py_raise_owned(py_exc_new(2, cstr("byte must be in range(0, 256)")))
         return null()

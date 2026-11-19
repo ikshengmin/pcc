@@ -803,6 +803,25 @@ GC0 5,008 → 5,224, GC1 3,672 → 3,868, GC2 3,494 → 3,818, GC3 3,621 → 3,8
 GC4 1,688 → 1,729; aiohttp ~27,000. `py_bytearray_append` returns a new
 object instead of mutating in place (identity and quadratic-copy bug, open).
 
+Bytearray append, Linux x86-64 checkpoint against `076fa37e`: the stock
+executable for `alias = b; b.append(0)` prints a different identity and the
+old alias contents; an expression-valued append then raises AttributeError.
+Argument conversion is a separate same-layout step: the native executable in
+`tests/python/test_bytearray_append_conversion.py` matches CPython 3.15.0 on
+GC0–4 for bool and exact-int `__index__` results, range errors (including a
+large integer), callback-raised OverflowError and a non-index TypeError.
+Run `uv run pytest -x -vv tests/python/test_bytearray_append_conversion.py`
+with its source-verified threaded runtime. Strict-int-subclass warning
+delivery is an existing index-protocol gap, not covered here.
+
+Identity, expression `None`, resize under live buffer exports and amortized
+growth **remain open**. A layout switch also needs leased data/length
+snapshots, every mutable raw reader/writer, exporter teardown after tracing
+clears its base, and rollback-safe native-buffer ownership under GC3/4 copying.
+This conversion changes neither collector modes nor the separate counted
+`CpyHandle` / C-API reference contract. No C-extension refcount, native pcc1
+bootstrap, Darwin or throughput result is claimed.
+
 `55ce5ce2`: runtime library functions poll at their loops, not at every
 entry (the root readers keep theirs). HTTP GET / C512, 5 pairs: GC0 5,341 →
 5,758 QPS (+7.8%, 5/5), GC3 3,826 → 4,010 (+4.8%, 5/5); aiohttp ~27,900.
