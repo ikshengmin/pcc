@@ -72,6 +72,7 @@ from pcc.unsafe import (
     load_ptr,
     memcpy,
     memmove,
+    unsigned_div_i64,
     memset,
     null,
     ptr_add,
@@ -923,6 +924,7 @@ _BUFFER_BYTES = 8
 
 define_global_i32("pcc_buffer_borrowed_map", -1)
 define_global_i32("pcc_bytearray_append_borrowed_map", -2)
+define_global_i32("pcc_bytearray_slice_borrowed_map", -2)
 pcc_gc_frame_enter_local = extern(
     "pcc_gc_frame_enter_local", (c_ptr, c_ptr), c_void
 )
@@ -1088,7 +1090,7 @@ def _buffer_sequence_fill(slots, tokens, mutable: int) -> int:
     return status
 
 
-def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
+def _buffer_unwrap_leaf(slots, tokens) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
     item = ptr_add(slots, _BUFFER_ITEM * _BUFFER_BYTES)
@@ -1101,13 +1103,23 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
         if _buffer_copy(slots, tokens, _BUFFER_ITEM, base_slot, 1) != 0:
             return -1
         if ptr_is_null(load_ptr(item, 0)) != 0:
-            return _buffer_error(3, cstr("memoryview has no buffer owner"))
+            return 1  # View has no base; the caller supplies its operation-specific error.
         _buffer_drop(slots, tokens, _BUFFER_LEAF)
         if pcc_gc_root_move(leaf, item) != 0:
             return _buffer_error(7, cstr("cannot transfer memoryview buffer owner"))
         token: int = load_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES)
         store_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES, -1)
         store_i64(tokens, _BUFFER_LEAF * _BUFFER_BYTES, token)
+    return 0
+
+
+def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
+    unwrapped: int = _buffer_unwrap_leaf(slots, tokens)
+    if unwrapped < 0:
+        return -1
+    if unwrapped != 0:
+        return _buffer_error(3, cstr("memoryview has no buffer owner"))
+    leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
     # The actual leaf, not just an outer view, owns an address lease.
     current = load_ptr(leaf, 0)
     if _type_of(current) == PY_TYPE_BYTEARRAY:
@@ -3699,6 +3711,126 @@ def py_bytearray_del_slice(o, lo, hi, step) -> int:
     return _bytearray_delete_selected(o, lo_v, hi_v, step_v, length)
 
 
+def _bytearray_extended_commit(receiver, source, scratch, raw_lo: int, raw_hi: int,
+                               step: int, reserved: int) -> int:
+    # These are registered slots, not object or data addresses. The actual
+    # source leaf (or the independent converted bytes) and scratch have leases.
+    # A positive return requests capacity only: no bytes have been changed.
+    pcc_py_gc_minor_graph_lock()
+    target = pcc_gc_resolve_borrowed_root_slot_unlocked(receiver, 0)
+    leaf = load_ptr(source, 0)
+    length: int = load_i64(target, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    count: int = load_i64(leaf, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    start: int = _bytes_normalize_lo(raw_lo, length, step)
+    stop: int = _bytes_normalize_lo(raw_hi, length, step)
+    selected: int = 0
+    # Both quotients have a nonnegative numerator and a proven positive
+    # divisor. Use native scalar division; Python // emits raising paths.
+    if step > 0 and start < stop:
+        selected = 1 + unsigned_div_i64(stop - start - 1, step)
+    elif step < 0 and start > stop:
+        selected = 1
+        if step != -9223372036854775807 - 1:
+            selected = selected + unsigned_div_i64(start - stop - 1, 0 - step)
+    result: int = 0
+    if count != selected:
+        result = -1
+    elif count > 0:
+        alias: int = ptr_eq(target, leaf)
+        if alias != 0 and count > reserved:
+            result = count
+        else:
+            data = ptr_add(leaf, PYBYTESOBJECT_DATA_OFFSET)
+            if alias != 0:
+                tmp = ptr_add(load_ptr(scratch, 0), PYBYTESOBJECT_DATA_OFFSET)
+                memcpy(tmp, data, count)
+                data = tmp
+            pos: int = start
+            i: int = 0
+            while i < count:
+                store_i8(target, PYBYTESOBJECT_DATA_OFFSET + pos, load_i8(data, i))
+                i = i + 1
+                if i < count:
+                    pos = pos + step  # Only compute a position in the validated slice.
+    pcc_py_gc_minor_graph_unlock()
+    return result
+
+
+def _bytearray_set_extended(o, lo, hi, step: int, replacement) -> int:
+    # Freeze the existing integer/omitted bound convention to scalars. The
+    # endpoints below clip exactly like omitted bounds for the step direction.
+    raw_lo: int = -9223372036854775807 - 1
+    raw_hi: int = 9223372036854775807
+    if step < 0:
+        raw_lo = 9223372036854775807
+        raw_hi = -9223372036854775807 - 1
+    if _bytes_is_none_or_null(lo) == 0:
+        raw_lo = py_int_value_i64(lo)
+    if _bytes_is_none_or_null(hi) == 0:
+        raw_hi = py_int_value_i64(hi)
+
+    borrowed = stack_alloc(2 * _BUFFER_BYTES)
+    store_ptr(borrowed, 0, o)
+    store_ptr(borrowed, _BUFFER_BYTES, replacement)
+    pcc_gc_frame_enter_local(global_addr("pcc_bytearray_slice_borrowed_map"), borrowed)
+    slots = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    tokens = stack_alloc(_BUFFER_COUNT * _BUFFER_BYTES)
+    _buffer_open_owned(slots, tokens)
+    status: int = _buffer_copy(slots, tokens, _BUFFER_SOURCE, ptr_add(borrowed, _BUFFER_BYTES), 1)
+    source = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
+    scratch = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    if status == 0:
+        tag: int = _type_of(load_ptr(slots, _BUFFER_SOURCE * _BUFFER_BYTES))
+        if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
+            # __index__ can mutate the receiver. Convert once, outside the
+            # writer transaction; the fresh immutable bytes cannot alias it.
+            status = _buffer_sequence_fill(slots, tokens, 0)
+            source = scratch
+        elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY or tag == PY_TYPE_MEMORYVIEW:
+            status = _buffer_unwrap_leaf(slots, tokens)
+            if status == 0:
+                leaf_tag: int = _type_of(load_ptr(source, 0))
+                if leaf_tag != PY_TYPE_BYTES and leaf_tag != PY_TYPE_BYTEARRAY:
+                    status = 1
+        else:
+            status = 1
+        if status > 0:
+            status = _buffer_error(3, cstr("can assign only bytes-like or an int sequence"))
+    reserved: int = 0
+    while status == 0:
+        need: int = _bytearray_extended_commit(borrowed, source, scratch, raw_lo, raw_hi, step, reserved)
+        if need <= 0:
+            if need < 0:
+                status = _buffer_error(2, cstr("attempt to assign bytes of the wrong size to extended slice"))
+            break
+        # Only an aliased source requests a private snapshot. Reserve outside
+        # graph exclusion, then re-read both live lengths before copying or writing.
+        if need > 9223372036854775782:
+            status = _buffer_error(19, cstr("bytearray slice snapshot too large"))
+            break
+        if reserved != 0:
+            _buffer_drop(slots, tokens, _BUFFER_RESULT)
+            if py_err_occurred() != 0:
+                status = -1
+                break
+        status = _buffer_new_raw(slots, tokens, null(), need, 1)
+        reserved = need
+    # This operation returns a status, not an owned snapshot. Keep the
+    # original exception across all releases, as in _buffer_finish_owned.
+    error = ptr_add(slots, _BUFFER_ERROR * _BUFFER_BYTES)
+    py_tls_exc_swap_slot(error)
+    memset(borrowed, 0, 2 * _BUFFER_BYTES)
+    idx: int = _BUFFER_RESULT
+    while idx >= 0:
+        _buffer_drop(slots, tokens, idx)
+        idx = idx - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(slots)
+    pcc_gc_frame_leave_local(borrowed)
+    return status
+
+
 @c_abi_export("py_bytearray_set_slice")
 def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
     """``ba[lo:hi:step] = replacement``, in place.
@@ -3718,7 +3850,6 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
             )
         )  # PY_EXC_TYPEERROR
         return -1
-    length: int = load_i64(o, 16)
     step_v: int = 1
     if _bytes_is_none_or_null(step) == 0:
         step_v = py_int_value_i64(step)
@@ -3728,6 +3859,10 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
             )  # PY_EXC_VALUEERROR
             return -1
 
+    if step_v != 1:
+        return _bytearray_set_extended(o, lo, hi, step_v, replacement)
+
+    length: int = load_i64(o, 16)
     src = _bytes_data(replacement)
     tmp = null()
     src_n: int = 0
@@ -3758,70 +3893,35 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
     lo_v = _bytes_normalize_lo(lo_v, length, step_v)
     hi_v = _bytes_normalize_hi(hi, hi_v, length, step_v)
 
-    if step_v == 1:
-        span: int = hi_v - lo_v
-        if span < 0:
-            span = 0
-        if src_n > span:
-            if ptr_is_null(tmp) == 0:
-                py_decref(tmp)
-            py_raise_owned(
-                py_exc_new(
-                    11,
-                    cstr(
-                        "bytearray slice assignment cannot grow the object "
-                        "in place"
-                    ),
-                )
-            )  # PY_EXC_NOTIMPLEMENTEDERROR
-            return -1
-        i: int = 0
-        while i < src_n:
-            store_i8(o, 24 + lo_v + i, load_i8(src, i))
-            i = i + 1
-        if src_n < span:
-            tail: int = length - hi_v
-            j: int = 0
-            while j < tail:
-                store_i8(o, 24 + lo_v + src_n + j, load_i8(o, 24 + hi_v + j))
-                j = j + 1
-            new_len: int = length - (span - src_n)
-            store_i64(o, 16, new_len)
-            store_i8(o, 24 + new_len, 0)
-        if ptr_is_null(tmp) == 0:
-            py_decref(tmp)
-        return 0
-
-    # Extended slice.  Walk the positions in slice order -- for a negative
-    # step that is descending, and the replacement's first byte belongs at the
-    # first position visited, not at the lowest index.
-    count: int = 0
-    pos: int = lo_v
-    if step_v > 0:
-        while pos < hi_v:
-            count = count + 1
-            pos = pos + step_v
-    else:
-        while pos > hi_v:
-            count = count + 1
-            pos = pos + step_v
-    if src_n != count:
+    span: int = hi_v - lo_v
+    if span < 0:
+        span = 0
+    if src_n > span:
         if ptr_is_null(tmp) == 0:
             py_decref(tmp)
         py_raise_owned(
             py_exc_new(
-                2,
-                cstr("attempt to assign bytes of the wrong size to extended slice"),
+                11,
+                cstr(
+                    "bytearray slice assignment cannot grow the object "
+                    "in place"
+                ),
             )
-        )  # PY_EXC_VALUEERROR
+        )  # PY_EXC_NOTIMPLEMENTEDERROR
         return -1
-    pos = lo_v
-    k: int = 0
-    while k < count:
-        if pos >= 0 and pos < length:
-            store_i8(o, 24 + pos, load_i8(src, k))
-        k = k + 1
-        pos = pos + step_v
+    i: int = 0
+    while i < src_n:
+        store_i8(o, 24 + lo_v + i, load_i8(src, i))
+        i = i + 1
+    if src_n < span:
+        tail: int = length - hi_v
+        j: int = 0
+        while j < tail:
+            store_i8(o, 24 + lo_v + src_n + j, load_i8(o, 24 + hi_v + j))
+            j = j + 1
+        new_len: int = length - (span - src_n)
+        store_i64(o, 16, new_len)
+        store_i8(o, 24 + new_len, 0)
     if ptr_is_null(tmp) == 0:
         py_decref(tmp)
     return 0
