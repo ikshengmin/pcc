@@ -42,6 +42,23 @@ all five collectors: GC0–GC3 matched CPython's public lifecycle result, and
 threaded GC4 retained its existing empty tracked snapshot. This native check
 did not force an in-flight worker handoff. Darwin and A/B are not qualified.
 
+Additional Linux controls: one native positive-root fixture ran both the
+ordinary callback path and the PCC reentrant-call path on GC0–GC4 (10/10
+executions); the ordinary case matched CPython. It guards caller locals and
+an explicit off-stack registration without asserting that a liveness check
+itself ran a nested collection. This does not qualify an owner-stack trim.
+The CpyHandle fixture now passes a single new owner through a typed C helper
+and drops it by ordinary Python scope exit: one native execution per backend
+observed exactly one release of the right payload. This is not the separate
+`Py_INCREF` / `Py_DECREF` compatibility or real extension-chain gate.
+
+The unmodified four-thread field stress passed on Linux through the stock
+`pcc` console: one binary, five backend runs, 26,672 objects constructed in
+each run by the fixture's aggregate assertions. GC1–GC4 allow a bounded shortfall;
+the fixture does not print a per-object ledger. It used the existing GC4
+closed-window behavior, so it neither reproduced nor ruled out the historical
+reopened-window fault.
+
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),
 incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
