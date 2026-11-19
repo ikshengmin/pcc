@@ -165,14 +165,17 @@ class Lowerer:
             ])
         raise expr.token.error("unsupported place")
 
+    def declare_function(self, fn, symbol):
+        # Unit has no payload and is erased at this private calling boundary.
+        signature = ir.FunctionType(self.type(fn.result), [self.type(ty) for _, ty, _ in fn.params if ty != "()"])
+        self.declarations[fn.identity] = ir.Function(self.module, signature, name=symbol)
+
     def lower(self):
         for fn in self.functions:
             name = fn.identity
             symbol = name if fn.body is None or fn.no_mangle else "__pcc_rust_" + name
             self.symbols[fn.export_name] = symbol
-            # Unit has no payload and is erased at this private calling boundary.
-            signature = ir.FunctionType(self.type(fn.result), [self.type(ty) for _, ty, _ in fn.params if ty != "()"])
-            self.declarations[name] = ir.Function(self.module, signature, name=symbol)
+            self.declare_function(fn, symbol)
         for fn in self.functions:
             if fn.body is None:
                 continue
@@ -405,7 +408,16 @@ class Lowerer:
                     args.append(value)
             if self.builder.block.is_terminated:
                 return None
-            return self.builder.call(self.declarations[expr.binding.identity], args)
+            fn = expr.binding
+            if fn.identity not in self.declarations:
+                resolution = self.checker.module_resolution
+                imported = resolution.source_calls.get(fn.identity) if resolution is not None else None
+                if imported is None or imported[0] is not fn:
+                    raise expr.token.error('missing checked Rust declaration for direct call')
+                # Declare only, at the actual cross-crate call. Its body stays
+                # in its independently compiled provider object.
+                self.declare_function(fn, imported[1])
+            return self.builder.call(self.declarations[fn.identity], args)
         if kind == "unary":
             value = self.expression(children[0])
             if self.builder.block.is_terminated:

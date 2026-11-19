@@ -30,6 +30,8 @@ class CrateId:
     root_path: str
     edition: int
     source_closure_sha256: str
+    # Only a source graph build has a target + dependency-edge identity.
+    link_context_sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -58,6 +60,8 @@ class ItemId:
         value = [crate.name, crate.root_path, crate.edition,
                  crate.source_closure_sha256, list(self.module.components),
                  self.namespace, self.name]
+        if crate.link_context_sha256 is not None:
+            value.append(crate.link_context_sha256)
         return '__pcc_scope$' + json.dumps(value, ensure_ascii=True, separators=(',', ':')).encode().hex()
 
 
@@ -243,6 +247,17 @@ def parse_crate_sources(crate_root, sources, *, crate_name, edition, configurati
 
 def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_type, configuration=None,
                          environment=None):
+    """Parse-only/context callers still perform the crate's owned lint checks."""
+    crate, parsers = _load_crate_sources(crate_root, sources, crate_name=crate_name, edition=edition,
+                                        parser_type=parser_type, configuration=configuration,
+                                        environment=environment)
+    _check_crate_missing_docs(crate, parsers[0])
+    return crate, parsers
+
+
+def _load_crate_sources(crate_root, sources, *, crate_name, edition, parser_type, configuration=None,
+                        environment=None, link_context_sha256=None):
+    """Load the original lexical tree. Resolution and linting share this tree."""
     root = _logical_path(crate_root)
     if (not isinstance(crate_name, str) or not crate_name.isascii()
             or not crate_name.isidentifier() or crate_name == "_"):
@@ -272,15 +287,16 @@ def _parse_crate_sources(crate_root, sources, *, crate_name, edition, parser_typ
         digest.update(len(encoded).to_bytes(8, 'big'))
         digest.update(encoded)
         digest.update(bytes.fromhex(source.sha256))
-    identity = CrateId(crate_name, root, edition, digest.hexdigest())
+    identity = CrateId(crate_name, root, edition, digest.hexdigest(), link_context_sha256)
     loader = _Loader(frozen, parser_type, configuration, environment)
     graph = loader.parse_file(root, ModuleId(identity, ()), PurePosixPath(root).parent)
-    crate = CrateSyntax(graph, edition, frozen)
-    root_parser = loader.context_parsers[0]
+    return CrateSyntax(graph, edition, frozen), loader.context_parsers
+
+
+def _check_crate_missing_docs(crate, root_parser, *, namespaces=None):
     from .missing_docs import check_missing_docs, scoped_module_lints
     if (root_parser.crate_lint_attributes or scoped_module_lints(crate)) and getattr(root_parser, '_rustc_check', None) is None:
         try:
-            check_missing_docs(crate, root_parser.crate_lint_attributes)
+            check_missing_docs(crate, root_parser.crate_lint_attributes, namespaces=namespaces)
         except RustError as exc:
-            raise RustError(f'{root}: {exc}') from exc
-    return crate, loader.context_parsers
+            raise RustError(f'{crate.root.source.path}: {exc}') from exc

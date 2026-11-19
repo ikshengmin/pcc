@@ -3,8 +3,8 @@
 Canonical declaration keys identify storage only after scoped lookup and privacy
 checks. They are never searched as a flattened source namespace. Private and
 `pub use` (re-export) imports resolve within the supplied module closure.
-External crates and module-scoped trait/method candidate sets remain explicit
-gaps; no import synthesizes source or supplies library definitions.
+Explicit source dependencies may supply a compiled public scalar function.
+No import synthesizes source or supplies missing system library definitions.
 """
 from dataclasses import replace
 from hashlib import sha256
@@ -15,6 +15,7 @@ from .crate_context import (
     CrateId, CrateSyntax, ModuleId, SourceFile, _Loader,
 )
 from .generics import PRIMITIVES
+from .source_dependencies import CompiledSourceLibrary
 from .syntax import ConstItem, CrateSelfAlias, Enumeration, Module, ModuleBody, Record, RustError, StaticItem, Trait
 from .types import TypeApplication
 from .visibility import scope_components, within
@@ -34,11 +35,14 @@ _NOT_REEXPORTED = object()
 
 class ModuleNamespaces:
     """Name/privacy lookup only; never builds Checker inputs or grants admission."""
-    def __init__(self, crate):
+    def __init__(self, crate, *, source_libraries=None):
         self.crate = crate
         self.policy = crate.policy
-        self.extern_prelude = {item.token.text: crate.root.items['type', item.token.text]
-                               for item in crate.root.body.crate_aliases}
+        self.source_calls = {}
+        self.extern_prelude = {alias: library.root_declaration()
+                               for alias, library in (source_libraries or {}).items()}
+        self.extern_prelude.update({item.token.text: crate.root.items['type', item.token.text]
+                                    for item in crate.root.body.crate_aliases})
         self.modules = {}
         self.by_key = {}
         pending = [crate.root]
@@ -142,13 +146,13 @@ class ModuleNamespaces:
             namespaces = ('type',) if item.group_self is not None else ('type', 'value')
             for namespace in namespaces:
                 declaration = self.resolve(path, namespace, module, item.token,
-                                           _use_root=self.policy.edition == 2015,
+                                           _use_path=True,
                                            _optional_final=True,
                                            _reexport=reexport)
                 if declaration is None:
                     continue
                 if (item.group_self is not None and
-                        not isinstance(declaration.syntax, (Module, CrateSelfAlias, Enumeration, Trait))):
+                        not isinstance(declaration.syntax, (Module, CrateSelfAlias, CompiledSourceLibrary, Enumeration, Trait))):
                     raise item.group_self.error('grouped self import of this parent kind is not implemented')
                 # Generic normalization and associated-path lookup still
                 # recognize these language-prelude names before scoped lookup.
@@ -177,10 +181,20 @@ class ModuleNamespaces:
         item = self._uses[module].get(name)
         if item is None or (item.group_self is not None and namespace != 'type'):
             return None
+        # In edition 2018+, `use dep;` binds the prelude crate to a local
+        # name. While finding this one's target its own new alias is not
+        # a source binding. Real local declarations above, glob candidates
+        # and visibility still go through ordinary resolution. Never break
+        # a different (or qualified) import cycle by guessing an extern.
+        if ((module, name) in self._resolving_uses and len(item.path) == 1
+                and item.path[0].text == name):
+            prelude = self.extern_prelude.get(name)
+            if prelude is not None and isinstance(prelude.syntax, CompiledSourceLibrary):
+                return None
         declaration = self._bind_use(module, name).get(namespace)
         return (declaration, self._scope(item.public, module)) if declaration is not None else None
 
-    def _binding(self, module, namespace, name, requester, token):
+    def _binding(self, module, namespace, name, requester, token, *, import_outer=None):
         strong = self._strong_binding(module, namespace, name)
         if strong is not None:
             declaration, scope = strong
@@ -195,6 +209,12 @@ class ModuleNamespaces:
         declaration, scope = next(iter(candidates.values()))
         if not self._within(requester, scope):
             raise token.error(f'private glob binding {name!r} is inaccessible from this module')
+        # During import resolution, a unique glob candidate can still be
+        # ambiguous against a real outer extern-prelude crate (GlobVsOuter).
+        # Re-exporting that very same crate does not create a new definition.
+        if (import_outer is not None and isinstance(import_outer.syntax, CompiledSourceLibrary)
+                and declaration.identity != import_outer.identity):
+            raise token.error(f'{name!r} is ambiguous between a glob import and an extern-prelude crate (rustc E0659)')
         return declaration, scope
 
     def _start(self, path, requester, token):
@@ -215,20 +235,23 @@ class ModuleNamespaces:
             raise token.error('item path must name a declaration')
         return current, parts
 
-    def resolve(self, path, namespace, requester, token, *, _use_root=False, _optional_final=False,
+    def resolve(self, path, namespace, requester, token, *, _use_path=False, _optional_final=False,
                 _reexport=_NOT_REEXPORTED):
         current, parts = self._start(path, requester, token)
-        if _use_root and path.split('::', 1)[0] not in {'crate', 'self', 'super'}:
+        unqualified = path.split('::', 1)[0] not in {'crate', 'self', 'super'}
+        if _use_path and self.policy.edition == 2015 and unqualified:
             current = self.root
         for index, name in enumerate(parts):
             space = namespace if index == len(parts) - 1 else 'type'
-            declaration, scope = self._binding(current, space, name, requester, token)
-            implicit = index == 0 and space == 'type' and path.split('::', 1)[0] not in {'crate', 'self', 'super'}
+            implicit = index == 0 and space == 'type' and unqualified
+            outer = self.extern_prelude.get(name) if implicit else None
+            declaration, scope = self._binding(current, space, name, requester, token,
+                                               import_outer=outer if _use_path else None)
             if (declaration is None and implicit and self.globs.binding_targets
                     and self.globs.entries.get(current) and name in self.extern_prelude):
                 raise token.error('a glob target using a possibly shadowed extern prelude alias is not implemented')
             if declaration is None and implicit:
-                declaration = self.extern_prelude.get(name)
+                declaration = outer
                 if declaration is not None:
                     scope = self._scope(declaration.public, declaration.identity.module)
             if declaration is None:
@@ -249,6 +272,13 @@ class ModuleNamespaces:
                 return declaration
             if isinstance(declaration.syntax, CrateSelfAlias):
                 current = self.root
+            elif isinstance(declaration.syntax, CompiledSourceLibrary):
+                library = declaration.syntax
+                member = library.member(parts[index + 1:], namespace, requester, token, optional=_optional_final)
+                if member is not None:
+                    fn = member.syntax
+                    self.source_calls[fn.identity] = (fn, library.compilation.symbols[fn.export_name])
+                return member
             elif isinstance(declaration.syntax, Module):
                 # Imported modules retain their target owner/name. The alias
                 # spelling must not invent a child under the importing scope.
@@ -259,12 +289,12 @@ class ModuleNamespaces:
 
 
 class ModuleResolution(ModuleNamespaces):
-    def __init__(self, crate):
+    def __init__(self, crate, *, source_libraries=None):
         crate.policy.require_owned_lang_item_context()
         if crate.compiler_context_obligations:
             obligation = crate.compiler_context_obligations[0]
             raise obligation.token.error("unresolved owned compiler context: " + obligation.description)
-        super().__init__(crate)
+        super().__init__(crate, source_libraries=source_libraries)
         self.functions, self.records, self.enums, self.consts, self.statics = [], [], [], [], []
         # Every module's impls and traits (each resolved in its own module).
         # A trait keeps its written name as its identity, so trait names must
@@ -414,7 +444,7 @@ class ModuleResolution(ModuleNamespaces):
         if path in {'crate', 'self'} or all(part == 'super' for part in path.split('::')):
             return True
         declaration = self.resolve(path, 'type', requester, token, _optional_final=True)
-        return declaration is not None and isinstance(declaration.syntax, (Module, CrateSelfAlias))
+        return declaration is not None and isinstance(declaration.syntax, (Module, CrateSelfAlias, CompiledSourceLibrary))
 
     def associated_function(self, owner, name, requester, token):
         if isinstance(owner, TypeApplication):
@@ -435,7 +465,7 @@ class ModuleResolution(ModuleNamespaces):
         if owner in {'crate', 'self'} or all(p == 'super' for p in owner.split('::')):
             return self.function(owner + '::' + name, requester, token)
         declaration = self.resolve(owner, 'type', requester, token)
-        if not isinstance(declaration.syntax, (Module, CrateSelfAlias)):
+        if not isinstance(declaration.syntax, (Module, CrateSelfAlias, CompiledSourceLibrary)):
             return None
         return self.function(owner + '::' + name, requester, token)
 

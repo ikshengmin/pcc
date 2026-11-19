@@ -91,7 +91,7 @@ def scoped_module_lints(crate):
     return tuple(result)
 
 
-def check_missing_docs(crate, attributes, *, test=False):
+def check_missing_docs(crate, attributes, *, test=False, namespaces=None):
     """Validate forbidden overrides in all live modules, then lint exports at definition."""
     root = crate.root.identity
     levels = {}
@@ -140,8 +140,9 @@ def check_missing_docs(crate, attributes, *, test=False):
     # Live items were already determined by cfg; real --test does not cap lints.
     if not any(level in ('deny', 'forbid') for choices in levels.values() for level, _, _ in choices):
         return
-    from .module_resolution import ModuleNamespaces
-    namespaces = ModuleNamespaces(crate)
+    if namespaces is None:
+        from .module_resolution import ModuleNamespaces
+        namespaces = ModuleNamespaces(crate)
 
     def missing(token, what, module):
         choices = levels[module]
@@ -161,6 +162,10 @@ def check_missing_docs(crate, attributes, *, test=False):
     exported, seen = {}, set()
 
     def consider(declaration):
+        # A local use (even a public re-export) does not move its definition
+        # into this crate. The provider has already checked its own levels.
+        if declaration.identity.module.crate != root.crate:
+            return
         syntax = declaration.syntax
         if id(syntax) in seen:
             return

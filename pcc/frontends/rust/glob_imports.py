@@ -70,8 +70,7 @@ class ModuleGlobImports:
                 raise item.glob.error('too many leading super path segments')
             source = ModuleId(owner.crate, owner.components[:-len(path)])
         else:
-            decl = self.ns.resolve('::'.join(path), 'type', owner, item.glob,
-                                   _use_root=self.ns.policy.edition == 2015)
+            decl = self.ns.resolve('::'.join(path), 'type', owner, item.glob, _use_path=True)
             if isinstance(decl.syntax, CrateSelfAlias):
                 source = self.ns.root
             elif isinstance(decl.syntax, Module):

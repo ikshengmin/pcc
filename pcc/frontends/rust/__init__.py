@@ -7,7 +7,7 @@ rustc or consumes MIR; the separately named transition adapter invokes rustc.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from .certification import ExternalRustcCheck
 from .editions import require_edition
@@ -19,6 +19,7 @@ from .builtin_macros import CompileEnvironment
 from .configuration import CfgOptions, OwnedRustConfiguration, TargetPlatformFacts
 from .moves import MoveChecker
 from .semantics import Checker
+from .source_dependencies import RustSourceDependency
 from .syntax import Parser, RustError
 from .targets import DEFAULT_TARGET, LINUX_LAYOUT, resolve_target
 
@@ -42,6 +43,10 @@ class RustCompilation:
     function_inline_hints: tuple = ()
     # Per-module syntax, not a warning stream and not a checked-source token.
     module_lint_attributes: tuple = ()
+    # Present for compile_rust_crate. Each explicit dependency owns its own IR
+    # and object; emit_object() always emits this crate, not a concatenation.
+    source_crate_id: object = None
+    source_dependencies: tuple = ()
 
     @property
     def ir_text(self) -> str:
@@ -228,7 +233,7 @@ def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: in
                        cfg: CfgOptions | TargetPlatformFacts | None = None,
                        env: CompileEnvironment | dict | None = None,
                        target_triple: str = DEFAULT_TARGET,
-                       module_name: str = "rust") -> RustCompilation:
+                       module_name: str = "rust", extern_sources=None) -> RustCompilation:
     """Compile a supplied original multi-file crate with owned admission only.
 
     `sources` maps normalized relative POSIX paths to decoded text and must
@@ -236,12 +241,34 @@ def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: in
     file system, Cargo or rustc is consulted. The module tree is resolved
     without flattening its scopes, then checked and lowered exactly as
     compile_rust checks and lowers a single source (owned admission, no
-    attestation). `cfg` and `env` are as for compile_rust.
+    attestation). `cfg` and `env` are as for compile_rust. An optional
+    `extern_sources` dict binds extern-prelude aliases to single-file
+    RustSourceDependency leaves. Each is compiled (not merely parsed) for
+    the same target with its own name, edition and digest. Only monomorphic
+    scalar functions cross the boundary. This path does not supply a sysroot,
+    an external-check token, or arbitrary build cfg/environment.
     """
     edition = require_edition(edition)
     if type(module_name) is not str:
         raise RustError("invalid Rust module_name: expected a string label")
     target = resolve_target(target_triple)
+    from .source_dependencies import checked_inputs, link_context
+
+    providers = {}
+    context = None
+    if extern_sources is not None:
+        if cfg is not None or env is not None:
+            raise RustError('source dependency builds do not yet bind cfg/environment in their link identity')
+        inputs = checked_inputs(extern_sources, target, edition)
+        for alias, spec, text in inputs:
+            provider = _compile_source_unit(
+                spec.root_path, {spec.root_path: text}, crate_name=spec.crate_name,
+                edition=spec.edition, target=target, module_name=spec.crate_name,
+                configuration=None, environment=None, providers={}, context=link_context(target, {}))
+            if any(p.resolution.root == provider.resolution.root for p in providers.values()):
+                raise RustError('binding the same source dependency under multiple aliases is not implemented')
+            providers[alias] = provider
+        context = link_context(target, providers)
     configuration = None
     if cfg is not None:
         if type(cfg) not in (CfgOptions, TargetPlatformFacts):
@@ -250,25 +277,44 @@ def compile_rust_crate(crate_root: str, sources, *, crate_name: str, edition: in
     environment = env
     if env is not None and type(env) is not CompileEnvironment:
         environment = CompileEnvironment.of(env)
-    from .crate_context import _parse_crate_sources
+    return _compile_source_unit(crate_root, sources, crate_name=crate_name, edition=edition, target=target,
+                                module_name=module_name, configuration=configuration, environment=environment,
+                                providers=providers, context=context).compilation
+
+
+def _compile_source_unit(crate_root, sources, *, crate_name, edition, target, module_name,
+                         configuration, environment, providers, context):
+    from .crate_context import _check_crate_missing_docs, _load_crate_sources
     from .module_resolution import ModuleResolution
-    # The crate's missing_docs level is checked over every module while parsing.
-    crate, parsers = _parse_crate_sources(crate_root, sources, crate_name=crate_name, edition=edition,
-                                          parser_type=Parser, configuration=configuration,
-                                          environment=environment)
+    from .source_dependencies import CompiledSourceLibrary
+    crate, parsers = _load_crate_sources(crate_root, sources, crate_name=crate_name, edition=edition,
+                                        parser_type=Parser, configuration=configuration,
+                                        environment=environment, link_context_sha256=context)
     root = parsers[0]
-    resolution = ModuleResolution(crate)
+    if providers:
+        # The consumer's lint pass must see exactly the imports, visibility
+        # and definition identities that its checker and lowerer will use.
+        resolution = ModuleResolution(crate, source_libraries=providers)
+        _check_crate_missing_docs(crate, root, namespaces=resolution)
+    else:
+        # Preserve eager linting and diagnostic ordering for standalone units.
+        _check_crate_missing_docs(crate, root)
+        resolution = ModuleResolution(crate)
     parsed = _ParsedCrate(resolution.functions, resolution.records, resolution.enums,
                           resolution.consts + resolution.statics, resolution.implementations,
                           resolution.traits, resolution, root.crate_policy,
                           tuple(expansion for parser in parsers for expansion in parser.macro_expansions),
                           root.crate_lint_attributes, root.crate_cfg_attributes,
                           tuple(item for parser in parsers for item in parser.conditional_items))
-    return _check_and_lower(parsed, rustc_check=None, source=None, target=target, overflow_checks=False,
-                            module_name=module_name, edition=edition)
+    result = _check_and_lower(parsed, rustc_check=None, source=None, target=target, overflow_checks=False,
+                              module_name=module_name, edition=edition)
+    result = replace(result, source_crate_id=resolution.root.crate,
+                     source_dependencies=tuple((alias, p.compilation) for alias, p in providers.items()))
+    return CompiledSourceLibrary(resolution, result)
 
 
 __all__ = ["ExternalRustcCheck", "CheckedRustSource", "RustcToolchain",
            "ExternalRustcLints",
            "RustExternalCheckError", "check_rust_source", "compile_rust_checked",
-           "RustCompilation", "RustError", "compile_rust", "compile_rust_crate", "CfgOptions", "CompileEnvironment", "TargetPlatformFacts"]
+           "RustCompilation", "RustError", "compile_rust", "compile_rust_crate", "RustSourceDependency",
+           "CfgOptions", "CompileEnvironment", "TargetPlatformFacts"]
