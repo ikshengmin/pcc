@@ -25,7 +25,8 @@ def test_essential_omits_normal_connection_events(event):
     assert LogPolicy().select(event, {}, {}) is None
 
 
-@pytest.mark.parametrize('event', ['process_start', 'process_stop', 'shutdown_requested', 'upstream_status'])
+@pytest.mark.parametrize('event', ['process_start', 'process_stop', 'shutdown_requested', 'upstream_status',
+                                  'unbuilt_transport_released'])
 def test_lifecycle_and_upstream_transitions_are_kept(event):
     assert LogPolicy().select(event, {'available': False}, {}) == (event, {'available': False})
 
@@ -166,9 +167,12 @@ def test_half_close_toward_reset_client_fails_with_routine_enotconn(monkeypatch)
     assert expected_disconnect(failures[0][0])
 
 
-def start_diagnostic(log_path, *args):
+def start_diagnostic(log_path, *args, prelude=None):
+    # prelude: source run in the CLI process before pproxy.diagnostic starts.
+    entry = ('-m', 'pproxy.diagnostic') if prelude is None else (
+        '-c', prelude + '\nfrom pproxy import diagnostic\ndiagnostic.main()')
     return asyncio.create_subprocess_exec(
-        sys.executable, '-u', '-m', 'pproxy.diagnostic', '-l', 'socks5://127.0.0.1:0', *args,
+        sys.executable, '-u', *entry, '-l', 'socks5://127.0.0.1:0', *args,
         cwd=Path(__file__).resolve().parents[1],
         env={**os.environ, 'PPROXY_TRACE_PATH': str(log_path), 'PPROXY_TRACE_MODE': 'essential'},
         stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE,
@@ -286,6 +290,61 @@ def test_connect_probe_failure_is_logged_once_with_connect_phase(tmp_path):
     assert statuses[0]['available'] is False and statuses[0]['phase'] == 'upstream_connect'
     assert statuses[0]['error_type'] == 'ConnectionRefusedError'
     assert not [r for r in records if r['event'] == 'upstream_connect_error']
+
+
+HOLD_CONNECT_AFTER_HANDSHAKE = """
+import asyncio
+from asyncio import selector_events
+original_connect = selector_events.BaseSelectorEventLoop.sock_connect
+async def sock_connect(self, sock, address):
+    await original_connect(self, sock, address)
+    if address[1] == {port}:
+        await asyncio.sleep(0.2)
+selector_events.BaseSelectorEventLoop.sock_connect = sock_connect
+"""
+
+
+def test_probe_reset_during_transport_setup_records_the_release(tmp_path):
+    """The live 8082 failure began with a probe of an upstream already marked
+    offline, which essential mode does not log. The probe's connection is reset
+    before its transport is built; on macOS that fails setting TCP_NODELAY and
+    the half-built transport must be released and recorded."""
+    async def scenario():
+        async with network() as net:
+            async def reset_on_accept(reader, writer):
+                writer.get_extra_info('socket').setsockopt(
+                    socket.SOL_SOCKET, socket.SO_LINGER, struct.pack('ii', 1, 0))
+                writer.transport.abort()
+
+            port = await net.listen(reset_on_accept)
+            log_path = tmp_path / 'release.jsonl'
+            process = await start_diagnostic(log_path, '-r', f'socks5://127.0.0.1:{port}', '-a', '1',
+                                             prelude=HOLD_CONNECT_AFTER_HANDSHAKE.format(port=port))
+            try:
+                await asyncio.wait_for(process.stdout.readline(), 3)
+                await asyncio.sleep(2.8)
+                process.send_signal(signal.SIGTERM)
+                _, stderr = await asyncio.wait_for(process.communicate(), 3)
+                assert process.returncode == 0, stderr.decode()
+            finally:
+                if process.returncode is None:
+                    process.kill()
+                    await process.wait()
+            return [json.loads(line) for line in log_path.read_text().splitlines()]
+
+    records = asyncio.run(asyncio.wait_for(scenario(), 12))
+    released = [r for r in records if r['event'] == 'unbuilt_transport_released']
+    statuses = [r for r in records if r['event'] == 'upstream_status']
+    if sys.platform != 'darwin':
+        # TCP_NODELAY succeeds on a reset socket; the reset surfaces later.
+        assert not released
+        return
+    # One release per probe, also while the upstream is already offline.
+    assert len(released) >= 2, records
+    assert all(r['fds'] and all(type(fd) is int for fd in r['fds']) for r in released)
+    assert len(statuses) == 1, records
+    assert statuses[0]['available'] is False and statuses[0]['phase'] == 'upstream_connect'
+    assert (statuses[0]['error_type'], statuses[0]['errno']) == ('OSError', errno.EINVAL)
 
 
 def test_assertion_location_without_messages_source_or_locals():

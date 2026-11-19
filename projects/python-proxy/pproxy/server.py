@@ -256,6 +256,32 @@ async def datagram_handler(writer, data, addr, protos, urserver, block, cipher, 
         if not str(ex).startswith('Connection closed'):
             verbose(f'{str(ex) or "Unsupported protocol"} from {remote_ip}')
 
+def release_unbuilt_transports(loop):
+    """Unregister transports whose construction failed after registration.
+
+    A transport registers its descriptor number in loop._transports before it
+    sets TCP_NODELAY; macOS rejects that option with EINVAL once the peer has
+    reset the connection. CPython 3.15 then closes the socket, but the
+    half-built transport stays registered, not closing, until the cyclic
+    collector frees it. Every socket that reuses the number meanwhile fails
+    with "File descriptor N is used by transport", for outbound connects and
+    for accepted clients alike. A transport closes its socket only after it is
+    marked closing, so an open transport with a closed socket is such a
+    leftover. It never reached the selector: dropping the entry is enough,
+    while close() would unregister whatever now uses that descriptor number."""
+    transports = getattr(loop, '_transports', None)
+    if transports is None:
+        return []
+    released = []
+    for fd, transport in list(transports.items()):
+        if transport.is_closing():
+            continue
+        sock = transport.get_extra_info('socket')
+        if sock is not None and sock.fileno() == -1:
+            del transports[fd]
+            released.append(fd)
+    return released
+
 def set_upstream_alive(remote, alive, phase, error=None):
     """Apply one health-probe transition. phase is 'upstream_connect' or
     'upstream_handshake'; observers (pproxy.diagnostic) hook every change here."""
@@ -377,7 +403,8 @@ class ProxyDirect(object):
             family = 0 if local_addr is None else socket.AF_INET6 if ':' in local_addr[0] else socket.AF_INET
             wait = self.wait_open_connection(host, port, local_addr, family)
             reader, writer = await asyncio.wait_for(wait, timeout=timeout)
-        except Exception as ex:
+        except Exception:
+            release_unbuilt_transports(asyncio.get_running_loop())
             raise
         return reader, writer
     async def prepare_connection(self, reader_remote, writer_remote, host, port):

@@ -8,9 +8,9 @@ concurrent HTTP/2 streams for 245 seconds.
 | Area | Checks |
 | --- | --- |
 | Negotiation | SOCKS5 domain/IPv4/IPv6, HTTP CONNECT, fragmented headers, payload arriving with the handshake, abandoned handshakes |
-| Logging | Essential mode suppresses normal traffic, expected cancellation and half-close toward a reset client (ENOTCONN); retains failure context, one issue per connection, zero-response upstream closes, SOCKS reply codes, client handshake deadlines, and every health-probe transition with its connect/handshake phase; diagnostic mode remains available |
+| Logging | Essential mode suppresses normal traffic, expected cancellation and half-close toward a reset client (ENOTCONN); retains failure context, one issue per connection, zero-response upstream closes, SOCKS reply codes, client handshake deadlines, every health-probe transition with its connect/handshake phase, and each release of a transport whose setup failed after registration; diagnostic mode remains available |
 | Authentication | Valid and invalid credentials, rejection when no authentication method is shared |
-| Connection failures | Delayed upstream connection, DNS failure, refusal, timeout, network unreachable, permission denial, SOCKS error propagation through a chain, HTTP 403/407/502 rejection |
+| Connection failures | Delayed upstream connection, DNS failure, refusal, timeout, network unreachable, permission denial, SOCKS error propagation through a chain, HTTP 403/407/502 rejection, a reset between TCP handshake and transport setup (target and upstream hop) leaving no descriptor registered to a dead transport |
 | Data integrity | Eight simultaneous 1 MiB transfers, binary payloads, two-hop HTTP/SOCKS chains, 2 MiB transfer to a slow receiver |
 | Cleanup | Either peer closing, abrupt transport abort, healthy connections surviving a peer failure, no retained writer/task registrations |
 | CLI | SIGINT during idle, incomplete handshake and active transfer; process exit and coroutine cleanup |
@@ -71,7 +71,9 @@ The tracked `python -m pproxy.diagnostic` entrypoint defaults to
 `PPROXY_TRACE_MODE=essential`. Set
 `PPROXY_TRACE_PATH` to the JSONL log path and pass the ordinary proxy arguments.
 It records process lifecycle, upstream availability transitions, failed
-connections/handshakes and unexpected relay errors. Normal connections, normal
+connections/handshakes, unexpected relay errors and `unbuilt_transport_released`
+(descriptor numbers freed from a transport whose setup failed after it
+registered them; on macOS a reset before TCP_NODELAY is set causes this). Normal connections, normal
 EOF, cancellation, connection resets and broken pipes are silent. Default mode
 does not wrap stream reads/writes/drains/closes or collect per-chunk counters,
 timestamps or snapshots. Routine disconnects are discarded before constructing

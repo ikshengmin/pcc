@@ -83,6 +83,15 @@ def main():
         return await original_check_alive(*args, **kwargs)
 
 
+    def release_unbuilt_transports(loop):
+        # The failed connect that leaves such a transport behind is not logged
+        # when it is a probe of an upstream already offline; record the repair.
+        released = original_release(loop)
+        if released:
+            emit('unbuilt_transport_released', fds=released)
+        return released
+
+
     def safe_host(host):
         return str(host).split('?', 1)[0].split('#', 1)[0].rsplit('@', 1)[-1][:255]
 
@@ -109,6 +118,7 @@ def main():
     original_prepare = server.ProxySimple.prepare_connection
     original_set_alive = server.set_upstream_alive
     original_check_alive = server.check_server_alive
+    original_release = server.release_unbuilt_transports
     original_channel = proto.BaseProtocol.channel
     original_read = asyncio.StreamReader.read
     original_write = asyncio.StreamWriter.write
@@ -305,6 +315,7 @@ def main():
     server.ProxySimple.prepare_connection = prepare
     server.set_upstream_alive = set_upstream_alive
     server.check_server_alive = check_server_alive
+    server.release_unbuilt_transports = release_unbuilt_transports
     if POLICY.mode == 'diagnostic':
         proto.BaseProtocol.channel = channel
         asyncio.StreamReader.read = read

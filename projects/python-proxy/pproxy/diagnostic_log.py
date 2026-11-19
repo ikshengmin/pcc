@@ -91,7 +91,8 @@ class LogPolicy:
             connection.setdefault('first_terminal', fields['direction'])
         if self.mode == 'diagnostic':
             return event, fields
-        if event in ('process_start', 'process_stop', 'shutdown_requested', 'upstream_status'):
+        if event in ('process_start', 'process_stop', 'shutdown_requested', 'upstream_status',
+                     'unbuilt_transport_released'):
             return event, fields
         if cancelled:
             return None

@@ -1,9 +1,12 @@
 """Offline integration tests: real TCP sockets, ephemeral loopback ports only."""
 import asyncio
 from contextlib import asynccontextmanager
+import gc
 import hashlib
 import socket
 import errno
+import struct
+import sys
 
 import pytest
 
@@ -454,6 +457,83 @@ def test_blackholed_ipv6_address_falls_back_to_ipv4(hop):
             assert loop.time() - started < 2
             assert attempts and attempts[0][0] == BLACKHOLE_IPV6
     run(scenario())
+
+
+def reset_after_handshake(loop, port, reset_sent):
+    """Let outbound connects to port finish the TCP handshake, then hold them
+    until the peer has reset the connection, so asyncio builds the transport on
+    an already reset socket. A busy event loop or a flapping network path opens
+    the same window between connect completion and transport setup."""
+    original_connect = loop.sock_connect
+
+    async def sock_connect(sock, address):
+        await original_connect(sock, address)
+        if address[1] == port:
+            await reset_sent.wait()
+            await asyncio.sleep(0.05)
+
+    loop.sock_connect = sock_connect
+
+
+def orphaned_transports(loop):
+    """Descriptor numbers still registered to an open transport whose socket is closed."""
+    return [fd for fd, transport in list(loop._transports.items())
+            if not transport.is_closing()
+            and transport.get_extra_info("socket").fileno() == -1]
+
+
+@pytest.mark.parametrize("hop", ["target", "upstream"])
+def test_reset_during_transport_setup_does_not_poison_descriptor(hop):
+    """macOS rejects TCP_NODELAY on a socket the peer already reset, so asyncio
+    fails while building the transport. CPython 3.15 then closes the socket but
+    leaves the half-built transport registered for its descriptor number until
+    the cyclic collector runs; any socket that reuses the number fails with
+    "File descriptor N is used by transport". After a network change the live
+    8082 proxy failed nearly every new connection this way until restarted.
+    The collector is paused because only its timing hides the stale entry."""
+    async def scenario():
+        loop, reset_sent = asyncio.get_running_loop(), asyncio.Event()
+
+        async def reset_on_accept(reader, writer):
+            writer.get_extra_info("socket").setsockopt(
+                socket.SOL_SOCKET, socket.SO_LINGER, struct.pack("ii", 1, 0))
+            writer.transport.abort()
+            reset_sent.set()
+
+        async with network() as net:
+            target = await net.listen(echo)
+            reset_port = await net.listen(reset_on_accept)
+            reset_after_handshake(loop, reset_port, reset_sent)
+            if hop == "target":
+                failing = healthy = await net.proxy()
+                destination = reset_port
+            else:
+                exit_port = await net.proxy()
+                failing = await net.proxy([server.proxies_by_uri(f"socks5://127.0.0.1:{reset_port}")])
+                healthy = await net.proxy([server.proxies_by_uri(f"socks5://127.0.0.1:{exit_port}")])
+                destination = target
+            reader, writer = await net.tcp(failing)
+            writer.write(b"\x05\x01\x00")
+            await writer.drain()
+            assert await reader.readexactly(2) == b"\x05\x00"
+            writer.write(b"\x05\x01\x00" + address("127.0.0.1", destination, "ipv4"))
+            await writer.drain()
+            reply = await socks_reply(reader)
+            if sys.platform == "darwin":
+                assert reply == 1  # EINVAL from TCP_NODELAY: general failure
+            assert reset_sent.is_set()
+            assert not orphaned_transports(loop)
+            for attempt in range(4):
+                reader, writer = await tunnel(net, healthy, target, "ipv4", b"after%d" % attempt)
+                assert await reader.readexactly(6) == b"after%d" % attempt
+
+    collecting = gc.isenabled()
+    gc.disable()
+    try:
+        run(scenario())
+    finally:
+        if collecting:
+            gc.enable()
 
 
 def test_builtin_echo_sends_socks_reply_before_payload():
