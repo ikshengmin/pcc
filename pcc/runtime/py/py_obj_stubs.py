@@ -1100,9 +1100,36 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
         token: int = load_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES)
         store_i64(tokens, _BUFFER_ITEM * _BUFFER_BYTES, -1)
         store_i64(tokens, _BUFFER_LEAF * _BUFFER_BYTES, token)
-    # This is the payload's actual owner, not just an outer memoryview. Its
-    # independent address lease covers data/length reads and allocating copy.
+    # The actual leaf, not just an outer view, owns an address lease.
     current = load_ptr(leaf, 0)
+    if _type_of(current) == PY_TYPE_BYTEARRAY:
+        # A lease on the leaf's address does not freeze its logical payload.
+        # Size the private destination, then take the pointer and length
+        # together *after* its allocation/adoption. No raw source pointer
+        # crosses the allocation and only one payload copy is needed.
+        pcc_py_gc_minor_graph_lock()
+        reserved: int = load_i64(load_ptr(leaf, 0), 16)
+        pcc_py_gc_minor_graph_unlock()
+        while True:
+            if _buffer_new_raw(slots, tokens, null(), reserved, mutable) != 0:
+                return -1
+            pcc_py_gc_minor_graph_lock()
+            current = load_ptr(leaf, 0)
+            live: int = load_i64(current, 16)
+            if live == reserved:
+                if live > 0:
+                    dst = load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+                    memcpy(_bytes_data(dst), _bytes_data(current), live)
+                pcc_py_gc_minor_graph_unlock()
+                return 0
+            pcc_py_gc_minor_graph_unlock()
+            # Preserve exact destination size without publishing a partial
+            # value. Releasing an owner may park; do it outside the lock.
+            _buffer_drop(slots, tokens, _BUFFER_RESULT)
+            if py_err_occurred() != 0:
+                return -1
+            reserved = live
+    # Immutable bytes retain the direct allocating-copy path.
     data = _bytes_data(current)
     count: int = py_bytes_len(load_ptr(leaf, 0))
     if py_err_occurred() != 0:

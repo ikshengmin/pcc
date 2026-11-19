@@ -450,6 +450,34 @@ def test_buffer_copy_holds_actual_payload_owner_through_allocation(kind, expecte
 
 
 @pytest.mark.parametrize('relocate', (False, True))
+@pytest.mark.parametrize('mode', (0, 1))
+def test_buffer_copy_cannot_mix_payloads_across_allocating_clear(mode, relocate):
+    model = BufferModel('bytearray', relocate=relocate)
+    _functions(RUNTIME, {'py_bytearray_clear'}, model.ns)
+    allocated = model.ns['pcc_gc_alloc']
+    clears = []
+
+    def clear_during_first_allocation(size, tag, flags):
+        if not clears:
+            current = model.load(model.external, 0)
+            model.ns['py_bytearray_clear'](current)
+            clears.append(model.content(current))
+        return allocated(size, tag, flags)
+
+    model.ns['pcc_gc_alloc'] = clear_during_first_allocation
+    before = model.content(model.load(model.external, 0))
+    result = model.run(mode)
+    assert before == b'ABC' and clears == [b'']
+    # Either complete snapshot is valid; the terminator written by clear()
+    # must never be combined with a length read before the allocation.
+    assert model.content(result) in (before, clears[0])
+    assert model.pending is None and not model.leases and not model.pins and not model.raw
+    model.clear_root(model.external, None)
+    model.clear_root(model.external + 8, None)
+    assert all(obj.refs == 0 for obj in model.objects)
+
+
+@pytest.mark.parametrize('relocate', (False, True))
 @pytest.mark.parametrize('kind', ('bytes', 'bytearray', 'memoryview', 'nested-view'))
 def test_memoryview_factory_retains_base_before_source_disposal(kind, relocate):
     model = BufferModel(kind, relocate=relocate)
