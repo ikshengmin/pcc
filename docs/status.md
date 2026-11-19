@@ -39,9 +39,9 @@ remains the only failing arm. The ordinary emitted IR and runtime forwarding
 path did not establish a retained owner; the retaining edge is still open.
 
 First-phase work still open: collector-owner root boundaries and retained
-roots across callbacks, and in-place amortized `bytearray.append`. The release integrator owns
-the CI-to-issue baseline. GC4 callback-window correctness is tracked separately
-from the corrected relocation-selector fixture. No new runtime fix or
+roots across callbacks. GC4 correctness remains the active priority. The
+release integrator owns the CI-to-issue baseline. GC4 callback-window
+correctness is tracked separately from the corrected relocation-selector fixture. No new runtime fix or
 five-pair A/B has been qualified by these baseline runs.
 
 Background-cleanup visibility: the patch removes confirmed queued deaths
@@ -97,6 +97,40 @@ Linux x86-64 in all five GC modes. This changes attribute lookup only,
 not which object a view retains internally or exposes through its C buffer.
 It does not implement `memoryview.release()`, partial-view descriptors,
 live-export resize checks, or in-place append growth.
+
+**#4: Layout migration (not a Stage 1 prerequisite).** On
+`2e935ab6`, one stock Linux x86-64 pcc0 program ran on GC0. After 40
+appends the receiver had length 41 but its alias still had length 1;
+CPython preserved identity and both lengths were 41. Calling `append`
+through a function parameter then raised `AttributeError`. CPython passed
+the whole fixture: two live views and then one blocked growth with
+`BufferError`, dropping the last view allowed growth, and `append` returned
+`None`. PCC did not reach those checks; GC1–GC4 were not run. Original
+local selector (the red fixture is not in the repository):
+`tests/python/test_bytearray_append_conversion.py::test_bytearray_append_identity_exports`.
+
+The bytearray payload is inline at `+24` with no capacity field, so
+`py_bytearray_append` allocates a new object. In `stmt_misc_lowering.py`,
+`_emit_bytearray_append_store` and `_emit_dyn_attr_bytearray_append_stmt`
+both write that replacement back to the target. The runtime method table
+does not register `append` for bytearray, hence the parameter-call failure.
+
+Migration order:
+
+1. Unify bytearray data access, including runtime and native image writers;
+   consumers must not assume inline storage or unchanged mutable lengths.
+2. Move the payload out of line, with geometric capacity and one per-bytearray
+   live-export count shared by Python and C. Count each successful view or C
+   buffer once and drop it once on normal teardown or release. Synchronize
+   acquisition and the data/length snapshot with resize; a pin is not an
+   export count, and teardown cannot depend on already-cleared view slots.
+3. Implement `append` as a mutator of the original object and remove **both**
+   frontend writebacks in the same commit. Validate visible alias mutation,
+   identity, `None`, and `BufferError` without mutation while exported.
+
+Dynamic method binding can land independently only with its specific call
+and return semantics explicitly tested. Registration alone is not an
+in-place append fix.
 
 The unmodified four-thread field stress passed on Linux through the stock
 `pcc` console: one binary, five backend runs, 26,672 objects constructed in
