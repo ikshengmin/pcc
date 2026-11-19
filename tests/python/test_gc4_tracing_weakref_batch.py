@@ -148,6 +148,119 @@ class SilentTracingClear(WeakBatch):
             self.ns[name] = unexpected
 
 
+def test_gc4_sweep_keeps_pending_exception_separate_from_queued_weakref():
+    """One count-free sweep, from candidate selection through the next reseed.
+
+    Execute the sweep coordinator, weakref queue, TLS exchange and error clear.
+    Root and lease providers are modeled; the unrelated sweep passes and
+    object walk are empty. This checks ownership, not native stack discovery.
+    """
+    from tests.python.test_exception_tls_swap_container_mode import Thread
+
+    batch = SilentTracingClear(backend=4)
+    thread = Thread(container_mode=1, exit_unregisters=0)
+    thread.roots = batch.words  # Both runtime modules operate on the same cells.
+    tls = thread.namespace()
+    load_functions(SOURCE.with_name("py_substrate.py"),
+                   {"py_tls_exc_set", "py_tls_exc_get"}, tls)
+    outer = ValueError("original", 41)
+    inner = LookupError("discard callback error")
+    covered, leased, disposed = set(), {}, []
+
+    def covers(slot):
+        covered.add(slot)
+        return 1  # This case assumes the existing full-stack provider covers it.
+
+    def acquire(slot):
+        leased[slot] = batch.load(slot)
+        return 1
+
+    def release(slot, token):
+        assert token == 1 and leased.pop(slot) == wr
+        return 0
+
+    def clear_owner(slot, empty):
+        assert empty == 0
+        disposed.append(batch.load(slot))
+        batch.store(slot, 0, empty)
+
+    ns = batch.ns
+    ns.update(py_tls_exc_get=tls["py_tls_exc_get"],
+              py_tls_exc_swap_slot=tls["py_tls_exc_swap_slot"],
+              pcc_gc_stack_slot_root_is_conservative=covers,
+              pcc_gc_store_root=clear_owner,
+              pcc_gc_foreign_lease_acquire=acquire, pcc_gc_foreign_lease_release=release,
+              _type_of=type)
+    load_functions(SOURCE.with_name("py_exc_tls.py"),
+                   {"py_current_exception", "py_clear_exception"}, ns)
+    load_functions(SOURCE, {"py_weakref_queue_tracing_candidates",
+                            "py_weakref_run_queued_callbacks"}, ns)
+
+    def callback(ref):
+        assert ref == wr and ns["py_weakref_call"](ref) == batch.none
+        assert ns["py_current_exception"]() == 0 and thread.pending == 0
+        assert list(leased.values()) == [wr]  # The queue does not own the exception.
+        assert any(batch.load(slot) is outer for slot in covered)
+        # The exception is private now, but neither guarded reentry starts a
+        # nested collection. The actual refresh is after this callback.
+        assert entry["pcc_gc_collect"](0) == 0
+        assert entry["_gc_tracing_automatic_collect"](0) == 0
+        raise inner
+
+    def call(func, args, kwargs):
+        try:
+            return batch.call(func, args, kwargs)
+        except LookupError as error:
+            tls["py_tls_exc_set"](error)
+            return 0  # A raised callback returns NULL with its own pending TLS.
+
+    wr = batch.ref(batch.target(), callback)
+    batch.callbacks[callback] = callback
+    ns["py_obj_call"] = call
+    tls["py_tls_exc_set"](outer)
+    # The mark finished in this same stop. There is no pre-sweep recheck; the
+    # one reseed below is requested by the coordinator because a weakref ran.
+    state = dict(pcc_gc_backend_selected=4, pcc_gc_explicit_collect_active=1,
+                 pcc_gc_backend4_no_refcounts=1, pcc_gc_tracing_finish_stop_epoch=7,
+                 pcc_gc_user_finalizer_runs=0)
+    reseeds = []
+
+    def reseed():
+        assert batch.calls == [wr] and not leased
+        assert all(batch.load(slot) == 0 for slot in covered)
+        reseeds.append([thread.tls[slot] for slot in thread.registered])
+
+    def word(cell, offset):
+        return state[cell] if isinstance(cell, str) else batch.load(cell, offset)
+
+    def release_world():
+        previous, batch.stopped = batch.stopped, False
+        return int(previous)
+
+    def reacquire_world(depth):
+        batch.stopped = batch.stopped or bool(depth)
+
+    entry = dict(global_addr=lambda name: name, load_i32=word, _gc_backend_fast=lambda: 4)
+    load_functions(SOURCE.with_name("py_obj.py"),
+                   {"pcc_gc_collect", "_gc_tracing_automatic_collect"}, entry)
+    sweep = dict(ns, global_addr=lambda name: name, load_i32=word, load_i64=word,
+                 store_i32=lambda name, offset, value: state.__setitem__(name, value),
+                 pcc_thread_world_stop_epoch_held=lambda: 7,
+                 pcc_thread_world_release_held=release_world,
+                 pcc_thread_world_reacquire_held=reacquire_world,
+                 pcc_gc_seed_roots=reseed, pcc_gc_object_walk_first=lambda: 0,
+                 pcc_gc_drain_all_gray_unlocked=lambda: 0, pcc_platform_monotonic_us=lambda: 0,
+                 _record_sweep_phase=lambda *args: None, _sweep_finalizers=lambda *args: None,
+                 _sweep_clear_and_reclaim=lambda *args: 0)
+    load_functions(SOURCE.with_name("freestanding_gc_tracing_sweep_collector.py"),
+                   {"pcc_gc_tracing_sweep_unreachable"}, sweep)
+    assert sweep["pcc_gc_tracing_sweep_unreachable"](1) == 0
+    assert reseeds == [[outer]] and disposed == [inner] and batch.windows == 0
+    restored = ns["py_current_exception"]()
+    assert restored is outer and restored.args == ("original", 41)
+    assert thread.pending == 1
+
+
 @pytest.mark.parametrize("backend", (1, 2, 3, 4))
 def test_post_finalizer_clear_never_queues_callbacks_even_for_live_refs(backend):
     model = SilentTracingClear(backend)
