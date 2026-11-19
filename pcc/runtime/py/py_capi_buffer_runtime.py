@@ -33,7 +33,12 @@ Private buffer flags remain owned here:
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_MEMORYVIEW
+from pcc.runtime.py.py_abi_constants import (
+    PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET,
+    PY_TYPE_BYTEARRAY,
+    PY_TYPE_BYTES,
+    PY_TYPE_MEMORYVIEW,
+)
 
 from pcc.extern import c_abi_typed_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
@@ -66,6 +71,7 @@ from pcc.unsafe import (
 
 py_type_of = extern("pcc_py_type_of", (c_ptr,), c_int64)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
+py_bytes_data_ptr = extern("py_bytes_data_ptr", (c_ptr,), c_ptr)
 py_memoryview_new = extern("py_memoryview_new", (c_ptr,), c_ptr)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
@@ -173,14 +179,16 @@ def _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) -> c_ptr:
 def _bytearray_from_memory(data, length: int) -> c_ptr:
     if length < 0:
         length = 0
-    total: int = 48 + length + 1  # sizeof(PyByteArrayObject) + len + 1
+    # Preserve this C factory's allocation size; 48 is not the payload offset.
+    total: int = 48 + length + 1
     obj = pcc_gc_alloc(total, PY_TYPE_BYTEARRAY, 0)  # PY_TYPE_BYTEARRAY
     if ptr_is_null(obj):
         return null()
-    store_i64(obj, 16, length)
+    store_i64(obj, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, length)
+    payload = py_bytes_data_ptr(obj)
     if length > 0 and not ptr_is_null(data):
-        memcpy(ptr_add(obj, 24), data, length)
-    store_i8(obj, 24 + length, 0)
+        memcpy(payload, data, length)
+    store_i8(payload, length, 0)
     return obj
 
 
