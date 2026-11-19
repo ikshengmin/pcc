@@ -247,6 +247,21 @@ it published a verified 25-module frontend IR bundle, then hit the 90 s
 watchdog (694.3 MiB peak, 1 GiB cap, 7 GiB host reserve). It produced no
 ELF and ran zero programs; the standalone runs are not an accepted `pcc_perf` arm.
 
+In an isolated warm Linux compile of [`native_stats.py`](../benchmarks/handler/native_stats.py),
+the first backend shard (index 89, 32.8 MB) consisted mostly of one gateway
+coroutine. A separate run of the standard per-item compiler on that shard
+wrote a 6,038,496-byte object in 46.35 s (peak RSS 556,044,288 bytes).
+All 24,979 `i1` PHI results had a syntactic use; that does not establish what
+dead-code elimination could remove. The formal run still produced no ELF
+executable, and no application or benchmark ran.
+
+In [CI run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171),
+all four Worker prior preflights stopped at the same source-inventory assertion.
+Separately, the [macOS Stage1 bootstrap receipt](https://github.com/ikshengmin/pcc/actions/runs/44358778171/artifacts/14456860366)
+shows that the indexed `c_codegen` worker exceeded its available budget by
+1,343,488 bytes after target selection. Stage2 and Stage3 were skipped; this
+run verifies neither a fix nor a Stage2-to-Stage1 resource comparison.
+
 A longer workload and an explicit-collection control passed 12/12 native
 launches with four distinct carriers each (same compiler/runtime, new ELF
 `c9bfdaaf138a`). At 16,384 iterations per carrier (65,536 total), with no
