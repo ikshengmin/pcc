@@ -50,7 +50,7 @@ end state, not a claim that every current implementation already meets it.
 
 ## CPython library contract (maintainer directive, 2026-09-08)
 
-Priority: native pcc1 self-hosting and the five-GC program remain P0. CPython
+Priority: native pcc1 self-hosting and the collector migration remain P0. CPython
 embedding, public tooling and ecosystem packages are P1 and must not displace
 or block that spine, change native execution ownership, or weaken GC contracts.
 
@@ -70,6 +70,41 @@ both CPython-callable and native-pcc1 entrypoints; neither proves the other.
 This is a required product contract, not a claim that the current implementation
 has completed every surface. The dependency ownership contract above still
 applies; do not implement the native entrypoint by delegating to CPython.
+
+## Garbage collection and extension ownership (maintainer directive, 2026-11-19)
+
+The product destination is one collector. Count-free generational tracing
+with incremental marking, heap pacing, and eligible generational relocation
+is the candidate to measure, not a proven throughput result. The two
+temporary GC3 experiments precede the decision to implement the full
+collector. Keep GC0–GC4 and `PCC_GC_BACKEND` unchanged during that decision
+and the migration. GC0 remains the reference for immediate refcount-based
+finalization in migration tests.
+
+- The unified collector does not promise that `__del__` or weakref callbacks
+  run immediately when a reference is dropped. They run during collection.
+- Explicit `gc.collect()` is a synchronization point. Before it returns, all
+  unreachable objects' finalizers and weakref callbacks due to the collection
+  must have completed, including callbacks deferred until the world resumes.
+  Do not treat a reachable or resurrected object as dead to satisfy this rule.
+- The `gc.collect()` return count need not equal CPython's integer. Lifecycle
+  regressions assert that the target object was collected and the expected
+  callbacks ran, not a particular incidental number of other objects.
+- CPython C-API objects keep counted compatibility ownership via the existing
+  `CpyHandle` boundary, including the NumPy extension chain. The observable
+  `Py_INCREF` / `Py_DECREF` ownership contract must hold even if normal
+  PCC-managed objects use a count-free collector. Test this boundary in each
+  migration layer; ordinary heap ownership is not a substitute for C-API tests.
+
+Retire modes only after all three gates pass: unchanged upstream-project and
+relevant CPython lifecycle tests (including the NumPy extension chain);
+throughput above frozen GC0 with no worse maximum pause or peak memory,
+checked with five same-input `pcc_perf.py` A/B pairs at one and four HTTP
+workers; and all five migration controls, including local macOS and the
+macOS CI gate. Before any removal, get maintainer approval on draft changes
+to `AGENTS.md` and `docs/project-intent.md`. Until approved, do not remove
+any legacy mode or change the runtime selector. This records required
+behavior and retirement gates, not current qualification.
 
 ## Public CLI parity contract (maintainer directive, 2026-09-08)
 
@@ -93,7 +128,7 @@ Current differences in cli_core/cli_bootstrap and the legacy adapter are
 migration gaps, even where historical code calls them intentional divergences.
 This paragraph specifies the target, not current completion. The maintainer
 promoted entry convergence to P0 for immediate work on 2026-09-08. It runs
-alongside native pcc1 self-host and five-GC P0 work, without editing another
+alongside native pcc1 self-host and collector migration, without editing another
 session's performance optimization. Do not replace
 the bootstrap entry or alter defaults without the relevant execution/parity
 and source-frozen bootstrap gates. Reuse capability-parity issue #171 for the

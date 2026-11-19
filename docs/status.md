@@ -26,6 +26,7 @@ pending-exception restoration passed before that failure; GC2–GC4 were not
 reached in this run. A separately labeled assertion-message observation on
 GC1 found one event (`outer`) and a still-live inner weak referent after
 four collections. It did not identify which root retained the referent.
+Tracked as [issue #3](https://github.com/ikshengmin/pcc/issues/3).
 
 First-phase work still open: collector-owner root boundaries and retained
 roots across callbacks, in-place amortized `bytearray.append`, and visibility
@@ -40,6 +41,20 @@ incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
 finalizers/weakref and roots, then retirement of the temporary selection
 and legacy paths. Measure throughout against frozen GC0 and asyncio
 baselines rather than keeping GC0 as a permanent product mode.
+
+Before funding those layers, test the count-free route in two local-only
+GC3 builds: first remove redundant counting protocol while preserving
+real roots, barriers and C-API ownership; then add a minimal young-slab
+prototype. Verify call-site differences and actual minor work, then take
+five same-input A/B pairs against frozen GC0 and an unaffected control.
+Use all `pcc_perf.py` primitives and GET / C512 at one and four workers;
+report throughput, maximum pause, peak memory and tail latency. The
+stacked prototype must match GC0 within 10% at both worker counts with
+consistent pairs to justify the count-free route; otherwise the maintainer
+reconsiders GC0 with biased accounting and tracing cycle collection.
+Report results and reproducible commands before deciding the route. The
+experimental code and changes to the project agreements do not land
+during this decision. There are no experimental results yet.
 
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
