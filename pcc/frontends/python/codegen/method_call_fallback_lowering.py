@@ -23,6 +23,7 @@ from pcc.frontends.python.py_ast import (
     IntType,
     ListType,
     Name,
+    NoneLit,
     NoneType,
     StrLit,
     StrType,
@@ -254,24 +255,13 @@ class MethodCallFallbackLoweringMixin:
             and len(expr.args) <= 1
             and not expr.kwargs
         ):
-            # bytearray.pop([index]) removes and returns the byte at index
-            # (default last) as an int, shrinking the receiver in place. No-arg
-            # form passes py_None; the runtime treats a None/non-int index as
-            # "last element". Raises IndexError on empty / out-of-range.
-            recv = self._emit_expr(attr.obj)
-            if expr.args:
-                index_obj = self._emit_as_object(expr.args[0])
-            else:
-                index_obj = self._emit_slice_bound_object(None)
-            result = self.builder.call(
-                self.runtime["py_bytearray_pop"],
-                [recv, index_obj],
-                name=self._fresh("bytearray.pop"),
+            # This exact producer returns a boxed byte (0..255) or sets
+            # IndexError. Keep the receiver live while evaluating the index
+            # and publish the actual result before retiring either operand.
+            index = expr.args[0] if expr.args else NoneLit(span=expr.span, ty=NoneType(name="None"))
+            return self._emit_owned_operand_runtime_call(
+                expr, "py_bytearray_pop", 2, operand_exprs=(attr.obj, index),
             )
-            self._emit_post_call_err_check(expr.span)
-            if expr.args:
-                self._gc_release_if_owned(index_obj, expr.args[0])
-            return result
         if (
             isinstance(obj_ty, (BytesType, ByteArrayType))
             and attr.name == "rfind"
