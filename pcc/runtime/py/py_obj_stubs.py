@@ -3756,7 +3756,39 @@ def _bytearray_extended_commit(receiver, source, scratch, raw_lo: int, raw_hi: i
     return result
 
 
-def _bytearray_set_extended(o, lo, hi, step: int, replacement) -> int:
+def _bytearray_contiguous_commit(receiver, source, raw_lo: int, raw_hi: int) -> int:
+    # The RHS leaf is already leased or is the independent converted bytes.
+    # Recompute bounds after conversion: __index__ may have changed the target.
+    pcc_py_gc_minor_graph_lock()
+    target = pcc_gc_resolve_borrowed_root_slot_unlocked(receiver, 0)
+    leaf = load_ptr(source, 0)
+    length: int = load_i64(target, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    count: int = load_i64(leaf, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    start: int = _bytes_normalize_lo(raw_lo, length, 1)
+    stop: int = _bytes_normalize_lo(raw_hi, length, 1)
+    span: int = stop - start
+    if span < 0:
+        span = 0
+    result: int = 0
+    if count > span:
+        result = -1  # Existing inline representation cannot grow.
+    elif ptr_eq(target, leaf) == 0:
+        data = ptr_add(target, PYBYTESOBJECT_DATA_OFFSET)
+        if count > 0:
+            memcpy(ptr_add(data, start), ptr_add(leaf, PYBYTESOBJECT_DATA_OFFSET), count)
+        if count < span:
+            if stop < length:
+                memmove(ptr_add(data, start + count), ptr_add(data, stop), length - stop)
+            new_length: int = length - (span - count)
+            store_i64(target, PYBYTESOBJECT_BYTE_LEN_OFFSET, new_length)
+            store_i8(data, new_length, 0)
+    # A non-growing contiguous assignment from this very leaf is an identity:
+    # source length == target length, and count <= span <= target length.
+    pcc_py_gc_minor_graph_unlock()
+    return result
+
+
+def _bytearray_set_slice_owned(o, lo, hi, step: int, replacement) -> int:
     # Freeze the existing integer/omitted bound convention to scalars. The
     # endpoints below clip exactly like omitted bounds for the step direction.
     raw_lo: int = -9223372036854775807 - 1
@@ -3798,6 +3830,10 @@ def _bytearray_set_extended(o, lo, hi, step: int, replacement) -> int:
             status = _buffer_error(3, cstr("can assign only bytes-like or an int sequence"))
     reserved: int = 0
     while status == 0:
+        if step == 1:
+            if _bytearray_contiguous_commit(borrowed, source, raw_lo, raw_hi) != 0:
+                status = _buffer_error(11, cstr("bytearray slice assignment cannot grow the object in place"))
+            break
         need: int = _bytearray_extended_commit(borrowed, source, scratch, raw_lo, raw_hi, step, reserved)
         if need <= 0:
             if need < 0:
@@ -3840,8 +3876,8 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
     cannot grow.  A step-1 replacement longer than the span it replaces would
     need a reallocation this slot cannot publish -- every other reference
     would keep pointing at the old object -- so it is refused loudly instead
-    of silently truncating.  Equal-length and shrinking step-1 stores, and
-    extended slices (which CPython requires to match exactly), are all exact.
+    of silently truncating. Both paths consume the prepared RHS under the
+    snapshot lock; this does not install an active-export resize policy.
     """
     if _type_of(o) != PY_TYPE_BYTEARRAY:
         py_raise_owned(
@@ -3859,72 +3895,7 @@ def py_bytearray_set_slice(o, lo, hi, step, replacement) -> int:
             )  # PY_EXC_VALUEERROR
             return -1
 
-    if step_v != 1:
-        return _bytearray_set_extended(o, lo, hi, step_v, replacement)
-
-    length: int = load_i64(o, 16)
-    src = _bytes_data(replacement)
-    tmp = null()
-    src_n: int = 0
-    if ptr_is_null(src) != 0:
-        tag: int = _type_of(replacement)
-        if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
-            tmp = _bytes_from_int_sequence(replacement, 1)
-            if py_err_occurred() != 0:
-                return -1
-            if ptr_is_null(tmp) == 0:
-                src = _bytes_data(tmp)
-                src_n = py_bytes_len(tmp)
-        if ptr_is_null(src) != 0:
-            if ptr_is_null(tmp) == 0:
-                py_decref(tmp)
-            py_raise_owned(
-                py_exc_new(
-                    3,
-                    cstr("can assign only bytes-like or an int sequence"),
-                )
-            )  # PY_EXC_TYPEERROR
-            return -1
-    else:
-        src_n = py_bytes_len(replacement)
-
-    lo_v: int = _bytes_slice_lo(lo, length, step_v)
-    hi_v: int = _bytes_slice_hi(hi, length, step_v)
-    lo_v = _bytes_normalize_lo(lo_v, length, step_v)
-    hi_v = _bytes_normalize_hi(hi, hi_v, length, step_v)
-
-    span: int = hi_v - lo_v
-    if span < 0:
-        span = 0
-    if src_n > span:
-        if ptr_is_null(tmp) == 0:
-            py_decref(tmp)
-        py_raise_owned(
-            py_exc_new(
-                11,
-                cstr(
-                    "bytearray slice assignment cannot grow the object "
-                    "in place"
-                ),
-            )
-        )  # PY_EXC_NOTIMPLEMENTEDERROR
-        return -1
-    i: int = 0
-    while i < src_n:
-        store_i8(o, 24 + lo_v + i, load_i8(src, i))
-        i = i + 1
-    if src_n < span:
-        tail: int = length - hi_v
-        j: int = 0
-        while j < tail:
-            store_i8(o, 24 + lo_v + src_n + j, load_i8(o, 24 + hi_v + j))
-            j = j + 1
-        new_len: int = length - (span - src_n)
-        store_i64(o, 16, new_len)
-        store_i8(o, 24 + new_len, 0)
-    if ptr_is_null(tmp) == 0:
-        py_decref(tmp)
-    return 0
+    return _bytearray_set_slice_owned(o, lo, hi, step_v, replacement)
 
 
 def _hex_digit(v: int) -> int:
