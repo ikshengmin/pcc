@@ -3176,9 +3176,36 @@ def py_bytes_decode_with_encoding(o, encoding, errors):
     return _bytes_decode_guarded(o, encoding, errors, -1, 0)
 
 
+def _bytearray_read_item(o, i: int) -> int:
+    # A pop can change both the length and the byte at a normalized index.
+    # Only a native byte or the miss sentinel leaves graph exclusion.
+    slot = stack_alloc(_BUFFER_BYTES)
+    store_ptr(slot, 0, o)
+    pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
+    n: int = load_i64(current, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET)
+    if i < 0:
+        i = i + n
+    value: int = _BYTEARRAY_INDEX_OUT_OF_RANGE
+    if i >= 0 and i < n:
+        data = _bytes_data(current)
+        if ptr_is_null(data) == 0:
+            value = load_i8(data, i) & 255
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave_local(slot)
+    return value
+
+
 @c_abi_export("py_bytes_getitem")
 def py_bytes_getitem(o, k):
     i: int = py_int_value_i64(k)
+    if _type_of(o) == PY_TYPE_BYTEARRAY:
+        value: int = _bytearray_read_item(o, i)
+        if value >= 0:
+            return py_int_from_i64(value)
+        py_raise_owned(py_exc_new(5, cstr("bytes index out of range")))
+        return null()
     n: int = py_bytes_len(o)
     data = _bytes_data(o)
     if i < 0:
