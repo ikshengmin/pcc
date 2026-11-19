@@ -67,6 +67,7 @@ py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_obj_index = extern("py_obj_index", (c_ptr,), c_ptr)
 py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+py_bytes_data_ptr = extern("py_bytes_data_ptr", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 _int_open_root = extern("_pcc_int_bytes_open_root", (c_ptr, c_ptr), c_ptr)
@@ -510,9 +511,13 @@ def _copy_int_bytes_text(obj, metadata: c_ptr) -> c_ptr:
         store_i64(metadata, 0, length)
         snapshot = malloc(length + 1)
         if not ptr_is_null(snapshot):
+            if tag == PY_TYPE_BYTEARRAY:
+                data = py_bytes_data_ptr(current)
+            else:
+                data = ptr_add(current, PYBYTESOBJECT_DATA_OFFSET)
             i: int = 0
             while i < length:
-                store_i8(snapshot, i, load_i8(current, PYBYTESOBJECT_DATA_OFFSET + i))
+                store_i8(snapshot, i, load_i8(data, i))
                 i = i + 1
             store_i8(snapshot, length, 0)
     pcc_py_gc_minor_graph_unlock()

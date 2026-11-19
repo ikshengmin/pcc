@@ -62,6 +62,7 @@ class _IntTextModel:
             "store_i64": lambda p, o, v: self.set_integer(p, o, v, "q"),
             "store_ptr": self.set_pointer,
             "py_obj_type_tag": self.tag,
+            "py_bytes_data_ptr": self.payload,
             "pcc_gc_load_ptr": lambda _owner, slot: self.get_pointer(slot),
             "pcc_py_gc_minor_graph_lock": self.lock,
             "pcc_py_gc_minor_graph_unlock": self.unlock,
@@ -95,9 +96,19 @@ class _IntTextModel:
             return result
         return _Pointer(owner=pointer, offset=offset)
 
+    def payload(self, leaf):
+        assert self.locked and leaf.alive
+        return memoryview(leaf.value)
+
     def byte(self, pointer, offset):
+        if isinstance(pointer, memoryview):
+            assert self.locked, "mutable payload escaped the graph-locked snapshot"
+            return pointer[offset]
+        if isinstance(pointer, _Pointer) and isinstance(pointer.owner, _Input):
+            return self.byte(pointer.owner, pointer.offset + offset)
         if isinstance(pointer, _Input):
             assert self.locked and pointer.alive
+            assert pointer.tag == abi.PY_TYPE_BYTES, "mutable bytes are not necessarily inline"
             return pointer.value[offset - abi.PYBYTESOBJECT_DATA_OFFSET]
         return pointer.owner[pointer.offset + offset]
 
@@ -244,6 +255,16 @@ def test_memoryview_omitted_and_explicit_base_model(factory):
     with pytest.raises(ValueError) as actual:
         _IntTextModel().convert(invalid)
     assert str(actual.value) == str(expected.value)
+
+
+def test_snapshot_walks_nested_views_to_the_mutable_leaf():
+    payload = bytearray(b"+12_345")
+    inner = _Input(memoryview(payload))
+    outer = _Input(memoryview(payload))
+    outer.base = inner  # CPython normally flattens this chain; the PCC ABI need not.
+    model = _IntTextModel()
+    assert model.ns["py_obj_as_int_object_args"](outer, None) == int(payload)
+    assert not model.error and not model.roots and not model.allocations and not model.locked
 
 
 def test_base_callback_reloads_root_and_snapshot_outlives_source_model():
