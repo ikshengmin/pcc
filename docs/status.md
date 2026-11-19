@@ -23,9 +23,11 @@ qualification or a performance comparison. The separate native pending-
 exception/weakref test passed on GC0 in both variants but failed its later
 `outer`, `inner` event-list assertion on GC1 in both variants. Immediate
 pending-exception restoration passed before that failure; GC2–GC4 were not
-reached in this run. A separately labeled assertion-message observation on
-GC1 found one event (`outer`) and a still-live inner weak referent after
-four collections. It did not identify which root retained the referent.
+reached in this run. A later direct run of those two unchanged native files
+covered GC2–GC4 (six runs): all six reached the same callback-list assertion
+and failed. A separate assertion-message observation on GC1 found one event
+(`outer`) and a still-live inner weak referent after four collections. It did
+not identify which root retained the referent, or inspect the other modes.
 Tracked as [issue #3](https://github.com/ikshengmin/pcc/issues/3).
 
 First-phase work still open: collector-owner root boundaries and retained
@@ -92,8 +94,17 @@ stacked prototype must match GC0 within 10% at both worker counts with
 consistent pairs to justify the count-free route; otherwise the maintainer
 reconsiders GC0 with biased accounting and tracing cycle collection.
 Report results and reproducible commands before deciding the route. The
-experimental code and changes to the project agreements do not land
-during this decision. There are no experimental results yet.
+experimental code and changes to the project agreements do not land during
+this decision. There are no qualified paired measurements yet.
+
+Linux experimental prechecks (not an A/B): the measured GET entry replaces
+11 counted root updates with 11 tracing root updates; raw leases, frames,
+safepoints and field barriers remain. A four-carrier C512 precheck had zero
+request errors on frozen GC0, but both stock and candidate GC3 had request
+errors and cannot be used as throughput results. The primitive arm stopped
+before compilation at the host reserve preflight. A private young-slab
+allocator fixture ran once natively and passed retention and terminal-free
+reuse checks; no minor collection or performance row has run.
 
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
