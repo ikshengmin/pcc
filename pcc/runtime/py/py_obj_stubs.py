@@ -3710,34 +3710,54 @@ def _bytearray_delete_selected(o, lo: int, hi: int, step: int, length: int) -> i
     return 0
 
 
+def _bytearray_delete_contiguous(o, lo, hi) -> int:
+    # Freeze the existing integer/None convention before acquiring the lock.
+    # For a positive step these defaults clip to zero and the live length.
+    raw_lo: int = 0
+    raw_hi: int = 9223372036854775807
+    if _bytes_is_none_or_null(lo) == 0:
+        raw_lo = py_int_value_i64(lo)
+    if _bytes_is_none_or_null(hi) == 0:
+        raw_hi = py_int_value_i64(hi)
+
+    slot = stack_alloc(_BUFFER_BYTES)
+    store_ptr(slot, 0, o)
+    pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
+    pcc_py_gc_minor_graph_lock()
+    target = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
+    length: int = load_i64(target, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET)
+    start: int = _bytes_normalize_lo(raw_lo, length, 1)
+    stop: int = _bytes_normalize_lo(raw_hi, length, 1)
+    if stop > start:
+        data = _bytes_data(target)
+        if stop < length:
+            memmove(ptr_add(data, start), ptr_add(data, stop), length - stop)
+        new_length: int = length - (stop - start)
+        store_i64(target, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, new_length)
+        store_i8(data, new_length, 0)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave_local(slot)
+    return 0
+
+
 @c_abi_export("py_bytearray_del_slice")
 def py_bytearray_del_slice(o, lo, hi, step) -> int:
     if _type_of(o) != PY_TYPE_BYTEARRAY:
         return -1
-    length: int = load_i64(o, 16)
     step_v: int = 1
     if _bytes_is_none_or_null(step) == 0:
         step_v = py_int_value_i64(step)
         if step_v == 0:
             return -1
+    if step_v == 1:
+        return _bytearray_delete_contiguous(o, lo, hi)
 
+    length: int = load_i64(o, 16)
     lo_v: int = _bytes_slice_lo(lo, length, step_v)
     hi_v: int = _bytes_slice_hi(hi, length, step_v)
     lo_v = _bytes_normalize_lo(lo_v, length, step_v)
     hi_v = _bytes_normalize_hi(hi, hi_v, length, step_v)
 
-    if step_v == 1:
-        if hi_v <= lo_v:
-            return 0
-        tail: int = length - hi_v
-        i: int = 0
-        while i < tail:
-            store_i8(o, 24 + lo_v + i, load_i8(o, 24 + hi_v + i))
-            i = i + 1
-        new_len: int = length - (hi_v - lo_v)
-        store_i64(o, 16, new_len)
-        store_i8(o, 24 + new_len, 0)
-        return 0
     return _bytearray_delete_selected(o, lo_v, hi_v, step_v, length)
 
 
