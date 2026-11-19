@@ -158,7 +158,7 @@ consistent pairs to justify the count-free route; otherwise the maintainer
 reconsiders GC0 with biased accounting and tracing cycle collection.
 Report results and reproducible commands before deciding the route. The
 experimental code and changes to the project agreements do not land during
-this decision. There are no qualified paired measurements yet.
+this decision. The combined primitive and HTTP gate has not passed.
 
 Linux experimental prechecks (not an A/B): the measured GET entry replaces
 11 counted root updates with 11 tracing root updates; raw leases, frames,
@@ -168,6 +168,40 @@ errors and cannot be used as throughput results. The primitive arm stopped
 before compilation at the host reserve preflight. A private young-slab
 allocator fixture ran once natively and passed retention and terminal-free
 reuse checks; no minor collection or performance row has run.
+
+## GC3 counting protocol, experiment 1 (local Apple Silicon Mac, 2026-11-19)
+
+Owner-reported replay of `076fa37e` + `gc3-codegen-v2.patch`. These are
+in-process primitive and handler measurements, not gateway HTTP or Linux
+results. The first arm build hit `MEMORY_LIMIT` at 6.5 s (~1.10 GB) under
+the kit's 1 GiB tree cap, with eight runtime-module workers in parallel.
+The owner used the stock 6 GiB cap for the build retry. Timed stages peaked
+at ≤402 MB; during `ab` the load was 5.5–7.6 on 12 cores and the unchanged
+GC0 control drifted about ±3%.
+
+The four qualified primitive functions had no remaining retain/release calls
+in their specialized bodies: counted roots became traced updates, with frame,
+pin and lease calls unchanged. Against stock GC3, the candidate won all five
+`prim` pairs for each of: loop +11%, range +14%, tuple +21%, try +13%,
+call +6% and kwcall +5%. That gain did not carry through to the handler:
+
+| In-process handler comparison | 1 worker | 4 workers |
+| --- | ---: | ---: |
+| Cross-run, candidate / stock GC3 | 1.02 | 1.01 |
+| Official `ab`, candidate vs stock GC3 (pair wins) | -5.4% (2/5) | -2.8% (3/5) |
+| Official `ab`, unchanged GC0 control | +2.5% | -3.0% |
+| Cross-run, candidate / frozen GC0 | 0.72 | 0.53 |
+| Official handler QPS, candidate GC3 vs GC0 | 37,930 vs 51,034 | 79,224 vs 139,837 |
+
+There was no measurable handler benefit, and the candidate was not within
+10% of GC0 at either worker count. Four-worker candidate/GC0 primitive ratios
+were `str_concat` 0.22, `int_str` 0.22, `fstring` 0.23, `raise` 0.21,
+`dict` 0.31, `closure` 0.35 and `list` 0.46; this allocation-heavy group
+was about 0.45–0.58 at one worker. The ratios do not identify a hot function.
+Before choosing the young-generation insertion point, use `pcc_perf.py top`
+and `gap` on GC3 `str_concat` and `raise` at four workers to distinguish
+allocation from collection costs. No GET/C512, HTTP tail or maximum pause is
+reported here; these measurements alone do not select a collector route.
 
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
