@@ -23,6 +23,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
+    PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET,
     PYBYTEARRAYOBJECT_DATA_OFFSET,
     PYBYTESOBJECT_BYTE_LEN_OFFSET,
     PYBYTESOBJECT_DATA_OFFSET,
@@ -1025,7 +1026,10 @@ def _buffer_count_fill(slots, tokens, mutable: int) -> int:
         return _buffer_error(15, cstr("byte count does not fit in an index-sized integer"))
     if count < 0:
         return _buffer_error(2, cstr("negative count"))
-    if count > 9223372036854775782:
+    overhead: int = PYBYTESOBJECT_DATA_OFFSET + 1  # Include the trailing NUL.
+    if mutable != 0:
+        overhead = PYBYTEARRAYOBJECT_DATA_OFFSET + 1
+    if count > 9223372036854775807 - overhead:
         kind: int = 15
         if mutable != 0:
             kind = 19
@@ -1033,7 +1037,7 @@ def _buffer_count_fill(slots, tokens, mutable: int) -> int:
     status: int = _buffer_new_raw(slots, tokens, null(), count, mutable)
     if status == 0 and count > 0:
         result = load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)
-        memset(ptr_add(result, PYBYTESOBJECT_DATA_OFFSET), 0, count)
+        memset(_bytes_data(result), 0, count)
     return status
 
 
@@ -1279,17 +1283,18 @@ def py_bytes_new(data, byte_len: int):
 def _bytearray_new_raw(data, byte_len: int):
     if byte_len < 0:
         byte_len = 0
-    p = pcc_gc_alloc(24 + byte_len + 1, PY_TYPE_BYTEARRAY, 0)
+    p = pcc_gc_alloc(PYBYTEARRAYOBJECT_DATA_OFFSET + byte_len + 1, PY_TYPE_BYTEARRAY, 0)
     if ptr_is_null(p):
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bytearray: out of memory")))
         return null()
     store_i64(p, 0, 1)
     store_i32(p, 8, PY_TYPE_BYTEARRAY)  # PY_TYPE_BYTEARRAY
-    store_i64(p, 16, byte_len)
+    store_i64(p, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, byte_len)
+    payload = _bytes_data(p)
     if not ptr_is_null(data) and byte_len > 0:
-        memcpy(ptr_add(p, 24), data, byte_len)
-    store_i8(p, 24 + byte_len, 0)
+        memcpy(payload, data, byte_len)
+    store_i8(payload, byte_len, 0)
     return p
 
 
