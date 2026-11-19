@@ -665,6 +665,11 @@ def _without_type_checking_imports_uncached(source: str) -> str:
             else:
                 record_typing_imports(rest)
 
+    if type(source) is str and not typing_aliases and not flag_aliases:
+        # No guard can match. Keep the original split/join result, including
+        # line endings and single-line identity, without the second line list.
+        return "".join(source.splitlines(keepends=True))
+
     out: list[str] = []
     guard_indent = -1
     guard_has_pass = False
