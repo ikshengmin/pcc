@@ -597,11 +597,9 @@ class ExceptionLoweringMixin:
 
         for i, h in enumerate(stmt.handlers):
             try_log("handler begin")
-            test_bb = fn.append_basic_block(name=self._fresh(f"except.test.{i}"))
+            # The first test starts in the open error dispatcher; the rest
+            # start on the previous test's false edge. Emit the test there.
             body_bb = fn.append_basic_block(name=self._fresh(f"except.body.{i}"))
-            if not self._builder_block_is_terminated():
-                self.builder.branch(test_bb)
-            self.builder.position_at_end(test_bb)
 
             if h.exc_type is None:
                 cond = ir.Constant(_I1, 1)
