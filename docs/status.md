@@ -128,6 +128,16 @@ Migration order:
    frontend writebacks in the same commit. Validate visible alias mutation,
    identity, `None`, and `BufferError` without mutation while exported.
 
+Step 1 progress: `af2b1838` centralized payload access for the locked writers;
+`b7adbc6a` routed managed bytearray construction through the layout helpers.
+`b6494abe` covered exact bytes-like comparisons; `ec0f30fd` used the helpers
+in the managed constructor for writable `PyMemoryView_FromMemory` views.
+Each focused ordinary Linux x86-64 pcc0 native check matched CPython on GC0–GC4
+(5/5 per checkpoint) with a source-matched runtime archive. Raw C `Py_buffer`
+acquisition/snapshot, other direct consumers and native writers, shared live-export
+accounting, and the layout change remain open. In-place `append` must still land
+with removal of both writebacks. No benchmark, CI, macOS or pcc1 result is claimed.
+
 Dynamic method binding can land independently only with its specific call
 and return semantics explicitly tested. Registration alone is not an
 in-place append fix.
