@@ -7,6 +7,40 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Single-collector migration: Linux correctness baseline (2026-11-19)
+
+The destination is one collector, not five shippable modes. GC0–GC4 and the
+process-start selector remain temporary compatibility and measurement controls
+during migration. Remove the legacy implementations and mode selection only
+after the combined collector meets its correctness and performance gates.
+
+Fresh Linux x86_64 pcc0 runs with source-matched, threaded atomic runtime
+archives: `b278f9391` passed 28/28 original sweep-verdict cases; `076fa37e`
+passed 28/28 sweep-verdict cases plus 8/8 retained-root controls (registered
+slot and live caller stack for each of GC1–GC4). For the controls exit 142
+was expected, with `collected=1 first=dead second=live`. This is not Darwin
+qualification or a performance comparison. The separate native pending-
+exception/weakref test passed on GC0 in both variants but failed its later
+`outer`, `inner` event-list assertion on GC1 in both variants. Immediate
+pending-exception restoration passed before that failure; GC2–GC4 were not
+reached in this run. A separately labeled assertion-message observation on
+GC1 found one event (`outer`) and a still-live inner weak referent after
+four collections. It did not identify which root retained the referent.
+
+First-phase work still open: collector-owner root boundaries and retained
+roots across callbacks, in-place amortized `bytearray.append`, and visibility
+of dead objects queued for background cleanup. The release integrator owns
+the CI-to-issue baseline. GC4 callback-window correctness is tracked separately
+from the corrected relocation-selector fixture. No new runtime fix or
+five-pair A/B has been qualified by these baseline runs.
+
+Remaining layers: Lua-style generational marking (starting from GC3),
+generational relocation (starting from GC4, after callback correctness),
+incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
+finalizers/weakref and roots, then retirement of the temporary selection
+and legacy paths. Measure throughout against frozen GC0 and asyncio
+baselines rather than keeping GC0 as a permanent product mode.
+
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
 Since `cb7a3ec5d` (2026-11-13) optimized AArch64 code is captured as typed

@@ -59,6 +59,31 @@ sequenceDiagram
 Verified against source at `4de52048c` (2026-11-15). Function and file names
 are the authority; re-check them before relying on a line here.
 
+### Migration target: one collector
+
+The backend names below describe the current implementation and temporary
+migration controls, not the long-term product interface. The destination is
+one collector with common root enumeration and finalizer/weakref processing,
+generational marking, incremental work and heap pacing, and relocation only
+where the roots and object state allow it. The temporary selector and redundant
+implementations are deleted after the combined collector passes the gates.
+
+Before the generational layer, establish the owner-thread root boundary:
+collector-local state is not an implicit root, but live caller stack/register
+roots and explicit roots remain authoritative. In particular, root-registration
+elision and nested callback lifetimes must agree with the ranges actually
+scanned. This is a pending contract, not implemented by the existing sweep
+phase split. On Linux x86_64, `b278f9391` passed the 28-case sweep matrix;
+`076fa37e` passed the matrix plus eight registered-root and caller-stack
+controls. Those runs do not qualify the boundary change or Darwin.
+
+During migration, GC0 retains its reference-count timing and GC1–GC4 do not
+promise immediate finalization. Explicit `gc.collect()` must be a
+synchronization point for the finalizers and weakref callbacks from the
+collection; this is also the contract for the unified collector. The GC4
+callback-window investigation is separate from the root-boundary work and
+must be resolved before enabling the generational relocation layer.
+
 ### Selection
 
 `PCC_GC_BACKEND=0..4` is read once and fixed for the process
