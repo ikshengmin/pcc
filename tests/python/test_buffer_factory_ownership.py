@@ -40,6 +40,8 @@ class BufferModel:
             global_addr=lambda name: -1 if 'borrowed' in name else 6,
             global_load_ptr=lambda name: None,
             pcc_gc_frame_enter=self.enter, pcc_gc_frame_leave=self.leave,
+            pcc_gc_frame_enter_local=self.enter, pcc_gc_frame_leave_local=self.leave,
+            pcc_gc_resolve_borrowed_root_slot_unlocked=self.load,
             pcc_gc_root_copy_lease=self.copy, pcc_gc_root_copy_borrowed_lease=self.copy,
             pcc_gc_foreign_lease_acquire=self.acquire, pcc_gc_foreign_lease_release=self.release,
             pcc_gc_root_move=self.move, pcc_gc_store_root=self.clear_root,

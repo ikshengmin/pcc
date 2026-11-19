@@ -71,6 +71,7 @@ from pcc.unsafe import (
     load_f64,
     load_ptr,
     memcpy,
+    memmove,
     memset,
     null,
     ptr_add,
@@ -922,6 +923,13 @@ _BUFFER_BYTES = 8
 
 define_global_i32("pcc_buffer_borrowed_map", -1)
 define_global_i32("pcc_bytearray_append_borrowed_map", -2)
+pcc_gc_frame_enter_local = extern(
+    "pcc_gc_frame_enter_local", (c_ptr, c_ptr), c_void
+)
+pcc_gc_frame_leave_local = extern("pcc_gc_frame_leave_local", (c_ptr,), c_void)
+pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
+    "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
+)
 define_global_i32("pcc_buffer_owned_map", 6)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
@@ -2584,54 +2592,70 @@ def py_bytearray_insert(o, index, item):
     return out
 
 
+_BYTEARRAY_EMPTY = -1
+_BYTEARRAY_INDEX_OUT_OF_RANGE = -2
+
+
+def _bytearray_shrink(o, at: int, clear: int) -> int:
+    # A contended graph acquisition may park. Publish the caller-borrowed
+    # receiver first and resolve that slot after acquisition; the returned
+    # byte or error code is all that survives the release.
+    slot = stack_alloc(_BUFFER_BYTES)
+    store_ptr(slot, 0, o)
+    pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
+    pcc_py_gc_minor_graph_lock()
+    current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
+    data = ptr_add(current, PYBYTESOBJECT_DATA_OFFSET)
+    result: int = 0
+    new_length: int = 0
+    if clear == 0:
+        length: int = load_i64(current, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+        if length <= 0:
+            result = _BYTEARRAY_EMPTY
+        else:
+            if at < 0:
+                at = at + length
+            if at < 0 or at >= length:
+                result = _BYTEARRAY_INDEX_OUT_OF_RANGE
+            else:
+                result = load_i8(data, at) & 255
+                new_length = length - 1
+                if at < new_length:
+                    memmove(ptr_add(data, at), ptr_add(data, at + 1), new_length - at)
+    if result >= 0:
+        store_i64(current, PYBYTESOBJECT_BYTE_LEN_OFFSET, new_length)
+        store_i8(data, new_length, 0)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_gc_frame_leave_local(slot)
+    return result
+
+
 @c_abi_export("py_bytearray_clear")
 def py_bytearray_clear(o) -> None:
-    # bytearray.clear(): zero byte_len (offset 16) in place, keeping the
-    # buffer and its NUL terminator.
     if ptr_is_null(o) != 0 or _type_of(o) != PY_TYPE_BYTEARRAY:
         py_raise_owned(py_exc_new(3, cstr("clear() requires a bytearray")))
         return
-    data = _bytes_data(o)
-    store_i64(o, 16, 0)
-    if ptr_is_null(data) == 0:
-        store_i8(data, 0, 0)
+    _bytearray_shrink(o, 0, 1)
 
 
 @c_abi_export("py_bytearray_pop")
 def py_bytearray_pop(o, index):
-    # bytearray.pop([index]): remove and return the byte at ``index`` (default
-    # last) as an int. Shrinking never needs more room, so mutate in place
-    # (shift the tail down + decrement byte_len at offset 16). None/non-int
-    # index means "last element" (pop() == pop(-1)).
     if ptr_is_null(o) != 0 or _type_of(o) != PY_TYPE_BYTEARRAY:
         py_raise_owned(py_exc_new(3, cstr("pop() requires a bytearray")))
         return null()
-    length: int = py_bytes_len(o)
-    if length <= 0:
-        py_raise_owned(py_exc_new(5, cstr("pop from empty bytearray")))
-        return null()
-
-    at: int = length - 1
+    # Preserve this ABI's existing omitted-index convention. Only native
+    # scalars enter the transaction alongside the receiver's borrowed slot.
+    at: int = -1
     if ptr_is_null(index) == 0 and _type_of(index) == PY_TYPE_INT:
         at = py_int_value_i64(index)
-        if at < 0:
-            at = at + length
-    if at < 0 or at >= length:
+    result: int = _bytearray_shrink(o, at, 0)
+    if result == _BYTEARRAY_EMPTY:
+        py_raise_owned(py_exc_new(5, cstr("pop from empty bytearray")))
+        return null()
+    if result == _BYTEARRAY_INDEX_OUT_OF_RANGE:
         py_raise_owned(py_exc_new(5, cstr("pop index out of range")))
         return null()
-
-    data = _bytes_data(o)
-    if ptr_is_null(data) != 0:
-        py_raise_owned(py_exc_new(3, cstr("pop() requires a bytearray")))
-        return null()
-    byte: int = load_i8(data, at) & 255
-    k: int = at
-    while k < length - 1:
-        store_i8(data, k, load_i8(data, k + 1))
-        k = k + 1
-    store_i64(o, 16, length - 1)
-    store_i8(data, length - 1, 0)
-    return py_int_from_i64(byte)
+    return py_int_from_i64(result)
 
 
 @c_abi_export("py_memoryview_new")
