@@ -2362,6 +2362,7 @@ define_global_i32("pcc_list_extend_borrowed_map", -2)
 define_global_i32("pcc_list_extend_owned_map", 5)
 pcc_gc_native_frame_bind_map = extern("pcc_gc_native_frame_bind_map", (c_ptr, c_ptr), c_void)
 pcc_gc_native_frame_unbind_map = extern("pcc_gc_native_frame_unbind_map", (c_ptr,), c_void)
+pcc_gc_frame_roots_disabled_fast = extern("pcc_gc_frame_roots_disabled_fast", (), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_root_copy_borrowed_lease = extern(
     "pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64,
@@ -2394,11 +2395,24 @@ def _list_extend_acquire(slots, tokens, index: int) -> int:
     return 1
 
 
+def _list_extend_bind_range(frame_map: c_ptr, slots: c_ptr) -> c_ptr:
+    # Same admissions as the void map adapter: a bypassing list entry has
+    # no native descriptor. Keep the bind's actual ticket when admitted;
+    # neither a user iterator nor its finalizer may select how this ends.
+    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
+            or pcc_gc_frame_roots_disabled_fast() != 0):
+        return null()
+    count: int = load_i32(frame_map, 0)
+    if count == 0:
+        return null()
+    return pcc_gc_native_root_bind_range(slots, count)
+
+
 def _list_extend_iterable(destination, source) -> None:
     borrowed = stack_alloc(2 * _LIST_EXTEND_SLOT_BYTES)
     store_ptr(borrowed, 0, destination)
     store_ptr(borrowed, _LIST_EXTEND_SLOT_BYTES, source)
-    pcc_gc_native_frame_bind_map(global_addr("pcc_list_extend_borrowed_map"), borrowed)
+    borrowed_range = _list_extend_bind_range(global_addr("pcc_list_extend_borrowed_map"), borrowed)
     slots = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
     tokens = stack_alloc(_LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
     memset(slots, 0, _LIST_EXTEND_SLOT_COUNT * _LIST_EXTEND_SLOT_BYTES)
@@ -2406,7 +2420,7 @@ def _list_extend_iterable(destination, source) -> None:
     while index < _LIST_EXTEND_SLOT_COUNT:
         store_i64(tokens, index * _LIST_EXTEND_SLOT_BYTES, -1)
         index = index + 1
-    pcc_gc_native_frame_bind_map(global_addr("pcc_list_extend_owned_map"), slots)
+    owned_range = _list_extend_bind_range(global_addr("pcc_list_extend_owned_map"), slots)
     destination_slot = ptr_add(slots, _LIST_EXTEND_DESTINATION * _LIST_EXTEND_SLOT_BYTES)
     source_slot = ptr_add(slots, _LIST_EXTEND_SOURCE * _LIST_EXTEND_SLOT_BYTES)
     iterator_slot = ptr_add(slots, _LIST_EXTEND_ITERATOR * _LIST_EXTEND_SLOT_BYTES)
@@ -2479,8 +2493,8 @@ def _list_extend_iterable(destination, source) -> None:
             pcc_platform_abort()
             return
     py_tls_exc_swap_slot(error_slot)
-    pcc_gc_native_frame_unbind_map(slots)
-    pcc_gc_native_frame_unbind_map(borrowed)
+    pcc_gc_native_root_unbind(owned_range)
+    pcc_gc_native_root_unbind(borrowed_range)
 
 
 def _list_extend_source_length(source, tag: int) -> int:

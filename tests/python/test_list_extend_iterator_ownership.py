@@ -24,6 +24,7 @@ class _ExtensionModel:
     def __init__(self, failure, relocate, alias):
         self.failure, self.relocate = failure, relocate
         self.memory, self.frames, self.leases = {}, {}, {}
+        self.range_tickets = {}
         self.objects, self.items, self.events = [], [], []
         self.pending, self.fresh = None, None
         self.next_address, self.next_count, self.copy_count = 100, 0, 0
@@ -40,10 +41,15 @@ class _ExtensionModel:
             'ptr_add': lambda base, offset: base + offset,
             'load_ptr': self.load, 'load_i64': self.load,
             'store_ptr': self.store, 'store_i64': self.store,
-            'global_addr': lambda name: -2 if 'borrowed' in name else 5,
+            'global_addr': lambda name: name,
+            'load_i32': lambda name, offset: {
+                'pcc_gc_nonmoving_count_free': 0,
+                'pcc_list_extend_borrowed_map': -2, 'pcc_list_extend_owned_map': 5,
+            }[name],
             'cstr': lambda value: value,
-            'pcc_gc_native_frame_bind_map': self.enter,
-            'pcc_gc_native_frame_unbind_map': self.leave,
+            'pcc_gc_frame_roots_disabled_fast': lambda: 0,
+            'pcc_gc_native_root_bind_range': self.bind_range,
+            'pcc_gc_native_root_unbind': self.unbind_range,
             'pcc_gc_root_copy_borrowed_lease': self.copy,
             'pcc_gc_foreign_lease_acquire': self.acquire,
             'pcc_gc_foreign_lease_release': self.release,
@@ -61,7 +67,8 @@ class _ExtensionModel:
             'pcc_platform_abort': lambda: pytest.fail('invariant abort'),
         }
         _functions(Path(__file__).resolve().parents[2] / 'pcc/runtime/py/py_list.py',
-                   {'_list_extend_drop', '_list_extend_acquire', '_list_extend_iterable'}, self.ns)
+                   {'_list_extend_drop', '_list_extend_acquire',
+                    '_list_extend_bind_range', '_list_extend_iterable'}, self.ns)
 
     def new(self, name, *, fresh=True, immortal=False):
         obj = _Object(name, immortal=immortal)
@@ -124,6 +131,15 @@ class _ExtensionModel:
     def leave(self, base):
         assert all(self.load(base, index * 8) is None for index in range(abs(self.frames[base])))
         self.frames.pop(base)
+
+    def bind_range(self, base, count):
+        self.enter(count, base)
+        ticket = object()
+        self.range_tickets[ticket] = base
+        return ticket
+
+    def unbind_range(self, ticket):
+        self.leave(self.range_tickets.pop(ticket))
 
     def acquire(self, slot):
         self.boundary()
@@ -245,7 +261,7 @@ class _ExtensionModel:
 def test_list_extend_iteration_owns_every_live_value(failure, relocate, alias):
     model = _ExtensionModel(failure, relocate, alias)
     model.run()
-    assert model.frames == {} and model.leases == {} and model.fresh is None
+    assert model.frames == {} and model.range_tickets == {} and model.leases == {} and model.fresh is None
     assert model.destination[0].refs == model.source[0].refs == 1
     if failure is None:
         assert model.pending is None
