@@ -7,6 +7,43 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
+
+Since `cb7a3ec5d` (2026-11-13) optimized AArch64 code is captured as typed
+records and finalized by the twenty ported passes in
+`self_backend_aarch64_typed_{peepholes,cfg,tlv,pair}.py` instead of the old text
+passes. On CI, `Native wheel / linux-aarch64` "Build Stage1" then hit its
+7,200 s `--stage1-timeout` on every run from `1f2b1660c` on (last pass
+`294efe342`: 2,346 s). Run 44329580281 (`80a0a010f`) finished 76/598 modules;
+backend_finalize was 83% of backend time and per-worker peak RSS rose from
+1.59 to 5.55 GiB (`c_codegen`). macOS arm64 "Build current pcc1" fails on the
+same pipeline with a `WorkerMemoryError` at `typed_publish` of `c_codegen`.
+
+Fixes so far: `f02cfebbf` (bulk run nodes in `CompilerRecordSpanArena`),
+`201d5efd7` (pass outputs stored as one run, inputs copied in bulk),
+`bed62852c` (a pass output validated against the fragments' own semantics is a
+checked run; the next pass skips only its redundant header walk),
+`56c480c50` (CFG reads operands only for branch opcodes). Same-input A/B on the
+host pcc0 backend call for `pcc/ir/optimization/ir_mutator.py` (aarch64 linux,
+owned host route), parent `6242d4596` vs `56c480c50`, 5 alternating pairs:
+typed passes 19.92 -> 9.77 s median (5/5), whole emit 24.55 -> 14.41 s (5/5),
+peak RSS 297 -> 159 MiB (5/5), parse control 0.87 / 0.87 s; assembled section
+hashes identical in every pair. The pre-regression text route (`294efe342`)
+emits the same input in 3.49 s, so the typed route is still about 4x slower.
+The CFG public route deliberately revalidates on every access (tests pin
+getter order and late proof-callback corruption); the remaining cost is there
+and in non-owned peepholes (modes 1, 9, 13).
+
+Not yet run: the CI Stage1 itself, the native compiled peephole snapshot test
+(needs `PCC_RUNTIME_ARCHIVE`), Stage2/3. Repro: emit one module with
+`uv run python -m pcc --backend self --ir-scaffold=on --python-library
+--emit-llvm --target aarch64-unknown-linux-gnu pcc/ir/optimization/ir_mutator.py
+-o M.ll`, then time
+`emit_aarch64_darwin_indexed_transport(parse_self_backend_module(text),
+optimize=True, structured_instructions=True,
+phase_timing=ModulePhaseTiming(name))`; its `parent=prepare` coarse-phase
+events name each typed pass.
+
 ## Runtime jump threading; protocol-stale tests (local Mac, 2026-11-16)
 
 `80927cec` adds the owned `jump-thread` pass (`pcc/ir/optimization/jump_thread.py`)
