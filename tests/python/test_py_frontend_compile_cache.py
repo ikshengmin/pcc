@@ -1,3 +1,9 @@
+import errno
+import hashlib
+import json
+import os
+import shutil
+import sys
 from pathlib import Path
 
 import pytest
@@ -179,6 +185,58 @@ def test_frontend_ir_cache_round_trip_and_tamper_rejection(tmp_path, monkeypatch
     assert (
         compile_cache.load_python_frontend_ir_cache(plan, ["entry", "helper"]) is None
     )
+
+
+@pytest.mark.parametrize(
+    "case", ["cross_device", "same_device", "other_errno", "partial_copy", "wrong_bytes"]
+)
+def test_frontend_ir_cache_stages_cross_device_bundle(tmp_path, monkeypatch, case):
+    # Execute the actual helper in-process so the syscall failure is portable.
+    key = "a" * 64
+    parent = tmp_path / "cache"
+    entry = parent / key
+    descriptor, bundle = tmp_path / "descriptor", tmp_path / "bundle"
+    descriptor.write_text(f"{compile_cache._CACHE_SCHEMA}\n{key}\n0\n1\n3\n0\n1\napp\t3\n")
+    data = b"3\nabc"
+    bundle.write_bytes(data)
+    copies = []
+    real_replace, real_copy = os.replace, shutil.copy2
+
+    def replace(src, dst):
+        assert Path(src) == bundle and Path(dst).name == "ir.bundle"
+        if case == "same_device":
+            return real_replace(src, dst)
+        code = errno.EACCES if case == "other_errno" else errno.EXDEV
+        raise OSError(code, "simulated bundle move")
+
+    def copy(src, dst, **kwargs):
+        assert not entry.exists() and Path(dst).parent.parent == parent
+        copies.append(dst)
+        if case == "partial_copy":
+            Path(dst).write_bytes(b"3")
+            raise OSError(errno.ENOSPC, "simulated incomplete copy")
+        if case == "wrong_bytes":
+            Path(dst).write_bytes(b"3\nabd")  # Same size is not the same bundle.
+            return dst
+        return real_copy(src, dst, **kwargs)
+
+    monkeypatch.setattr(os, "replace", replace)
+    monkeypatch.setattr(shutil, "copy2", copy)
+    monkeypatch.setattr(sys, "argv", ["helper", "publish", *map(str, (descriptor, bundle, parent, entry))])
+    if case in ("cross_device", "same_device"):
+        exec(compile_cache._CACHE_HELPER_CODE, {})
+        assert (entry / "ir.bundle").read_bytes() == data
+        manifest = json.loads((entry / "manifest.json").read_text())
+        assert manifest["bundle_sha256"] == hashlib.sha256(data).hexdigest()
+    else:
+        with pytest.raises(ValueError if case == "wrong_bytes" else OSError) as caught:
+            exec(compile_cache._CACHE_HELPER_CODE, {})
+        if case != "wrong_bytes":
+            assert caught.value.errno == (errno.EACCES if case == "other_errno" else errno.ENOSPC)
+        assert not entry.exists()
+    assert len(copies) == (0 if case in ("other_errno", "same_device") else 1)
+    assert not descriptor.exists() and not bundle.exists()
+    assert not list(parent.glob("*.tmp.*"))
 
 
 def test_frontend_ir_cache_coordinates_byte_identical_compiler_copies(

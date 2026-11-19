@@ -107,6 +107,7 @@ _CODEGEN_ENV_NAMES = (
 
 
 _CACHE_HELPER_CODE = r"""
+import errno
 import hashlib
 import json
 import os
@@ -401,8 +402,19 @@ elif mode == "publish":
             os.makedirs(parent, exist_ok=True)
             os.mkdir(temporary)
             target_bundle = os.path.join(temporary, "ir.bundle")
-            os.replace(bundle_path, target_bundle)
+            source_sha256 = None
+            try:
+                os.replace(bundle_path, target_bundle)
+            except OSError as exc:
+                if exc.errno != errno.EXDEV:
+                    raise
+                # The input scratch file may live on a different filesystem.
+                # Copy into unpublished staging; the final rename stays atomic.
+                source_sha256 = sha256_file(bundle_path)
+                shutil.copy2(bundle_path, target_bundle)
             manifest["bundle_sha256"] = sha256_file(target_bundle)
+            if source_sha256 is not None and manifest["bundle_sha256"] != source_sha256:
+                raise ValueError("frontend cache bundle copy checksum mismatch")
             with open(os.path.join(temporary, "manifest.json"), "w", encoding="utf-8") as stream:
                 json.dump(manifest, stream, sort_keys=True, separators=(",", ":"))
                 stream.write("\n")
