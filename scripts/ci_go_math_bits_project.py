@@ -37,6 +37,9 @@ REVISION = "2aae1000ea1d4b28923b96db28acf4e3b99d6aff"
 PACKAGE = "math/bits"
 PACKAGE_DIR = "src/math/bits"
 RELEASE = "go1.27.3"
+# Official go list -deps -test -json math/bits, linux/amd64/v1, cgo off.
+# Hash of the portable JSON-lines selection, NOT a hash of package contents.
+REFERENCE_BUILD_IDS_SHA256 = "220a909f4e633dcfdb0eb92c31d74ad4425bb87eb48538d9e600cfb45d804b54"
 NORMAL = ("bits.go", "bits_errors.go", "bits_tables.go")
 INTERNAL_TEST = ("export_test.go",)
 EXTERNAL_TEST = ("bits_test.go", "example_math_test.go", "example_test.go")
@@ -261,6 +264,69 @@ def validate_graph(rows, goroot):
     return sources
 
 
+def reference_build_ids(rows, goroot, cache_root):
+    """Freeze exact per-instance source selection and dependency bindings.
+
+    validate_graph separately reads the actual files: identical bytes from a
+    shared directory do not say which instance the external tests imported.
+    cmd/go's generated source is in a private cache and is compared separately.
+    """
+    if not isinstance(rows, list) or any(type(row) is not dict or
+            not all(type(row.get(k)) is str for k in ("ImportPath", "Name", "Dir")) for row in rows):
+        raise ValueError("invalid official reference build-instance record")
+    ids = {row["ImportPath"] for row in rows}
+    if (len(ids) != len(rows) or any(row.get("Incomplete") or row.get("DepsErrors") or row.get("Error")
+                                     for row in rows)):
+        raise ValueError("incomplete or duplicate official reference build instance")
+    suffix = " [" + PACKAGE + ".test]"
+    source_root = goroot / "src"
+    normalized, maps, variants = [], 0, 0
+    for row in sorted(rows, key=lambda item: item["ImportPath"]):
+        key = row["ImportPath"]
+        variant = key.endswith(suffix)
+        logical = key.removesuffix(suffix)
+        if row.get("ForTest") != (PACKAGE if variant else None):
+            raise ValueError("inconsistent official ForTest: " + key)
+        variants += variant
+        imports, mapping = row.get("Imports", []), row.get("ImportMap", {})
+        if (type(imports) is not list or not all(type(s) is str for s in imports)
+                or len(set(imports)) != len(imports) or not set(imports) <= ids
+                or type(mapping) is not dict or not all(type(s) is str for s in mapping.values())
+                or not set(mapping.values()) <= set(imports)
+                or mapping != {dst.removesuffix(suffix): dst for dst in imports if dst.endswith(suffix)}):
+            raise ValueError("incomplete or inconsistent official ImportMap/Imports: " + key)
+        if any(row.get(k) for k in ("CgoFiles", "CFiles", "CXXFiles", "MFiles", "FFiles", "SwigFiles",
+                                    "SwigCXXFiles", "SysoFiles", "EmbedFiles")):
+            raise ValueError("unqualified official build input role: " + key)
+        maps += len(mapping)
+        source_dir = Path(row["Dir"]).relative_to(source_root).as_posix()
+        expected_dir = PACKAGE if key in {PACKAGE + ".test", PACKAGE + "_test" + suffix} else logical
+        if source_dir != expected_dir:
+            raise ValueError("official build instance source directory differs: " + key)
+        for field in ("GoFiles", "SFiles", "HFiles"):
+            names = row.get(field, [])
+            if (type(names) is not list or not all(type(n) is str for n in names)
+                    or len(names) != len(set(names))):
+                raise ValueError("invalid official build source selection: " + key)
+        go = row.get("GoFiles", [])
+        if key == PACKAGE + ".test":
+            if (len(go) != 1 or not Path(go[0]).is_absolute() or ".." in Path(go[0]).parts
+                    or Path(go[0]) == cache_root or not Path(go[0]).is_relative_to(cache_root)):
+                raise ValueError("official generated entry outside the private cache")
+            go = ["<generated-test-entry>"]
+        normalized.append({"ImportPath": key, "Name": row["Name"], "ForTest": row.get("ForTest"),
+                           "SourceDir": source_dir, "GoFiles": go, "SFiles": row.get("SFiles", []),
+                           "HFiles": row.get("HFiles", []), "Imports": sorted(imports), "ImportMap": mapping})
+    # Rows and map keys have no semantic ordering. File selection is kept per
+    # instance/role in original order. Neither a runner path nor its tmp cache
+    # key contributes to this identity.
+    raw = "".join(json.dumps(r, sort_keys=True, separators=(",", ":")) + "\n" for r in normalized).encode()
+    digest = sha256(raw)
+    if digest != REFERENCE_BUILD_IDS_SHA256:
+        raise ValueError("official package-test build-instance selection differs from Go 1.27.3 pin")
+    return {"sha256": digest, "instances": len(ids), "test_variants": variants, "import_map_edges": maps}
+
+
 def reference_test_entry(rows, cache_root, own_path, expected_owned_sha256):
     """Compare real cmd/go output only after owned discovery; never feed it to PCC."""
     from pcc.frontends.go.syntax import scan
@@ -377,12 +443,13 @@ def _run_reference(report, lock, files, directory, go, goroot, tools_before):
         row["status"] = "BLOCKED"
         return
     rows = decode_graph((directory / "reference-dependencies.stdout").read_bytes())
+    before_ids = reference_build_ids(rows, goroot, Path(environment["GOCACHE"]))
     before = validate_graph(rows, goroot)
     if report["owned"]["test_entry"]["status"] == "PASS":
         row["test_entry_comparison"] = reference_test_entry(
             rows, Path(environment["GOCACHE"]), directory / "owned-testmain.go", report["owned"]["test_entry"]["sha256"])
     row["dependency_graph"].update(
-        status="PASS", source_sha256=before,
+        status="PASS", source_sha256=before, build_instances=before_ids,
         identity_scope="observed reference GOROOT closure; package originals are independently pinned",
     )
     save(directory / "frontier.json", report)
@@ -391,17 +458,22 @@ def _run_reference(report, lock, files, directory, go, goroot, tools_before):
     result = process([str(go), *TEST_COMMAND], directory, "reference-tests", environment, 80)
     row["tests_and_examples"]["process"] = result
     verify_originals(goroot, files)
+    row["dependency_graph"]["status"] = "RUNNING"
     recheck = process([str(go), "list", "-deps", "-test", "-json", PACKAGE], directory,
                       "reference-dependencies-after", environment, 10)
     row["dependency_graph"]["recheck"] = recheck
     if recheck["status"] != "PASS":
         raise ValueError("official dependency graph could not be rechecked")
     after_rows = decode_graph((directory / "reference-dependencies-after.stdout").read_bytes())
+    after_ids = reference_build_ids(after_rows, goroot, Path(environment["GOCACHE"]))
+    if after_ids != before_ids:
+        raise ValueError("official package-test build instances changed during whole-package tests")
     if report["owned"]["test_entry"]["status"] == "PASS" and reference_test_entry(
             after_rows, Path(environment["GOCACHE"]), directory / "owned-testmain.go", report["owned"]["test_entry"]["sha256"]) != row["test_entry_comparison"]:
         raise ValueError("official generated test entry changed during the upstream tests")
     if validate_graph(after_rows, goroot) != before:
         raise ValueError("official dependency source changed during whole-package tests")
+    row["dependency_graph"].update(status="PASS", rechecked_build_instances=after_ids)
     if result["status"] == "PASS":
         row["tests_and_examples"].update(test_events((directory / "reference-tests.stdout").read_bytes(),
                                                    lock["test_entry"]["tests_and_examples"]))
