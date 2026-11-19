@@ -1,15 +1,14 @@
 """pcc-Python owners for the no-libpython buffer/memoryview surface.
 
 Replaces the PyObject_CheckBuffer / PyObject_GetBuffer / PyMemoryView_*
-block of the removed py_capi_shim.c.  The buffer-data probe (bytes/bytearray/memoryview
-layout) is duplicated here; PyBuffer_Release already lives in
-py_capi_misc_runtime.py.
+block of the removed py_capi_shim.c. The buffer probe follows whole views
+to a borrowed bytes/bytearray leaf; PyBuffer_Release lives in py_capi_misc_runtime.py.
 
 Py_buffer layout (CPython): buf@0, obj@8, len@16, itemsize@24,
 readonly@32 (i32), ndim@36 (i32), format@40, shape@48, strides@56,
 suboffsets@64, internal@72.
 PccBufferMeta: shape@0 (i64), strides@8 (i64).
-PyBytesObject/PyByteArrayObject: byte_len@16, data@24.
+Bytes/bytearray payloads use the shared py_bytes_data_ptr accessor.
 PyMemoryViewObject: base@16, owned Py_buffer allocation@24.
 
 The owned allocation is 96 bytes: the public 80-byte Py_buffer followed by
@@ -159,12 +158,12 @@ def _buffer_data(obj, buf_ptr, len_ptr, ro_ptr) -> c_ptr:
         return null()
     tag: int = load_i32(obj, 8)
     if tag == PY_TYPE_BYTES:  # PY_TYPE_BYTES
-        store_ptr(buf_ptr, 0, ptr_add(obj, 24))
+        store_ptr(buf_ptr, 0, py_bytes_data_ptr(obj))
         store_i64(len_ptr, 0, load_i64(obj, 16))
         store_i32(ro_ptr, 0, 1)
         return obj
     if tag == PY_TYPE_BYTEARRAY:  # PY_TYPE_BYTEARRAY
-        store_ptr(buf_ptr, 0, ptr_add(obj, 24))
+        store_ptr(buf_ptr, 0, py_bytes_data_ptr(obj))
         store_i64(len_ptr, 0, load_i64(obj, 16))
         store_i32(ro_ptr, 0, 0)
         return obj

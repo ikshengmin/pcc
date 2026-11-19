@@ -58,6 +58,7 @@ class BufferModel:
             "_buffer_data", "PyObject_CheckBuffer", "PyObject_GetBuffer",
             "PyMemoryView_FromObject",
         }, self.ns)
+        load_functions(RUNTIME / "py_obj_stubs.py", {"py_bytes_data_ptr"}, self.ns)
         load_functions(RUNTIME / "py_capi_misc_runtime.py", {"PyBuffer_Release"}, self.ns)
 
     def raw(self, size):
@@ -116,8 +117,9 @@ class BufferModel:
         leaf = self.raw(64)
         self.store(leaf, 8, abi.PY_TYPE_BYTEARRAY if writable else abi.PY_TYPE_BYTES)
         self.store(leaf, 16, 7)
+        offset = self.ns["PYBYTEARRAYOBJECT_DATA_OFFSET" if writable else "PYBYTESOBJECT_DATA_OFFSET"]
         for index, byte in enumerate(b"lease\x00x"):
-            self.store(leaf, 24 + index, byte)
+            self.store(leaf, offset + index, byte)
         outer = leaf
         for _ in range(depth):
             outer = self.ns["PyMemoryView_FromObject"](outer)
@@ -130,6 +132,9 @@ class BufferModel:
 @pytest.mark.parametrize("reverse", (False, True))
 def test_production_buffer_probe_selects_data_and_owner_once(depth, writable, reverse):
     model = BufferModel()
+    # Only in the model, give the two exact leaf types different payload locations.
+    model.ns["PYBYTESOBJECT_DATA_OFFSET"] += 3
+    model.ns["PYBYTEARRAYOBJECT_DATA_OFFSET"] += 7
     leaf, outer = model.chain(depth, writable)
     assert model.ns["PyObject_CheckBuffer"](outer) == 1
     assert len(model.edges) == depth
@@ -140,7 +145,8 @@ def test_production_buffer_probe_selects_data_and_owner_once(depth, writable, re
         # Exactly one base read per layer, not a second owner walk.
         assert len(model.edges) == depth
         assert len(set(model.edges)) == depth
-        assert model.load(view, 0) == leaf + 24
+        payload = model.load(view, 0)
+        assert bytes(model.load(payload, i) for i in range(7)) == b"lease\x00x"
         assert model.load(view, 8) == outer
         assert model.load(view, 16) == 7
         assert model.load(view, 24) == 1
@@ -176,7 +182,12 @@ def test_production_buffer_failure_preserves_empty_export(kind):
     elif kind == "tagged":
         outer = 3
     elif kind == "unsupported":
-        outer = model.raw(32)  # Unrecognized tag, not a valid exporter.
+        outer = model.raw(32)
+        model.store(outer, 8, abi.PY_TYPE_TUPLE)  # Ordinary empty tuple, not an exporter.
+    if kind in ("null", "tagged", "unsupported"):
+        def unexpected_payload(obj):
+            pytest.fail("non-exporters must not reach the leaf payload accessor")
+        model.ns["py_bytes_data_ptr"] = unexpected_payload
     model.fail_malloc = kind == "malloc"
     view = model.raw(80)
     model.zero(view, 99, 80)

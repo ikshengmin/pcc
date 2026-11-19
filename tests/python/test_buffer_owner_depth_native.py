@@ -2,8 +2,8 @@
 
 Host pcc0 compiles C with its owned frontend and self object emitter, then
 links Python with the source-matched runtime fixture. No external cc fallback.
-Automatic GC is disabled to bound this test to the depth/ABI defect; this does
-not qualify generic GetBuffer allocation/parking/relocation safety or pcc1.
+The depth fixture disables automatic GC. The separate public payload-copy
+fixture uses normal execution. Neither qualifies general relocation safety or pcc1.
 """
 
 import os
@@ -11,6 +11,10 @@ from pathlib import Path
 import subprocess
 
 import pytest
+
+from tests.python.owned_regression_support import (
+    _record_execution, assert_reference_program, explicit_owned_runtime,
+)
 
 
 PROGRAM = '''
@@ -98,3 +102,83 @@ def test_cpython_stdlib_memoryview_reference(depth, writable, reverse):
     finally:
         for view in reversed(owned):
             view.release()
+
+
+# Copy only the small fixture's logical bytes while its public export is live.
+# Release before allocating the returned Python bytes. No address escapes.
+COPY_C = """#include <Python.h>
+#include <string.h>
+PyObject *copy_export(PyObject *obj, int writable) {
+    char bytes[3];
+    Py_buffer view;
+    if (PyObject_GetBuffer(obj, &view, writable ? PyBUF_WRITABLE : PyBUF_SIMPLE) != 0)
+        return NULL;
+    Py_ssize_t n = view.len;
+    if (n < 0 || n > 3) {
+        PyBuffer_Release(&view);
+        PyErr_SetString(PyExc_ValueError, "expected at most three bytes");
+        return NULL;
+    }
+    if (n > 0) memcpy(bytes, view.buf, n);
+    PyBuffer_Release(&view);
+    return PyBytes_FromStringAndSize(bytes, n);
+}
+"""
+COPY_REFERENCE = """def take(obj, writable):
+    with memoryview(obj) as view:
+        assert not writable or not view.readonly
+        return view.tobytes()
+"""
+COPY_NATIVE = """from pcc.extern import c_int32, c_obj, extern
+take = extern("copy_export", (c_obj, c_int32), c_obj)
+"""
+COPY_PROGRAM = r"""def main():
+    raw = b'\x00\xffA'
+    owner = bytearray(b'Q\x00\xff')
+    a = take(raw, 0)
+    b = take(owner, 1)
+    assert take(memoryview(memoryview(raw)), 0) == a
+    c = take(memoryview(memoryview(owner)), 1)
+    empty = take(bytearray(), 1)
+    assert a == raw and b == b'Q\x00\xff' and c == b and empty == b''
+    print(a[0], a[1], a[2], b[0], c[1], c[2], len(empty))
+
+main()
+"""
+COPY_EXPECTED = "0 255 65 81 0 255 0\n"
+
+
+def test_export_leaf_copy_reference(tmp_path):
+    assert_reference_program(COPY_REFERENCE + COPY_PROGRAM, COPY_EXPECTED, tmp_path)
+
+
+@pytest.mark.integration
+def test_export_leaf_copy_native(tmp_path, explicit_owned_runtime, python_program_compiler):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+    from scripts.owned_image_linkage import inspect_owned_image
+
+    _, oracle = assert_reference_program(COPY_REFERENCE + COPY_PROGRAM, COPY_EXPECTED, tmp_path)
+    root = Path(__file__).resolve().parents[2]
+    target = host_target_triple()
+    c_source = tmp_path / "copy_export.c"
+    c_source.write_text(COPY_C)
+    (unit,) = CEvaluator(backend="self", target_triple=target).compile_translation_units(
+        [TranslationUnit(c_source.name, str(c_source), COPY_C)],
+        use_system_cpp=False, use_compile_cache=False,
+        include_dirs=[str(root / "pcc/runtime/include"), str(root / "utils/fake_libc_include")],
+    )
+    helper, source, binary = (tmp_path / name for name in ("copy_export.o", "copy.py", "copy.out"))
+    helper.write_bytes(emit_owned_object(unit[1], target))
+    source.write_text(COPY_NATIVE + COPY_PROGRAM)
+    python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
+                            runtime_archive=str(explicit_owned_runtime), object_inputs=(str(helper),))
+    assert inspect_owned_image(binary.read_bytes())["libpython"] == "off"
+    for backend in range(5):
+        result = _record_execution(tmp_path, f"gc{backend}", [str(binary)],
+                                   dict(os.environ, PCC_GC_BACKEND=str(backend)))
+        assert (result["returncode"], result["stdout"], result["stderr"]) == (
+            oracle["returncode"], oracle["stdout"], oracle["stderr"],
+        ), result
