@@ -30,6 +30,10 @@ class BufferModel:
         self.globals = {"pcc_capi_buffer_lease_head": 0}
         self.locked = False
         self.fail_malloc = False
+        self.no_park = 0
+        self.frames = {}
+        self.fail_frame = False
+        self.conservative = False
         self.ns = dict(
             c_ptr=int, null=lambda: 0, ptr_is_null=lambda p: p == 0,
             ptr_eq=lambda a, b: a == b, ptr_add=lambda p, n: p + n,
@@ -51,6 +55,13 @@ class BufferModel:
             py_incref=lambda p: self.retain(p, 1),
             py_decref=lambda p: self.retain(p, -1),
             py_memoryview_new=self.new_view,
+            global_addr=lambda s: s,
+            pcc_thread_no_park_enter=lambda: self.guard(1),
+            pcc_thread_no_park_exit=lambda: self.guard(-1),
+            pcc_gc_stack_slot_root_is_conservative=lambda slot: int(self.conservative),
+            pcc_gc_note_frame_enter_local_checked=self.enter_borrowed,
+            pcc_gc_note_frame_leave_local=self.leave_borrowed,
+            pcc_gc_resolve_borrowed_root_slot_unlocked=self.resolve_borrowed,
             _type_error=lambda s: self.errors.append(("type", s)),
             _runtime_error=lambda s: self.errors.append(("runtime", s)),
         )
@@ -60,6 +71,26 @@ class BufferModel:
         }, self.ns)
         load_functions(RUNTIME / "py_obj_stubs.py", {"py_bytes_data_ptr"}, self.ns)
         load_functions(RUNTIME / "py_capi_misc_runtime.py", {"PyBuffer_Release"}, self.ns)
+
+    def guard(self, n):
+        self.no_park += n
+        assert self.no_park >= 0
+
+    def enter_borrowed(self, layout, slots):
+        assert self.no_park and not self.locked and slots not in self.frames
+        if self.fail_frame:
+            return 0
+        self.frames[slots] = layout
+        return 1
+
+    def leave_borrowed(self, slots):
+        assert not self.locked and not self.no_park
+        assert self.load(slots) == self.load(slots, 8) == 0
+        del self.frames[slots]
+
+    def resolve_borrowed(self, slots, off):
+        assert self.locked and (slots in self.frames or self.conservative)
+        return self.load(slots, off)
 
     def raw(self, size):
         address = self.next_address
@@ -194,7 +225,7 @@ def test_production_buffer_failure_preserves_empty_export(kind):
     assert model.ns["PyObject_GetBuffer"](outer, view, int(kind == "readonly")) == -1
     assert all(model.load(view, offset) == 0 for offset in range(80))
     assert not model.pins and not model.allocations and not model.retains
-    assert not model.locked
+    assert not model.locked and not model.frames and not model.no_park
     expected = ("runtime", "out of memory creating buffer view") if kind == "malloc" else (
         "type", "object is not writable" if kind == "readonly" else "object does not support buffer protocol"
     )
@@ -247,3 +278,79 @@ def test_production_buffer_null_output_preserves_error_without_export():
     assert not model.pins and not model.allocations and not model.retains
     assert model.globals["pcc_capi_buffer_lease_head"] == 0
     assert not model.locked
+
+
+@pytest.mark.parametrize("depth", (0, 2))
+@pytest.mark.parametrize("conservative", (False, True))
+def test_getbuffer_length_linearizes_when_record_is_committed(depth, conservative):
+    # Entirely model storage. A legitimate nonempty clear completes before
+    # C admission. Check only .len / .shape and the retained object, never
+    # read the old .buf or inspect a live native address.
+    model = BufferModel()
+    model.conservative = conservative
+    leaf, original = model.chain(depth, True)
+    view = model.raw(80)
+    clear_ns = dict(model.ns)
+    clear_ns.update(pcc_gc_frame_enter_local=lambda layout, slot: None,
+                    pcc_gc_frame_leave_local=lambda slot: None,
+                    pcc_gc_resolve_borrowed_root_slot_unlocked=lambda slot, off: model.load(slot, off))
+    load_functions(RUNTIME / "py_obj_stubs.py", {"py_bytearray_clear"}, clear_ns)
+    allocations = []
+    def allocate_record(size):
+        assert not model.locked and not model.no_park
+        assert not model.pins and not model.globals["pcc_capi_buffer_lease_head"]
+        clear_ns["py_bytearray_clear"](leaf)
+        assert model.load(leaf, 16) == 0
+        allocations.append(size)
+        return model.malloc(size)
+    model.ns["PyMem_Malloc"] = allocate_record
+    assert model.ns["PyObject_GetBuffer"](original, view, 0x1d) == 0
+    assert allocations == [40] and model.load(view, 8) == original
+    actual = (model.load(view, 16), model.load(model.load(view, 48)))
+    model.ns["PyBuffer_Release"](view)
+    assert not model.pins and not model.frames and not model.allocations and not model.errors
+    assert actual == (0, 0)
+
+
+def test_getbuffer_registration_failure_does_not_mask_readonly_or_publish():
+    model = BufferModel()
+    _, readonly = model.chain(2, False)
+    _, mutable = model.chain(2, True)
+    model.fail_frame = True
+    def must_not_allocate(size):
+        pytest.fail("record allocation after failed validation or frame admission")
+    model.ns["PyMem_Malloc"] = must_not_allocate
+    for original, error in ((readonly, ("type", "object is not writable")),
+                            (mutable, ("runtime", "out of memory creating buffer view"))):
+        view = model.raw(80)
+        model.zero(view, 99, 80)
+        assert model.ns["PyObject_GetBuffer"](original, view, 1) == -1
+        assert all(model.load(view, offset) == 0 for offset in range(80))
+        assert model.errors[-1] == error
+    assert not model.pins and not model.frames and not model.retains and not model.allocations
+    assert not model.no_park and not model.locked
+
+
+def test_getbuffer_reloads_both_registered_aliases_at_commit():
+    # Two generations of the same model graph. No native storage or actual
+    # payload pointer is observed; a moving collector's update is modeled
+    # only on the two activation-private registered aliases at allocation.
+    model = BufferModel()
+    leaf, outer = model.chain(2, True)
+    moved_leaf, moved_outer = model.chain(2, True)
+    view = model.raw(80)
+    def allocate_after_forwarding(size):
+        assert not model.locked and not model.no_park
+        (slots,) = model.frames
+        assert (model.load(slots), model.load(slots, 8)) == (outer, leaf)
+        model.store(slots, 0, moved_outer)
+        model.store(slots, 8, moved_leaf)
+        return model.malloc(size)
+    model.ns["PyMem_Malloc"] = allocate_after_forwarding
+    assert model.ns["PyObject_GetBuffer"](outer, view, 0x1c) == 0
+    assert model.load(view, 8) == moved_outer
+    assert model.pins == {moved_outer, moved_leaf}
+    assert model.retains == {moved_outer: 1}
+    model.ns["PyBuffer_Release"](view)
+    assert model.retains == {moved_outer: 0}
+    assert not model.pins and not model.frames and not model.allocations
