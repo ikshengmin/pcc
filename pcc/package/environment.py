@@ -349,25 +349,33 @@ def package_environment_fingerprint() -> str:
     equal fingerprints resolve identical ``package_sites`` (the
     environment.json merge only adds ``lock_provenance``; it never alters the
     site list).  Keep this list in exact sync with the os.environ reads in
-    ``resolve_package_environment`` below.
+    ``resolve_package_environment``.
     """
-    return "\x1f".join(
-        (
-            str(os.environ.get("HOME") or ""),
-            str(os.environ.get("PCC_PACKAGE_TARGET_PYTHON") or ""),
-            str(os.environ.get("PCC_NATIVE_ABI_VERSION") or ""),
-            str(os.environ.get("PCC_PACKAGE_ABI_MODE") or ""),
-            str(os.environ.get("PCC_TARGET_TRIPLE") or ""),
-            str(os.environ.get("PCC_TARGET_ARCH") or ""),
-            str(os.environ.get("PCC_ENVIRONMENT") or ""),
-            str(os.environ.get("VIRTUAL_ENV") or ""),
-            str(os.environ.get("PCC_DATA_HOME") or ""),
-            str(os.environ.get("XDG_DATA_HOME") or ""),
-            str(os.environ.get("PCC_PACKAGE_SITE") or ""),
-            str(os.environ.get("PCC_PACKAGE_CACHE") or ""),
-            str(os.environ.get("XDG_CACHE_HOME") or ""),
-        )
+    fields = (
+        str(os.environ.get("HOME") or ""),
+        str(os.environ.get("PCC_PACKAGE_TARGET_PYTHON") or ""),
+        str(os.environ.get("PCC_NATIVE_ABI_VERSION") or ""),
+        str(os.environ.get("PCC_PACKAGE_ABI_MODE") or ""),
+        str(os.environ.get("PCC_TARGET_TRIPLE") or ""),
+        str(os.environ.get("PCC_TARGET_ARCH") or ""),
+        str(os.environ.get("PCC_ENVIRONMENT") or ""),
+        str(os.environ.get("VIRTUAL_ENV") or ""),
+        str(os.environ.get("PCC_DATA_HOME") or ""),
+        str(os.environ.get("XDG_DATA_HOME") or ""),
+        str(os.environ.get("PCC_PACKAGE_SITE") or ""),
+        str(os.environ.get("PCC_PACKAGE_CACHE") or ""),
+        str(os.environ.get("XDG_CACHE_HOME") or ""),
     )
+    joined = "\x1f".join(fields)
+    if joined.count("\x1f") == len(fields) - 1:
+        return joined
+    # A value contains the separator. Prefix each field with its length so
+    # boundaries are unambiguous even if the value itself contains colons,
+    # digits or separators. These keys retain more separators than plain keys.
+    framed: list[str] = []
+    for value in fields:
+        framed.append(str(len(value)) + ":" + value)
+    return "\x1f".join(framed)
 
 
 def package_site_roots(
