@@ -116,6 +116,7 @@ py_dict_update_slots = extern("py_dict_update_slots", (c_ptr, c_ptr), c_int64)
 py_set_union = extern("py_set_union", (c_ptr, c_ptr), c_ptr)
 
 py_int_value_i64 = extern("py_int_value_i64", (c_ptr,), c_int64)
+py_int_to_i64 = extern("py_int_to_i64", (c_ptr, c_ptr), c_int64)
 strcmp = extern("strcmp", (c_ptr, c_ptr), c_int32)
 py_int_from_i64 = extern("py_int_from_i64", (c_int64,), c_ptr)
 py_obj_as_int_object = extern("py_obj_as_int_object", (c_ptr, c_int64), c_ptr)
@@ -125,6 +126,7 @@ py_str_encode_with_encoding = extern("py_str_encode_with_encoding", (c_ptr, c_pt
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
 py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 py_bytearray_from_obj = extern("py_bytearray_from_obj", (c_ptr,), c_ptr)
+py_bytearray_pop = extern("py_bytearray_pop", (c_ptr, c_ptr), c_ptr)
 py_complex_from_parts = extern("py_complex_from_parts", (c_ptr, c_ptr), c_ptr)
 py_obj_index_i64 = extern("py_obj_index_i64", (c_ptr,), c_int64)
 py_obj_has_index = extern("py_obj_has_index", (c_ptr,), c_int64)
@@ -3851,7 +3853,7 @@ def _bound_method_finish(borrowed, slots, tokens, status: int):
     return pcc_gc_take_pinned_slot(result, prior)
 
 
-# Operations: dict 1..11, list 21..28, bytes/bytearray find 31, set 41..49
+# Operations: dict 1..11, list 21..28, bytes/bytearray find 31, bytearray pop 32, set 41..49
 # and the set algebra 50..57 (50 + py_set_call_method_slots's method code).
 def _bound_method_operation(tag: int, name) -> int:
     if tag == PY_TYPE_DICT:
@@ -3897,6 +3899,8 @@ def _bound_method_operation(tag: int, name) -> int:
     elif tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
         if strcmp(name, cstr("find")) == 0:
             return 31
+        if tag == PY_TYPE_BYTEARRAY and strcmp(name, cstr("pop")) == 0:
+            return 32
     elif tag == PY_TYPE_SET:
         if strcmp(name, cstr("add")) == 0:
             return 41
@@ -3970,6 +3974,8 @@ def _bound_method_name(operation: int):
         return cstr("count")
     if operation == 31:
         return cstr("find")
+    if operation == 32:
+        return cstr("pop")
     if operation == 41:
         return cstr("add")
     if operation == 42:
@@ -4013,7 +4019,7 @@ def _bound_method_arity(operation: int) -> int:
     # 2 "expected at least/at most", 3 "expected N arguments".
     if operation == 1 or operation == 5:
         return 212
-    if operation == 7:
+    if operation == 7 or operation == 32:
         return 201
     if operation == 10 or operation == 11 or operation == 21 or operation == 23 or operation == 25:
         return 111
@@ -4228,6 +4234,23 @@ def _bound_method_body(slots, tokens) -> int:
     elif operation == 28:
         py_list_clear(receiver)
         returns_none = 1
+    elif operation == 32:
+        # Only omission means "last". An explicit argument must implement
+        # __index__ and fit Py_ssize_t before the existing shrink kernel runs.
+        if nargs != 0:
+            normalized = ptr_add(slots, _BOUND_METHOD_ARG1 * C_POINTER_SIZE)
+            if py_obj_index_slots(ptr_add(slots, _BOUND_METHOD_ARG0 * C_POINTER_SIZE),
+                                  normalized) != 0:
+                return -1
+            if _bound_method_adopt(slots, tokens, _BOUND_METHOD_ARG1) != 0:
+                return -1
+            overflow = stack_alloc(4)
+            py_int_to_i64(load_ptr(normalized, 0), overflow)
+            if load_i32(overflow, 0) != 0:
+                py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C ssize_t")))
+                return -1
+        result = py_bytearray_pop(load_ptr(slots, _BOUND_METHOD_RECEIVER * C_POINTER_SIZE),
+                                  load_ptr(slots, _BOUND_METHOD_ARG1 * C_POINTER_SIZE))
     elif operation == 41:
         py_set_add(receiver, argument)
         returns_none = 1
