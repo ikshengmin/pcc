@@ -33,6 +33,10 @@ Moving the callback setup into a normal function that returned before the
 four collects did not change this GC1 outcome. In a separate telemetry
 observation those calls returned `26, 0, 0, 0`; sweep passes 0, 1 and 2 each
 ran once. That rules out an entirely idle sweep, not a particular root.
+Keeping the same exception construction and weakref but returning normally,
+or raising and catching locally, makes GC1 pass. The escaped callback error
+remains the only failing arm. The ordinary emitted IR and runtime forwarding
+path did not establish a retained owner; the retaining edge is still open.
 
 First-phase work still open: collector-owner root boundaries and retained
 roots across callbacks, and in-place amortized `bytearray.append`. The release integrator owns
@@ -75,8 +79,14 @@ change qualifies root-stack cropping or mutable-buffer concurrency broadly.
 Managed `bytearray.clear` and `pop` now protect the length, bytes and
 terminator with the same lock as snapshot copies. The integer parser uses
 the buffer accessor for mutable payloads and leaves exact bytes inline.
-Each change passed independently in all five Linux modes against CPython;
-other writers, live buffer exports and in-place append growth remain open.
+Each change passed independently in all five Linux modes against CPython.
+The scalar byte writer now validates the index and writes under that same
+lock. A separate bound-method entry handles dynamic `bytearray.pop`, and
+non-unit same-length slice writes snapshot aliased sources before modifying
+them. The full original slice comparator recovered once the missing dynamic
+method was present: two native programs, 10/10 Linux runs, both matching
+CPython. Step-1 resizing, live buffer export policy and in-place append
+growth remain open; the focused tests do not qualify Mac or performance.
 
 The unmodified four-thread field stress passed on Linux through the stock
 `pcc` console: one binary, five backend runs, 26,672 objects constructed in
