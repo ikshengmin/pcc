@@ -52,6 +52,21 @@ and drops it by ordinary Python scope exit: one native execution per backend
 observed exactly one release of the right payload. This is not the separate
 `Py_INCREF` / `Py_DECREF` compatibility or real extension-chain gate.
 
+The separate stock static-C ownership gate is red on GC1–GC4: after Python
+locals drop, a public `Py_INCREF` does not keep the object live through an
+explicit collection. GC0 matches CPython. The test exits safely when the
+weak reference is empty and does not use the expired reference. This is
+distinct from exactly-once foreign payload release. It is not yet evidence
+about the behavior of native dynamic extensions or CPython bridge objects.
+
+Two additional Linux fixes were exercised independently: generic iterable
+`list.extend` retires the two root admissions it actually acquired across
+user callbacks, and mutable payload copies sample length/data after the
+destination allocation rather than using a pre-allocation source pointer.
+Both public controls matched CPython in all five modes. The latter's exact
+allocating-clear red/green witness is a host source-body model; neither
+change qualifies root-stack cropping or mutable-buffer concurrency broadly.
+
 The unmodified four-thread field stress passed on Linux through the stock
 `pcc` console: one binary, five backend runs, 26,672 objects constructed in
 each run by the fixture's aggregate assertions. GC1–GC4 allow a bounded shortfall;
