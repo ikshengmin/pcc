@@ -113,7 +113,7 @@ def test_outer_false_does_not_evaluate_descendant_or_later_cfg_and_never_expands
     (NO+' if true {bogus!([)];}', 'mismatched closing delimiter'),
     (NO+' if true {bogus!x;}', 'expected a delimited macro input'),
     (NO+' absent![]', "requires its own ';'"),
-    (YES+' absent!();', 'macro invocations require'),
+    (YES+' absent!();', 'cannot find macro `absent` in this scope'),
     (YES+' env!("MISSING");', 'not defined at compile time'),
     (YES+' if missing(){ }', 'unknown'),
     (YES+' if true { let x:u64=false; }', 'expected'),

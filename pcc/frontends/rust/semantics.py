@@ -124,6 +124,13 @@ def integer_literal(expr: Expr) -> tuple[int, object]:
     return value, RUST_U8 if suffix == "u8" else (suffix or InferredInteger())
 
 
+def local_key(name: str, token=None) -> str:
+    """A local's scope key: its name, qualified by the macro_rules! expansion
+    mark of the token naming it (mixed-site hygiene; items ignore marks)."""
+    mark = getattr(token, 'hygiene', 0) if token is not None else 0
+    return name if not mark else f"{name}\x00{mark}"
+
+
 def bounds(ty: str, pointer_bits=None) -> tuple[int, int]:
     bits = integer_bits(ty, pointer_bits)
     return (-(1 << (bits - 1)), (1 << (bits - 1)) - 1) if ty[0] == "i" else (0, (1 << bits) - 1)
@@ -260,7 +267,7 @@ class Checker:
         self.source_type_access(ty, token)
         self.serial += 1
         binding = Binding(token.text, ty, mutable, self.serial, parameter)
-        self.scopes[-1][token.text] = binding
+        self.scopes[-1][local_key(token.text, token)] = binding
         return binding
 
     def struct_variant(self, path, token):
@@ -459,7 +466,7 @@ class Checker:
         """Type an assignment target; True when it is a static item."""
         if lhs.kind not in {"name", "variant", "static"}:
             return False
-        if lhs.kind == "name" and self.local(str(lhs.value)) is not None:
+        if lhs.kind == "name" and self.local(str(lhs.value), lhs.token) is not None:
             return False
         if lhs.kind != "static":
             item = (self.constant_named(str(lhs.value), lhs.token) if lhs.kind == "name"
@@ -479,10 +486,13 @@ class Checker:
             return expr.binding.value
         return None
 
-    def local(self, name: str) -> Binding | None:
+    def local(self, name: str, token: Token | None = None) -> Binding | None:
+        """The local `name` written as `token` denotes: macro_rules! hygiene
+        keys locals by the token's expansion mark (local_key)."""
+        key = local_key(name, token)
         for scope in reversed(self.scopes):
-            if name in scope:
-                return scope[name]
+            if key in scope:
+                return scope[key]
         return None
 
     def fields(self, ty: object) -> tuple[object, ...]:
@@ -1065,7 +1075,7 @@ class Checker:
             if self.through_reference(expr) and not place_context and not self.copy_type(ty):
                 raise expr.token.error("cannot move a non-Copy field out of a shared reference")
         elif kind == "name":
-            binding = self.local(str(expr.value))
+            binding = self.local(str(expr.value), expr.token)
             const = self.constant_named(str(expr.value), expr.token) if binding is None else None
             if const is not None:
                 self.evaluate_const(const, expr.token)
@@ -1186,7 +1196,7 @@ class Checker:
             if fn is None:
                 path = callee.value
                 name = path.name if isinstance(path, TypeApplication) else str(path)
-                if callee.kind != "name" or self.local(name) is not None:
+                if callee.kind != "name" or self.local(name, callee.token) is not None:
                     raise callee.token.error("only unshadowed direct function calls are supported")
                 fn = (self.module_resolution.function(name, self.current_module, callee.token)
                       if self.module_resolution is not None else self.names.get(name))

@@ -129,7 +129,7 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
     resolution = None
     records, enums, consts = parser.records, parser.enums, parser.consts + parser.statics
     implementations, traits = parser.implementations, parser.traits
-    if parser.modules or parser.crate_aliases or parser.uses:
+    if parser.modules or parser.crate_aliases or parser.uses or _module_relative_paths(parser.tokens):
         from .module_resolution import ModuleResolution, inline_crate
         resolution = ModuleResolution(inline_crate(parser, functions))
         functions, records, enums = resolution.functions, resolution.records, resolution.enums
@@ -146,6 +146,13 @@ def compile_rust(source: str, *, experimental_rustc_checked: bool = False,
                           parser.crate_lint_attributes, parser.crate_cfg_attributes, parser.conditional_items)
     return _check_and_lower(parsed, rustc_check=rustc_check, source=source, target=target,
                             overflow_checks=overflow_checks, module_name=module_name, edition=edition)
+
+
+def _module_relative_paths(tokens):
+    """Whether the (expanded) source writes a `crate::`, `self::` or `super::`
+    path, which only module resolution can resolve, even with no `mod`."""
+    return any(token.text in {'crate', 'self', 'super'} and following.text == '::'
+               for token, following in zip(tokens, tokens[1:]))
 
 
 @dataclass(frozen=True)

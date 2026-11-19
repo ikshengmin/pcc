@@ -28,7 +28,7 @@ FRONTIER = (
     # `GlobalInitialization` and its `const fn` method with `matches!` parse,
     # and thiserror's helper attributes are retained (its derive is a semantic
     # gap); line 121 is `format!(..)`.
-    ("crates/uv/src/lib.rs", "121:36: macro invocations require macro-by-example expansion"),
+    ("crates/uv/src/lib.rs", "121:36: the standard macro `format!` is not implemented"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped.
     # Formerly stopped at the gate on every input ("experimental Rust

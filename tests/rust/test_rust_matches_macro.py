@@ -60,7 +60,7 @@ def test_unowned_or_malformed_matches_are_explicit(source, message):
 
 def test_lang_item_context_has_no_core_macros():
     from pcc.frontends.rust.lang_item_context import inspect_lang_item_context
-    with pytest.raises(RustError, match='macro invocations require macro-by-example expansion'):
+    with pytest.raises(RustError, match='cannot find macro `matches` in this scope'):
         inspect_lang_item_context('src/lib.rs', {'src/lib.rs': 'fn f(x: u64) -> bool { matches!(x, 0) }'},
                                   crate_name='example', edition=2021)
 

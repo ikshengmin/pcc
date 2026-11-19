@@ -149,6 +149,12 @@ class _Loader:
             if self.environment is not None:
                 options['environment'] = self.environment
             parser = self.parser_type(source.text, source_path=path, edition=identity.crate.edition, **options)
+            if self.context_parsers:
+                # One crate's expansion marks, and the macro_rules! textually
+                # in scope at the `mod name;` declaring this file.
+                parser.macro_state = self.context_parsers[0].macro_state
+            if declaration is not None and getattr(declaration, 'macros', None):
+                parser.macros = dict(declaration.macros)
             self.context_parsers.append(parser)
             functions = parser.parse(_module=bool(identity.components))
             body = ModuleBody(functions, parser.records, parser.enums,

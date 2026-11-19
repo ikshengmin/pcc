@@ -54,16 +54,23 @@ def test_invalid_or_unimplemented_input_never_returns_a_false_literal(call,messa
 
 
 @pytest.mark.parametrize('s,message', [
-    ('#![no_std] fn f(){println!("x");}', 'macro-by-example expansion'),
+    ('#![no_std] fn f(){println!("x");}', 'cannot find macro `println` in this scope'),
     ('use m::other as println; fn f(){println!("x");}', 'same-name import'),
     ('fn f(){eprintln!("x");} use m::eprintln;', 'same-name import'),
     ('fn f(){println!();} use m::*;', 'glob import'),
     ('fn f(){use m::println; println!();}', 'block-scoped use'),
-    ('macro_rules! println { () => (()) } fn f(){println!();}', 'macro-by-example expansion'),
 ])
 def test_no_pretense_of_a_prelude_if_the_source_could_shadow_it(s,message):
     with pytest.raises(RustError,match=message):
         Parser(s).parse()
+
+
+def test_a_macro_rules_println_in_textual_scope_shadows_the_std_macro():
+    # rustc: a textual macro_rules! shadows the std prelude's println!.
+    parser = Parser('macro_rules! println { () => (()) } fn f(){println!();}')
+    parser.parse()
+    assert [item.name for item in parser.macro_expansions] == ['println']
+    assert type(parser.macro_expansions[0]).__name__ == 'MacroRulesExpansion'
 
 
 @pytest.mark.parametrize('s', [

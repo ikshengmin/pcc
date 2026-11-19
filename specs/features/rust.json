@@ -2707,6 +2707,20 @@
       "evidence": []
     },
     {
+      "id": "rust.macros.macro-rules",
+      "title": "macro_rules! macro-by-example expansion",
+      "chapter_ids": [
+        "rust.ref.3.1"
+      ],
+      "scope": "Qualification missing, not implementation missing: step 2 (first part) of pcc/frontends/rust/README.md, \"Plan: the DataSketches Rust arm\". macro_rules! definitions with any number of rules, tried in order; matchers with literal tokens, delimited groups, fragments (expr, ty, ident, tt, literal, pat, pat_param, path, block, lifetime; stmt, item, vis and meta are explicit gaps) and repetitions `$(..) sep? op` with *, + and ?; fragments are parsed by the owned parser on the invocation's tokens. Transcription keeps an expr fragment one parenthesized expression, rejects mismatched repetition counts, and maps $crate to crate. Invocations expand in item, statement and expression position (a statement invocation followed by an operator is an expression), recursively up to rustc's default recursion_limit 128. Mixed-site hygiene: every transcribed token carries its expansion's mark and locals bind and resolve by (name, mark), so macro locals and invocation locals never capture each other (E0425), while items, fields and methods ignore marks. Textual scoping: after the definition, in blocks until their end and in child modules (inline or outlined) declared later; a macro_rules! in scope shadows the prelude's println!, env! and matches!. stringify! of one token and concat! of string, bool and decimal integer literals are core's. An undefined macro is rustc's `cannot find macro` and a core/std macro the parser does not expand yet is an explicit gap. crate::, self:: and super:: paths now enable module resolution in a crate without modules. 24 original programs get a rustc 1.92.0 -O build's verdict without rustc running and an original program (generated structs and trait impls, recursive tt counting, repetition, hygiene, $crate, concat!/stringify!, fragment precedence) runs with owned compile, assemble and link and matches rustc. #[macro_export], #[macro_use] and stringify! of several tokens keep explicit boundaries. Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_macro_rules.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

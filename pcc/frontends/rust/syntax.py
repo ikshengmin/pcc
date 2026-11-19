@@ -22,6 +22,9 @@ class Token:
     source_end: int | None = None
     literal_value: str | int | None = None
     source_path: str | None = None
+    # macro_rules! hygiene: 0 for source tokens, else the expansion whose
+    # transcriber wrote this token (locals resolve by name and mark).
+    hygiene: int = 0
 
     def error(self, message: str) -> RustError:
         prefix = self.source_path + ": " if self.source_path is not None else ""
@@ -463,6 +466,8 @@ class Module:
     documentation: tuple[Documentation, ...]
     path: str | None
     body: object = None  # ModuleBody for inline modules; None for `mod name;`.
+    # macro_rules! definitions textually in scope at an outlined `mod name;`.
+    macros: object = None
 
 
 @dataclass
@@ -586,6 +591,13 @@ _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "&=": 1, "|=
                "==": 4, "!=": 4, "<": 4, "<=": 4, ">": 4, ">=": 4, "|": 5, "^": 6, "&": 7,
                "<<": 8, ">>": 8, "+": 9, "-": 9, "*": 10, "/": 10, "%": 10, "as": 11}
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
+DELIMITERS_CLOSE = {"(": ")", "[": "]", "{": "}"}
+# Macros core/std define that are not expanded by the owned parser yet.
+STANDARD_MACROS = frozenset({
+    "format", "format_args", "vec", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
+    "debug_assert_ne", "unreachable", "panic", "todo", "unimplemented", "write", "writeln", "print",
+    "eprint", "dbg", "include", "include_str", "include_bytes", "line", "column", "file", "module_path",
+    "cfg", "thread_local", "compile_error", "const_format_args"})
 # The element a destructuring `for` binds before its pattern: not a Rust
 # identifier (no `.`), so no source name can refer to or shadow it.
 FOR_ELEMENT = "for.element"
@@ -654,6 +666,10 @@ class Parser:
         self.type_argument_depth = 0
         self.modules: list[Module] = []
         self.module_depth = 0
+        # macro_rules! definitions in textual scope, and the crate's expansion
+        # state (marks, depths and limits) shared with every child parser.
+        self.macros = {}
+        self.macro_state = {'count': 0, 'depths': {}, 'tokens': 0}
 
     @property
     def token(self) -> Token:
@@ -1142,6 +1158,7 @@ class Parser:
         child.__dict__ = self.__dict__.copy()
         child.module_depth += 1
         child._macro_scope = self._macro_scope + (self.pos,)
+        child.macros = dict(self.macros)  # textual scope enters, never leaves, the module
         child.records, child.enums, child.implementations, child.traits = [], [], [], []
         child.modules, child.attribute_requirements, child.crate_aliases = [], [], []
         child.uses = []
@@ -1446,7 +1463,8 @@ class Parser:
                             raise name.error("path attributes on inline modules are not implemented")
                         self.expect("{")
                         body = self.module_body()
-                    self.modules.append(Module(name, public, tuple(docs), module_path, body))
+                    self.modules.append(Module(name, public, tuple(docs), module_path, body,
+                                               macros=dict(self.macros) if body is None else None))
                     continue
                 if module_path is not None:
                     raise self.token.error("path attribute is implemented only for outlined modules")
@@ -1607,8 +1625,11 @@ class Parser:
                 if repr_c:
                     raise self.token.error("repr(C) applies only to a struct")
                 if self.token.kind == "name" and self.tokens[self.pos + 1].text == "!":
-                    raise self.token.error("macro_rules! definitions and item macro invocations require "
-                                           "macro-by-example expansion, which is not implemented")
+                    if docs or derives or public or cfg_attributes or inline_attributes:
+                        raise self.token.error("attributes, documentation and visibility on macro items "
+                                               "are not implemented")
+                    if self.item_macro():
+                        continue
                 if self.union_item():
                     raise self.token.error("union items require untagged overlapping field layout and "
                                            "unsafe field reads, which are not implemented")
@@ -1967,6 +1988,15 @@ class Parser:
         return expr if enabled else None, semi, info
 
     def block(self, *, function_inner_docs=False) -> Expr:
+        # A macro_rules! definition in a block is in scope until its end.
+        outer_macros = self.macros
+        self.macros = dict(outer_macros)
+        try:
+            return self.block_body(function_inner_docs=function_inner_docs)
+        finally:
+            self.macros = outer_macros
+
+    def block_body(self, *, function_inner_docs=False) -> Expr:
         token = self.expect("{")
         inner_docs = self.documentation(inner=True) if function_inner_docs else ()
         statements: list[Expr] = []
@@ -1996,6 +2026,9 @@ class Parser:
                 from .attribute_metadata import local_let_lints
                 attributes = local_let_lints(self)
             last_can_be_tail = False
+            if (not configured and self.token.kind == "name" and self.tokens[self.pos + 1].text == "!"
+                    and self.statement_macro()):
+                continue
             if not configured and self.accept("let"):
                 mutable = self.accept("mut")
                 if self.token.text == "[":
@@ -2086,6 +2119,83 @@ class Parser:
         return Expr("if_let" if pattern is not None else "if", token,
                     value=pattern, children=children)
 
+    def item_macro(self):
+        """A `macro_rules!` definition or an invocation in item position (its
+        expansion is parsed as items in place). False for other macros."""
+        from .macro_rules import define, expand, splice
+        if self.token.text == "macro_rules":
+            define(self)
+            return True
+        if self.token.text not in self.macros:
+            self.unknown_macro(self.token)
+        start, name = self.pos, self.take()
+        braced = self.tokens[self.pos + 1].text == "{"
+        tokens = expand(self, name)
+        if not braced:
+            self.expect(";")  # an item invocation in () or [] ends with `;`
+        splice(self, start, tokens)
+        return True
+
+    def statement_macro(self):
+        """A `macro_rules!` definition or an invocation in statement position
+        whose expansion is parsed as statements in place (it ends the
+        statement); False when the invocation is an expression's start."""
+        from .macro_rules import closing, define, expand, splice
+        if self.token.text == "macro_rules":
+            define(self)
+            return True
+        if self.token.text not in self.macros:
+            return False
+        opener = self.pos + 2
+        if self.tokens[opener].text not in "([{":
+            return False
+        after = self.tokens[closing(self.tokens, opener) + 1].text
+        if self.tokens[opener].text != "{" and after not in {";", "}"}:
+            return False
+        start, name = self.pos, self.take()
+        splice(self, start, expand(self, name))
+        return True
+
+    def unknown_macro(self, token):
+        if token.text in STANDARD_MACROS:
+            raise token.error(f"the standard macro `{token.text}!` is not implemented")
+        raise token.error(f"cannot find macro `{token.text}` in this scope")
+
+    def text_macro(self, token):
+        """`stringify!` and `concat!` (core), evaluated to string literals."""
+        from .macro_rules import closing
+        self.expect("!")
+        opener = self.token
+        if opener.text not in "([{":
+            raise opener.error(f"expected a delimited input after `{token.text}!`")
+        end = closing(self.tokens, self.pos)
+        if token.text == "stringify":
+            inner = self.tokens[self.pos + 1:end]
+            self.pos = end + 1
+            if len(inner) > 1:
+                raise token.error("stringify! of several tokens requires rustc's token pretty-printing, "
+                                  "which is not implemented")
+            return Expr("string", token, inner[0].text if inner else "")
+        self.take()
+        parts = []
+        while self.pos < end:
+            argument = self.expression()
+            while argument.kind == "group":
+                argument = argument.children[0]
+            if argument.kind == "string":
+                parts.append(argument.value)
+            elif argument.kind == "bool":
+                parts.append("true" if argument.value else "false")
+            elif argument.kind == "integer" and str(argument.value).isdecimal():
+                parts.append(str(int(argument.value)))
+            else:
+                raise argument.token.error("concat! arguments other than string, bool and unsuffixed decimal "
+                                           "integer literals are not implemented")
+            if self.pos < end:
+                self.expect(",")
+        self.expect(DELIMITERS_CLOSE[opener.text])
+        return Expr("string", token, "".join(parts))
+
     def expression_macro(self, token):
         if self._inactive_cfg_statement:
             self.expect('!')
@@ -2093,6 +2203,16 @@ class Parser:
                 raise self.token.error('expected a delimited macro input')
             self.skip_token_tree()
             return Expr('unexpanded_cfg_macro', token)
+        if token.text in self.macros:
+            # A macro_rules! in textual scope shadows the core/std prelude macros.
+            from .macro_rules import expand, splice
+            start = self.pos - 1
+            tokens = expand(self, token)
+            # An expression position sees the expansion as one expression.
+            splice(self, start, [Token("(", "punct", token.line, token.column, source_path=token.source_path),
+                                 *tokens,
+                                 Token(")", "punct", token.line, token.column, source_path=token.source_path)])
+            return self.expression(14)
         if self.core_prelude and token.text in {'env', 'option_env', 'matches'}:
             from .builtin_macros import expand_expression_macro, expand_matches
             return expand_matches(self, token) if token.text == 'matches' else expand_expression_macro(self, token)
@@ -2100,7 +2220,9 @@ class Parser:
                 and token.text in {'println', 'eprintln'}):
             from .print_macros import expand_std_output
             return expand_std_output(self, token)
-        raise token.error("macro invocations require macro-by-example expansion, which is not implemented")
+        if self.core_prelude and token.text in {"stringify", "concat"}:
+            return self.text_macro(token)
+        self.unknown_macro(token)
 
     def expression(self, minimum: int = 1, allow_struct: bool = True, *, complete_block: bool = False) -> Expr:
         token = self.take()

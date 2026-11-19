@@ -71,7 +71,8 @@ def check_pattern(checker, pattern, ty, *, allow_inferred=False):
     if pattern.kind == "wildcard":
         return
     if pattern.kind in BINDING_KINDS:
-        if pattern.token.text in checker.scopes[-1]:
+        from .semantics import local_key
+        if local_key(pattern.token.text, pattern.token) in checker.scopes[-1]:
             raise pattern.token.error("duplicate binding in pattern: identifier is bound more than once in the same pattern (rustc E0416)")
         pattern.binding = checker.bind(pattern.token, ty, pattern.value)
         if pattern.kind == "at":

@@ -20,17 +20,25 @@ def test_dollar_is_a_punctuation_token():
 
 
 @pytest.mark.parametrize("text,location,message", [
-    ("macro_rules! m { ($x:expr) => {$x} } fn main(){}", "1:1",
-     "macro_rules! definitions and item macro invocations require macro-by-example expansion"),
-    ("m!{} fn main(){}", "1:1", "item macro invocations require macro-by-example expansion"),
-    ("fn main(){ m!(); }", "1:12", "macro invocations require macro-by-example expansion"),
-    ("fn f()->u64{ let v = m![1]; v }", "1:22", "macro invocations require macro-by-example expansion"),
+    ("macro_rules! m { ($x:stmt) => {$x} } fn main(){}", "1:22", "the `stmt` macro fragment is not implemented"),
     ("fn f(){let x=$;}", "1:14", "unsupported expression '\\$'"),
 ])
 def test_macro_syntax_reports_a_located_capability_boundary(text, location, message):
     with pytest.raises(RustError, match="^" + location + ": .*" + message) as caught:
         Parser(text).parse()
     assert diagnostic_status(caught.value) == "UNSUPPORTED"
+
+
+@pytest.mark.parametrize("text,location", [
+    ("m!{} fn main(){}", "1:1"),
+    ("fn main(){ m!(); }", "1:12"),
+    ("fn f()->u64{ let v = m![1]; v }", "1:22"),
+])
+def test_an_undefined_macro_is_an_invalid_program_not_a_capability_gap(text, location):
+    # macro_rules! is owned now: rustc reports `cannot find macro` for these.
+    with pytest.raises(RustError, match="^" + location + ": cannot find macro `m` in this scope") as caught:
+        Parser(text).parse()
+    assert diagnostic_status(caught.value) == "FAIL"
 
 
 def test_inequality_is_not_a_macro_invocation():

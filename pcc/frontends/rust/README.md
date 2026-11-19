@@ -334,6 +334,13 @@ inventory below, with the user's approval):
 10. The driver: `println!`/`format!` for its JSON line, `Instant`,
     `env::args`. Milestone M5: the Rust arm runs and is timed.
 
+Progress on step 2: macro_rules! is done (2a, `macro_rules.py`,
+`tests/rust/test_rust_macro_rules.py`: rules, fragments, repetitions,
+mixed-site hygiene, textual scope, recursion limit, `stringify!`/`concat!`);
+16 closure files parse. Next, 2b: the core/std macros the closure invokes
+(`assert!`/`debug_assert!` families, `unreachable!`/`panic!`, `vec!`,
+`format!`/`format_args!`/`write!`/`writeln!`), the first blocker of 12 files.
+
 Closure parse inventory (each closure file parsed alone, 2026-11-19): 15 of
 about 60 files parse; the first blocker of the rest is macro invocation in
 13, other syntax in 14 (ranges, `type` in impls, field attributes), an
