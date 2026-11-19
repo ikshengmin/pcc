@@ -125,7 +125,7 @@ def test_diverging_match_arm_does_not_poison_live_move_state():
     ("core_cmp.rs","c48745bb89c4d3ef361923ac72346133f81a64c112f7bfc625f4beced52016c1",r"2025:12: unsupported Rust token '~'"),
     # assert_eq! reports the macro capability boundary at its own token.
     ("exhaustive-bool-match-sanity.rs","43a9442c59cf2640ef85947545c0a01954bcd5697f993183d688501fb57f80fb",
-     "18:5: the standard macro `assert_eq!` is not implemented"),
+     "18:5: assert_eq!/assert_ne! need owned panic support"),
 ])
 def test_whole_official_sources_remain_explicit_frontiers(name,sha,message):
     path=Path(__file__).parent/'upstream'/'rust-1.90.0'/name

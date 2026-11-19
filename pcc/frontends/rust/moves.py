@@ -730,6 +730,32 @@ class MoveChecker:
 
     def evaluate(self, expr: Expr, state: State) -> State | None:
         kind, children = expr.kind, expr.children
+        if kind == "debug_assert":
+            # `if cfg!(debug_assertions) { .. }`: borrow-checked as a branch
+            # that may or may not run, whether or not it is emitted.
+            after = self.expression(children[0], clone(state))
+            return join([state] + ([after] if after is not None else []))
+        if kind == "format_args":
+            for child in children:  # each argument is borrowed, never moved
+                if self.checker.place(child) is not None:
+                    self.read_place(child, state, consume=False)
+                else:
+                    state = self.expression(child, state)
+                    if state is None:
+                        return None
+            return state
+        if kind == "assert_compare":
+            for child in children:
+                if child.kind != "format_args" and self.checker.place(child) is not None:
+                    self.read_place(child, state, consume=False)
+                else:
+                    state = self.expression(child, state)
+                    if state is None:
+                        return None
+            return state
+        if kind == "panic":
+            self.expression(children[0], state)
+            return None  # diverges
         if kind in {"integer", "bool", "character", "unit", "variant", "const", "static", "string"}:
             return state
         if kind == "borrow":

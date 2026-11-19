@@ -187,7 +187,7 @@ def run_rustc_crate_function(crate_root, sources, function, tmp_path, *, edition
 
 
 def run_rustc_str_function(source, function, tmp_path, *, edition=2021, environment=None, cfg=(), panic=None,
-                           output='{call}.as_bytes()', library=None):
+                           output='{call}.as_bytes()', library=None, debug_assertions=None):
     """The same function built by a development rustc, printed byte for byte
     (`output='&{call}.to_le_bytes()'` for an integer result). `library` is an
     existing crate root file used instead of writing `source`."""
@@ -206,6 +206,8 @@ def run_rustc_str_function(source, function, tmp_path, *, edition=2021, environm
     link_env = _reference_environment(os.environ, environment, windows=windows, link=True)
     binary = tmp_path / ('reference.exe' if windows else 'reference')
     strategy = ['-C', f'panic={panic}'] if panic else []
+    if debug_assertions is not None:
+        strategy += ['-C', f'debug-assertions={"on" if debug_assertions else "off"}']
     common = [f'--edition={edition}', '-C', 'overflow-checks=off', *strategy,
               *[part for spec in cfg for part in ('--cfg', spec)]]
     _reference_command('rustc fixture rlib',

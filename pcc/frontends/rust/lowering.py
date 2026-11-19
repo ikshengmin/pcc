@@ -458,6 +458,11 @@ class Lowerer:
             return self.match(expr)
         if kind == "if":
             return self.conditional(expr)
+        if kind == "debug_assert":
+            # Disabled debug assertions emit nothing; enabled ones (which
+            # need owned panics) never pass semantic checking yet.
+            assert not expr.value
+            return None
         if kind == "for":
             return self.array_iteration(expr)
         if kind in {"for_range", "for_range_inclusive"}:

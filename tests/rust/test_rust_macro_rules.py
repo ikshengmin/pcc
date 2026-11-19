@@ -119,7 +119,7 @@ def test_expansion_tokens_carry_their_hygiene_mark():
     ('#[macro_export]\nmacro_rules! m { () => { 1 }; }', 'unsupported Rust attribute'),
     ('macro_rules! m { ($s:stmt) => { $s }; }', 'the `stmt` macro fragment is not implemented'),
     ('pub fn f() -> usize { stringify!(a b).len() }', 'stringify! of several tokens'),
-    ('pub fn f() -> u64 { let v = vec![1u64]; 0 }', r'the standard macro `vec!` is not implemented'),
+    ('pub fn f() -> u64 { let v = vec![1u64]; 0 }', r'vec! needs alloc::vec::Vec'),
 ])
 def test_macro_forms_beyond_the_owned_expander_keep_explicit_boundaries(source, boundary):
     with pytest.raises(RustError, match=boundary):

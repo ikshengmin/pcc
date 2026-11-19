@@ -337,9 +337,15 @@ inventory below, with the user's approval):
 Progress on step 2: macro_rules! is done (2a, `macro_rules.py`,
 `tests/rust/test_rust_macro_rules.py`: rules, fragments, repetitions,
 mixed-site hygiene, textual scope, recursion limit, `stringify!`/`concat!`);
-16 closure files parse. Next, 2b: the core/std macros the closure invokes
-(`assert!`/`debug_assert!` families, `unreachable!`/`panic!`, `vec!`,
-`format!`/`format_args!`/`write!`/`writeln!`), the first blocker of 12 files.
+16 closure files parse. 2b is done too (`std_macros.py`,
+`tests/rust/test_rust_standard_macros.py`): `format_args!`, `format!`,
+`write!`/`writeln!`, `panic!`, `unreachable!`, `todo!`, `unimplemented!`,
+`assert!`, `assert_eq!`/`assert_ne!` and their `debug_` forms, `vec!`, `cfg!`
+and `compile_error!` expand with rustc's format-string checks; disabled debug
+assertions are checked but never emitted, and the panic, fmt and alloc
+runtimes they need are semantic gaps until steps 5, 7 and 9. 21 closure files
+parse; only `thread_local!` (one file) remains of the macro blockers. Step 3,
+the remaining parse gaps, is next.
 
 Closure parse inventory (each closure file parsed alone, 2026-11-19): 15 of
 about 60 files parse; the first blocker of the rest is macro invocation in

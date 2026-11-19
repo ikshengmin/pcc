@@ -14,6 +14,8 @@ from .types import (
 
 INTEGERS = INTEGER_TYPES
 SHIFTS = frozenset({"<<", ">>"})
+STANDARD_MACRO_NODES = frozenset({"debug_assert", "panic", "assert_compare", "format_args", "format",
+                                  "write_fmt", "vec_macro"})
 FFI_INTEGERS = frozenset({"i32", "i64", "u32", "u64"})
 NEVER = "!"
 # The value of a borrow node for a two-phase mutable borrow (truthy: mutable).
@@ -124,6 +126,10 @@ def integer_literal(expr: Expr) -> tuple[int, object]:
     return value, RUST_U8 if suffix == "u8" else (suffix or InferredInteger())
 
 
+_TRAIT_SPELLING = {"Display": "", "Debug": "?", "LowerHex": "x", "UpperHex": "X", "Octal": "o", "Binary": "b",
+                   "LowerExp": "e", "UpperExp": "E", "Pointer": "p"}
+
+
 def local_key(name: str, token=None) -> str:
     """A local's scope key: its name, qualified by the macro_rules! expansion
     mark of the token naming it (mixed-site hygiene; items ignore marks)."""
@@ -200,6 +206,9 @@ class Checker:
         # Nesting of mandatory constant evaluation (array lengths, enum
         # discriminants; const and static initializers use evaluating_consts).
         self.const_evaluation = 0
+        # Nesting of code that is checked but never emitted (a disabled
+        # debug_assert!): runtime models it would need are not required.
+        self.suppressed_runtime = 0
         self.declared_derives = {}
         self.scopes: list[dict[str, Binding]] = []
         self.serial = 0
@@ -1474,6 +1483,8 @@ class Checker:
             # early return converts errors through From. No core model exists.
             raise expr.token.error("the ? operator requires owned core Try/Result/Option and From lowering, "
                                    "which is not implemented")
+        elif kind in STANDARD_MACRO_NODES:
+            ty = self.standard_macro(expr)
         elif kind == "closure":
             # A closure has a unique anonymous type implementing Fn/FnMut/FnOnce
             # from its captures and body; none of that model exists yet.
@@ -1504,12 +1515,95 @@ class Checker:
                                    "(rustc E0080)")
         return True
 
+    def runtime_gap(self, expr: Expr, message: str) -> None:
+        """A runtime model a reachable expansion needs; code that is never
+        emitted (a disabled debug_assert!) is checked without it."""
+        if not self.suppressed_runtime:
+            raise expr.token.error(message)
+
+    def format_arguments(self, expr: Expr) -> None:
+        """A format_args node's arguments are borrowed (place context); their
+        formatting traits are checked once types are resolved (validate)."""
+        for child in expr.children:
+            self.expression(child, place_context=self.place(child) is not None)
+        for piece in expr.value.pieces:
+            if isinstance(piece, str):
+                continue
+            for count in (piece.width, piece.precision):
+                if count is not None and count.argument:
+                    unify("usize", expr.children[count.value].ty, expr.children[count.value].token)
+
+    def standard_macro(self, expr: Expr) -> object:
+        """The core/std macro expansions of std_macros.py."""
+        kind, children = expr.kind, expr.children
+        if kind == "debug_assert":
+            if expr.value:
+                self.expression(children[0])
+            else:
+                self.suppressed_runtime += 1
+                try:
+                    self.expression(children[0])
+                finally:
+                    self.suppressed_runtime -= 1
+            return "()"
+        if kind == "panic":
+            self.format_arguments(children[0])
+            self.runtime_gap(expr, f"{expr.value}! needs owned panic support, which is not implemented "
+                                   "(plan step 5)")
+            return NEVER
+        if kind == "assert_compare":
+            left = self.expression(children[0], place_context=self.place(children[0]) is not None)
+            right = self.expression(children[1], place_context=self.place(children[1]) is not None)
+            unify(left, right, expr.token)
+            if len(children) == 3:
+                self.format_arguments(children[2])
+            self.runtime_gap(expr, "assert_eq!/assert_ne! need owned panic support and core::fmt::Debug "
+                                   "messages, which are not implemented (plan steps 5 and 9)")
+            return "()"
+        if kind == "format_args":
+            self.format_arguments(expr)
+            raise expr.token.error("format_args! values are core::fmt::Arguments, which is not implemented "
+                                   "(plan step 9)")
+        if kind == "format":
+            self.format_arguments(children[0])
+            raise expr.token.error("format! needs alloc::string::String and core::fmt, which are not "
+                                   "implemented (plan steps 7 and 9)")
+        if kind == "write_fmt":
+            self.expression(children[0], place_context=self.place(children[0]) is not None)
+            self.format_arguments(children[1])
+            raise expr.token.error(f"{expr.value}! needs core::fmt::Write or std::io::Write formatting, which "
+                                   "is not implemented (plan step 9)")
+        # vec_macro
+        for child in children:
+            self.expression(child)
+        raise expr.token.error("vec! needs alloc::vec::Vec, which is not implemented (plan step 7)")
+
     def require_static_divisor(self, expr: Expr, divisor, ty) -> None:
         """Until owned panics exist, `/` and `%` (and `/=`, `%=`) need a known
         divisor that cannot panic: nonzero, and not -1 for a signed type."""
         if divisor is None or divisor == 0 or (ty.startswith("i") and divisor == -1):
             raise expr.token.error("panic-capable division/remainder is unsupported; divisor must be a nonzero "
                                    "constant, not signed -1")
+
+    def formatting_traits(self, expr: Expr) -> None:
+        """Each placeholder's core::fmt trait for its resolved argument type:
+        primitives as core implements them, references through them; other
+        types need the owned fmt trait model."""
+        for piece in expr.value.pieces:
+            if isinstance(piece, str):
+                continue
+            argument = expr.children[piece.argument]
+            ty = argument.ty
+            while isinstance(ty, SharedReference) and piece.trait in ("Display", "Debug"):
+                ty = ty.referent
+            if ty in INTEGERS:
+                continue
+            if piece.trait in ("Display", "Debug") and (ty == "bool" or ty == STATIC_STR or ty == "str"):
+                continue
+            if piece.trait == "Debug" and ty == "()":
+                continue
+            raise argument.token.error(f"formatting {ty} with {{:{_TRAIT_SPELLING[piece.trait]}}} needs the "
+                                       "owned core::fmt trait model, which is not implemented (plan step 9)")
 
     def shift_operands(self, expr: Expr, op: str) -> None:
         """Both shift operands must be integers: core implements Shl/Shr for
@@ -1617,6 +1711,8 @@ class Checker:
                 raise expr.token.error("an enum with payload fields cannot be cast to an integer")
             if values[0] is not None:
                 return cast_constant(int(values[0]), expr.ty, self.pointer_bits)
+        if kind == "format_args":
+            self.formatting_traits(expr)
         if kind == "binary" and op in SHIFTS:
             self.shift_operands(expr, op)
             left, right = values

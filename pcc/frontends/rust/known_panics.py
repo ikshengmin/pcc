@@ -185,6 +185,13 @@ class KnownPanics:
             return UNKNOWN
         if kind == "binary":
             return self.binary(expr)
+        if kind == "debug_assert":
+            # Disabled, it is `if false { .. }`: rustc's pass never reaches it.
+            if expr.value:
+                self.boundary()
+                self.value(children[0])
+                self.boundary()
+            return UNKNOWN
         if kind == "block":
             result = UNKNOWN
             for child in children:

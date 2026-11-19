@@ -2721,6 +2721,20 @@
       "evidence": []
     },
     {
+      "id": "rust.macros.core-std-expansions",
+      "title": "Core and std macros expanded by the owned parser",
+      "chapter_ids": [
+        "rust.ref.3"
+      ],
+      "scope": "Qualification missing, not implementation missing: step 2 (second part) of pcc/frontends/rust/README.md, \"Plan: the DataSketches Rust arm\". format_args!, format!, write!/writeln!, panic!, unreachable!, todo!, unimplemented!, assert!, assert_eq!/assert_ne! and debug_assert!/debug_assert_eq!/debug_assert_ne!, vec!, cfg! and compile_error! expand as core/std define them (Rust 1.92). Format strings follow std::fmt's grammar (fill, align, sign, #, 0, width and precision as literals, N$, name$ or .*, and the format traits) with rustc's expansion-time checks: unmatched braces, unknown traits, positional and named references, unused arguments, positional after named arguments, non-literal format strings and implicit captures of identifiers; width and precision arguments are usize; format arguments are borrowed, never moved. debug_ forms are `if cfg!(debug_assertions)` code: always type- and borrow-checked (a move inside is E0382 as in rustc), emitted only when an explicit CfgOptions.debug_assertions turns them on; cfg! is evaluated by the owned configuration. Panics, core::fmt (Arguments, String formatting, Write) and alloc's Vec are explicit semantic gaps until plan steps 5, 7 and 9; formatting a non-primitive argument is a gap of the fmt trait model. A macro_rules! in scope shadows these. 28 original programs get a rustc 1.92.0 build's verdict (debug assertions off) without rustc running, and an original program shows a disabled assertion's condition never runs, matching rustc. DataSketches workload closure: 21 files parse (16 before). uv's crates/uv root now passes its format! and stops at #[instrument] (132:3). Local Mac.",
+      "status": "missing",
+      "tests": [
+        "tests/rust/test_rust_standard_macros.py"
+      ],
+      "diagnostics": [],
+      "evidence": []
+    },
+    {
       "id": "rust.expressions.match-guards",
       "title": "Match guards",
       "chapter_ids": [

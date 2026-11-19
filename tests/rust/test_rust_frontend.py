@@ -115,7 +115,7 @@ def test_loop_local_slots_are_allocated_once_in_entry():
     ("fn f(){ 0b102; }", "invalid or unsupported integer"),
     ("fn f(){ 12i8; }", "invalid or unsupported integer"),
     ("fn f(){ let x=1; let y=&mut x; }", "cannot borrow an immutable place as mutable"),
-    ("fn f(){ panic!(); }", "1:9: the standard macro `panic!` is not implemented"),
+    ("fn f(){ panic!(); }", "1:9: panic! needs owned panic support"),
     ("struct S {}", "zero-field structs"),
     ("fn f(){ let x=Box::new(1); }", "unsupported Rust type 'Box'"),
     ("fn f(x: u64) -> u32 { x as u32 << 2 }", "`<<` is interpreted as a start of generic arguments for `u32`"),

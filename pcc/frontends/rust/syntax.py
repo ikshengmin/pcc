@@ -593,11 +593,11 @@ _PRECEDENCE = {"=": 1, "+=": 1, "-=": 1, "*=": 1, "/=": 1, "%=": 1, "&=": 1, "|=
 _COMPARISONS = {"==", "!=", "<", "<=", ">", ">="}
 DELIMITERS_CLOSE = {"(": ")", "[": "]", "{": "}"}
 # Macros core/std define that are not expanded by the owned parser yet.
+# (Those std_macros.py expands are absent: where they are unavailable, as in
+# a no_std crate's `vec!`, rustc's `cannot find macro` is the right error.)
 STANDARD_MACROS = frozenset({
-    "format", "format_args", "vec", "assert", "assert_eq", "assert_ne", "debug_assert", "debug_assert_eq",
-    "debug_assert_ne", "unreachable", "panic", "todo", "unimplemented", "write", "writeln", "print",
-    "eprint", "dbg", "include", "include_str", "include_bytes", "line", "column", "file", "module_path",
-    "cfg", "thread_local", "compile_error", "const_format_args"})
+    "print", "eprint", "dbg", "include", "include_str", "include_bytes", "line", "column", "file",
+    "module_path", "thread_local", "const_format_args"})
 # The element a destructuring `for` binds before its pattern: not a Rust
 # identifier (no `.`), so no source name can refer to or shadow it.
 FOR_ELEMENT = "for.element"
@@ -2220,6 +2220,9 @@ class Parser:
                 and token.text in {'println', 'eprintln'}):
             from .print_macros import expand_std_output
             return expand_std_output(self, token)
+        from .std_macros import expand as expand_standard, expands
+        if expands(self, token.text):
+            return expand_standard(self, token)
         if self.core_prelude and token.text in {"stringify", "concat"}:
             return self.text_macro(token)
         self.unknown_macro(token)

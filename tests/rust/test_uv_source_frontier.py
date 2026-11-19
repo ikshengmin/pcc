@@ -27,8 +27,10 @@ FRONTIER = (
     # lifetime argument of `BaseClientBuilder<'a>`, the built-in derives of
     # `GlobalInitialization` and its `const fn` method with `matches!` parse,
     # and thiserror's helper attributes are retained (its derive is a semantic
-    # gap); line 121 is `format!(..)`.
-    ("crates/uv/src/lib.rs", "121:36: the standard macro `format!` is not implemented"),
+    # gap); `format!(..)` at line 121 now expands (its String/fmt runtime is
+    # a semantic gap), so the parser stops at the external attribute
+    # `#[instrument(skip_all)]` (tracing) at line 132.
+    ("crates/uv/src/lib.rs", "132:3: unsupported Rust attribute"),
     # The whole root parses and compiles: env!("CARGO_PKG_VERSION") is the
     # `&'static str` "0.13.7" and the disabled test module is skipped.
     # Formerly stopped at the gate on every input ("experimental Rust
