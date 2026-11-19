@@ -136,11 +136,13 @@ def _skip_llvm_quoted(text: str, open_index: int) -> int:
     limit = len(text)
     cursor = open_index + 1
     while cursor < limit:
-        backslash = text.find("\\", cursor)
         closing = text.find('"', cursor)
         if closing < 0:
             return limit
-        if backslash >= 0 and backslash < closing:
+        # Escapes after this quote cannot affect it. In particular, do not
+        # rescan the remainder of a module for each short, unescaped literal.
+        backslash = text.find("\\", cursor, closing)
+        if backslash >= 0:
             cursor = backslash + 2
             continue
         return closing + 1
