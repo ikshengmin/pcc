@@ -166,8 +166,6 @@ DEFERRED = (
      'void f(){S s;}', 'cpp.unsupported.default-member-initializer-path'),
     ('const-nonaggregate-value-init-stays-explicit', 'struct S{explicit S()=default;int n;};void f(){const S s{};}',
      'cpp.unsupported.const-class-initialization'),
-    ('namespace-class-declaration-is-next-new-header-frontier',
-     'struct Tag{explicit Tag()=default;};extern const Tag tag;', 'cpp.unsupported.static-class-lifetime'),
 )
 
 
@@ -338,3 +336,29 @@ def test_value_init_uses_whole_aggregate_zero_store_before_constructor(owned_onl
     assert len(aggregate_zero_stores) == 1
     value, address = aggregate_zero_stores[0]
     assert isinstance(address.type, ir.PointerType) and address.type.pointee == value.type
+
+
+# Exact historical row shared with the unmodified-source C++17 validity oracle.
+# Its former diagnostic documents the capability graduation, not a result.
+GRADUATED_EXTERN_CLASS = (
+    'namespace-class-declaration-is-next-new-header-frontier',
+    'struct Tag{explicit Tag()=default;};extern const Tag tag;', 'cpp.unsupported.static-class-lifetime',
+)
+
+
+def test_original_namespace_extern_tag_is_a_declaration_not_a_lifetime_request():
+    # Exact original DEFERRED source: upgraded, not edited to evade its boundary.
+    _, source, _ = GRADUATED_EXTERN_CLASS
+    parser = CppParser(target_triple='x86_64-unknown-linux-gnu')
+    ast = parser.parse(source, 'original-extern-tag.cpp')
+    symbol = parser.scope.names['tag']
+    pending = parser.scope.names['Tag'].dtype.definition.defaulted_constructors[0]
+    assert not symbol.defined and not symbol.internal_linkage
+    assert not symbol.initialization_complete
+    declarations = [node for node in ast.ext if isinstance(node, c_ast.Decl)
+                    and node.name == symbol.c_name]
+    assert declarations == [symbol.object_declaration]
+    assert declarations[0].storage == ['extern'] and declarations[0].init is None
+    assert not any(isinstance(node, c_ast.FuncDef) and node.decl.name == pending.symbol.c_name
+                   for node in ast.ext)
+    assert not parser.instance_registry.entries

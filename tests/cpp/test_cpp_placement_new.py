@@ -242,13 +242,23 @@ def test_full_new_header_keeps_real_unsupported_syntax_visible():
     parser = CppParser()
     with pytest.raises(CppDiagnostic) as error:
         parser.parse(text)
-    # The exact defaulted C1 is now owned. The next untouched declaration
-    # still requires namespace class-object declaration/lifetime semantics.
-    assert error.value.code == 'cpp.unsupported.static-class-lifetime'
-    assert error.value.message == 'namespace class objects require lifetime/static initialization semantics'
+    # The original class object declaration was bound, not skipped or defined.
+    assert 'externconstnothrow_tnothrow;' in compact
+    nothrow, = [obj for obj in parser.namespace_objects if obj.name == 'nothrow']
+    assert nothrow.c_name == '_ZSt7nothrow' and nothrow.language_linkage == 'C++'
+    assert not nothrow.internal_linkage and not nothrow.defined
+    assert not nothrow.initialization_complete
+    assert nothrow.object_declaration.storage == ['extern'] and nothrow.object_declaration.init is None
+    # The unchanged header still fails: constexpr template declarations are
+    # not implemented. Keep the full following declaration and exact location.
+    assert error.value.code == 'cpp.unsupported.syntax'
+    assert error.value.message == "C++ feature not implemented at 'constexpr' (expected an implemented arithmetic type)"
+    assert Path(error.value.coord.file).name == 'new'
+    assert (error.value.coord.line, error.value.coord.column) == (21, 19)
     position = parser.cursor.position
-    assert [token.value for token in parser.cursor.tokens[position - 4:position + 1]] == [
-        'extern', 'const', 'nothrow_t', 'nothrow', ';',
+    assert [token.value for token in parser.cursor.tokens[position - 5:position + 10]] == [
+        'template', '<', 'class', 'T', '>', 'constexpr', 'T', '*', 'launder',
+        '(', 'T', '*', ')', 'noexcept', ';',
     ]
 
 

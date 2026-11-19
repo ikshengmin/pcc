@@ -15,6 +15,7 @@ from tests.cpp.test_cpp_class_execution import record_execution
 from tests.cpp.test_cpp_constructor_direct_list_execution import syntax_reference
 from tests.cpp.test_cpp_defaulted_default_constructors import (
     DEFERRED,
+    GRADUATED_EXTERN_CLASS,
     INVALID,
     PLACEMENT_PROGRAMS,
     PROGRAMS,
@@ -51,8 +52,13 @@ def test_invalid_defaulted_c1_originals_fail_reference(name, source, code, tmp_p
     assert syntax_reference(tmp_path, name, source).returncode != 0
 
 
+# Keep every original valid source (and its pytest ID) in the external oracle,
+# including the declaration which now also has its own strict PCC obligation.
+CPP17_VALID_ORIGINALS = DEFERRED + (GRADUATED_EXTERN_CLASS,)
+
+
 @pytest.mark.integration
-@pytest.mark.parametrize('name,source,code', DEFERRED, ids=[row[0] for row in DEFERRED])
+@pytest.mark.parametrize('name,source,code', CPP17_VALID_ORIGINALS, ids=[row[0] for row in CPP17_VALID_ORIGINALS])
 def test_deferred_defaulted_c1_originals_remain_cpp17_valid(name, source, code, tmp_path):
     result = syntax_reference(tmp_path, name, source)
     assert result.returncode == 0, result.stderr

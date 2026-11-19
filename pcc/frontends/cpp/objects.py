@@ -3,7 +3,9 @@
 This is not a dynamic-initialization runtime: only target-proven integral/enum
 values, zero initialization, null pointers, addresses of declared namespace
 objects and static data members, and ordinary string literals (a `const char*`
-initialized with the literal's static array, [conv.array]) are admitted. Class lifetime, floating constant evaluation, inline/TLS,
+initialized with the literal's static array, [conv.array]) are admitted. Pure
+C++-linkage extern declarations of complete ordinary classes create no storage.
+Class definitions/lifetime, floating constant evaluation, inline/TLS,
 block extern/static and dependent object declarations stay explicit gaps.
 
 Rules: N4659 [basic.def], [basic.link], [basic.start.static], [dcl.init].
@@ -109,13 +111,29 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     if array_type(dtype):
         raise CppDiagnostic("cpp.unsupported.namespace-array-objects",
                             "namespace arrays require static aggregate initialization and ODR rules", coord)
-    if is_class_type(dtype):
-        raise CppDiagnostic("cpp.unsupported.static-class-lifetime",
-                            "namespace class objects require lifetime/static initialization semantics", coord)
-    parser._check_object_type(dtype, coord)
     has_initializer = parser._peek().value in ("=", "{")
     specifier = storage.value if storage is not None else ("extern" if implicit_extern else None)
     definition = specifier != "extern" or has_initializer
+    if is_class_type(dtype):
+        owner = unqualified(dtype)
+        previous = parser.scope.names.get(name.value)
+        linkage = parser.language_linkage or getattr(previous, "language_linkage", "C++")
+        # [basic.def]: an extern declaration without an initializer does not
+        # define an object. Bind its real class/cv/name identity without
+        # allocating storage or requesting initialization/destruction. Neither
+        # constructor accessibility nor abstractness constrains this declaration.
+        # Definitions, C linkage, incomplete/union/template/internal types and
+        # dependent contexts retain their separate, unimplemented owners.
+        if (definition or linkage != "C++" or parser.scope.kind != "namespace"
+                or not owner.complete or owner.is_union or owner.internal_linkage
+                or parser.scope.internal_linkage
+                or getattr(owner, "template_origin", None) is not None
+                or parser.parsing_template or parser.template_function is not None
+                or parser.instantiating_template):
+            raise CppDiagnostic("cpp.unsupported.static-class-lifetime",
+                                "namespace class objects require lifetime/static initialization semantics", coord)
+    else:
+        parser._check_object_type(dtype, coord)
     fresh = Symbol(name.value, "value", coord, dtype=dtype)
     fresh.requested_language_linkage = parser.language_linkage
     symbol = parser.scope.declare_namespace_object(fresh, definition, specifier)
