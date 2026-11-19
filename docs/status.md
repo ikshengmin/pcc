@@ -29,11 +29,18 @@ four collections. It did not identify which root retained the referent.
 Tracked as [issue #3](https://github.com/ikshengmin/pcc/issues/3).
 
 First-phase work still open: collector-owner root boundaries and retained
-roots across callbacks, in-place amortized `bytearray.append`, and visibility
-of dead objects queued for background cleanup. The release integrator owns
+roots across callbacks, and in-place amortized `bytearray.append`. The release integrator owns
 the CI-to-issue baseline. GC4 callback-window correctness is tracked separately
 from the corrected relocation-selector fixture. No new runtime fix or
 five-pair A/B has been qualified by these baseline runs.
+
+Background-cleanup visibility: the patch removes confirmed queued deaths
+from public GC tracking while preserving the worker's tracing records and
+instance layout ownership. Four modeled handoff cases fail before the fix and
+pass after it; 152 host controls were green. A candidate native binary ran on
+all five collectors: GC0–GC3 matched CPython's public lifecycle result, and
+threaded GC4 retained its existing empty tracked snapshot. This native check
+did not force an in-flight worker handoff. Darwin and A/B are not qualified.
 
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),

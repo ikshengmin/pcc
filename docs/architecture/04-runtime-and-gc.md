@@ -84,6 +84,13 @@ collection; this is also the contract for the unified collector. The GC4
 callback-window investigation is separate from the root-boundary work and
 must be resolved before enabling the generational relocation layer.
 
+An object committed to the ordinary GC1–GC3 background sweep queue is removed
+from public tracked snapshots after the final reachability verdict. This is
+not terminal deallocation: the worker still owns its tracing record, and
+instance layout metadata must remain available until teardown. Resurrected
+objects and candidates not handed off stay on the existing tracking path.
+The Linux native lifecycle control does not force a live in-flight handoff.
+
 ### Selection
 
 `PCC_GC_BACKEND=0..4` is read once and fixed for the process
