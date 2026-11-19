@@ -38,6 +38,7 @@ from pcc.unsafe import (
     load_i8,
     load_i32,
     load_i64,
+    load_ptr,
     null,
     ptr_add,
     ptr_eq,
@@ -59,6 +60,7 @@ py_int_value_i64     = extern("py_int_value_i64",     (c_ptr,),                 
 py_cext_number_to_i64 = extern("py_cext_number_to_i64", (c_ptr, c_ptr),          c_int64)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
+py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 py_bigint_alloc = extern("py_bigint_alloc", (c_int64,), c_ptr)
 py_bigint_to_pyobject = extern("py_bigint_to_pyobject", (c_ptr,), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
@@ -70,6 +72,7 @@ py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
 py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
+pcc_gc_note_root_slot_barrier = extern("pcc_gc_note_root_slot_barrier", (c_ptr,), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -464,6 +467,34 @@ def _int_to_bytes(v, length: int, byteorder, is_signed: int):
     return out
 
 
+def _int_bytes_snapshot_root(base_slot: c_ptr, snapshot_slot: c_ptr) -> c_ptr:
+    # The registered base slot still owns and leases the actual mutable leaf.
+    # Publish the NEW immutable result straight into its own empty root.
+    store_ptr(snapshot_slot, 0, null())
+    handle = pcc_gc_scheduler_root_register_handle(snapshot_slot)
+    if ptr_is_null(handle):
+        _raise_int_bytes(7, cstr("integer byte conversion buffer root registration failed"))
+        return null()
+    store_ptr(snapshot_slot, 0, py_bytes_from_obj(pcc_gc_load_ptr(null(), base_slot)))
+    if ptr_is_null(load_ptr(snapshot_slot, 0)):
+        pcc_gc_scheduler_root_unregister_handle(handle)
+        return null()
+    pcc_gc_note_root_slot_barrier(snapshot_slot)
+    return handle
+
+
+def _int_bytes_buffer_lease_error(status: int) -> None:
+    if status == -2:
+        _raise_int_bytes(15, cstr("integer byte conversion buffer lease overflow"))
+    else:
+        _raise_int_bytes(7, cstr("integer byte conversion requires a stable buffer owner"))
+
+
+def _int_bytes_buffer_cleanup_error() -> None:
+    if py_err_occurred() == 0:
+        _raise_int_bytes(7, cstr("integer byte conversion buffer lease cleanup failed"))
+
+
 @c_abi_export("py_int_from_bytes")
 def py_int_from_bytes(bytes_obj, byteorder):
     # Preserve the unsigned two-argument runtime ABI used by existing objects.
@@ -502,26 +533,45 @@ def py_int_from_bytes_signed(bytes_obj, byteorder, is_signed: int):
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_retain_plan_finish(retain_plan)
     acquired: int = pcc_gc_foreign_lease_acquire(base_slot)
+    snapshot_slot = null()
+    snapshot_handle = null()
+    snapshot_lease: int = -1
     result = null()
     if acquired < 0:
-        if acquired == -2:
-            _raise_int_bytes(15, cstr("integer byte conversion buffer lease overflow"))
-        else:
-            _raise_int_bytes(7, cstr("integer byte conversion requires a stable buffer owner"))
+        _int_bytes_buffer_lease_error(acquired)
     else:
-        result = _int_from_bytes_leased_base(pcc_gc_load_ptr(null(), base_slot), big, is_signed)
+        current = pcc_gc_load_ptr(null(), base_slot)
+        if (ptr_is_null(current) == 0
+                and load_i32(current, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_BYTEARRAY):
+            # An address lease is not a payload snapshot. The factory copies
+            # once under the mutable owner's lock, outside our graph transaction.
+            snapshot_slot = stack_alloc(8)
+            snapshot_handle = _int_bytes_snapshot_root(base_slot, snapshot_slot)
+            if ptr_is_null(snapshot_handle) == 0:
+                snapshot_lease = pcc_gc_foreign_lease_acquire(snapshot_slot)
+                if snapshot_lease < 0:
+                    _int_bytes_buffer_lease_error(snapshot_lease)
+                else:
+                    result = _int_from_bytes_leased_base(
+                        pcc_gc_load_ptr(null(), snapshot_slot), big, is_signed,
+                    )
+        else:
+            result = _int_from_bytes_leased_base(current, big, is_signed)
     result_state = stack_alloc(16)
     result_handle = _int_bytes_save_result(result_state, result)
-    if acquired >= 0:
-        status: int = pcc_gc_foreign_lease_release(base_slot, acquired)
-        if status < 0 and py_err_occurred() == 0:
-            _raise_int_bytes(7, cstr("integer byte conversion buffer lease cleanup failed"))
+    if ptr_is_null(snapshot_handle) == 0:
+        if snapshot_lease >= 0 and pcc_gc_foreign_lease_release(snapshot_slot, snapshot_lease) < 0:
+            _int_bytes_buffer_cleanup_error()
+        _int_bytes_close_root(snapshot_slot, snapshot_handle)
+    if acquired >= 0 and pcc_gc_foreign_lease_release(base_slot, acquired) < 0:
+        _int_bytes_buffer_cleanup_error()
     _int_bytes_close_root(base_slot, base_handle)
     return _int_bytes_take_result(result_state, result_handle)
 
 
 @c_abi_export("_pcc_int_from_bytes_leased_base")
 def _int_from_bytes_leased_base(base, big: int, is_signed: int):
+    # The caller leases exact immutable bytes, or supplies NULL for a nonbuffer.
     if ptr_is_null(base):
         _raise_int_bytes(3, cstr("from_bytes expects a bytes object"))
         return null()
