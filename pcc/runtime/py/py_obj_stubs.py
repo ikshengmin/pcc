@@ -921,6 +921,7 @@ _BUFFER_RESULT = 4
 _BUFFER_ERROR = 5
 _BUFFER_COUNT = 6
 _BUFFER_BYTES = 8
+_BUFFER_EXPORTER_ATTRIBUTE_MODE = 3
 
 define_global_i32("pcc_buffer_borrowed_map", -1)
 define_global_i32("pcc_bytearray_append_borrowed_map", -2)
@@ -1160,6 +1161,19 @@ def _buffer_payload_fill(slots, tokens, mutable: int) -> int:
 def _buffer_fill(slots, tokens, mode: int) -> int:
     source = ptr_add(slots, _BUFFER_SOURCE * _BUFFER_BYTES)
     result = ptr_add(slots, _BUFFER_RESULT * _BUFFER_BYTES)
+    if mode == _BUFFER_EXPORTER_ATTRIBUTE_MODE:
+        # .obj is the original exporter, not an intermediate view or a
+        # payload copy. The existing owner walk retains from each traced slot.
+        unwrapped: int = _buffer_unwrap_leaf(slots, tokens)
+        if unwrapped < 0:
+            return -1
+        if unwrapped != 0:
+            return _buffer_error(2, cstr("operation forbidden on released memoryview object"))
+        leaf = ptr_add(slots, _BUFFER_LEAF * _BUFFER_BYTES)
+        leaf_tag: int = _type_of(load_ptr(leaf, 0))
+        if leaf_tag != PY_TYPE_BYTES and leaf_tag != PY_TYPE_BYTEARRAY:
+            return _buffer_error(3, cstr("memoryview base does not support buffer protocol"))
+        return _buffer_copy(slots, tokens, _BUFFER_RESULT, leaf, 0)
     if mode == 2:
         store_ptr(result, 0, pcc_gc_alloc(32, PY_TYPE_MEMORYVIEW, 0))
         if ptr_is_null(load_ptr(result, 0)) != 0:
@@ -2674,6 +2688,12 @@ def py_bytearray_pop(o, index):
 @c_abi_export("py_memoryview_new")
 def py_memoryview_new(o):
     return _buffer_convert_owned(o, 2)
+
+
+@c_abi_export("py_memoryview_exporter")
+def py_memoryview_exporter(o):
+    # Called only by exact-memoryview attribute dispatch.
+    return _buffer_convert_owned(o, _BUFFER_EXPORTER_ATTRIBUTE_MODE)
 
 
 @c_abi_export("py_dealloc_memoryview")

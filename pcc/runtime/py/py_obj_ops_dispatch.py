@@ -125,6 +125,7 @@ py_bytes_decode_with_encoding = extern("py_bytes_decode_with_encoding", (c_ptr, 
 py_str_encode_with_encoding = extern("py_str_encode_with_encoding", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_bytes_new = extern("py_bytes_new", (c_ptr, c_int64), c_ptr)
 py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
+py_memoryview_exporter = extern("py_memoryview_exporter", (c_ptr,), c_ptr)
 py_bytearray_from_obj = extern("py_bytearray_from_obj", (c_ptr,), c_ptr)
 py_bytearray_pop = extern("py_bytearray_pop", (c_ptr, c_ptr), c_ptr)
 py_complex_from_parts = extern("py_complex_from_parts", (c_ptr, c_ptr), c_ptr)
@@ -4514,6 +4515,9 @@ def py_obj_getattr(o, name):
         if py_err_occurred() != 0:
             return result
         return _raise_attribute_error(o, name)
+
+    if tag == PY_TYPE_MEMORYVIEW and strcmp(name, cstr("obj")) == 0:
+        return py_memoryview_exporter(o)
 
     if tag == PY_TYPE_PROPERTY:
         field_offset: int = -1

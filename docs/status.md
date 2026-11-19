@@ -88,6 +88,16 @@ method was present: two native programs, 10/10 Linux runs, both matching
 CPython. Step-1 resizing, live buffer export policy and in-place append
 growth remain open; the focused tests do not qualify Mac or performance.
 
+For a live whole managed memoryview of `bytes` or `bytearray`, Python
+`.obj` returns the original exporter, including through nested views. The
+result owns a reference: it remains usable after temporary views leave
+scope and the collector runs. The public program in
+`tests/python/test_memoryview_exporter_attribute.py` matched CPython on
+Linux x86-64 in all five GC modes. This changes attribute lookup only,
+not which object a view retains internally or exposes through its C buffer.
+It does not implement `memoryview.release()`, partial-view descriptors,
+live-export resize checks, or in-place append growth.
+
 The unmodified four-thread field stress passed on Linux through the stock
 `pcc` console: one binary, five backend runs, 26,672 objects constructed in
 each run by the fixture's aggregate assertions. GC1–GC4 allow a bounded shortfall;
