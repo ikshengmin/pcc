@@ -12,6 +12,8 @@ from tests.python import test_weakset_weakref_order_native as peer
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_CI_STAGE1_MANIFEST")
+# Each owner launches a compiler tree inside the same budget as the native resource driver.
+@pytest.mark.xdist_group(name="worker_resource_fixtures")
 @pytest.mark.parametrize("owner", ["pcc0", "pcc1"])
 @pytest.mark.parametrize("program_name", ["weakset_order", "dynamic_set"])
 def test_ci_weakset_explicit_owners(tmp_path, pcc_runtime_archive, owner, program_name):

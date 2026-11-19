@@ -528,6 +528,62 @@ def test_nested_ci_process_trees_keep_resource_exclusion_groups(members, expecte
     assert run.batches(rows, "ordinary") == [rows]
 
 
+def test_weakset_owner_matrix_uses_the_native_resource_driver_loadgroup(tmp_path):
+    """Check the real declarations and stock xdist keys without starting a compiler."""
+    from itertools import product
+    from xdist.remote import WorkerInteractor
+    from xdist.scheduler.loadgroup import LoadGroupScheduling
+
+    weak = "tests/python/test_ci_weakset_owners.py"
+    driver = "tests/python/test_worker_resource_plan.py"
+    owner_test = "test_ci_weakset_explicit_owners"
+    driver_test = "test_resource_acceptance_driver_native_five_collectors"
+    ordinary = "test_ci_weakset_host_command_is_a_fresh_cpython_not_fixture_label"
+
+    def declarations(path, name):
+        tree = ast.parse((ROOT / path).read_text(encoding="utf-8"))
+        function, = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == name]
+        marks = list(function.decorator_list)
+        for node in tree.body:
+            if isinstance(node, ast.Assign) and any(isinstance(t, ast.Name) and t.id == "pytestmark" for t in node.targets):
+                marks.extend(node.value.elts if isinstance(node.value, (ast.List, ast.Tuple)) else (node.value,))
+        groups, axes = [], {}
+        for call in marks:
+            if isinstance(call, ast.Attribute):
+                assert ast.unparse(call) == "pytest.mark.integration"
+                continue
+            assert isinstance(call, ast.Call)
+            mark = ast.unparse(call.func)
+            if mark == "pytest.mark.xdist_group":
+                groups.append(pytest.mark.xdist_group(
+                    *[ast.literal_eval(arg) for arg in call.args],
+                    **{key.arg: ast.literal_eval(key.value) for key in call.keywords}).mark)
+            if mark == "pytest.mark.parametrize":
+                axes[ast.literal_eval(call.args[0])] = ast.literal_eval(call.args[1])
+        return groups, axes
+
+    weak_groups, axes = declarations(weak, owner_test)
+    ids = [f"{program}-{owner}" for program, owner in product(axes["program_name"], axes["owner"])]
+    assert ids == ["weakset_order-pcc0", "weakset_order-pcc1", "dynamic_set-pcc0", "dynamic_set-pcc1"]
+    driver_groups, _ = declarations(driver, driver_test)
+    independent, _ = declarations(weak, ordinary)
+    marked = [(weak, f"{owner_test}[{case}]", weak_groups) for case in ids]
+    marked += [(driver, f"{driver_test}[{owner}]", driver_groups) for owner in ("pcc0", "pcc1")]
+    items = []
+    for path, name, marks in [*marked, (weak, ordinary, independent)]:
+        item = _SourceGroupItem(tmp_path, name, marks)
+        item._nodeid = path + "::" + name
+        items.append(item)
+    assert all(len(item.own_markers) == 1 for item in items[:-1])
+    assert not items[-1].own_markers  # Do not pin unrelated ordinary checks in this module.
+    original = [item.nodeid for item in items]
+    config = SimpleNamespace(getvalue=lambda name: name == "loadgroup")
+    WorkerInteractor.pytest_collection_modifyitems(None, config, items)
+    expected = "worker_resource_fixtures"
+    assert [item.nodeid for item in items] == [node + "@" + expected for node in original[:-1]] + original[-1:]
+    assert [LoadGroupScheduling._split_scope(None, item.nodeid) for item in items] == [expected] * 6 + original[-1:]
+
+
 def test_shared_scope_refreshes_new_elf_macho_odr_modules_without_old_counts():
     shared = json.loads((ROOT / "scripts/data/ci_validation_shared.json").read_text())
     assert set(shared["refresh_globs"]) == {"tests/**/test_elf_*.py", "tests/**/test_macho_*.py", "tests/**/test_*odr_definition*.py"}
