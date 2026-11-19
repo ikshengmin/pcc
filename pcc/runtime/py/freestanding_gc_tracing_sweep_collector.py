@@ -2,6 +2,7 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_TRACKED
 from pcc.unsafe import (
     abi_constant,
     atomic_load_i32,
@@ -879,6 +880,12 @@ def _sweep_clear_and_reclaim(budget: i64, count_free: i64, weak_settled: i64,
                 cleared_nonclasses = cleared_nonclasses + 1
                 cleared = cleared + 1
                 if ptr_is_null(early) == 0:
+                    # This slot commits the death after the last reachability
+                    # verdict. Public snapshots must not acquire the object
+                    # while it waits for the worker. Keep the tracing record
+                    # active: class retirement still needs to see instances.
+                    if (flags & PY_FLAG_GC_TRACKED) != 0:
+                        py_gc_untrack(obj)
                     store_ptr(early, early_count * 8, obj)
                     early_count = early_count + 1
                     recorded = 1
@@ -969,6 +976,9 @@ def _sweep_clear_and_reclaim(budget: i64, count_free: i64, weak_settled: i64,
             elif reclaimed < (cleared_nonclasses if count_free != 0 else cleared):
                 eligible: i64 = _concurrent_sweep_eligible_object(obj, load_i32(obj, 8))
                 if defer_concurrent != 0 and eligible != 0:
+                    # Same irrevocable handoff as the listed PASS1 path.
+                    if (flags & PY_FLAG_GC_TRACKED) != 0:
+                        py_gc_untrack(obj)
                     store_ptr(deferred_objects, deferred * 8, obj)
                     deferred = deferred + 1
                 else:
