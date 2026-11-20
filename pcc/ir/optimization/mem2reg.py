@@ -808,7 +808,8 @@ def _rename(
     for name in names:
         current[name] = "undef"
 
-    # Explicit stack: [block, child cursor, saved values to restore]
+    # Explicit stack: [block, child cursor, values from before this block's
+    # first writes]. Untouched slots already have the parent frame's value.
     stack = [[entry, 0, None]]
     steps = 0
     limit = len(reachable) + 2
@@ -819,19 +820,20 @@ def _rename(
             steps = steps + 1
             if steps > limit:
                 return None
-            saved = {}
-            for name in names:
-                saved[name] = current[name]
+            saved: dict[str, str] = {}
             frame[2] = saved
             slot = phi_for.get(block_name)
             if slot is not None:
                 for name in sorted(slot.keys()):
+                    saved[name] = current[name]
                     current[name] = "%" + slot[name]
             block_events = events.get(block_name)
             if block_events is not None:
                 for index in sorted(block_events.keys()):
                     kind, name, payload = block_events[index]
                     if kind == "store":
+                        if name not in saved:
+                            saved[name] = current[name]
                         current[name] = payload
                     else:
                         replacements[payload] = current[name]
@@ -849,8 +851,9 @@ def _rename(
             frame[1] = frame[1] + 1
             stack.append([child, 0, None])
             continue
-        for name in names:
-            current[name] = frame[2][name]
+        restore = frame[2]
+        for name in restore:
+            current[name] = restore[name]
         stack.pop()
 
     # Every phi must name each predecessor edge exactly once.  An edge from a
