@@ -2056,17 +2056,31 @@ def _populate_owned_optimizer_exports(out):
     )
     include_defs["default"] = BoolLit(span=span, ty=BoolType(name="bool"), value=False)
     owner = "pcc.ir.optimization.inline"
+    limit_type = ("int", 64, True)
+    definition_limit = _export_arg(
+        "definition_limit", limit_type, kind="kw_only", has_default=True,
+    )
+    definition_limit["default"] = Name(
+        span=span, ty=DynType(name="dyn"), ident="DEFINITION_LIMIT",
+    )
+    definition_limit["default_native_global"] = {
+        "owning_module": owner, "name": "DEFINITION_LIMIT",
+    }
     out[owner] = {
+        "DEFINITION_LIMIT": {"kind": "constant", "value_kind": "int", "value": 32},
         "inline_module": _native_function_object_export(
-            owner, "inline_module", changed_text, (text, flag, flag),
+            owner, "inline_module", changed_text, (text, flag, flag, limit_type),
             (
                 _export_arg("ir_text", text),
                 _export_arg("", kind="kw_only"),
                 require_inline,
                 include_defs,
+                definition_limit,
             ),
         ),
     }
+    # The provider accepts a Python int, not a fixed-width machine integer.
+    out[owner]["inline_module"]["box_int_abi"] = True
     owner = "pcc.frontends.python.compiled_default_passes"
     out[owner] = {
         "_has_py_cpy_call": _native_function_object_export(
