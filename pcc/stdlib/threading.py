@@ -19,6 +19,7 @@ _event_set = extern("py_threading_event_set", (c_ptr,), c_int64)
 _event_clear = extern("py_threading_event_clear", (c_ptr,), c_int64)
 _event_is_set = extern("py_threading_event_is_set", (c_ptr,), c_int64)
 _event_wait = extern("py_threading_event_wait", (c_ptr,), c_int64)
+_event_wait_args = extern("py_threading_event_wait_args", (c_ptr, c_ptr), c_int64)
 _thread_new = extern("py_threading_thread_new", (c_ptr, c_ptr), c_obj)
 _thread_start = extern("py_threading_thread_start", (c_ptr,), c_int64)
 _thread_join = extern("py_threading_thread_join", (c_ptr,), c_int64)
@@ -95,7 +96,9 @@ class Event:
         return _event_is_set(self._ptr) != 0
 
     def wait(self, timeout=None) -> bool:
-        return _event_wait(self._ptr) == 0
+        if timeout is None:
+            return _event_wait(self._ptr) == 0
+        return _event_wait_args(self._ptr, timeout) == 0
 
 
 class Thread:
