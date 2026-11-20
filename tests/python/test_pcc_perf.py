@@ -346,7 +346,14 @@ def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monke
         PERF.seal("probe", (), root=repository)
 
 
-def test_arm_passes_its_preflight_reserve_and_reports_a_refused_start(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("platform,flag,cap,reserve", [
+    ("darwin", "--darwin-preflight-reserve-bytes", "4294967296", "536870912"),
+    ("linux", "--linux-physical-preflight-reserve-bytes", "1073741824", "7516192768"),
+    ("freebsd", "--darwin-preflight-reserve-bytes", "1073741824", "7516192768"),
+])
+def test_arm_passes_its_preflight_reserve_and_reports_a_refused_start(
+        tmp_path, monkeypatch, capsys, platform, flag, cap, reserve):
+    monkeypatch.setattr(PERF.sys, "platform", platform)
     monkeypatch.setattr(PERF, "HOME", tmp_path / "home")
     sealed = tmp_path / "home/arms/probe"
     (sealed / "source/benchmarks/handler").mkdir(parents=True)
@@ -360,12 +367,17 @@ def test_arm_passes_its_preflight_reserve_and_reports_a_refused_start(tmp_path, 
     from scripts import run_process_tree_sample
     monkeypatch.setattr(run_process_tree_sample, "main", lambda argv: seen.append(argv) or 2)
     monkeypatch.setattr(PERF.os, "environ", dict(PERF.os.environ))
-    assert PERF.main(["arm", "probe", "--max-tree-rss", "4294967296",
-                      "--preflight-reserve", "536870912"]) == 1
+    assert PERF.main(["arm", "probe", "--max-tree-rss", cap,
+                      "--preflight-reserve", reserve]) == 1
     argv = seen[0]
-    assert argv[argv.index("--max-tree-rss-bytes") + 1] == "4294967296"
-    assert argv[argv.index("--darwin-preflight-reserve-bytes") + 1] == "536870912"
+    assert argv[argv.index("--max-tree-rss-bytes") + 1] == cap
+    assert argv[argv.index("--timeout") + 1] == "900"
+    assert argv[argv.index(flag) + 1] == reserve
+    assert [option for option in argv if option.endswith("preflight-reserve-bytes")] == [flag]
+    assert "--auto-tree-rss-ceiling-bytes" not in argv
+    assert argv[-2:] == ["_build", str(sealed)]
     assert "build did not start (guard exit 2)" in capsys.readouterr().out
     seen.clear()
     PERF.main(["arm", "probe"])
-    assert seen[0][seen[0].index("--darwin-preflight-reserve-bytes") + 1] == "8589934592"
+    assert seen[0][seen[0].index(flag) + 1] == "8589934592"
+    assert seen[0][seen[0].index("--max-tree-rss-bytes") + 1] == "6442450944"

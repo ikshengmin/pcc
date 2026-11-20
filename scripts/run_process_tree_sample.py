@@ -696,6 +696,39 @@ def _darwin_resource_preflight(*, max_tree_rss_bytes: int, reserve_bytes: int) -
     )
 
 
+def _linux_physical_resource_preflight(*, max_tree_rss_bytes: int, reserve_bytes: int) -> dict:
+    """Extra admission for an explicitly capped tree. Not an auto-cap or cgroup guarantee."""
+    if not sys.platform.startswith("linux") or min(max_tree_rss_bytes, reserve_bytes) <= 0:
+        raise ProcessTreeSampleError("Linux physical preflight requires a positive explicit RSS cap and reserve")
+    required = max_tree_rss_bytes + reserve_bytes
+    receipt = {"kind": "linux_host_memavailable", "max_tree_rss_bytes": max_tree_rss_bytes,
+               "reserve_bytes": reserve_bytes, "required_physical_bytes": required}
+    try:
+        lines = Path("/proc/meminfo").read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeError) as exc:
+        raise ProcessTreeSampleError("cannot read Linux physical memory: " + str(exc),
+                                     resource_preflight=receipt) from exc
+    values = {}
+    for line in lines:
+        key = re.match(r"\s*(MemTotal|MemAvailable)\b", line)
+        if not key:
+            continue
+        name = key.group(1)
+        match = re.fullmatch(name + r":[ \t]*([0-9]{1,17})[ \t]+kB[ \t]*", line)
+        if name in values or not match or int(match.group(1)) > ((1 << 64) - 1) // 1024:
+            raise ProcessTreeSampleError("invalid Linux " + name, resource_preflight=receipt)
+        values[name] = int(match.group(1)) * 1024
+    if ("MemAvailable" not in values or "MemTotal" not in values
+            or values["MemTotal"] <= 0 or values["MemAvailable"] > values["MemTotal"]):
+        raise ProcessTreeSampleError("incomplete or inconsistent Linux physical memory",
+                                     resource_preflight=receipt)
+    receipt.update(mem_available_bytes=values["MemAvailable"], mem_total_bytes=values["MemTotal"])
+    if values["MemAvailable"] < required:
+        raise ProcessTreeSampleError("insufficient Linux MemAvailable for RSS cap plus reserve",
+                                     resource_preflight=receipt)
+    return receipt
+
+
 def _linux_memory_observation(proc_root: Path = Path("/proc")) -> dict:
     """MemAvailable capped by every visible ancestor cgroup memory limit."""
     memory = {}
@@ -1254,7 +1287,11 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         raise ProcessTreeSampleError("preflight reserve must be zero or positive")
     auto_ceiling = args.auto_tree_rss_ceiling_bytes
     preserve_worker_budget = getattr(args, "preserve_worker_budget", False)
-    if preserve_worker_budget and (auto_ceiling or args.darwin_preflight_reserve_bytes):
+    linux_reserve = getattr(args, "linux_physical_preflight_reserve_bytes", None)
+    if linux_reserve is not None and (linux_reserve <= 0 or args.max_tree_rss_bytes <= 0
+                                      or auto_ceiling or args.darwin_preflight_reserve_bytes):
+        raise ProcessTreeSampleError("Linux physical preflight requires only a positive explicit RSS cap and reserve")
+    if preserve_worker_budget and (auto_ceiling or args.darwin_preflight_reserve_bytes or linux_reserve is not None):
         raise ProcessTreeSampleError("inherited observation cannot re-admit memory")
     if auto_ceiling < 0 or args.min_tree_rss_bytes <= 0:
         raise ProcessTreeSampleError("automatic tree budget bounds must be positive")
@@ -1300,8 +1337,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
         "max_tree_rss_bytes": args.max_tree_rss_bytes,
         "darwin_preflight_reserve_bytes": args.darwin_preflight_reserve_bytes,
     }
+    if linux_reserve is not None:
+        payload["linux_physical_preflight_reserve_bytes"] = linux_reserve
     _persist(result_path, payload)
-    if auto_ceiling or args.darwin_preflight_reserve_bytes:
+    if auto_ceiling or args.darwin_preflight_reserve_bytes or linux_reserve is not None:
         try:
             if auto_ceiling:
                 selection = select_tree_memory_budget(
@@ -1317,6 +1356,10 @@ def _run(args: argparse.Namespace) -> dict[str, object]:
                     payload["darwin_preflight_reserve_bytes"] = (
                         selection["configured_host_memory_reserve_bytes"]
                     )
+            elif linux_reserve is not None:
+                payload["resource_preflight"] = _linux_physical_resource_preflight(
+                    max_tree_rss_bytes=args.max_tree_rss_bytes, reserve_bytes=linux_reserve,
+                )
             else:
                 payload["resource_preflight"] = _darwin_resource_preflight(
                     max_tree_rss_bytes=args.max_tree_rss_bytes,
@@ -1814,7 +1857,12 @@ def _parser() -> argparse.ArgumentParser:
         "--min-tree-rss-bytes", type=int, default=1,
         help="reject automatic admission below this tree budget; never round up",
     )
-    parser.add_argument(
+    reserves = parser.add_mutually_exclusive_group()
+    reserves.add_argument(
+        "--linux-physical-preflight-reserve-bytes", type=int,
+        help="require positive host MemAvailable reserve beside an explicit process-tree RSS cap",
+    )
+    reserves.add_argument(
         "--darwin-preflight-reserve-bytes",
         type=int,
         default=0,

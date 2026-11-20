@@ -245,13 +245,15 @@ def build(name: str, timeout: int, max_tree_rss: int,
         PCC_PERF_HOME=str(HOME),
     )
     os.environ.update(environment)
+    reserve_flag = ("--linux-physical-preflight-reserve-bytes" if sys.platform.startswith("linux")
+                    else "--darwin-preflight-reserve-bytes")
     with performance_lock():
         return run_process_tree_sample.main([
             "--result", str(arm / "guard.json"), "--samples", str(arm / "rss.tsv"),
             "--stdout", str(arm / "build.stdout"), "--stderr", str(arm / "build.stderr"),
             "--cwd", str(arm / "source"), "--timeout", str(timeout),
             "--max-tree-rss-bytes", str(max_tree_rss),
-            "--darwin-preflight-reserve-bytes", str(preflight_reserve),
+            reserve_flag, str(preflight_reserve),
             "--no-performance-lock", "--",
             "uv", "run", "--no-sync", "python", str(arm / "source/scripts/pcc_perf.py"),
             "_build", str(arm),
@@ -966,7 +968,10 @@ def main(argv: list[str] | None = None) -> int:
     # the build starts. 8 GiB suits a large Mac; a 16 GiB machine with a
     # desktop session never has 14 GiB reclaimable, so it names a smaller
     # reserve explicitly. The tree cap itself is still enforced.
-    arm.add_argument("--preflight-reserve", type=int, default=8589934592)
+    arm.add_argument("--preflight-reserve", type=int, default=8589934592,
+                     help="bytes to leave available beyond --max-tree-rss before building "
+                          "(Linux: positive reserve against host MemAvailable, not cgroup headroom; "
+                          "Darwin: reclaimable memory, disk and swap checks)")
 
     child = commands.add_parser("_build")
     child.add_argument("arm", type=Path)
