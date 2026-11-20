@@ -23,6 +23,7 @@ _event_wait_args = extern("py_threading_event_wait_args", (c_ptr, c_ptr), c_int6
 _thread_new = extern("py_threading_thread_new", (c_ptr, c_ptr), c_obj)
 _thread_start = extern("py_threading_thread_start", (c_ptr,), c_int64)
 _thread_join = extern("py_threading_thread_join", (c_ptr,), c_int64)
+_thread_join_args = extern("py_threading_thread_join_args", (c_ptr, c_ptr), c_int64)
 _thread_is_alive = extern("py_threading_thread_is_alive", (c_ptr,), c_int64)
 _condition_new = extern("py_threading_condition_new", (c_ptr,), c_obj)
 _condition_acquire = extern("py_threading_condition_acquire", (c_ptr,), c_int64)
@@ -125,7 +126,10 @@ class Thread:
 
     def join(self, timeout=None) -> None:
         if self._native is not None:
-            _thread_join(self._native)
+            if timeout is None:
+                _thread_join(self._native)
+            else:
+                _thread_join_args(self._native, timeout)
         return None
 
     def is_alive(self) -> bool:
