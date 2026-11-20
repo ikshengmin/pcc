@@ -441,7 +441,16 @@ class CompilerIntArena:
                 raise RuntimeError("compiler int arena is closed")
             if source._address != 0:
                 raise RuntimeError("compiler arena storage projections disagree")
-            self._values.extend(source._values[start:start + count])
+            # A complete built-in run already is the sequence to extend.
+            # list.extend handles self-extension; retain slicing for partial
+            # ranges and any custom lookup, arithmetic, or container hooks.
+            if (type(self) is CompilerIntArena and type(source) is CompilerIntArena
+                    and type(start) is int and type(count) is int and start == 0
+                    and type(self._values) is list and type(source._values) is list
+                    and count == len(source._values)):
+                self._values.extend(source._values)
+            else:
+                self._values.extend(source._values[start:start + count])
         self._length += count
 
     def extend_list(self, values: list[int]) -> None:
