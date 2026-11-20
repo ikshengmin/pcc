@@ -15,6 +15,8 @@ edges that supply constants and merges the straight-line remains.
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import platform
 import re
 import subprocess
@@ -214,8 +216,7 @@ no:
     assert "ret i64 %wide" in out
 
 
-def test_successor_phis_take_the_value_of_the_threaded_path():
-    text = """define i64 @n(i1 %x, i64 %a) {
+SUCCESSOR_PHI = """define i64 @n(i1 %x, i64 %a) {
 entry:
   br i1 %x, label %one, label %two
 one:
@@ -237,14 +238,72 @@ no:
   ret i64 %q
 }
 """
-    out, changed = jump_thread_text(text)
+
+
+def _check_threaded_successor_phis(text):
+    _check_phi_entries(text)
+    function = MutableModule.parse(text).function("n")
+    # The join and its successor PHIs merge into the two predecessor paths.
+    assert {block.name: block.terminator.text.strip() for block in function.blocks} == {
+        "entry": "br i1 %x, label %one, label %two",
+        "one": "ret i64 15",  # 10 + 5 on the true edge
+        "two": "ret i64 20",  # 20 on the false edge
+    }
+
+
+def test_successor_phis_take_the_value_of_the_threaded_path():
+    out, changed = jump_thread_text(SUCCESSOR_PHI)
     assert changed
-    _check_phi_entries(out)
-    assert "join:" not in out
-    # Merged into its single new predecessor, each phi became the value of
-    # the threaded path: 10 + 5 on the true edge, 20 on the false edge.
-    assert "ret i64 15" in out
-    assert "ret i64 20" in out
+    _check_threaded_successor_phis(out)
+
+
+def _successor_phi_driver():
+    return f'''from pcc.ir.optimization.jump_thread import jump_thread_text
+
+
+def main() -> None:
+    rewritten, changed = jump_thread_text("""{SUCCESSOR_PHI}""")
+    assert changed
+    print(rewritten)
+
+
+main()
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(
+    platforms=("linux",), machines=("x86_64",),
+    probe=lambda: not os.environ.get("PCC_TEST_COMPILER"),
+)
+def test_named_jump_thread_executes_owned_optimizer(tmp_path, pcc_runtime_archive):
+    """pcc0 builds the actual optimizer and siblings as one native executable."""
+    from pcc.backend.elf_x86_64 import parse_static_executable
+    from pcc.frontends.python.pipeline import compile_python_multi
+
+    root = Path(__file__).resolve().parents[2]
+    driver = tmp_path / "jump_thread_driver.py"
+    driver.write_text(_successor_phi_driver(), encoding="utf-8")
+    reference = subprocess.run(
+        [sys.executable, "-B", str(driver)],
+        env={**os.environ, "PYTHONPATH": str(root)}, capture_output=True, timeout=10,
+    )
+    assert reference.returncode == 0 and not reference.stderr, reference.stderr
+
+    modules = ["pcc.ir.optimization." + name for name in ("jump_thread", "ir_mutator", "text_tokens")]
+    paths = [str(driver), *(str(root / (name.replace(".", "/") + ".py")) for name in modules)]
+    binary = tmp_path / "jump_thread_driver"
+    target = "x86_64-unknown-linux-gnu"
+    profile = {}
+    compile_python_multi(
+        paths, str(binary), module_names=[driver.stem, *modules], entry_module=driver.stem,
+        target_triple=target, runtime_archive=str(pcc_runtime_archive), profile=profile,
+    )
+    assert profile["counters"]["multi_files"] == 4
+    parse_static_executable(binary.read_bytes())
+    actual = subprocess.run([str(binary)], capture_output=True, timeout=10)
+    assert (actual.returncode, actual.stdout, actual.stderr) == (0, reference.stdout, b"")
+    _check_threaded_successor_phis(f'target triple = "{target}"\n' + actual.stdout.decode("utf-8"))
 
 
 def test_a_predecessor_already_reaching_the_decision_is_not_threaded():
