@@ -147,6 +147,24 @@ def test_self_time_is_split_by_the_owning_category():
     assert shares == {"program": 35, "graph-lock": 25, "collect": 30}
 
 
+def test_gap_charges_gc3_worker_and_cell_registration_at_their_outer_boundary():
+    rows = [
+        [0, 12, "op_str_concat"],
+        [1, 8, "pcc_gc_register_object_cell"],
+        [2, 5, "pcc_thread_graph_lock_acquire_for"],
+        [0, 20, "pcc_gc_cms_worker_main_py"],
+        [1, 15, "pcc_gc_concurrent_sweep_slice"],
+        [2, 6, "pcc_gc_register_object_cell"],
+        [3, 3, "pcc_allocator_alloc_object"],
+        [1, 2, "__psynch_cvwait"],
+    ]
+    # The worker owns its subtree, even when it registers a cell;
+    # directly entered registration owns its lock/allocator work.
+    assert PERF.category_shares(rows) == {"program": 4, "register": 8, "collect": 18}
+    # Attribution cannot change the denominator or drop busy samples.
+    assert sum(PERF.category_shares(rows).values()) == sum(PERF.function_shares(rows).values())
+
+
 def test_self_and_inclusive_samples_by_function():
     rows = PERF.parse_sample(SAMPLE, SYMBOLS, "bench")
     assert PERF.function_shares(rows) == {

@@ -105,8 +105,10 @@ SMOKE_BATCH = 64
 # program entry wins, so a collection owns everything it calls.
 CATEGORIES = (
     ("collect", ("pcc_gc_safepoint", "pcc_gc_collect_tracing", "pcc_gc_collect",
-                 "py_gc_collect", "pcc_gc_alloc_stage_drain_stopped")),
-    ("register", ("pcc_gc_note_object_allocated_sized", "pcc_gc_alloc_stage_note")),
+                 "py_gc_collect", "pcc_gc_alloc_stage_drain_stopped",
+                 "pcc_gc_cms_worker_main_py")),
+    ("register", ("pcc_gc_note_object_allocated_sized", "pcc_gc_alloc_stage_note",
+                  "pcc_gc_register_object_cell")),
     ("unregister", ("pcc_gc_note_object_freeing",)),
     ("barrier", ("pcc_gc_note_slot_write_barrier", "pcc_gc_note_store",
                  "pcc_gc_note_relocation_read", "pcc_gc_store_ptr",
