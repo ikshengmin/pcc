@@ -2025,6 +2025,7 @@ def _populate_owned_optimizer_exports(out):
         ("pcc.ir.optimization.simplifycfg", "simplify_cfg_text", 'Apply a focused local SimplifyCFG subset across all functions.'),
         ("pcc.ir.optimization.foldselect", "fold_two_entry_phi_text", None),
         ("pcc.ir.optimization.instcombine", "instcombine_text", 'Apply local InstCombine-style peepholes; return (new_ir, changed).'),
+        ("pcc.ir.optimization.jump_thread", "jump_thread_text", 'Thread constant-decided branches and merge straight-line blocks.'),
     ):
         out[owner] = {
             name: _native_function_object_export(

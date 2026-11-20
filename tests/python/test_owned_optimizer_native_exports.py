@@ -30,6 +30,8 @@ ROOT = Path(__file__).resolve().parents[2]
 CONSUMER = "pcc.frontends.python.compiled_owned_passes"
 INLINE_OWNER = "pcc.ir.optimization.inline"
 INLINE_SYMBOL = "user_pcc_ir_optimization_inline_inline_module"
+JUMP_THREAD_OWNER = "pcc.ir.optimization.jump_thread"
+JUMP_THREAD_SYMBOL = "user_pcc_ir_optimization_jump_thread_jump_thread_text"
 PROVIDERS = (
     ("pcc.ir.optimization.mem2reg", "mem2reg_text", "ptr", ("ptr",)),
     ("pcc.ir.optimization.instsimplify", "simplify_module_text", "ptr", ("ptr",)),
@@ -38,6 +40,7 @@ PROVIDERS = (
     ("pcc.ir.optimization.instcombine", "instcombine_text", "ptr", ("ptr",)),
     ("pcc.ir.optimization.dce", "dce_module_text", "ptr", ("ptr", "ptr")),
     (INLINE_OWNER, "inline_module", "ptr", ("ptr", "i1", "i1", "ptr")),
+    (JUMP_THREAD_OWNER, "jump_thread_text", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_has_py_cpy_call", "i1", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_mem2reg_function", "ptr", ("ptr",)),
     ("pcc.frontends.python.compiled_default_passes", "_sroa_function", "ptr", ("ptr",)),
@@ -200,6 +203,45 @@ def test_standalone_owned_dispatch_binds_native_providers(tmp_path):
     none_arg = re.search(r"@user_pcc_ir_optimization_dce_dce_module_text\(ptr [^,]+, ptr (%[^ )]+)\)", text)
     assert none_arg
     assert none_arg[1] + " = load ptr, ptr @py_None" in text
+
+
+def test_strict_standalone_jump_thread_keeps_real_owner_import(tmp_path):
+    from pcc.backend.self_backend_parse import parse_self_backend_module
+    from pcc.backend.self_backend_verify import verify_parsed_module
+    from pcc.frontends.python.pipeline import compile_python
+
+    source = ROOT / (CONSUMER.replace(".", "/") + ".py")
+    output = tmp_path / "standalone_dispatch.ll"
+    compile_python(
+        str(source), str(output), emit_llvm_only=True, python_library=True,
+        backend="self", ir_scaffold_mode="on", target_triple="x86_64-unknown-linux-gnu",
+    )
+    text = output.read_text(encoding="utf-8")
+    verify_parsed_module(parse_self_backend_module(text))
+    assert f"declare external ptr @{JUMP_THREAD_SYMBOL}(ptr)" in text
+    assert "strict.nolib.stub" not in text
+    assert not re.search(r"\bcall [^\n]*@py_cpy_", text)
+
+    owner_prefix = CONSUMER.replace(".", "_")
+    top = re.search(rf"(?ms)^define [^\n]*@_pcc_py_module_top_{owner_prefix}\(.*?^\}}", text)[0]
+    imported = re.search(
+        rf"(?m)^\s*(%\S+) = .*ptr @\.pcc\.compiled\.from\.mod\.{re.escape(JUMP_THREAD_OWNER)},", top,
+    )
+    assert imported
+    call = re.search(rf"\bcall ptr[^\n]*@py_compiled_module_import_by_name\(ptr {re.escape(imported[1])}\)", top)
+    member = re.search(r"\bcall ptr[^\n]*@py_obj_getattr\([^\n]*@\.pyattr\.jump_thread_text,", top)
+    publish = re.search(r"\bcall i64[^\n]*@py_module_attr_set\([^\n]*@\.pyattr\.jump_thread_text,", top)
+    assert call and member and publish and imported.end() < call.start() < member.start() < publish.start()
+    for begin, end in ((call.end(), member.start()), (member.end(), publish.start())):
+        guarded = top[begin:end]
+        assert "@py_err_occurred()" in guarded and "br i1" in guarded and "label %call.slot.cleanup." in guarded
+
+    dispatch = re.search(rf"(?ms)^define [^\n]*@user_{owner_prefix}_run_owned_passes\(.*?^\}}", text)[0]
+    assert re.search(rf"\bcall ptr[^\n]*@{JUMP_THREAD_SYMBOL}\(ptr %[^,\s)]+\)", dispatch)
+    # This is a caller-only artifact. Neither a declaration nor its binder
+    # manufactures an initializer or supplies the required provider body.
+    assert not re.search(r"\bcall [^\n]*@py_compiled_module_register_init\(", text)
+    assert not re.search(rf"(?m)^define [^\n]*@{JUMP_THREAD_SYMBOL}\(", text)
 
 
 def _assert_complete_binding_body(text):
