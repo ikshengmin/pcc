@@ -271,7 +271,14 @@ def _mem2reg_single_block_function(lines: list[str]) -> list[str]:
             "events": [],
             "safe": block_ids[index] not in blocked,
         }
-    if not candidates:
+    # Check the completed table: a later alloca of the same name replaces its
+    # earlier row. The scan can invalidate a candidate, but never enable one.
+    has_safe_candidate = False
+    for _name, candidate in candidates.items():
+        if candidate["safe"]:
+            has_safe_candidate = True
+            break
+    if not has_safe_candidate:
         return lines
 
     for index, line in enumerate(lines):

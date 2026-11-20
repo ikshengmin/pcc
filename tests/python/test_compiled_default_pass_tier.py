@@ -448,6 +448,77 @@ def test_mem2reg_token_scan_matches_the_all_candidates_scan():
         ), text[:200]
 
 
+@pytest.mark.parametrize("shadowed", [False, True])
+def test_single_block_mem2reg_skips_scan_without_a_safe_final_candidate(
+    monkeypatch, shadowed,
+):
+    module = compiled_default_passes
+    source = """\
+define i64 @blocked(i64 %arg) {
+entry:
+  br label %blocked
+blocked:
+  %slot = alloca i64
+  store i64 %arg, ptr %slot
+  %value = load i64, ptr %slot
+  br label %exit
+exit:
+  ret i64 %value
+}
+"""
+    if shadowed:
+        # Invalid SSA is a downstream diagnostic. Preserve this pass's
+        # last-allocation-per-name rule, even if an earlier one was unblocked.
+        source = source.replace(
+            "blocked:\n",
+            "dead:\n  %slot = alloca i64\n  ret i64 0\nblocked:\n",
+        )
+    lines = source.splitlines(keepends=True)
+    assert _mem2reg_all_candidates_reference(lines) is lines
+    original = module._ssa_names_in
+    visited = []
+
+    def count_tokens(line):
+        visited.append(line)
+        return original(line)
+
+    monkeypatch.setattr(module, "_ssa_names_in", count_tokens)
+    assert module._mem2reg_single_block_function(lines) is lines
+    assert not visited
+
+
+def test_single_block_mem2reg_preserves_mixed_candidate_rewrite():
+    prefix = """\
+define i64 @mixed(i64 %arg) {
+entry:
+  %blocked = alloca i64
+  store i64 %arg, ptr %blocked
+  store i64 5, ptr %blocked
+  %incoming = load i64, ptr %blocked
+  br label %exit
+exit:
+"""
+    source = prefix + """\
+  %local = alloca i64
+  store i64 %incoming, ptr %local
+  %sum = add i64 %incoming, 2
+  store i64 %sum, ptr %local
+  %value = load i64, ptr %local
+  ret i64 %value
+}
+"""
+    expected = prefix + """\
+  %sum = add i64 %incoming, 2
+  ret i64 %sum
+}
+"""
+    lines = source.splitlines(keepends=True)
+    assert "".join(_mem2reg_all_candidates_reference(lines)) == expected
+    assert compiled_default_passes.run_compiled_default_tier(
+        source, ["mem2reg", "sroa"]
+    ) == expected
+
+
 def test_ssa_name_tokens_agree_with_contains_ssa_name():
     m = compiled_default_passes
     lines = [
