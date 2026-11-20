@@ -1006,9 +1006,9 @@ def _local_names(text: str) -> list[str]:
     index = 0
     limit = len(text)
     while index < limit:
-        if text[index] != "%":
-            index = index + 1
-            continue
+        index = text.find("%", index)
+        if index < 0:
+            break
         end = index + 1
         while end < limit and text[end] in _NAME_CHARS:
             end = end + 1
