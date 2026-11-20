@@ -230,6 +230,14 @@ after releasing that winner, settled it exactly once. A CPython control
 that keeps the loser correctly fails the first checkpoint. This does not
 qualify min, pcc1 or macOS for that first-collection path.
 
+**#22 field-store shape.** On the source-matched Linux x86-64
+production IR for `d7d54cd3`, both locked field-store paths call the
+shared StorePlan commit, which calls the write barrier. The older
+GC4-specific helper expected by the existing test is absent. The retained
+artifact is optimized and does not qualify the frontend test's separate
+post-unlock poll invariant or an inlining performance requirement. The
+old test and current runtime were not changed or rerun for this check.
+
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),
 incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
@@ -456,8 +464,16 @@ app matched CPython on GC0–GC4. Before this change, the real three-module
 `jump_thread` / `ir_mutator` / `text_tokens` package emitted one reachable
 strict stub. A same-input, guarded named-module replay after the change
 produced 222 verified definitions and no strict stubs or CPython calls.
-This is IR evidence for the named closure, not standalone export, linked
-optimizer behavior, or self-host qualification.
+A subsequent genuine four-module Linux pcc0 executable ran the named
+optimizer on that successor-PHI input, not just the optimized program.
+In five GC0–GC4 launches, its transformed IR matched the CPython driver
+byte for byte, and the production verifier confirmed the join disappeared
+and its branch results were 15 and 20. A separate standalone caller ABI
+fix (`6f89a1ac`) passes the no-CPython caller check without synthesizing
+any provider initialization; the real owner is still required at link
+and execution. The opt-in named regression (`d7d54cd3`) passed on the
+current Linux pcc0 default path in one fresh native run. Darwin, pcc1 and
+full bootstrap remain separate gates.
 
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
