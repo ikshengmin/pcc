@@ -3469,16 +3469,36 @@ def _managed_live_after(
     block_count = len(kernel.block_names)
     uses: list[set[int]] = []
     definitions: list[set[int]] = []
+    # PHI uses belong to predecessor edges and do not change during the
+    # fixed point. Index only tracked uses, and only at joins that have any.
+    phi_uses_by_join: dict[int, dict[int, set[int]]] = {}
     for block_index in range(block_count):
         block_fact: CompilerInt4 = kernel.block_fact(block_index)
         defined: set[int] = set()
         phi_fact: CompilerInt2 = kernel.block_phi_fact(block_index)
+        predecessor_uses: dict[int, set[int]] | None = None
         phi_index = 0
         while phi_index < phi_fact.second:
             phi: CompilerInt4 = kernel.phi_record(phi_fact.first + phi_index)
             if phi.first in tracked:
                 defined.add(phi.first)
+            if tracked:
+                incoming_index = 0
+                while incoming_index < phi.fourth:
+                    incoming: CompilerInt2 = kernel.phi_incoming(
+                        phi.third + incoming_index
+                    )
+                    if incoming.first in tracked:
+                        if predecessor_uses is None:
+                            predecessor_uses = {}
+                        predecessor = incoming.second
+                        if predecessor not in predecessor_uses:
+                            predecessor_uses[predecessor] = set()
+                        predecessor_uses[predecessor].add(incoming.first)
+                    incoming_index += 1
             phi_index += 1
+        if predecessor_uses is not None:
+            phi_uses_by_join[block_index] = predecessor_uses
         used: set[int] = set()
         instruction_index = 0
         while instruction_index < block_fact.second:
@@ -3544,26 +3564,10 @@ def _managed_live_after(
                 if successor_index < 0 or successor_index >= block_count:
                     _fail(func, f"unknown CFG successor id {successor_index}")
                 outgoing.update(live_in[successor_index])
-                successor_phi_fact: CompilerInt2 = kernel.block_phi_fact(
-                    successor_index
-                )
-                phi_index = 0
-                while phi_index < successor_phi_fact.second:
-                    phi: CompilerInt4 = kernel.phi_record(
-                        successor_phi_fact.first + phi_index
-                    )
-                    incoming_index = 0
-                    while incoming_index < phi.fourth:
-                        incoming: CompilerInt2 = kernel.phi_incoming(
-                            phi.third + incoming_index
-                        )
-                        if (
-                            incoming.second == block_index
-                            and incoming.first in tracked
-                        ):
-                            outgoing.add(incoming.first)
-                        incoming_index += 1
-                    phi_index += 1
+                if successor_index in phi_uses_by_join:
+                    predecessor_uses = phi_uses_by_join[successor_index]
+                    if block_index in predecessor_uses:
+                        outgoing.update(predecessor_uses[block_index])
             incoming_live = uses[block_index] | (
                 outgoing - definitions[block_index]
             )
@@ -3575,6 +3579,8 @@ def _managed_live_after(
                 changed = True
             block_index -= 1
 
+    predecessor_uses = None
+    phi_uses_by_join.clear()
     result = PackedManagedLiveness()
     for block_index in range(block_count):
         block_fact: CompilerInt4 = kernel.block_fact(block_index)
