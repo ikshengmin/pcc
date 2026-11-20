@@ -1026,14 +1026,8 @@ def _buffer_count_fill(slots, tokens, mutable: int) -> int:
         return _buffer_error(15, cstr("byte count does not fit in an index-sized integer"))
     if count < 0:
         return _buffer_error(2, cstr("negative count"))
-    overhead: int = PYBYTESOBJECT_DATA_OFFSET + 1  # Include the trailing NUL.
-    if mutable != 0:
-        overhead = PYBYTEARRAYOBJECT_DATA_OFFSET + 1
-    if count > 9223372036854775807 - overhead:
-        kind: int = 15
-        if mutable != 0:
-            kind = 19
-        return _buffer_error(kind, cstr("byte count is too large"))
+    if mutable == 0 and count > 9223372036854775807 - (PYBYTESOBJECT_DATA_OFFSET + 1):
+        return _buffer_error(15, cstr("byte count is too large"))
     status: int = _buffer_new_raw(slots, tokens, null(), count, mutable)
     if status == 0 and count > 0:
         result = load_ptr(slots, _BUFFER_RESULT * _BUFFER_BYTES)
@@ -1283,7 +1277,11 @@ def py_bytes_new(data, byte_len: int):
 def _bytearray_new_raw(data, byte_len: int):
     if byte_len < 0:
         byte_len = 0
-    p = pcc_gc_alloc(PYBYTEARRAYOBJECT_DATA_OFFSET + byte_len + 1, PY_TYPE_BYTEARRAY, 0)
+    overhead: int = PYBYTEARRAYOBJECT_DATA_OFFSET + 1  # Include the trailing NUL.
+    if byte_len > 9223372036854775807 - overhead:
+        _buffer_error(19, cstr("byte count is too large"))
+        return null()
+    p = pcc_gc_alloc(byte_len + overhead, PY_TYPE_BYTEARRAY, 0)
     if ptr_is_null(p):
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bytearray: out of memory")))

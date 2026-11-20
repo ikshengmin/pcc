@@ -68,6 +68,57 @@ def test_count_limit_reserves_the_selected_header_and_terminator(mutable, excess
     assert not model.leases and not model.pins
 
 
+@pytest.mark.parametrize(("count", "kind", "message", "delegates"), (
+    (-1, 2, "negative count", False),
+    (1 << 63, 15, "byte count does not fit in an index-sized integer", False),
+    ((1 << 63) - 1, 19, "byte count is too large", True),
+))
+def test_mutable_count_validates_index_then_delegates_footprint(count, kind, message, delegates):
+    model = BufferModel("count", relocate=True)
+    model.source[0].value = count
+    ns = model.ns
+    ns["PYBYTEARRAYOBJECT_DATA_OFFSET"] = ns["PYBYTESOBJECT_DATA_OFFSET"] + 3
+    calls = []
+
+    def observe(name, fn):
+        def call(*args):
+            calls.append(name)
+            return fn(*args)
+        return call
+
+    ns["py_obj_index_slots"] = observe("index", ns["py_obj_index_slots"])
+    ns["py_int_to_i64"] = observe("narrow", ns["py_int_to_i64"])
+    ns["_bytearray_new_raw"] = observe("factory", ns["_bytearray_new_raw"])
+    ns["py_exc_new"] = observe("error", ns["py_exc_new"])
+    ns["pcc_gc_alloc"] = lambda *_: pytest.fail("impossible bytearray reservation")
+    assert model.run(1) is None
+    assert calls == ["index", "narrow"] + (["factory"] if delegates else []) + ["error"]
+    assert (model.pending[0].kind, model.pending[0].message) == (kind, message)
+    assert model.raises == 1 and not model.leases and not model.pins
+
+
+@pytest.mark.parametrize("excess", (0, 1))
+def test_bytearray_factory_checks_footprint_before_allocation(excess):
+    model = BufferModel("count", relocate=False)
+    ns = model.ns
+    ns["PYBYTEARRAYOBJECT_DATA_OFFSET"] = ns["PYBYTESOBJECT_DATA_OFFSET"] + 3
+    maximum = (1 << 63) - 1
+    count = maximum - ns["PYBYTEARRAYOBJECT_DATA_OFFSET"] - 1 + excess
+    requested = []
+
+    def refuse(size, tag, flags):
+        requested.append((size, tag, flags))
+        return None  # No real allocation of a limit-sized buffer.
+
+    ns["pcc_gc_alloc"] = refuse
+    assert ns["_bytearray_new_raw"](None, count) is None
+    assert requested == ([] if excess else [(maximum, ns["PY_TYPE_BYTEARRAY"], 0)])
+    assert (model.pending[0].kind, model.pending[0].message) == (
+        19, "byte count is too large" if excess else "bytearray: out of memory",
+    )
+    assert model.raises == 1
+
+
 PROGRAM = r"""def main():
     empty = bytearray()
     zero = bytearray(0)
@@ -78,10 +129,29 @@ PROGRAM = r"""def main():
     a[0] = 65
     assert bytes(copy) == b'\x00\xffQ' and bytes(a) == b'A\xffQ'
     print(len(zero), len(zeros), copy[0], copy[1], a[0])
+    try:
+        bytearray(9223372036854775807)
+    except MemoryError:
+        print("mutable footprint rejected")
+    try:
+        bytes(9223372036854775807)
+    except OverflowError:
+        print("immutable footprint rejected")
+    try:
+        bytearray(9223372036854775808)
+    except OverflowError:
+        print("count conversion rejected")
+    try:
+        bytearray(-1)
+    except ValueError:
+        print("negative count rejected")
 
 main()
 """
-EXPECTED = "0 4 0 255 65\n"
+EXPECTED = (
+    "0 4 0 255 65\nmutable footprint rejected\nimmutable footprint rejected\n"
+    "count conversion rejected\nnegative count rejected\n"
+)
 
 
 def test_factory_layout_public_reference(tmp_path):
