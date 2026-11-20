@@ -181,6 +181,27 @@ the fixture does not print a per-object ledger. It used the existing GC4
 closed-window behavior, so it neither reproduced nor ruled out the historical
 reopened-window fault.
 
+**#21 public reachability.** The standalone and committed regression
+(`907a67f4`) on Linux x86-64 matched CPython across GC0–GC4: a weak
+witness expired when its cyclic list was unreachable, an anchored cycle
+survived, and removing the anchor then allowed it to collect. A retained
+strong reference makes the last assertion fail. This is separate from the
+older internal cleared-list pressure test: its status 60 check is an
+admission-count threshold before the list-disappearance assertion. That
+test remains unchanged and unresolved.
+
+**#20 expiration versus immediate disposal.** In the public CPython
+adapter for `vt.call`, a retained exception from inside the selected
+callback kept its operands live even across an explicit collection. A
+failure in the last argument instead happened before the callback was
+entered. A separate Linux x86-64 PCC executable with the actual native
+scheduler matched both expected outcomes across all five GC modes (ten
+launches): a deliberate GC callback failure did not replace the selected
+exception, and the first explicit collection after releasing the error
+settled the two finalizers and weak callback exactly once. This is
+post-release behavior, not immediate disposal. The original strict
+virtual-thread test remains unchanged, and the other #20 cases are open.
+
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),
 incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
@@ -299,6 +320,26 @@ A separate ordinary native pointer-PHI correctness case matched CPython
 3.15 in five isolated GC0–GC4 runs. This does not qualify a complete
 benchmark build, a formal performance arm, or Stage1/Stage2 timing.
 
+The warm benchmark build reached its first worker at +67.495 s of its 90 s
+budget. That leaves less time than the faster shard takes in isolation,
+even before other objects and linking. An exact 25-unit cached pre-pass
+diagnostic spent 57.124 s on owned passes and 2.893 s on sharding. Both
+phases returned; a later receipt check compared inconsistent filename
+orders, so complete shard parity was not established by that diagnostic.
+On the exact gateway input alone, sparse dominator-frame restoration in
+`mem2reg` (`08f482f8`) changed 27.377 to 25.054 s and peak tree RSS
+580,063,232 to 549,179,392 bytes in one matched pair, yielding the same
+88,905,270-byte optimized IR. The textual pass (`d86c17b7`) now skips
+tokenization when its final candidate table has no eligible slot; the
+222,090-byte model was 24.882 → 15.824 ms in five byte-identical pairs.
+The whole gateway was not retimed for that textual change.
+
+On Linux, `pcc_perf.py arm` now checks the requested positive physical
+reserve against `MemAvailable` in addition to the original explicit
+tree cap (`1777b4e3`). Unavailable or insufficient observations reject
+before spawn. This is not proof of effective cgroup headroom, and it
+does not remove the compile deadline. No formal HTTP arm was started.
+
 In [CI run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171),
 all four Worker prior preflights stopped at the same source-inventory assertion.
 Separately, the [macOS Stage1 bootstrap receipt](https://github.com/ikshengmin/pcc/actions/runs/44358778171/artifacts/14456860366)
@@ -344,8 +385,9 @@ had the same 166,936-byte median peak in both arms. A 32,768-ID late
 rewrite took 53.56 ms before both changes, 57.18 ms after the first change
 and 52.13 ms with bounded replay (untraced medians, five pairs). Darwin
 target objects were byte-identical; no Darwin executable was run. The
-existing shared Mac phase label alone cannot establish which implementation
-or mix of rewritten spans ran in CI.
+exact CI command and timing configuration select the host-owned mode 2
+route, but only its start was logged. The retained artifacts do not show
+the no-op/late-rewrite mix or establish a worker RSS improvement.
 
 A longer workload and an explicit-collection control passed 12/12 native
 launches with four distinct carriers each (same compiler/runtime, new ELF
