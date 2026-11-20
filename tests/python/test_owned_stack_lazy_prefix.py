@@ -94,3 +94,33 @@ def test_mode2_flushes_original_prefix_before_first_producer_failure(monkeypatch
         assert oracle._ids(f, span) == before
     finally:
         f.close()
+
+def test_mode2_replays_a_long_prefix_with_bounded_scratch(monkeypatch):
+    from pcc.backend.self_backend_value_arena import CompilerIntArena
+
+    f, s, span = fixture(2, "basic", prefix=4099)
+    before = oracle._ids(f, span)
+    contexts, copies = [], []
+    init, extend = typed._Pass.__init__, CompilerIntArena.extend_from
+
+    def initialize(p, *args):
+        init(p, *args)
+        contexts.append(p)
+
+    def observe(target, source, start, count):
+        if contexts and target is contexts[0].output and source is contexts[0].ids:
+            copies.append((start, count))
+        return extend(target, source, start, count)
+
+    monkeypatch.setattr(typed._Pass, "__init__", initialize)
+    monkeypatch.setattr(CompilerIntArena, "extend_from", observe)
+    try:
+        out = typed._run_owned_stack(f, s, span, 2)
+        cursor = 0
+        for start, count in copies:
+            assert start == cursor and 0 < count <= 1024
+            cursor += count
+        assert cursor == 4099
+        assert oracle._ids(f, out)[:4099] == before[:4099]
+    finally:
+        f.close()

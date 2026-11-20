@@ -864,10 +864,13 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
                 decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2), compact_records)
                 if decision[0] != 0:
                     if mode == 2 and not changed:
-                        # This prefix was passed through unchanged. Replay it
-                        # only at the first rewrite, without a prefix slice.
-                        for prior in range(index):
-                            p.output.append(p.rid(prior))
+                        # Replay only at the first rewrite. A bounded block
+                        # avoids both per-ID dispatch and a prefix-sized slice.
+                        prior = 0
+                        while prior < index:
+                            count = min(1024, index - prior)
+                            p.output.extend_from(p.ids, prior, count)
+                            prior += count
                     replacement = p.new_move(decision[1], decision[2], decision[3] != 0)
                     if replacement == -2:
                         raise EncodeError("owned stack decision disagrees with producer")
