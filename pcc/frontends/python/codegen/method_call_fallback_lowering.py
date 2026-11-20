@@ -637,6 +637,18 @@ class MethodCallFallbackLoweringMixin:
             )
             return result
         if isinstance(obj_ty, NoneType):
+            # A local can still hold a container on the edge where its
+            # None assignment did not run. A registered lexical slot proves
+            # native ownership; normal method lookup checks the actual
+            # receiver before any argument is evaluated.
+            if (
+                getattr(self, "_strict_no_libpython", False)
+                and not getattr(self, "_freestanding_module", False)
+                and not getattr(self, "_runtime_port_module", False)
+                and not getattr(self, "_generator_ctx_stack", ())
+                and self._frame_root_slot_for_operand(attr.obj) is not None
+            ):
+                return self._emit_slot_method_call(expr, "method." + attr.name)
             # Flow-insensitive inference can label a mutable module global by
             # its initial ``None`` even after a guarded branch has installed a
             # native instance.  The slot, not that stale expression type, owns
