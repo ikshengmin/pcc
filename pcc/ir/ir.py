@@ -1044,7 +1044,9 @@ class InstructionRecord:
         self.text = text
         self.opname = opname
         self.block = block
-        self._metadata: dict[str, _MetadataNode] = {}
+        # The direct-only frontend retains every record until kernel capture.
+        # Most have no attachments: do not allocate a dict per instruction.
+        self._metadata_nodes: Optional[dict[str, _MetadataNode]] = None
         # One compact-plane row ID on the existing record preserves final
         # insertion order without allocating a parallel instruction object.
         # -1 is the explicit text-fallback marker.
@@ -1060,6 +1062,18 @@ class InstructionRecord:
         # explicit cold API on DirectIndexedFunctionBuilder.
         return self.opname
 
+    @property
+    def _metadata(self) -> dict[str, _MetadataNode]:
+        nodes = self._metadata_nodes
+        if nodes is None:
+            nodes = {}
+            self._metadata_nodes = nodes
+        return nodes
+
+    @_metadata.setter
+    def _metadata(self, nodes: dict[str, _MetadataNode]) -> None:
+        self._metadata_nodes = nodes
+
     def set_metadata(self, name: str, node: "_MetadataNode") -> None:
         """Attach instruction metadata using llvmlite's public API shape.
 
@@ -1070,7 +1084,8 @@ class InstructionRecord:
         """
         if not isinstance(node, _MetadataNode):
             raise TypeError("instruction metadata requires a metadata node")
-        prior = self._metadata.get(name)
+        nodes = self._metadata
+        prior = nodes.get(name)
         text = self.text
         if prior is not None:
             old_suffix = ", !" + str(name) + " " + prior.get_reference()
@@ -1079,7 +1094,7 @@ class InstructionRecord:
                     "instruction metadata text is out of sync: " + str(name)
                 )
             text = text[: -len(old_suffix)]
-        self._metadata[name] = node
+        nodes[name] = node
         text += ", !" + str(name) + " " + node.get_reference()
         self.block._replace_record_text(self, text)
 
@@ -2171,8 +2186,10 @@ class IRBuilder:
         end with the previous suffix.
         """
         loc = self.debug_location
-        if loc is not None and "dbg" not in rec._metadata:
-            rec.set_metadata("dbg", loc)
+        if loc is not None:
+            nodes = rec._metadata_nodes
+            if nodes is None or "dbg" not in nodes:
+                rec.set_metadata("dbg", loc)
         return rec
 
     def _next_name(self, name: str) -> str:
