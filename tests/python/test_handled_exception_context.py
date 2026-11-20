@@ -81,8 +81,8 @@ def test_handled_context_thread_local_isolation():
     runtime["py_handled_context_pop"](main_record)
 
 
-def _implicit_chainer(on_lock=None):
-    state = {"locked": False, "finishes": 0}
+def _implicit_chainer(on_lock=None, *, backend=0):
+    state = {"locked": False, "finishes": 0, "acquisitions": 0}
     def load(pointer):
         if isinstance(pointer, tuple):
             obj, offset = pointer
@@ -99,6 +99,7 @@ def _implicit_chainer(on_lock=None):
         state["finishes"] += 1
     def lock():
         assert not state["locked"]
+        state["acquisitions"] += 1
         if on_lock is not None:
             on_lock()
         state["locked"] = True
@@ -112,7 +113,7 @@ def _implicit_chainer(on_lock=None):
         "is_tagged_int": lambda value: isinstance(value, int),
         "load_i32": lambda obj, offset: obj[offset],
         "stack_alloc": lambda _size: {},
-        "pcc_gc_backend": lambda: 0,
+        "pcc_gc_backend": lambda: backend,
         "pcc_gc_load_ptr": lambda _owner, pointer: load(pointer),
         # The raw read of the caller's context slot (empty-context return).
         "load_ptr": lambda pointer, offset: load(pointer) if offset == 0 else None,
@@ -150,6 +151,25 @@ def test_implicit_context_overwrite_self_and_indirect_cycles():
     chain([fresh], [first])
     assert fresh[40] is first and second[40] is first
     assert not state["locked"] and state["finishes"] == 10
+
+
+def test_same_object_context_skips_graph_only_on_nonmoving_backends():
+    for backend in range(5):
+        chain, state = _implicit_chainer(backend=backend)
+        previous = {8: 8, 40: None}
+        error = {8: 8, 40: previous}
+        chain([error], [error])
+        assert error[40] is previous
+        assert state["acquisitions"] == (0 if 1 <= backend <= 3 else 1)
+        assert state["finishes"] == (0 if 1 <= backend <= 3 else 2)
+        # A distinct pair that would introduce a cycle still commits under
+        # the graph lock, including on the nonmoving fast-path backends.
+        current = {8: 8, 40: error}
+        seen = state["acquisitions"]
+        chain([error], [current])
+        assert error[40] is current and current[40] is None
+        assert state["acquisitions"] == seen + 1
+        assert not state["locked"]
 
 
 def test_implicit_context_reloads_roots_after_graph_lock_parks():

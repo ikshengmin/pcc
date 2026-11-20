@@ -291,11 +291,18 @@ def py_exc_set_implicit_context_slots(exception_slot, context_slot) -> None:
     # No exception is being handled (a raise outside an except block): there
     # is no context to set or cycle to break. The caller's slot is its own
     # root, and NULL is NULL through any forwarding.
-    if ptr_is_null(load_ptr(context_slot, 0)) != 0:
+    raw_context = load_ptr(context_slot, 0)
+    if ptr_is_null(raw_context) != 0:
         return
+    backend: int = pcc_gc_backend()
+    if backend >= 1 and backend <= 3:
+        # The caller owns both rooted slots and the nonmoving collectors do
+        # not rewrite either while it runs. The same object cannot require
+        # a link mutation, even when it already has an explicit context.
+        if ptr_eq(load_ptr(exception_slot, 0), raw_context) != 0:
+            return
     sever = stack_alloc(128)
     replace = stack_alloc(128)
-    backend: int = pcc_gc_backend()
     pcc_gc_store_ptr_plan_init(sever, null(), backend)
     pcc_gc_store_ptr_plan_init(replace, null(), backend)
     pcc_py_gc_minor_graph_lock()
