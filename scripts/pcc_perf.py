@@ -65,6 +65,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -877,17 +878,37 @@ def profile(name: str, collector: int, workers: int, seconds: int,
         argv = ["100", "0", str(rounds), "--summary", str(workers)]
         unit = "request"
     target = arm_dir(name) / f"gc{collector}w{workers}{primitive}.sample"
-    process = subprocess.Popen(
-        [str(binary), *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-        env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
-    )
-    time.sleep(0.3)
-    subprocess.run(["/usr/bin/sample", str(process.pid), str(seconds), "-file", str(target)],
-                   capture_output=True)
-    process.communicate(timeout=900)
-    if process.returncode != 0:
-        raise SystemExit(f"{binary} failed while sampled on gc{collector} w{workers}")
-    rows = parse_sample(target.read_text(), text_symbols(binary), binary.name)
+    label = f"{name} gc{collector} w{workers} {primitive or unit}"
+    # The previous artifact may belong to a different run. Parse a private
+    # output first and only publish it after the sampler and benchmark pass.
+    with tempfile.TemporaryDirectory(prefix=".profile-", dir=target.parent) as directory:
+        output = Path(directory) / target.name
+        process = subprocess.Popen(
+            [str(binary), *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+        )
+        try:
+            time.sleep(0.3)
+            sampler = subprocess.run(
+                ["/usr/bin/sample", str(process.pid), str(seconds), "-file", str(output)],
+                capture_output=True,
+            )
+        finally:
+            process.communicate(timeout=900)
+        if process.returncode != 0:
+            raise SystemExit(f"{binary} failed while sampled on gc{collector} w{workers}")
+        if sampler.returncode != 0:
+            raise SystemExit(f"{label}: sample failed (exit {sampler.returncode})")
+        try:
+            report = output.read_text()
+        except (OSError, UnicodeError) as exc:
+            raise SystemExit(f"{label}: sample report is unreadable: {exc}") from exc
+        if "Call graph:" not in report:
+            raise SystemExit(f"{label}: sample report has no call graph")
+        rows = parse_sample(report, text_symbols(binary), binary.name)
+        if not rows:
+            raise SystemExit(f"{label}: sample report has an empty call graph")
+        output.replace(target)
     return rows, 1e9 * workers / rate, unit
 
 

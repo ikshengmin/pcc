@@ -429,3 +429,47 @@ def test_arm_passes_its_preflight_reserve_and_reports_a_refused_start(
     PERF.main(["arm", "probe"])
     assert seen[0][seen[0].index(flag) + 1] == "8589934592"
     assert seen[0][seen[0].index("--max-tree-rss-bytes") + 1] == "6442450944"
+
+
+@pytest.mark.parametrize("mode", ["failed", "missing", "invalid", "empty", "valid"])
+def test_profile_requires_a_fresh_successful_sampler_report(monkeypatch, tmp_path, mode):
+    target = tmp_path / "gc3w4loop.sample"
+    previous = "Call graph:\n    8 previous_function\nTotal number in stack\n"
+    target.write_text(previous)
+    binary = tmp_path / "benchmark"
+    fresh = "Call graph:\n    4 current_function\nTotal number in stack\n"
+    writes = {"failed": fresh, "invalid": "incomplete", "empty": "Call graph:\n",
+              "valid": fresh}
+    waited = []
+
+    class Process:
+        pid = 123
+        returncode = 0
+
+        def communicate(self, *, timeout):
+            waited.append(timeout)
+
+    def sample(argv, **kwargs):
+        output = Path(argv[-1])
+        if mode in writes:
+            output.write_text(writes[mode])
+        return subprocess.CompletedProcess(argv, int(mode == "failed"))
+
+    monkeypatch.setattr(PERF, "binary_of", lambda name: binary)
+    monkeypatch.setattr(PERF, "arm_dir", lambda name: tmp_path)
+    monkeypatch.setattr(PERF, "run_primitive", lambda *args: {"rate": 1000})
+    monkeypatch.setattr(PERF.subprocess, "Popen", lambda *args, **kwargs: Process())
+    monkeypatch.setattr(PERF.subprocess, "run", sample)
+    monkeypatch.setattr(PERF.time, "sleep", lambda _: None)
+    monkeypatch.setattr(PERF, "text_symbols", lambda path: [])
+
+    if mode == "valid":
+        assert PERF.profile("base", 3, 4, 1, "loop") == (
+            [[4, 4, "current_function"]], 4_000_000.0, "operation")
+        assert target.read_text() == fresh
+    else:
+        with pytest.raises(SystemExit, match="sample"):
+            PERF.profile("base", 3, 4, 1, "loop")
+        assert target.read_text() == previous
+    assert waited == [900]
+    assert sorted(tmp_path.iterdir()) == [target]
