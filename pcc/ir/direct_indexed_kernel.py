@@ -2183,6 +2183,18 @@ def build_direct_indexed_function(function: _ir.Function, *, type_context=None) 
         ) from exc
     if builder is not None:
         builder.release_construction_state()
+        if seed is builder.seed:
+            # The kernel copied these SSA construction columns into its
+            # final scalar tables. The frontend function keeps the builder
+            # until module release; do not retain a second copy meanwhile.
+            # A text fallback adopted a different seed and is left alone.
+            seed.definition_blocks.clear()
+            seed.definition_positions.clear()
+            seed.value_type_ids.clear()
+            seed.alloca_type_ids.clear()
+            seed.value_last_use_positions.clear()
+            seed.value_is_used_flags.clear()
+            seed.used_value_ids_in_order.clear()
     function._direct_indexed_function_cache = parsed
     return parsed
 
