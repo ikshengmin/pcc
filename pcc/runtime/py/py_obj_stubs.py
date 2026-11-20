@@ -1690,11 +1690,19 @@ def _bytes_new_same_family(src, data, byte_len: int):
     return py_bytes_new(data, byte_len)
 
 
+def _bytearray_length_exact(o) -> int:
+    # The caller supplies a live, exact bytearray and any required exclusion.
+    # Only a scalar leaves this accessor, never a payload address.
+    return load_i64(o, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET)
+
+
 @c_abi_export("py_bytes_len")
 def py_bytes_len(o) -> int:
     tag: int = _type_of(o)
-    if tag == PY_TYPE_BYTES or tag == PY_TYPE_BYTEARRAY:
-        return load_i64(o, 16)
+    if tag == PY_TYPE_BYTES:
+        return load_i64(o, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    if tag == PY_TYPE_BYTEARRAY:
+        return _bytearray_length_exact(o)
     if tag == PY_TYPE_MEMORYVIEW:
         return py_bytes_len(load_ptr(o, 16))
     return 0
@@ -3182,7 +3190,7 @@ def _bytearray_read_item(o, i: int) -> int:
     pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
     pcc_py_gc_minor_graph_lock()
     current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
-    n: int = load_i64(current, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET)
+    n: int = _bytearray_length_exact(current)
     if i < 0:
         i = i + n
     value: int = _BYTEARRAY_INDEX_OUT_OF_RANGE
@@ -3693,7 +3701,7 @@ def py_bytearray_setitem(o, k, v) -> int:
     pcc_gc_frame_enter_local(global_addr("pcc_buffer_borrowed_map"), slot)
     pcc_py_gc_minor_graph_lock()
     current = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
-    n: int = load_i64(current, PYBYTESOBJECT_BYTE_LEN_OFFSET)
+    n: int = _bytearray_length_exact(current)
     if i < 0:
         i = i + n
     status: int = 0
