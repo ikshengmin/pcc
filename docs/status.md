@@ -162,6 +162,14 @@ acquisition/snapshot, other direct consumers and native writers, shared live-exp
 accounting, and the layout change remain open. In-place `append` must still land
 with removal of both writebacks. No benchmark, CI, macOS or pcc1 result is claimed.
 
+The `7b321141` factory slice moves the bytearray allocation-size check out of
+the counted constructor and into the single raw bytearray factory. Oversized
+`bytearray(count)` still raises `MemoryError` before payload allocation; the
+immutable `bytes(count)` path keeps `OverflowError`. One Linux x86-64 pcc0
+static executable matched CPython 3.15 in five isolated GC0–GC4 runs. This
+does not centralize the ELF/Mach-O word writers, migrate storage or export
+accounting, or fix in-place append.
+
 Dynamic method binding can land independently only with its specific call
 and return semantics explicitly tested. Registration alone is not an
 in-place append fix.
@@ -282,9 +290,16 @@ executable, and no application or benchmark ran.
 In [CI run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171),
 all four Worker prior preflights stopped at the same source-inventory assertion.
 Separately, the [macOS Stage1 bootstrap receipt](https://github.com/ikshengmin/pcc/actions/runs/44358778171/artifacts/14456860366)
-shows that the indexed `c_codegen` worker exceeded its available budget by
-1,343,488 bytes after target selection. Stage2 and Stage3 were skipped; this
-run verifies neither a fix nor a Stage2-to-Stage1 resource comparison.
+distinguishes two processes for `c_codegen`. Indexed frontend task 2
+finished (reported peak 1,065,271,296 bytes; 832,957 direct records and no
+fallback). Separate indexed backend task 3 reached 2,470,150,144 bytes
+against 2,468,806,656 bytes available. The last logged start was the
+one-intervening stack-store/load forwarding phase, which does not by itself
+attribute the memory growth. The backend opens a sealed handoff; it does
+not retain the frontend's construction lists. Neither this artifact nor the
+same-run Linux x86-64 artifact retains the complete worker input and sealed
+handoff for a replay. Stage2 and Stage3 were skipped; no Stage2-to-Stage1
+resource comparison was possible.
 
 Commit `511743ae` avoids one empty dictionary per unannotated frontend
 instruction. On Linux, 32,768 untouched structured records no longer
@@ -296,6 +311,17 @@ final revision produced identical indexed and object bytes on that input;
 a different small native indexed program exited 42 in both arms, using
 identical Linux static ELFs. Nine focused host cases passed. No macOS
 bootstrap, full C-codegen unit, or Stage2 timing or memory was verified.
+
+Commit `607e9e37` avoids a transient slice when a host compiler arena copies
+a complete built-in list. Partial spans and native storage keep their
+previous paths. In five focused pairs at 262,144 IDs, the input-copy
+allocation peak fell from 4,194,392 to 2,097,216 bytes by host
+`tracemalloc`; this is not process-tree RSS. The full mode-2 pass's
+small-fixture peak was unchanged (665,944 bytes in both arms), with no
+consistent pass-level timing improvement. An affected small Darwin-target
+indexed object emitted on Linux was byte-identical. The unaffected Linux
+x86-64 ELF was identical and exited 42 in both arms. No Darwin binary or
+bootstrap ran.
 
 A longer workload and an explicit-collection control passed 12/12 native
 launches with four distinct carriers each (same compiler/runtime, new ELF
