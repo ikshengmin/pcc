@@ -1492,7 +1492,19 @@ def _semaphore_deadline(timeout) -> int:
     now_us: int = pcc_runtime_monotonic_us()
     ns = stack_alloc(8)
     if _is_real_number(timeout) != 0:
-        if _timeout_ns(timeout, ns) != 0:
+        builtin_seconds: float = py_float_to_f64(timeout)
+        if builtin_seconds < 0.0:
+            # CPython's Condition.wait does not convert a negative wait to
+            # PyTime_t. Finite seconds and a float's -inf thus try once. An
+            # overlarge Python int converted to -inf must still overflow.
+            if builtin_seconds >= -1.7976931348623157e308:
+                return 0
+            if (
+                is_tagged_int(timeout) == 0
+                and load_i32(timeout, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FLOAT
+            ):
+                return 0
+        if _seconds_ns(builtin_seconds, ns) != 0:
             return -2
         return _deadline_after_ns(load_i64(ns, 0))
     now_seconds: float = float(now_us) / 1000000.0
