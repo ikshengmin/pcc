@@ -170,6 +170,14 @@ static executable matched CPython 3.15 in five isolated GC0–GC4 runs. This
 does not centralize the ELF/Mach-O word writers, migrate storage or export
 accounting, or fix in-place append.
 
+Commit `830e87f0` makes exact bytearray `len`, scalar item read and
+scalar item write share the mutable length accessor. The existing receiver
+resolution and lock intervals are unchanged; optimized runtime IR inlines
+the access inside both locked paths. Exact immutable bytes and whole-view
+behavior are not changed. One native Linux pcc0 app matched CPython on
+GC0–GC4 for length, read/write, and index/conversion errors. The native
+ELF/Mach-O fixed-width writers still need an owner-held access path.
+
 Dynamic method binding can land independently only with its specific call
 and return semantics explicitly tested. Registration alone is not an
 in-place append fix.
@@ -188,7 +196,8 @@ survived, and removing the anchor then allowed it to collect. A retained
 strong reference makes the last assertion fail. This is separate from the
 older internal cleared-list pressure test: its status 60 check is an
 admission-count threshold before the list-disappearance assertion. That
-test remains unchanged and unresolved.
+test remains unchanged and unresolved as nonblocking
+[issue #5](https://github.com/ikshengmin/pcc/issues/5).
 
 **#20 expiration versus immediate disposal.** In the public CPython
 adapter for `vt.call`, a retained exception from inside the selected
@@ -199,8 +208,18 @@ scheduler matched both expected outcomes across all five GC modes (ten
 launches): a deliberate GC callback failure did not replace the selected
 exception, and the first explicit collection after releasing the error
 settled the two finalizers and weak callback exactly once. This is
-post-release behavior, not immediate disposal. The original strict
-virtual-thread test remains unchanged, and the other #20 cases are open.
+post-release behavior, not immediate disposal. The same case is now an
+additive regression (`5e180c6a`); the original strict virtual-thread test
+remains unchanged.
+
+Two existing native #20 nodes also passed unchanged on `830e87f0`:
+the exact-integer attribute receiver released two tuple receivers and eight
+call results by its single explicit collection (five native launches);
+the pcc0 min/max producer case preserved the first tied winner, stopped
+on producer and comparison errors, and observed cleanup after its existing
+two explicit collections (five launches). Neither asserts immediate
+finalization; the min/max result does not establish a first-collection
+barrier. No pcc1, macOS, or overall collector contract claim follows.
 
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),
