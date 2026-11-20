@@ -165,6 +165,23 @@ def test_gap_charges_gc3_worker_and_cell_registration_at_their_outer_boundary():
     assert sum(PERF.category_shares(rows).values()) == sum(PERF.function_shares(rows).values())
 
 
+def test_gap_charges_a_mutator_marking_step_to_collection():
+    # A mutator paying allocation debt marks through
+    # pcc_gc_tracing_step_cycle from inside pcc_gc_alloc; that step is
+    # collection work, while the allocation glue around it stays program.
+    rows = [
+        [0, 30, "op_str_concat"],
+        [1, 26, "pcc_gc_alloc"],
+        [2, 12, "pcc_gc_note_alloc"],
+        [3, 9, "pcc_gc_cms_publish_alloc"],
+        [4, 9, "pcc_gc_tracing_step_cycle"],
+        [5, 7, "pcc_gc_page_mark_assign_cell"],
+        [2, 10, "pcc_allocator_alloc_object"],
+    ]
+    assert PERF.category_shares(rows) == {"program": 11, "collect": 9, "allocator": 10}
+    assert sum(PERF.category_shares(rows).values()) == sum(PERF.function_shares(rows).values())
+
+
 def test_self_and_inclusive_samples_by_function():
     rows = PERF.parse_sample(SAMPLE, SYMBOLS, "bench")
     assert PERF.function_shares(rows) == {

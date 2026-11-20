@@ -104,9 +104,14 @@ SMOKE_BATCH = 64
 # Functions that own a category of a request's time. The frame nearest the
 # program entry wins, so a collection owns everything it calls.
 CATEGORIES = (
+    # pcc_gc_cms_worker_main_py is the GC1-GC4 collector thread; every
+    # sample on it is collection work, whatever it calls. A mutator also
+    # marks through pcc_gc_tracing_step_cycle when it pays allocation debt.
     ("collect", ("pcc_gc_safepoint", "pcc_gc_collect_tracing", "pcc_gc_collect",
                  "py_gc_collect", "pcc_gc_alloc_stage_drain_stopped",
-                 "pcc_gc_cms_worker_main_py")),
+                 "pcc_gc_cms_worker_main_py", "pcc_gc_tracing_step_cycle")),
+    # pcc_gc_register_object_cell indexes an allocator cell; the other two
+    # are its fallbacks in pcc_gc_alloc.
     ("register", ("pcc_gc_note_object_allocated_sized", "pcc_gc_alloc_stage_note",
                   "pcc_gc_register_object_cell")),
     ("unregister", ("pcc_gc_note_object_freeing",)),
