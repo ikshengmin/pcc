@@ -221,6 +221,15 @@ two explicit collections (five launches). Neither asserts immediate
 finalization; the min/max result does not establish a first-collection
 barrier. No pcc1, macOS, or overall collector contract claim follows.
 
+The separate first-collection `max` test (`45054ba9`) disables automatic
+collection and keeps the old reentrant min/max test intact. On Linux pcc0,
+one executable passed on GC0–GC4: the first explicit collection settled
+the unreachable source/loser and the group abandoned by a later-argument
+error, while the identical held winner survived. The next collection,
+after releasing that winner, settled it exactly once. A CPython control
+that keeps the loser correctly fails the first checkpoint. This does not
+qualify min, pcc1 or macOS for that first-collection path.
+
 Remaining layers: Lua-style generational marking (starting from GC3),
 generational relocation (starting from GC4, after callback correctness),
 incremental debt-driven marking (GC1), a heap-goal pacer (GC2), common
@@ -421,6 +430,34 @@ returned 8,245 (concat) and 8,308 (raise), not just the 32 setup cycles.
 One process per condition, counters read after pool stop: the durations
 measure the owner's stopped-world window, not loop time or summed worker
 latency. They do not establish an allocation threshold or explain the Mac gap.
+
+## Linux x86-64 Stage2 stopped before link (CI run 44358778171)
+
+The same-run [native wheel job](https://github.com/ikshengmin/pcc/actions/runs/44358778171/job/134994269708)
+published a real Stage1 compiler and passed all five Stage1 canaries.
+Stage1 took 2,202.313 s and its sampled process-tree RSS peak was
+3,775,819,776 bytes with four workers. Only the GC0 shared-input owner
+entered Stage2; the 1,800-second outer watchdog terminated it before
+linking Stage2 or starting Stage3. The active two-worker Stage2 compiler
+tree already sampled 4,626,243,584 bytes (+22.5% relative to that Stage1
+sample), from the native compiler and its `c_codegen` worker. This
+compares the same type of RSS sampling, not matched configurations or
+completed stages. There is no completed Stage2 time or fixed-point result.
+The 17,179,869,184-byte outer test guard did not stop it on memory. These
+receipts describe CI source `7ce5cf66`, not a new run of current master.
+
+On a separate compiler-correctness path, `b1737e9f` aligns the static
+`inline_module` export with its boxed definition-limit argument and
+defining-module default. The broader standalone optimizer still needs a
+qualified `jump_thread_text` provider path. `8f932abc` fixes native method
+lookup where a managed local can hold a container or `None`; actual
+`None` raises before arguments have side effects. An ordinary Linux pcc0
+app matched CPython on GC0–GC4. Before this change, the real three-module
+`jump_thread` / `ir_mutator` / `text_tokens` package emitted one reachable
+strict stub. A same-input, guarded named-module replay after the change
+produced 222 verified definitions and no strict stubs or CPython calls.
+This is IR evidence for the named closure, not standalone export, linked
+optimizer behavior, or self-host qualification.
 
 ## linux-aarch64 Stage1 deadline: typed AArch64 passes (local Mac, 2026-11-19)
 
