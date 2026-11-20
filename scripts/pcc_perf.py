@@ -606,10 +606,12 @@ def run_primitive_cpython(name: str, batch: int, milliseconds: int) -> float:
     return data["operations"] / data["seconds"]
 
 
-def allocations_per_operation(timed: dict, single: dict, batch: int) -> float:
-    """Objects one operation allocates: a timed run against a one-batch run
-    of the same program, so start-up allocations cancel."""
-    operations = timed["operations"] - batch
+def allocations_per_operation(timed: dict, single: dict) -> float:
+    """Cancel start-up allocations against a zero-ms run of the same program.
+
+    The reference reports one completed batch per worker, not one total.
+    """
+    operations = timed["operations"] - single["operations"]
     if operations <= 0:
         return 0.0
     return (timed["allocations"] - single["allocations"]) / operations
@@ -639,7 +641,7 @@ def measure_primitives(name: str, names, collectors, workers,
                     run["rate"] for run in runs)
                 if collector == collectors[0] and count == workers[0]:
                     single = run_primitive(binary, primitive, batch, 0, count, collector)
-                    row["allocations"] = allocations_per_operation(runs[0], single, batch)
+                    row["allocations"] = allocations_per_operation(runs[0], single)
         rows.append(row)
         print_primitive_row(row, collectors, workers, first=len(rows) == 1)
     return rows

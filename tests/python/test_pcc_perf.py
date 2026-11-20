@@ -305,8 +305,21 @@ def test_allocations_per_operation_cancel_the_start_up():
     # warm-up batch and 5000 operations, the single run one batch of each.
     timed = {"operations": 5000, "allocations": 9000 + 3 * (5000 + 1000)}
     single = {"operations": 1000, "allocations": 9000 + 3 * (1000 + 1000)}
-    assert PERF.allocations_per_operation(timed, single, 1000) == pytest.approx(3.0)
-    assert PERF.allocations_per_operation(single, single, 1000) == 0.0
+    assert PERF.allocations_per_operation(timed, single) == pytest.approx(3.0)
+    assert PERF.allocations_per_operation(single, single) == 0.0
+
+
+def test_allocations_per_operation_use_all_workers_in_the_reference():
+    batch, workers, warmup, cost = 1000, 4, 1000, 3
+
+    def row(operations):
+        return {"operations": operations,
+                "allocations": 9000 + cost * (operations + warmup)}
+
+    single = row(batch * workers)
+    assert PERF.allocations_per_operation(row(20000), single) == pytest.approx(cost)
+    assert PERF.allocations_per_operation(single, single) == 0.0
+    assert PERF.allocations_per_operation(row(3000), single) == 0.0
 
 
 def test_primitive_cells_report_costs_ratios_and_scaling():
