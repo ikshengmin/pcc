@@ -863,6 +863,11 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
                 a = p.rid(index)
                 decision = decide(view, mode, a, p.rid(index + 1), p.rid(index + 2), compact_records)
                 if decision[0] != 0:
+                    if mode == 2 and not changed:
+                        # This prefix was passed through unchanged. Replay it
+                        # only at the first rewrite, without a prefix slice.
+                        for prior in range(index):
+                            p.output.append(p.rid(prior))
                     replacement = p.new_move(decision[1], decision[2], decision[3] != 0)
                     if replacement == -2:
                         raise EncodeError("owned stack decision disagrees with producer")
@@ -874,7 +879,8 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
                     changed = True
                     index += decision[0]
                 else:
-                    p.output.append(a)
+                    if mode != 2 or changed:
+                        p.output.append(a)
                     index += 1
             if not changed and fragments.spans.length(span) == len(p.ids):
                 result = fragments.new_fragment()
@@ -882,6 +888,9 @@ def _run_owned_stack(fragments, semantics, span, mode, transfer: _SpanOwnerTrans
                 if transfer is not None:
                     transfer.revoke()
                 return result
+            if mode == 2 and not changed:
+                # A damaged root count still rebuilds from the actual IDs.
+                p.output.extend_from(p.ids, 0, len(p.ids))
             if not can_transfer:
                 return p.finish()
             pending = CompilerRecordSpanArena()
