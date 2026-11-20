@@ -69,6 +69,30 @@ weak reference is empty and does not use the expired reference. This is
 distinct from exactly-once foreign payload release. It is not yet evidence
 about the behavior of native dynamic extensions or CPython bridge objects.
 
+The combined static C ownership check on `58a941bb` exercises a real
+`CpyHandle` created by the existing foreign-payload fixture. Linux x86-64
+pcc0 supplied one owned static executable and five isolated runs, using a
+source-matched threaded, atomic runtime. Immediate `Py_INCREF` /
+`Py_DECREF` balance passed on all five. When the public C reference
+outlived the local Python owner and four explicit collections, only GC0
+matched CPython: GC1–GC4 counted two payload releases while only one was
+due. The fixture shares one counter across the two lifetimes, so this
+distinguishes a contract failure, not which particular callback was early
+or duplicated. It does not read or drop an expired pointer. Dynamic PCC
+extension loading, NumPy, Darwin and performance were not exercised.
+
+A separate public GC4 acceptance candidate uses a cyclic Python object,
+bounded monotonic polling, peer Python acknowledgments during weakref
+and finalizer callbacks, and checks immediately after each explicit
+collection. On the same source, GC0–GC3 matched the CPython reference,
+including a resurrected object's intact payload and a second weakref
+callback without a duplicate finalizer. GC4 ran both callbacks before
+the first collection returned, but neither saw the peer advance before
+its one-second deadline. The test failed its first assertion without
+a process timeout; GC4 did not reach the second collection. The old
+window was not enabled. This is a Linux x86-64 behavioral baseline for
+deferred finalization, not the Linux AArch64 investigation or a fix.
+
 Two additional Linux fixes were exercised independently: generic iterable
 `list.extend` retires the two root admissions it actually acquired across
 user callbacks, and mutable payload copies sample length/data after the
@@ -261,6 +285,17 @@ Separately, the [macOS Stage1 bootstrap receipt](https://github.com/ikshengmin/p
 shows that the indexed `c_codegen` worker exceeded its available budget by
 1,343,488 bytes after target selection. Stage2 and Stage3 were skipped; this
 run verifies neither a fix nor a Stage2-to-Stage1 resource comparison.
+
+Commit `511743ae` avoids one empty dictionary per unannotated frontend
+instruction. On Linux, 32,768 untouched structured records no longer
+allocated 2 MiB of empty dictionaries. In five small real frontend-worker
+pairs with 22,355 records, an intermediate version's peak RSS median
+was 83,369,984 → 81,760,256 bytes; the unchanged backend control moved by
+618,496 bytes. That is not a whole-stage performance measurement. The
+final revision produced identical indexed and object bytes on that input;
+a different small native indexed program exited 42 in both arms, using
+identical Linux static ELFs. Nine focused host cases passed. No macOS
+bootstrap, full C-codegen unit, or Stage2 timing or memory was verified.
 
 A longer workload and an explicit-collection control passed 12/12 native
 launches with four distinct carriers each (same compiler/runtime, new ELF
