@@ -7,6 +7,52 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## Linux C512 request timeout: intermittent, investigation paused (2026-11-21)
+
+[PCC issue #4](https://github.com/ikshengmin/pcc/issues/4) remains open and
+marked intermittent. The original frozen GC3 preflight (ELF `27e64792fdbd…`)
+observed 510 HTTP 2xx and 508 timeouts. The later reconstruction used PCC
+`076fa37e` and gateway `3f91c0e5`, not a byte-identical copy of that original
+ELF. On the reconstructed stock server the in-flight timeouts did not recur
+in five GC3 runs. No stalled-thread trace was captured; do not interpret
+0/5 as fixed. No further historical timeout replay is planned.
+The separate stock shutdown race produced drain exit 1 in four of five GC3
+runs and two of three GC0 control runs. The gateway fix is
+[`b1490486`](https://github.com/ikshengmin/pcc-gateway/commit/b1490486a993c9528dcbfeecf499daba18ae0ef1);
+it does not resolve or close the historical request-timeout issue.
+
+The GC0 control reused the exact reconstructed stock ELF measured with GC3
+(SHA-256 `da0b9f19bfdb1179b219583e39d6081c2347212e2df78c3d296b2afb9c22c0d7`).
+The C512 main runs returned 62,941 / 62,957 / 59,087 HTTP 2xx with zero
+client errors. Process-wide STW counters (count / total µs / max µs) were
+2 / 4,943 / 2,474; 4 / 10,841 / 4,117; and 3 / 9,737 / 4,091.
+The previous [five GC3 runs and counters](https://github.com/ikshengmin/pcc/issues/4#issuecomment-7045802751)
+on this ELF had median 29,192 HTTP 2xx versus 62,941 on GC0 (about 46%).
+These separate, non-interleaved batches with stock drain failures are
+diagnostics, not a five-pair performance A/B. Do not use the earlier
+30% ratio across different artifacts. Counters 119–121 do not attribute
+the 2,714,738 µs total or the 122,783 µs maximum to a collection phase.
+
+Historical workload command, for reference only. The ELF is the pinned
+native gateway GET `/` benchmark with four carriers; use official zrk 3.0.0.
+Keep the same running server for warmup and measurement, then send
+`SIGTERM`, record its exit, and capture process counters 119–121 if the
+server has the shutdown reporting hook.
+
+```sh
+PCC_GC_BACKEND=0 "$GATEWAY_ELF" 18080 & # GC3 selects PCC_GC_BACKEND=3
+server_pid=$!
+# Wait for the loopback listener before warmup.
+zrk --plain --closed -t 3 --disable-keepalive --connections 50 \
+    --duration 5s --method GET --timeout 8s --format json \
+    --output warmup.json http://127.0.0.1:18080/
+zrk --plain --closed -t 3 --disable-keepalive --connections 512 \
+    --duration 15s --method GET --timeout 8s --format json \
+    --output main.json http://127.0.0.1:18080/
+kill -TERM "$server_pid"
+wait "$server_pid"
+```
+
 ## Single-collector migration: Linux correctness baseline (2026-11-19)
 
 The destination is one collector, not five shippable modes. GC0–GC4 and the
