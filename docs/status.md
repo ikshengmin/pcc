@@ -170,8 +170,10 @@ in the relevant section or issue and removes the entry.
    [#5](https://github.com/ikshengmin/pcc/issues/5),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; #3 and #4 were observed on
-   Linux x86-64, so reproduce them there first. Next: #7, establish ownership for the other
-   direct boxed-int return expressions before widening the caller proof;
+   Linux x86-64, so reproduce them there first. Next: #7, generalize the same-module direct-call
+   producer proof to the owning binary-return route. The `e80427d` native
+   audit distinguishes remaining binary/unary/conversion owners from
+   handled addition and immortal literals; the full matrix is in issue #7;
    then #3, #5 and #4. The single same-module returned int addition now
    transfers its owned value into an annotated object local. On the
    `e560691` claim base that native case had terminal `decref(1)`; with
@@ -182,7 +184,7 @@ in the relevant section or issue and removes the entry.
    control but not the C-held handle. Mac and pcc1 were not executed.
 
    Claims:
-   - #7 residual direct-return ownership audit: Codex, Linux x86-64, 2026-11-21T17:19:45Z, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
