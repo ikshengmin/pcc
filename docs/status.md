@@ -148,6 +148,13 @@ due now.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- PCC validation checkpoint (rule 13): Linux `gh workflow run` returned
+  unauthenticated and no run was launched. Use an authenticated GitHub
+  Actions dispatch with baseline `7ce5cf6635b0893ceca1f06932b1127745099223`
+  and the current full master SHA; record its run under Pending. Recommendation:
+  dispatch from an authenticated checkout; no need to wait for CI before
+  focused rounds outside stopped areas.
+
 - Whether the operating system's Metal shader compiler is an accepted platform
   boundary under the pcc1 ownership contract (item 5; open point in the
   [local-model architecture](design/pcc-local-model-architecture.md)). The
@@ -161,16 +168,17 @@ in the relevant section or issue and removes the entry.
    [#3](https://github.com/ikshengmin/pcc/issues/3),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    [#5](https://github.com/ikshengmin/pcc/issues/5),
-   [#6](https://github.com/ikshengmin/pcc/issues/6) and
-   [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
+   and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; #3 and #4 were observed on
-   Linux x86-64, so reproduce them there first. Next (agent's suggested order):
-   #6, whose fix candidate `84209428d` (root counted CpyHandle owners in the
-   tracing collectors) landed after the report: run the issue's probe under
-   GC0–4 on current master, then close or report; then #7, #3, #5, #4.
+   Linux x86-64, so reproduce them there first. Next: #7, the fresh
+   boxed-int direct-call ownership leak remaining after `10a4a3c`; then
+   #3, #5 and #4. #6 was revalidated on `8e67977b`: all six guarded
+   Linux pcc0 native cases passed across GC0–4 with a source-matched archive.
+   This includes two C owners, setter round trip, and GC4 moving the list
+   control but not the C-held handle. Mac and pcc1 were not executed.
 
    Claims:
-   - #6 five-GC native revalidation: Codex, Linux x86-64, 2026-11-21T17:12:00Z, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
