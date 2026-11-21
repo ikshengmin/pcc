@@ -19,7 +19,7 @@ NAMES = (
     "_carrier_length_slot", "_carrier_turn_slot", "_carrier_ring_slot",
     "_carrier_push", "_carrier_pop", "_carrier_pop_locked", "_carrier_queues_open",
     "_carrier_queues_close", "_dequeue", "_dequeue_from", "_dequeue_carrier",
-    "_dequeue_global", "_dequeue_io_ready",
+    "_dequeue_global", "_dequeue_io_ready", "_io_ready_push",
 )
 
 
@@ -41,6 +41,7 @@ class Scheduler:
         self.scheduler_locked = False
         self.scheduler_acquisitions = 0
         self.on_queue_lock = None
+        self.next_io_deadline = 0
         tree = ast.parse(RUNTIME.read_text())
         nodes = [node for node in tree.body
                  if isinstance(node, ast.FunctionDef) and node.name in NAMES]
@@ -60,6 +61,7 @@ class Scheduler:
             "_counter_set": lambda slot, value: self.words.__setitem__(slot[0], value),
             "load_ptr": lambda slot, offset: self.memory.get((slot, offset)),
             "global_load_ptr": lambda name: self.memory.get(((name, 0), 0)),
+            "global_store_ptr": lambda name, value: self.memory.__setitem__(((name, 0), 0), value),
             "store_ptr": lambda slot, offset, value: self.memory.__setitem__((slot, offset), value),
             "ptr_is_null": lambda value: int(value is None),
             "ptr_eq": lambda left, right: int(left == right),
@@ -71,6 +73,17 @@ class Scheduler:
             "_ready_node_take": self.claim,
             "pcc_platform_abort": lambda: pytest.fail("nonempty queue reopened"),
         }
+        # Real IO ready nodes carry predecessor links and deadline metadata.
+        # Use the runtime's own layout and publication, not the injection FIFO.
+        offsets = {
+            node.targets[0].id: ast.literal_eval(node.value)
+            for node in tree.body
+            if isinstance(node, ast.Assign) and len(node.targets) == 1
+            and isinstance(node.targets[0], ast.Name)
+            and node.targets[0].id in {"READY_NODE_PREVIOUS_OFFSET", "READY_NODE_DEADLINE_OFFSET"}
+        }
+        assert len(offsets) == 2
+        namespace.update(offsets)
         code = compile(ast.Module(nodes, type_ignores=[]), str(RUNTIME), "exec")
         for const in code.co_consts:
             if isinstance(const, types.CodeType) and const.co_name in NAMES:
@@ -78,12 +91,12 @@ class Scheduler:
         self.namespace = namespace
 
     def load_word(self, slot, offset):
-        if slot[0] in self.words:
+        if isinstance(slot, tuple) and slot[0] in self.words:
             return self.words[slot[0]]
         return self.memory.get((slot, offset), 0)
 
     def store_word(self, slot, offset, value):
-        if slot[0] in self.words:
+        if isinstance(slot, tuple) and slot[0] in self.words:
             self.words[slot[0]] = value
         else:
             self.memory[slot, offset] = value
@@ -129,10 +142,11 @@ class Scheduler:
     def push_io(self, node):
         self.words["pcc_vthread_ready_count_py"] += 1
         self.scheduler_locked = True
-        self.namespace["_queue_push"](
-            ("pcc_vthread_io_ready_head_py", 0),
-            ("pcc_vthread_io_ready_tail_py", 0), node,
-        )
+        # This fixture tests service and fairness in arrival order. Real
+        # earlier-deadline insertion is covered by test_vthread_io_ready_order.
+        self.store_word(node, self.namespace["READY_NODE_DEADLINE_OFFSET"], self.next_io_deadline)
+        self.next_io_deadline += 1
+        self.namespace["_io_ready_push"](node)
         self.scheduler_locked = False
 
     def close(self):
