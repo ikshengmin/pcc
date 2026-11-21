@@ -193,3 +193,77 @@ class Allocator:
     assert '.owned.release' not in null_error
     assert '.scalar.move' not in null_error
     assert 'item.addr' not in null_error
+
+
+def test_annotated_object_float_uses_box_owner_instead_of_retaining_again():
+    source = '''def probe(value: float) -> float:
+    boxed: object = value + 0.5
+    return float(boxed)
+'''
+    module = infer_module(parse_and_lift(source, 'annotated_box.py', 'annotated_box'))
+    codegen = L1CodeGen(module, ir_scaffold_mode='on')
+    codegen._strict_no_libpython = True
+    text = str(codegen.generate(module))
+    fn = re.search(r'^define [^\n]*@user_annotated_box_probe\([^\n]*\).*?^}',
+                   text, re.M | re.S)
+    assert fn is not None
+    body = fn.group(0)
+    assert body.count('@py_float_from_f64(') == 1
+    assert 'boxed.local.borrowed.retain' not in body
+    assert re.search(r'@pcc_gc_root_move\(ptr %boxed\.addr\.[0-9]+, ptr %boxed\.scalar\.box', body)
+
+
+ANNOTATED_FLOAT_PROGRAM = '''\
+def probe(value: float) -> float:
+    boxed: object = value + 0.5
+    return float(boxed)
+
+def exercise() -> bool:
+    return probe(1.25) == 1.75
+
+assert exercise()
+print("ANNOTATED_FLOAT_LOCAL_OK")
+'''
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_annotated_object_float_single_owner_native(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    import json
+    import os
+    import subprocess
+
+    from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_FLOAT
+
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(
+        ANNOTATED_FLOAT_PROGRAM, "ANNOTATED_FLOAT_LOCAL_OK\n", tmp_path,
+        python_program_compiler, mode, explicit_owned_runtime, capfd,
+    )
+    # The simple typed call and comparison remain native doubles; there is
+    # exactly one 24-byte float allocation, produced inside the object local.
+    log = tmp_path / "float-owner.jsonl"
+    result = subprocess.run(
+        [str(tmp_path / "program.out")], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PCC_GC_BACKEND": "0", "PCC_LOG": "alloc,refcount",
+             "PCC_LOG_FORMAT": "json", "PCC_LOG_FILE": str(log)},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (
+        0, "ANNOTATED_FLOAT_LOCAL_OK\n", "",
+    )
+    events = [json.loads(line) for line in log.read_text().splitlines()]
+    allocations = [
+        event for event in events if
+        (event["category"], event["event"], event["value0"], event["value1"]) ==
+        ("alloc", "alloc_object", 24, PY_TYPE_FLOAT)
+    ]
+    assert len(allocations) == 1, allocations
+    obj = allocations[0]["ptr"]
+    ref_events = [
+        (event["event"], event["value0"]) for event in events
+        if event["category"] == "refcount" and event["ptr"] == obj
+    ]
+    assert ("free", 0) in ref_events, ref_events
+    assert ("incref", 2) not in ref_events, ref_events

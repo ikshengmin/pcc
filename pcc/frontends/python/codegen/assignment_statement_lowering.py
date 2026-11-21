@@ -1431,7 +1431,13 @@ class AssignmentStatementLoweringMixin:
                 )
             self._exact_int_env_flags[target.ident] = True
         elif (
-            target.ident in getattr(self, "_planned_object_local_names", set())
+            (target.ident in getattr(self, "_planned_object_local_names", set())
+             # An explicitly object-typed local may already have an owning
+             # frame-map slot without being a mixed-type planner local. The
+             # native float box is NEW here, not a borrowed coerced object.
+             or (isinstance(stmt.value.ty, FloatType)
+                 and not isinstance(value.type, ir.PointerType)
+                 and is_preplanned_owned_local(self, target.ident, alloca)))
             and isinstance(ir_ty, ir.PointerType)
             and self._ir_type_matches(ir_ty, _CSTR)
         ):
