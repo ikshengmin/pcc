@@ -709,6 +709,15 @@ typedef struct {
     PyObject *base;
 } PyMemoryViewObject;
 
+/* Private stable wrapper for an owned foreign payload.  The C API-visible
+ * h.refcount is observational in tracing modes; c_owners holds only the
+ * independent, explicit C references that keep the wrapper rooted. */
+typedef struct {
+    PyObjectHeader h;
+    void *foreign_ref;
+    int64_t c_owners;
+} PyCpyHandleObject;
+
 /* PyStrObject: UTF-8 encoded string.
  *
  * Phase 2 layout uses a flexible-array-member tail for the UTF-8 payload,

@@ -55,6 +55,7 @@ STRUCT_FIELDS: dict[str, tuple[str, ...]] = {
     "PyBytesObject": ("byte_len", "data"),
     "PyByteArrayObject": ("byte_len", "data"),
     "PyMemoryViewObject": ("base",),
+    "PyCpyHandleObject": ("foreign_ref", "c_owners"),
     "PyStrObject": ("byte_len", "cp_len", "hash", "data"),
     "PyListObject": ("length", "capacity", "items"),
     "PyInlineGenObject": ("length", "items"),
@@ -89,6 +90,7 @@ STRUCT_FIELDS: dict[str, tuple[str, ...]] = {
 
 SIZEOF_STRUCTS: tuple[str, ...] = (
     "PyObjectHeader",
+    "PyCpyHandleObject",
     "DictEntry",
     "PyClassObject",
     "PyClassMethod",

@@ -8,6 +8,9 @@ replaces the C object with this module while preserving the ABI.
 __pcc_runtime_port__ = True
 
 from pcc.extern import extern, c_abi_export, c_int32, c_int64, c_ptr, c_void
+from pcc.runtime.py.py_abi_constants import (
+    PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, PYCPYHANDLEOBJECT_SIZE,
+)
 from pcc.runtime.py.py_abi_constants import DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_INDICES_OFFSET, PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_REFCOUNT_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_FLAG_IMMORTAL, PY_TYPE_CONTINUATION, PY_TYPE_COROUTINE, PY_TYPE_CPY_HANDLE, PY_TYPE_CLASS, PY_TYPE_CLASSMETHOD, PY_TYPE_DICT, PY_TYPE_EXC, PY_TYPE_FILE, PY_TYPE_FLOAT, PY_TYPE_FUNC, PY_TYPE_GEN, PY_TYPE_INSTANCE, PY_TYPE_INT, PY_TYPE_ITER, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_PROPERTY, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_STATICMETHOD, PY_TYPE_TASK, PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PY_TYPE_TUPLE, PY_TYPE_USER_CLASS_START, PY_TYPE_VALUEBOX, PY_TYPE_VIRTUAL_THREAD, PY_TYPE_VTHREAD_CHANNEL, PY_TYPE_WEAKREF
 from pcc.unsafe import (
     atomic_load_i64,
@@ -304,10 +307,11 @@ def py_cpy_handle_new(cpy_ref):
             229,
         )
         return null()
-    box = pcc_gc_alloc(24, PY_TYPE_CPY_HANDLE, 0)
+    # The allocator zeroes c_owners; GC0 uses only the ordinary header count.
+    box = pcc_gc_alloc(PYCPYHANDLEOBJECT_SIZE, PY_TYPE_CPY_HANDLE, 0)
     if ptr_is_null(box):
         return null()
-    store_ptr(box, 16, cpy_ref)
+    store_ptr(box, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, cpy_ref)
     return box
 
 
@@ -317,7 +321,7 @@ def py_cpy_handle_get(o):
         return null()
     if load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_CPY_HANDLE:
         return null()
-    return load_ptr(o, 16)
+    return load_ptr(o, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET)
 
 
 @c_abi_export("pcc_cpy_handle_move_owned_ref")
@@ -342,7 +346,7 @@ def pcc_cpy_handle_move_owned_ref(from_obj, to_obj) -> None:
             258,
         )
         return
-    owned = load_ptr(from_obj, 16)
+    owned = load_ptr(from_obj, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET)
     if ptr_is_null(owned):
         _cpy_handle_owner_tripwire(
             cstr(
@@ -351,7 +355,7 @@ def pcc_cpy_handle_move_owned_ref(from_obj, to_obj) -> None:
             268,
         )
         return
-    destination = load_ptr(to_obj, 16)
+    destination = load_ptr(to_obj, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET)
     if not ptr_is_null(destination) and not ptr_eq(destination, owned):
         _cpy_handle_owner_tripwire(
             cstr(
@@ -360,8 +364,8 @@ def pcc_cpy_handle_move_owned_ref(from_obj, to_obj) -> None:
             277,
         )
         return
-    store_ptr(from_obj, 16, null())
-    store_ptr(to_obj, 16, owned)
+    store_ptr(from_obj, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, null())
+    store_ptr(to_obj, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, owned)
 
 
 @c_abi_export("py_dealloc_cpy_handle")
@@ -376,7 +380,7 @@ def py_dealloc_cpy_handle(o) -> None:
         )
         return
 
-    foreign = load_ptr(o, 16)
+    foreign = load_ptr(o, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET)
     release = global_load_ptr("py_cpy_handle_release_fn")
     if not ptr_is_null(foreign) and ptr_is_null(release):
         _cpy_handle_tripwire(
@@ -386,7 +390,7 @@ def py_dealloc_cpy_handle(o) -> None:
         return
     if not ptr_is_null(foreign):
         call_void_ptr1(release, foreign)
-    store_ptr(o, 16, null())
+    store_ptr(o, PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET, null())
     pcc_gc_free_object_memory(o)
 
 

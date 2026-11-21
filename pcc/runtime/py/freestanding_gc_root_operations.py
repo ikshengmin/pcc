@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import (
+    PYCPYHANDLEOBJECT_C_OWNERS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_REFCOUNT_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
@@ -64,6 +65,7 @@ pcc_gc_object_index_find_stable = extern(
 )
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_gc_count_free_store_shade = extern("pcc_gc_count_free_store_shade", (c_ptr,), c_void)
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_gc_gray_worklist_note = extern("pcc_gc_gray_worklist_note", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
@@ -729,6 +731,72 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     return status
 
 
+# A CpyHandle's explicit owner count is distinct from the observable C
+# refcount and from managed references (which remain count-free). A single
+# indexed lease represents all its explicit owners collectively, independent
+# of its temporary foreign borrow leases.
+@c_abi_export("pcc_gc_cpy_handle_change_c_owners")
+def pcc_gc_cpy_handle_change_c_owners(obj, delta: i64) -> None:
+    # Only a valid CpyHandle passed to Py_INCREF/DECREF in tracing mode
+    # reaches here. The caller owns it through entry (or is releasing its
+    # last C hold); the handle's type is already excluded from normal
+    # moving allocation. Existing node pins additionally forbid evacuation.
+    if delta != 1 and delta != -1:
+        pcc_platform_abort()
+        return
+    pcc_py_gc_minor_graph_lock()
+    node = pcc_gc_object_index_find(obj)
+    if ptr_is_null(node) != 0 or load_i64(node, 32) != 0:
+        pcc_py_gc_minor_graph_unlock()
+        pcc_platform_abort()
+        return
+    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
+            & (2048 | PY_FLAG_GC_DEALLOCATING)) != 0:
+        pcc_py_gc_minor_graph_unlock()
+        pcc_platform_abort()
+        return
+    old: i64 = atomic_load_i64(obj, PYCPYHANDLEOBJECT_C_OWNERS_OFFSET, "relaxed")
+    if delta < 0 and old == 0:
+        # A count-free managed reference is not a C hold. The preexisting
+        # decref path for such a reference has no ownership effect.
+        pcc_py_gc_minor_graph_unlock()
+        return
+    if old < 0 or (delta > 0 and old >= 9223372036854775806):
+        pcc_py_gc_minor_graph_unlock()
+        pcc_platform_abort()
+        return
+    if (delta > 0 and old == 0) or (delta < 0 and old == 1):
+        counter = global_addr("pcc_gc_foreign_lease_active")
+        active: i64 = atomic_load_i64(counter, 0, "acquire")
+        count: i64 = load_i64(node, 80)
+        # The graph lock serializes indexed leases with reset. Retain the
+        # central reservation so even a same-backend reset cannot clear this
+        # live object's node. Never consume an unrelated temporary lease.
+        while True:
+            if active < 0 or count < 0 or (
+                delta > 0 and (active == 9223372036854775807 or count == 9223372036854775807)
+            ) or (delta < 0 and (active == 0 or count == 0)):
+                pcc_py_gc_minor_graph_unlock()
+                pcc_platform_abort()
+                return
+            seen: i64 = atomic_cas_i64(
+                counter, 0, active, active + delta, "acq_rel", "acquire"
+            )
+            if seen == active:
+                break
+            active = seen
+        store_i64(node, 80, count + delta)
+        if delta > 0:
+            # Root seeding sees the persistent pin on the next stopped walk;
+            # an already active mark also needs this root's insertion shade.
+            pcc_gc_count_free_store_shade(obj)
+    atomic_store_i64(obj, PYCPYHANDLEOBJECT_C_OWNERS_OFFSET, old + delta, "release")
+    # Py_SET_REFCNT writes this observable counter, never c_owners. The atomic
+    # add composes with that store without making it a lease operation.
+    atomic_rmw_i64("add", obj, PYOBJECTHEADER_REFCOUNT_OFFSET, delta, "acq_rel")
+    pcc_py_gc_minor_graph_unlock()
+
+
 @c_abi_export("pcc_gc_foreign_lease_release")
 def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
     # A no-op token must never decrement a counted node registered later.
@@ -776,9 +844,6 @@ def pcc_gc_foreign_lease_release(slot, acquired: i64) -> i64:
     return status
 
 
-pcc_gc_count_free_store_shade = extern(
-    "pcc_gc_count_free_store_shade", (c_ptr,), c_void
-)
 pcc_gc_page_mark_set = extern("pcc_gc_page_mark_set", (c_ptr,), c_int64)
 pcc_gc_object_is_black = extern("pcc_gc_object_is_black", (c_ptr, c_int64), c_int64)
 pcc_gc_page_mark_test = extern("pcc_gc_page_mark_test", (c_ptr,), c_int64)

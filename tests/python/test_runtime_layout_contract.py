@@ -21,6 +21,9 @@ import pytest
 
 from pcc1_gate import repo_root
 from pcc.runtime.py.py_abi_constants import (
+    PYCPYHANDLEOBJECT_C_OWNERS_OFFSET,
+    PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET,
+    PYCPYHANDLEOBJECT_SIZE,
     PYCLASSMETHOD_FUNC_OFFSET,
     PYCLASSMETHOD_NAME_HASH_OFFSET,
     PYCLASSMETHOD_NAME_LENGTH_OFFSET,
@@ -52,6 +55,8 @@ EXPECTED_OFFSETS = {
     ("PyByteArrayObject", "byte_len"): 16,
     ("PyByteArrayObject", "data"): 24,
     ("PyMemoryViewObject", "base"): 16,
+    ("PyCpyHandleObject", "foreign_ref"): PYCPYHANDLEOBJECT_FOREIGN_REF_OFFSET,
+    ("PyCpyHandleObject", "c_owners"): PYCPYHANDLEOBJECT_C_OWNERS_OFFSET,
     ("PyStrObject", "byte_len"): 16,
     ("PyStrObject", "cp_len"): 24,
     ("PyStrObject", "hash"): 32,
@@ -99,6 +104,7 @@ EXPECTED_OFFSETS = {
 }
 EXPECTED_SIZES = {
     "PyObjectHeader": 16,
+    "PyCpyHandleObject": PYCPYHANDLEOBJECT_SIZE,
     "DictEntry": 24,
     "PyClassObject": 120,
     "PyClassMethod": PYCLASSMETHOD_SIZE,
