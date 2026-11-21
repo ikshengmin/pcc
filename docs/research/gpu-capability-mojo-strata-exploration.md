@@ -96,6 +96,25 @@ top-level `LICENSE` says portions of MAX are under a separate MAX License.
 Check which license governs a file before reusing source or format tables
 from it.
 
+Update, 2026-11-18: mojolang.org now states that Mojo, including its
+compiler, is fully open source under Apache 2.0 (stable 1.2.0). The
+repository's top-level `LICENSE` still names the MAX License for portions of
+MAX, read both at the local checkout `c0bfec57fa` and at upstream `main` that
+day, and the Metal backend files above still sit under `max_license/`. Which
+license governs them is still unresolved. The maintainer's direction is to
+borrow ideas only: pcc reimplements in pcc-Python and copies no Mojo source.
+Ideas already used or worth reading:
+
+- Shared events for completion and GPU-side ordering, without Objective-C
+  blocks (`Target/lib/Metal/Event.cpp`, `Queue.cpp`); reimplemented as the
+  M4 prototype of the [local-model architecture](../design/pcc-local-model-architecture.md).
+- The vendor-neutral driver interface (`SDK/include/HAL/M_driver_*.h`) as a
+  template for queues, events and memory in pcc's device contract.
+- Kernel algorithms for a first model (`max/kernels/src/nn`: attention,
+  RMSNorm, RoPE, softmax; `kv_cache`, `quantization`) as maps for writing
+  them as `@gpu.kernel` or Kernel IR. MAX's own documentation says Apple
+  silicon GPUs run only a subset of models.
+
 ## 2. pcc at the baseline, with a later owned-route update
 
 ### 2.1 What exists

@@ -37,6 +37,21 @@ over any procedure in this file, including its gates and checks.
    result boundaries and reproducible commands, never machine-specific recovery
    paths or rejected payloads. Do not create another dated in-repository handoff.
 
+## Continuing on "推进"
+
+A maintainer message that is only "推进" (Chinese for "advance"), "continue"
+or "proceed" means: take the next step from the
+[work order](docs/status.md#work-order) without asking. This applies to every
+agent, Codex or Claude, on Linux or macOS, including a fresh session. Take the
+first item whose next step this host can execute (each item names its platform)
+and that is not waiting on the maintainer; name the items skipped and why. Do
+that step under this file's rules, record the result and the new next step in
+the item's linked section or issue and in the work order, then commit and push
+the validated change to `shenming/master` under the collaboration rule below.
+Maintainer decision of 2026-11-22: "推进" authorizes that commit and push.
+Full-suite runs, bootstrap runs and deletions still need the maintainer's
+explicit OK.
+
 ## Project contracts
 
 These are required outcomes, not assertions that migration is complete. See
@@ -57,7 +72,10 @@ These are required outcomes, not assertions that migration is complete. See
   frontends (owned parse/Sema -> PCC IR) and shared infrastructure needed to
   compile and run unmodified real projects. Java class-file/JAR compatibility
   is frozen historical work, excluded from source-language acceptance. The
-  owned NumPy extension chain is second priority, Linux first.
+  owned NumPy extension chain is second priority, Linux first. The
+  maintainer's current order across this work, the GC program and the
+  self-host fixed point is the work order in `docs/status.md`; where it
+  differs from this paragraph, the work order applies.
   Drive implementation from unchanged upstream projects and their own tests:
   TinyXML2, Commons Numbers Primes, the complete Go math/bits package, and
   fallible-streaming-iterator. Fix each project's first observed blocker;
@@ -118,7 +136,8 @@ These are required outcomes, not assertions that migration is complete. See
   preimages/modes, preserves peers' work, and publishes reviewed batches.
 - Preserve other work. Re-read targets before narrow edits; no destructive
   restore/reset/revert/stash/clean or discarding branch switches without explicit
-  user direction. Do not commit/push unless authorized in the current session.
+  user direction. Do not commit/push unless authorized in the current session;
+  a bare "推进" is that authorization (see above).
 - Stay inside the workspace. Never search, list or traverse from `/`, the home
   directory or other user folders (iCloud Drive, Music, Photos, Desktop...);
   scope `rg`/`find` to this repository and the session scratch directory. A

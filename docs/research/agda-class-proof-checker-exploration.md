@@ -404,9 +404,10 @@ Layers in `pcc/proof/`, trusted first:
 
 Entry point: `python -m pcc.proof check PATH...`.
 
-The edition in `tests/proof/editions/church_turing` has four modules so far,
-following `LambdaDeBruijn`, `LambdaUntyped`, the first part of
-`LambdaWeakHead`, and part of `Demo`. The tests compare its two readings: for
+The edition in `tests/proof/editions/church_turing` has five modules so far,
+following `LambdaDeBruijn`, `LambdaUntyped`, `LambdaSize` (added in
+`7da36432b`), part of `LambdaWeakHead`, and part of `Demo`. The Agda edition
+has 75. The tests compare its two readings: for
 every closed constant, the kernel's normal form with implicit arguments erased
 equals the value CPython computes when it imports the module.
 

@@ -1,11 +1,77 @@
 # PCC current status
 
-Updated 2026-11-21. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-22. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## Work order
+
+The queue an agent takes when the maintainer says only "推进"; see
+[AGENTS.md](../AGENTS.md#continuing-on-推进). Take the first item whose next
+step this host can run and that does not wait on the maintainer. After each
+step, rewrite that item's "Next" line here with the new next step and its
+source identity. Platform "any" means Linux or macOS.
+
+Who set the order: the GC order is the maintainer's decision of 2026-11-21
+(next section); self-host last and its completion bar, and "推进" authorizing
+commit and push, are the maintainer's decisions of 2026-11-22. The relative
+order of items 3 to 6 is the agent's recommendation of 2026-11-22, which the
+maintainer adjusted only by moving self-host last; ask before trading one of
+them against another.
+
+1. **GC correctness.** Open issues
+   [#3](https://github.com/ikshengmin/pcc/issues/3),
+   [#4](https://github.com/ikshengmin/pcc/issues/4),
+   [#5](https://github.com/ikshengmin/pcc/issues/5),
+   [#6](https://github.com/ikshengmin/pcc/issues/6) and
+   [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
+   reproduction and acceptance. Platform: any; #3 and #4 were observed on
+   Linux x86-64, so reproduce them there first. Next (agent's suggested order):
+   #6, whose fix candidate `84209428d` (root counted CpyHandle owners in the
+   tracing collectors) landed after the report: run the issue's probe under
+   GC0–4 on current master, then close or report; then #7, #3, #5, #4.
+2. **GC0–4 optimization, then one collector.** The next section is the plan
+   and its stopping rule. Platform: any for code and Linux measurements;
+   macOS acceptance numbers are the maintainer's runs (give the commands).
+   Measure with `scripts/pcc_perf.py`. Next: after item 1, the GC3 mainline
+   (write barrier, remembered set of dirty regions, bump-allocated young
+   region, minor GC cost independent of old-heap size at n/4n/16n).
+3. **Source-language frontends**, in parallel with item 2 (different files;
+   only heavy gates and shared runtime publication are serialized). Targets
+   and each project's current first blocker:
+   [multi-language status](multilanguage-status.md). Platform: any. Next: the
+   first observed blocker of one of the four projects in that table.
+4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
+   "numpy through uv locks" section below and allstoalls#153, #155. Value
+   model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
+   Linux first for NumPy, any for the value model. Next: not yet assessed in
+   this order; read those sections and issues and fix the first observed
+   blocker.
+5. **Maintainer-selected branches**, after the items above unless the
+   maintainer names one:
+   - Local-model mode and GPU
+     ([architecture](design/pcc-local-model-architecture.md), milestones M0
+     to M6). Platform: macOS on Apple silicon for anything that executes
+     Metal; Linux can only do static and Kernel IR work. Next: the M4
+     remainder — fence-driven buffer release, no-copy buffers, more than one
+     queue per context, a wait the collectors see as blocked — then growing
+     `@gpu.kernel` beyond loop-free kernels (loops, reductions, threadgroup
+     memory) before M5. M3, the Harness route, waits for the TAG-translated
+     Harness in its own repositories.
+   - Agda-class proof checker
+     ([exploration and implementation state](research/agda-class-proof-checker-exploration.md)).
+     Platform: any (host CPython). Next: stage 2 (`with`, `rewrite`, records,
+     `Fin`, `Vec`, `Dec`), continuing the church-turing edition.
+6. **Long-standing CPython-replacement and standard-library issues**
+   (allstoalls#157 to #170): advanced through the items above; take one
+   directly only when the maintainer names it.
+7. **Last: self-host fixed point and public CLI parity** (allstoalls#199,
+   #200; section "Self-host fixed point: the final convergence step" below),
+   together with every claim that needs a current pcc1 (GPU M2, proof-checker
+   stage 3). Bootstrap runs need the maintainer's explicit OK.
 
 ## GC0–4: optimize each collector before unifying
 
