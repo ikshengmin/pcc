@@ -72,6 +72,10 @@ them against another.
    #200; section "Self-host fixed point: the final convergence step" below),
    together with every claim that needs a current pcc1 (GPU M2, proof-checker
    stage 3). Bootstrap runs need the maintainer's explicit OK.
+8. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
+   pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
+   order are reviewed again. When item 7 is done, an agent told "推进" starts
+   no new item; it reports that the review is due and waits.
 
 ## GC0–4: optimize each collector before unifying
 

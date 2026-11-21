@@ -52,6 +52,12 @@ Maintainer decision of 2026-11-22: "推进" authorizes that commit and push.
 Full-suite runs, bootstrap runs and deletions still need the maintainer's
 explicit OK.
 
+This mechanism is provisional. It was set up while pcc changes every round.
+Once the self-host fixed point is reached and pcc has a stable kernel (the last
+item of the work order), the maintainer reviews this section and the work order
+again. At that point "推进" does not start new work: report that the review is
+due and wait for the maintainer.
+
 ## Project contracts
 
 These are required outcomes, not assertions that migration is complete. See
