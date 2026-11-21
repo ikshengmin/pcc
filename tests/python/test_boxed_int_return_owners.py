@@ -86,6 +86,18 @@ def via_direct_object_local(n: int) -> None:
     result: object = fresh(n)
     assert result == 9223372036854775827
 
+def add_two(n: int, m: int) -> int:
+    return n + m
+
+def subtract(n: int) -> int:
+    return n - 19
+
+def via_binary_direct_object_local(n: int, delta: int) -> None:
+    box_add: object = add_two(n, delta)
+    box_sub: object = subtract(n)
+    assert box_add == 9223372036854775827
+    assert box_sub == 9223372036854775789
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -115,6 +127,7 @@ main(2)
 CASES = {
     "fresh": "via_direct_operand(inspect_fresh, n)\n    consume(fresh, n, n, False)",
     "fresh-direct-local": "via_direct_object_local(n)",
+    "binary-direct-local": "via_binary_direct_object_local(n, 19)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",

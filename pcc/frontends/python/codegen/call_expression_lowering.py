@@ -86,8 +86,8 @@ _CPY_BUILTIN_FALLBACK = frozenset(
 )
 
 
-def _direct_integer_add_returns_owned(host, fd, fn) -> bool:
-    """Recognize a single ordinary int addition returned through an owning slot.
+def _direct_integer_binary_returns_owned(host, fd, fn) -> bool:
+    """Recognize simple boxed int arithmetic returned through an owning slot.
 
     Keep this in step with the pointer-return BinOp route in return_lowering:
     that route calls the runtime object producer into a registered slot.
@@ -103,14 +103,20 @@ def _direct_integer_add_returns_owned(host, fd, fn) -> bool:
     if not isinstance(ret, Return) or not isinstance(ret.value, BinOp):
         return False
     value = ret.value
-    if (value.op != "+" or not isinstance(value.lhs, Name)
-            or not isinstance(value.rhs, IntLit)):
+    if value.op not in ("+", "-") or not isinstance(value.lhs, Name):
         return False
     types = (value.ty, value.lhs.ty, value.rhs.ty)
     for item in types:
         if not isinstance(item, IntType) or item.name != "int" or item.width != 64 or not item.signed:
             return False
-    return any(arg.name == value.lhs.ident and arg.annotation == value.lhs.ty for arg in fd.args)
+    for operand in (value.lhs, value.rhs):
+        if isinstance(operand, IntLit):
+            continue
+        if not isinstance(operand, Name):
+            return False
+        if not any(arg.name == operand.ident and arg.annotation == operand.ty for arg in fd.args):
+            return False
+    return True
 
 
 def _ascii_decimal_digit(ch: str) -> int:
@@ -2853,7 +2859,7 @@ class CallExpressionLoweringMixin:
             call_name,
             span=self._expr_span_or_none(expr),
             root_result=(self._is_object(ast_func_def.return_ty) and not returns_cpython)
-                        or (null_signals_error and _direct_integer_add_returns_owned(self, ast_func_def, fn)),
+                        or (null_signals_error and _direct_integer_binary_returns_owned(self, ast_func_def, fn)),
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),

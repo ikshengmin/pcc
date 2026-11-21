@@ -170,21 +170,19 @@ in the relevant section or issue and removes the entry.
    [#5](https://github.com/ikshengmin/pcc/issues/5),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; #3 and #4 were observed on
-   Linux x86-64, so reproduce them there first. Next: #7, generalize the same-module direct-call
-   producer proof to the owning binary-return route. The `e80427d` native
-   audit distinguishes remaining binary/unary/conversion owners from
-   handled addition and immortal literals; the full matrix is in issue #7;
-   then #3, #5 and #4. The single same-module returned int addition now
-   transfers its owned value into an annotated object local. On the
-   `e560691` claim base that native case had terminal `decref(1)`; with
-   the correction it and seven adjacent five-collector native cases match
-   CPython with complete GC0 releases. No broad return ABI change. #6 was revalidated on `8e67977b`: all six guarded
+   Linux x86-64, so reproduce them there first. Next: #7, establish a safe direct-call
+   owner proof for unary and conversion returns; then #3, #5 and #4.
+   Same-module returned int addition and subtraction now transfer the
+   existing owned result for verified parameter/literal forms. The expanded
+   Linux pcc0 suite at `e10a1b8` had two GC0 residual owners before the
+   change and passed nine five-collector cases against CPython afterward.
+   The earlier eight-form audit and its remaining shapes are in #7. #6 was revalidated on `8e67977b`: all six guarded
    Linux pcc0 native cases passed across GC0–4 with a source-matched archive.
    This includes two C owners, setter round trip, and GC4 moving the list
    control but not the C-held handle. Mac and pcc1 were not executed.
 
    Claims:
-   - #7 owning binary-return producer: Codex, Linux x86-64, 2026-11-21T17:22:11Z, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
