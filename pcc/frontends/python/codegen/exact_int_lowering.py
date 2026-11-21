@@ -888,6 +888,9 @@ class ExactIntLoweringMixin:
                         self._gc_release(lhs)
                     if rhs_owned:
                         self._gc_release(rhs)
+                    # A fast tagged word needs no release; the slow kernel
+                    # returns one heap owner. The merged SSA is safe to take.
+                    self._note_owned_object_value(inline)
                     return inline
                 # No inline shape after all: the unconditional call below
                 # needs the deferred pins in place.
@@ -923,6 +926,7 @@ class ExactIntLoweringMixin:
                 self._gc_unpin(rhs)
             if rhs_owned:
                 self._gc_release(rhs)
+            self._note_owned_object_value(result)
             return result
         if (
             isinstance(expr, UnaryOp)
@@ -985,6 +989,7 @@ class ExactIntLoweringMixin:
                 self._gc_unpin(operand)
             if operand_owned:
                 self._gc_release(operand)
+            self._note_owned_object_value(result)
             return result
         if isinstance(expr, IntLit):
             value = int(expr.value)
@@ -1546,6 +1551,10 @@ class ExactIntLoweringMixin:
 
     def _emit_expr_as_pcc_object(self, expr: Expr) -> ir.Value:
         if isinstance(expr.ty, IntType):
+            if isinstance(expr, IntLit):
+                # Use the tagged word or immortal literal, even for i64
+                # values outside the tagged lane. No fresh box to retain.
+                return self._emit_int_literal_object(expr.value)
             exact = self._maybe_emit_exact_int_object(expr)
             if exact is not None:
                 return exact
@@ -1579,13 +1588,18 @@ class ExactIntLoweringMixin:
         boxed_valueclass = self._emit_valueclass_payload_to_object(value, expr.ty)
         if boxed_valueclass is not None:
             return boxed_valueclass
-        return marshal.marshal_to_object(
+        boxed = marshal.marshal_to_object(
             self.builder,
             self.module,
             self.runtime,
             value,
             expr.ty,
         )
+        if isinstance(expr.ty, IntType) and not isinstance(value.type, ir.PointerType):
+            # py_int_from_i64 may allocate outside the tagged range. Do
+            # not apply this rule to an already-boxed borrowed Name.
+            self._note_owned_object_value(boxed)
+        return boxed
 
     def _emit_subscript_load_object(self, expr: Subscript) -> Optional[ir.Value]:
         if isinstance(expr.idx, Slice):
