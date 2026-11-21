@@ -2581,7 +2581,6 @@ def _func_call_restore_error(slots, pins) -> None:
     if ptr_is_null(load_ptr(slots, 16)):
         return
     py_clear_exception()
-    error = load_ptr(slots, 16)
     prior: int = load_i64(pins, 16)
     # Release through the token-bearing slot BEFORE transferring it to TLS.
     if pcc_gc_foreign_lease_release(ptr_add(slots, 16), load_i64(pins, 104)) != 0:
@@ -2589,10 +2588,14 @@ def _func_call_restore_error(slots, pins) -> None:
         return
     store_i64(pins, 104, 0)
     py_tls_exc_swap_slot(ptr_add(slots, 16))
-    if ptr_is_null(error) == 0 and is_tagged_int(error) == 0 and prior >= 0:
-        pcc_gc_unpin(error)
-        if prior != 0:
-            atomic_rmw_i32("or", error, 12, 64, "relaxed")
+    if prior >= 0:
+        # TLS owns the error again. Read the authoritative owner after the
+        # exchange, rather than carrying a raw copy across the lease release.
+        error = py_current_exception()
+        if ptr_is_null(error) == 0 and is_tagged_int(error) == 0:
+            pcc_gc_unpin(error)
+            if prior != 0:
+                atomic_rmw_i32("or", error, 12, 64, "relaxed")
     store_i64(pins, 16, 0)
 
 

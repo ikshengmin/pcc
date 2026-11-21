@@ -165,15 +165,17 @@ in the relevant section or issue and removes the entry.
   `scripts/cpython_conformance/support/__init__.py`.
 
 1. **GC correctness.** Open issues
-   [#3](https://github.com/ikshengmin/pcc/issues/3),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    [#5](https://github.com/ikshengmin/pcc/issues/5),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; #3 and #4 were observed on
-   Linux x86-64, so reproduce them there first. Next: #3, reproduce the
-   retained referent through the dynamic native call after the exception
-   is caught, then trace its pin owner; then #5. Keep #4 open as
-   intermittent; the maintainer asked not to repeat its reproduction.
+   reproduction and acceptance. Platform: any; next: revalidate #5 with
+   the GC1/GC2 count-free sweep cases and the public CPython comparison.
+   Keep #4 open as intermittent; the maintainer asked not to repeat its
+   reproduction. [#3](https://github.com/ikshengmin/pcc/issues/3): native
+   dynamic-call cleanup now reloads the exception from its restored TLS
+   owner before dropping the temporary pin. On Linux pcc0, both unchanged
+   pending-TLS probes and both ordinary Python call orderings passed on
+   GC0–4. The latter matched CPython. Mac and pcc1 were not executed.
    #7 fixed the reported same-module boxed-int direct-return cases
    (addition/subtraction, unary +/−/~, and unshadowed
    `int(<string literal>)`). The string case went from one unreleased
@@ -186,7 +188,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #3 dynamic exception pin owner: Codex, Linux x86-64, 2026-11-21T17:36:29Z, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
