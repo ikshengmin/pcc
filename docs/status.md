@@ -220,7 +220,7 @@ in the relevant section or issue and removes the entry.
    first observed blocker of one of the four projects in that table.
 
    Claims:
-   - none
+   - TinyXML2 nested member-function blocker source audit: Codex, Linux x86-64, 2026-11-21T18:19:08Z, area frontend-cpp
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
