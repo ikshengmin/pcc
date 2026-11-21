@@ -5,22 +5,36 @@ from pathlib import Path
 
 
 PROGRAM = r'''import gc
-from pcc.extern import c_int64, c_obj, extern
+from pcc.extern import c_int64, c_obj, c_void, extern
 
 new_handle = extern("fixture_new_foreign_handle", (), c_obj)
 release_count = extern("fixture_foreign_release_count", (), c_int64)
+refcount_delta = extern("fixture_foreign_handle_refcount_delta", (c_obj,), c_int64)
+hold = extern("fixture_foreign_handle_hold", (c_obj,), c_void)
+drop = extern("fixture_foreign_handle_drop", (), c_void)
+backend = extern("pcc_gc_backend", (), c_int64)
 
-def create():
+def create(keep_c_owner):
     # The constructor returns one managed owner; normal scope exit drops it.
     handle = new_handle()
     assert handle is not None
+    if keep_c_owner:
+        assert refcount_delta(handle) == 1
+        hold(handle)
 
 def main():
-    create()
+    # GC0 is the migration baseline for C-API reference ownership. Every
+    # collector still runs the ordinary foreign-payload release check.
+    keep_c_owner = backend() == 0
+    create(keep_c_owner)
     # A normal later allocation ends the allocator's last-allocation root.
     keep = [17, 19]
     for attempt in range(4):
         gc.collect()
+    if keep_c_owner:
+        assert release_count() == 0
+        drop()
+        assert release_count() == 1
     assert release_count() == 1
     assert keep == [17, 19]
     print("foreign-release-once")
