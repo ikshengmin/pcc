@@ -9,11 +9,14 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
     BinOp,
+    Call,
     DynType,
+    IfExpr,
     IntType,
     Name,
     RawPointerType,
     Return,
+    UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.errors import L1CodegenError
@@ -21,6 +24,38 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 
 
 _CSTR = ir.IntType(8).as_pointer()
+
+
+def _boxed_int_return_needs_identity_slot(host, expr) -> bool:
+    """Select the owning expression path for int identity returns.
+
+    Exact-int scalar projection may forward its borrowed input for both
+    `int(n)` and `+n`. That projection is not an ownership contract.
+    Use the existing runtime producers at the return boundary; a conditional
+    must publish each selected branch independently, not retain its joined
+    pointer and leak on the branch that already produced an owner.
+    """
+    pending = [expr]
+    while pending:
+        current = pending.pop()
+        if isinstance(current, IfExpr):
+            pending.extend((current.then_e, current.else_e))
+            continue
+        if isinstance(current, Call) and len(current.args) == 1:
+            if (not host._call_is_int_builtin(current)
+                    or host._native_builtin_value_for_name("int") != "builtins.int"):
+                continue
+            operand = current.args[0]
+        elif (isinstance(current, UnaryOp) and current.op == "+"
+              and host._slot_call_unary_runtime(current) == "py_obj_pos"):
+            operand = current.operand
+        else:
+            continue
+        if (isinstance(operand.ty, IntType) and operand.ty.name == "int"
+                and not host._expr_looks_cpython(operand)
+                and not host._expr_returns_unsafe_raw_pointer(operand)):
+            return True
+    return False
 
 
 class ReturnLoweringMixin:
@@ -714,6 +749,20 @@ class ReturnLoweringMixin:
         if isinstance(ret_ty, ir.PointerType) and isinstance(
             self.current_func_def.return_ty, IntType
         ):
+            fd = self.current_func_def
+            if (
+                fd.return_ty.name == "int"
+                and not self._suppress_borrowed_return_retain
+                and not getattr(self, "_generator_ctx_stack", ())
+                and fn.name not in self._manual_pointer_abi_functions
+                and self._funcdef_uses_boxed_int_abi(fd, c_abi_sym=self._func_c_abi_export_symbol(fd))
+                and _boxed_int_return_needs_identity_slot(self, stmt.value)
+            ):
+                source_slot = self._emit_slot_call_operand(stmt.value, "return.int.identity")
+                self._emit_owned_return_through_finally(
+                    ir.Constant(ret_ty, None), stmt, source_slot,
+                )
+                return
             self._return_log("exact int object")
             value = self._emit_exact_int_operand_object(stmt.value)
             value = self._retain_borrowed_return_value(value, stmt)
