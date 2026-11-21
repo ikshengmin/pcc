@@ -1,11 +1,47 @@
 # PCC current status
 
-Updated 2026-11-13. Source: `ikshengmin/pcc` master (`shenming` remote).
+Updated 2026-11-21. Source: `ikshengmin/pcc` master (`shenming` remote).
 Durable receipts for this period (patches, profiles, A/B scripts, repros):
 `/Users/jiamo/pcc-recovery-archive/2026-10-13/README.md`; the 2026-10-21
 handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10-07 status
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
+
+## GC migration experiment 2: first measurable nursery (2026-11-21)
+
+The temporary Linux x86-64 prototype combines the experiment 1 GC3
+code-generation changes with a leaf bump nursery. It actually reclaims
+pages, but still performs an independent full scan of old strong slots.
+This receipt is an early performance screen, not a dirty-only collector,
+an HTTP result, a macOS result, or permission to remove any backend.
+
+Five alternating same-input pairs per worker count (plus an identical
+GC0 control arm) used the native in-process handler: concurrency 100,
+zero injected delay, 200 warmups and 10,000 validated timed requests per
+process. The frozen GC0 input was compiled from `076fa37e`; the test arm
+was the private GC3 experiment checkpoint `21bbc16c`.
+
+| Workers | Median GC0 req/s | Median GC3 candidate req/s | Ratio | Pairs at 90% |
+|---|---:|---:|---:|---:|
+| 1 | 17,631 | 8,622 | 48.9% | 0/5 |
+| 4 | 43,433 | 18,639 | 42.9% | 0/5 |
+
+Peak process RSS was about 22.7 MiB for GC0 and 43.5/51.7 MiB for
+the candidate (one/four workers). The worst per-process request p99
+was 8.23/1.31 ms for GC0 and 37.87/26.12 ms for the candidate. The
+candidate's longest recorded GC window was 27.1/27.8 ms; frozen GC0's
+counter did not report an event, which is not evidence of zero latency
+or a directly equivalent GC window.
+
+With the preserved native artifacts, run the frozen and candidate
+handler with their respective `PCC_GC_BACKEND` set to 0 and 3, passing
+`100 0 100 --summary 1` or `100 0 100 --summary 4`. Retain the raw
+latencies, exact process peak RSS, and both runtime and nursery
+pause counters, and reverse arm order each pair. SHA-256: frozen ELF
+`6456816ca5dca1f4bdcf7c79107c50d892b4d4ae7467950eef2723440a212530`;
+candidate ELF
+`602cadeb510074036421dcb0264833bc2cd8c0ee406cedd75cf62be9fcc6c139`.
+The experiment code and artifacts are not shipped in this branch.
 
 ## Linux C512 request timeout: intermittent, investigation paused (2026-11-21)
 
