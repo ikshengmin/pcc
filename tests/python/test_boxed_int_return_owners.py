@@ -138,6 +138,43 @@ def via_mixed_direct_object_local(n: int, make_fresh: bool) -> None:
     else:
         assert box is n
 
+def wrap_fresh(n: int) -> int:
+    return fresh(n)
+
+def wrap_alias(n: int) -> int:
+    return by_name(n)
+
+def valid_input(n: int) -> int:
+    return int("9223372036854775808")
+
+def wrap_parse(n: int) -> int:
+    return valid_input(n)
+
+def invalid_input(n: int) -> int:
+    return int("not-an-integer")
+
+def wrap_invalid(n: int) -> int:
+    return invalid_input(n)
+
+def via_wrapped_fresh(n: int) -> None:
+    value: object = wrap_fresh(n)
+    assert value == 9223372036854775827 and value is not n
+
+def via_wrapped_alias(n: int) -> None:
+    value: object = wrap_alias(n)
+    assert value is n
+
+def via_wrapped_parse(n: int) -> None:
+    value: object = wrap_parse(n)
+    assert value == n and value is not n
+
+def via_wrapped_error(n: int) -> None:
+    try:
+        value: object = wrap_invalid(n)
+    except ValueError:
+        return
+    raise AssertionError("missing exception in direct return chain")
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -172,6 +209,10 @@ CASES = {
     "string-direct-local": "via_string_direct_object_local(n)",
     "mixed-direct-fresh": "via_mixed_direct_object_local(n, True)",
     "mixed-direct-alias": "via_mixed_direct_object_local(n, False)",
+    "wrapper-direct-fresh": "via_wrapped_fresh(n)",
+    "wrapper-direct-alias": "via_wrapped_alias(n)",
+    "wrapper-direct-parse": "via_wrapped_parse(n)",
+    "wrapper-direct-error": "via_wrapped_error(n)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
@@ -220,7 +261,10 @@ def test_boxed_int_return_owner_native(
                 retired += 1
     assert all(last == ("free", 0) for last in terminal.values()), terminal
     assert retired >= (4 if shape in {"fresh", "finally-cancel"} else 2)
-    if shape in {"string-direct-local", "mixed-direct-fresh"}:
+    if shape in {
+        "string-direct-local", "mixed-direct-fresh",
+        "wrapper-direct-fresh", "wrapper-direct-parse",
+    }:
         # Exercise a separate heap result in addition to the source and
         # replacement instead of passing with only tagged results.
         assert retired >= 3
@@ -382,3 +426,90 @@ def mix(n: int, flag: bool) -> int:
     assert "return.int.mixed" not in body[1]
     assert "@py_obj_add(" not in body[1]
     assert not re.search(r"@pcc_gc_(?:retain|release|frame_enter|root_move)\w*\(", body[1])
+
+
+@pytest.mark.parametrize("terminal", ("n + 19", "n", 'int("not-an-integer")'))
+def test_one_direct_wrapper_publishes_its_leaf_owner_before_cleanup(terminal):
+    # Definitions below their callers also use the resolved declarations;
+    # recognition must not depend on which function's body was emitted first.
+    text = _emit(f"""\
+def probe(n: int) -> bool:
+    value: object = wrap(n)
+    return value is n
+def wrap(n: int) -> int:
+    return leaf(n)
+def leaf(n: int) -> int:
+    return {terminal}
+""", strict=True)
+    wrapper, caller = _body(text, "wrap"), _body(text)
+    native_call = re.search(
+        r"(%[^ ]+) = call ptr [^\n]*@user_bridge_handoff_leaf\([^\n]+\)\n"
+        r"\s*store ptr \1, ptr (%return\.int\.forwarded[^ ,\n]+)",
+        wrapper,
+    )
+    assert native_call is not None
+    assert re.search(r"@pcc_gc_root_move\(ptr %return\.cleanup\.slot[^ ,]+, ptr "
+                     + re.escape(native_call[2]) + r"\)", wrapper)
+    result = re.search(r"(%[^ ]+) = call ptr [^\n]*@user_bridge_handoff_wrap\(", caller)
+    assert result is not None
+    assert re.search(r"icmp eq ptr " + re.escape(result[1]) + r", null", caller)
+    assert "value.local.borrowed.retain" not in caller
+
+
+def test_direct_wrapper_does_not_prove_a_second_layer():
+    text = _emit("""\
+def terminal(n: int) -> int:
+    return n
+def leaf(n: int) -> int:
+    return terminal(n)
+def wrap(n: int) -> int:
+    return leaf(n)
+def probe(n: int) -> bool:
+    value: object = wrap(n)
+    return value is n
+""", strict=True)
+    assert "return.int.forwarded" in _body(text, "leaf")
+    assert "return.int.forwarded" not in _body(text, "wrap")
+    assert "value.local.borrowed.retain" in _body(text)
+
+
+def test_wrapper_with_foreign_leaf_has_no_native_owner_proof():
+    text = _emit("""\
+from compatibility_provider import leaf
+def wrap(n: int) -> int:
+    return leaf(n)
+def probe(n: int) -> bool:
+    value: object = wrap(n)
+    return bool(value)
+""")
+    wrapper = _body(text, "wrap")
+    assert "@py_cpy_call1(" in wrapper
+    assert "return.int.forwarded" not in wrapper
+
+
+def test_wrapper_of_c_export_has_no_python_boxed_owner_proof():
+    text = _emit("""\
+from pcc.extern import c_abi_export
+@c_abi_export("raw_leaf")
+def leaf(n: int) -> int:
+    return n
+def wrap(n: int) -> int:
+    return leaf(n)
+""", strict=True)
+    assert "@raw_leaf(" in _body(text, "wrap")
+    assert "return.int.forwarded" not in _body(text, "wrap")
+
+
+@pytest.mark.parametrize("name", ("slice", "frozenset"))
+def test_wrapper_does_not_infer_the_provider_from_a_builtin_spelling(name):
+    text = _emit(f"""\
+def {name}(n: int) -> int:
+    return n
+def wrap(n: int) -> int:
+    return {name}(n)
+def probe(n: int) -> bool:
+    value: object = wrap(n)
+    return bool(value)
+""", strict=True)
+    assert "return.int.forwarded" not in _body(text, "wrap")
+    assert "value.local.borrowed.retain" in _body(text)

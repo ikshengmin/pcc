@@ -57,7 +57,11 @@ from pcc.frontends.python.codegen.builtin_exceptions import (
     builtin_exception_uses_module_lookup,
 )
 from pcc.frontends.python.codegen.errors import L1CodegenError
-from pcc.frontends.python.codegen.return_lowering import boxed_int_mixed_return_uses_owner_slot
+from pcc.frontends.python.codegen.return_lowering import (
+    boxed_int_direct_forward_has_owner,
+    boxed_int_literal_parse_has_owner,
+    boxed_int_mixed_return_uses_owner_slot,
+)
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call, emit_generator_may_park_sync, funcdef_has_source_yield
 from pcc.frontends.python.codegen.guarded_loop_lowering import emit_guarded_i64_dot, emit_guarded_loop_counter, emit_i64_buffer_constructor
 
@@ -109,22 +113,8 @@ def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
     if boxed_int_mixed_return_uses_owner_slot(fd, value):
         return True
     if isinstance(value, Call):
-        # emit_int_builtin_as_object uses py_int_from_cstr_or_raise for this
-        # actual literal. Do not assume a typed parameter is a builtin str,
-        # or apply a caller's local-name proof to a callee formal or capture.
-        return (
-            isinstance(value.ty, IntType) and value.ty.name == "int"
-            and len(value.args) == 1 and isinstance(value.args[0], StrLit)
-            and isinstance(value.args[0].ty, StrType)
-            and not fd.is_method and fd.name not in host._hoisted_qualnames
-            and not any(arg.name == "int" for arg in fd.args)
-            and host._call_is_int_builtin(value)
-            and host._native_builtin_value_for_name("int") == "builtins.int"
-            and not host._expr_looks_cpython(value.func)
-            and live_import_global_slot(host, "int") is None
-            and not getattr(host, "_native_extension_star_module_env", {})
-            and not getattr(host, "_cpy_star_module_env", {})
-        )
+        return (boxed_int_literal_parse_has_owner(host, fd, value)
+                or boxed_int_direct_forward_has_owner(host, fd, value))
     if isinstance(value, BinOp):
         if value.op not in ("+", "-") or not isinstance(value.lhs, Name):
             return False

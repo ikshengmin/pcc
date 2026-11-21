@@ -7,6 +7,8 @@ import sys
 
 from pcc.ir.compat import ir
 
+from pcc.frontends.python.builtin_function_values import builtin_function_value_name_exists
+
 from pcc.frontends.python.py_ast import (
     BinOp,
     BoolType,
@@ -18,14 +20,113 @@ from pcc.frontends.python.py_ast import (
     Name,
     RawPointerType,
     Return,
+    StrLit,
+    StrType,
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG
+from pcc.frontends.python.codegen.cpy_import_state import live_import_global_slot
+from pcc.frontends.python.codegen.str_default_cells import funcdef_defined_here
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
 
 
 _CSTR = ir.IntType(8).as_pointer()
+
+
+def boxed_int_literal_parse_has_owner(host, fd, value) -> bool:
+    """Prove the actual builtin parser, not a typed or shadowed conversion."""
+    return (
+        isinstance(value.ty, IntType) and value.ty.name == "int"
+        and len(value.args) == 1 and isinstance(value.args[0], StrLit)
+        and isinstance(value.args[0].ty, StrType)
+        and not fd.is_method and fd.name not in host._hoisted_qualnames
+        and not any(arg.name == "int" for arg in fd.args)
+        and host._call_is_int_builtin(value)
+        and host._native_builtin_value_for_name("int") == "builtins.int"
+        and not host._expr_looks_cpython(value.func)
+        and live_import_global_slot(host, "int") is None
+        and not getattr(host, "_native_extension_star_module_env", {})
+        and not getattr(host, "_cpy_star_module_env", {})
+    )
+
+
+def _exact_int_repr(ty) -> bool:
+    return isinstance(ty, IntType) and ty.name == "int" and ty.width == 64 and ty.signed
+
+
+def _direct_unary_boxed_int_def(host, fd, fn) -> bool:
+    if (fd is None or not isinstance(fn, ir.Function)
+            or fd.is_async or fd.is_method or fd.decorators or fd.manual_pointer_abi
+            or fd.name in host._hoisted_qualnames
+            or fn.name in host._manual_pointer_abi_functions
+            or not funcdef_defined_here(host, fd)
+            or not _exact_int_repr(fd.return_ty) or len(fd.args) != 1 or len(fd.body) != 1
+            or not isinstance(fd.body[0], Return)
+            or not isinstance(fn.function_type.return_type, ir.PointerType)):
+        return False
+    formal = fd.args[0]
+    params = fn.function_type.args
+    return (
+        formal.kind in ("pos", "pos_only") and not formal.has_default
+        and _exact_int_repr(formal.annotation)
+        and len(params) == 1 and isinstance(params[0], ir.PointerType)
+        and host._funcdef_uses_boxed_int_abi(fd, c_abi_sym=host._func_c_abi_export_symbol(fd))
+    )
+
+
+def boxed_int_direct_forward_has_owner(host, fd, value) -> bool:
+    """A single plain direct call that forwards a proven leaf's one owner."""
+    if (not isinstance(value, Call) or not isinstance(value.func, Name)
+            or value.kwargs or len(value.args) != 1 or not isinstance(value.args[0], Name)
+            or not _exact_int_repr(value.ty)
+            or host._module_has_c_abi_export or host._module_uses_raw_int_scaffold
+            or host._suppress_borrowed_return_retain
+            or not _direct_unary_boxed_int_def(host, fd, host.functions.get(fd.name))):
+        return False
+    name = value.func.ident
+    original = fd.args[0]
+    if value.args[0].ident != original.name or value.args[0].ty != original.annotation:
+        return False
+    # These bindings can bypass ordinary declared-function lowering. The
+    # wrapper has no locals besides its formal and no hoisted captures.
+    if (name == original.name or name == fd.name or name.startswith("_")
+            or name in ("cast", "cls", "dir", "open", "range", "xrange",
+                        "enumerate", "zip", "reversed", "slice", "frozenset",
+                        "globals", "locals", "vars", "type", "super")
+            or builtin_function_value_name_exists(name) or name in BUILTIN_EXC_TAG
+            or name in host._module_globals or name in host._cross_module_func_defs
+            or name in host._vthread_may_park_func_names
+            or name in getattr(host, "_extern_decls", {})
+            or host._native_builtin_value_for_name(name) is not None
+            or host._unsafe_intrinsic_for_name(name) is not None
+            or host._resolve_class_alias(name) in host.class_lowering.classes
+            or live_import_global_slot(host, name) is not None
+            or host._expr_looks_cpython(value.func)
+            or getattr(host, "_native_extension_star_module_env", {})
+            or getattr(host, "_cpy_star_module_env", {})):
+        return False
+    target = host.functions.get(name)
+    if not isinstance(target, ir.Function) or target.name != host._user_symbol(name):
+        return False
+    leaf = host._native_symbol_funcdefs.get(target.name)
+    if not _direct_unary_boxed_int_def(host, leaf, target):
+        return False
+    result = leaf.body[0].value
+    formal = leaf.args[0]
+    if isinstance(result, Name):
+        # The normal return lowering retains a borrowed parameter once.
+        return result.ident == formal.name and result.ty == formal.annotation
+    if isinstance(result, BinOp):
+        # The same rooted addition producer used by ordinary boxed returns.
+        return (
+            result.op == "+" and _exact_int_repr(result.ty)
+            and isinstance(result.lhs, Name) and result.lhs.ident == formal.name
+            and result.lhs.ty == formal.annotation
+            and isinstance(result.rhs, IntLit) and _exact_int_repr(result.rhs.ty)
+        )
+    return isinstance(result, Call) and boxed_int_literal_parse_has_owner(host, leaf, result)
 
 
 def boxed_int_mixed_return_uses_owner_slot(fd, expr) -> bool:
@@ -776,15 +877,18 @@ class ReturnLoweringMixin:
         ):
             fd = self.current_func_def
             mixed = boxed_int_mixed_return_uses_owner_slot(fd, stmt.value)
+            forwarded = boxed_int_direct_forward_has_owner(self, fd, stmt.value)
             if (
                 fd.return_ty.name == "int"
                 and not self._suppress_borrowed_return_retain
                 and not getattr(self, "_generator_ctx_stack", ())
                 and fn.name not in self._manual_pointer_abi_functions
                 and self._funcdef_uses_boxed_int_abi(fd, c_abi_sym=self._func_c_abi_export_symbol(fd))
-                and (mixed or _boxed_int_return_needs_identity_slot(self, stmt.value))
+                and (mixed or forwarded or _boxed_int_return_needs_identity_slot(self, stmt.value))
             ):
                 label = "return.int.mixed" if mixed else "return.int.identity"
+                if forwarded:
+                    label = "return.int.forwarded"
                 source_slot = self._emit_slot_call_operand(stmt.value, label)
                 self._emit_owned_return_through_finally(
                     ir.Constant(ret_ty, None), stmt, source_slot,

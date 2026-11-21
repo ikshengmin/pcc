@@ -167,9 +167,9 @@ in the relevant section or issue and removes the entry.
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #7, isolate the
-   direct nested boxed-int return through one ordinary same-module wrapper;
-   measure transfer balance for both an allocating and an alias producer.
+   reproduction and acceptance. Platform: any; Next: #7, run separate
+   owned-reference checks for direct attribute and subscript integer
+   returns, and typed string conversion, before widening any proof.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -181,21 +181,20 @@ in the relevant section or issue and removes the entry.
    owner before dropping the temporary pin. On Linux pcc0, both unchanged
    pending-TLS probes and both ordinary Python call orderings passed on
    GC0–4. The latter matched CPython. Mac and pcc1 were not executed.
-   #7 fixed the reported same-module boxed-int direct-return cases
-   (addition/subtraction, unary +/−/~, and unshadowed
-   `int(<string literal>)`), plus a conditional selecting a literal
-   addition or the original parameter. The conditional fresh branch no
-   longer leaves one GC0 reference, and the alias survives result cleanup.
-   All 13 guarded Linux pcc0 cases across GC0–4 matched CPython and 11 IR
-   checks passed. Separate returns, typed string inputs and unproved ABI
-   shapes remain outside these fixes.
+   #7 fixes cover proved ordinary same-module integer returns, including
+   one direct forwarding wrapper around an alias, addition, or unshadowed
+   string-literal parse. The wrapper cases each stopped leaving one GC0
+   reference without changing identity or `ValueError`. All 17 guarded
+   Linux pcc0 cases across GC0–4 matched CPython and 19 IR checks passed;
+   Mac and pcc1 were not executed. Deeper wrappers, foreign ABI paths
+   and other unproved producers are not included.
    #6 passed six guarded Linux pcc0 native cases across GC0–4 on
    `8e67977b`, with a source-matched archive, including the moving GC4
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
    Claims:
-   - #7 nested direct return owner: Codex, Linux x86-64, 2026-11-21T17:54:03Z, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
