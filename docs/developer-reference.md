@@ -183,7 +183,8 @@ work=$(mktemp -d)
 ```
 
 For an application replace the sample with the same workload and add just its
-final counter-reading loop. Read the 32 slots and 119–121 together **after**
+final counter-reading loop. Read all phase slots (until the reader returns
+`-1`) and 119–121 together **after**
 workers have stopped and automatic collection is disabled. The phase ledger is
 per-process: use a fresh process, not telemetry reset between runs. It covers
 explicit/automatic **tracing GC** windows; it does not instrument GC0. Initial
@@ -192,7 +193,12 @@ a callback and reacquisition is a separate phase, not necessarily mutator stop
 time. A phase is exclusive of nested timed phases; `mark_other` also includes
 unseparated work inside a tracing step. The report checks conservation of
 both the accumulated vector and the vector from the *same longest event*.
-A report cannot be generated retroactively from ordinary aggregate counters.
+A window whose two clock readings are equal contributes zero measured
+microseconds to every phase. The report separately exposes
+`zero_us_windows` and `public_telemetry`: counters 119–121 still floor each
+window at 1 µs, and the report reconciles that exact difference. Snapshots
+from older 32-slot probes lack this information and are rejected. A report
+cannot be generated retroactively from ordinary aggregate counters.
 
 ### Python library and inspection tools (in progress)
 

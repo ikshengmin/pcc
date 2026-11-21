@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from pcc.diagnostics import _gc_pause_layout as layout
 from pcc.diagnostics.gc_pause_probe import make_overlay, instrument_module, render_changes
 
 
@@ -29,6 +30,9 @@ def test_overlay_has_two_original_collection_windows_and_nested_phases():
     for name in ("_gc_tracing_automatic_collect", "pcc_gc_collect"):
         function = core[name]
         assert len(calls(function, "pcc_exp_pause_begin")) == 1
+        [alloc] = [node for node in calls(function, "stack_alloc")
+                   if ast.unparse(node.args[0]) == "_PAUSE_CONTEXT_BYTES"]
+        assert isinstance(alloc.args[0], ast.Name)
         [private] = calls(function, "pcc_exp_pause_finish")
         [public] = calls(function, "pcc_gc_record_collection_stw_pause")
         assert ast.unparse(private.args[-1]) == ast.unparse(public.args[-1]) == "exp_end_us"
@@ -88,33 +92,49 @@ def test_generated_primitives_are_declared_and_result_reader_is_bounded():
                                           if isinstance(n, ast.Constant)}
     functions = names(diff[CORE])
     reader = ast.unparse(functions["pcc_exp_pause_value"])
-    assert "i < 0 or i >= 32" in reader
+    assert "i < 0 or i >= _PAUSE_RESULT_SLOTS" in reader
+    assert "i * _PAUSE_WORD_BYTES" in reader
     assert 'define_thread_local_ptr_null("pcc_exp_pause_owner")' in diff[CORE]
 
 
-def test_exclusive_intervals_ties_zero_and_invalid_time():
-    """Exercise the actual generated accounting functions with a controlled clock."""
+@pytest.fixture
+def clocked_runtime():
+    """Exercise the generated accounting functions with a controlled clock."""
     from pcc.diagnostics._gc_pause_kernel import RUNTIME
-    from pcc.diagnostics.gc_pause_report import phase_report
 
-    state = {"tls": None, "out": [0] * 32, "time": 0}
+    state = {"tls": None, "out": [], "time": 0}
+
     def store(p, off, value):
-        p[off // 8] = value
+        p[off // layout.WORD_BYTES] = value
+
+    def load(p, off):
+        return p[off // layout.WORD_BYTES]
+
+    def clear(p, _value, size):
+        assert size == len(p) * layout.WORD_BYTES
+        p[:] = [0] * len(p)
 
     native = {
         "define_thread_local_ptr_null": lambda *_: None,
-        "define_global_i64_array": lambda *_: None,
+        "define_global_i64_array": lambda _name, *slots: state["out"].extend(slots),
         "c_abi_export": lambda _: lambda f: f,
-        "memset": lambda p, _v, _n: p.__setitem__(slice(None), [0] * len(p)),
-        "load_i64": lambda p, off: p[off // 8], "store_i64": store,
-        "load_ptr": lambda p, off: p[off // 8], "store_ptr": store,
+        "memset": clear,
+        "load_i64": load, "store_i64": store,
+        "load_ptr": load, "store_ptr": store,
         "global_load_ptr": lambda _: state["tls"],
         "global_store_ptr": lambda _, v: state.__setitem__("tls", v),
         "global_addr": lambda _: state["out"],
         "pcc_runtime_monotonic_us": lambda: state["time"], "ptr_is_null": lambda p: int(p is None),
     }
     exec(RUNTIME, native)
-    ctx = [0] * 21
+    assert len(state["out"]) == layout.SLOTS
+    return state, native, [0] * (layout.CONTEXT_BYTES // layout.WORD_BYTES)
+
+
+def test_exclusive_intervals_ties_zero_and_invalid_time(clocked_runtime):
+    from pcc.diagnostics.gc_pause_report import phase_report
+
+    state, native, ctx = clocked_runtime
     switch = native["pcc_exp_pause_switch"]
     begin, finish = native["pcc_exp_pause_begin"], native["pcc_exp_pause_finish"]
     assert switch(3) == -1
@@ -135,17 +155,37 @@ def test_exclusive_intervals_ties_zero_and_invalid_time():
     begin(ctx, 250)
     finish(ctx, 250, 250)               # Public counter rounds zero to 1 µs.
     report = phase_report((3, 51, 25), state["out"])
+    assert report["total_us"] == 50    # 0µs resolution does not charge runtime_other.
+    assert report["zero_us_windows"] == 1
+    assert report["public_telemetry"] == {"windows": 3, "total_us": 51, "maximum_us": 25}
     assert report["longest_window_us"]["runtime_other"] == 5
     assert report["longest_window_us"]["mark_other"] == 13
     assert report["longest_window_us"]["capture_sort_root_words"] == 3
     assert report["longest_window_us"]["world_released_until_reacquire"] == 4
-    assert report["aggregate_us"]["runtime_other"] == 31
+    assert report["aggregate_us"]["runtime_other"] == 30
     assert state["tls"] is None
     begin(ctx, 330)
     state["time"] = 329
     switch(2)
     finish(ctx, 330, 339)
-    assert state["out"][3] != 0 and state["tls"] is None
+    assert state["out"][layout.INVALID] != 0 and state["tls"] is None
+
+
+def test_only_same_tick_windows_leave_all_phase_values_zero(clocked_runtime):
+    from pcc.diagnostics.gc_pause_report import phase_report
+
+    state, native, ctx = clocked_runtime
+    for start in (100, 200):
+        native["pcc_exp_pause_begin"](ctx, start)
+        native["pcc_exp_pause_finish"](ctx, start, start)
+    read = native["pcc_exp_pause_value"]
+    report = phase_report([2, 2, 1], [read(i) for i in range(layout.SLOTS)])
+    assert report["windows"] == report["zero_us_windows"] == 2
+    assert report["total_us"] == report["maximum_us"] == 0
+    assert report["public_telemetry"] == {"windows": 2, "total_us": 2, "maximum_us": 1}
+    assert not any(report["aggregate_us"].values()) and not any(report["longest_window_us"].values())
+    assert read(-1) == read(layout.SLOTS) == -1
+    assert state["tls"] is None
 
 
 def test_fresh_overlay_can_attest_the_complete_compiler(tmp_path):

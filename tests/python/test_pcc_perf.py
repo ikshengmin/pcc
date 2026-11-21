@@ -32,16 +32,24 @@ WAIT = PERF.LOCK_WAIT
 
 
 def test_pause_subcommand_reports_one_quiescent_snapshot(tmp_path):
+    from pcc.diagnostics import _gc_pause_layout as layout
+
+    vector = [0] * layout.SLOTS
+    vector[layout.WINDOWS:layout.INVALID] = [2, 3, 3]
+    vector[layout.AGGREGATE] = vector[layout.LONGEST] = 3
+    vector[layout.ZERO_US_WINDOWS] = 1
     snapshot = tmp_path / "native.json"
     snapshot.write_text(json.dumps({
-        "gc": {"119": 1, "120": 3, "121": 3},
-        "pause_vector": [1, 3, 3, 0, 3] + [0] * 13 + [3] + [0] * 13,
+        "gc": {"119": 2, "120": 4, "121": 3}, "pause_vector": vector,
     }))
     argv = [sys.executable, "-I", str(ROOT / "scripts" / "pcc_perf.py"),
             "pause", "report", str(snapshot)]
     result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
-    assert json.loads(result.stdout)["longest_window_us"]["runtime_other"] == 3
+    report = json.loads(result.stdout)
+    assert report["longest_window_us"]["runtime_other"] == 3
+    assert report["total_us"] == 3 and report["public_telemetry"]["total_us"] == 4
+    assert report["zero_us_windows"] == 1
     snapshot.write_text("gc-pause-stw 1 3 3\n")
     result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
     assert result.returncode == 2

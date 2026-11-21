@@ -15,9 +15,13 @@ def main():
     gc.collect()
     gc.collect()
     print("gc-pause-stw", _telemetry(119), _telemetry(120), _telemetry(121))
-    for i in range(32):
-        print("gc-pause-slot", i, _phase(i))
-    if _phase(-1) != -1 or _phase(32) != -1:
+    i = 0
+    value = _phase(i)
+    while value >= 0:
+        print("gc-pause-slot", i, value)
+        i += 1
+        value = _phase(i)
+    if _phase(-1) != -1 or value != -1:
         raise RuntimeError("phase counter bounds")
 
 if __name__ == "__main__":

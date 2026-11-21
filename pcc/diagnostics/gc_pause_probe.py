@@ -4,7 +4,7 @@ python scripts/pcc_perf.py pause prepare CHECKOUT NEW_DIRECTORY
 
 The input checkout, its ordinary compiler/runtime and caches are not modified.
 Build the new archive using the copy's pcc package and point a *diagnostic*
-application at it. Read pcc_exp_pause_value(0..31) and telemetry 119--121
+application at it. Read the pcc_exp_pause_value slots and telemetry 119--121
 together after workers stop. See docs/developer-reference.md.
 """
 from __future__ import annotations
@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from pcc.diagnostics._gc_pause_kernel import RUNTIME
-from pcc.diagnostics.gc_pause_report import PHASES
+from pcc.diagnostics._gc_pause_layout import PHASES
 
 # Instruments coarse *function scopes*, never per-object mutator operations.
 # Any time not claimed by a nested scope remains in its enclosing phase.
@@ -118,7 +118,7 @@ def _replace(fun, original, replacement):
 
 def _phase_window(fun):
     start = "collection_stw_start: int = pcc_runtime_monotonic_us()"
-    _replace(fun, start, start + "\nexp_phase_context = stack_alloc(168)\n"
+    _replace(fun, start, start + "\nexp_phase_context = stack_alloc(_PAUSE_CONTEXT_BYTES)\n"
              "pcc_exp_pause_begin(exp_phase_context, collection_stw_start)")
     _replace(fun, "pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())",
              "exp_end_us: int = pcc_runtime_monotonic_us()\n"

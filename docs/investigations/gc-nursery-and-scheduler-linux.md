@@ -196,17 +196,21 @@ resolve issue #4 or measure an uninstrumented performance arm.
 | Other | 2,306 | 25 |
 | **Total** | **2,917,702** | **110,576** |
 
-Both columns agree exactly with counters 119–121. Clear/reclaim
-accounted for 70% of the longest event. The clocks start after the
+Both columns agree with counters 119–121 under this build's old
+1 µs floor; the archived vector does not identify same-tick windows.
+Clear/reclaim accounted for 70% of the longest event. The clocks start after the
 initial stop rendezvous; no temporary callback-release interval
 was measured in this diagnostic. The historical 2,714,738 µs total
 and 122,783 µs max did not carry phase data and cannot be backfilled.
 
 Use the instrumented gateway ELF and `PCC_GC_BACKEND=3` with the
 load commands below; capture gateway stdout on shutdown and validate
-it using the parser at the recorded revision. This historical report may use
-older input prefixes and the old same-tick rounding convention; do not treat
-it as a fresh measurement of the corrected parser.
+it using the parser at the recorded revision. The historical 32-slot report
+uses earlier labels and the old same-tick convention; do not feed it to the
+corrected parser. For new runs see
+[`pcc_perf.py pause prepare`](../developer-reference.md#diagnose-a-tracing-collectors-pause-phases)
+and use `python scripts/pcc_perf.py pause report server.stdout` with the
+canonical 33-slot rows.
 The verified report SHA-256 is
 `9e6265f56f9b95a875f914bef1eaf824a9e95a578e25aa318d3509215042ef38`.
 

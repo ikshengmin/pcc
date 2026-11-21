@@ -11,38 +11,50 @@ import json
 from collections.abc import Iterable, Sequence
 from pathlib import Path
 
-# Slots 4..17 accumulate each exclusive phase over the whole process.
-# Slots 18..31 describe one event: the first event attaining the maximum.
-# Where the world is released for a callback, the release-to-reacquire
-# interval is kept separate; it is not necessarily mutator stop time.
-PHASES = (
-    "runtime_other", "retired_sweep_drain", "mark_other", "registered_roots",
-    "prepare_heap_for_mark", "capture_sort_root_words", "pin_owner_lookup",
-    "sweep_other", "candidate_recheck", "weak_targets", "select_and_call_finalizers",
-    "clear_reclaim", "world_released_until_reacquire", "gray_drain",
+from pcc.diagnostics._gc_pause_layout import (
+    AGGREGATE,
+    INVALID,
+    LONGEST,
+    MAXIMUM_US,
+    PHASES,
+    PUBLIC_STW_COUNTERS,
+    SLOTS,
+    TOTAL_US,
+    WINDOWS,
+    ZERO_US_WINDOWS,
 )
-HEADER = 4
-SLOTS = HEADER + 2 * len(PHASES)
 
 
 def phase_report(counters: Sequence[int], vector: Sequence[int]) -> dict:
     """Return the two complete vectors, rejecting mismatched/inconsistent reads."""
-    if len(counters) != 3 or len(vector) != SLOTS:
-        raise ValueError("expected 3 public counters and 32 phase slots")
+    if not isinstance(vector, Sequence) or len(counters) != len(PUBLIC_STW_COUNTERS) or len(vector) != SLOTS:
+        raise ValueError(f"expected {len(PUBLIC_STW_COUNTERS)} public counters and {SLOTS} phase slots")
     if any(type(x) is not int or x < 0 for seq in (counters, vector) for x in seq):
         raise ValueError("collection counters must be nonnegative integers")
-    count, total, maximum = counters
-    if list(vector[:3]) != list(counters) or vector[3] != 0:
-        raise ValueError("phase header does not match counters 119–121 or reserved slot")
-    if (not count and (total or maximum)) or (
-            count and (maximum == 0 or not maximum + count - 1 <= total <= count * maximum)):
-        raise ValueError("impossible count, total and maximum for nonempty windows")
-    aggregate, longest = vector[HEADER:HEADER + len(PHASES)], vector[HEADER + len(PHASES):]
+    count, total, maximum = vector[WINDOWS], vector[TOTAL_US], vector[MAXIMUM_US]
+    zeroes = vector[ZERO_US_WINDOWS]
+    if vector[INVALID] != 0:
+        raise ValueError("phase snapshot contains an invalid clock or phase")
+    nonzero = count - zeroes
+    if (nonzero < 0 or (not nonzero and (total or maximum)) or
+            (nonzero > 0 and (not maximum or not maximum + nonzero - 1 <= total <= nonzero * maximum))):
+        raise ValueError("impossible count, total and maximum for measured windows")
+    # Public telemetry retains its 1µs floor per event. The raw phase
+    # ledger does not invent a duration when both clock samples agree.
+    public_count, public_total, public_maximum = counters
+    if (count != public_count or total + zeroes != public_total or
+            (max(1, maximum) if count else 0) != public_maximum):
+        raise ValueError("phase header does not match public counters 119–121 after the 1µs floor")
+    aggregate, longest = vector[AGGREGATE:LONGEST], vector[LONGEST:ZERO_US_WINDOWS]
     if (sum(aggregate) != total or sum(longest) != maximum
             or any(event > all_events for event, all_events in zip(longest, aggregate))):
         raise ValueError("phase times do not conserve the process total and same-event maximum")
     return {
         "windows": count, "total_us": total, "maximum_us": maximum,
+        "zero_us_windows": zeroes,
+        "public_telemetry": {
+            "windows": public_count, "total_us": public_total, "maximum_us": public_maximum,
+        },
         "aggregate_us": dict(zip(PHASES, aggregate)),
         "longest_window_us": dict(zip(PHASES, longest)),
     }
@@ -77,7 +89,7 @@ def read_measurement(path: Path) -> dict:
     if text.lstrip().startswith("{"):
         data = json.loads(text)
         try:
-            counters = [data["gc"][str(i)] for i in (119, 120, 121)]
+            counters = [data["gc"][str(i)] for i in PUBLIC_STW_COUNTERS]
             vector = data["pause_vector"]
         except (KeyError, TypeError) as exc:
             raise ValueError("missing phase vector or public GC counters") from exc
