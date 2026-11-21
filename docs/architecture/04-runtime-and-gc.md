@@ -237,6 +237,11 @@ than one, for every collector.
    `genmajormul` share. Acceptance: young objects die in minor collections
    without a full mark (count the objects a minor visits), all five-GC
    finalizer/weakref suites unchanged.
+   The pending [GC3 design review](https://github.com/ikshengmin/pcc/issues/8)
+   proposes size-class bump slabs with once-per-slab provenance, sparse
+   dirty old regions, nonmoving promotion, and a separate major handoff.
+   It is not an implementation. The work order requires approval before
+   its first code slice and a fixed-input n/4n/16n minor-work check.
 2. **GC4 phase 2.** Set `PAGE_GENERATION` (slabs age by survived
    collections); evacuate young slabs in each minor; age dense slabs in
    place; relocate old slabs by density in majors; record old-to-young

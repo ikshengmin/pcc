@@ -148,6 +148,11 @@ due now.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- GC3 generational design ([#8](https://github.com/ikshengmin/pcc/issues/8)):
+  approve the proposed scoped nursery and sparse remembered-set plan, or name
+  the writer/lifetime case that needs redesign. Recommendation: review the
+  barrier, root/pin coverage and major handoff before the first code slice.
+
 - PCC validation checkpoint (rule 13): Linux `gh workflow run` returned
   unauthenticated and no run was launched. Use an authenticated GitHub
   Actions dispatch with baseline `7ce5cf6635b0893ceca1f06932b1127745099223`
@@ -201,13 +206,13 @@ in the relevant section or issue and removes the entry.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next: after item 1, the design round
-   for the GC3 mainline (rule 15): write barrier, remembered set of dirty
-   regions, bump-allocated young region, minor GC cost independent of
-   old-heap size at n/4n/16n. Its first code slice follows approval.
+   Measure with `scripts/pcc_perf.py`. Next: GC3's first test-only or
+   runtime-inert slice, once the maintainer or named reviewer approves
+   [the generational design](https://github.com/ikshengmin/pcc/issues/8).
+   No implementation or performance result is claimed by the design round.
 
    Claims:
-   - GC3 generational collector design review: Codex, Linux x86-64, 2026-11-21T18:15:35Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
