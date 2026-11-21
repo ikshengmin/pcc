@@ -9,9 +9,11 @@ from pcc.ir.compat import ir
 
 from pcc.frontends.python.py_ast import (
     BinOp,
+    BoolType,
     Call,
     DynType,
     IfExpr,
+    IntLit,
     IntType,
     Name,
     RawPointerType,
@@ -24,6 +26,29 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 
 
 _CSTR = ir.IntType(8).as_pointer()
+
+
+def boxed_int_mixed_return_uses_owner_slot(fd, expr) -> bool:
+    """One conditional return with a boxed addition and its input alias.
+
+    This proof is shared by the producer and the ordinary same-module direct
+    caller. The two arms must use the slot protocol, not a pointer phi:
+    addition publishes its owner; the name copies its parameter root.
+    """
+    if (fd.is_async or fd.is_method or fd.decorators or len(fd.body) != 1
+            or not isinstance(fd.body[0], Return) or not isinstance(expr, IfExpr)):
+        return False
+    condition, fresh, alias = expr.cond, expr.then_e, expr.else_e
+    if (not isinstance(condition, Name) or not isinstance(condition.ty, BoolType)
+            or not isinstance(fresh, BinOp) or fresh.op != "+"
+            or not isinstance(fresh.lhs, Name) or not isinstance(fresh.rhs, IntLit)
+            or not isinstance(alias, Name) or fresh.lhs.ident != alias.ident):
+        return False
+    for ty in (expr.ty, fresh.ty, fresh.lhs.ty, fresh.rhs.ty, alias.ty):
+        if not isinstance(ty, IntType) or ty.name != "int" or ty.width != 64 or not ty.signed:
+            return False
+    return (any(arg.name == alias.ident and arg.annotation == alias.ty for arg in fd.args)
+            and any(arg.name == condition.ident and arg.annotation == condition.ty for arg in fd.args))
 
 
 def _boxed_int_return_needs_identity_slot(host, expr) -> bool:
@@ -750,15 +775,17 @@ class ReturnLoweringMixin:
             self.current_func_def.return_ty, IntType
         ):
             fd = self.current_func_def
+            mixed = boxed_int_mixed_return_uses_owner_slot(fd, stmt.value)
             if (
                 fd.return_ty.name == "int"
                 and not self._suppress_borrowed_return_retain
                 and not getattr(self, "_generator_ctx_stack", ())
                 and fn.name not in self._manual_pointer_abi_functions
                 and self._funcdef_uses_boxed_int_abi(fd, c_abi_sym=self._func_c_abi_export_symbol(fd))
-                and _boxed_int_return_needs_identity_slot(self, stmt.value)
+                and (mixed or _boxed_int_return_needs_identity_slot(self, stmt.value))
             ):
-                source_slot = self._emit_slot_call_operand(stmt.value, "return.int.identity")
+                label = "return.int.mixed" if mixed else "return.int.identity"
+                source_slot = self._emit_slot_call_operand(stmt.value, label)
                 self._emit_owned_return_through_finally(
                     ir.Constant(ret_ty, None), stmt, source_slot,
                 )

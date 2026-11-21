@@ -57,6 +57,7 @@ from pcc.frontends.python.codegen.builtin_exceptions import (
     builtin_exception_uses_module_lookup,
 )
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.return_lowering import boxed_int_mixed_return_uses_owner_slot
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call, emit_generator_may_park_sync, funcdef_has_source_yield
 from pcc.frontends.python.codegen.guarded_loop_lowering import emit_guarded_i64_dot, emit_guarded_loop_counter, emit_i64_buffer_constructor
 
@@ -90,8 +91,8 @@ _CPY_BUILTIN_FALLBACK = frozenset(
 def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
     """Recognize only ordinary boxed int returns with a proven producer.
 
-    Binary returns and unary plus go through a registered output slot in
-    return_lowering. The exact negation/invert kernels and the builtin parser
+    Binary returns, unary plus and a proven mixed conditional use registered
+    output slots in return_lowering. The exact negation/invert kernels and the builtin parser
     for a string literal return new owners. An annotation or a callable named
     `int` is not that proof.
     """
@@ -105,6 +106,8 @@ def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
     if not isinstance(ret, Return):
         return False
     value = ret.value
+    if boxed_int_mixed_return_uses_owner_slot(fd, value):
+        return True
     if isinstance(value, Call):
         # emit_int_builtin_as_object uses py_int_from_cstr_or_raise for this
         # actual literal. Do not assume a typed parameter is a builtin str,

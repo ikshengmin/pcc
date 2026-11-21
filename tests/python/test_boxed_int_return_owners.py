@@ -128,6 +128,16 @@ def via_string_direct_object_local(n: int) -> None:
     else:
         raise AssertionError("missing int conversion error")
 
+def mixed(n: int, make_fresh: bool) -> int:
+    return n + 19 if make_fresh else n
+
+def via_mixed_direct_object_local(n: int, make_fresh: bool) -> None:
+    box: object = mixed(n, make_fresh)
+    if make_fresh:
+        assert box == 9223372036854775827 and box is not n
+    else:
+        assert box is n
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -160,6 +170,8 @@ CASES = {
     "binary-direct-local": "via_binary_direct_object_local(n, 19)",
     "unary-direct-local": "via_unary_direct_object_local(n)",
     "string-direct-local": "via_string_direct_object_local(n)",
+    "mixed-direct-fresh": "via_mixed_direct_object_local(n, True)",
+    "mixed-direct-alias": "via_mixed_direct_object_local(n, False)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
@@ -208,9 +220,9 @@ def test_boxed_int_return_owner_native(
                 retired += 1
     assert all(last == ("free", 0) for last in terminal.values()), terminal
     assert retired >= (4 if shape in {"fresh", "finally-cancel"} else 2)
-    if shape == "string-direct-local":
-        # Exercise the independent parsed heap integer in addition to the
-        # source and replacement rather than passing with tagged values only.
+    if shape in {"string-direct-local", "mixed-direct-fresh"}:
+        # Exercise a separate heap result in addition to the source and
+        # replacement instead of passing with only tagged results.
         assert retired >= 3
 
 
@@ -304,3 +316,69 @@ def probe(callback=None, text: str = "") -> bool:
         assert "result.local.borrowed.retain" not in caller
     else:
         assert "result.local.borrowed.retain" in caller
+
+
+
+def test_mixed_boxed_int_direct_return_selects_a_proven_owner_per_branch():
+    text = _emit("""def mix(n: int, flag: bool) -> int:
+    return n + 19 if flag else n
+def probe(n: int, flag: bool) -> bool:
+    box: object = mix(n, flag)
+    return box is n
+""", strict=True)
+    callee, caller = _body(text, "mix"), _body(text)
+    addition = re.search(
+        r"(%[^ ]+) = call ptr [^\n]*@py_obj_add\([^\n]+\)\n"
+        r"\s*store ptr \1, ptr (%[^ ,\n]+)",
+        callee,
+    )
+    alias_copy = re.search(
+        r"@pcc_gc_root_copy_local\(ptr (%[^ ,]+), ptr %n\.addr[^ ,]+, i64 1\)", callee,
+    )
+    assert addition is not None
+    assert alias_copy is not None
+    joined = []
+    for source in (addition[2], alias_copy[1]):
+        move = re.search(r"@pcc_gc_root_move\(ptr (%[^ ,]+), ptr "
+                         + re.escape(source) + r"\)", callee)
+        assert move is not None
+        joined.append(move[1])
+    assert joined[0] == joined[1]
+    assert re.search(r"@pcc_gc_root_move\(ptr %return\.cleanup\.slot[^ ,]+, ptr "
+                     + re.escape(joined[0]) + r"\)", callee)
+    assert "ret ptr null" in callee
+    result = re.search(
+        r"(%[^ ]+) = call ptr [^\n]*@user_bridge_handoff_mix\(", caller,
+    )
+    assert result is not None
+    assert re.search(r"icmp eq ptr " + re.escape(result[1]) + r", null", caller)
+    assert "box.local.borrowed.retain" not in caller
+
+
+def test_mixed_direct_return_with_an_unproven_alias_keeps_existing_boundary():
+    text = _emit("""def mix(n: int, other: int, flag: bool) -> int:
+    return n + 19 if flag else other
+def probe(n: int, other: int, flag: bool) -> bool:
+    box: object = mix(n, other, flag)
+    return box is other
+""", strict=True)
+    callee, caller = _body(text, "mix"), _body(text)
+    assert "return.int.mixed" not in callee
+    assert "@user_bridge_handoff_mix(" in caller
+    assert "box.local.borrowed.retain" in caller
+
+
+def test_exported_mixed_int_return_keeps_the_machine_abi():
+    text = _emit("""\
+from pcc.extern import c_abi_export
+@c_abi_export("raw_mix")
+def mix(n: int, flag: bool) -> int:
+    return n + 19 if flag else n
+""", strict=True)
+    body = re.search(r"^define external i64 @raw_mix\(i64 %n, i1 %flag\) \{\n(.*?)^\}",
+                     text, re.M | re.S)
+    assert body is not None
+    assert "ret i64 " in body[1]
+    assert "return.int.mixed" not in body[1]
+    assert "@py_obj_add(" not in body[1]
+    assert not re.search(r"@pcc_gc_(?:retain|release|frame_enter|root_move)\w*\(", body[1])
