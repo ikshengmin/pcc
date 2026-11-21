@@ -51,6 +51,44 @@ Keep all five existing backends and the process-start selector in place.
 Do not merge the temporary nursery code or remove any backend on the
 strength of these results.
 
+## GC0 ownership follow-up: scheduler transfer trials (2026-11-21)
+
+The native [foreign-last-release check](https://github.com/ikshengmin/pcc/commit/6eca5235d7ee0af466198d172b6033a62ad73e12)
+requires last-release finalization while the original owner is still blocked.
+The [cycle/weakref check](https://github.com/ikshengmin/pcc/commit/d5dc5ba5d99e3097841c432a7c237adaad05c604)
+requires both callbacks before explicit collection returns. The latter was
+run on all five backends against CPython. These tests do not enable a new
+collector. A [separate float ownership correction](https://github.com/ikshengmin/pcc/commit/8fe76edcacc5ab17c95004d6dd9d342417b59ba9)
+made an annotated object local consume its fresh float allocation instead of
+retaining the same value a second time.
+
+The Linux in-process GC0 handler log recorded 39,027 virtual-thread
+incref/decref events out of 168,431 at four carriers. Of 1,201 virtual-thread
+frees, 626 were logged on a different carrier from allocation. This is a
+reference-event census, not time attribution or proof of confinement.
+
+Two private trials transferred the detached ready node's existing owner to
+the running claim, preserving the queue and recycle protocols. Native tests
+checked a sole queue owner survives the transfer with count 1 and is freed
+once; four-carrier spawn/join also passed. Each performance screen used five
+alternating same-input Linux handler pairs at each width with a duplicate
+stock arm, 200 warmups and 10,000 validated timed responses per process.
+
+| Trial | w1 median throughput vs stock; wins | w4 median throughput vs stock; wins |
+|---|---:|---:|
+| Helper, `e3d846b` | 95.9%; 2/5 | 95.6%; 1/5 |
+| Inline, `d3c8fa8` | 94.4%; 1/5 | 106.6%; 2/5 |
+
+Peak RSS was unchanged. The inline trial also worsened w1 worst
+per-process p99 (14.92 vs 4.64 ms). Its w4 median looked higher, but it
+lost three matched pairs and the unchanged duplicate stock ratios
+spanned 0.86–1.20. Neither version showed a stable improvement; do not
+merge them. These private screens do not claim an HTTP or macOS result.
+The exact frozen ELF SHA-256 was
+`a479a90d7a61a01cf5378d4163ca846bd53860c4f1041f7d6fc04ab746d8f48b`.
+Use its corresponding native handler with `PCC_GC_BACKEND=0` and
+`100 0 100 --samples 1` or `100 0 100 --samples 4` in each arm.
+
 ## GC migration experiment 2: first measurable nursery (2026-11-21)
 
 The temporary Linux x86-64 prototype combines the experiment 1 GC3
