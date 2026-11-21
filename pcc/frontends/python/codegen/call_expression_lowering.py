@@ -40,6 +40,7 @@ from pcc.frontends.python.py_ast import (
     Subscript,
     TupleExpr,
     TupleType,
+    UnaryOp,
     ValueArrayType,
 )
 from pcc.frontends.python.codegen.bootstrap_trace import bootstrap_trace_enabled
@@ -86,12 +87,12 @@ _CPY_BUILTIN_FALLBACK = frozenset(
 )
 
 
-def _direct_integer_binary_returns_owned(host, fd, fn) -> bool:
-    """Recognize simple boxed int arithmetic returned through an owning slot.
+def _direct_integer_arithmetic_returns_owned(host, fd, fn) -> bool:
+    """Recognize ordinary boxed int arithmetic with a proven owned producer.
 
-    Keep this in step with the pointer-return BinOp route in return_lowering:
-    that route calls the runtime object producer into a registered slot.
-    A return annotation alone is not evidence of a managed owner.
+    Binary returns and unary plus go through a registered output slot in
+    return_lowering. The exact negation/invert kernels return a new owner.
+    A return annotation alone does not prove either contract.
     """
     ty = fd.return_ty
     if (not isinstance(ty, IntType) or ty.name != "int"
@@ -100,16 +101,24 @@ def _direct_integer_binary_returns_owned(host, fd, fn) -> bool:
             or not host._funcdef_uses_boxed_int_abi(fd, c_abi_sym=None)):
         return False
     ret = fd.body[0]
-    if not isinstance(ret, Return) or not isinstance(ret.value, BinOp):
+    if not isinstance(ret, Return):
         return False
     value = ret.value
-    if value.op not in ("+", "-") or not isinstance(value.lhs, Name):
+    if isinstance(value, BinOp):
+        if value.op not in ("+", "-") or not isinstance(value.lhs, Name):
+            return False
+        operands = (value.lhs, value.rhs)
+    elif isinstance(value, UnaryOp):
+        if value.op not in ("+", "-", "~") or not isinstance(value.operand, Name):
+            return False
+        operands = (value.operand,)
+    else:
         return False
-    types = (value.ty, value.lhs.ty, value.rhs.ty)
+    types = (value.ty,) + tuple(operand.ty for operand in operands)
     for item in types:
         if not isinstance(item, IntType) or item.name != "int" or item.width != 64 or not item.signed:
             return False
-    for operand in (value.lhs, value.rhs):
+    for operand in operands:
         if isinstance(operand, IntLit):
             continue
         if not isinstance(operand, Name):
@@ -2859,7 +2868,7 @@ class CallExpressionLoweringMixin:
             call_name,
             span=self._expr_span_or_none(expr),
             root_result=(self._is_object(ast_func_def.return_ty) and not returns_cpython)
-                        or (null_signals_error and _direct_integer_binary_returns_owned(self, ast_func_def, fn)),
+                        or (null_signals_error and _direct_integer_arithmetic_returns_owned(self, ast_func_def, fn)),
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),

@@ -98,6 +98,20 @@ def via_binary_direct_object_local(n: int, delta: int) -> None:
     assert box_add == 9223372036854775827
     assert box_sub == 9223372036854775789
 
+def negate(n: int) -> int:
+    return -n
+
+def invert(n: int) -> int:
+    return ~n
+
+def via_unary_direct_object_local(n: int) -> None:
+    negative: object = negate(n)
+    inverse: object = invert(n)
+    alias: object = by_plus(n)
+    assert negative == -9223372036854775808
+    assert inverse == -9223372036854775809
+    assert alias is n
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -128,6 +142,7 @@ CASES = {
     "fresh": "via_direct_operand(inspect_fresh, n)\n    consume(fresh, n, n, False)",
     "fresh-direct-local": "via_direct_object_local(n)",
     "binary-direct-local": "via_binary_direct_object_local(n, 19)",
+    "unary-direct-local": "via_unary_direct_object_local(n)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
