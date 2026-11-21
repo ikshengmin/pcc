@@ -207,7 +207,7 @@ in the relevant section or issue and removes the entry.
    old-heap size at n/4n/16n. Its first code slice follows approval.
 
    Claims:
-   - none
+   - GC3 generational collector design review: Codex, Linux x86-64, 2026-11-21T18:15:35Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
