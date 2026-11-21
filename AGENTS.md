@@ -40,17 +40,19 @@ over any procedure in this file, including its gates and checks.
 ## Continuing on "推进"
 
 A maintainer message that is only "推进" (Chinese for "advance"), "continue"
-or "proceed" means: take the next step from the
+or "proceed" means: do one round from the
 [work order](docs/status.md#work-order) without asking. This applies to every
-agent, Codex or Claude, on Linux or macOS, including a fresh session. Take the
-first item whose next step this host can execute (each item names its platform)
-and that is not waiting on the maintainer; name the items skipped and why. Do
-that step under this file's rules, record the result and the new next step in
-the item's linked section or issue and in the work order, then commit and push
-the validated change to `shenming/master` under the collaboration rule below.
-Maintainer decision of 2026-11-22: "推进" authorizes that commit and push.
-Full-suite runs, bootstrap runs and deletions still need the maintainer's
-explicit OK.
+agent, Codex or Claude, on Linux or macOS, including a fresh session and
+several agents at once. One round is one unit: claim it there first through
+Git as the work order's claim rules say (the claim holds only once its push
+succeeds), carry it under this file's rules until it is validated and pushed
+or blocked with its reason recorded, rewrite the item's "Next", release the
+claim, report and stop. Skip units this host cannot execute or that wait on
+the maintainer, and name them. Each concurrent agent works in its own
+worktree or clone. Maintainer decision of 2026-11-22: "推进" authorizes the
+claim, result and release commits and their push to `shenming/master` under
+the collaboration rule below. Full-suite runs, bootstrap runs and deletions
+still need the maintainer's explicit OK.
 
 This mechanism is provisional. It was set up while pcc changes every round.
 Once the self-host fixed point meets its completion bar (Stage2 and Stage3

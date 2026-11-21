@@ -10,17 +10,53 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 ## Work order
 
 The queue an agent takes when the maintainer says only "推进"; see
-[AGENTS.md](../AGENTS.md#continuing-on-推进). Take the first item whose next
-step this host can run and that does not wait on the maintainer. After each
-step, rewrite that item's "Next" line here with the new next step and its
-source identity. Platform "any" means Linux or macOS.
+[AGENTS.md](../AGENTS.md#continuing-on-推进). Platform "any" means Linux or
+macOS.
 
 Who set the order: the GC order is the maintainer's decision of 2026-11-21
-(next section); self-host last and its completion bar, and "推进" authorizing
-commit and push, are the maintainer's decisions of 2026-11-22. The relative
-order of items 3 to 6 is the agent's recommendation of 2026-11-22, which the
-maintainer adjusted only by moving self-host last; ask before trading one of
-them against another.
+(next section); self-host last and its completion bar, "推进" authorizing
+commit and push, and the round and claim rules below are the maintainer's
+decisions of 2026-11-22. The relative order of items 3 to 6 is the agent's
+recommendation of 2026-11-22, which the maintainer adjusted only by moving
+self-host last; ask before trading one of them against another.
+
+**One round.** One "推进" is one round on one unit. A unit is the single thing
+an item's "Next" names: one issue, one project's first blocker, or one
+sub-step of a milestone. When that is too large to validate and commit on its
+own, the unit is its first slice that can be, and the rest goes back into
+"Next". The round ends when the unit is validated and pushed, or is blocked
+with its reason recorded. The agent then rewrites the item's "Next" with the
+new next step and its source identity, releases its claim, reports and stops;
+it does not move on to another unit in the same round.
+
+**Claims.** Concurrent agents, on any host, coordinate through the claim lines
+under each item and through Git alone.
+
+1. Choose the first unit that this host can execute, that waits on no
+   maintainer decision, that no active claim names, and whose area no other
+   active claim holds. Areas are coarse: `runtime-gc`, `runtime-codegen`,
+   `backend`, `frontend-<language>`, `numpy`, `value-model`, `gpu`, `proof`,
+   `selfhost`. Two units may share an area only if they touch no common file.
+2. Claim before any other work: fetch `shenming/master`, replace the item's
+   `- none` line, or add a line under the existing claims, with
+   `- <unit>: <Codex|Claude>, <host>, <UTC start>, area <area>`; commit only
+   that change as `claim: <unit> [skip ci]` and push. The claim holds only
+   once that push succeeds.
+3. If the push is rejected, pull with rebase. A conflict on claim lines means
+   another agent claimed at the same time: keep its line. If it names the same
+   unit or area, drop your own claim commit and choose another unit;
+   otherwise keep both lines.
+4. Finish in one commit: the result, the item's new "Next", and the removal of
+   your claim line (back to `- none` when it was the last one).
+5. A claim with no pushed progress for four hours may be taken over: replace
+   its line and write "taken over from <previous claim>" in the commit
+   message. Work the previous agent did not push cannot be recovered from
+   another host.
+6. On one machine every agent works in its own worktree or clone, never in
+   another agent's checkout. Heavy builds and performance runs still queue on
+   `build/.pcc-performance.lock`.
+7. An agent that cannot push to `shenming/master` claims nothing and takes no
+   unit.
 
 1. **GC correctness.** Open issues
    [#3](https://github.com/ikshengmin/pcc/issues/3),
@@ -33,23 +69,35 @@ them against another.
    #6, whose fix candidate `84209428d` (root counted CpyHandle owners in the
    tracing collectors) landed after the report: run the issue's probe under
    GC0–4 on current master, then close or report; then #7, #3, #5, #4.
+
+   Claims:
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS acceptance numbers are the maintainer's runs (give the commands).
    Measure with `scripts/pcc_perf.py`. Next: after item 1, the GC3 mainline
    (write barrier, remembered set of dirty regions, bump-allocated young
    region, minor GC cost independent of old-heap size at n/4n/16n).
+
+   Claims:
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next: the
    first observed blocker of one of the four projects in that table.
+
+   Claims:
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
    Linux first for NumPy, any for the value model. Next: not yet assessed in
    this order; read those sections and issues and fix the first observed
    blocker.
+
+   Claims:
+   - none
 5. **Maintainer-selected branches**, after the items above unless the
    maintainer names one:
    - Local-model mode and GPU
@@ -65,18 +113,27 @@ them against another.
      ([exploration and implementation state](research/agda-class-proof-checker-exploration.md)).
      Platform: any (host CPython). Next: stage 2 (`with`, `rewrite`, records,
      `Fin`, `Vec`, `Dec`), continuing the church-turing edition.
+
+   Claims:
+   - none
 6. **Long-standing CPython-replacement and standard-library issues**
    (allstoalls#157 to #170): advanced through the items above; take one
    directly only when the maintainer names it.
+
+   Claims:
+   - none
 7. **Last: self-host fixed point and public CLI parity** (allstoalls#199,
    #200; section "Self-host fixed point: the final convergence step" below),
-   together with every claim that needs a current pcc1 (GPU M2, proof-checker
+   together with every result that needs a current pcc1 (GPU M2, proof-checker
    stage 3). Bootstrap runs need the maintainer's explicit OK.
+
+   Claims:
+   - none
 8. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
    completion bar (Stage2 and Stage3 pass, Stage2 wall time not above
-   Stage1), even if the pcc1-dependent claims of item 7 (CLI parity, GPU M2,
+   Stage1), even if the pcc1-dependent results of item 7 (CLI parity, GPU M2,
    proof-checker stage 3) are still open. From then on an agent told "推进"
    starts no new item; it reports that the review is due and waits.
 
