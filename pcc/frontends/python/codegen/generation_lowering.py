@@ -1185,6 +1185,16 @@ class GenerationLoweringMixin:
             _mark_freestanding_no_builtins(self)
             out = str(self.module)
             out = postprocess_varargs_ir(out)
+            # Isolated, explicit scratch experiment. Refuse raw, runtime and
+            # compatibility owners; the stock compiler and selector are unchanged.
+            if (os.environ.get("PCC_EXPERIMENT_GC3_CEILING") == "1"
+                    and self._strict_no_libpython and not self._runtime_port_module
+                    and not self._freestanding_module and not self._module_has_c_abi_export
+                    and not self._module_uses_raw_int_scaffold and not _has_raw_root_scope(self)
+                    and not direct_only):
+                from pcc.frontends.python.codegen.gc3_ceiling_experiment import specialize
+                owners = {fn.name for fn in self.functions.values() if isinstance(fn, ir.Function)}
+                out = specialize(out, owners, self.ast_module.name or "")
         if worker_timing:
             sys.stderr.write(
                 "pcc llvm text render module="

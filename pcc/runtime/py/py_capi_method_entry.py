@@ -46,6 +46,7 @@ pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
     "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
 )
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_exp2_forward_exposure = extern("pcc_exp2_forward_exposure", (c_ptr, c_int64), c_int64)
 
 
 @c_abi_export("pcc_capi_pin_borrowed_result_gc4")
@@ -137,6 +138,10 @@ def pcc_capi_method_invoke_into(
     if pcc_thread_no_park_depth() != 0:
         pcc_platform_abort()
         return
+    # Cannot enumerate arbitrary C globals/foreign owned state reachable
+    # through the operands, even if none directly names a nursery start.
+    # Revoke before the C function can observe or retain an address.
+    pcc_exp2_forward_exposure(null(), 129)
     value: c_ptr = null()
     if flags == 3:
         value = call_ptr3(function, self_obj, args, kwargs)

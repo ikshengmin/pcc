@@ -32,6 +32,9 @@ from pcc.unsafe import (
     atomic_rmw_i64,
     atomic_store_i32,
     atomic_store_i64,
+    call_c_abi,
+    int_to_ptr,
+    stack_alloc,
     define_thread_local_ptr_null,
     define_global_i64,
     define_global_null_ptr_array,
@@ -79,6 +82,80 @@ pcc_gc_granule_span = extern("pcc_gc_granule_span", (c_ptr,), c_ptr)
 pcc_gc_stack_slot_root_is_conservative = extern(
     "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
 )
+
+
+# One callback for the entire private process nursery. The stock word is
+# zero. A trusted enabled pool installs a process-lifetime, strictly no-poll
+# function before any young allocation; no unregistration can race a pin.
+define_global_i64("pcc_exp2_exposure_hook_bits", 0)
+define_global_i64("pcc_exp2_exposure_reject_latch", 0)
+pcc_thread_world_stop_epoch_held = extern(
+    "pcc_thread_world_stop_epoch_held", (), c_int64
+)
+
+
+@c_abi_export("pcc_exp2_exposure_is_revoked")
+def pcc_exp2_exposure_is_revoked() -> i64:
+    if atomic_load_i64(global_addr("pcc_exp2_exposure_reject_latch"), 0, "acquire") != 0:
+        return 1
+    return 1 if atomic_load_i32(
+        global_addr("pcc_gc_backend3_closed_young_domain"), 0, "acquire"
+    ) == 2 else 0
+
+
+@c_abi_export("pcc_exp2_install_exposure_hook")
+def pcc_exp2_install_exposure_hook(callback) -> i64:
+    if (ptr_is_null(callback)
+            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or pcc_thread_world_stop_epoch_held() <= 0
+            or pcc_exp2_exposure_is_revoked() != 0):
+        return 0
+    return 1 if atomic_cas_i64(global_addr("pcc_exp2_exposure_hook_bits"),
+                                 0, 0, ptr_to_int(callback), "acq_rel", "acquire") == 0 else 0
+
+
+@c_abi_export("_pcc_exp2_latch_exposure_reject")
+def _pcc_exp2_latch_exposure_reject(active: i64) -> None:
+    # Opaque execution before installation must also prevent later admission.
+    # Do not change an ordinary collector's existing closed-young state.
+    atomic_store_i64(global_addr("pcc_exp2_exposure_reject_latch"), 0, 1, "release")
+    if active != 0:
+        atomic_store_i32(global_addr("pcc_gc_backend3_closed_young_domain"),
+                         0, 2, "release")
+
+
+@c_abi_export("_pcc_exp2_call_exposure")
+def _pcc_exp2_call_exposure(bits: i64, word, reason: i64) -> i64:
+    result = stack_alloc(8)
+    call_c_abi(int_to_ptr(bits), "i64", ("ptr", "i64"), (word, reason), result)
+    return load_i64(result, 0)
+
+
+@c_abi_export("_pcc_exp2_exposure_dispatch")
+def _pcc_exp2_exposure_dispatch(bits: i64, word, reason: i64) -> i64:
+    if reason >= 128:
+        # A foreign callback/boxed foreign owner may hide any nursery
+        # address, not just the word. Revoke BEFORE executing it or returning
+        # a new owner. The pool hook also receives the reason for diagnostics.
+        _pcc_exp2_latch_exposure_reject(bits)
+        if bits != 0:
+            _pcc_exp2_call_exposure(bits, word, reason)
+        return -1
+    if bits == 0 or ptr_is_null(word):
+        return 0
+    result: i64 = _pcc_exp2_call_exposure(bits, word, reason)
+    if result != 0 and result != 1:
+        _pcc_exp2_latch_exposure_reject(bits)
+        return -1
+    return result
+
+
+@c_abi_export("pcc_exp2_forward_exposure")
+def pcc_exp2_forward_exposure(word, reason: i64) -> i64:
+    """Synchronous, no allocation/safepoint/lock/user code even for raw words."""
+    bits: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    return _pcc_exp2_exposure_dispatch(bits, word, reason)
 
 
 # Exact, process-lifetime image origins, not a cache of arbitrary immortals.
@@ -129,6 +206,12 @@ def pcc_gc_static_literal_record(obj) -> None:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
         return
     if ptr_is_null(pcc_gc_granule_span(obj)) == 0:
+        return
+    # A positive page-origin answer is NOT image storage; never index it
+    # as a process-lifetime literal. The primary runtime registration also
+    # independently rejects nursery origins.
+    bits: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    if bits != 0 and _pcc_exp2_exposure_dispatch(bits, obj, 3) != 0:
         return
     if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_IMMORTAL) == 0:
         return
@@ -577,6 +660,12 @@ def pcc_gc_borrowed_lease_acquire(slot) -> i64:
 def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
+    # The existing GC3 token-zero shortcut says "no move", not "no
+    # whole-page reclamation". The stable slot is governed by the existing
+    # lease ABI; report its exact raw value before every early return.
+    bits: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    if bits != 0:
+        _pcc_exp2_exposure_dispatch(bits, load_ptr(slot, 0), 2)
     # Collectors 0-3 never move an object, and none can be replaced once an
     # object exists (pcc_gc_set_backend), so an address lease there guards
     # nothing: its mode reservation only fenced a collector switch. Every
@@ -1074,11 +1163,17 @@ def pcc_gc_pin(o) -> None:
             or ptr_eq(o, global_addr("py_notimplemented_storage")) != 0
             or ptr_eq(o, global_addr("py_ellipsis_storage")) != 0):
         return
+    # Legacy Boolean pins have no record of who may persist the address.
+    # Preserve a whole nursery page before either header mutation or later
+    # escape; unpin cannot undo this conservative decision. No new poll.
+    bits: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    if bits != 0:
+        _pcc_exp2_exposure_dispatch(bits, o, 1)
     # Other threads and collector workers update the same flags word: the
     # pin bit is one atomic or, never a lost read-modify-write.
     atomic_rmw_i32("or", o, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
     # pcc_gc_note_pin(1), inline: codegen pins around most calls. The shard
-    # is computed here too, so pinning calls nothing before it returns.
+    # is computed here too, so the unarmed pin calls nothing before return.
     region: i64 = logical_shift_right_i64(ptr_to_int(frame_address()), 19)
     shard: i64 = ((region ^ logical_shift_right_i64(region, 6)) & 63) * 128
     atomic_rmw_i64("add", global_addr("pcc_gc_metric_shards"), shard, 1, "relaxed")

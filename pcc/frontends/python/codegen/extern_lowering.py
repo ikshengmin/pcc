@@ -23,6 +23,11 @@ _CSTR = _I8.as_pointer()
 # exact contract and the hot callers are ordinary runtime modules.
 _GC_BACKEND_QUERY_SYMBOLS = frozenset({"pcc_gc_backend", "pcc_gc_config_ensure"})
 
+# ABI of the source-owned, no-argument clock boxer. Its implementation only
+# reads time and constructs an exact float; no caller-owned address or callback
+# crosses the call. Runtime admission separately seals the actual provider.
+_EXP2_MANAGED_CLOCK_BOXER = "py_time_perf_counter"
+
 
 class ExternScaffoldMixin:
     _EXTERN_CTYPE_IR = {
@@ -257,7 +262,13 @@ class ExternScaffoldMixin:
                 result = self.builder.call(fn, ir_args, name=call_name)
                 # The declaration, not an annotation or symbol name, proves
                 # NEW ownership. Publish before argument cleanup can park.
-                self._publish_slot_call_owned(result_slot, result, label="extern c_obj result")
+                self._publish_slot_call_owned(
+                    result_slot, result, label="extern c_obj result",
+                    opaque_foreign_result=(
+                        symbol != _EXP2_MANAGED_CLOCK_BOXER or bool(argtype_names)
+                        or bool(args) or restype_name != "c_obj" or variadic
+                    ),
+                )
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy
@@ -544,7 +555,10 @@ class ExternScaffoldMixin:
                 result = self.builder.call(fn, arguments, name=self._fresh("extern.result"))
                 # Result ownership is independent even when it aliases an
                 # argument. Its root survives all alias unpins and callbacks.
-                self._publish_slot_call_owned(result_slot, result, label="extern c_obj result")
+                self._publish_slot_call_owned(
+                    result_slot, result, label="extern c_obj result",
+                    opaque_foreign_result=True,
+                )
             finally:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = saved_cpy

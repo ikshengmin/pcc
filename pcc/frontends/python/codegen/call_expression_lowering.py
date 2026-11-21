@@ -54,6 +54,7 @@ from pcc.frontends.python.codegen.builtin_exceptions import (
     builtin_exception_uses_module_lookup,
 )
 from pcc.frontends.python.codegen.errors import L1CodegenError
+from pcc.frontends.python.codegen.freestanding_abi_constants import ABI_CONSTANTS, PY_TYPE_FLOAT
 from pcc.frontends.python.codegen.generator_lowering import emit_generator_may_park_call, emit_generator_may_park_sync, funcdef_has_source_yield
 from pcc.frontends.python.codegen.guarded_loop_lowering import emit_guarded_i64_dot, emit_guarded_loop_counter, emit_i64_buffer_constructor
 
@@ -244,6 +245,69 @@ def _direct_builtin_type_arity(name: str):
 
 
 class CallExpressionLoweringMixin:
+    def _emit_float_from_registered_operand(self, operand, span):
+        # A dynamic annotation or an extern's c_obj result is not proof of
+        # exact float identity. The private lowering has a compiler-side
+        # lexical ownership proof and uses the same no-poll runtime validator
+        # as immediate local nursery publication. Otherwise keep the entire
+        # ordinary lease, conversion (strings and __float__), and cleanup.
+        if (os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") != "1"
+                or not self._slot_call_root_is_registered(operand)
+                or not self._slot_call_has_exp2_lexical_root(operand)):
+            return self._slot_call_runtime_call("py_float_value_of", (operand,), span=span)
+        mode_name = "pcc_gc_backend_selected"
+        log_name = "pcc_diagnostics_runtime_log_fast_state"
+        for name in (mode_name, log_name):
+            existing = self.module.globals.get(name)
+            if existing is not None and (not isinstance(existing, ir.GlobalVariable)
+                                         or not self._ir_type_matches(existing.value_type, _I32)):
+                return self._slot_call_runtime_call("py_float_value_of", (operand,), span=span)
+        fn = self.current_function
+        probe = fn.append_basic_block(self._fresh("float.gc3.probe"))
+        tag = fn.append_basic_block(self._fresh("float.gc3.tag"))
+        exact = fn.append_basic_block(self._fresh("float.gc3.exact"))
+        legacy = fn.append_basic_block(self._fresh("float.gc3.legacy"))
+        done = fn.append_basic_block(self._fresh("float.gc3.done"))
+        backend = self.builder.load_atomic(
+            self._declare_external_global(mode_name, _I32), "acquire", 4,
+        )
+        log = self.builder.load_atomic(
+            self._declare_external_global(log_name, _I32), "acquire", 4,
+        )
+        gc3 = self.builder.icmp_signed("==", backend, ir.Constant(_I32, 3))
+        no_log = self.builder.icmp_signed("==", log, ir.Constant(_I32, 0))
+        self.builder.cbranch(self.builder.and_(gc3, no_log), probe, legacy)
+        self.builder.position_at_end(probe)
+        validator = self._declare_external_function("pcc_exp2_lexical_leaf_slot", _CSTR, [_CSTR])
+        obj = self.builder.call(validator, [self._as_gc_ptr(operand)])
+        self.builder.cbranch(
+            self.builder.icmp_unsigned("!=", obj, ir.Constant(_CSTR, None)), tag, legacy,
+        )
+        self.builder.position_at_end(tag)
+        tag_addr = self._unsafe_typed_addr(
+            obj, ir.Constant(_I64, ABI_CONSTANTS["object.header.type_tag_offset"]), _I32,
+        )
+        is_float = self.builder.icmp_signed("==", self.builder.load(tag_addr), ir.Constant(_I32, PY_TYPE_FLOAT))
+        self.builder.cbranch(is_float, exact, legacy)
+        self.builder.position_at_end(exact)
+        # Consume the address immediately. No call, poll, write or alias
+        # crosses this block: only a double reaches the shared continuation.
+        addr = self._unsafe_typed_addr(
+            obj, ir.Constant(_I64, ABI_CONSTANTS["object.float.value_offset"]), _DOUBLE,
+        )
+        f64 = self.builder.load(addr)
+        self.builder.branch(done)
+        self.builder.position_at_end(legacy)
+        fallback = self._slot_call_runtime_call("py_float_value_of", (operand,), span=span)
+        legacy_end = self.builder.block
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        result = self.builder.phi(_DOUBLE)
+        result.add_incoming(f64, exact)
+        result.add_incoming(fallback, legacy_end)
+        self._emit_post_call_err_check(span)
+        return result
+
     def _expr_span_or_none(self, expr):
         try:
             return expr.span
@@ -1645,9 +1709,13 @@ class CallExpressionLoweringMixin:
                 self._try_err_block = cleanup
                 self._cpy_operand_cleanup_block = cleanup
                 try:
-                    result = self._slot_call_runtime_call(
-                        "py_float_value_of", (argument,), span=expr.span,
-                    )
+                    if (builtin_value == "builtins.float" and not expr.kwargs
+                            and not self._iterator_builtin_is_shadowed(name)):
+                        result = self._emit_float_from_registered_operand(argument, expr.span)
+                    else:
+                        result = self._slot_call_runtime_call(
+                            "py_float_value_of", (argument,), span=expr.span,
+                        )
                     self._release_slot_call_roots((argument,))
                     return result
                 finally:

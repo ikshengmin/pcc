@@ -39,6 +39,7 @@ from pcc.unsafe import (
 
 
 py_decref = extern("py_decref", (c_ptr,), c_void)
+pcc_exp2_forward_exposure = extern("pcc_exp2_forward_exposure", (c_ptr, c_int64), c_int64)
 pcc_gc_release_nonterminal_tail = extern("pcc_gc_release_nonterminal_tail", (c_ptr, c_int64), c_int64)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
@@ -304,6 +305,9 @@ def py_cpy_handle_new(cpy_ref):
             229,
         )
         return null()
+    # Foreign owned state is opaque to PCC tracing and can contain edges
+    # even if the box's raw pointer is outside the nursery.
+    pcc_exp2_forward_exposure(cpy_ref, 128)
     box = pcc_gc_alloc(24, PY_TYPE_CPY_HANDLE, 0)
     if ptr_is_null(box):
         return null()

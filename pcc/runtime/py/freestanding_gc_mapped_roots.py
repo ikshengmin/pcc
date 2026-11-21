@@ -4,6 +4,8 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
+    call_void_ptr2,
+    int_to_ptr,
     cstr,
     frame_address,
     function_addr,
@@ -81,6 +83,45 @@ py_subs_exc_cache_slot = extern(
 )
 
 
+pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
+pcc_thread_snapshot_stopped_world_owner = extern("pcc_thread_snapshot_stopped_world_owner", (), c_int64)
+pcc_thread_visit_conservative_words = extern("pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64)
+
+
+@c_abi_export("pcc_gc_visit_stopped_root_cut")
+def pcc_gc_visit_stopped_root_cut(epoch: i64, exact, ambiguous, context) -> i64:
+    """Visit raw registered root values and conservative words under one held stop.
+
+    Internal callbacks take (value, context). They may record a positive only:
+    no allocation, callbacks into managed code, root mutation, resume or free.
+    A negative result never permits reclamation; even after success the caller
+    must cover incoming heap/foreign edges independently and commit in THIS
+    stop. An epoch is not a transferable snapshot. Unregistered native memory
+    is not a root source this routine promises to cover.
+    """
+    if (epoch <= 0 or ptr_is_null(exact) or ptr_is_null(ambiguous)
+            or pcc_thread_world_stop_epoch_held() != epoch
+            or load_i32(global_addr("pcc_gc_backend3_closed_young_domain"), 0) == 2):
+        return -1
+    if pcc_thread_snapshot_stopped_world_owner() != 1:
+        return -1
+    visit = stack_alloc(16)
+    store_ptr(visit, 0, exact)
+    store_ptr(visit, 8, context)
+    # The carrier acquisition copied its GPRs and complete active stack.
+    # Failure on any one carrier poisons the *whole* cut, not just that row.
+    words: i64 = pcc_thread_visit_conservative_words(ambiguous, context)
+    slots: i64 = -1
+    if words > 0 and pcc_thread_world_stop_epoch_held() == epoch:
+        pcc_py_gc_minor_graph_lock()
+        slots = pcc_gc_visit_registered_root_slots(8, ptr_to_int(visit))
+        pcc_py_gc_minor_graph_unlock()
+    if (slots < 0 or pcc_thread_world_stop_epoch_held() != epoch
+            or load_i32(global_addr("pcc_gc_backend3_closed_young_domain"), 0) == 2):
+        return -1
+    return epoch
+
+
 @c_abi_export("pcc_gc_visit_mapped_root_slot")
 def pcc_gc_visit_mapped_root_slot(
     slot_base,
@@ -90,6 +131,14 @@ def pcc_gc_visit_mapped_root_slot(
     mode: i64,
     resolve: i64,
 ) -> i64:
+    if mode == 8:  # raw positive: never dereference a candidate or require an old object node
+        # Only internal mode 8 carries a stop-local callback descriptor in
+        # the auxiliary argument; ordinary mark/resolve modes are unchanged.
+        if resolve <= 1 or (resolve & 7) != 0:
+            return 0
+        visit = int_to_ptr(resolve)
+        call_void_ptr2(load_ptr(visit, 0), load_ptr(slot_base, slot_offset), load_ptr(visit, 8))
+        return 1
     if mode == 1:  # gray
         root = load_ptr(slot_base, slot_offset)
         if resolve != 0:

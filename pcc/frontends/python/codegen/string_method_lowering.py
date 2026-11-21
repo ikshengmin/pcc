@@ -22,6 +22,7 @@ from pcc.frontends.python.py_ast import (
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.freestanding_abi_constants import (
+    ABI_CONSTANTS,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
     PY_TYPE_MEMORYVIEW,
@@ -130,6 +131,131 @@ def _str_find_range_bounds(host, expr: Call):
     else:
         end = ir.Constant(_I64, _STR_FIND_END_DEFAULT)
     return start, end
+
+
+def _exp2_default_encode(self, expr):
+    """A fixed, no-argument builtin using the same encoder and owned output.
+
+    In the admitted GC3 arm, an *actual* one-word owning local root is
+    independently checked before exposing an immutable nursery string to the
+    known default UTF-8 encoder. The slot remains registered through bytes
+    allocation and its copy of the interior string pointer. There is no
+    codec-name lookup callback, user argument evaluation, managed value
+    export, or raw-address escape. No existing pin bit is modified.
+    """
+    # Do not claim the outer expression sink: the inactive branch returns
+    # the old encoder's raw NEW result. Both paths hand one owner back to
+    # precisely the same caller, which publishes it in the existing sink.
+    output = self._new_slot_call_root("exp2.encode.output")
+    roots = [output]
+    previous = self._current_try_err_block()
+    target = previous if previous is not None else self._ensure_fn_err_exit()
+    saved = self._cpy_operand_cleanup_block
+    try:
+        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        # May include arbitrary receiver computation. Do it exactly once;
+        # the standard builder owns the necessary generator/cancellation
+        # state until it returns a valid managed operand.
+        receiver = self._emit_slot_call_operand(expr.func.obj, "exp2.encode.input")
+        roots.append(receiver)
+        self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
+        self._cpy_operand_cleanup_block = self._try_err_block
+        if not self._slot_call_has_exp2_lexical_root(receiver):
+            self._slot_call_runtime_call("py_str_encode_with_encoding", (receiver,),
+                suffix_args=(ir.Constant(_CSTR,None),ir.Constant(_CSTR,None)), result_slot=output,span=expr.span)
+        else:
+            fn = self.module.globals.get("pcc_exp2_lexical_leaf_slot")
+            if fn is None:
+                fn = ir.Function(self.module,ir.FunctionType(_CSTR,[_CSTR]),name="pcc_exp2_lexical_leaf_slot")
+            value = self.builder.call(fn,[self._as_gc_ptr(receiver)],name=self._fresh("exp2.encode.leaf"))
+            check = self.current_function.append_basic_block(self._fresh("exp2.encode.type"))
+            fast = self.current_function.append_basic_block(self._fresh("exp2.encode.accept"))
+            stock = self.current_function.append_basic_block(self._fresh("exp2.encode.fallback"))
+            done = self.current_function.append_basic_block(self._fresh("exp2.encode.done"))
+            self.builder.cbranch(self.builder.icmp_unsigned("!=",value,ir.Constant(_CSTR,None)),check,stock)
+            self.builder.position_at_end(check)
+            tagp = self.builder.gep(value,[ir.Constant(_I64,ABI_CONSTANTS["object.header.type_tag_offset"])])
+            tag = self.builder.load(self.builder.bitcast(tagp,_I32.as_pointer()))
+            self.builder.cbranch(self.builder.icmp_signed("==",tag,ir.Constant(_I32,PY_TYPE_STR)),fast,stock)
+            self.builder.position_at_end(fast)
+            # No uncaptured value crosses a safe point: the independent
+            # receiver root remains live. The NEW bytes handoff is immediate.
+            result=self.builder.call(self.runtime["py_str_encode_with_encoding"],
+                    [value,ir.Constant(_CSTR,None),ir.Constant(_CSTR,None)],name=self._fresh("exp2.encode.bytes"))
+            self._publish_slot_call_owned(output,result,label="exact managed str.encode()")
+            self._emit_post_call_err_check(expr.span)
+            self.builder.branch(done)
+            self.builder.position_at_end(stock)
+            self._slot_call_runtime_call("py_str_encode_with_encoding",(receiver,),result_slot=output,
+                    suffix_args=(ir.Constant(_CSTR,None),ir.Constant(_CSTR,None)),span=expr.span)
+            self.builder.branch(done)
+            self.builder.position_at_end(done)
+        self._release_slot_call_roots(tuple(roots[1:]))
+    finally:
+        self._try_err_block=previous;self._cpy_operand_cleanup_block=saved
+    return self._take_slot_call_root(output)
+
+
+def _exp2_select_default_encode(self, expr):
+    # A true inactive/GC0 control uses the same existing source evaluation,
+    # receiver pin, lease, codec call, and cleanup. Neither GC3 correctness
+    # nor the throughput comparison may be won by weakening that fallback.
+    # This method duplicates the operand's code generation in two
+    # exclusive branches. Never duplicate a generator suspension edge.
+    context = None
+    if getattr(self, "_generator_ctx_stack", ()):
+        from pcc.frontends.python.py_ast import ExprStmt
+        from pcc.frontends.python.codegen.generator_lowering import (
+            diagnostic_synchronous_generator_statement_context as synchronous,
+        )
+        context = synchronous(self, ExprStmt(span=expr.span, expr=expr.func.obj))
+        if context is None:
+            # The existing proof rejects unknown nodes, suspensions, walrus
+            # stores and nested definitions including lambda default effects.
+            return None
+        saved_lexical = context.get("lexical_slot_operands", False)
+        start_state = context["next_state"]
+    guard = self.module.globals.get("pcc_exp2_window_active")
+    if guard is None:
+        guard=ir.Function(self.module,ir.FunctionType(_I64,[]),name="pcc_exp2_window_active")
+    enabled=self.builder.call(guard,[],name=self._fresh("exp2.encode.enabled"))
+    selected=self.current_function.append_basic_block(self._fresh("exp2.encode.selected"))
+    legacy=self.current_function.append_basic_block(self._fresh("exp2.encode.legacy"))
+    done=self.current_function.append_basic_block(self._fresh("exp2.encode.merge"))
+    self.builder.cbranch(self.builder.icmp_signed("==",enabled,ir.Constant(_I64,1)),selected,legacy)
+    self.builder.position_at_end(selected)
+    if context is not None:
+        context["lexical_slot_operands"] = True
+    try:
+        # All new roots belong to this arm only, are gone before the join,
+        # and cannot straddle a generator suspension.
+        left = _exp2_default_encode(self, expr)
+    finally:
+        if context is not None:
+            context["lexical_slot_operands"] = saved_lexical
+            if context["next_state"] != start_state:
+                from pcc.frontends.python.codegen.errors import L1CodegenError
+                raise L1CodegenError("synchronous default encoder introduced a resume edge")
+    lblock=self.builder._block;self.builder.branch(done)
+    self.builder.position_at_end(legacy)
+    # Match _maybe_emit_str_method / _maybe_emit_str_method_via_dyn exactly.
+    obj=expr.func.obj;recv=self._emit_expr(obj)
+    if recv in self._cpy_values:
+        recv=self.builder.call(self.runtime["py_cpy_to_pcc_obj"],[recv],name=self._fresh("cpy.str.encode.recv"))
+        self._note_owned_object_value(recv)
+    if not isinstance(recv.type,ir.PointerType):
+        recv=marshal.marshal_to_object(self.builder,self.module,self.runtime,recv,obj.ty)
+    right=self._emit_str_encode_call(expr,recv)
+    if context is not None and context["next_state"] != start_state:
+        from pcc.frontends.python.codegen.errors import L1CodegenError
+        raise L1CodegenError("legacy default encoder introduced a resume edge")
+    rblock=self.builder._block;self.builder.branch(done)
+    self.builder.position_at_end(done)
+    result=self.builder.phi(left.type,name=self._fresh("exp2.encode.result"))
+    result.add_incoming(left,lblock);result.add_incoming(right,rblock)
+    self._note_owned_object_value(result)
+    return result
 
 
 class StringMethodLoweringMixin:
@@ -889,6 +1015,15 @@ class StringMethodLoweringMixin:
         if self._expr_looks_cpython(attr.obj):
             return None
         name = attr.name
+        # The experiment's compiler is separate; normal builds keep the
+        # existing root/lease generation byte-for-byte.
+        if name == "encode" and not expr.args and not expr.kwargs:
+            import os
+            if (os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") == "1"
+                    and getattr(self, "_strict_no_libpython", False)
+                    and not getattr(self, "_freestanding_module", False)
+                    and not getattr(self, "_runtime_port_module", False)):
+                return _exp2_select_default_encode(self,expr)
         if name in ("ljust", "rjust"):
             return self._emit_owned_padding_method(expr)
         if name in ("strip", "lstrip", "rstrip"):

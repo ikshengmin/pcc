@@ -156,6 +156,7 @@ _FRAME_LEAVE = frozenset((
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
     "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_lifo_local",
     "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
+    "pcc_gc_frame_leave_lifo_exp2_take",
 ))
 _FRAME_PROTOCOL = _FRAME_ENTER | _FRAME_LEAVE
 

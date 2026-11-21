@@ -54,6 +54,8 @@ pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
 pcc_gc_begin_mark_cycle = extern("pcc_gc_begin_mark_cycle", (), c_void)
+pcc_exp2_window_active = extern("pcc_exp2_window_active", (), c_int64)
+pcc_exp2_window_stop_minor = extern("pcc_exp2_window_stop_minor",(c_int64,),c_int64)
 pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
 pcc_gc_finish_tracing_cycle = extern(
     "pcc_gc_finish_tracing_cycle", (c_int64, c_int64), c_int64
@@ -243,6 +245,10 @@ def _pcc_gc_complete_mark_cycle_seed(
     pcc_py_gc_minor_graph_unlock()
 
     if valid != 0:
+        # Validated owner, closed epoch, graph lock released, legacy mark not
+        # yet active. Rejection leaves ALL nursery pages intact.
+        if claim_backend == 3 and pcc_exp2_window_active() != 0:
+            pcc_exp2_window_stop_minor(pcc_thread_world_stop_epoch_held())
         pcc_gc_seed_roots()
 
     pcc_py_gc_minor_graph_lock()

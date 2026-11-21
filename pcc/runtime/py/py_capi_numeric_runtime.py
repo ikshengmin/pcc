@@ -50,6 +50,9 @@ py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_bigint_alloc = extern("py_bigint_alloc", (c_int64,), c_ptr)
 
 
+pcc_exp2_forward_exposure = extern("pcc_exp2_forward_exposure", (c_ptr, c_int64), c_int64)
+
+
 def _raise_scalar(kind: int, message) -> None:
     py_raise_owned(py_exc_new(kind, message))
 
@@ -160,7 +163,9 @@ def PyBool_Check(obj) -> int:
 
 @c_abi_typed_export("PyFloat_FromDouble", "ptr", ("f64",))
 def PyFloat_FromDouble(value: float):
-    return py_float_from_f64(value)
+    result = py_float_from_f64(value)
+    pcc_exp2_forward_exposure(result, 6)
+    return result
 
 
 @c_abi_typed_export("PyFloat_AsDouble", "f64", ("ptr",))

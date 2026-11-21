@@ -75,6 +75,9 @@ pcc_py_gc_defer_tripwire = extern(
     "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
 )
 
+pcc_exp2_process_contains = extern("pcc_exp2_process_contains",(c_ptr,),c_int64)
+pcc_exp2_process_is_start = extern("pcc_exp2_process_is_start", (c_ptr,), c_int64)
+pcc_exp2_leaf_bound_start = extern("pcc_exp2_leaf_bound_start", (c_ptr,), c_int64)
 pcc_gc_index_slot_size = extern("pcc_gc_index_slot_size", (), c_int64)
 pcc_gc_metric_shard = extern("pcc_gc_metric_shard", (), c_int64)
 pcc_gc_metric_shard_reset = extern("pcc_gc_metric_shard_reset", (c_int64,), c_void)
@@ -2406,6 +2409,11 @@ def pcc_gc_pointer_is_managed(o) -> int:
     # from the pointer bits alone.
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return 0
+    # The bound experiment has fixed-stride exact object provenance without
+    # inserting any per-object record. Outside the private scope it is absent.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
+        if pcc_exp2_process_is_start(o) != 0 or pcc_exp2_leaf_bound_start(o) != 0:
+            return 1
     # Hoisting the four immortal-singleton compares ahead of the granule probe
     # was measured and DENIED on 2026-09-06: on the cli_bootstrap ASM worker it
     # added 3.2% instructions (four extra compares on every probe) and saved
@@ -2559,6 +2567,11 @@ def pcc_gc_fix_backend() -> None:
 def pcc_gc_pointer_register(o) -> int:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return -1
+    # Never add a second kind of provenance for an individually untracked
+    # slab cell. This also prevents the static-literal wrapper from caching
+    # a slab address past the lifetime of its backing page.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3 and (pcc_exp2_leaf_bound_start(o) != 0 or pcc_exp2_process_contains(o) != 0):
+        return -1
     # 262144 = PY_FLAG_GC_MALLOC_ALLOC: a raw managed allocation.
     if (
         atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
@@ -2591,6 +2604,8 @@ def pcc_gc_pointer_register_static_literal(o) -> int:
 def pcc_gc_pointer_unregister(o) -> int:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return 0
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3 and (pcc_exp2_leaf_bound_start(o) != 0 or pcc_exp2_process_contains(o) != 0):
+        return -1
     if (atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0
             and pcc_gc_scalar_sweep_owns(o) != 0):
         return -1
@@ -4597,6 +4612,10 @@ def pcc_gc_free_object_memory(o) -> None:
         return
     if is_tagged_int(o) != 0:
         return
+    # A live nursery start is managed but was never a malloc/object cell.
+    # Pin/IMMORTAL may set nonzero flags, so a flags==0 test is not ownership.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3 and (pcc_exp2_leaf_bound_start(o) != 0 or pcc_exp2_process_contains(o) != 0):
+        return
     if _gc0_terminal_free_has_no_metadata(o) != 0:
         # The predicate just proved what pcc_gc_note_object_freeing and
         # pcc_gc_pointer_unregister would establish again for this object:
@@ -4695,6 +4714,8 @@ def pcc_gc_note_object_allocated_sized(o, size: int) -> None:
     if size < 16:
         size = 16
     if backend == 0:
+        return
+    if backend == 3 and (pcc_exp2_leaf_bound_start(o) != 0 or pcc_exp2_process_contains(o) != 0):
         return
     prepared_node = null()
     prepared_slots = null()
@@ -5286,6 +5307,8 @@ def pcc_gc_note_object_freeing(o) -> None:
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if ptr_is_null(o) != 0:
+        return
+    if backend == 3 and (pcc_exp2_leaf_bound_start(o) != 0 or pcc_exp2_process_contains(o) != 0):
         return
     # Only a forwarding target can be kept by an inactive source. Every
     # target install sets 8192 and GC3 never clears it, so an object without

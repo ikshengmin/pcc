@@ -44,6 +44,7 @@ from pcc.unsafe import (
 )
 
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
+pcc_exp2_forward_exposure = extern("pcc_exp2_forward_exposure", (c_ptr, c_int64), c_int64)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 pcc_capi_str_utf8_pinned = extern(
     "pcc_capi_str_utf8_pinned", (c_ptr,), c_ptr
@@ -94,8 +95,11 @@ def _value_error(message) -> None:
 @c_abi_typed_export("PyUnicode_FromString", "ptr", ("ptr",))
 def PyUnicode_FromString(value) -> c_ptr:
     if ptr_is_null(value):
-        return py_str_new(cstr(""), 0)
-    return py_str_new(value, strlen(value))
+        result = py_str_new(cstr(""), 0)
+    else:
+        result = py_str_new(value, strlen(value))
+    pcc_exp2_forward_exposure(result, 6)
+    return result
 
 
 @c_abi_typed_export("PyUnicode_FromStringAndSize", "ptr", ("ptr", "i64"))
@@ -106,7 +110,9 @@ def PyUnicode_FromStringAndSize(value, length: int) -> c_ptr:
     if ptr_is_null(value) and length > 0:
         _value_error(cstr("NULL unicode data with nonzero size"))
         return null()
-    return py_str_new(value, length)
+    result = py_str_new(value, length)
+    pcc_exp2_forward_exposure(result, 6)
+    return result
 
 
 @c_abi_typed_export("PyUnicode_FromObject", "ptr", ("ptr",))
@@ -115,6 +121,7 @@ def PyUnicode_FromObject(obj) -> c_ptr:
         _type_error(cstr("expected str"))
         return null()
     py_incref(obj)
+    pcc_exp2_forward_exposure(obj, 6)
     return obj
 
 

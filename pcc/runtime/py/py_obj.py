@@ -152,6 +152,9 @@ py_obj_eq = extern("py_obj_eq", (c_ptr, c_ptr), c_int64)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
+pcc_exp2_process_take = extern("pcc_exp2_process_take", (c_int64,c_int64), c_ptr)
+pcc_exp2_window_active = extern("pcc_exp2_window_active", (), c_int64)
+pcc_exp2_leaf_try_kind = extern("pcc_exp2_leaf_try_kind", (c_int64,c_int64), c_ptr)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
 pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
 pcc_gc_tracing_debt_threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
@@ -501,6 +504,20 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
         pcc_gc_fix_backend()
     backend: int = _gc_backend_fast()
+    # Private exp2: a caller-bound synchronous, no-escape scope proves its
+    # complete root cut. Never admit normal application strings by tag alone.
+    if (backend == 3 and flags == 0 and
+            ((type_tag == PY_TYPE_STR and size >= 41 and size <= 128) or
+             (type_tag == PY_TYPE_FLOAT and size == 24))):
+        leaf = pcc_exp2_leaf_try_kind(size,type_tag)
+        if ptr_is_null(leaf) == 0:
+            return leaf
+        # This separate process scope is activated only by the opt-in driver
+        # after a stopped, closed-domain install; exhaustion falls back.
+        if pcc_exp2_window_active() != 0:
+            leaf = pcc_exp2_process_take(size,type_tag)
+            if ptr_is_null(leaf) == 0:
+                return leaf
     obj = null()
     stored_flags: int = flags
     if backend == 4:

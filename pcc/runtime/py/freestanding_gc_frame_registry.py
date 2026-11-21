@@ -2,7 +2,15 @@
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import (
+    PYOBJECTHEADER_FLAGS_OFFSET,
+    PY_FLAG_GC_DEALLOCATING,
+    PY_FLAG_GC_PINNED,
+    PY_FLAG_IMMORTAL,
+)
 from pcc.unsafe import (
+    atomic_load_i32,
+    atomic_load_i64,
     call_void_ptr2,
     define_thread_local_i32,
     define_thread_local_ptr_null,
@@ -892,3 +900,74 @@ def pcc_gc_note_frame_leave_local(slots) -> None:
     # Pair of checked raw adapter entry. It is intentionally not the compiler
     # frame protocol: checked failure branches do not have an active scope.
     pcc_gc_frame_leave_local_mode(slots, 0)
+
+
+# These are closed operations, not new leases or transferable pin tokens.
+# Only compiler-owned exact one-slot local LIFO scopes may select them. The
+# ordinary pin, foreign lease, native ownership and export APIs stay sticky.
+pcc_exp2_exposure_is_revoked = extern("pcc_exp2_exposure_is_revoked", (), c_int64)
+pcc_exp2_process_is_start = extern("pcc_exp2_process_is_start", (c_ptr,), c_int64)
+pcc_gc_note_slot_write_barrier = extern(
+    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
+)
+
+
+@c_abi_export("_pcc_exp2_lexical_has_local_owner")
+def _exp2_lexical_has_local_owner(slot) -> i64:
+    if ptr_is_null(slot) or (ptr_to_int(slot) & 7) != 0 or pcc_thread_is_running() == 0:
+        return 0
+    arena = pcc_thread_local_root_arena_get()
+    entry = pcc_gc_local_frame_find(arena, slot, 2)
+    # Require the exact owner, not its alias, interior, borrowed map, another
+    # carrier, or merely a coincidentally conservative address on this stack.
+    if (ptr_is_null(entry) or load_i64(entry, 16) != 1 or load_i64(entry, 48) != 1
+            or load_i64(entry, 32) != load_i64(arena, 48)):
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_exp2_lexical_leaf_slot")
+def pcc_exp2_lexical_leaf_slot(slot):
+    if (atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire") == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0
+            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+            or pcc_exp2_exposure_is_revoked() != 0
+            or _exp2_lexical_has_local_owner(slot) != 1):
+        return null()
+    value = load_ptr(slot, 0)
+    if pcc_exp2_process_is_start(value) != 1:
+        return null()
+    flags: i64 = atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
+    if (flags & (PY_FLAG_GC_PINNED | PY_FLAG_IMMORTAL | PY_FLAG_GC_DEALLOCATING)) != 0:
+        return null()
+    return value
+
+
+@c_abi_export("pcc_exp2_lexical_publish_slot")
+def pcc_exp2_lexical_publish_slot(slot) -> i64:
+    value = pcc_exp2_lexical_leaf_slot(slot)
+    if ptr_is_null(value):
+        return 0
+    # The helper exposes no pointer. The same traced slot stays registered
+    # over the entire existing barrier, including any nested deferred poll.
+    pcc_gc_note_slot_write_barrier(null(), slot, value)
+    return 1
+
+
+@c_abi_export("pcc_gc_frame_leave_lifo_exp2_take")
+def pcc_gc_frame_leave_lifo_exp2_take(slot):
+    # This private consuming edge follows an accepted leaf predicate with
+    # no intervening poll/callback. Its ordinary return ALWAYS retires the
+    # active local root; the owned stack-map planner knows this exact ABI.
+    # A concurrent independent real pin/exposure is left unchanged.
+    if _exp2_lexical_has_local_owner(slot) != 1:
+        pcc_platform_abort()
+        return null()
+    value = load_ptr(slot, 0)
+    if pcc_exp2_process_is_start(value) != 1 or pcc_gc_local_frame_leave(slot, 2) != 1:
+        pcc_platform_abort()
+        return null()
+    store_ptr(slot, 0, null())
+    return value

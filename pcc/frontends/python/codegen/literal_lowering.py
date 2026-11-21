@@ -113,7 +113,16 @@ class LiteralLoweringMixin:
         register_name = "pcc_gc_pointer_register_static_literal"
         if self._python_library or self._module_has_c_abi_export:
             register_name = "pcc_gc_pointer_register"
-        register = self.runtime[register_name]
+        # PRIVATE EXP2 SEALED STATIC IMAGE ONLY. Ordinary explicit callers of
+        # pointer_register are unchanged. These private initializer entrypoints
+        # also record the exact *compiler-created* pooled scalar. The closure
+        # verifier checks their relocations and their argument's exact origin;
+        # sharing, plugins/unload, or unverifiable image identity never admit.
+        origin_name = ("pcc_exp2_old_library_literal" if register_name == "pcc_gc_pointer_register"
+                       else "pcc_exp2_old_entry_literal")
+        register = self.module.globals.get(origin_name)
+        if register is None:
+            register = ir.Function(self.module, self.runtime[register_name].function_type, name=origin_name)
         for gv in self._str_obj_pool.values():
             builder.call(register, [builder.bitcast(gv, _CSTR)])
         # Static bytes literals (_emit_bytes_literal) are the same kind of

@@ -1,6 +1,7 @@
 """Callable object materialization helpers for Layer-1 codegen."""
 from __future__ import annotations
 
+import os
 from typing import Optional
 
 from pcc.ir.compat import ir
@@ -847,7 +848,25 @@ class CallObjectLoweringMixin:
             return classes[expr.ident].global_var, False
         return None
 
-    def _publish_slot_call_owned(self, slot, value, *, label="owned result") -> None:
+    def _slot_call_has_exp2_lexical_root(self, slot) -> bool:
+        if (os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") != "1"
+                or not getattr(self, "_strict_no_libpython", False)
+                or getattr(self, "_freestanding_module", False)
+                or getattr(self, "_runtime_port_module", False)
+                or getattr(self, "_exp2_opaque_result_roots", {}).get(id(slot)) is slot):
+            return False
+        owned, flag, lifo = self._slot_call_root_record(slot)
+        record = getattr(self, "_private_frame_scopes", {}).get(
+            self.current_function.name, {},
+        ).get(id(slot))
+        return (owned is slot and flag is None and lifo and record is not None
+                and record[0] is self.current_function and record[1] is slot
+                and record[3].get(2) == "pcc_gc_frame_enter_lifo_local"
+                and record[4].get(2, (None, 0, 0))[1:] == (1, 1))
+
+    def _publish_slot_call_owned(
+        self, slot, value, *, label="owned result", opaque_foreign_result=False,
+    ) -> None:
         """Immediately transfer a fresh result into an already empty root.
 
         An earlier SSA result returned after cleanup is not fresh. Reject it
@@ -855,6 +874,10 @@ class CallObjectLoweringMixin:
         Output-slot producers should instead write directly or root_move.
         """
         self._slot_call_root_record(slot)
+        if opaque_foreign_result and os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") == "1":
+            if not hasattr(self, "_exp2_opaque_result_roots"):
+                self._exp2_opaque_result_roots = {}
+            self._exp2_opaque_result_roots[id(slot)] = slot
         if not isinstance(value.type, ir.PointerType):
             raise L1CodegenError("slot-call publication requires an object: " + label)
         record = getattr(value, "_instr", value)
@@ -887,6 +910,19 @@ class CallObjectLoweringMixin:
                 [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), value],
             )
             return
+        lexical_done = None
+        if self._slot_call_has_exp2_lexical_root(slot):
+            publish = self._declare_external_function(
+                "pcc_exp2_lexical_publish_slot", _I64, [_CSTR],
+            )
+            accepted = self.builder.call(publish, [self._as_gc_ptr(slot)])
+            legacy = self.current_function.append_basic_block(self._fresh("exp2.pub.legacy"))
+            lexical_done = self.current_function.append_basic_block(self._fresh("exp2.pub.done"))
+            self.builder.cbranch(
+                self.builder.icmp_signed("==", accepted, ir.Constant(_I64, 1)),
+                lexical_done, legacy,
+            )
+            self.builder.position_at_end(legacy)
         token = self.builder.call(
             self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
             name=self._fresh("call.slot.publish.lease"),
@@ -902,6 +938,9 @@ class CallObjectLoweringMixin:
             name=self._fresh("call.slot.publish.release"),
         )
         self._slot_call_check_status(released, "owned-result lease release")
+        if lexical_done is not None:
+            self.builder.branch(lexical_done)
+            self.builder.position_at_end(lexical_done)
 
     def _slot_call_builtin_power_expr(self, expr):
         """Recognize only an unshadowed two-argument builtin power call."""
@@ -1672,6 +1711,28 @@ class CallObjectLoweringMixin:
         done_block = self.current_function.append_basic_block(self._fresh("call.slot.take.done"))
         self.builder.cbranch(immediate, word_block, object_block)
         self.builder.position_at_end(object_block)
+        lexical_value = None
+        if not keep_pinned and self._slot_call_has_exp2_lexical_root(slot):
+            validate = self._declare_external_function(
+                "pcc_exp2_lexical_leaf_slot", _CSTR, [_CSTR],
+            )
+            take = self._declare_external_function(
+                "pcc_gc_frame_leave_lifo_exp2_take", _CSTR, [_CSTR],
+            )
+            slot_pointer = self._as_gc_ptr(slot)
+            accepted = self.builder.call(validate, [slot_pointer])
+            fast = self.current_function.append_basic_block(self._fresh("exp2.take.local"))
+            legacy = self.current_function.append_basic_block(self._fresh("exp2.take.legacy"))
+            lexical_done = self.current_function.append_basic_block(self._fresh("exp2.take.done"))
+            self.builder.cbranch(
+                self.builder.icmp_unsigned("!=", accepted, ir.Constant(_CSTR, None)),
+                fast, legacy,
+            )
+            self.builder.position_at_end(fast)
+            lexical_value = self.builder.call(take, [slot_pointer])
+            lexical_end = self.builder.block
+            self.builder.branch(lexical_done)
+            self.builder.position_at_end(legacy)
         # The runtime pins the current object inside a graph transaction on a
         # moving collector; GC0 never relocates and pins without that lock.
         prior = self.builder.call(
@@ -1695,6 +1756,14 @@ class CallObjectLoweringMixin:
             self.runtime["pcc_gc_take_pinned_slot"], [self._as_gc_ptr(slot), prior_pin],
             name=self._fresh("call.slot.take"),
         )
+        if lexical_value is not None:
+            legacy_end = self.builder.block
+            self.builder.branch(lexical_done)
+            self.builder.position_at_end(lexical_done)
+            transferred = self.builder.phi(_CSTR, name=self._fresh("exp2.take.owner"))
+            transferred.add_incoming(value, legacy_end)
+            transferred.add_incoming(lexical_value, lexical_end)
+            value = transferred
         self._note_owned_object_value(value)
         return value
 
@@ -2286,7 +2355,14 @@ class CallObjectLoweringMixin:
         output = sink
         roots = []
         if output is None:
-            output = self._new_slot_call_root(label + ".result")
+            # This path owns and takes its output here, not at another
+            # suspension point. The guard above proves the entire AST and
+            # the next_state assertion below checks the real emitted scope.
+            # Pre-existing sinks still belong to the surrounding emitter.
+            synchronous_result = (lexical_context is not None
+                and os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") == "1"
+                and not getattr(self, "_runtime_port_module", False))
+            output = self._new_slot_call_root(label + ".result", synchronous_lexical=synchronous_result)
             roots.append(output)
         placeholders = []
         if lexical_context is not None:

@@ -812,12 +812,12 @@ def _runtime_signatures_part_16():
     "py_obj_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_default": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_default_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
-    "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_17():
     return {
+    "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     # for k, v in x.items(): the dict whose entries the loop walks, or NULL.
     "py_dict_items_loop_source": (_PYOBJ, [_PYOBJ], False),
     # iter(x) for ``a, b = x``: a non-iterable type raises CPython's
@@ -1874,6 +1874,21 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_exp2_old_origin_poison",
+        "pcc_exp2_image_witness",
+        "pcc_exp2_domain_install_kind",
+        "pcc_exp2_exposure_hook_bits",
+        "pcc_exp2_exposure_reject_latch",
+        "pcc_exp2_leaf_carrier_domain",
+        "pcc_exp2_process_directory",
+        "pcc_exp2_process_gate_fn",
+        "pcc_exp2_window_attempts",
+        "pcc_exp2_window_first_bad_reason",
+        "pcc_exp2_window_first_bad_tag",
+        "pcc_exp2_window_old_owners",
+        "pcc_exp2_window_old_slots",
+        "pcc_exp2_window_refused",
+        "pcc_exp2_window_state",
         "pcc_gc_backend3_young_cut_commits",
         "pcc_gc_backend3_young_cut_freed",
         "pcc_gc_scalar_sweep_state",
@@ -2035,6 +2050,10 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_exp2_leaf_bound_state",
+        "pcc_exp2_process_cut",
+        "pcc_exp2_process_gate_user",
+        "pcc_exp2_process_lane",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_worker_head",
         "pcc_gc_scalar_sweep_head",
@@ -2122,6 +2141,9 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_exp2_leaf_bound_state",
+        "pcc_exp2_process_cut",
+        "pcc_exp2_process_lane",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active",
         "pcc_gc_deferred_free_head",
@@ -3362,6 +3384,41 @@ def _cross_object_signatures_part_15():
     # A mark's finish reads a walked record's bit through its span and cell.
     "pcc_gc_record_is_white": (("c_ptr", "c_ptr", "c_int64"), "c_int64"),
     "pcc_py_gc_minor_graph_lock_yield": ((), "c_void"),
+    "pcc_exp2_exposure_is_revoked": ((), 'c_int64'),
+    "pcc_exp2_forward_exposure": (('c_ptr', 'c_int64'), 'c_int64'),
+    "pcc_exp2_install_exposure_hook": (('c_ptr',), 'c_int64'),
+    "pcc_exp2_leaf_bound_start": (('c_ptr',), 'c_int64'),
+    "pcc_exp2_leaf_try_kind": (('c_int64', 'c_int64'), 'c_ptr'),
+    "pcc_exp2_process_contains": (('c_ptr',), 'c_int64'),
+    "pcc_exp2_process_enable": (('c_int64', 'c_int64'), 'c_int64'),
+    "pcc_exp2_process_expose": (('c_ptr', 'c_int64'), 'c_int64'),
+    "pcc_exp2_process_is_start": (('c_ptr',), 'c_int64'),
+    "pcc_exp2_process_mark": (('c_ptr', 'c_ptr'), 'c_void'),
+    "pcc_exp2_process_metric": (('c_int64',), 'c_int64'),
+    "pcc_exp2_process_minor_held": (('c_int64',), 'c_int64'),
+    "pcc_exp2_process_register_gate": (('c_ptr', 'c_ptr'), 'c_int64'),
+    "pcc_exp2_process_take": (('c_int64', 'c_int64'), 'c_ptr'),
+    "pcc_exp2_visit_stopped_old_edges": (('c_int64', 'c_ptr', 'c_ptr', 'c_ptr'), 'c_int64'),
+    "pcc_exp2_window_active": ((), 'c_int64'),
+    "pcc_exp2_window_stop_minor": (('c_int64',), 'c_int64'),
+    "pcc_gc_visit_stopped_root_cut": (('c_int64', 'c_ptr', 'c_ptr', 'c_ptr'), 'c_int64'),
+    "pcc_platform_monotonic_ns": ((), 'c_int64'),
+    "pcc_exp2_old_exact_metric": (('c_int64',), 'c_int64'),
+    "pcc_exp2_own_image_matches_seal": ((), 'c_int64'),
+    "pcc_exp2_window_domain_ok": ((), 'c_int64'),
+    "pcc_exp2_window_image_verified": ((), 'c_int64'),
+    "pcc_platform_env_snapshot_count": ((), 'c_int64'),
+    }
+
+
+def _cross_object_signatures_part_16():
+    return {
+    "pcc_gc_note_slot_write_barrier": (("c_ptr", "c_ptr", "c_ptr"), "c_void"),
+    "pcc_exp2_lexical_leaf_slot": (("c_ptr",), "c_ptr"),
+    "py_program_argc": ((), 'c_int64'),
+    "py_program_argv": (('c_int64',), 'c_ptr'),
+    "py_program_mode": ((), 'c_int32'),
+    "pcc_gc_foreign_lease_count_quiescent": ((), "c_int64"),
     }
 
 
@@ -3385,6 +3442,7 @@ FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_12(
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_13())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_14())
 FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_15())
+FREESTANDING_GC_CROSS_OBJECT_SIGNATURES.update(_cross_object_signatures_part_16())
 def is_freestanding_gc_cross_object_runtime_import(
     symbol: str, parameters_source: str, return_source: str
 ) -> bool:

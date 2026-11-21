@@ -866,3 +866,468 @@ def pcc_gc_visit_object_slots(o, visitor, context) -> i64:
     if cext_handled != 0:
         return cext_handled
     return 0
+
+# Diagnostic full-heap reference, independent of any experiment state/TLS.
+# Old=every registry-owned object OUTSIDE the unindexed leaf pool, regardless
+# of age/color. Major, unknown/partially published or opaque domains refuse.
+# No candidate word is dereferenced here. The optional extra typed C aliases
+# are conservative words (never scanned as heap or used as object addresses).
+from pcc.unsafe import (atomic_load_i32, atomic_load_i64, call_void_ptr2, global_addr, null, ptr_diff)
+_old_epoch = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
+_old_gc = extern("pcc_gc_backend", (), c_int64)
+_old_first = extern("pcc_gc_object_walk_first", (), c_ptr)
+_old_next = extern("pcc_gc_object_walk_next", (c_ptr,), c_ptr)
+_old_pending = extern("pcc_gc_alloc_stage_pending", (), c_int64)
+_old_index = extern("pcc_gc_object_index_find_stable", (c_ptr,), c_ptr)
+_old_slice = extern("pcc_gc_visit_object_slots_slice", (c_ptr,c_int64,c_int64,c_ptr,c_ptr,c_ptr), c_int64)
+# Limit is a diagnostic refusal, never a truncated successful scan.
+_OLD_LIMIT = 16777216
+
+
+# The two emitter-owned direct entrypoints preserve ordinary registration vs
+# old process-static registration semantics. This additional exact set alone
+# is not a capability: a checked static image and no foreign exposures are
+# required before the old cut uses it. No reads through a registered word.
+from pcc.unsafe import (atomic_cas_i64, atomic_store_i64, define_global_i64,
+                        define_global_i64_array, define_global_null_ptr_array,
+                        int_to_ptr, logical_shift_right_i64, ptr_to_int)
+_old_generic_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
+_old_entry_register = extern("pcc_gc_pointer_register_static_literal", (c_ptr,), c_int64)
+_exp2_old_scope_ok = extern("pcc_exp2_window_domain_ok", (), c_int64)
+_old_total_mode_leases = extern("pcc_gc_foreign_lease_count_quiescent", (), c_int64)
+_old_image_verified = extern("pcc_exp2_window_image_verified", (), c_int64)
+define_global_null_ptr_array("pcc_exp2_old_origin_keys",32768)
+define_global_i64("pcc_exp2_old_origin_poison",0)
+define_global_i64_array("pcc_exp2_old_raw_metrics",0,0,0,0,0,0)
+
+
+@c_abi_export("pcc_exp2_old_literal_slot")
+def _old_literal_slot(bits:i64)->i64:
+    return (logical_shift_right_i64(bits,3)^logical_shift_right_i64(bits,13))&32767
+
+
+@c_abi_export("pcc_exp2_old_literal_record")
+def _old_literal_record(w)->None:
+    if ptr_is_null(w) or is_tagged_int(w):
+        atomic_store_i64(global_addr("pcc_exp2_old_origin_poison"),0,1,"release")
+        return
+    bits:i64=ptr_to_int(w)
+    at:i64=_old_literal_slot(bits)
+    keys=global_addr("pcc_exp2_old_origin_keys")
+    i:i64=0
+    while i<128:
+        found:i64=atomic_cas_i64(keys,at*8,0,bits,"acq_rel","acquire")
+        if found==0 or found==bits:
+            return
+        at=(at+1)&32767
+        i+=1
+    # Bounded table can never silently drop an origin.
+    atomic_store_i64(global_addr("pcc_exp2_old_origin_poison"),0,1,"release")
+
+
+@c_abi_export("pcc_exp2_old_library_literal")
+def pcc_exp2_old_library_literal(w)->i64:
+    rc:i64=_old_generic_register(w)
+    if rc>=0:
+        _old_literal_record(w)
+    else:
+        atomic_store_i64(global_addr("pcc_exp2_old_origin_poison"),0,1,"release")
+    return rc
+
+
+@c_abi_export("pcc_exp2_old_entry_literal")
+def pcc_exp2_old_entry_literal(w)->i64:
+    rc:i64=_old_entry_register(w)
+    if rc>=0:
+        _old_literal_record(w)
+    else:
+        atomic_store_i64(global_addr("pcc_exp2_old_origin_poison"),0,1,"release")
+    return rc
+
+
+@c_abi_export("pcc_exp2_old_literal_known")
+def _old_literal_known(w)->i64:
+    bits:i64=ptr_to_int(w)
+    at:i64=_old_literal_slot(bits)
+    keys=global_addr("pcc_exp2_old_origin_keys")
+    i:i64=0
+    while i<128:
+        found:i64=atomic_load_i64(keys,at*8,"acquire")
+        if found==0:
+            return 0
+        if found==bits:
+            return 1
+        at=(at+1)&32767
+        i+=1
+    return 0
+
+
+@c_abi_export("pcc_exp2_old_static_key")
+def pcc_exp2_old_static_key(i:i64):
+    # Raw diagnostic oracle for the separate calibration harness; no read
+    # through the key and no authority to create an origin.
+    if i<0 or i>=32768:
+        return null()
+    return int_to_ptr(atomic_load_i64(global_addr("pcc_exp2_old_origin_keys"),i*8,"acquire"))
+
+
+@c_abi_export("pcc_exp2_old_exact_metric")
+def pcc_exp2_old_exact_metric(i:i64)->i64:
+    if i<0 or i>5:
+        return -1
+    return atomic_load_i64(global_addr("pcc_exp2_old_raw_metrics"),i*8,"acquire")
+
+
+@c_abi_export("pcc_exp2_old_exact_only_status")
+def _old_exact_only(audit)->i64:
+    # Inspect only stopped address-index storage. A non-null bucket is a
+    # word, NOT permission to inspect its target (including heap/ELF words).
+    slots=global_load_ptr("pcc_py_gc_managed_pointer_slots")
+    cap:i64=load_i64(global_addr("pcc_py_gc_managed_pointer_cap"),0)
+    count:i64=load_i64(global_addr("pcc_py_gc_managed_pointer_count"),0)
+    m=global_addr("pcc_exp2_old_raw_metrics")
+    i:i64=0
+    while i<6:
+        atomic_store_i64(m,i*8,0,"release")
+        i+=1
+    atomic_store_i64(m,0,count,"release")
+    if cap<0 or cap>_OLD_LIMIT or count<0 or count>cap or (cap>0 and ptr_is_null(slots)):
+        store_i64(audit,24,-15)
+        return -15
+    if atomic_load_i64(global_addr("pcc_exp2_old_origin_poison"),0,"acquire")!=0:
+        store_i64(audit,24,-16)
+        return -16
+    sealed:i64=_old_image_verified()
+    i=0
+    seen:i64=0
+    origins:i64=0
+    ascii_starts:i64=0
+    indexed:i64=0
+    status:i64=1
+    while i<cap:
+        word=load_ptr(slots,i*8)
+        if ptr_is_null(word)==0:
+            seen+=1
+            if sealed==1 and _old_literal_known(word)!=0:
+                origins+=1
+            else:
+                off:i64=ptr_diff(word,global_addr("pcc_ascii_image_chars"))
+                if off>=0 and off<128*48 and off%48==0:
+                    ascii_starts+=1
+                elif ptr_is_null(_old_index(word))==0:
+                    indexed+=1
+                else:
+                    # Distinguish a known but not-yet-sealed typed origin
+                    # from an untyped unknown WITHOUT inspecting its header.
+                    status=-14
+                    if sealed!=1 and _old_literal_known(word)!=0:
+                        status=-17
+                    store_i64(audit,16,-2)
+                    atomic_store_i64(m,40,1,"release")
+                    break
+        i+=1
+    atomic_store_i64(m,8,seen,"release")
+    atomic_store_i64(m,16,origins,"release")
+    atomic_store_i64(m,24,ascii_starts,"release")
+    atomic_store_i64(m,32,indexed,"release")
+    if status==1 and seen!=count:
+        status=-15
+    if status!=1:
+        store_i64(audit,24,status)
+    return status
+
+
+
+@c_abi_export("pcc_exp2_old_domain_status")
+def _old_domain(epoch: i64) -> i64:
+    if epoch <= 0 or _old_epoch() != epoch:
+        return -1
+    if _old_gc() != 3 or _exp2_old_scope_ok() != 1:
+        return -2
+    if _old_total_mode_leases() != 0:
+        return -3
+    if atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0:
+        return -4
+    if (atomic_load_i32(global_addr("py_gc_collecting"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_explicit_collect_active"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0
+            or atomic_load_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, "acquire") != 0):
+        return -11
+    if _old_pending() != 0:
+        return -5
+    return 1
+
+
+@c_abi_export("pcc_exp2_old_count_fits")
+def _old_count(n: i64, cap: i64, data) -> i64:
+    if n < 0 or cap < 0 or n > cap or cap > _OLD_LIMIT or (n > 0 and ptr_is_null(data)):
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_exp2_old_verify_shape")
+def _old_shape(o, tag: i64, size: i64, flags: i64) -> i64:
+    # -6: opaque/unknown; -7: incomplete/invalid/oversized storage.
+    # 0: known no-reference scalar, 1: vetted authoritative builtin layout.
+    if size < 16 or (flags & (524288 | 2048 | 131072)) != 0:
+        return -7
+    if (tag == abi_constant("object.type.str") or tag == abi_constant("object.type.int")
+            or tag == abi_constant("object.type.float") or tag == abi_constant("object.type.bool")
+            or tag == abi_constant("object.type.none") or tag == abi_constant("object.type.complex")
+            or tag == abi_constant("object.type.bytes") or tag == abi_constant("object.type.bytearray")
+            or tag == 33 or tag == 34):
+        return 0
+    if tag == abi_constant("object.type.list"):
+        if size < 40 or _old_count(load_i64(o,16),load_i64(o,24),load_ptr(o,32)) == 0:
+            return -7
+    elif tag == abi_constant("object.type.tuple"):
+        if size < 24:
+            return -7
+        n: i64 = load_i64(o,16)
+        if n < 0 or n > _OLD_LIMIT or n > (size - 24) // 8:
+            return -7
+    elif tag == abi_constant("object.type.dict"):
+        if size < 56:
+            return -7
+        used: i64 = load_i64(o,48)
+        if (_old_count(used, load_i64(o,24), load_ptr(o,40)) == 0
+                or load_i64(o,16) < 0 or load_i64(o,16) > used):
+            return -7
+    elif tag == abi_constant("object.type.set"):
+        if size < 48:
+            return -7
+        cap: i64 = load_i64(o,24)
+        if (_old_count(cap, cap, load_ptr(o,40)) == 0 or load_i64(o,16) < 0
+                or load_i64(o,16) > load_i64(o,32) or load_i64(o,32) > cap):
+            return -7
+    elif tag == abi_constant("object.type.func"):
+        if size < 96:
+            return -7
+        # A C extension's PyCFunction may hide retained objects outside slots.
+        if ptr_is_null(load_ptr(o,16)) == 0:
+            return -6
+    elif tag == abi_constant("object.type.class"):
+        if size < 120:
+            return -7
+        nb: i64 = load_i32(o,24)
+        nm: i64 = load_i32(o,40)
+        nt: i64 = load_i32(o,56)
+        nf: i64 = load_i32(o,72)
+        if (_old_count(nb, _OLD_LIMIT, load_ptr(o,32)) == 0 or
+                _old_count(nm, _OLD_LIMIT, load_ptr(o,48)) == 0 or
+                _old_count(nt, _OLD_LIMIT, load_ptr(o,64)) == 0 or
+                _old_count(nf, _OLD_LIMIT, load_ptr(o,80)) == 0):
+            return -7
+    elif (tag == abi_constant("object.type.instance") or tag == abi_constant("object.type.valuebox")
+            or (tag >= abi_constant("object.type.user_class_start") and tag < 65536)):
+        if size < 24:
+            return -7
+        cls = load_ptr(o,16)
+        if ptr_is_null(cls) or is_tagged_int(cls):
+            return -7
+        # Compare candidate value in the stopped registry before dereferencing.
+        cn = _old_index(cls)
+        if (ptr_is_null(cn) or ptr_eq(load_ptr(cn,0),cls) == 0 or load_i64(cn,32) != 0
+                or load_i64(cn,8) < 120 or load_i32(cls,8) != abi_constant("object.type.class")):
+            return -7
+        sz: i64 = load_i32(cls,88)
+        fields: i64 = load_i32(cls,72)
+        if (sz < 24 or (sz & 7) != 0 or sz > size or fields < 0 or fields >= _OLD_LIMIT
+                or fields + 1 > (size - 24) // 8 or (sz - 24) // 8 > _OLD_LIMIT):
+            return -7
+    elif tag == abi_constant("object.type.iter"):
+        if size < 32:
+            return -7
+    elif tag == abi_constant("object.type.gen"):
+        if size < 56:
+            return -7
+        if (flags & abi_constant("object.gen.inline_frame_flag")) != 0:
+            if size < 64:
+                return -7
+            n = load_i64(o,abi_constant("object.gen.inline_length_offset"))
+            if n < 0 or n > _OLD_LIMIT or n > (size-64)//8:
+                return -7
+    elif tag == abi_constant("object.type.virtual_thread"):
+        # Native scheduler timer, IO and wait-node backpointers do not own
+        # objects; runnable and parked state requires the independent root cut.
+        if size < 200:
+            return -7
+    elif tag == abi_constant("object.type.continuation"):
+        if size < 48:
+            return -7
+        chunk = load_ptr(o,24)
+        if ptr_is_null(chunk):
+            return -7
+        n = load_i64(chunk,8)
+        if _old_count(n, _OLD_LIMIT, load_ptr(chunk,16)) == 0 or n != load_i32(chunk,0):
+            return -7
+    elif tag == abi_constant("object.type.vthread_channel"):
+        if size < 40:
+            return -7
+        kind: i64 = load_i64(o,16)
+        if kind == 0:
+            if size < 128:
+                return -7
+            cap = load_i64(o,24)
+            if cap < 0 or cap > 1048576 or cap > (size-128)//8 or load_i64(o,32)<0 or load_i64(o,32)>cap:
+                return -7
+        elif kind != 1 and kind != 2:
+            return -7
+    elif tag == abi_constant("object.type.coroutine"):
+        if size < 64:
+            return -7
+    elif tag == abi_constant("object.type.task"):
+        if size < 48:
+            return -7
+    elif tag == abi_constant("object.type.exc"):
+        if size < 64:
+            return -7
+        if (_old_count(load_i32(o,56), load_i32(o,60), load_ptr(o,48)) == 0):
+            return -7
+    elif tag == abi_constant("object.type.property"):
+        if size < 40:
+            return -7
+    elif tag == abi_constant("object.type.classmethod") or tag == abi_constant("object.type.staticmethod"):
+        if size < 24:
+            return -7
+    else:
+        # Weakrefs need logical death/clearing; memoryviews/raw foreign export
+        # paths need lifetime leases; handles, extension, native thread/sync
+        # and file domains can own opaque state. Never call their traverse.
+        return -6
+    return 1
+
+
+@c_abi_export("pcc_exp2_old_deliver_slot")
+def pcc_exp2_old_deliver_slot(slot, role:i64, state) -> None:
+    audit = load_ptr(state,16)
+    if ptr_is_null(slot) or (role != 1 and role != 2 and role != 3):
+        store_i64(audit,24,-10)
+        return
+    if role == 3:
+        # Conservative borrowed cache entries, not precise strong owners.
+        store_i64(audit,40,load_i64(audit,40)+1)
+    else:
+        store_i64(audit,8,load_i64(audit,8)+1)
+    call_void_ptr2(load_ptr(state,0),load_ptr(slot,0),load_ptr(state,8))
+
+
+@c_abi_export("pcc_exp2_old_alias")
+def _old_alias(word,state) -> None:
+    audit = load_ptr(state,16)
+    store_i64(audit,48,load_i64(audit,48)+1)
+    call_void_ptr2(load_ptr(state,0),word,load_ptr(state,8))
+
+
+@c_abi_export("pcc_exp2_old_borrowed_words")
+def _old_aliases(o, tag: i64, state) -> None:
+    # Inspect only *declared* borrowed C-string fields with validated array
+    # lengths. Read pointer words from current storage; never chase a C string.
+    if tag == abi_constant("object.type.func"):
+        _old_alias(load_ptr(o,72),state)
+    elif tag == abi_constant("object.type.coroutine"):
+        _old_alias(load_ptr(o,16),state)
+    elif tag == abi_constant("object.type.class"):
+        _old_alias(load_ptr(o,16),state)
+        i: i64 = 0
+        methods = load_ptr(o,64)
+        while i < load_i32(o,56):
+            _old_alias(load_ptr(methods,i*abi_constant("object.class_method.size")),state)
+            i += 1
+        i = 0
+        names = load_ptr(o,80)
+        while i < load_i32(o,72):
+            _old_alias(load_ptr(names,i*8),state)
+            i += 1
+    elif tag == abi_constant("object.type.exc"):
+        frames=load_ptr(o,48)
+        i: i64=0
+        while i < load_i32(o,56):
+            _old_alias(load_ptr(frames,i*32),state)
+            _old_alias(load_ptr(frames,i*32+8),state)
+            _old_alias(load_ptr(frames,i*32+16),state)
+            i+=1
+
+
+@c_abi_export("pcc_exp2_visit_stopped_old_edges")
+def pcc_exp2_visit_stopped_old_edges(epoch:i64,visitor,context,audit)->i64:
+    """Trusted collector word visitor only. No user callback, graph mutation
+    or allocations. 1 means ALL registered old owners, not all process roots.
+    audit[12]: owners, strong slots, first denied tag, status, scalar owners,
+    update-only slots, typed conservative aliases, total nodes, failing bytes,
+    failing flags, reserved, reserved. A negative is never a minor license.
+    """
+    if ptr_is_null(audit):
+        return -1
+    i:i64=0
+    while i<12:
+        store_i64(audit,i*8,0)
+        i+=1
+    store_i64(audit,16,-1)
+    rc:i64=_old_domain(epoch)
+    if rc!=1 or ptr_is_null(visitor):
+        if rc==1:
+            rc=-1
+        store_i64(audit,24,rc)
+        return rc
+    exact_state:i64=_old_exact_only(audit)
+    if exact_state!=1:
+        return exact_state
+    state=stack_alloc(24)
+    store_ptr(state,0,visitor)
+    store_ptr(state,8,context)
+    store_ptr(state,16,audit)
+    curs=stack_alloc(16)
+    # First pass vet all registry owners before issuing the first callback.
+    # Both passes execute in the same immutable stopped-world epoch.
+    phase:i64=0
+    while phase<2:
+        node=_old_first()
+        while ptr_is_null(node)==0:
+            o=load_ptr(node,0)
+            if load_i64(node,32)!=0 or ptr_is_null(o) or is_tagged_int(o):
+                store_i64(audit,24,-8)
+                return -8
+            tag:i64=load_i32(o,abi_constant("object.header.type_tag_offset"))
+            flags:i64=load_i32(o,abi_constant("object.header.flags_offset"))
+            size:i64=load_i64(node,8)
+            kind:i64=_old_shape(o,tag,size,flags)
+            if kind<0:
+                store_i64(audit,16,tag)
+                store_i64(audit,24,kind)
+                store_i64(audit,64,size)
+                store_i64(audit,72,flags)
+                return kind
+            if phase==0:
+                store_i64(audit,56,load_i64(audit,56)+1)
+                if kind==0:
+                    store_i64(audit,32,load_i64(audit,32)+1)
+                else:
+                    store_i64(audit,0,load_i64(audit,0)+1)
+            elif kind!=0:
+                cursor:i64=0
+                while True:
+                    if _old_slice(o,cursor,64,pcc_exp2_old_deliver_slot,state,curs)!=1:
+                        store_i64(audit,16,tag)
+                        store_i64(audit,24,-10)
+                        return -10
+                    if load_i64(audit,24)<0:
+                        store_i64(audit,16,tag)
+                        return -10
+                    nxt:i64=load_i64(curs,0)
+                    if nxt==-1:
+                        break
+                    if nxt<=cursor or nxt>_OLD_LIMIT*4:
+                        store_i64(audit,16,tag)
+                        store_i64(audit,24,-9)
+                        return -9
+                    cursor=nxt
+                _old_aliases(o,tag,state)
+            node=_old_next(node)
+        rc=_old_domain(epoch)
+        if rc!=1:
+            store_i64(audit,24,rc)
+            return rc
+        phase+=1
+    store_i64(audit,24,1)
+    return 1

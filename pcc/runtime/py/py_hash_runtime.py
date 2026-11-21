@@ -9,9 +9,10 @@ __pcc_runtime_port__ = True
 
 from pcc.extern import c_abi_export, c_int64, c_ptr, extern
 from pcc.unsafe import (
-    cstr, define_global_i64_array, global_addr, load_i8, load_i64,
+    cstr, define_global_i64_array, global_addr, load_i8, load_i32, load_i64,
     logical_shift_left_i64, logical_shift_right_i64, memcpy, memset,
-    null, open_readonly, ptr_add, ptr_is_null, stack_alloc, store_i8, store_i64,
+    null, open_readonly, ptr_add, ptr_is_null, ptr_to_int, seek_file,
+    stack_alloc, store_i8, store_i64, uname,
 )
 
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
@@ -528,3 +529,180 @@ def py_md5_state_digest(state_object):
     digest = stack_alloc(16)
     _md5_final(context, digest)
     return py_bytes_new(digest, 16)
+
+
+# Experimental application seal: unkeyed integrity correlation with an
+# independently issued private copy, NOT executable authentication. Scope is
+# deliberately the owned x86-64 Linux static ET_EXEC, before warmup/carriers.
+def _exp2_seal_hex(byte: int) -> int:
+    if 48 <= byte and byte <= 57:
+        return byte - 48
+    if 97 <= byte and byte <= 102:
+        return byte - 87
+    return -1
+
+
+def _exp2_seal_expected(marker, digest) -> int:
+    # Prefix=31, 64 lowercase hex bytes, suffix ":END", then NUL.
+    i: int = 0
+    nonzero: int = 0
+    while i < 32:
+        high: int = _exp2_seal_hex(load_i8(marker, 31 + i * 2) & 255)
+        low: int = _exp2_seal_hex(load_i8(marker, 32 + i * 2) & 255)
+        if high < 0 or low < 0:
+            return 0
+        value: int = high * 16 + low
+        store_i8(digest, i, value)
+        nonzero = nonzero | value
+        i += 1
+    return 1 if nonzero != 0 else 0
+
+
+def _exp2_seal_read(fd: int, buffer, count: int) -> int:
+    attempts: int = 0
+    while attempts < 8:
+        n: int = pcc_platform_read(fd, buffer, count)
+        if n != -4:  # Linux EINTR
+            return n
+        attempts += 1
+    return -1
+
+
+def _exp2_seal_read_exact(fd: int, buffer, count: int) -> int:
+    done: int = 0
+    while done < count:
+        n: int = _exp2_seal_read(fd, ptr_add(buffer, done), count - done)
+        if n <= 0 or n > count - done:
+            return 0
+        done += n
+    return 1
+
+
+def _exp2_seal_marker_offset(fd: int, size: int, address: int) -> int:
+    ph = stack_alloc(64)
+    if _exp2_seal_read_exact(fd, ph, 64) != 1:
+        return -1
+    if (load_i32(ph, 0) != 0x464c457f or load_i8(ph, 4) != 2
+            or load_i8(ph, 5) != 1 or load_i8(ph, 6) != 1
+            or load_i32(ph, 16) != 0x003e0002  # ET_EXEC, EM_X86_64
+            or load_i32(ph, 20) != 1 or load_i32(ph, 52) != 0x00380040):
+        return -1
+    phoff: int = load_i64(ph, 32)
+    phnum: int = (load_i8(ph, 56) & 255) | ((load_i8(ph, 57) & 255) * 256)
+    entry: int = load_i64(ph, 24)
+    if (phnum < 1 or phnum > 64 or phoff < 64 or phoff > size - phnum * 56
+            or entry <= 0 or address <= 0 or address > 140737488355228
+            or seek_file(fd, phoff, 0) != phoff):
+        return -1
+    out: int = -1
+    exec_entry: int = 0
+    i: int = 0
+    while i < phnum:
+        if _exp2_seal_read_exact(fd, ph, 56) != 1:
+            return -1
+        kind: int = load_i32(ph, 0)
+        flags: int = load_i32(ph, 4)
+        # No interpreter, dynamic section, or writable+execute segment, even
+        # a GNU stack header. Stage1's static owned image uses RX and RW LOADs.
+        if kind == 2 or kind == 3 or (flags & 3) == 3:
+            return -1
+        if kind == 1:  # PT_LOAD
+            offset: int = load_i64(ph, 8)
+            va: int = load_i64(ph, 16)
+            file_bytes: int = load_i64(ph, 32)
+            mem_bytes: int = load_i64(ph, 40)
+            if (offset < 0 or offset > size or file_bytes < 0 or file_bytes > size - offset
+                    or va <= 0 or va >= 140737488355328 or mem_bytes < file_bytes
+                    or mem_bytes > 140737488355328 - va or (va & 4095) != (offset & 4095)):
+                return -1
+            if (flags & 1) != 0 and entry >= va and entry - va < file_bytes:
+                exec_entry = 1
+            # Reject even another partial mapping of a marker page. Page
+            # sharing with an overlapping writable LOAD cannot count as RO.
+            if (mem_bytes > 0 and (va & -4096) <= ((address + 99) & -4096)
+                    and ((va + mem_bytes - 1) & -4096) >= (address & -4096)):
+                delta: int = address - va
+                if (out >= 0 or (flags & 6) != 4 or delta < 0 or delta > file_bytes - 100):
+                    return -1
+                out = offset + delta
+        i += 1
+    return out if exec_entry == 1 else -1
+
+
+def _exp2_seal_digest(fd: int, size: int, marked_at: int, marker, expected) -> int:
+    context = stack_alloc(144)
+    buffer = stack_alloc(32768)
+    _sha256_init(context)
+    pos: int = 0
+    slot: int = marked_at + 31
+    while pos < size:
+        ask: int = 32768
+        if size - pos < ask:
+            ask = size - pos
+        count: int = _exp2_seal_read(fd, buffer, ask)
+        if count <= 0 or count > ask:
+            return 0
+        if pos < marked_at + 100 and pos + count > marked_at:
+            # Compare the saved literal with the same descriptor bytes we
+            # hash, BEFORE normalization (including suffix and NUL).
+            first: int = marked_at - pos
+            if first < 0:
+                first = 0
+            end: int = marked_at + 100 - pos
+            if end > count:
+                end = count
+            i: int = first
+            while i < end:
+                if load_i8(buffer, i) != load_i8(marker, pos + i - marked_at):
+                    return 0
+                i += 1
+            zfirst: int = slot - pos
+            if zfirst < 0:
+                zfirst = 0
+            zend: int = slot + 64 - pos
+            if zend > count:
+                zend = count
+            if zfirst < zend:
+                memset(ptr_add(buffer, zfirst), 48, zend - zfirst)
+        _sha256_update(context, buffer, count)
+        pos += count
+    if _exp2_seal_read(fd, buffer, 1) != 0:
+        return 0
+    digest = stack_alloc(32)
+    _sha256_final(context, digest)
+    differences: int = 0
+    index: int = 0
+    while index < 32:
+        differences = differences | (load_i8(digest, index) ^ load_i8(expected, index))
+        index += 1
+    return 1 if differences == 0 else 0
+
+
+def _exp2_seal_check_fd(fd: int, marker, expected) -> int:
+    size: int = seek_file(fd, 0, 2)  # SEEK_END, one bounded descriptor
+    if size < 64 or size > 67108864 or seek_file(fd, 0, 0) != 0:
+        return 0
+    offset: int = _exp2_seal_marker_offset(fd, size, ptr_to_int(marker))
+    if offset < 0 or seek_file(fd, 0, 0) != 0:
+        return 0
+    return _exp2_seal_digest(fd, size, offset, marker, expected)
+
+
+@c_abi_export("pcc_exp2_own_image_matches_seal")
+def pcc_exp2_own_image_matches_seal() -> int:
+    """Check exactly one compiled marker; no disk access for an unsealed image."""
+    marker = cstr("PCC_EXP2_DIAGNOSTIC_HANDLER_V1:0000000000000000000000000000000000000000000000000000000000000000:END")
+    expected = stack_alloc(32)
+    if _exp2_seal_expected(marker, expected) == 0:
+        return 0
+    system = stack_alloc(1536)
+    if (uname(system) != 0 or load_i32(system, 0) != 0x756e694c
+            or load_i8(system, 4) != 120 or load_i8(system, 5) != 0):  # "Linux\0"
+        return 0
+    fd: int = open_readonly(cstr("/proc/self/exe"))
+    if fd < 0:
+        return 0
+    accepted: int = _exp2_seal_check_fd(fd, marker, expected)
+    if pcc_platform_close(fd) != 0:
+        return 0
+    return accepted

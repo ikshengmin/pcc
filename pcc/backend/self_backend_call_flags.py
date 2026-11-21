@@ -27,6 +27,7 @@ _FRAME_LEAVE_CALLEES = frozenset((
     "pcc_gc_frame_leave_mapped", "pcc_gc_frame_leave_lifo_mapped",
     "pcc_gc_frame_leave_local", "pcc_gc_frame_leave_lifo_local",
     "pcc_gc_frame_leave_local_mapped", "pcc_gc_frame_leave_lifo_local_mapped",
+    "pcc_gc_frame_leave_lifo_exp2_take",
 ))
 CALL_FLAG_STACKMAP_SKIP = CALL_FLAG_FRAME_PROTOCOL | CALL_FLAG_LLVM_INTRINSIC
 
