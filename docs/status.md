@@ -166,10 +166,15 @@ in the relevant section or issue and removes the entry.
 
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
-   [#5](https://github.com/ikshengmin/pcc/issues/5),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; next: revalidate #5 with
-   the GC1/GC2 count-free sweep cases and the public CPython comparison.
+   reproduction and acceptance. Platform: any; Next: #7, isolate the
+   ordinary same-module mixed integer return (fresh box versus alias)
+   in a direct call, measuring owner balance in addition to Python identity.
+   [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
+   mode/backend cases and the public cyclic-list check against CPython on
+   Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
+   GC1 and GC2 each admitted and retired 777 actual target lists. Mac and
+   pcc1 were not executed.
    Keep #4 open as intermittent; the maintainer asked not to repeat its
    reproduction. [#3](https://github.com/ikshengmin/pcc/issues/3): native
    dynamic-call cleanup now reloads the exception from its restored TLS
@@ -188,7 +193,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #5 count-free cleared-list sweep revalidation: Codex, Linux x86-64, 2026-11-21T17:43:15Z, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
