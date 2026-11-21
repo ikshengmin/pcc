@@ -49,7 +49,10 @@ succeeds), carry it under this file's rules until it is validated and pushed
 or blocked with its reason recorded, rewrite the item's "Next", release the
 claim, report and stop. Skip units this host cannot execute or that wait on
 the maintainer, and name them. Each concurrent agent works in its own
-worktree or clone. Maintainer decision of 2026-11-22: "推进" authorizes the
+worktree or clone. A continuous agent, including one running around the
+clock, repeats rounds one at a time under the work order's renewal,
+circuit-breaker and waiting-list rules; questions for the maintainer go to
+that waiting list, never into an idle wait. Maintainer decision of 2026-11-22: "推进" authorizes the
 claim, result and release commits and their push to `shenming/master` under
 the collaboration rule below. Full-suite runs, bootstrap runs and deletions
 still need the maintainer's explicit OK.

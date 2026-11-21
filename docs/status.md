@@ -48,15 +48,52 @@ under each item and through Git alone.
    otherwise keep both lines.
 4. Finish in one commit: the result, the item's new "Next", and the removal of
    your claim line (back to `- none` when it was the last one).
-5. A claim with no pushed progress for four hours may be taken over: replace
-   its line and write "taken over from <previous claim>" in the commit
-   message. Work the previous agent did not push cannot be recovered from
-   another host.
+5. Renew a claim at least every two hours, by pushing progress or by updating
+   only the time on its claim line. A claim with no pushed progress or renewal
+   for four hours may be taken over: replace its line and write "taken over
+   from <previous claim>" in the commit message. Work the previous agent did
+   not push cannot be recovered from another host. Before pushing any result,
+   fetch and check that your claim line still stands; if it was taken over,
+   push nothing for that unit and report.
 6. On one machine every agent works in its own worktree or clone, never in
    another agent's checkout. Heavy builds and performance runs still queue on
    `build/.pcc-performance.lock`.
 7. An agent that cannot push to `shenming/master` claims nothing and takes no
    unit.
+8. An agent holds at most one active claim. After a round it fetches again and
+   chooses again by these rules; it never reserves its next unit.
+9. Circuit breaker: when the same unit ends blocked or fails validation in two
+   consecutive rounds, move it to "Waiting on maintainer" with the reason and
+   do not retry it. An agent whose last three rounds all ended blocked stops
+   and waits for the maintainer.
+10. Anything that needs the maintainer goes to "Waiting on maintainer" below:
+    the unit, the question, the options and the agent's recommendation,
+    labeled as such. Then choose another unit. Do not wait idle on it.
+11. Resources: when `build/.pcc-performance.lock` is held, take a unit that
+    does not need it rather than queueing for it. Delete your own run outputs
+    at the end of each round, and keep this repository's memory and time
+    guards.
+12. Pacing: an agent runs one round at a time. A continuous agent, including
+    one running around the clock, starts its next round only after the
+    previous one ended, and reads this work order again each time.
+
+**Waiting on maintainer.** Questions agents could not settle. The maintainer
+answers here or in chat; the agent that next takes the unit records the answer
+in the relevant section or issue and removes the entry.
+
+- Whether the operating system's Metal shader compiler is an accepted platform
+  boundary under the pcc1 ownership contract (item 5; open point in the
+  [local-model architecture](design/pcc-local-model-architecture.md)). The
+  owned device runtime already relies on it.
+- Whether to keep a cheap self-host non-regression check before item 7: a
+  current pcc1 can still be produced, and Stage1 time does not jump (for
+  example linux-aarch64 Stage1 from 2,346 s to the 7,200 s timeout since
+  `1f2b1660c`). Agent's recommendation of 2026-11-22: keep it, without
+  requiring Stage2 or Stage3 before item 7.
+- Whether to schedule the existing failure of
+  `tests/test_no_skip_doctrine.py::test_no_executed_skip_mechanism_anywhere`,
+  which reports `unittest.SkipTest` in
+  `scripts/cpython_conformance/support/__init__.py`.
 
 1. **GC correctness.** Open issues
    [#3](https://github.com/ikshengmin/pcc/issues/3),
