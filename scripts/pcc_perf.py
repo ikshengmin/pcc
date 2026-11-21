@@ -20,6 +20,8 @@
                         collector or arm, the functions that differ
     locks NAME          which callers wait for the graph lock
     layout A [B]        cache-line audit (scripts/pcc_hot_layout.py)
+    pause prepare      make an opt-in tracing GC source overlay
+    pause report       verify exclusive GC phase counters from a native log
 
 Arms, the object cache and the ledger live outside the repository, under
 PCC_PERF_HOME (default ~/.cache/pcc/perf). An arm is a sealed copy of the
@@ -1062,6 +1064,14 @@ def main(argv: list[str] | None = None) -> int:
     layout.add_argument("a")
     layout.add_argument("b", nargs="?")
 
+    pause = commands.add_parser("pause", help="diagnose tracing GC collection windows")
+    pause_commands = pause.add_subparsers(dest="pause_command", required=True)
+    prepare = pause_commands.add_parser("prepare", help="write an isolated diagnostic source overlay")
+    prepare.add_argument("checkout", type=Path)
+    prepare.add_argument("new_directory", type=Path)
+    report = pause_commands.add_parser("report", help="verify one quiescent native snapshot")
+    report.add_argument("file", type=Path)
+
     args = parser.parse_args(argv)
     if args.command == "arm":
         sealed = seal(args.name, tuple(args.with_paths))
@@ -1142,6 +1152,24 @@ def main(argv: list[str] | None = None) -> int:
         if args.b:
             argv_layout += ["--diff", str(binary_of(args.b))]
         return pcc_hot_layout.main(argv_layout)
+    if args.command == "pause":
+        sys.path.insert(0, str(REPO_ROOT))
+        if args.pause_command == "prepare":
+            from pcc.diagnostics.gc_pause_probe import make_overlay
+
+            try:
+                make_overlay(args.checkout, args.new_directory)
+            except (OSError, ValueError) as exc:
+                prepare.error(f"cannot prepare GC phase diagnostic: {exc}")
+        else:
+            from pcc.diagnostics.gc_pause_report import read_measurement
+
+            try:
+                measurement = read_measurement(args.file)
+            except (OSError, ValueError) as exc:
+                report.error(f"{args.file}: {exc}")
+            print(json.dumps(measurement, indent=2))
+        return 0
     return 2
 
 

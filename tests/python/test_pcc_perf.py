@@ -31,6 +31,34 @@ PERF = _load()
 WAIT = PERF.LOCK_WAIT
 
 
+def test_pause_subcommand_reports_one_quiescent_snapshot(tmp_path):
+    snapshot = tmp_path / "native.json"
+    snapshot.write_text(json.dumps({
+        "gc": {"119": 1, "120": 3, "121": 3},
+        "pause_vector": [1, 3, 3, 0, 3] + [0] * 13 + [3] + [0] * 13,
+    }))
+    argv = [sys.executable, "-I", str(ROOT / "scripts" / "pcc_perf.py"),
+            "pause", "report", str(snapshot)]
+    result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
+    assert json.loads(result.stdout)["longest_window_us"]["runtime_other"] == 3
+    snapshot.write_text("gc-pause-stw 1 3 3\n")
+    result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 2
+    assert "public counters alone are insufficient" in result.stderr
+    assert not result.stdout
+
+
+def test_pause_prepare_dispatches_to_the_overlay_builder(tmp_path, monkeypatch):
+    from pcc.diagnostics import gc_pause_probe
+
+    calls = []
+    monkeypatch.setattr(gc_pause_probe, "make_overlay", lambda *args: calls.append(args))
+    checkout, out = tmp_path / "source", tmp_path / "diagnostic"
+    assert PERF.main(["pause", "prepare", str(checkout), str(out)]) == 0
+    assert calls == [(checkout, out)]
+
+
 def _run(qps, stw=0.0, waits=0, wait_ms=0.0, cpu=0.0):
     return {"qps": qps, "requests": 10000, "stw_ms": stw, "sweep_ms": 0.0,
             "lock_waits": waits, "lock_wait_ms": wait_ms, "allocations": 0,

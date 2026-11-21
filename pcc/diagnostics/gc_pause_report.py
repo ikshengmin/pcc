@@ -1,13 +1,12 @@
 """Verify the exclusive-phase snapshot of a diagnostic collection-window build.
 
-Run `python -m pcc.diagnostics.gc_pause_report FILE` on either the native
+Run `python scripts/pcc_perf.py pause report FILE` on either the native
 handler's JSON or the gateway's line-oriented shutdown output. Sample once
 after workers are quiescent. Ordinary runtime counters 119--121 alone carry
 no phase information and cannot be converted into a phase report.
 """
 from __future__ import annotations
 
-import argparse
 import json
 from collections.abc import Iterable, Sequence
 from pathlib import Path
@@ -57,11 +56,11 @@ def parse_native_counters(lines: Iterable[str]) -> tuple[list[int], list[int]]:
         words = line.split()
         if not words:
             continue
-        if words[0] in ("gc-pause-stw", "issue4-stw"):
+        if words[0] == "gc-pause-stw":
             if counters is not None or len(words) != 4:
                 raise ValueError("malformed or duplicate public counter row")
             counters = [int(word) for word in words[1:]]
-        elif words[0] in ("gc-pause-slot", "pause-slot"):
+        elif words[0] == "gc-pause-slot":
             if len(words) != 3:
                 raise ValueError("malformed phase slot row")
             index, value = int(words[1]), int(words[2])
@@ -85,18 +84,3 @@ def read_measurement(path: Path) -> dict:
     else:
         counters, vector = parse_native_counters(text.splitlines())
     return phase_report(counters, vector)
-
-
-def main() -> None:
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("file", type=Path)
-    args = parser.parse_args()
-    try:
-        report = read_measurement(args.file)
-    except (OSError, ValueError) as exc:
-        parser.exit(2, f"{args.file}: {exc}\n")
-    print(json.dumps(report, indent=2))
-
-
-if __name__ == "__main__":
-    main()

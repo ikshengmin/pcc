@@ -83,8 +83,16 @@ def test_reads_native_json_or_diagnostic_stream(tmp_path):
     j = tmp_path / "native.json"
     j.write_text(json.dumps({"gc": dict(zip(("119","120","121"), COUNTERS)), "pause_vector": NATIVE}))
     t = tmp_path / "server.out"
-    t.write_text(dump().replace("gc-pause-stw", "issue4-stw").replace("gc-pause-slot", "pause-slot"))
+    t.write_text(dump())
     assert read_measurement(j) == read_measurement(t)
+
+
+@pytest.mark.parametrize(("label", "one_off"), [
+    ("gc-pause-stw", "issue4-stw"), ("gc-pause-slot", "pause-slot"),
+])
+def test_no_one_off_native_log_labels(label, one_off):
+    with pytest.raises(ValueError, match="incomplete phase snapshot"):
+        parse_native_counters(dump().replace(label, one_off).splitlines())
 
 
 @pytest.mark.parametrize(("count", "total", "maximum"), [(0, 9, 0), (2, 5, 5), (2, 4, 1)])

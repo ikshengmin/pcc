@@ -1,6 +1,6 @@
 """Prepare a separate tracing-GC runtime build with exclusive phase counters.
 
-python -m pcc.diagnostics.gc_pause_probe CHECKOUT NEW_DIRECTORY
+python scripts/pcc_perf.py pause prepare CHECKOUT NEW_DIRECTORY
 
 The input checkout, its ordinary compiler/runtime and caches are not modified.
 Build the new archive using the copy's pcc package and point a *diagnostic*
@@ -9,7 +9,6 @@ together after workers stop. See docs/developer-reference.md.
 """
 from __future__ import annotations
 
-import argparse
 import ast
 import shutil
 from pathlib import Path
@@ -233,18 +232,3 @@ def make_overlay(root: Path, output: Path) -> None:
         shutil.copytree(root / directory, output / directory, ignore=ignore)
     for path, code in changed.items():
         (output / path).write_text(code)
-
-
-def main():
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("checkout", type=Path)
-    parser.add_argument("new_directory", type=Path)
-    args = parser.parse_args()
-    try:
-        make_overlay(args.checkout, args.new_directory)
-    except (ValueError, OSError) as exc:
-        parser.exit(2, f"cannot prepare GC phase diagnostic: {exc}\n")
-
-
-if __name__ == "__main__":
-    main()

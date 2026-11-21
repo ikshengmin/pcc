@@ -168,7 +168,7 @@ From the checkout with `uv` configured, under the usual process-tree guards:
 repo=$PWD
 py=$(uv run python -c 'import sys; print(sys.executable)')
 work=$(mktemp -d)
-"$py" -m pcc.diagnostics.gc_pause_probe "$repo" "$work/source"
+"$py" scripts/pcc_perf.py pause prepare "$repo" "$work/source"
 (
   cd "$work/source" || exit
   export PYTHONPATH=$PWD PCC_SOURCE_ROOT=$PWD PCC_REPO_ROOT=$PWD
@@ -179,7 +179,7 @@ work=$(mktemp -d)
   "$py" -m pcc "$repo/benchmarks/python/gc_phase_sample.py" -o "$work/sample"
   PCC_GC_BACKEND=3 "$work/sample" > "$work/counters.txt"
 )
-"$py" -m pcc.diagnostics.gc_pause_report "$work/counters.txt"
+"$py" scripts/pcc_perf.py pause report "$work/counters.txt"
 ```
 
 For an application replace the sample with the same workload and add just its
