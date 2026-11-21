@@ -13,8 +13,12 @@ from pathlib import Path
 
 import pytest
 
+from tests.python.owned_regression_support import explicit_owned_runtime
+from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
+
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_virtual_thread_runtime.py"
+ROOT_OPERATIONS = SOURCE.with_name("py_obj.py")
 VTHREAD_TYPE = 113
 STATE = 32
 RUN_MARK = 40
@@ -60,6 +64,7 @@ class Model:
             "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_store_root": lambda slot, value: self.store(slot, 0, value),
             "pcc_gc_load_ptr": lambda owner, slot: self.load(slot, 0),
+            "pcc_gc_claim_detached_ready_root": self.claim_stock_root,
             "_ready_release": self.release,
             "_join_release": self.release,
             "free": self.freed.append,
@@ -131,6 +136,12 @@ class Model:
         assert node not in self.released, "scheduler root retired twice"
         self.released.append(node)
 
+    def claim_stock_root(self, node):
+        value = self.load(node, 0)
+        if value is not None:
+            self.retain(value, 1)
+        return value
+
     @staticmethod
     def retain(value, delta):
         value.references += delta
@@ -166,6 +177,119 @@ class Model:
 
     def finish(self, thread):
         return self.namespace["_step_finished"](thread)
+
+
+@pytest.mark.parametrize("move", (False, True))
+@pytest.mark.parametrize("runnable", (False, True))
+def test_detached_sole_scheduler_owner_transfers_or_drops_once(move, runnable):
+    model = Model()
+    thread = model.thread(state=1 if runnable else 4, mark=1)
+    thread.references = 1  # Only the queue roots this object.
+    node = model.node(thread)
+    model.count.fields[0] = 1
+    operations = []
+
+    def adjust(obj, amount):
+        assert obj.alive
+        model.retain(obj, amount)
+        operations.append(amount)
+        if obj.references == 0:
+            obj.alive = False
+
+    def release(slot):
+        value = slot.fields[0]
+        slot.fields[0] = None
+        if value is not None:
+            adjust(value, -1)
+        model.release(slot)
+
+    ns = model.namespace
+    ns["_gc0_owner_fast_path"] = lambda: move
+    ns["py_incref"] = lambda obj: adjust(obj, 1)
+    ns["py_decref"] = lambda obj: adjust(obj, -1)
+    ns["_ready_release"] = release
+    fn, = (
+        n for n in ast.parse(ROOT_OPERATIONS.read_text()).body
+        if isinstance(n, ast.FunctionDef) and n.name == "pcc_gc_claim_detached_ready_root"
+    )
+    fn.decorator_list = []
+    exec(compile(ast.Module([fn], type_ignores=[]), str(ROOT_OPERATIONS), "exec"), ns)
+    claimed = ns["_ready_node_take"](node, 1)
+    assert claimed is (thread if runnable else None)
+    assert node.fields[0] is None and model.released == [node]
+    if runnable:
+        assert thread.alive and thread.references == 1
+        adjust(thread, -1)
+    assert not thread.alive and thread.references == 0
+    assert operations == ([-1] if move else [1, -1, -1])
+
+
+@pytest.mark.integration
+def test_detached_sole_ready_owner_owned_native(tmp_path, explicit_owned_runtime):
+    import subprocess
+    from unittest.mock import patch
+
+    from pcc.driver.project import TranslationUnit
+    from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
+    from pcc.frontends.python.pipeline_targets import host_target_triple
+
+    code = CACHED_POOL_ROOT_PROBE + r'''
+    #include <stdio.h>
+    extern int64_t pcc_refcount_load(int64_t *);
+
+    int main(int argc, char **argv) {
+        if (argc != 2) return 10;
+        int64_t gc = argv[1][0] - '0';
+        PyObject *vt = py_virtual_thread_new(py_None);
+        if (vt == NULL || py_virtual_thread_start(vt) != 0 || pcc_gc_backend() != gc)
+            return 11;
+        py_decref(vt);
+        vt = NULL;
+        pcc_gc_collect(0);
+        if (py_virtual_thread_ready_count() != 1 || pcc_gc_scheduler_root_count() != 1)
+            return 12;
+        PyObject *ready = py_virtual_thread_poll_ready();
+        if (ready == NULL || py_virtual_thread_state(ready) != 2 ||
+            py_virtual_thread_ready_count() != 0 || cached_pool_roots() != 1)
+            return 13;
+        if (gc == 0 && pcc_refcount_load((int64_t *)ready) != 1) return 14;
+        if (py_virtual_thread_complete(ready, py_None) != 0) return 15;
+        if (gc == 0) {
+            int64_t watch[3];
+            pcc_gc_free_watch_begin(watch, ready);
+            py_decref(ready);
+            if (pcc_gc_free_watch_end(watch) != 1) return 16;
+        } else {
+            py_decref(ready);
+        }
+        if (cached_pool_roots() != 1) return 17;
+        puts("DETACHED_SOLE_OWNER_OK");
+        return 0;
+    }
+    '''
+    source = tmp_path / "sole_context.c"
+    source.write_text(code)
+    binary = tmp_path / "sole_context"
+    repo = SOURCE.parents[3]
+    evaluator = CEvaluator(backend="self", target_triple=host_target_triple())
+    with patch("subprocess.Popen", side_effect=AssertionError("external compiler")):
+        units = evaluator.compile_translation_units(
+            [TranslationUnit(source.name, str(source), code)],
+            use_system_cpp=False,
+            use_compile_cache=False,
+            include_dirs=[
+                str(repo / "pcc/runtime/include"), str(repo / "utils/fake_libc_include"),
+            ],
+        )
+        evaluator.emit_executable(units, str(binary), link_args=[str(explicit_owned_runtime)])
+    for collector in range(5):
+        result = subprocess.run(
+            [str(binary), str(collector)], capture_output=True, text=True, timeout=10,
+            env={"PCC_GC_BACKEND": str(collector), "PATH": "/nonexistent"},
+        )
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "DETACHED_SOLE_OWNER_OK\n", "",
+        ), (collector, result.stdout, result.stderr)
 
 
 @pytest.mark.parametrize("entrypoint", ["_enqueue", "_publish_ready_node"])

@@ -168,6 +168,7 @@ pcc_gc_free_object_memory = extern(
     "pcc_gc_free_object_memory", (c_ptr,), c_void
 )
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
+pcc_gc_claim_detached_ready_root = extern("pcc_gc_claim_detached_ready_root", (c_ptr,), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_note_relocation_read = extern(
@@ -2125,9 +2126,7 @@ def _ready_node_take(node, scheduler_locked: int):
     or published by a later waker, never left READY without a queue entry.
     """
     _counter_add(global_addr("pcc_vthread_ready_count_py"), -1)
-    thread = pcc_gc_load_ptr(null(), node)
-    if ptr_is_null(thread) == 0:
-        py_incref(thread)
+    thread = pcc_gc_claim_detached_ready_root(node)
     _ready_release(node)
     if (
         ptr_is_null(thread) == 0
