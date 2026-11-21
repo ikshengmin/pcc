@@ -56,6 +56,28 @@ leaves, and exhausted FLOAT pages at w4. A true nursery-only experiment needs
 otherwise identical builds, including the same codegen, and a nursery switch
 with proof that only the admission/reclamation mechanism changes.
 
+## Same-candidate-ELF admission ablation
+
+A tighter interleaved run used the final measured candidate ELF in both
+GC3 candidate arms. The enabled arm retains the exact, sealed native inputs.
+The disabled arm adds one inert environment entry, causing the experiment's
+exact two-entry environment check to deny admission. The driver required
+zero nursery allocations and minor cycles with admission denied, and actual
+reclamation with admission enabled. Both arms used the same source and ELF;
+stock GC3 and duplicate GC0 were run alongside. All 50 timed processes
+completed under the unchanged 90-second / 1-GiB diagnostic guard.
+
+| Workers | Paired enabled / same-ELF disabled throughput | Enabled wins | Paired enabled / stock GC3 throughput |
+|---|---:|---:|---:|
+| 1 | 87.0% | 0/5 | 87.4% |
+| 4 | 85.8% | 0/5 | 81.3% |
+
+This toggles the experimentally admitted window and its dependent codegen
+paths as a group, not the allocator alone. The enabled minor still walks
+the old heap; this does not evaluate a complete dirty-only design. The
+companion replay supplement records the driver, source-independent command
+and the 50 raw observations; the main replay kit provides both exact ELFs.
+
 ## Experiment 2: final combined prototype
 
 The last measured experiment 2 arm routed proven escaping float values
