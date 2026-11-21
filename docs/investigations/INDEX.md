@@ -423,6 +423,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - RESOLVED 2026-06-12 (all five backends) — root cause was TWO FRONTEND
 - [gc-module-global-finalizer-shutdown.md](gc-module-global-finalizer-shutdown.md) — **module-global finalizers do not run at shutdown**
   - `tests/test_gc_finalizer_corner.py::test_module_global_del_at_shutdown` is the
+- [gc-nursery-and-scheduler-linux.md](gc-nursery-and-scheduler-linux.md) — **Linux GC prototype, scheduler and pause measurements**
+  - Linux x86-64 measurements from 2026-11-21. The nursery and scheduler results
 - [gc-pcc-py-object-index-freeing-reuse.md](gc-pcc-py-object-index-freeing-reuse.md) — **pcc-Python GC object index stale freeing entry**
   - While validating the No.42 Phase 2 suspended-root hook substrate, the broader
 - [gc-scheduler-queue-root-slot-race.md](gc-scheduler-queue-root-slot-race.md) — **scheduler queue root slots must be TSan-clean**

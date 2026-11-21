@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-593 investigations.
+594 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -1140,6 +1140,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `set-and-frozenset-of-dict-lower-to-empty.md` · `pcc1-stage2-emit-throughput-and-memory.md` · `managed_names` · `build_function_stack_map_plan` · `_planned_managed_reloads` · `format_lowering`
 - [libpy_runtime_pcc.a pure-C chain crashes (implicit decls + py_decref stack-free)](../investigations/libpy-runtime-pcc-archive-pure-c-chain-crashes.md) — **Symptom 1 fixed (implicit-declaration prototypes; sensitive C gates green).**
   - `libpy_runtime_pcc.a` · `PCC_RUNTIME_CC=cc` · `py_format_float -> fwrite` · `malloc: pointer being freed was not allocated` · `build_pcc/py_print_fmt.o` · `py_format_obj_to_str`
+- [Linux GC prototype, scheduler and pause measurements](../investigations/gc-nursery-and-scheduler-linux.md)
+  - `PCC_GC_BACKEND=0` · `100 0 100 --samples 1` · `100 0 100 --samples 4` · `PCC_GC_BACKEND` · `100 0 100 --summary 1` · `100 0 100 --summary 4`
 - [Native provider closure scan reparses the export AST](../investigations/native-provider-closure-scan-reparses-export-ast.md)
   - `native-subprocess-provider-omitted-from-shallow-multi-file-closure.md` · `host execution of` · `_expand_required_native_builtin_providers` · `_stdlib_absolute_imports_in(..., include_function_bodies=True)` · `parse_and_lift(..., "<scan>")` · `subprocess.CalledProcessError`
 - [Nested-function default-cache ownership regression](../investigations/valuebox-call-return-ownership-regression.md) — **Resolved in the working tree (2026-07-16). The filename is retained because**
