@@ -18,15 +18,14 @@ Original commit history and the ELF hashes below can be verified against
 the separately delivered Git bundles and native replay kit. No experimental
 changes are merged into master.
 
-## Maintainer direction and engineering recommendation
+## Decision at the time of measurement
 
-The maintainer set the condition: “达不到就转 GC0 + 偏向引用计数。”
-The 90% gate also required no worse longest pause, peak RSS or tail latency.
-That instruction governs what to work on after a prototype misses the gate;
-it is not proof against count-free collection. Engineering recommendation:
-continue measuring the GC0 fallback, and do not call the unified architecture
-settled by this experiment. Preserve all five compatibility controls and the
-runtime selector.
+The maintainer's previous fallback instruction was “达不到就转 GC0 + 偏向引用计数。”
+The evidence below evaluates the tested prototype only, not all count-free
+designs. The maintainer superseded that fallback with
+“我还是想GC0-4全部优化的不能优化之后，再融合。” The
+[current status](../status.md#gc04-optimize-each-collector-before-unifying)
+records the active five-collector roadmap and stopping rule.
 
 ## Added stock GC3 control
 

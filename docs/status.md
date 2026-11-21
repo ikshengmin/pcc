@@ -7,21 +7,44 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
-## GC migration: current validation
+## GC0–4: optimize each collector before unifying
 
-- The Linux leaf-nursery prototype missed the maintainer's gate; it did not
-  establish what a dirty-only nursery would do. The matched stock-GC3
-  comparison, source snapshots, scheduler trials, and C512 measurements
-  are in the [investigation](investigations/gc-nursery-and-scheduler-linux.md).
-- The maintainer's fallback instruction was “达不到就转 GC0 + 偏向引用计数。”
-  The engineering recommendation is to continue the GC0 fallback work
-  without treating the prototype as evidence against all count-free designs.
-  All five backends and the runtime selector remain.
-- [#4](https://github.com/ikshengmin/pcc/issues/4) remains open/intermittent;
-  the reconstructed C512 run did not reproduce the historical timeout.
-  [#6](https://github.com/ikshengmin/pcc/issues/6) remains open: the strict
-  C-owned-handle test passes for GC0 and reproduces known early release
-  for GC1–4. No independent macOS acceptance was run here.
+Maintainer decision: “我还是想GC0-4全部优化的不能优化之后，再融合。”
+This supersedes the earlier recommendation to continue the GC0 fallback.
+Keep all five backends and the runtime selector. Do not start unification
+until all five collectors meet the stopping rule below.
+
+1. Verify and resolve the known correctness issues in
+   [#3](https://github.com/ikshengmin/pcc/issues/3),
+   [#5](https://github.com/ikshengmin/pcc/issues/5), and
+   [#6](https://github.com/ikshengmin/pcc/issues/6) before performance work
+   on GC1–4. #3 is closed upstream; independently verify its native test.
+2. GC3 mainline: use a write barrier and a remembered set of dirty regions,
+   with a bump-allocated young region and no per-object registration.
+   Minor GC scans roots, the remembered set, and the young region only.
+   Hold those inputs fixed while measuring old-heap sizes n/4n/16n;
+   demonstrate that minor cost does not grow with the whole heap. Beat
+   stock GC3 before comparing against GC0.
+3. GC4 phase two builds on GC3's generational substrate: evacuate young
+   slabs and support in-place promotion of survivors.
+4. GC1: mutator-stepped incremental collection, no background marking
+   thread; validate maximum pause. GC2: pacer and allocation assist;
+   validate four-worker scaling and pause.
+5. GC0 in parallel: spend at most one hour measuring the CPU share of
+   atomic reference counting; do not pursue biased counting if it is
+   below 10%. It is a candidate, not the chosen architecture.
+
+Each performance candidate needs five same-input A/B pairs and an unchanged
+control. Freeze a collector for optimization when three consecutive
+candidates each have measured gains below 5% or an Amdahl ceiling below 10%;
+continue correctness fixes and move to the next collector. Commit or report
+after each step, report any hour without output, move to the next ready item
+when blocked, and give the maintainer the macOS commands to run.
+
+The [Linux nursery and scheduler investigation](investigations/gc-nursery-and-scheduler-linux.md)
+covers a limited prototype, not a dirtied-regions-only nursery or a decision
+against count-free collection. [#4](https://github.com/ikshengmin/pcc/issues/4)
+remains open/intermittent; no independent macOS acceptance is claimed here.
 
 ## Single-collector migration: Linux correctness baseline (2026-11-19)
 
