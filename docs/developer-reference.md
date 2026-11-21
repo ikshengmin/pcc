@@ -154,6 +154,46 @@ archive whose source, codegen, target or configuration (`PCC_WITH_THREADS`,
 `PCC_REFCOUNT_KIND`) does not match the compile. This builds the runtime
 library only, not `pcc1`.
 
+### Diagnose a tracing collector's pause phases
+
+A normal executable has only count, sum and maximum (telemetry 119–121).
+To find which phase dominates a particular maximum, build a separate,
+instrumented tracing runtime. This affects **only the new copy**: no clock
+calls, TLS state or extra branches are added to an ordinary build. Do not use
+the diagnostic executable for a throughput A/B.
+
+From the checkout with `uv` configured, under the usual process-tree guards:
+
+```sh
+repo=$PWD
+py=$(uv run python -c 'import sys; print(sys.executable)')
+work=$(mktemp -d)
+"$py" -m pcc.diagnostics.gc_pause_probe "$repo" "$work/source"
+(
+  cd "$work/source" || exit
+  export PYTHONPATH=$PWD PCC_SOURCE_ROOT=$PWD PCC_REPO_ROOT=$PWD
+  export PCC_NO_AUTO_PCC1=1 PCC_WITH_THREADS=1 PCC_THREADS=1 PCC_REFCOUNT_KIND=atomic
+  export PCC_RUNTIME_ARCHIVE="$work/libpy_runtime_pcc_py.a"
+  export PCC_THREADED_RUNTIME_ARCHIVE="$PCC_RUNTIME_ARCHIVE"
+  "$py" -m pcc.frontends.python.owned_runtime_build --output "$PCC_RUNTIME_ARCHIVE"
+  "$py" -m pcc "$repo/benchmarks/python/gc_phase_sample.py" -o "$work/sample"
+  PCC_GC_BACKEND=3 "$work/sample" > "$work/counters.txt"
+)
+"$py" -m pcc.diagnostics.gc_pause_report "$work/counters.txt"
+```
+
+For an application replace the sample with the same workload and add just its
+final counter-reading loop. Read the 32 slots and 119–121 together **after**
+workers have stopped and automatic collection is disabled. The phase ledger is
+per-process: use a fresh process, not telemetry reset between runs. It covers
+explicit/automatic **tracing GC** windows; it does not instrument GC0. Initial
+stop rendezvous is outside 119–121. Time between a temporary world release for
+a callback and reacquisition is a separate phase, not necessarily mutator stop
+time. A phase is exclusive of nested timed phases; `mark_other` also includes
+unseparated work inside a tracing step. The report checks conservation of
+both the accumulated vector and the vector from the *same longest event*.
+A report cannot be generated retroactively from ordinary aggregate counters.
+
 ### Python library and inspection tools (in progress)
 
 Native self-hosting and five-GC correctness remain the primary qualification
