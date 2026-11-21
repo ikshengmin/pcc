@@ -87,12 +87,13 @@ _CPY_BUILTIN_FALLBACK = frozenset(
 )
 
 
-def _direct_integer_arithmetic_returns_owned(host, fd, fn) -> bool:
-    """Recognize ordinary boxed int arithmetic with a proven owned producer.
+def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
+    """Recognize only ordinary boxed int returns with a proven producer.
 
     Binary returns and unary plus go through a registered output slot in
-    return_lowering. The exact negation/invert kernels return a new owner.
-    A return annotation alone does not prove either contract.
+    return_lowering. The exact negation/invert kernels and the builtin parser
+    for a string literal return new owners. An annotation or a callable named
+    `int` is not that proof.
     """
     ty = fd.return_ty
     if (not isinstance(ty, IntType) or ty.name != "int"
@@ -104,6 +105,23 @@ def _direct_integer_arithmetic_returns_owned(host, fd, fn) -> bool:
     if not isinstance(ret, Return):
         return False
     value = ret.value
+    if isinstance(value, Call):
+        # emit_int_builtin_as_object uses py_int_from_cstr_or_raise for this
+        # actual literal. Do not assume a typed parameter is a builtin str,
+        # or apply a caller's local-name proof to a callee formal or capture.
+        return (
+            isinstance(value.ty, IntType) and value.ty.name == "int"
+            and len(value.args) == 1 and isinstance(value.args[0], StrLit)
+            and isinstance(value.args[0].ty, StrType)
+            and not fd.is_method and fd.name not in host._hoisted_qualnames
+            and not any(arg.name == "int" for arg in fd.args)
+            and host._call_is_int_builtin(value)
+            and host._native_builtin_value_for_name("int") == "builtins.int"
+            and not host._expr_looks_cpython(value.func)
+            and live_import_global_slot(host, "int") is None
+            and not getattr(host, "_native_extension_star_module_env", {})
+            and not getattr(host, "_cpy_star_module_env", {})
+        )
     if isinstance(value, BinOp):
         if value.op not in ("+", "-") or not isinstance(value.lhs, Name):
             return False
@@ -2868,7 +2886,7 @@ class CallExpressionLoweringMixin:
             call_name,
             span=self._expr_span_or_none(expr),
             root_result=(self._is_object(ast_func_def.return_ty) and not returns_cpython)
-                        or (null_signals_error and _direct_integer_arithmetic_returns_owned(self, ast_func_def, fn)),
+                        or (null_signals_error and _direct_boxed_int_returns_owned(self, ast_func_def, fn)),
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),

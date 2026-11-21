@@ -170,19 +170,23 @@ in the relevant section or issue and removes the entry.
    [#5](https://github.com/ikshengmin/pcc/issues/5),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; #3 and #4 were observed on
-   Linux x86-64, so reproduce them there first. Next: #7, prove the direct-call owner for
-   ordinary string-to-int conversion; then #3, #5 and #4. Same-module
-   direct addition/subtraction and unary +/−/~ now preserve their proven
-   return owners; unary plus keeps the original object identity. The
-   unary case was red on `4bbe9a9` with three GC0 references left, and
-   all ten guarded Linux pcc0 cases across GC0–4 passed against CPython
-   afterward. The larger ABI classification remains outside this change. #6 was revalidated on `8e67977b`: all six guarded
-   Linux pcc0 native cases passed across GC0–4 with a source-matched archive.
-   This includes two C owners, setter round trip, and GC4 moving the list
-   control but not the C-held handle. Mac and pcc1 were not executed.
+   Linux x86-64, so reproduce them there first. Next: #3, reproduce the
+   retained referent through the dynamic native call after the exception
+   is caught, then trace its pin owner; then #5. Keep #4 open as
+   intermittent; the maintainer asked not to repeat its reproduction.
+   #7 fixed the reported same-module boxed-int direct-return cases
+   (addition/subtraction, unary +/−/~, and unshadowed
+   `int(<string literal>)`). The string case went from one unreleased
+   GC0 reference to zero, with eleven Linux pcc0 native cases across
+   GC0–4 matching CPython and eight IR checks passing. Typed string
+   inputs and the broader ABI classification remain outside the fixes.
+   #6 passed six guarded Linux pcc0 native cases across GC0–4 on
+   `8e67977b`, with a source-matched archive, including the moving GC4
+   list control and the non-moving C-held handle. Mac and pcc1 were not
+   executed.
 
    Claims:
-   - #7 string-to-int direct return: Codex, Linux x86-64, 2026-11-21T17:28:56Z, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

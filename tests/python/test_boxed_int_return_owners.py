@@ -112,6 +112,22 @@ def via_unary_direct_object_local(n: int) -> None:
     assert inverse == -9223372036854775809
     assert alias is n
 
+def parse_literal() -> int:
+    return int("9223372036854775808")
+
+def parse_invalid_literal() -> int:
+    return int("not-an-integer")
+
+def via_string_direct_object_local(n: int) -> None:
+    parsed: object = parse_literal()
+    assert parsed == n and parsed is not n
+    try:
+        invalid: object = parse_invalid_literal()
+    except ValueError:
+        pass
+    else:
+        raise AssertionError("missing int conversion error")
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -143,6 +159,7 @@ CASES = {
     "fresh-direct-local": "via_direct_object_local(n)",
     "binary-direct-local": "via_binary_direct_object_local(n, 19)",
     "unary-direct-local": "via_unary_direct_object_local(n)",
+    "string-direct-local": "via_string_direct_object_local(n)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
@@ -191,6 +208,10 @@ def test_boxed_int_return_owner_native(
                 retired += 1
     assert all(last == ("free", 0) for last in terminal.values()), terminal
     assert retired >= (4 if shape in {"fresh", "finally-cancel"} else 2)
+    if shape == "string-direct-local":
+        # Exercise the independent parsed heap integer in addition to the
+        # source and replacement rather than passing with tagged values only.
+        assert retired >= 3
 
 
 
@@ -243,3 +264,43 @@ def probe(n: int, flag: bool) -> int:
     assert not re.search(r"@py_cpy_decref\(ptr " + re.escape(conversion) + r"\)", body)
     assert re.search(r"@pcc_gc_root_move\(ptr [^,]+, ptr " + re.escape(output) + r"\)",
                      body[bridge.end():])
+
+
+@pytest.mark.parametrize(
+    ("prefix", "formals", "value", "call", "proven"),
+    (
+        ("", "", '"9223372036854775808"', "parse()", True),
+        ("", "int", '"9223372036854775808"', "parse(callback)", False),
+        ("def int(text: str) -> int:\n    return 17\n", '',
+         '"9223372036854775808"', "parse()", False),
+        ("", "text: str", "text", "parse(text)", False),
+    ),
+    ids=("builtin-literal", "formal-shadow", "module-shadow", "typed-input"),
+)
+def test_direct_string_int_owner_requires_the_unshadowed_builtin_literal(
+    prefix, formals, value, call, proven,
+):
+    text = _emit(prefix + f"""\
+def parse({formals}) -> int:
+    return int({value})
+def probe(callback=None, text: str = "") -> bool:
+    result: object = {call}
+    return bool(result)
+""", strict=True)
+    caller = _body(text)
+    assert "@user_bridge_handoff_parse(" in caller
+    if proven:
+        callee = _body(text, "parse")
+        producer = re.search(
+            r"(%[^ ]+) = call ptr [^\n]*@py_int_from_cstr_or_raise\(", callee,
+        )
+        assert producer is not None
+        # The caller consumes exactly the owner returned by the parser, not
+        # the pointer of a scalar fallback that unboxed and reboxed a result.
+        assert re.search(
+            r"@pcc_gc_store_return_root\(ptr [^,]+, ptr "
+            + re.escape(producer[1]) + r"\)", callee,
+        )
+        assert "result.local.borrowed.retain" not in caller
+    else:
+        assert "result.local.borrowed.retain" in caller
