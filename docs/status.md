@@ -43,6 +43,39 @@ candidate ELF
 `602cadeb510074036421dcb0264833bc2cd8c0ee406cedd75cf62be9fcc6c139`.
 The experiment code and artifacts are not shipped in this branch.
 
+## Linux C512: new GC3 collection phase measurement (2026-11-21)
+
+A diagnostic rebuild of the same native HTTP program (PCC `076fa37e`,
+gateway `3f91c0e5`) added exclusive collection-window clocks and read
+them at shutdown. With GC3 and four carriers, the exact loopback
+zrk 3.0.0 C50 warmup and C512 measurement commands below returned
+28,182/28,182 successful main requests, zero client errors. The old
+gateway still exited 1 when draining after SIGTERM; this does not
+resolve issue #4 or measure an uninstrumented performance arm.
+
+| Exclusive phase | All 96 windows (µs) | The same longest window (µs) |
+|---|---:|---:|
+| Marking and unseparated mark work | 926,667 | 7,648 |
+| Heap lookup of pin owners | 788,435 | 7,471 |
+| Clear/reclaim | 763,070 | 77,414 |
+| Finalizer-target stage | 377,131 | 17,285 |
+| Capture/sort stack roots | 34,014 | 368 |
+| Registered roots | 26,079 | 365 |
+| Other | 2,306 | 25 |
+| **Total** | **2,917,702** | **110,576** |
+
+Both columns agree exactly with counters 119–121. Clear/reclaim
+accounted for 70% of the longest event. The clocks start after the
+initial stop rendezvous; no temporary callback-release interval
+was measured in this diagnostic. The historical 2,714,738 µs total
+and 122,783 µs max did not carry phase data and cannot be backfilled.
+
+Use the instrumented gateway ELF and `PCC_GC_BACKEND=3` with the
+load commands below; capture gateway stdout on shutdown and validate
+it with `python -m pcc.diagnostics.gc_pause_report server.stdout`.
+The verified report SHA-256 is
+`9e6265f56f9b95a875f914bef1eaf824a9e95a578e25aa318d3509215042ef38`.
+
 ## Linux C512 request timeout: intermittent, investigation paused (2026-11-21)
 
 [PCC issue #4](https://github.com/ikshengmin/pcc/issues/4) remains open and
