@@ -15,6 +15,7 @@ from pcc.frontends.python.py_ast import (
     RawPointerType,
     Arg,
     Attr,
+    BinOp,
     BoolLit,
     BoolType,
     Call,
@@ -32,6 +33,7 @@ from pcc.frontends.python.py_ast import (
     Name,
     NoneLit,
     NoneType,
+    Return,
     Slice,
     StrLit,
     StrType,
@@ -82,6 +84,33 @@ _CPY_BUILTIN_FALLBACK = frozenset(
         "locals",
     }
 )
+
+
+def _direct_integer_add_returns_owned(host, fd, fn) -> bool:
+    """Recognize a single ordinary int addition returned through an owning slot.
+
+    Keep this in step with the pointer-return BinOp route in return_lowering:
+    that route calls the runtime object producer into a registered slot.
+    A return annotation alone is not evidence of a managed owner.
+    """
+    ty = fd.return_ty
+    if (not isinstance(ty, IntType) or ty.name != "int"
+            or not isinstance(fn.function_type.return_type, ir.PointerType)
+            or fd.is_async or fd.decorators or len(fd.body) != 1
+            or not host._funcdef_uses_boxed_int_abi(fd, c_abi_sym=None)):
+        return False
+    ret = fd.body[0]
+    if not isinstance(ret, Return) or not isinstance(ret.value, BinOp):
+        return False
+    value = ret.value
+    if (value.op != "+" or not isinstance(value.lhs, Name)
+            or not isinstance(value.rhs, IntLit)):
+        return False
+    types = (value.ty, value.lhs.ty, value.rhs.ty)
+    for item in types:
+        if not isinstance(item, IntType) or item.name != "int" or item.width != 64 or not item.signed:
+            return False
+    return any(arg.name == value.lhs.ident and arg.annotation == value.lhs.ty for arg in fd.args)
 
 
 def _ascii_decimal_digit(ch: str) -> int:
@@ -2823,7 +2852,8 @@ class CallExpressionLoweringMixin:
             args_ir,
             call_name,
             span=self._expr_span_or_none(expr),
-            root_result=self._is_object(ast_func_def.return_ty) and not returns_cpython,
+            root_result=(self._is_object(ast_func_def.return_ty) and not returns_cpython)
+                        or (null_signals_error and _direct_integer_add_returns_owned(self, ast_func_def, fn)),
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),

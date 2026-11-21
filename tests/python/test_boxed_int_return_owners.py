@@ -82,6 +82,10 @@ def via_direct_operand(f, n: int) -> None:
     # This does not cover the separate scalar-to-object local assignment.
     f(fresh(n))
 
+def via_direct_object_local(n: int) -> None:
+    result: object = fresh(n)
+    assert result == 9223372036854775827
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -110,6 +114,7 @@ main(2)
 
 CASES = {
     "fresh": "via_direct_operand(inspect_fresh, n)\n    consume(fresh, n, n, False)",
+    "fresh-direct-local": "via_direct_object_local(n)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
