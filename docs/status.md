@@ -46,6 +46,31 @@ covers a limited prototype, not a dirtied-regions-only nursery or a decision
 against count-free collection. [#4](https://github.com/ikshengmin/pcc/issues/4)
 remains open/intermittent; no independent macOS acceptance is claimed here.
 
+## Self-host fixed point: the final convergence step
+
+Maintainer decision of 2026-11-22, translated: the self-host fixed point comes
+last. pcc keeps changing, round after round; the fixed point is the
+convergence that closes the work, after which the project has a stable kernel.
+It is ordered after GC correctness, the GC0–4 optimization and unification
+above, the source-language frontends, the NumPy extension chain and the value
+model. Evidence that needs a current pcc1 (GPU milestone M2 in
+[the local-model architecture](design/pcc-local-model-architecture.md), stage 3
+of the [proof checker](research/agda-class-proof-checker-exploration.md)) moves
+to that step with it. Self-host stays a required outcome; this decision orders
+the work and does not change the contract.
+
+Completion bar, set by the maintainer the same day: Stage2 and Stage3 pass,
+and Stage2 wall time does not exceed Stage1, because Stage2 is the native pcc1
+compiling the same source that host pcc0 compiles under CPython in Stage1.
+Compare the two stages with the same source, worker count and cache state.
+
+State against that bar: not met. In CI run 44358778171 (Linux x86-64, below)
+Stage1 took 2,202.313 s with four workers; Stage2, with two workers, was
+stopped by the 1,800 s watchdog before linking, its process tree already 22.5%
+above the Stage1 RSS sample. The worker counts differ, so those times are not
+an equal-condition comparison. Stage2 completion blockers are tracked in
+[allstoalls/pcc#200](https://github.com/allstoalls/pcc/issues/200).
+
 ## Single-collector migration: Linux correctness baseline (2026-11-19)
 
 The destination is one collector, not five shippable modes. GC0–GC4 and the
