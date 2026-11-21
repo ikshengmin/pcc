@@ -45,6 +45,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.call_object_lowering import (
     direct_call_argument_is_gate_free,
     direct_call_argument_is_managed,
+    direct_call_returns_boxed_python_int,
     direct_call_argument_reads_stable_root,
     pin_rooted_direct_call_arguments,
 )
@@ -2823,7 +2824,9 @@ class CallExpressionLoweringMixin:
             args_ir,
             call_name,
             span=self._expr_span_or_none(expr),
-            root_result=self._is_object(ast_func_def.return_ty) and not returns_cpython,
+            root_result=(self._is_object(ast_func_def.return_ty)
+                         or direct_call_returns_boxed_python_int(self, fn, ast_func_def))
+                        and not returns_cpython,
             pinned_arg_temps=tuple(pinned_arg_temps),
             result_slot=(None if returns_cpython or synchronous_park_result
                          else output_sink),

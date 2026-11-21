@@ -53,6 +53,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.call_object_lowering import (
     direct_call_argument_is_gate_free,
     direct_call_argument_is_managed,
+    direct_call_returns_boxed_python_int,
     direct_call_argument_reads_stable_root,
     pin_rooted_direct_call_arguments,
 )
@@ -3966,10 +3967,12 @@ class UserFunctionLoweringMixin:
             if isinstance(fn.function_type.return_type, ir.VoidType)
             else self._fresh(f"{display_name}_ret")
         )
+        returns_cpython = self._user_func_returns_cpython(ast_func_def, runtime_formals, resolved_args)
         result = self._call_user(
             fn,
             args_ir,
             call_name,
+            root_result=not returns_cpython and direct_call_returns_boxed_python_int(self, fn, ast_func_def),
             pinned_arg_temps=tuple(pinned_arg_temps),
         )
         for arg_value, owned in pinned_arg_temps:
@@ -3979,11 +3982,7 @@ class UserFunctionLoweringMixin:
                     arg_value,
                     self._release_context_label("direct_call_arg"),
                 )
-        if self._user_func_returns_cpython(
-            ast_func_def,
-            runtime_formals,
-            resolved_args,
-        ):
+        if returns_cpython:
             self._mark_owned_cpy_value(result)
         return result
 

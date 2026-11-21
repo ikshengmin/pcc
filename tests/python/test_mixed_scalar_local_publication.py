@@ -267,3 +267,99 @@ def test_annotated_object_float_single_owner_native(
     ]
     assert ("free", 0) in ref_events, ref_events
     assert ("incref", 2) not in ref_events, ref_events
+
+
+ANNOTATED_INT_BOOL = """\
+def new_literal() -> bool:
+    value: object = 4611686018427387907
+    return bool(value)
+
+def literal_edges(edge: int) -> bool:
+    positive_tagged: object = 4611686018427387903
+    positive_heap: object = 4611686018427387904
+    negative_tagged: object = -4611686018427387904
+    negative_heap: object = -4611686018427387905
+    beyond_i64: object = 1180591620717411303429
+    return (positive_tagged == edge - 1 and positive_heap == edge and
+            negative_tagged == -edge and negative_heap == -edge - 1 and
+            beyond_i64 == (edge << 8) + 5)
+
+def new_int(n: int) -> int:
+    return n << 62
+
+def computed(n: int) -> bool:
+    value: object = (n << 62) + 3
+    return bool(value)
+
+def by_call(n: int) -> bool:
+    value: object = new_int(n)
+    return bool(value)
+
+def by_name(n: int) -> bool:
+    value: object = n
+    return value is n
+
+def by_identity(n: int) -> bool:
+    value: object = int(n)
+    return value is n
+
+def by_bit(n: int, bit: bool) -> bool:
+    pred: object = n > 0
+    named: object = bit
+    return pred is named
+
+def main() -> None:
+    assert new_literal()
+    assert literal_edges(new_int(1))
+    assert computed(0)
+    assert computed(1)
+    assert by_call(1)
+    source = new_int(2)
+    assert by_name(source)
+    assert by_identity(source)
+    assert float(source) == 9223372036854775808.0
+    assert by_bit(1, True)
+    assert by_bit(0, False)
+    print("INT_BOOL_OWNER_OK")
+main()
+"""
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_annotated_object_int_and_bool_ownership_native(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
+):
+    import json
+    import os
+    import subprocess
+
+    from pcc.frontends.python.codegen.freestanding_abi_constants import PY_TYPE_BOOL, PY_TYPE_INT
+
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(
+        ANNOTATED_INT_BOOL, "INT_BOOL_OWNER_OK\n", tmp_path,
+        python_program_compiler, mode, explicit_owned_runtime, capfd,
+    )
+    log = tmp_path / "int-bool-owner.jsonl"
+    result = subprocess.run(
+        [str(tmp_path / "program.out")], capture_output=True, text=True, timeout=10,
+        env={**os.environ, "PCC_GC_BACKEND": "0", "PCC_LOG": "alloc,refcount",
+             "PCC_LOG_FORMAT": "json", "PCC_LOG_FILE": str(log)},
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "INT_BOOL_OWNER_OK\n", "")
+    # Big integers use the digit allocator, not pcc_gc_alloc; their traced
+    # refcount events (including terminal free) carry the integer tag.
+    terminal = {}
+    free_count = 0
+    for line in log.read_text().splitlines():
+        event = json.loads(line)
+        if (event["category"], event["event"]) == ("alloc", "alloc_object"):
+            assert event["value1"] != PY_TYPE_BOOL  # neither singleton is a fresh box
+        if event["category"] == "refcount" and event["value1"] == PY_TYPE_INT:
+            terminal[event["ptr"]] = (event["event"], event["value0"])
+            if event["event"] == "free":
+                free_count += 1
+    assert terminal, "Expected heap integers outside the tagged lane"
+    assert all(last == ("free", 0) for last in terminal.values()), terminal
+    assert free_count >= 3
