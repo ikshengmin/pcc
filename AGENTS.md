@@ -53,9 +53,11 @@ Full-suite runs, bootstrap runs and deletions still need the maintainer's
 explicit OK.
 
 This mechanism is provisional. It was set up while pcc changes every round.
-Once the self-host fixed point is reached and pcc has a stable kernel (the last
-item of the work order), the maintainer reviews this section and the work order
-again. At that point "推进" does not start new work: report that the review is
+Once the self-host fixed point meets its completion bar (Stage2 and Stage3
+pass and Stage2 wall time does not exceed Stage1; see the work order), pcc has
+a stable kernel and the maintainer reviews this section and the work order
+again. The trigger is that bar alone, not the rest of the last work-order
+item. From then on "推进" does not start new work: report that the review is
 due and wait for the maintainer.
 
 ## Project contracts

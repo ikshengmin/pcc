@@ -74,8 +74,11 @@ them against another.
    stage 3). Bootstrap runs need the maintainer's explicit OK.
 8. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
-   order are reviewed again. When item 7 is done, an agent told "推进" starts
-   no new item; it reports that the review is due and waits.
+   order are reviewed again. The trigger is the fixed point meeting its
+   completion bar (Stage2 and Stage3 pass, Stage2 wall time not above
+   Stage1), even if the pcc1-dependent claims of item 7 (CLI parity, GPU M2,
+   proof-checker stage 3) are still open. From then on an agent told "推进"
+   starts no new item; it reports that the review is due and waits.
 
 ## GC0–4: optimize each collector before unifying
 
