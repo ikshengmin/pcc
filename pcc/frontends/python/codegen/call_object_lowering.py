@@ -227,16 +227,6 @@ def direct_call_argument_is_gate_free(host, expr, target_ty) -> bool:
     return direct_call_argument_reads_stable_root(host, expr, target_ty)
 
 
-def direct_call_returns_boxed_python_int(host, fn, fd) -> bool:
-    """A native Python int object return, not a machine integer or raw ABI."""
-    return (
-        isinstance(fd.return_ty, IntType) and fd.return_ty.name == "int"
-        and isinstance(fn.function_type.return_type, ir.PointerType)
-        and fn.name not in host._manual_pointer_abi_functions
-        and host._funcdef_uses_boxed_int_abi(fd, c_abi_sym=host._func_c_abi_export_symbol(fd))
-    )
-
-
 def direct_call_argument_is_managed(host, expr, value, target_ty) -> bool:
     """The call site pins ``value``, lowered from ``expr``, and releases it
     after the call when the argument was a fresh temporary.
