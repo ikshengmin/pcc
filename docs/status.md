@@ -233,10 +233,20 @@ reopened-window fault.
 witness expired when its cyclic list was unreachable, an anchored cycle
 survived, and removing the anchor then allowed it to collect. A retained
 strong reference makes the last assertion fail. This is separate from the
-older internal cleared-list pressure test: its status 60 check is an
-admission-count threshold before the list-disappearance assertion. That
-test remains unchanged and unresolved as nonblocking
-[issue #5](https://github.com/ikshengmin/pcc/issues/5).
+internal cleared-list pressure test tracked in
+[issue #5](https://github.com/ikshengmin/pcc/issues/5). That test's status
+60 means the scalar retirement queue admitted too few LIST shells, not
+that public cycles were retained. Its admission and drain rejected ordinary
+slab records because their span field is non-null. GC1/GC2 now accept
+exact, cleared LIST records with all other ownership checks unchanged.
+In a guarded Linux x86-64 pcc0 run of
+`pytest -n 0 -m integration tests/python/test_gc_cleared_list_sweep_native.py`,
+all nine cases passed. GC1 and GC2 each admitted, retired and released
+777 LIST shells across four bounded chunks; all target addresses disappeared
+from the index. Both budget-one tracking modes verified the exact per-array
+usable-byte decrease before seal, and confirmed that only the shell was
+released by the worker and that its cell record was not freed as raw memory.
+No macOS, full-suite, bootstrap or performance result is claimed.
 
 **#20 expiration versus immediate disposal.** In the public CPython
 adapter for `vt.call`, a retained exception from inside the selected

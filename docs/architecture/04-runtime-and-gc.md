@@ -177,7 +177,11 @@ reference implementation is kept under `docs/refs_docs/`
      survive them), PASS1 clears referents (count-free: nothing released),
      PASS2 frees. Plain dead objects may be left to the collector thread
      (`pcc_gc_concurrent_sweep_slice`; `docs/gc-deferred-free.md`,
-     `docs/gc-scalar-sweep-retirement.md`).
+     `docs/gc-scalar-sweep-retirement.md`). GC1/GC2 can leave exact cleared
+     LIST shells to bounded CMS retirement. PASS2 removes tracking and
+     releases the raw items array before sealing. The shell's inactive cell
+     record retains its span and index key until the worker retires the
+     allocation; the record itself never becomes raw allocator work.
    While the world runs user code, `pcc_gc_explicit_collect_active` stays
    set: `gc.collect()`, automatic collections and GC4 steps stand aside, and
    the scheduler begins no mark unless its caller holds the stopped world.

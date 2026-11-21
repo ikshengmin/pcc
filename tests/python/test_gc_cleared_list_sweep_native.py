@@ -10,6 +10,8 @@ are not replaced. Budget-one calls prove exact target claims, tracking removal,
 unchanged RC and still-live header provenance while BUILDING. Allocator live
 usable bytes independently prove synchronous raw-array release before seal.
 Both flag-only and real materialized merged tracking representations are used.
+Slab-backed ObjectNode records stay indexed but logically dead while BUILDING
+and return to their cells, rather than the raw overflow queue, after drain.
 """
 from __future__ import annotations
 
@@ -87,7 +89,8 @@ def _run(cleared_list_binary, backend, mode):
     }
     assert fields["backend"] == backend and fields["mode"] == mode, receipt
     assert fields["status"] == fields["first_failure"] == fields["setup_status"] == fields["double_frees"] == 0, receipt
-    assert fields["tracking_flags"] == int(backend <= 2), receipt
+    # GC0 and all four default count-free backends now enter flag mode.
+    assert fields["tracking_flags"] == 1, receipt
     assert fields["tracking_view"] == 0, receipt
     assert fields["retired"] == fields["released"] == fields["admitted"], receipt
     assert fields["worker_retired"] == fields["admitted"] and fields["local"] == 0, receipt

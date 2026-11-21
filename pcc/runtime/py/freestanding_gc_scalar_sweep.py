@@ -8,11 +8,13 @@ are freed after unlocking, before PASS2 returns. BUILDING forbids consumption. N
 typed dispatcher, callback or managed allocation runs in the worker. This is not
 whole-heap concurrent sweep or a finalizer queue.
 
-One stopped-world epoch detaches its proven-dead nodes from the active object
-list, retaining their index and negative batch-token owner. Existing node storage
-holds the pending chain. No later epoch can append while that reservation is
-pending, draining or quarantined. The consumer bounds each graph-lock hold and
-raw-release tail to 256 objects / 64 KiB, then yields to the normal CMS loop.
+One stopped-world epoch removes its proven-dead nodes from the active graph
+while retaining their index and negative batch-token owner. A LIST cell record
+keeps its span binding so a collector walk can step over the inactive record.
+Existing node storage holds the pending chain. No later epoch can append while
+that reservation is pending, draining or quarantined. The consumer bounds each
+graph-lock hold and raw-release tail to 256 objects / 64 KiB, then yields to the
+normal CMS loop.
 """
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
@@ -53,7 +55,9 @@ _NODE: i64 = 8
 _USABLE: i64 = 16
 _TAG: i64 = 24
 # Detached ObjectNode layout. Claim first unlinks the original next/prev and
-# young-list links. Pin state@56 and foreign leases@80 retain their semantics.
+# young-list links. Record span@24, pin state@56 and foreign leases@80 retain
+# their semantics.
+_NODE_RECORD_SPAN: i64 = 24
 _PENDING_NEXT: i64 = 16
 _PENDING_USABLE: i64 = 40
 _PENDING_TAG: i64 = 64
@@ -206,6 +210,7 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
     flags: i64 = load_i32(obj, 12)
     tag: i64 = load_i32(obj, 8)
     excluded = _EXCLUDED
+    allow_list_record: i64 = 0
     if tag == abi_constant("object.type.gen"):
         if ((flags & abi_constant("object.gen.inline_frame_flag")) != 0
                 or ptr_is_null(load_ptr(obj, _GEN_FRAME)) == 0
@@ -221,6 +226,11 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
             pcc_py_gc_minor_graph_unlock()
             return 0
         excluded = excluded & ~_TRACKED
+        # GC1/2's ordinary LIST headers are now indexed by their cell record.
+        # The non-NULL span is not a zpage (word 48) or a foreign owner.
+        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+        if selected == 1 or selected == 2:
+            allow_list_record = 1
     elif (tag != abi_constant("object.type.int")
           and tag != abi_constant("object.type.float")
           and tag != abi_constant("object.type.str")):
@@ -230,7 +240,7 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         (flags & (_CANDIDATE | 8)) != (_CANDIDATE | 8)
         or (flags & excluded) != 0
         or pcc_gc_object_node_is_address_pinned(node, obj) != 0
-        or ptr_is_null(load_ptr(node, 24)) == 0
+        or (allow_list_record == 0 and ptr_is_null(load_ptr(node, _NODE_RECORD_SPAN)) == 0)
         or ptr_is_null(load_ptr(node, 48)) == 0
         or load_i64(node, 80) != 0
         or pcc_gc_granule_is_object_start(obj) != 1
@@ -251,7 +261,9 @@ def pcc_gc_scalar_sweep_try_enqueue(obj, node) -> i64:
         pcc_py_gc_minor_graph_unlock()
         return 0
     # PASS2 saved its traversal successor before calling us. Existing unlink
-    # updates all active-list cursors and revision before next/prev are reused.
+    # updates active-list cursors and revision before next/prev are reused.
+    # For a cell record the negative token makes it inactive without removing
+    # the index key, which the drain needs to validate exact ownership.
     pcc_gc_object_node_unlink(node)
     store_ptr(node, _PENDING_NEXT, null())
     store_i64(node, _PENDING_USABLE, usable)
@@ -355,6 +367,7 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
             return total_retired
         atomic_store_i64(global_addr("pcc_gc_scalar_sweep_state"), 0, _DRAINING, "release")
         token: i64 = load_i64(global_addr("pcc_gc_scalar_sweep_token"), 0)
+        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         tasks = global_addr("pcc_gc_scalar_sweep_tasks")
         retired: i64 = 0
         retired_bytes: i64 = 0
@@ -384,6 +397,7 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
             valid: i64 = 0
             flags: i64 = load_i32(obj, 12)
             payload_cleared: i64 = 1
+            allow_list_record: i64 = 0
             if load_i32(obj, 8) != tag:
                 payload_cleared = 0
             elif tag == abi_constant("object.type.gen"):
@@ -396,11 +410,13 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
                         or load_i64(obj, abi_constant("object.list.capacity_offset")) != 0
                         or ptr_is_null(load_ptr(obj, abi_constant("object.list.items_offset"))) == 0):
                     payload_cleared = 0
+                if selected == 1 or selected == 2:
+                    allow_list_record = 1
             if (payload_cleared != 0
                     and (flags & (_CANDIDATE | 8 | 4 | _DEALLOCATING)) == (_CANDIDATE | 8 | 4 | _DEALLOCATING)
                     and (flags & (_EXCLUDED & ~_DEALLOCATING)) == 0
                     and pcc_gc_object_node_is_address_pinned(node, obj) == 0
-                    and ptr_is_null(load_ptr(node, 24)) != 0
+                    and (allow_list_record != 0 or ptr_is_null(load_ptr(node, _NODE_RECORD_SPAN)) != 0)
                     and ptr_is_null(load_ptr(node, 48)) != 0
                     and load_i64(node, 80) == 0
                     and pcc_gc_granule_is_object_start(obj) == 1
@@ -414,6 +430,7 @@ def pcc_gc_scalar_sweep_drain(worker: i64, closing: i64, expected_token: i64) ->
                     store_i64(node, 32, 1)
                     # Already detached at claim. Unlinking again would corrupt
                     # the live list, and node_release may immediately reuse it.
+                    # Cell records return to their cell, never the raw free tail.
                     overflow_node = null()
                     if pcc_gc_object_node_release_to_pool(node) == 0:
                         overflow_node = node

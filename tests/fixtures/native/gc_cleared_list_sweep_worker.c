@@ -21,6 +21,9 @@ extern int64_t pcc_gc_cms_stop_worker(void);
 extern int64_t pcc_platform_sleep_ns(int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern void *pcc_gc_object_index_find(void *);
+extern void *pcc_allocator_object_node_record_find(void *);
+extern int64_t pcc_gc_object_node_is_record(void *);
+extern int64_t pcc_gc_object_node_is_active(void *);
 extern void *py_gc_index_find(void *);
 extern void pcc_gc_default_table_lock(void);
 extern void pcc_gc_default_table_unlock(void);
@@ -111,6 +114,9 @@ static int make_garbage(void) {
             item_bytes[i] = malloc_usable_size(original_items[i]);
             CHECK(nodes[i] && original_items[i] && item_bytes[i] > 0, 12);
             CHECK((((PyObjectHeader *)obj)->flags & TRACKED) && !py_gc_index_find(obj), 13);
+            CHECK(pcc_allocator_object_node_record_find(obj) == nodes[i]
+                  && pcc_gc_object_node_is_record(nodes[i])
+                  && pcc_gc_object_node_is_active(nodes[i]), 26);
         }
     }
     if (mode == 1) return 0;
@@ -130,6 +136,7 @@ static int make_garbage(void) {
         CHECK(node_for(obj) == nodes[i] && word(nodes[i], NODE_OWNER) == 0, 21);
         CHECK(!py_gc_index_find(obj) && (header->flags & TRACKED), 22);
         CHECK(C(3) == 0 && pcc_gc_scalar_sweep_owns(obj) == 0, 23);
+        header->flags &= ~CANDIDATE;
         rejected++;
     }
     pcc_gc_scalar_sweep_seal();
@@ -160,6 +167,9 @@ static int observe_building(void) {
         CHECK(!(((PyObjectHeader *)obj)->flags & TRACKED) && !py_gc_index_find(obj), 35);
         CHECK(word(obj, LIST_LENGTH) == 0 && word(obj, LIST_CAPACITY) == 0 && !pointer(obj, LIST_ITEMS), 36);
         CHECK(pcc_gc_granule_is_object_start(obj) == 1 && pcc_gc_scalar_sweep_owns(obj) == 1, 37);
+        CHECK(pcc_allocator_object_node_record_find(obj) == node
+              && pcc_gc_object_node_is_record(node)
+              && !pcc_gc_object_node_is_active(node), 27);
         int32_t before = py_gc_tracked_count;
         py_gc_untrack(obj);
         CHECK(py_gc_tracked_count == before && !py_gc_index_find(obj), 38);
@@ -190,6 +200,11 @@ static int controlled_sweep(void) {
     /* Controlled same-stop completed-mark verdict only. Real weakref,
      * finalizer and resurrection machinery executes inside every call. */
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
+    /* Initialize the production sweep in this stop before introducing any
+     * verdicts. Even a first sweep with no candidates can allocate runtime
+     * scratch; charge none of that to the later per-item byte checks. */
+    CHECK(pcc_gc_tracing_sweep_unreachable(1) == 0 && C(3) == 0 && C(0) == 1, 57);
+    for (int i = 0; i < BOUNDED; i++) ((PyObjectHeader *)lists[i])->flags |= CANDIDATE;
     for (int step = 0; step <= BOUNDED; step++) {
         int64_t released_before = items_released_bytes;
         int64_t live_before = pcc_allocator_live_usable_bytes();
@@ -219,8 +234,12 @@ static int controlled_sweep(void) {
     CHECK(pcc_resume_world() == 0, 52);
     pcc_gc_deferred_free_close();
     CHECK(finish_worker() == 0, 53);
+    CHECK(C(16) == 0, 55);
     for (int i = 0; i < BOUNDED; i++) {
         CHECK(!node_for(lists[i]) && !py_gc_index_find(lists[i]), 54);
+        CHECK(pcc_allocator_object_node_record_find(lists[i]) == nodes[i]
+              && !pcc_gc_object_node_is_active(nodes[i])
+              && pcc_gc_granule_is_object_start(lists[i]) != 1, 56);
     }
     return 0;
 }
