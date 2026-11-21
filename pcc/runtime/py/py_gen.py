@@ -24,6 +24,7 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.extern import extern, c_abi_export, c_int32, c_ptr, c_int64, c_void
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
     atomic_rmw_i64,
     define_global_i32,
@@ -80,6 +81,7 @@ pcc_gc_publish_initialized = extern(
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr), c_ptr)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_exp2_note_old_target = extern("pcc_exp2_note_old_target", (c_ptr, c_int64), c_int64)
 pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
 pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_gc_count_free_store_shade = extern(
@@ -324,6 +326,9 @@ def py_gen_frame_set(frame, index: int, value) -> None:
         cell = ptr_add(load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET), index * C_POINTER_SIZE)
         pcc_gc_count_free_store_shade(value)
         store_ptr(cell, 0, value)
+        # This traced heap frame persists after its native activation leaves.
+        if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+            pcc_exp2_note_old_target(value, 7)
         pcc_container_unlock(frame)
         return
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:

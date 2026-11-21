@@ -154,6 +154,8 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_exp2_process_take = extern("pcc_exp2_process_take", (c_int64,c_int64), c_ptr)
 pcc_exp2_window_active = extern("pcc_exp2_window_active", (), c_int64)
+_exp2_old_float_counter = extern("_pcc_exp2_old_float_counter", (c_int64,), c_ptr)
+pcc_exp2_note_old_target = extern("pcc_exp2_note_old_target", (c_ptr, c_int64), c_int64)
 pcc_exp2_leaf_try_kind = extern("pcc_exp2_leaf_try_kind", (c_int64,c_int64), c_ptr)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
 pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
@@ -782,7 +784,7 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         # the store, write the slot and shade the value in a cycle. Do that
         # under one no-park scope, as a root store does, without the graph
         # lock that serialized every such store with the marker.
-        _store_root_nonmoving_tracing(slot, value, backend)
+        _store_root_nonmoving_tracing(slot, value, backend, owner)
         return
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
@@ -1156,15 +1158,18 @@ def pcc_gc_store_ptr_plan_finish(plan) -> None:
     _pcc_gc_store_plan_finish(plan, 0)
 
 
-def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
+def _store_root_nonmoving_tracing(slot, value, backend: int, owner) -> None:
     # Initial seeding and the final root verdict stop the world, so a store
     # and its insertion barrier must never be split by a stop. Only
-    # intrinsics run between the store and the phase read below: a stop is
-    # admitted only at a poll, and the mark phase changes only in a stopped
-    # world, so the read answers for this store. Outside a cycle the store
-    # owes nothing; during one, the shade runs in a no-park scope that opens
-    # before anything could poll (pcc_thread_no_park_enter polls nowhere).
+    # intrinsics and the strictly no-poll private shadow observer run before
+    # the phase read below; an actual native poll can only occur later.
+    # Root callers pass NULL. In this window any managed object with pointer
+    # slots is outside the leaf-only nursery. This is an ordinary committed
+    # object field, not a request to inspect the owner or the target.
     store_ptr(slot, 0, value)
+    if (ptr_is_null(owner) == 0 and is_tagged_int(owner) == 0
+            and atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2):
+        pcc_exp2_note_old_target(value, 1)
     if (
         ptr_is_null(value) == 0
         and is_tagged_int(value) == 0
@@ -1346,7 +1351,7 @@ def pcc_gc_store_root(slot, value) -> None:
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
-        _store_root_nonmoving_tracing(slot, value, backend)
+        _store_root_nonmoving_tracing(slot, value, backend, null())
         return
     if (
         (backend == 4)
@@ -1421,7 +1426,7 @@ def pcc_gc_store_root_take(slot, value) -> None:
         and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
         and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
     ):
-        _store_root_nonmoving_tracing(slot, value, backend)
+        _store_root_nonmoving_tracing(slot, value, backend, null())
         return
     if (
         (backend == 4)
@@ -1594,7 +1599,7 @@ def pcc_gc_root_copy_lease(destination, source) -> int:
             if ptr_is_null(load_ptr(destination, 0)) != 0:
                 _store_root_nonmoving_tracing(
                     destination, load_ptr(source, 0),
-                    load_i32(global_addr("pcc_gc_backend_selected"), 0),
+                    load_i32(global_addr("pcc_gc_backend_selected"), 0), null(),
                 )
                 traced_status = 0
             pcc_thread_no_park_exit()
@@ -1729,7 +1734,7 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
         if ptr_is_null(load_ptr(destination, 0)) != 0:
             _store_root_nonmoving_tracing(
                 destination, load_ptr(source, 0),
-                load_i32(global_addr("pcc_gc_backend_selected"), 0),
+                load_i32(global_addr("pcc_gc_backend_selected"), 0), null(),
             )
             borrowed_status = 0
         pcc_thread_no_park_exit()
@@ -1846,7 +1851,7 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
                         local_valid = 0
                         local_status = -1
                 if local_valid != 0:
-                    _store_root_nonmoving_tracing(destination, local_value, local_backend)
+                    _store_root_nonmoving_tracing(destination, local_value, local_backend, null())
                     local_status = 0
             pcc_thread_no_park_exit()
             return local_status
@@ -3032,3 +3037,139 @@ def pcc_gc_release_known(o) -> None:
     store_i64(prepared, 32, new_rc)
     store_i64(prepared, 40, 1)
     _py_decref_finish(prepared)
+
+
+# BEGIN EXP2 M11 generated old-only entries (test_direct_old_float_specialization.py)
+@c_abi_export("_pcc_exp2_alloc_direct_old_float")
+def _pcc_exp2_alloc_direct_old_float(site: i64):
+    size: int = 24
+    type_tag: int = PY_TYPE_FLOAT
+    flags: int = 0
+    if size < 16:
+        return null()
+    pcc_thread_safepoint()
+    pcc_gc_note_alloc(size)
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_diagnostics_runtime_log_event_code(1, 1, size, type_tag, null())
+    # The first managed allocation fixes the collector before reading it.
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
+        pcc_gc_fix_backend()
+    backend: int = _gc_backend_fast()
+    direct_counter = null()
+    if backend == 3:
+        direct_counter = _exp2_old_float_counter(site)
+    # Private exp2: a caller-bound synchronous, no-escape scope proves its
+    # complete root cut. Never admit normal application strings by tag alone.
+    if (ptr_is_null(direct_counter) and backend == 3 and flags == 0 and
+            ((type_tag == PY_TYPE_STR and size >= 41 and size <= 128) or
+             (type_tag == PY_TYPE_FLOAT and size == 24))):
+        leaf = pcc_exp2_leaf_try_kind(size,type_tag)
+        if ptr_is_null(leaf) == 0:
+            return leaf
+        # This separate process scope is activated only by the opt-in driver
+        # after a stopped, closed-domain install; exhaustion falls back.
+        if pcc_exp2_window_active() != 0:
+            leaf = pcc_exp2_process_take(size,type_tag)
+            if ptr_is_null(leaf) == 0:
+                return leaf
+    obj = null()
+    stored_flags: int = flags
+    if backend == 4:
+        if (
+            type_tag == PY_TYPE_LIST
+            or type_tag == PY_TYPE_TUPLE
+            or type_tag == PY_TYPE_DICT
+            or type_tag == PY_TYPE_SET
+            or type_tag == PY_TYPE_PROPERTY
+            or type_tag == PY_TYPE_CLASSMETHOD
+            or type_tag == PY_TYPE_WEAKREF
+            # Every remaining tag the colored-relocation accept predicate
+            # admits (GC-P1-BACKEND4-RELOCATABLE-TAGS-LACK-FRESH-ALLOC).
+            # Constructors publish on success.
+            or type_tag == PY_TYPE_FUNC
+            or type_tag == PY_TYPE_ITER
+            or type_tag == PY_TYPE_GEN
+            or type_tag == PY_TYPE_COROUTINE
+            or type_tag == PY_TYPE_CONTINUATION
+            or type_tag == PY_TYPE_TASK
+            or type_tag == PY_TYPE_EXC
+            or type_tag == PY_TYPE_CLASS
+            or type_tag == PY_TYPE_STATICMETHOD
+            or type_tag == PY_TYPE_MEMORYVIEW
+        ):
+            stored_flags = stored_flags | 16384
+    if backend == 4:
+        # The page allocator bumps a shared active page under the graph
+        # lock, and a page object's provenance is a locked index insert:
+        # two lock round trips for every container, which put four workers
+        # below one. Under the nonmoving protocol every object comes from
+        # the allocator's per-thread object cells; relocation copies cells.
+        if (_gc_graph_leaf_tag(type_tag) == 0
+                and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
+            obj = pcc_gc_backend4_try_zpage_alloc(size, flags)
+            if ptr_is_null(obj) == 0:
+                stored_flags = stored_flags | 65536
+        else:
+            stored_flags = stored_flags & ~65536
+    from_allocator: int = 0
+    if ptr_is_null(obj) != 0:
+        from_allocator = 1
+        # Zero-filled like calloc: fresh objects are
+        # GC-visible before their constructor fills the body; visitors
+        # must see NULL slots, not malloc garbage.  Objects draw from the
+        # allocator's OBJECT slab family (ARCH-P0 S1) so their granules are
+        # registered for exact structural provenance; raw allocations keep
+        # using plain malloc and never share these slabs.
+        if (
+            backend == 4
+            and load_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0) != 0
+        ):
+            # A relocation copy never lands in a slab being evacuated.
+            obj = pcc_allocator_alloc_object_outside_evacuation(size)
+        else:
+            obj = pcc_allocator_alloc_object(size)
+        if ptr_is_null(obj) == 0:
+            memset(obj, 0, size)
+            if backend == 4:
+                stored_flags = (stored_flags & ~65536) | 262144
+    if ptr_is_null(obj):
+        return obj
+    store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
+    store_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET, type_tag)
+    store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, stored_flags)
+    # The size note runs only with PCC_DEBUG_RUNTIME (cache 1) or before
+    # its cache is filled (-1).
+    if load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) != 0:
+        pcc_debug_note_alloc_size(obj, size)
+    # Exact provenance is visible before the tracking layer can publish the
+    # object.  Backend-0 objects and graph leaves intentionally stay here.
+    # A cell the allocator just handed out publishes without the radix
+    # validation pcc_gc_pointer_register gives an arbitrary pointer; a large
+    # raw mapping (0) and a zpage object keep that path.
+    published: int = 0
+    if from_allocator != 0:
+        published = pcc_allocator_object_publish_fresh(obj)
+        if published < 0:
+            return null()
+    if published == 0:
+        if pcc_gc_pointer_register(obj) < 0:
+            return null()
+    # The tracing collectors index the new object; GC0 keeps no index.
+    # Count-free GC1/GC2 stage it in this thread's ring and the next
+    # graph-lock holder that needs the index registers the batch.
+    # An object cell registers through its record without the graph lock
+    # under GC1/GC2 (pcc_gc_register_object_cell).
+    if backend != 0:
+        if pcc_gc_register_object_cell(obj, size) == 0:
+            if pcc_gc_alloc_stage_note(obj, size) == 0:
+                pcc_gc_note_object_allocated_sized(obj, size)
+    # Tracking may rehash the object index, which is read without the lock;
+    # with one thread the replaced table can go now.
+    if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) == 0:
+        pcc_gc_reclaim_retired_index_tables_if_alone()
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_diagnostics_runtime_log_event_code(1, 2, size, type_tag, obj)
+    if not ptr_is_null(direct_counter):
+        atomic_store_i64(direct_counter, 0, atomic_load_i64(direct_counter, 0, "relaxed") + 1, "relaxed")
+    return obj
+# END EXP2 M11 generated old-only entries

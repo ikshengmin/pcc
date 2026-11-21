@@ -99,6 +99,7 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_exp2_note_old_target = extern("pcc_exp2_note_old_target", (c_ptr, c_int64), c_int64)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
@@ -1208,7 +1209,10 @@ def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
                 done = 1
             elif pcc_gc_try_init_ptr_locked(retained, ptr_add(sources, C_POINTER_SIZE)) != 0:
                 released = load_ptr(field, 0)
-                store_ptr(field, 0, load_ptr(retained, 0))
+                stored = load_ptr(retained, 0)
+                store_ptr(field, 0, stored)
+                if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+                    pcc_exp2_note_old_target(stored, 6)
                 done = 1
         elif ix == -1:
             target: int = load_i64(insert_slot, 0)
@@ -1228,6 +1232,11 @@ def _dict_set_gc0_locked(d, key, value, kind: int) -> int:
                             d, PYDICTOBJECT_ITEM_COUNT_OFFSET,
                             load_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET) + 1,
                         )
+                        # Only after both children and the index are live.
+                        # A refused value init rolls the unpublished key back.
+                        if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+                            pcc_exp2_note_old_target(load_ptr(key_field, 0), 5)
+                            pcc_exp2_note_old_target(load_ptr(value_field, 0), 6)
                         done = 2
                     else:
                         # Unpublished: take the retained key back out.

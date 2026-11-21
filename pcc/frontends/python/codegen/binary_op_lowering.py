@@ -30,6 +30,7 @@ from pcc.frontends.python.py_ast import (
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen import mapped_float_publication as mapped_float
 from pcc.frontends.python.codegen.call_object_lowering import (
     frame_operand_sources,
     restore_frame_operand_modes,
@@ -382,7 +383,26 @@ class BinaryOpLoweringMixin:
                 and self._slot_call_in_place_operand(expr.rhs)):
             return self._emit_slot_call_binary_in_place(expr, label, runtime_name)
         views = self._dict_keys_view_binop_receivers(expr)
+        scope = mapped_float.numeric_scope(self, expr, runtime_name) if views is None else None
         output = self._new_slot_call_root(label + ".result")
+        incoming = mapped_float.current_proof(self, expr) if scope is not None else None
+        # A sub result is eligible only as the actual private operand of
+        # a proven numeric consumer, with input provenance from the real
+        # direct native arm and an independently checked exact pair at use.
+        prove_result = (runtime_name == "py_obj_sub"
+                        and incoming is not None and incoming.publish
+                        and incoming.group_of(self, output) is not None
+                        and mapped_float.provider_candidate(expr.lhs)
+                        and (mapped_float.exact_float_literal(expr.rhs)
+                             or mapped_float.exact_local_source(self, scope, expr.rhs)))
+        literal_peer = scope is not None and mapped_float.exact_float_literal(expr.rhs)
+        terminal = (mapped_float.terminal_placement(self, expr)
+                    if runtime_name == "py_obj_mul_slots" and literal_peer else None)
+        placement_for_left = terminal
+        if (prove_result and incoming.placement is not None
+                and incoming.placement.subtraction is expr):
+            placement_for_left = incoming.placement
+        left_proof = None
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -398,11 +418,17 @@ class BinaryOpLoweringMixin:
                 left, right = sources[0][0], sources[1][0]
                 previous_modes = set_frame_operand_modes(self, sources)
             else:
-                left = (
-                    self._emit_dict_keys_view_set_operand(expr.lhs, label + ".left")
-                    if views is not None and views[0] is not None
-                    else self._emit_slot_call_operand(expr.lhs, label + ".left")
-                )
+                if prove_result or (literal_peer and isinstance(expr.lhs, (Call, BinOp))):
+                    left, left_proof = mapped_float.emit_operand(
+                        self, expr.lhs, label + ".left", scope, literal_peer, prove_result,
+                        placement=placement_for_left,
+                    )
+                else:
+                    left = (
+                        self._emit_dict_keys_view_set_operand(expr.lhs, label + ".left")
+                        if views is not None and views[0] is not None
+                        else self._emit_slot_call_operand(expr.lhs, label + ".left")
+                    )
                 roots.append(left)
                 staged_operands.append(left)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
@@ -417,6 +443,7 @@ class BinaryOpLoweringMixin:
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
             join = None
+            fast_end = None
             if (_SLOT_TAGGED_FAST_OPS.get(runtime_name) == expr.op
                     and self.current_function is not None
                     and all(isinstance(ty, (DynType, IntType, BoolType))
@@ -438,24 +465,49 @@ class BinaryOpLoweringMixin:
                 )
                 self.builder.store(fast_result, output)
                 self._slot_call_note_published(output)
+                fast_end = self.builder.block
                 self.builder.branch(join)
                 self.builder.position_at_end(slow)
             if runtime_name == "py_obj_mul_slots":
-                status = self.builder.call(
-                    self.runtime[runtime_name],
-                    [self._as_gc_ptr(left), self._as_gc_ptr(right), self._as_gc_ptr(output)],
-                    name=self._fresh("binary.slot.invoke"),
-                )
+                args = [self._as_gc_ptr(left), self._as_gc_ptr(right), self._as_gc_ptr(output)]
+                if (terminal is not None and left_proof is not None and left_proof.placement is terminal
+                        and left_proof.exact_sub_inputs is not None):
+                    if (not terminal.current(self) or terminal.box_slot is None
+                            or terminal.output_slot is not None
+                            or left_proof.helper_slot is not left
+                            or left_proof.group_of(self, right) is None
+                            or left_proof.group_of(self, output) is None):
+                        raise L1CodegenError("M11 final multiply lost its exact terminal owner")
+                    status = mapped_float.emit_old_multiplication(self, args, left_proof.exact_sub_inputs)
+                    terminal.output_slot = output
+                else:
+                    status = self.builder.call(
+                        self.runtime[runtime_name], args,
+                        name=self._fresh("binary.slot.invoke"),
+                    )
                 self._slot_call_note_published(output)
                 self._slot_call_check_status(status, "multiplication", expr.span)
                 self._emit_post_call_err_check(expr.span)
             else:
+                direct = (left_proof.direct_native_arm if prove_result
+                          and left_proof is not None and left_proof.provider_slot is left else None)
+                if direct is not None:
+                    if not incoming.current(self) or incoming.group_of(self, right) is None:
+                        raise L1CodegenError("M10 subtraction lost its owning input ledger")
                 self._slot_call_runtime_call(
                     runtime_name, (left, right), result_slot=output, span=expr.span,
+                    mapped_float_result=(incoming, direct) if direct is not None else None,
                 )
             if join is not None:
+                slow_end = self.builder.block
                 self.builder.branch(join)
                 self.builder.position_at_end(join)
+                if incoming is not None and incoming.exact_sub_inputs is not None:
+                    # Do not infer a FLOAT producer on the inline tagged arm.
+                    exact = self.builder.phi(_I1, name=self._fresh("exp2.place.sub.exact"))
+                    exact.add_incoming(ir.Constant(_I1, 0), fast_end)
+                    exact.add_incoming(incoming.exact_sub_inputs, slow_end)
+                    incoming.exact_sub_inputs = exact
             current = self.builder.load(output, name=self._fresh("binary.slot.result"))
             if runtime_name in ("py_obj_mod", "py_obj_floordiv"):
                 # The existing integer modulo/floor ABI leaves zero-divisor raising
@@ -467,6 +519,13 @@ class BinaryOpLoweringMixin:
             # The output and any captured expressions belong to this
             # operation. Reused frame inputs still belong to their caller.
             self._release_slot_call_roots(tuple(staged_operands))
+            if left_proof is not None and left_proof.helper_slot is not None:
+                # The emitted consumer and retirement, not just its source
+                # spelling, have stayed in the producing activation.
+                if (not left_proof.current(self)
+                        or not any(root is left_proof.helper_slot for root in staged_operands)
+                        or left_proof.group_of(self, right) is None):
+                    raise L1CodegenError("M10 FLOAT operand missed its same-activation consumer")
         finally:
             restore_frame_operand_modes(self, previous_modes)
             self._try_err_block = previous

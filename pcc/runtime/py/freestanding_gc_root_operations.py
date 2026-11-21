@@ -92,6 +92,9 @@ define_global_i64("pcc_exp2_exposure_reject_latch", 0)
 pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
+pcc_exp2_window_exposure_identity = extern(
+    "pcc_exp2_window_exposure_identity", (), c_int64
+)
 
 
 @c_abi_export("pcc_exp2_exposure_is_revoked")
@@ -658,6 +661,18 @@ def pcc_gc_borrowed_lease_acquire(slot) -> i64:
 
 @c_abi_export("pcc_gc_slot_lease_acquire")
 def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
+    return _foreign_lease_acquire_impl(slot, borrowed, 0)
+
+
+@c_abi_export("pcc_exp2_foreign_lease_acquire_site")
+def pcc_exp2_foreign_lease_acquire_site(slot, site: i64) -> i64:
+    # Exactly the original owning address lease, including the release ABI.
+    # A by-value site has no ambient scope to leak through callbacks or parks.
+    return _foreign_lease_acquire_impl(slot, 0, site)
+
+
+@c_abi_export("_pcc_exp2_foreign_lease_acquire_impl")
+def _foreign_lease_acquire_impl(slot, borrowed: i64, site: i64) -> i64:
     if ptr_is_null(slot) != 0:
         return -1
     # The existing GC3 token-zero shortcut says "no move", not "no
@@ -665,7 +680,14 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     # lease ABI; report its exact raw value before every early return.
     bits: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
     if bits != 0:
-        _pcc_exp2_exposure_dispatch(bits, load_ptr(slot, 0), 2)
+        reason: i64 = 2
+        # Only the source-owned window callback speaks the private reason
+        # extension. Other installed hooks see exactly their original reason.
+        if (site > 0 and site <= 6
+                and atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2
+                and bits == pcc_exp2_window_exposure_identity()):
+            reason = 16 + site
+        _pcc_exp2_exposure_dispatch(bits, load_ptr(slot, 0), reason)
     # Collectors 0-3 never move an object, and none can be replaced once an
     # object exists (pcc_gc_set_backend), so an address lease there guards
     # nothing: its mode reservation only fenced a collector switch. Every

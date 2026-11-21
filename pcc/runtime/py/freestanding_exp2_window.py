@@ -7,7 +7,7 @@ No request or application code is called while the world is stopped.
 from pcc import i64
 from pcc.extern import c_abi_export,c_ptr,c_int64,c_int32,c_void,extern
 from pcc.unsafe import (
-    cstr,load_i8,ptr_is_null,target_sys_platform,
+    cstr,load_i8,ptr_is_null,ptr_to_int,target_sys_platform,
     atomic_load_i32,atomic_load_i64,atomic_store_i64,atomic_cas_i64,atomic_rmw_i64,
     define_global_i64,global_addr,function_addr,stack_alloc,load_i64,store_i64,null,
 )
@@ -24,6 +24,7 @@ pcc_exp2_total_mode_leases=extern("pcc_gc_foreign_lease_count_quiescent",(),c_in
 pcc_stop_the_world=extern("pcc_stop_the_world",(),c_int64)
 pcc_resume_world=extern("pcc_resume_world",(),c_int64)
 pcc_thread_world_stop_epoch_held=extern("pcc_thread_world_stop_epoch_held",(),c_int64)
+pcc_platform_monotonic_ns=extern("pcc_platform_monotonic_ns",(),c_int64)
 pcc_exp2_exposure_is_revoked=extern("pcc_exp2_exposure_is_revoked",(),c_int64)
 pcc_exp2_install_exposure_hook=extern("pcc_exp2_install_exposure_hook",(c_ptr,),c_int64)
 pcc_exp2_process_expose=extern("pcc_exp2_process_expose",(c_ptr,c_int64),c_int64)
@@ -40,10 +41,19 @@ define_global_i64("pcc_exp2_window_state",0)
 define_global_i64("pcc_exp2_image_witness",-1)
 define_global_i64("pcc_exp2_window_first_bad_tag",0)
 define_global_i64("pcc_exp2_window_first_bad_reason",0)
+# A separate coherent first -7 record, independent of earlier refusals with
+# a different reason. Clause: 0 empty, -1 writing, positive ready (immutable).
+define_global_i64("pcc_exp2_window_first_shape_clause",0)
+define_global_i64("pcc_exp2_window_first_shape_bytes",0)
+define_global_i64("pcc_exp2_window_first_shape_flags",0)
+define_global_i64("pcc_exp2_window_first_shape_tag",0)
 define_global_i64("pcc_exp2_window_old_owners",0)
 define_global_i64("pcc_exp2_window_old_slots",0)
 define_global_i64("pcc_exp2_window_attempts",0)
 define_global_i64("pcc_exp2_window_refused",0)
+define_global_i64("pcc_exp2_window_attempt_sum_ns",0)
+define_global_i64("pcc_exp2_window_attempt_max_us",0)
+define_global_i64("pcc_exp2_window_invalid_times",0)
 
 
 @c_abi_export("pcc_exp2_window_mark_cb")
@@ -54,6 +64,12 @@ def pcc_exp2_window_mark_cb(word, context)->None:
 @c_abi_export("pcc_exp2_window_expose_cb")
 def pcc_exp2_window_expose_cb(word, reason:i64)->i64:
     return pcc_exp2_process_expose(word,reason)
+
+
+@c_abi_export("pcc_exp2_window_exposure_identity")
+def pcc_exp2_window_exposure_identity()->i64:
+    # function_addr trusts only a definition from this same translation unit.
+    return ptr_to_int(function_addr("pcc_exp2_window_expose_cb"))
 
 
 @c_abi_export("pcc_exp2_window_cstr_equal")
@@ -142,6 +158,14 @@ def pcc_exp2_window_checked_old(epoch:i64,context)->i64:
             atomic_cas_i64(global_addr("pcc_exp2_window_first_bad_tag"),0,0,tag,"acq_rel","acquire")
         if reason!=0:
             atomic_cas_i64(global_addr("pcc_exp2_window_first_bad_reason"),0,0,reason,"acq_rel","acquire")
+        if result==-7 and reason==-7:
+            clause:i64=load_i64(audit,80)
+            record=global_addr("pcc_exp2_window_first_shape_clause")
+            if clause>0 and atomic_cas_i64(record,0,0,-1,"acq_rel","acquire")==0:
+                atomic_store_i64(global_addr("pcc_exp2_window_first_shape_bytes"),0,load_i64(audit,64),"relaxed")
+                atomic_store_i64(global_addr("pcc_exp2_window_first_shape_flags"),0,load_i64(audit,72),"relaxed")
+                atomic_store_i64(global_addr("pcc_exp2_window_first_shape_tag"),0,tag,"relaxed")
+                atomic_store_i64(record,0,clause,"release")
         return 0
     return 1
 
@@ -208,14 +232,41 @@ def pcc_exp2_window_stop_minor(epoch:i64)->i64:
     if (epoch<=0 or pcc_exp2_window_active()==0 or pcc_thread_world_stop_epoch_held()!=epoch):
         return -1
     atomic_rmw_i64("add",global_addr("pcc_exp2_window_attempts"),0,1,"relaxed")
+    # Include root visits and admission checks even when they reject this
+    # minor. These clocks do not include the stop rendezvous or old major.
+    start:i64=pcc_platform_monotonic_ns()
     count:i64=pcc_exp2_process_minor_held(epoch)
+    end:i64=pcc_platform_monotonic_ns()
     if count<0:
         atomic_rmw_i64("add",global_addr("pcc_exp2_window_refused"),0,1,"relaxed")
+    if start<=0 or end<=start:
+        # pcc_platform_monotonic_ns returns zero on error. A missing, backward
+        # or unresolved sample cannot be treated as a very short GC pause.
+        atomic_rmw_i64("add",global_addr("pcc_exp2_window_invalid_times"),0,1,"relaxed")
+        return count
+    elapsed:i64=end-start
+    atomic_rmw_i64("add",global_addr("pcc_exp2_window_attempt_sum_ns"),0,elapsed,"relaxed")
+    us:i64=elapsed//1000 + (1 if elapsed%1000!=0 else 0)
+    maximum=global_addr("pcc_exp2_window_attempt_max_us")
+    previous:i64=atomic_load_i64(maximum,0,"relaxed")
+    while us>previous:
+        observed:i64=atomic_cas_i64(maximum,0,previous,us,"relaxed","relaxed")
+        if observed==previous:
+            break
+        previous=observed
     return count
 
 
 @c_abi_export("pcc_exp2_window_metric")
 def pcc_exp2_window_metric(i:i64)->i64:
+    if i==3 or i==4:
+        # The diagnostic handler reads these *after* the window closes.
+        # The underlying process-only counters still mean successful minors.
+        if atomic_load_i64(global_addr("pcc_exp2_window_invalid_times"),0,"acquire")!=0:
+            return -1
+        if i==3:
+            return atomic_load_i64(global_addr("pcc_exp2_window_attempt_sum_ns"),0,"acquire")
+        return atomic_load_i64(global_addr("pcc_exp2_window_attempt_max_us"),0,"acquire")
     if i==30:return atomic_load_i64(global_addr("pcc_exp2_window_state"),0,"acquire")
     if i==31:return atomic_load_i64(global_addr("pcc_exp2_window_first_bad_reason"),0,"acquire")
     if i==32:return atomic_load_i64(global_addr("pcc_exp2_window_first_bad_tag"),0,"acquire")
@@ -227,4 +278,13 @@ def pcc_exp2_window_metric(i:i64)->i64:
     if i==38:return pcc_exp2_exposure_is_revoked()
     if i==39:return atomic_load_i64(global_addr("pcc_exp2_image_witness"),0,"acquire")
     if i>=40 and i<=45:return pcc_exp2_old_exact_metric(i-40)
+    if i==46:return atomic_load_i64(global_addr("pcc_exp2_window_invalid_times"),0,"acquire")
+    if i>=80 and i<=83:
+        clause:i64=atomic_load_i64(global_addr("pcc_exp2_window_first_shape_clause"),0,"acquire")
+        if clause<=0:
+            return 0
+        if i==80:return clause
+        if i==81:return atomic_load_i64(global_addr("pcc_exp2_window_first_shape_bytes"),0,"relaxed")
+        if i==82:return atomic_load_i64(global_addr("pcc_exp2_window_first_shape_flags"),0,"relaxed")
+        return atomic_load_i64(global_addr("pcc_exp2_window_first_shape_tag"),0,"relaxed")
     return pcc_exp2_process_metric(i)

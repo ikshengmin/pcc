@@ -29,12 +29,14 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_FLOAT,
     PY_TYPE_INT,
     PY_TYPE_LIST,
     PY_TYPE_STR,
     PY_TYPE_TUPLE,
 )
 from pcc.unsafe import (
+    atomic_load_i64,
     cstr,
     define_global_i32,
     free,
@@ -64,6 +66,9 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
+pcc_exp2_foreign_lease_acquire_site = extern(
+    "pcc_exp2_foreign_lease_acquire_site", (c_ptr, c_int64), c_int64
+)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -87,6 +92,7 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_raise_type_named_error = extern("py_raise_type_named_error", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_obj_has_index = extern("py_obj_has_index", (c_ptr,), c_int64)
 py_obj_mul = extern("py_obj_mul", (c_ptr, c_ptr), c_ptr)
+_exp2_exact_float_mul_old = extern("_pcc_exp2_exact_float_mul_old", (c_ptr, c_ptr), c_ptr)
 py_obj_special_call_slots = extern(
     "py_obj_special_call_slots", (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
@@ -140,7 +146,11 @@ def _mul_copy(slots: c_ptr, tokens: c_ptr, index: int, source: c_ptr) -> int:
 
 def _mul_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
     slot = ptr_add(slots, index * C_POINTER_SIZE)
-    token: int = pcc_gc_foreign_lease_acquire(slot)
+    token: int = 0
+    if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+        token = pcc_exp2_foreign_lease_acquire_site(slot, 4)  # Native _mul_adopt site.
+    else:
+        token = pcc_gc_foreign_lease_acquire(slot)
     if token < 0:
         return _mul_error(7, cstr("multiplication result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
@@ -461,3 +471,115 @@ def py_obj_mul_slots(left_owner: c_ptr, right_owner: c_ptr, output_owner: c_ptr)
     py_tls_exc_swap_slot(error)
     pcc_gc_frame_leave(slots)
     return status
+
+
+# BEGIN EXP2 M11 generated old-only entries (test_direct_old_float_specialization.py)
+def _exp2_mul_body_old(slots: c_ptr, tokens: c_ptr) -> int:
+    left = ptr_add(slots, _MUL_LEFT * C_POINTER_SIZE)
+    right = ptr_add(slots, _MUL_RIGHT * C_POINTER_SIZE)
+    result = ptr_add(slots, _MUL_RESULT * C_POINTER_SIZE)
+    if ptr_is_null(load_ptr(left, 0)) != 0 or ptr_is_null(load_ptr(right, 0)) != 0:
+        return _mul_error(3, cstr("unsupported operand type(s) for *"))
+    left_tag: int = _mul_type(load_ptr(left, 0))
+    right_tag: int = _mul_type(load_ptr(right, 0))
+    if pcc_capi_is_cext_type_tag(left_tag) != 0 or pcc_capi_is_cext_type_tag(right_tag) != 0:
+        store_ptr(result, 0, py_obj_mul(load_ptr(left, 0), load_ptr(right, 0)))
+        return _mul_adopt(slots, tokens, _MUL_RESULT)
+    if (left_tag == PY_TYPE_FLOAT and right_tag == PY_TYPE_FLOAT
+            and atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2):
+        store_ptr(result, 0, _exp2_exact_float_mul_old(load_ptr(left, 0), load_ptr(right, 0)))
+        return _mul_adopt(slots, tokens, _MUL_RESULT)
+    source_index: int = _MUL_LEFT
+    count_index: int = _MUL_RIGHT
+    tag: int = left_tag
+    count_tag: int = right_tag
+    method_name = cstr("__rmul__")
+    if _mul_is_sequence(left_tag) == 0:
+        if _mul_is_sequence(right_tag) == 0:
+            store_ptr(result, 0, py_obj_mul(load_ptr(left, 0), load_ptr(right, 0)))
+            return _mul_adopt(slots, tokens, _MUL_RESULT)
+        source_index = _MUL_RIGHT
+        count_index = _MUL_LEFT
+        tag = right_tag
+        count_tag = left_tag
+        method_name = cstr("__mul__")
+    source = ptr_add(slots, source_index * C_POINTER_SIZE)
+    count_slot = ptr_add(slots, count_index * C_POINTER_SIZE)
+    if count_tag != PY_TYPE_INT and count_tag != PY_TYPE_BOOL:
+        arguments = ptr_add(slots, _MUL_ARGS * C_POINTER_SIZE)
+        store_ptr(arguments, 0, py_tuple_new(1))
+        if _mul_adopt(slots, tokens, _MUL_ARGS) != 0:
+            return -1
+        py_tuple_set_item(load_ptr(arguments, 0), 0, load_ptr(source, 0))
+        if py_err_occurred() != 0:
+            return -1
+        handled = stack_alloc(C_POINTER_SIZE)
+        store_i64(handled, 0, 0)
+        if py_obj_special_call_slots(count_slot, method_name, arguments, null(), result, handled) != 0:
+            return -1
+        if load_i64(handled, 0) != 0:
+            if _mul_adopt(slots, tokens, _MUL_RESULT) != 0:
+                return -1
+            if ptr_eq(load_ptr(result, 0), global_load_ptr("py_NotImplemented")) == 0:
+                return 0
+            _mul_drop(slots, tokens, _MUL_RESULT)
+        _mul_drop(slots, tokens, _MUL_ARGS)
+    if py_obj_has_index(load_ptr(count_slot, 0)) == 0:
+        # CPython's sequence_repeat checks the count's index protocol first.
+        py_raise_type_named_error(cstr("can't multiply sequence by non-int of type '"),
+                                  load_ptr(count_slot, 0), cstr("'"))
+        return -1
+    count: int = py_index_i64_checked_slots(count_slot)
+    if py_err_occurred() != 0:
+        return -1
+    if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE:
+        return _mul_sequence_items(slots, tokens, source_index, tag, count)
+    return _mul_sequence_bytes(slots, tokens, source_index, tag, count)
+
+
+@c_abi_export("pcc_exp2_obj_mul_slots_old")
+def pcc_exp2_obj_mul_slots_old(left_owner: c_ptr, right_owner: c_ptr, output_owner: c_ptr) -> int:
+    """Status 0/-1; publish one owner to a distinct empty caller root.
+
+    Both inputs are authoritative owning caller roots. The output remains
+    registered through input/snapshot retirement and every pending exception.
+    No caller may manufacture these contracts by wrapping a raw pointer.
+    """
+    if ptr_is_null(left_owner) != 0 or ptr_is_null(right_owner) != 0 or ptr_is_null(output_owner) != 0:
+        return _mul_error(7, cstr("multiplication requires owning slots"))
+    if ptr_eq(output_owner, left_owner) != 0 or ptr_eq(output_owner, right_owner) != 0 or ptr_is_null(load_ptr(output_owner, 0)) == 0:
+        return _mul_error(7, cstr("multiplication output must be distinct and empty"))
+    slots = stack_alloc(_MUL_SLOT_COUNT * C_POINTER_SIZE)
+    tokens = stack_alloc(_MUL_SLOT_COUNT * C_POINTER_SIZE)
+    memset(slots, 0, _MUL_SLOT_COUNT * C_POINTER_SIZE)
+    index: int = 0
+    while index < _MUL_SLOT_COUNT:
+        store_i64(tokens, index * C_POINTER_SIZE, -1)
+        index = index + 1
+    pcc_gc_frame_enter(global_addr("pcc_binary_mul_owned_map"), slots)
+    status: int = _mul_copy(slots, tokens, _MUL_LEFT, left_owner)
+    if status == 0:
+        status = _mul_copy(slots, tokens, _MUL_RIGHT, right_owner)
+    if status == 0:
+        status = _exp2_mul_body_old(slots, tokens)
+    if status == 0:
+        status = pcc_gc_root_move(output_owner, ptr_add(slots, _MUL_RESULT * C_POINTER_SIZE))
+        if status == 0:
+            token: int = load_i64(tokens, _MUL_RESULT * C_POINTER_SIZE)
+            store_i64(tokens, _MUL_RESULT * C_POINTER_SIZE, -1)
+            if pcc_gc_foreign_lease_release(output_owner, token) != 0:
+                pcc_platform_abort()
+                return -1
+    if status != 0:
+        _mul_error(7, cstr("multiplication failed without an exception"))
+    error = ptr_add(slots, _MUL_ERROR * C_POINTER_SIZE)
+    py_tls_exc_swap_slot(error)
+    index = _MUL_ERROR - 1
+    while index >= 0:
+        _mul_clear(slots, tokens, index)
+        index = index - 1
+    py_clear_exception()
+    py_tls_exc_swap_slot(error)
+    pcc_gc_frame_leave(slots)
+    return status
+# END EXP2 M11 generated old-only entries

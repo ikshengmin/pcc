@@ -135,6 +135,7 @@ pcc_gc_backend4_zpage_register_owner_payload_span = extern(
     c_int64,
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
+pcc_exp2_note_old_target = extern("pcc_exp2_note_old_target", (c_ptr, c_int64), c_int64)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
@@ -883,9 +884,12 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
         _list_unlock(locked)
         return _append_grow_gc0(list_slot, item_slot, full_items, capacity)
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
+    dst = ptr_add(items, length * C_POINTER_SIZE)
+    result: int = pcc_gc_try_init_ptr_locked(dst, item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
+        if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+            pcc_exp2_note_old_target(load_ptr(dst, 0), 3)
     _list_unlock(locked)
     return result
 
@@ -929,9 +933,21 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     memset(ptr_add(new_items, length * C_POINTER_SIZE), 0, (new_capacity - length) * C_POINTER_SIZE)
     store_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET, new_items)
     store_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET, new_capacity)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
+    # This fast grow also serves nonmoving GC3. Its raw memmove bypasses
+    # the owner-aware barrier used by the general grow/extend path.
+    recording: int = 0
+    if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+        recording = 1
+        copied: int = 0
+        while copied < length:
+            pcc_exp2_note_old_target(load_ptr(new_items, copied * C_POINTER_SIZE), 4)
+            copied = copied + 1
+    dst = ptr_add(new_items, length * C_POINTER_SIZE)
+    result: int = pcc_gc_try_init_ptr_locked(dst, item_slot)
     if result != 0:
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
+        if recording != 0:
+            pcc_exp2_note_old_target(load_ptr(dst, 0), 3)
     _list_unlock(locked)
     free(old_items)
     return result

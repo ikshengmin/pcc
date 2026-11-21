@@ -9,13 +9,13 @@ Only whole, empty-of-roots pages are recycled. A page containing any survivor
 is promoted in-place (conservative roots and object addresses never move).
 """
 from pcc import i64
-from pcc.extern import c_abi_export,c_ptr, c_int64, extern
+from pcc.extern import c_abi_export,c_ptr, c_int64, c_void, extern
 from pcc.unsafe import (
     abi_constant, atomic_cas_i64, atomic_load_i32, atomic_load_i64,
     atomic_rmw_i64, atomic_store_i64,
     call_i64_i64_ptr, calloc, clock_gettime, define_global_i64, define_global_ptr_null,
-    define_thread_local_ptr_null, free, function_addr, global_addr,
-    global_load_ptr, global_store_ptr, int_to_ptr, load_i64, load_ptr, memset,
+    define_thread_local_ptr_null, frame_address, free, function_addr, global_addr,
+    global_load_ptr, global_store_ptr, int_to_ptr, load_i32, load_i64, load_ptr, memset,
     null, ptr_add, ptr_diff, ptr_is_null, ptr_to_int, stack_alloc, store_i32,
     store_i64, store_ptr,
 )
@@ -397,7 +397,26 @@ _PROCESS_REFUSALS = 128
 _PROCESS_EXPOSURES = 136
 _PROCESS_LAST_EPOCH = 144
 _PROCESS_STAMP = 152
-_PROCESS_HEADER_BYTES = 160
+# Additional stopped-window evidence. No object records or per-cell pins.
+# Target pages are a conservative remembered set: a clear/overwrite does
+# not clear a bit; all their occupied cells are promoted on a committed cut.
+_PROCESS_WRITE_TARGETS = 160
+_PROCESS_OLD_REFERENCE = 168
+_PROCESS_WRITE_PAGES = 176
+_PROCESS_REF_PAGES = 184
+_PROCESS_WRITE_ONLY = 192
+_PROCESS_MISSING_PAGES = 200
+_PROCESS_FIRST_MISSING_TYPE = 208
+_PROCESS_WRITE_KINDS = 216     # 10 x i64 target-word observations (0..9)
+_PROCESS_FALLBACK_COUNTS = 296  # private 64-byte counter row per allocated carrier/class
+_PROCESS_LANE_FALLBACK = 0
+_PROCESS_LANE_PUBLISH_SCALAR = 8  # FLOAT row, stable caller lane
+_PROCESS_LANE_PUBLISH_RUNTIME = 16
+_PROCESS_LANE_OLD_SCALAR = 24    # successful direct stock allocation, FLOAT row
+_PROCESS_LANE_OLD_MUL = 32
+_PROCESS_EXPOSE_KINDS = 304     # first page transition only; 2 classes x 4 reasons
+_PROCESS_FLOAT_LEASE_SITES = 368  # site 0..6, only the winning FLOAT exposure CAS
+_PROCESS_HEADER_BYTES = 424
 _PROCESS_CUT_DOMAIN = 0
 _PROCESS_CUT_STAMP = 8
 _PROCESS_CUT_BYTES = 16
@@ -413,6 +432,12 @@ pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
 pcc_gc_visit_stopped_root_cut = extern("pcc_gc_visit_stopped_root_cut",(c_int64,c_ptr,c_ptr,c_ptr),c_int64)
 pcc_platform_monotonic_ns = extern("pcc_platform_monotonic_ns",(),c_int64)
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
+_mapped_float_owner = extern("_pcc_exp2_mapped_float_owner", (c_ptr,c_ptr,c_ptr,c_ptr), c_int64)
+_window_domain_ok = extern("pcc_exp2_window_domain_ok", (), c_int64)
+_window_exposure_identity = extern("pcc_exp2_window_exposure_identity", (), c_int64)
+_publication_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr,c_ptr,c_ptr), c_void)
+_publication_enter = extern("pcc_thread_no_park_enter", (), c_void)
+_publication_exit = extern("pcc_thread_no_park_exit", (), c_void)
 
 
 @c_abi_export("_pcc_exp2_internal_process_directory")
@@ -435,8 +460,8 @@ def pcc_exp2_process_enable(carriers: i64, pages_per_class: i64) -> i64:
     pages: i64 = classes * pages_per_class
     class_bytes: i64 = pages_per_class * PAGE_BYTES
     arena_bytes: i64 = pages * PAGE_BYTES
-    prefix: i64 = (_PROCESS_HEADER_BYTES + classes * (STATE_BYTES + _PROCESS_REM_SLOTS * 8)
-                   + pages * (META_BYTES + 8))
+    prefix: i64 = (_PROCESS_HEADER_BYTES + classes * (STATE_BYTES + _PROCESS_REM_SLOTS * 8 + 64)
+                   + pages * (META_BYTES + 8 + 8 + 16))
     reserve_bytes: i64 = prefix + PAGE_BYTES - 1 + arena_bytes
     d = calloc(1, reserve_bytes)
     if ptr_is_null(d):
@@ -445,7 +470,13 @@ def pcc_exp2_process_enable(carriers: i64, pages_per_class: i64) -> i64:
     states = ptr_add(d, _PROCESS_HEADER_BYTES)
     meta = ptr_add(states, classes * STATE_BYTES)
     marks = ptr_add(meta, pages * META_BYTES)
-    remembered = ptr_add(marks, pages * 8)
+    writes = ptr_add(marks, pages * 8)
+    refs = ptr_add(writes, pages * 8)
+    remembered = ptr_add(refs, pages * 16)
+    fallbacks = ptr_add(remembered,classes * _PROCESS_REM_SLOTS * 8)
+    store_ptr(d, _PROCESS_FALLBACK_COUNTS, fallbacks)
+    store_ptr(d, _PROCESS_WRITE_TARGETS, writes)
+    store_ptr(d, _PROCESS_OLD_REFERENCE, refs)
     arena = int_to_ptr((ptr_to_int(d) + prefix + PAGE_BYTES - 1) & -PAGE_BYTES)
     store_ptr(d, _PROCESS_BASE, arena)
     store_ptr(d, _PROCESS_STATES, states)
@@ -505,6 +536,45 @@ def _process_claim_lane(d):
     return null()
 
 
+@c_abi_export("_pcc_exp2_old_float_counter")
+def _old_float_counter(site: i64):
+    """Return this carrier's accounting word, or choose the ordinary path.
+
+    No sticky allocator mode is installed. The only saved result lives in
+    one call's native activation, and cannot affect any other allocation.
+    """
+    if site != 1 and site != 4:
+        return null()
+    if (atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") != 2
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0
+            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+            or pcc_thread_is_running() != 1 or _window_domain_ok() != 1
+            or pcc_thread_world_stop_epoch_held() >= 0
+            or not ptr_is_null(global_load_ptr("pcc_exp2_leaf_bound_state"))
+            or not ptr_is_null(global_load_ptr("pcc_exp2_process_cut"))):
+        return null()
+    hook: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    if hook == 0 or hook != _window_exposure_identity():
+        return null()
+    d = _process_directory()
+    if (ptr_is_null(d) or atomic_load_i64(d, _PROCESS_TAINTED, "acquire") != 0
+            or atomic_load_i64(global_addr("pcc_exp2_process_gate_fn"), 0, "acquire") <= 1):
+        return null()
+    lane = global_load_ptr("pcc_exp2_process_lane")
+    if ptr_is_null(lane):
+        lane = _process_claim_lane(d)
+        if ptr_is_null(lane):
+            return null()
+    delta: i64 = ptr_diff(lane, load_ptr(d, _PROCESS_STATES))
+    if delta < 0 or delta >= load_i64(d, _PROCESS_CARRIERS) * 2 * STATE_BYTES or delta % (2 * STATE_BYTES) != 0:
+        return null()
+    index: i64 = delta // STATE_BYTES
+    field: i64 = _PROCESS_LANE_OLD_SCALAR if site == 1 else _PROCESS_LANE_OLD_MUL
+    return ptr_add(load_ptr(d, _PROCESS_FALLBACK_COUNTS), index * 64 + field)
+
+
 @c_abi_export("pcc_exp2_process_take")
 def pcc_exp2_process_take(size: i64, tag: i64):
     """Try a cell on the calling registered carrier; NULL means stock fallback."""
@@ -528,7 +598,16 @@ def pcc_exp2_process_take(size: i64, tag: i64):
         lane = _process_claim_lane(d)
         if ptr_is_null(lane):
             return null()
-    return pcc_exp2_leaf_take_kind(ptr_add(lane, kind * STATE_BYTES), size, tag)
+    cell = pcc_exp2_leaf_take_kind(ptr_add(lane,kind*STATE_BYTES),size,tag)
+    if ptr_is_null(cell):
+        # The state belongs to this carrier. Bounds, foreign/revoked and
+        # unregistered carrier refusals happen earlier and are not reported
+        # as occupancy misses. This does not allocate or write a cell record.
+        index: i64 = ptr_diff(lane,load_ptr(d,_PROCESS_STATES))//STATE_BYTES + kind
+        f=load_ptr(d,_PROCESS_FALLBACK_COUNTS)
+        field: i64 = index * 64 + _PROCESS_LANE_FALLBACK
+        atomic_store_i64(f,field,atomic_load_i64(f,field,"relaxed")+1,"relaxed")
+    return cell
 
 
 @c_abi_export("_pcc_exp2_internal_process_offset")
@@ -574,6 +653,75 @@ def pcc_exp2_process_contains(word) -> i64:
     return _process_occupied(_process_page(d, offset), offset)
 
 
+@c_abi_export("pcc_exp2_publish_mapped_float")
+def pcc_exp2_publish_mapped_float(slot, site: i64, slots, frame_map) -> i64:
+    """Accept a private immediate FLOAT24 publication, not an address lease.
+
+    The surrounding emitted dataflow must retain this registered owner across
+    the barrier and never deliver a raw address on this success arm. All misses
+    before the owner and the value are proved leave the ordinary lease untouched.
+    """
+    if site != 1 and site != 5:
+        return 0
+    if (atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") != 2
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) != 0
+            or atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+            or pcc_thread_is_running() != 1 or _window_domain_ok() != 1
+            or pcc_thread_world_stop_epoch_held() >= 0
+            or not ptr_is_null(global_load_ptr("pcc_exp2_process_cut"))):
+        return 0
+    hook: i64 = atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire")
+    if hook == 0 or hook != _window_exposure_identity():
+        return 0
+    d = _process_directory()
+    lane = global_load_ptr("pcc_exp2_process_lane")
+    if (ptr_is_null(d) or ptr_is_null(lane) or atomic_load_i64(d, _PROCESS_TAINTED, "acquire") != 0
+            or atomic_load_i64(global_addr("pcc_exp2_process_gate_fn"), 0, "acquire") <= 1):
+        return 0
+    delta: i64 = ptr_diff(lane, load_ptr(d, _PROCESS_STATES))
+    if delta < 0 or delta >= load_i64(d, _PROCESS_CARRIERS) * 2 * STATE_BYTES or delta % (2 * STATE_BYTES) != 0:
+        return 0
+    if _mapped_float_owner(slot, slots, frame_map, frame_address()) != 1:
+        return 0
+    # Read the member only after proving its exact active caller registration.
+    value = load_ptr(slot, 0)
+    off: i64 = _process_offset(d, value)
+    index: i64 = delta // STATE_BYTES
+    if off < 0 or (off & 31) != 0 or off // load_i64(d, _PROCESS_CLASS_BYTES) != index:
+        return 0
+    page = _process_page(d, off)
+    if (atomic_load_i64(page, 0, "acquire") != YOUNG
+            or (off & (PAGE_BYTES - 1)) + 24 > atomic_load_i64(page, 8, "acquire")):
+        return 0
+    # Only FLOAT24 can be allocated in this carrier/class lane. Check its
+    # ordinary header as well. Truly pinned/exposed/old values are not wins.
+    tag: i64 = load_i32(value, abi_constant("object.header.type_tag_offset"))
+    if (tag != abi_constant("object.type.float")
+            or atomic_load_i32(value, abi_constant("object.header.flags_offset"), "acquire") != 0):
+        return 0
+    _publication_enter()
+    # No callbacks or suspension from the proof through the existing
+    # barrier. The exit may honor a deferred collector poll only after the
+    # barrier; the caller still owns this exact slot across that poll.
+    if (atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") != 2
+            or _window_domain_ok() != 1 or atomic_load_i64(d, _PROCESS_TAINTED, "acquire") != 0
+            or atomic_load_i64(page, 0, "acquire") != YOUNG):
+        _publication_exit()
+        return 0
+    _publication_barrier(null(), slot, value)
+    counters = load_ptr(d, _PROCESS_FALLBACK_COUNTS)
+    metric: i64 = index * 64
+    if site == 1:
+        metric += _PROCESS_LANE_PUBLISH_SCALAR
+    else:
+        metric += _PROCESS_LANE_PUBLISH_RUNTIME
+    atomic_store_i64(counters, metric, atomic_load_i64(counters, metric, "relaxed") + 1, "relaxed")
+    _publication_exit()
+    return 1
+
+
 @c_abi_export("pcc_exp2_process_expose")
 def pcc_exp2_process_expose(word, reason: i64) -> i64:
     """Retain the touched page irrevocably, or fail closed and taint the pool.
@@ -604,11 +752,74 @@ def pcc_exp2_process_expose(word, reason: i64) -> i64:
         changed: i64 = atomic_cas_i64(page, 0, state, EXPOSED, "acq_rel", "acquire")
         if changed == state:
             atomic_rmw_i64("add", d, _PROCESS_EXPOSURES, 1, "relaxed")
+            cls:i64=(offset//load_i64(d,_PROCESS_CLASS_BYTES)) & 1
+            normalized:i64=reason
+            site:i64=0
+            if 17 <= reason <= 22:
+                normalized=2
+                site=reason-16
+            bucket:i64=normalized-1 if 1<=normalized<=3 else 3
+            atomic_rmw_i64("add",d,_PROCESS_EXPOSE_KINDS+(cls*4+bucket)*8,1,"relaxed")
+            if cls==0 and normalized==2:
+                atomic_rmw_i64("add",d,_PROCESS_FLOAT_LEASE_SITES+site*8,1,"relaxed")
             return 1
         state = changed
     atomic_store_i64(d, _PROCESS_TAINTED, 1, "release")
     return -1
 
+
+@c_abi_export("pcc_exp2_note_old_target")
+def pcc_exp2_note_old_target(value, kind: i64) -> i64:
+    """Nonparking post/prepublish observer for old managed writes.
+
+    The caller owns its existing safe mutator write scope. No pointer to an
+    old slot, backing array, or individual young cell is ever saved. The
+    single bit is monotone across overwrites, releases and rejected stops.
+    """
+    if kind < 1 or kind > 9:
+        return 0
+    d = _process_directory()
+    offset: i64 = _process_offset(d,value)
+    if offset < 0:
+        return 0
+    page = _process_page(d,offset)
+    if (atomic_load_i64(page,0,"acquire") != YOUNG or
+            (offset & (PAGE_BYTES-1)) >= atomic_load_i64(page,8,"acquire")):
+        return 0
+    if ptr_is_null(global_load_ptr("pcc_exp2_process_cut")) == 0:
+        # Collector inspection never enrolls artificial escaped references.
+        return 0
+    writes=load_ptr(d,_PROCESS_WRITE_TARGETS)
+    atomic_store_i64(writes,(offset // PAGE_BYTES)*8,1,"release")
+    atomic_rmw_i64("add",d,_PROCESS_WRITE_KINDS+kind*8,1,"relaxed")
+    return 1
+
+@c_abi_export("pcc_exp2_process_old_reference")
+def pcc_exp2_process_old_reference(value, owner_type: i64) -> None:
+    """Independent full-reference observer. Only the actual stopped owner can call.
+
+    Stamp instead of overwriting marks: a partially refused census is not
+    transferred into the next cut, even if the stopped epoch has not changed.
+    The full reference *always* retains the page, even if all writes missed it.
+    """
+    cut = global_load_ptr("pcc_exp2_process_cut")
+    if ptr_is_null(cut):
+        return
+    d=load_ptr(cut,_PROCESS_CUT_DOMAIN)
+    offset: i64 = _process_offset(d,value)
+    if offset<0:
+        return
+    page=_process_page(d,offset)
+    if (atomic_load_i64(page,0,"acquire")!=YOUNG or
+            (offset & (PAGE_BYTES-1))>=atomic_load_i64(page,8,"acquire")):
+        return
+    k: i64 = offset // PAGE_BYTES
+    refs=load_ptr(d,_PROCESS_OLD_REFERENCE)
+    stamp: i64 = load_i64(cut,_PROCESS_CUT_STAMP)
+    if load_i64(refs,k*16)!=stamp:
+        store_i64(refs,k*16+8,owner_type)
+        store_i64(refs,k*16,stamp)
+    store_i64(load_ptr(d,_PROCESS_MARKS),k*8,stamp)
 
 @c_abi_export("pcc_exp2_process_mark")
 def pcc_exp2_process_mark(word, context) -> None:
@@ -695,8 +906,27 @@ def pcc_exp2_process_minor_held(epoch: i64) -> i64:
     marks = load_ptr(d, _PROCESS_MARKS)
     meta = load_ptr(d, _PROCESS_META)
     count: i64 = load_i64(d, _PROCESS_ARENA_BYTES) // PAGE_BYTES
+    writes=load_ptr(d,_PROCESS_WRITE_TARGETS)
+    refs=load_ptr(d,_PROCESS_OLD_REFERENCE)
+    write_count:i64=0
+    ref_count:i64=0
+    extra:i64=0
+    missing:i64=0
     i = 0
     while i < count:
+        written:i64=atomic_load_i64(writes,i*8,"acquire")
+        if atomic_load_i64(meta,i*META_BYTES,"acquire")==YOUNG:
+            observed:i64=1 if load_i64(refs,i*16)==stamp else 0
+            if observed!=0:
+                ref_count+=1
+            if written!=0:
+                write_count+=1
+                if observed==0:
+                    extra+=1
+                store_i64(marks,i*8,stamp)
+            elif observed!=0:
+                missing+=1
+                atomic_cas_i64(d,_PROCESS_FIRST_MISSING_TYPE,0,load_i64(refs,i*16+8),"relaxed","relaxed")
         if load_i64(marks, i * 8) == stamp:
             atomic_cas_i64(meta, i * META_BYTES, YOUNG, SEEN_YOUNG, "acq_rel", "acquire")
         i += 1
@@ -712,6 +942,16 @@ def pcc_exp2_process_minor_held(epoch: i64) -> i64:
         promoted += load_i64(s, PAGES_PROMOTED) - old_pages
         occupied += load_i64(s, PROMOTED_OCCUPIED_CELLS) - old_cells
         i += 1
+    # All mutators remain parked. Transfer marks only after all admissions
+    # and page-state checks, and never discard the journal on refusal.
+    i=0
+    while i<count:
+        atomic_store_i64(writes,i*8,0,"release")
+        i+=1
+    atomic_rmw_i64("add",d,_PROCESS_WRITE_PAGES,write_count,"relaxed")
+    atomic_rmw_i64("add",d,_PROCESS_REF_PAGES,ref_count,"relaxed")
+    atomic_rmw_i64("add",d,_PROCESS_WRITE_ONLY,extra,"relaxed")
+    atomic_rmw_i64("add",d,_PROCESS_MISSING_PAGES,missing,"relaxed")
     atomic_store_i64(d, _PROCESS_LAST_EPOCH, epoch, "release")
     atomic_rmw_i64("add", d, _PROCESS_RECYCLED, recycled, "relaxed")
     atomic_rmw_i64("add", d, _PROCESS_PROMOTED, promoted, "relaxed")
@@ -732,6 +972,38 @@ def pcc_exp2_process_metric(index: i64) -> i64:
     d = _process_directory()
     if ptr_is_null(d):
         return 0
+    if index==101 or index==105 or index==111 or index==114:
+        rows:i64=load_i64(d,_PROCESS_CARRIERS)*2
+        row:i64=0
+        total:i64=0
+        counters=load_ptr(d,_PROCESS_FALLBACK_COUNTS)
+        field:i64=_PROCESS_LANE_PUBLISH_SCALAR if index==101 else _PROCESS_LANE_PUBLISH_RUNTIME
+        if index==111:
+            field=_PROCESS_LANE_OLD_SCALAR
+        elif index==114:
+            field=_PROCESS_LANE_OLD_MUL
+        while row<rows:
+            total+=atomic_load_i64(counters,row*64+field,"relaxed")
+            row+=2
+        return total
+    if index==70 or index==71:
+        j:i64=index-70
+        n:i64=load_i64(d,_PROCESS_CARRIERS)*2
+        f=load_ptr(d,_PROCESS_FALLBACK_COUNTS)
+        total_f:i64=0
+        while j<n:
+            total_f+=atomic_load_i64(f,j*64+_PROCESS_LANE_FALLBACK,"relaxed")
+            j+=2
+        return total_f
+    if index>=72 and index<=79:
+        return atomic_load_i64(d,_PROCESS_EXPOSE_KINDS+(index-72)*8,"relaxed")
+    site:i64=index-90
+    if 0<=site<=6:
+        return atomic_load_i64(d,_PROCESS_FLOAT_LEASE_SITES+site*8,"relaxed")
+    if index>=50 and index<=54:
+        return atomic_load_i64(d,_PROCESS_WRITE_PAGES+(index-50)*8,"relaxed")
+    if index>=60 and index<=69:
+        return atomic_load_i64(d,_PROCESS_WRITE_KINDS+(index-60)*8,"relaxed")
     if index == 2:
         return atomic_load_i64(d, _PROCESS_MINORS, "acquire")
     if index == 3:

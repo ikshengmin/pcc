@@ -2898,6 +2898,16 @@ class CallExpressionLoweringMixin:
             aggregate_result_ty=ast_func_def.return_ty,
             null_signals_error=null_signals_error,
         )
+        f64_call_witness = getattr(self, "_exp2_float_placement_direct_witness", None)
+        if (f64_call_witness is not None and f64_call_witness[0] is expr
+                and f64_call_witness[1] is fn and isinstance(fn, ir.Function)
+                and isinstance(fn.function_type.return_type, ir.DoubleType)
+                and isinstance(result.type, ir.DoubleType)
+                and not fn.function_type.var_arg and not fn.args and not args_ir
+                and not returns_cpython and not may_park_callee and not synchronous_park_result):
+            # The actual native `builder.call(fn, ...)` result. Decorated,
+            # runtime-bound, sleeping and cached entry paths never issue it.
+            f64_call_witness[2] = result
         for arg_value, owned in pinned_arg_temps:
             self._gc_unpin(arg_value)
             if owned:

@@ -15,6 +15,8 @@ Tagged ints use the generated ``PY_TYPE_INT`` semantic tag.
 
 __pcc_runtime_port__ = True
 
+from pcc import i64
+
 from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEMENTED
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
@@ -158,6 +160,7 @@ py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
+_exp2_alloc_old_float = extern("_pcc_exp2_alloc_direct_old_float", (c_int64,), c_ptr)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
@@ -5077,3 +5080,53 @@ def py_obj_str(o):
             return py_exc_base_str(o, py_isinstance(o, py_exc_builtin_class(4)))  # PY_EXC_KEYERROR
     # No user __str__: object.__str__ falls back to __repr__.
     return py_obj_repr(o)
+
+
+# BEGIN EXP2 M11 generated old-only entries (test_direct_old_float_specialization.py)
+@c_abi_export("pcc_exp2_float_from_f64_old")
+def pcc_exp2_float_from_f64_old(v: float):
+    # PyFloatObject layout (24 bytes):
+    #   0   refcount (i64)
+    #   8   type_tag (i32) = PY_TYPE_FLOAT (3)
+    #   12  flags    (i32)
+    #   16  value    (f64)
+    p = _exp2_alloc_old_float(1)
+    if ptr_is_null(p):
+        return null()
+    store_i64(p, 0, 1)
+    store_i32(p, 8, PY_TYPE_FLOAT)
+    store_f64(p, 16, v)
+    return p
+
+@c_abi_export("_pcc_exp2_float_box_old_mul")
+def _pcc_exp2_float_box_old_mul(v: float):
+    # PyFloatObject layout (24 bytes):
+    #   0   refcount (i64)
+    #   8   type_tag (i32) = PY_TYPE_FLOAT (3)
+    #   12  flags    (i32)
+    #   16  value    (f64)
+    p = _exp2_alloc_old_float(4)
+    if ptr_is_null(p):
+        return null()
+    store_i64(p, 0, 1)
+    store_i32(p, 8, PY_TYPE_FLOAT)
+    store_f64(p, 16, v)
+    return p
+
+@c_abi_export("_pcc_exp2_exact_float_mul_old")
+def _pcc_exp2_exact_float_mul_old(a, b):
+    # float * numeric -> float (mirrors py_float_add). Non-numeric -> null.
+    at: int = _type_of(a)
+    bt: int = _type_of(b)
+    a_num: int = 0
+    if at == PY_TYPE_BOOL or at == PY_TYPE_INT or at == PY_TYPE_FLOAT:
+        a_num = 1
+    b_num: int = 0
+    if bt == PY_TYPE_BOOL or bt == PY_TYPE_INT or bt == PY_TYPE_FLOAT:
+        b_num = 1
+    if a_num == 1 and b_num == 1:
+        if at == PY_TYPE_FLOAT and bt == PY_TYPE_FLOAT:
+            return _pcc_exp2_float_box_old_mul(py_float_to_f64(a) * py_float_to_f64(b))
+        return py_float_from_f64(py_float_to_f64(a) * py_float_to_f64(b))
+    return null()
+# END EXP2 M11 generated old-only entries

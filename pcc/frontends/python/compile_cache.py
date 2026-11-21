@@ -81,6 +81,9 @@ except BaseException as exc:
 # object-emitter policy intentionally remain outside this pre-pass key.
 _CODEGEN_ENV_NAMES = (
     "PCC_EXPERIMENT_GC3_LEXICAL",
+    "PCC_EXPERIMENT_GC3_LEASE_SITES",
+    "PCC_EXPERIMENT_GC3_MAPPED_FLOAT",
+    "PCC_EXPERIMENT_GC3_FLOAT_PLACEMENT",
     "PCC_DISABLE_BULK_GENERATOR_FRAME_INIT",
     "PCC_INLINE_GENERATOR_FRAMES",
     "PCC_GENERATOR_FIRST_ENTRY_INIT",

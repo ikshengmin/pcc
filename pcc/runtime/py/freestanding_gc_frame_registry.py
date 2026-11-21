@@ -926,6 +926,70 @@ def _exp2_lexical_has_local_owner(slot) -> i64:
     return 1
 
 
+@c_abi_export("_pcc_exp2_mapped_float_owner")
+def _exp2_mapped_float_owner(slot, slots, frame_map, bridge_frame) -> i64:
+    """Private nonparking verifier for the compiler-owned publication ABI.
+
+    Identity comes from the exact emitted alloca and original active frame
+    map, not a word coincidentally in a rooted range. No value is read here.
+    """
+    if (ptr_is_null(slot) or ptr_is_null(slots) or ptr_is_null(frame_map)
+            or ptr_is_null(bridge_frame) or pcc_thread_is_running() != 1):
+        return 0
+    member: i64 = ptr_to_int(slot)
+    base: i64 = ptr_to_int(slots)
+    low: i64 = ptr_to_int(bridge_frame)
+    high: i64 = pcc_thread_stack_high()
+    if ((member & 7) != 0 or (base & 7) != 0 or (low & 7) != 0
+            or low <= 0 or high <= 16 or low > high - 16
+            or base < low + 16 or member < base or member > high - 8
+            or member - base >= 16 * 8):
+        return 0
+    # The bridge supplies its OWN frame_address(), whose first saved word
+    # is its immediate caller's frame on owned x86-64/AArch64. Check the
+    # recorded live stack extent before reading it. No guessed unwind.
+    caller: i64 = load_i64(bridge_frame, 0)
+    if caller <= low + 16 or caller > high or (caller & 7) != 0 or member > caller - 8:
+        return 0
+    arena = pcc_thread_local_root_arena_get()
+    if ptr_is_null(arena):
+        return 0
+    owner: i64 = load_i64(arena, 48)
+    if owner <= 0 or owner != pcc_current_thread_id():
+        return 0
+    remaining: i64 = load_i64(arena, 24)
+    # A long/foreign activation is not a reason to grant an address
+    # exemption. Never walk past this private diagnostic bound.
+    if remaining <= 0 or remaining > 512:
+        return 0
+    entry = load_ptr(arena, 16)
+    matches: i64 = 0
+    while not ptr_is_null(entry):
+        if remaining == 0:
+            return 0
+        remaining -= 1
+        other = load_ptr(entry, 40)
+        other_base: i64 = ptr_to_int(other)
+        signed_count: i64 = load_i64(entry, 48)
+        if (load_i64(entry, 32) != owner or load_i64(entry, 16) != 1
+                or load_i64(entry, 24) != 1 or signed_count == 0
+                or signed_count < -2147483647 or signed_count > 2147483647
+                or other_base <= 0):
+            return 0
+        count: i64 = signed_count if signed_count > 0 else 0 - signed_count
+        if member >= other_base and member - other_base < count * 8:
+            if (matches != 0 or not ptr_eq(other, slots) or signed_count <= 1
+                    or signed_count > 16 or base > caller - signed_count * 8
+                    or load_i64(entry, 64) != 0
+                    or not ptr_eq(load_ptr(entry, 8), ptr_add(entry, 40))
+                    or not ptr_eq(load_ptr(entry, 56), frame_map)
+                    or load_i32(frame_map, 0) != signed_count):
+                return 0
+            matches = 1
+        entry = load_ptr(entry, 0)
+    return matches if remaining == 0 else 0
+
+
 @c_abi_export("pcc_exp2_lexical_leaf_slot")
 def pcc_exp2_lexical_leaf_slot(slot):
     if (atomic_load_i64(global_addr("pcc_exp2_exposure_hook_bits"), 0, "acquire") == 0

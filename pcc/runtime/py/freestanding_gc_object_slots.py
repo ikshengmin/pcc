@@ -1067,10 +1067,19 @@ def _old_count(n: i64, cap: i64, data) -> i64:
 
 @c_abi_export("pcc_exp2_old_verify_shape")
 def _old_shape(o, tag: i64, size: i64, flags: i64) -> i64:
-    # -6: opaque/unknown; -7: incomplete/invalid/oversized storage.
-    # 0: known no-reference scalar, 1: vetted authoritative builtin layout.
-    if size < 16 or (flags & (524288 | 2048 | 131072)) != 0:
-        return -7
+    detail: i64 = _old_shape_detail(o, tag, size, flags)
+    return -7 if detail < -1000 else detail
+
+
+@c_abi_export("pcc_exp2_old_verify_shape_detail")
+def _old_shape_detail(o, tag: i64, size: i64, flags: i64) -> i64:
+    # Preserve public verdicts. -1000 - clause is the private encoding for
+    # the first failed layout guard. The stopped visitor converts it to -7.
+    # 0: known no-reference scalar; 1: vetted layout; -6: opaque/unknown.
+    if size < 16:
+        return -1001
+    if (flags & (524288 | 2048 | 131072)) != 0:
+        return -1002
     if (tag == abi_constant("object.type.str") or tag == abi_constant("object.type.int")
             or tag == abi_constant("object.type.float") or tag == abi_constant("object.type.bool")
             or tag == abi_constant("object.type.none") or tag == abi_constant("object.type.complex")
@@ -1078,118 +1087,143 @@ def _old_shape(o, tag: i64, size: i64, flags: i64) -> i64:
             or tag == 33 or tag == 34):
         return 0
     if tag == abi_constant("object.type.list"):
-        if size < 40 or _old_count(load_i64(o,16),load_i64(o,24),load_ptr(o,32)) == 0:
-            return -7
+        if size < 40:
+            return -1101
+        if _old_count(load_i64(o,16),load_i64(o,24),load_ptr(o,32)) == 0:
+            return -1102
     elif tag == abi_constant("object.type.tuple"):
         if size < 24:
-            return -7
+            return -1103
         n: i64 = load_i64(o,16)
         if n < 0 or n > _OLD_LIMIT or n > (size - 24) // 8:
-            return -7
+            return -1104
     elif tag == abi_constant("object.type.dict"):
         if size < 56:
-            return -7
+            return -1105
         used: i64 = load_i64(o,48)
         if (_old_count(used, load_i64(o,24), load_ptr(o,40)) == 0
                 or load_i64(o,16) < 0 or load_i64(o,16) > used):
-            return -7
+            return -1106
     elif tag == abi_constant("object.type.set"):
         if size < 48:
-            return -7
+            return -1107
         cap: i64 = load_i64(o,24)
         if (_old_count(cap, cap, load_ptr(o,40)) == 0 or load_i64(o,16) < 0
                 or load_i64(o,16) > load_i64(o,32) or load_i64(o,32) > cap):
-            return -7
+            return -1108
     elif tag == abi_constant("object.type.func"):
         if size < 96:
-            return -7
+            return -1109
         # A C extension's PyCFunction may hide retained objects outside slots.
         if ptr_is_null(load_ptr(o,16)) == 0:
             return -6
     elif tag == abi_constant("object.type.class"):
         if size < 120:
-            return -7
+            return -1110
         nb: i64 = load_i32(o,24)
         nm: i64 = load_i32(o,40)
         nt: i64 = load_i32(o,56)
         nf: i64 = load_i32(o,72)
-        if (_old_count(nb, _OLD_LIMIT, load_ptr(o,32)) == 0 or
-                _old_count(nm, _OLD_LIMIT, load_ptr(o,48)) == 0 or
-                _old_count(nt, _OLD_LIMIT, load_ptr(o,64)) == 0 or
-                _old_count(nf, _OLD_LIMIT, load_ptr(o,80)) == 0):
-            return -7
+        if _old_count(nb, _OLD_LIMIT, load_ptr(o,32)) == 0:
+            return -1111
+        if _old_count(nm, _OLD_LIMIT, load_ptr(o,48)) == 0:
+            return -1112
+        if _old_count(nt, _OLD_LIMIT, load_ptr(o,64)) == 0:
+            return -1113
+        if _old_count(nf, _OLD_LIMIT, load_ptr(o,80)) == 0:
+            return -1114
     elif (tag == abi_constant("object.type.instance") or tag == abi_constant("object.type.valuebox")
             or (tag >= abi_constant("object.type.user_class_start") and tag < 65536)):
         if size < 24:
-            return -7
+            return -1020
         cls = load_ptr(o,16)
-        if ptr_is_null(cls) or is_tagged_int(cls):
-            return -7
+        if ptr_is_null(cls):
+            return -1021
+        if is_tagged_int(cls):
+            return -1022
         # Compare candidate value in the stopped registry before dereferencing.
         cn = _old_index(cls)
-        if (ptr_is_null(cn) or ptr_eq(load_ptr(cn,0),cls) == 0 or load_i64(cn,32) != 0
-                or load_i64(cn,8) < 120 or load_i32(cls,8) != abi_constant("object.type.class")):
-            return -7
+        if ptr_is_null(cn):
+            return -1023
+        if ptr_eq(load_ptr(cn,0),cls) == 0:
+            return -1024
+        if load_i64(cn,32) != 0:
+            return -1025
+        if load_i64(cn,8) < 120:
+            return -1026
+        if load_i32(cls,8) != abi_constant("object.type.class"):
+            return -1027
         sz: i64 = load_i32(cls,88)
         fields: i64 = load_i32(cls,72)
-        if (sz < 24 or (sz & 7) != 0 or sz > size or fields < 0 or fields >= _OLD_LIMIT
-                or fields + 1 > (size - 24) // 8 or (sz - 24) // 8 > _OLD_LIMIT):
-            return -7
+        if sz < 24:
+            return -1028
+        if (sz & 7) != 0:
+            return -1029
+        if sz > size:
+            return -1030
+        if fields < 0:
+            return -1031
+        if fields >= _OLD_LIMIT:
+            return -1032
+        if fields + 1 > (size - 24) // 8:
+            return -1033
+        if (sz - 24) // 8 > _OLD_LIMIT:
+            return -1034
     elif tag == abi_constant("object.type.iter"):
         if size < 32:
-            return -7
+            return -1115
     elif tag == abi_constant("object.type.gen"):
         if size < 56:
-            return -7
+            return -1116
         if (flags & abi_constant("object.gen.inline_frame_flag")) != 0:
             if size < 64:
-                return -7
+                return -1117
             n = load_i64(o,abi_constant("object.gen.inline_length_offset"))
             if n < 0 or n > _OLD_LIMIT or n > (size-64)//8:
-                return -7
+                return -1118
     elif tag == abi_constant("object.type.virtual_thread"):
         # Native scheduler timer, IO and wait-node backpointers do not own
         # objects; runnable and parked state requires the independent root cut.
         if size < 200:
-            return -7
+            return -1119
     elif tag == abi_constant("object.type.continuation"):
         if size < 48:
-            return -7
+            return -1120
         chunk = load_ptr(o,24)
         if ptr_is_null(chunk):
-            return -7
+            return -1121
         n = load_i64(chunk,8)
         if _old_count(n, _OLD_LIMIT, load_ptr(chunk,16)) == 0 or n != load_i32(chunk,0):
-            return -7
+            return -1122
     elif tag == abi_constant("object.type.vthread_channel"):
         if size < 40:
-            return -7
+            return -1123
         kind: i64 = load_i64(o,16)
         if kind == 0:
             if size < 128:
-                return -7
+                return -1124
             cap = load_i64(o,24)
             if cap < 0 or cap > 1048576 or cap > (size-128)//8 or load_i64(o,32)<0 or load_i64(o,32)>cap:
-                return -7
+                return -1125
         elif kind != 1 and kind != 2:
-            return -7
+            return -1126
     elif tag == abi_constant("object.type.coroutine"):
         if size < 64:
-            return -7
+            return -1127
     elif tag == abi_constant("object.type.task"):
         if size < 48:
-            return -7
+            return -1128
     elif tag == abi_constant("object.type.exc"):
         if size < 64:
-            return -7
+            return -1129
         if (_old_count(load_i32(o,56), load_i32(o,60), load_ptr(o,48)) == 0):
-            return -7
+            return -1130
     elif tag == abi_constant("object.type.property"):
         if size < 40:
-            return -7
+            return -1131
     elif tag == abi_constant("object.type.classmethod") or tag == abi_constant("object.type.staticmethod"):
         if size < 24:
-            return -7
+            return -1132
     else:
         # Weakrefs need logical death/clearing; memoryviews/raw foreign export
         # paths need lifetime leases; handles, extension, native thread/sync
@@ -1197,6 +1231,10 @@ def _old_shape(o, tag: i64, size: i64, flags: i64) -> i64:
         return -6
     return 1
 
+
+# Shadow observer is separate from the runtime's trusted visitor. A failed
+# old-census call never confers a new-page reclamation decision.
+_exp2_old_observe = extern("pcc_exp2_process_old_reference", (c_ptr,c_int64), c_void)
 
 @c_abi_export("pcc_exp2_old_deliver_slot")
 def pcc_exp2_old_deliver_slot(slot, role:i64, state) -> None:
@@ -1209,13 +1247,16 @@ def pcc_exp2_old_deliver_slot(slot, role:i64, state) -> None:
         store_i64(audit,40,load_i64(audit,40)+1)
     else:
         store_i64(audit,8,load_i64(audit,8)+1)
-    call_void_ptr2(load_ptr(state,0),load_ptr(slot,0),load_ptr(state,8))
+    value=load_ptr(slot,0)
+    _exp2_old_observe(value,load_i64(state,24))
+    call_void_ptr2(load_ptr(state,0),value,load_ptr(state,8))
 
 
 @c_abi_export("pcc_exp2_old_alias")
 def _old_alias(word,state) -> None:
     audit = load_ptr(state,16)
     store_i64(audit,48,load_i64(audit,48)+1)
+    _exp2_old_observe(word,load_i64(state,24))
     call_void_ptr2(load_ptr(state,0),word,load_ptr(state,8))
 
 
@@ -1255,7 +1296,8 @@ def pcc_exp2_visit_stopped_old_edges(epoch:i64,visitor,context,audit)->i64:
     or allocations. 1 means ALL registered old owners, not all process roots.
     audit[12]: owners, strong slots, first denied tag, status, scalar owners,
     update-only slots, typed conservative aliases, total nodes, failing bytes,
-    failing flags, reserved, reserved. A negative is never a minor license.
+    failing flags, first failing shape clause, reserved.
+    A negative is never a minor license.
     """
     if ptr_is_null(audit):
         return -1
@@ -1273,7 +1315,7 @@ def pcc_exp2_visit_stopped_old_edges(epoch:i64,visitor,context,audit)->i64:
     exact_state:i64=_old_exact_only(audit)
     if exact_state!=1:
         return exact_state
-    state=stack_alloc(24)
+    state=stack_alloc(32)
     store_ptr(state,0,visitor)
     store_ptr(state,8,context)
     store_ptr(state,16,audit)
@@ -1291,8 +1333,11 @@ def pcc_exp2_visit_stopped_old_edges(epoch:i64,visitor,context,audit)->i64:
             tag:i64=load_i32(o,abi_constant("object.header.type_tag_offset"))
             flags:i64=load_i32(o,abi_constant("object.header.flags_offset"))
             size:i64=load_i64(node,8)
-            kind:i64=_old_shape(o,tag,size,flags)
+            kind:i64=_old_shape_detail(o,tag,size,flags)
             if kind<0:
+                if kind<-1000:
+                    store_i64(audit,80,-1000-kind)
+                    kind=-7
                 store_i64(audit,16,tag)
                 store_i64(audit,24,kind)
                 store_i64(audit,64,size)
@@ -1305,6 +1350,7 @@ def pcc_exp2_visit_stopped_old_edges(epoch:i64,visitor,context,audit)->i64:
                 else:
                     store_i64(audit,0,load_i64(audit,0)+1)
             elif kind!=0:
+                store_i64(state,24,tag)
                 cursor:i64=0
                 while True:
                     if _old_slice(o,cursor,64,pcc_exp2_old_deliver_slot,state,curs)!=1:

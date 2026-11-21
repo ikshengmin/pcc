@@ -3085,7 +3085,10 @@ class GeneratorLoweringMixin:
         if frame_entry is None:
             raise L1CodegenError("generator return missing managed value slot")
         value_slot = frame_entry[1]
-        value = self._emit_as_object(stmt.value)
+        from pcc.frontends.python.codegen.mapped_float_publication import (
+            emit_generator_terminal_object,
+        )
+        value = emit_generator_terminal_object(self, stmt.value)
         # Normalize the expression to one owned reference, then transfer that
         # reference into the heap-frame slot.  The slot is saved by any park in
         # a pending finally block and is rewritten by relocating collectors.

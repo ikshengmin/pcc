@@ -4,6 +4,7 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
     global_addr,
     global_load_ptr,
@@ -23,6 +24,7 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
+pcc_exp2_note_old_target = extern("pcc_exp2_note_old_target", (c_ptr, c_int64), c_int64)
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
 pcc_gc_shade_gray_atomic = extern(
     "pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void
@@ -394,7 +396,9 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     cycle. A cycle's mark_active changes only in a stopped world, so a 0
     read here is the answer a locked read would give. Since GC4 joined that
     protocol (pcc_gc_fix_backend sets pcc_gc_nonmoving_count_free for every
-    tracing collector) it records no old-to-young edge here either.
+    tracing collector) the ordinary collector records no old-to-young
+    edge here. The private GC3 shadow observes known owner-aware callers
+    before the major-mark early exits; it does not authorize a cut.
     """
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return
@@ -404,6 +408,8 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if ptr_is_null(owner) == 0:
         if is_tagged_int(owner) != 0:
             return
+        if atomic_load_i64(global_addr("pcc_exp2_window_state"), 0, "acquire") == 2:
+            pcc_exp2_note_old_target(value, 2)
         if pcc_container_lock_held() != 0:
             # Container mode: the store holds the owner's container lock, and
             # the marker scans that owner under the same lock

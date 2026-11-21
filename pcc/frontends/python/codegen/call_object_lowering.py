@@ -8,6 +8,7 @@ from pcc.ir.compat import ir
 from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
+    PY_TYPE_FLOAT,
     PY_TYPE_LIST,
     PY_TYPE_MEMORYVIEW,
     PY_TYPE_STR,
@@ -26,6 +27,7 @@ from pcc.frontends.python.py_ast import (
     DynType,
     Expr,
     FloatLit,
+    FloatType,
     IfExpr,
     IntLit,
     IntType,
@@ -46,6 +48,7 @@ from pcc.frontends.python.py_ast import (
     ValueArrayType,
 )
 from pcc.frontends.python.codegen import marshal
+from pcc.frontends.python.codegen import mapped_float_publication as mapped_float
 from pcc.frontends.python.codegen.builtin_exceptions import (
     BUILTIN_EXC_TAG as _BUILTIN_EXC_TAG,
     builtin_exception_uses_module_lookup,
@@ -69,6 +72,14 @@ _I8 = ir.IntType(8)
 _I32 = ir.IntType(32)
 _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
+
+# M9 fixed ownership sites, not a runtime lease kind. Native _mul_adopt owns 4.
+EXP2_LEASE_SITE_LEGACY = 0
+EXP2_LEASE_SITE_PERSISTENT_SCALAR = 1
+EXP2_LEASE_SITE_PERSISTENT_RESULT = 2
+EXP2_LEASE_SITE_SLOT_OPERAND = 3
+EXP2_LEASE_SITE_PERSISTENT_RUNTIME = 5
+EXP2_LEASE_SITE_LIFO_PUBLICATION = 6
 
 
 def _slot_call_rejection_detail(expr, pointer: bool, cpython: bool) -> str:
@@ -864,8 +875,26 @@ class CallObjectLoweringMixin:
                 and record[3].get(2) == "pcc_gc_frame_enter_lifo_local"
                 and record[4].get(2, (None, 0, 0))[1:] == (1, 1))
 
+    def _emit_exp2_site_acquire(self, slot, helper, label, site):
+        address = self._as_gc_ptr(slot)
+        if (site != EXP2_LEASE_SITE_LEGACY
+                and helper == "pcc_gc_foreign_lease_acquire"
+                and os.environ.get("PCC_EXPERIMENT_GC3_LEASE_SITES") == "1"
+                and getattr(self, "_strict_no_libpython", False)
+                and not getattr(self, "_freestanding_module", False)
+                and not getattr(self, "_runtime_port_module", False)):
+            acquire = self._declare_external_function(
+                "pcc_exp2_foreign_lease_acquire_site", _I64, [_CSTR, _I64],
+            )
+            return self.builder.call(
+                acquire, [address, ir.Constant(_I64, site)], name=self._fresh(label),
+            )
+        return self.builder.call(self.runtime[helper], [address], name=self._fresh(label))
+
     def _publish_slot_call_owned(
         self, slot, value, *, label="owned result", opaque_foreign_result=False,
+        physical_scalar_box=False, slot_runtime_result=False,
+        mapped_float_proof=None, mapped_float_guard=None,
     ) -> None:
         """Immediately transfer a fresh result into an already empty root.
 
@@ -873,7 +902,7 @@ class CallObjectLoweringMixin:
         rather than registering a possibly stale pointer after a safepoint.
         Output-slot producers should instead write directly or root_move.
         """
-        self._slot_call_root_record(slot)
+        _owned_slot, _owner_flag, lifo = self._slot_call_root_record(slot)
         if opaque_foreign_result and os.environ.get("PCC_EXPERIMENT_GC3_LEXICAL") == "1":
             if not hasattr(self, "_exp2_opaque_result_roots"):
                 self._exp2_opaque_result_roots = {}
@@ -911,7 +940,38 @@ class CallObjectLoweringMixin:
             )
             return
         lexical_done = None
-        if self._slot_call_has_exp2_lexical_root(slot):
+        group = (mapped_float_proof.group_of(self, slot)
+                 if mapped_float_proof is not None and mapped_float_proof.publish else None)
+        if group is not None and not opaque_foreign_result:
+            site = (EXP2_LEASE_SITE_PERSISTENT_SCALAR if physical_scalar_box
+                    else EXP2_LEASE_SITE_PERSISTENT_RUNTIME)
+            if (lifo or (site == EXP2_LEASE_SITE_PERSISTENT_SCALAR and mapped_float_guard is not None)
+                    or (site == EXP2_LEASE_SITE_PERSISTENT_RUNTIME
+                        and (not slot_runtime_result or mapped_float_guard is None))
+                    or mapped_float_proof.helper_slot is not None):
+                raise L1CodegenError("M10 mapped FLOAT publication misses its physical proof")
+            mapped_float_proof.helper_slot = slot
+            legacy = self.current_function.append_basic_block(self._fresh("exp2.mapped.pub.legacy"))
+            lexical_done = self.current_function.append_basic_block(self._fresh("exp2.mapped.pub.done"))
+            if mapped_float_guard is not None:
+                test = self.current_function.append_basic_block(self._fresh("exp2.mapped.pub.check"))
+                self.builder.cbranch(mapped_float_guard, test, legacy)
+                self.builder.position_at_end(test)
+            publish = self._declare_external_function(
+                "pcc_exp2_publish_mapped_float", _I64, [_CSTR, _I64, _CSTR, _CSTR],
+            )
+            accepted = self.builder.call(
+                publish,
+                [self._as_gc_ptr(slot), ir.Constant(_I64, site),
+                 self._as_gc_ptr(group["base"]), self._as_gc_ptr(group["map"])],
+                name=self._fresh("exp2.mapped.pub.accepted"),
+            )
+            self.builder.cbranch(
+                self.builder.icmp_signed("==", accepted, ir.Constant(_I64, 1)),
+                lexical_done, legacy,
+            )
+            self.builder.position_at_end(legacy)
+        elif self._slot_call_has_exp2_lexical_root(slot):
             publish = self._declare_external_function(
                 "pcc_exp2_lexical_publish_slot", _I64, [_CSTR],
             )
@@ -923,9 +983,18 @@ class CallObjectLoweringMixin:
                 lexical_done, legacy,
             )
             self.builder.position_at_end(legacy)
-        token = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
-            name=self._fresh("call.slot.publish.lease"),
+        if opaque_foreign_result:
+            site = EXP2_LEASE_SITE_LEGACY
+        elif lifo:
+            site = EXP2_LEASE_SITE_LIFO_PUBLICATION
+        elif physical_scalar_box:
+            site = EXP2_LEASE_SITE_PERSISTENT_SCALAR
+        elif slot_runtime_result:
+            site = EXP2_LEASE_SITE_PERSISTENT_RUNTIME
+        else:
+            site = EXP2_LEASE_SITE_PERSISTENT_RESULT
+        token = self._emit_exp2_site_acquire(
+            slot, "pcc_gc_foreign_lease_acquire", "call.slot.publish.lease", site,
         )
         self._slot_call_check_status(token, "owned-result lease")
         current = self.builder.load(slot, name=self._fresh("call.slot.published"))
@@ -1769,7 +1838,7 @@ class CallObjectLoweringMixin:
 
     def _slot_call_runtime_call(
         self, runtime_name, roots, *, result_slot=None, suffix_args=(), argument_order=(), span=None,
-        exception_slot=None,
+        exception_slot=None, mapped_float_result=None,
     ):
         """Expose raw operands only while independent counted leases live.
 
@@ -1796,9 +1865,10 @@ class CallObjectLoweringMixin:
                 lease_helper = ("pcc_gc_borrowed_lease_acquire"
                                 if borrowed.get(id(slot)) is slot
                                 else "pcc_gc_foreign_lease_acquire")
-                token = self.builder.call(
-                    self.runtime[lease_helper], [self._as_gc_ptr(slot)],
-                    name=self._fresh("call.slot.argument.lease"),
+                site = (EXP2_LEASE_SITE_SLOT_OPERAND if self._slot_call_root_is_registered(slot)
+                        else EXP2_LEASE_SITE_LEGACY)
+                token = self._emit_exp2_site_acquire(
+                    slot, lease_helper, "call.slot.argument.lease", site,
                 )
                 self._slot_call_check_status(token, "argument lease", span)
                 leases.append((slot, token))
@@ -1819,12 +1889,36 @@ class CallObjectLoweringMixin:
             arguments = values + list(suffix_args)
             if argument_order:
                 arguments = [arguments[index] for index in argument_order]
+            proof = None
+            exact_inputs = None
+            if mapped_float_result is not None:
+                proof, exact_inputs = mapped_float_result
+                if (runtime_name != "py_obj_sub" or len(values) != 2 or values != arguments
+                        or not proof.current(self) or result_slot is None or len(leases) != 2):
+                    raise L1CodegenError("M10 subtraction misses its exact leased inputs")
+                # The checked values are the very same leased operands
+                # passed to sub, not early local snapshots. This runtime
+                # tag read is bounded, nonparking and non-reentrant.
+                for value in values:
+                    tag = self.builder.call(self.runtime["py_obj_type_tag"], [value],
+                                            name=self._fresh("exp2.mapped.sub.tag"))
+                    is_float = self.builder.icmp_signed("==", tag, ir.Constant(_I64, PY_TYPE_FLOAT))
+                    exact_inputs = self.builder.and_(
+                        exact_inputs, is_float, name=self._fresh("exp2.mapped.sub.exact"),
+                    )
+                if proof.placement is not None and proof.placement.box_slot is roots[0]:
+                    # Carry the actual post-lease exact pair into the final
+                    # multiply, never an inferred or pre-evaluation tag.
+                    proof.exact_sub_inputs = exact_inputs
             result = self.builder.call(
                 self.runtime[runtime_name], arguments,
                 name=self._fresh("call.slot.runtime") if result_slot is not None else "",
             )
             if result_slot is not None:
-                self._publish_slot_call_owned(result_slot, result, label=runtime_name)
+                self._publish_slot_call_owned(
+                    result_slot, result, label=runtime_name, slot_runtime_result=True,
+                    mapped_float_proof=proof, mapped_float_guard=exact_inputs,
+                )
             elif exception_slot is None:
                 # Scalar results have no publication step. Check TLS before
                 # retiring a lease, and let the cleanup edge preserve the
@@ -2425,21 +2519,54 @@ class CallObjectLoweringMixin:
             direct = Call(span=span, ty=expr.ty, func=expr.func,
                           args=tuple(positional), kwargs=tuple(keywords))
             self._slot_call_result_sinks.append((direct, output, False))
+            physical_scope = mapped_float.current_proof(self, expr)
+            placement = physical_scope.placement if physical_scope is not None else None
+            witness = ([direct, fn, None] if placement is not None and placement.producer is expr
+                       and placement.current(self) else None)
+            saved_witness = getattr(self, "_exp2_float_placement_direct_witness", None)
+            if witness is not None:
+                self._exp2_float_placement_direct_witness = witness
             try:
                 raw = self._emit_static_user_function_call(direct, name, fn, fd)
             finally:
+                if witness is not None:
+                    self._exp2_float_placement_direct_witness = saved_witness
                 _candidate, _slot, published = self._slot_call_result_sinks.pop()
+            proven_direct_box = None
             if not published:
                 # Pointer results were published at the call; a scalar or void
                 # result boxes from the callee's declared return type.
                 if isinstance(raw.type, ir.PointerType):
                     raise L1CodegenError("direct import call left its result unpublished: " + name)
                 result_ty = NoneType(name="None") if isinstance(raw.type, ir.VoidType) else fd.return_ty
-                boxed = marshal.marshal_to_object(
-                    self.builder, self.module, self.runtime, raw, result_ty,
+                physical_float = isinstance(raw.type, (ir.FloatType, ir.DoubleType))
+                proof = mapped_float.current_proof(self, expr)
+                if (physical_float and sink is output and proof is not None and not fd.args
+                        and mapped_float.provider_candidate(expr)
+                        and proof.group_of(self, output) is not None):
+                    proven_direct_box = proof
+                if (witness is not None and witness[2] is raw and proven_direct_box is physical_scope
+                        and proof is physical_scope and isinstance(raw.type, ir.DoubleType)
+                        and not isinstance(raw, ir.Constant)
+                        and isinstance(result_ty, FloatType) and result_ty.name == "float"
+                        and result_ty.width == 64):
+                    if placement.box_slot is not None:
+                        raise L1CodegenError("M11 duplicate physical scalar placement")
+                    old_box = self._declare_external_function(
+                        "pcc_exp2_float_from_f64_old", _CSTR, [ir.DoubleType()],
+                    )
+                    boxed = self.builder.call(old_box, [raw], name="m.flt_box")
+                    placement.box_slot = output
+                else:
+                    boxed = marshal.marshal_to_object(
+                        self.builder, self.module, self.runtime, raw, result_ty,
+                    )
+                self._publish_slot_call_owned(
+                    output, boxed, label="direct import result",
+                    physical_scalar_box=physical_float, mapped_float_proof=proven_direct_box,
                 )
-                self._publish_slot_call_owned(output, boxed, label="direct import result")
                 self._emit_post_call_err_check(span)
+            direct_end = self.builder.block
             self.builder.branch(done_bb)
             self.builder.position_at_end(dynamic_bb)
             self._emit_slot_call_from_roots(
@@ -2448,8 +2575,15 @@ class CallObjectLoweringMixin:
             )
             self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
             self._cpy_operand_cleanup_block = self._try_err_block
+            dynamic_end = self.builder.block
             self.builder.branch(done_bb)
             self.builder.position_at_end(done_bb)
+            if proven_direct_box is not None and proven_direct_box.witness_direct:
+                arm = self.builder.phi(_I1, name=self._fresh("exp2.mapped.native.arm"))
+                arm.add_incoming(ir.Constant(_I1, 1), direct_end)
+                arm.add_incoming(ir.Constant(_I1, 0), dynamic_end)
+                proven_direct_box.direct_native_arm = arm
+                proven_direct_box.provider_slot = output
             self._slot_call_note_published(output)
             self._release_slot_call_roots(tuple(roots[1:]) if sink is None else tuple(roots))
         finally:
@@ -2835,7 +2969,10 @@ class CallObjectLoweringMixin:
             # The actual scalar-to-object producer establishes this owner.
             # Pointer pass-through and annotations alone provide no such
             # evidence and retain the caller's strict provenance checks.
-            self._publish_slot_call_owned(output, boxed, label="scalar boxing")
+            self._publish_slot_call_owned(
+                output, boxed, label="scalar boxing",
+                physical_scalar_box=isinstance(raw.type, (ir.FloatType, ir.DoubleType)),
+            )
             if isinstance(arg, Call):
                 self._emit_post_call_err_check(arg.span)
         return boxed
