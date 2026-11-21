@@ -182,7 +182,7 @@ in the relevant section or issue and removes the entry.
    control but not the C-held handle. Mac and pcc1 were not executed.
 
    Claims:
-   - none
+   - #7 owning unary-return producer: Codex, Linux x86-64, 2026-11-21T17:25:19Z, area runtime-codegen
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
