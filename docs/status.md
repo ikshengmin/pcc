@@ -18,7 +18,21 @@ Who set the order: the GC order is the maintainer's decision of 2026-11-21
 commit and push, and the round and claim rules below are the maintainer's
 decisions of 2026-11-22. The relative order of items 3 to 6 is the agent's
 recommendation of 2026-11-22, which the maintainer adjusted only by moving
-self-host last; ask before trading one of them against another.
+self-host last; ask before trading one of them against another. Targeted
+rounds, rules 13 to 16, the GC measurement rules and the inert-slice rule
+were the agent's recommendations after a risk review on 2026-11-22; the
+maintainer approved them and asked for targeted rounds the same day.
+
+**Targeted round.** The advance message followed by a target skips the
+queue order: the target names one item by its number, an issue, or words
+naming an item or project. For example "advance 3" means item 3,
+"advance Go" the Go project in item 3, "advance #6" issue #6 in item 1,
+and "advance numpy" item 4.
+Take the first unit of that target that rule 1 allows; if none is free,
+report that and stop rather than fall back to another item. Everything else
+still applies: claims, areas, a regression's stopped area (rule 13),
+design-review waits (rule 15), the circuit breaker and the waiting list.
+Without a target, take the queue in order.
 
 **One round.** One "推进" is one round on one unit. A unit is the single thing
 an item's "Next" names: one issue, one project's first blocker, or one
@@ -36,7 +50,8 @@ under each item and through Git alone.
    maintainer decision, that no active claim names, and whose area no other
    active claim holds. Areas are coarse: `runtime-gc`, `runtime-codegen`,
    `backend`, `frontend-<language>`, `numpy`, `value-model`, `gpu`, `proof`,
-   `selfhost`. Two units may share an area only if they touch no common file.
+   `selfhost`, `checkpoint`. Two units may share an area only if they touch
+   no common file.
 2. Claim before any other work: fetch `shenming/master`, replace the item's
    `- none` line, or add a line under the existing claims, with
    `- <unit>: <Codex|Claude>, <host>, <UTC start>, area <area>`; commit only
@@ -76,6 +91,58 @@ under each item and through Git alone.
 12. Pacing: an agent runs one round at a time. A continuous agent, including
     one running around the clock, starts its next round only after the
     previous one ended, and reads this work order again each time.
+13. Checkpoint. Focused tests alone do not catch drift across many rounds.
+    A checkpoint is due when ten or more commits since the last checkpoint
+    below touch the compiler or runtime
+    (`git rev-list --count <checkpoint>..shenming/master -- pcc/runtime pcc/frontends pcc/ir pcc/backend pcc/driver`),
+    or when a result of GC plan steps 2 to 5 lands.
+    - Dispatch: any round, targeted or not, that finds a checkpoint due and
+      none pending first runs
+      `gh workflow run "PCC validation" --repo ikshengmin/pcc --ref master -f base_sha=<checkpoint> -f expected_sha=<current master SHA>`,
+      records the run under "Pending" below in its own `checkpoint:` commit,
+      and continues with its unit. Nobody waits for the run.
+    - Comparison: once the pending run has finished, comparing it is the
+      first unit of the next untargeted round (area `checkpoint`). Compare
+      it with the last checkpoint's run by job and by test node id. A
+      regression is a job or node that passed there and fails now, a
+      platform where pcc1 was produced and now is not, or a Stage1 wall time
+      more than 25% above the same lane there. A lane cancelled or missing
+      in either run gives no comparison; record it.
+    - Outcome: with no regression, the dispatched commit becomes the last
+      checkpoint. With one, open an issue naming the run, lane, node and
+      commit range, put it first in item 1's "Next", and record its area as
+      stopped: until the fix lands, no agent pushes another result in that
+      area except the fix.
+    - The maintainer's approval of 2026-11-22 covers this dispatch at this
+      cadence only. `full_chain`, performance A/B dispatches and local
+      full-suite or bootstrap runs still need the maintainer's explicit OK.
+14. macOS verification. Each result of GC plan steps 2 to 5 adds a unit
+    "macOS verification of <step>" to item 2, platform macOS. A local agent
+    on the maintainer's Mac takes it: `scripts/pcc_perf.py arm` for the result
+    and its parent, `ab` with `--control` or `--control-arm`, `table`, and the
+    step's focused native tests, reported as local Mac evidence. Until one
+    does, the result's report lists those commands for the maintainer.
+15. Design review. The first code round of three architecture units is
+    preceded by a design round: GC3's young generation and remembered set,
+    GC4 phase two, and biased reference counting once its ceiling qualifies.
+    The design round writes a note in the unit's issue: the data
+    structures; every store path the barrier must cover; conservative roots
+    and pins, finalizers, weakrefs and C-API handles; what stays inert for
+    the other collectors; and the measurement that decides the unit. The
+    unit then waits under "Waiting on maintainer" until the maintainer, or a
+    reviewer the maintainer names, approves the note. Agents take other
+    units meanwhile.
+16. Rules. Agents change AGENTS.md's continuation section and these rules
+    only on the maintainer's instruction; a proposed change goes to the
+    waiting list. Rewriting an item's "Next", claim lines, the checkpoint lines and
+    the waiting list is ordinary round work.
+
+**Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
+[run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
+That run is a red baseline: its failures and cancelled lanes predate rule 13
+and are not regressions. Pending: none. Stopped areas: none. Since
+`7ce5cf663`, 72 commits touch the compiler or runtime, so a checkpoint is
+due now.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
 answers here or in chat; the agent that next takes the unit records the answer
@@ -85,11 +152,6 @@ in the relevant section or issue and removes the entry.
   boundary under the pcc1 ownership contract (item 5; open point in the
   [local-model architecture](design/pcc-local-model-architecture.md)). The
   owned device runtime already relies on it.
-- Whether to keep a cheap self-host non-regression check before item 7: a
-  current pcc1 can still be produced, and Stage1 time does not jump (for
-  example linux-aarch64 Stage1 from 2,346 s to the 7,200 s timeout since
-  `1f2b1660c`). Agent's recommendation of 2026-11-22: keep it, without
-  requiring Stage2 or Stage3 before item 7.
 - Whether to schedule the existing failure of
   `tests/test_no_skip_doctrine.py::test_no_executed_skip_mechanism_anywhere`,
   which reports `unittest.SkipTest` in
@@ -111,10 +173,11 @@ in the relevant section or issue and removes the entry.
    - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
-   macOS acceptance numbers are the maintainer's runs (give the commands).
-   Measure with `scripts/pcc_perf.py`. Next: after item 1, the GC3 mainline
-   (write barrier, remembered set of dirty regions, bump-allocated young
-   region, minor GC cost independent of old-heap size at n/4n/16n).
+   macOS numbers come from the macOS verification units (rule 14).
+   Measure with `scripts/pcc_perf.py`. Next: after item 1, the design round
+   for the GC3 mainline (rule 15): write barrier, remembered set of dirty
+   regions, bump-allocated young region, minor GC cost independent of
+   old-heap size at n/4n/16n. Its first code slice follows approval.
 
    Claims:
    - none
@@ -202,9 +265,23 @@ until all five collectors meet the stopping rule below.
    below 10%. It is a candidate, not the chosen architecture.
 
 Each performance candidate needs five same-input A/B pairs and an unchanged
-control. Freeze a collector for optimization when three consecutive
-candidates each have measured gains below 5% or an Amdahl ceiling below 10%;
-continue correctness fixes and move to the next collector. Commit or report
+control: `scripts/pcc_perf.py ab --control GC` names a collector the change
+cannot reach, and `--control-arm NAME` adds a second build of the base arm
+for a change every collector sees. The control's largest deviation from 1.0
+is the noise floor, and `ab` gives each row a verdict against it. A change
+counts as a gain or a loss only beyond that floor. When the change is within
+the floor and the floor is 5% or more, the A/B is inconclusive. It then
+counts neither as a gain nor toward freezing; rerun it with more pairs or
+on a quieter host. Freeze a collector for optimization when three
+consecutive conclusive candidates each have measured gains below 5%, or an
+Amdahl ceiling below 10%. Then continue correctness fixes and move to the
+next collector.
+
+Code merged before its candidate can be measured must stay inert for the
+collectors that do not use it: no added call, load or store on their common
+path. Show this with `ab --control` and no loss on an unaffected collector,
+GC0 at least. Otherwise keep the slices on a review branch and merge them
+with the first measurable candidate. Commit or report
 after each step, report any hour without output, move to the next ready item
 when blocked, and give the maintainer the macOS commands to run.
 

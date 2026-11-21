@@ -265,6 +265,96 @@ def test_a_screen_of_fewer_than_five_pairs_is_labelled(capsys):
     assert "screen, not a result" in capsys.readouterr().out
 
 
+def _row(gc, workers, first, second):
+    row = PERF.summarize_pairs([_run(q) for q in first], [_run(q) for q in second])
+    row.update({"gc": gc, "workers": workers})
+    return row
+
+
+def test_an_unreached_collector_sets_the_noise_floor_of_its_worker_count():
+    # gc0 is the control: the arms differ only where gc0 never goes, so its
+    # largest single-pair deviation is the noise floor of that worker count.
+    rows = [
+        _row(0, 1, [100] * 5, [104, 98, 101, 100, 99]),
+        _row(3, 1, [100] * 5, [110, 109, 108, 111, 110]),
+        _row(2, 1, [100] * 5, [103, 102, 101, 104, 103]),
+        _row(0, 4, [100] * 5, [100, 101, 99, 100, 100]),
+        _row(3, 4, [100] * 5, [97, 96, 98, 97, 95]),
+    ]
+    PERF.apply_control(rows, collector=0)
+    verdicts = {(row["gc"], row["workers"]): (row["verdict"], round(row["noise_percent"], 1))
+                for row in rows}
+    assert verdicts == {
+        (0, 1): ("control", 4.0), (3, 1): ("gain", 4.0), (2, 1): ("within noise", 4.0),
+        (0, 4): ("control", 1.0), (3, 4): ("loss", 1.0),
+    }
+
+
+def test_a_change_inside_a_noise_floor_of_five_percent_or_more_is_inconclusive():
+    rows = [
+        _row(0, 4, [100] * 5, [118, 86, 104, 97, 101]),
+        _row(3, 4, [100] * 5, [104, 103, 106, 102, 104]),
+        _row(1, 4, [100] * 5, [125, 122, 121, 124, 123]),
+    ]
+    PERF.apply_control(rows, collector=0)
+    assert [row["verdict"] for row in rows] == ["control", "inconclusive", "gain"]
+    assert rows[1]["noise_percent"] == pytest.approx(18.0)
+
+
+def test_a_duplicate_base_arm_gives_each_row_its_own_noise_floor():
+    row = PERF.summarize_pairs(
+        [_run(100)] * 5, [_run(q) for q in (106, 107, 105, 108, 106)],
+        control=[_run(q) for q in (102, 99, 101, 98, 100)])
+    row.update({"gc": 3, "workers": 1})
+    PERF.apply_control([row])
+    assert row["verdict"] == "gain"
+    assert row["noise_percent"] == pytest.approx(2.0)
+
+
+def test_without_a_control_a_comparison_cannot_count(capsys):
+    rows = [_row(3, 1, [100] * 5, [110] * 5)]
+    PERF.apply_control(rows)
+    PERF.print_comparison(rows)
+    assert rows[0]["verdict"] == "no control"
+    assert "cannot count toward the freeze rule" in capsys.readouterr().out
+
+
+def test_fewer_than_five_pairs_stay_a_screen_whatever_the_control_says():
+    rows = [_row(0, 1, [100] * 3, [100] * 3), _row(3, 1, [100] * 3, [150] * 3)]
+    PERF.apply_control(rows, collector=0)
+    assert rows[1]["verdict"] == "screen"
+
+
+def test_the_control_collector_must_be_measured():
+    with pytest.raises(SystemExit):
+        PERF.main(["ab", "a", "b", "--gc", "3", "--control", "0"])
+
+
+def _record_order(monkeypatch, rates):
+    order = []
+    monkeypatch.setattr(PERF, "binary_of", lambda name, program="native_stats": name)
+
+    def run(binary, collector, workers, rounds):
+        order.append(binary)
+        return _run(rates[binary])
+
+    monkeypatch.setattr(PERF, "run_once", run)
+    return order
+
+
+def test_two_arms_alternate_their_order_every_pair(monkeypatch):
+    order = _record_order(monkeypatch, {"a": 100, "b": 110})
+    PERF.compare("a", "b", 2, (3,), (1,), 10)
+    assert order == ["a", "b", "b", "a"]
+
+
+def test_a_duplicate_base_arm_rotates_with_the_two_arms(monkeypatch):
+    order = _record_order(monkeypatch, {"a": 100, "b": 110, "a2": 101})
+    rows = PERF.compare("a", "b", 3, (3,), (1,), 10, control_arm="a2")
+    assert order == ["a", "b", "a2", "b", "a2", "a", "a2", "a", "b"]
+    assert rows[0]["control_ratios"] == [pytest.approx(1.01)] * 3
+
+
 HANDLER = ROOT / "benchmarks/handler"
 # What 64 operations of each pure primitive sum to, derived by hand from
 # its loop (for example ``loop`` adds 0..63).

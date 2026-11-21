@@ -7,7 +7,9 @@
                         and the benchmark program, and run every primitive
                         on all five collectors
     ab A B              alternating paired runs of two arms: medians, pair
-                        wins, stopped time and graph-lock waits per collector
+                        wins, stopped time and graph-lock waits per collector;
+                        with --control GC or --control-arm NAME, the noise
+                        floor and a verdict for every row
     table NAME          every collector with one and four workers, against
                         GC0 and against the recorded asyncio figure
     asyncio             measure the CPython asyncio counterpart and record it
@@ -46,8 +48,12 @@ The loop this replaces took ten minutes per question. What makes it short:
   questions that otherwise each cost a build: "did a hot word change
   neighbours" and "who waits".
 
-A result is a claim only with at least five pairs and an unchanged control
-collector; ``ab`` prints both, and appends every comparison to the ledger.
+A result is a claim only with at least five pairs and an unchanged control:
+``--control`` names a collector the change cannot reach, ``--control-arm``
+a second build of arm A rotated with A and B (for a change every collector
+sees). The control's largest deviation from 1.0 is the noise floor; ``ab``
+calls each row a gain or a loss only beyond it, and a change inside a floor
+of 5% or more inconclusive. Every comparison goes to the ledger.
 Rates are wall-clock and need idle cores: ``ab`` and ``table`` print the
 machine's load, and beside each rate the processor time one request cost,
 which other work on the machine barely moves (it does not see time spent
@@ -447,16 +453,22 @@ def run_once(binary: Path, collector: int, workers: int, rounds: int,
     }
 
 
-def summarize_pairs(first: list[dict], second: list[dict]) -> dict:
-    """Medians of two arms' runs and how many pairs the second won."""
+def summarize_pairs(first: list[dict], second: list[dict],
+                    control: list[dict] | None = None) -> dict:
+    """Medians of two arms' runs and how many pairs the second won; with the
+    runs of a duplicate base arm, how far that identical build strayed."""
     def median(runs, key):
         return statistics.median(run[key] for run in runs)
 
+    def ratios(runs):
+        return [b["qps"] / a["qps"] if a["qps"] else 0.0 for a, b in zip(first, runs)]
+
     qps_a, qps_b = median(first, "qps"), median(second, "qps")
-    return {
+    row = {
         "pairs": len(first),
         "qps_a": qps_a, "qps_b": qps_b,
         "change_percent": 100.0 * (qps_b / qps_a - 1.0) if qps_a else 0.0,
+        "ratios": ratios(second),
         "wins": sum(1 for a, b in zip(first, second) if b["qps"] > a["qps"]),
         "cpu_us_a": median(first, "cpu_us"), "cpu_us_b": median(second, "cpu_us"),
         "stw_ms_a": median(first, "stw_ms"), "stw_ms_b": median(second, "stw_ms"),
@@ -465,25 +477,83 @@ def summarize_pairs(first: list[dict], second: list[dict]) -> dict:
         "lock_waits_a": median(first, "lock_waits"),
         "lock_waits_b": median(second, "lock_waits"),
     }
+    if control is not None:
+        row["control_ratios"] = ratios(control)
+        row["control_change_percent"] = (
+            100.0 * (median(control, "qps") / qps_a - 1.0) if qps_a else 0.0)
+    return row
 
 
-def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int) -> list[dict]:
-    binary_a, binary_b = binary_of(a), binary_of(b)
+# A candidate whose measured gain stays below this is one of the three that
+# freeze a collector (docs/status.md, GC0-4 optimization).
+FREEZE_PERCENT = 5.0
+
+
+def verdict(change: float, noise: float | None, pairs: int,
+            threshold: float = FREEZE_PERCENT) -> str:
+    """What a change means against the noise floor its control measured."""
+    if pairs < 5:
+        return "screen"
+    if noise is None:
+        return "no control"
+    if change > noise:
+        return "gain"
+    if change < -noise:
+        return "loss"
+    # A floor this wide cannot tell a real sub-threshold change from drift.
+    return "inconclusive" if noise >= threshold else "within noise"
+
+
+def apply_control(rows: list[dict], collector: int | None = None,
+                  threshold: float = FREEZE_PERCENT) -> list[dict]:
+    """Give every row its noise floor and verdict.
+
+    The floor is the largest deviation of the unchanged control from 1.0:
+    over its single pairs and its median. The control is the named
+    collector the change cannot reach (one floor per worker count), or
+    else each row's own duplicate base arm.
+    """
+    def floor(ratios, change):
+        return max([abs(ratio - 1.0) * 100.0 for ratio in ratios] + [abs(change)])
+
+    floors = {row["workers"]: floor(row["ratios"], row["change_percent"])
+              for row in rows if collector is not None and row["gc"] == collector}
+    for row in rows:
+        if collector is not None:
+            noise = floors.get(row["workers"])
+        elif "control_ratios" in row:
+            noise = floor(row["control_ratios"], row["control_change_percent"])
+        else:
+            noise = None
+        row["noise_percent"] = noise
+        if collector is not None and row["gc"] == collector:
+            row["verdict"] = "control"
+        else:
+            row["verdict"] = verdict(row["change_percent"], noise, row["pairs"], threshold)
+    return rows
+
+
+def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
+            control_arm: str | None = None) -> list[dict]:
+    arms = [(a, binary_of(a)), (b, binary_of(b))]
+    if control_arm is not None:
+        arms.append((control_arm, binary_of(control_arm)))
     runs: dict[tuple, list[dict]] = {}
     for index in range(pairs):
         for collector in collectors:
             for count in workers:
-                order = ((a, binary_a), (b, binary_b))
-                if index % 2:
-                    order = order[::-1]
-                for name, binary in order:
+                # Rotate who runs first, so no arm always runs on a cold or
+                # a warm machine; with two arms this alternates.
+                shift = index % len(arms)
+                for name, binary in arms[shift:] + arms[:shift]:
                     runs.setdefault((collector, count, name), []).append(
                         run_once(binary, collector, count, rounds))
     results = []
     for collector in collectors:
         for count in workers:
             row = summarize_pairs(
-                runs[(collector, count, a)], runs[(collector, count, b)])
+                runs[(collector, count, a)], runs[(collector, count, b)],
+                runs.get((collector, count, control_arm)))
             row.update({"gc": collector, "workers": count, "a": a, "b": b,
                         "requests": rounds * 100, "time": time.time(),
                         "load": os.getloadavg()[0]})
@@ -510,13 +580,29 @@ def print_comparison(rows: list[dict]) -> None:
             f"cpu {row['cpu_us_a']:6.1f} -> {row['cpu_us_b']:6.1f} us  "
             f"stopped {row['stw_ms_a']:5.0f} -> {row['stw_ms_b']:5.0f} ms  "
             f"lock wait {row['lock_wait_ms_a']:6.0f} -> {row['lock_wait_ms_b']:6.0f} ms "
-            f"({row['lock_waits_a']:.0f} -> {row['lock_waits_b']:.0f})",
+            f"({row['lock_waits_a']:.0f} -> {row['lock_waits_b']:.0f})"
+            + _verdict_note(row),
             flush=True,
         )
     for row in rows:
         if row["pairs"] < 5:
             print("note: fewer than five pairs is a screen, not a result")
             break
+    if any(row.get("verdict") == "no control" for row in rows):
+        print("note: no --control or --control-arm: the noise floor is unknown, "
+              "so this comparison cannot count toward the freeze rule")
+    if any(row.get("verdict") == "inconclusive" for row in rows):
+        print(f"note: inconclusive rows changed less than a control floor of "
+              f"{FREEZE_PERCENT:.0f}% or more; they count neither as a gain nor "
+              f"toward the freeze rule: add pairs or use a quieter machine")
+
+
+def _verdict_note(row: dict) -> str:
+    if row.get("verdict") == "control":
+        return f"  control, floor {row['noise_percent']:.1f}%"
+    if row.get("noise_percent") is not None:
+        return f"  {row['verdict']} (floor {row['noise_percent']:.1f}%)"
+    return f"  {row['verdict']}" if "verdict" in row else ""
 
 
 def append_ledger(rows: list[dict]) -> None:
@@ -1015,6 +1101,13 @@ def main(argv: list[str] | None = None) -> int:
     ab.add_argument("--gc", type=_numbers, default=COLLECTORS)
     ab.add_argument("--workers", type=_numbers, default=WORKERS)
     ab.add_argument("--rounds", type=int, default=100)
+    control = ab.add_mutually_exclusive_group()
+    control.add_argument("--control", type=int, default=None, metavar="GC",
+                         help="a measured collector the change cannot reach; "
+                              "its pairs set the noise floor")
+    control.add_argument("--control-arm", default=None, metavar="NAME",
+                         help="a second build of arm A, rotated with A and B; "
+                              "when every collector is reached")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -1100,8 +1193,12 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "_build":
         return build_child(args.arm)
     if args.command == "ab":
+        if args.control is not None and args.control not in args.gc:
+            parser.error(f"--control {args.control} is not among the measured collectors")
         with performance_lock():
-            rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds)
+            rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds,
+                           control_arm=args.control_arm)
+        apply_control(rows, collector=args.control)
         print_comparison(rows)
         append_ledger(rows)
         return 0

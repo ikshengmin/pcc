@@ -47,15 +47,21 @@ several agents at once. One round is one unit: claim it there first through
 Git as the work order's claim rules say (the claim holds only once its push
 succeeds), carry it under this file's rules until it is validated and pushed
 or blocked with its reason recorded, rewrite the item's "Next", release the
-claim, report and stop. Skip units this host cannot execute or that wait on
-the maintainer, and name them. Each concurrent agent works in its own
+claim, report and stop. The same message followed by a target (an item
+number, issue or project, for example "advance 3") does one round on that
+target instead of the queue order; see the work order. Skip units this
+host cannot execute or that wait on the maintainer, and name them. Each concurrent agent works in its own
 worktree or clone. A continuous agent, including one running around the
 clock, repeats rounds one at a time under the work order's renewal,
 circuit-breaker and waiting-list rules; questions for the maintainer go to
 that waiting list, never into an idle wait. Maintainer decision of 2026-11-22: "推进" authorizes the
 claim, result and release commits and their push to `shenming/master` under
 the collaboration rule below. Full-suite runs, bootstrap runs and deletions
-still need the maintainer's explicit OK.
+still need the maintainer's explicit OK, except the checkpoint validation
+dispatch that the work order's checkpoint rule schedules, which the
+maintainer approved on 2026-11-22. Agents change this section and the work
+order's rules only on the maintainer's instruction; a proposed change goes
+to the work order's waiting list.
 
 This mechanism is provisional. It was set up while pcc changes every round.
 Once the self-host fixed point meets its completion bar (Stage2 and Stage3
@@ -246,7 +252,10 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
   `layout` then name the functions, the category, the lock callers and the
   cache-line neighbours.
 - `ab A B` is the result: five alternating pairs, medians, pair wins and an
-  unchanged control collector; fewer pairs is a screen. `table` reports every
+  unchanged control (`--control GC`, or `--control-arm` for a change every
+  collector sees); fewer pairs is a screen. A change is a gain or a loss
+  only beyond the control's noise floor; inside a floor of 5% or more it is
+  inconclusive and is not a result. `table` reports every
   collector with one and four workers against GC0 and the recorded asyncio
   figure. Four workers below one worker is a defect for any collector.
 - Extend the tool instead of writing a one-off script. A newly found hot
