@@ -168,7 +168,6 @@ pcc_gc_free_object_memory = extern(
     "pcc_gc_free_object_memory", (c_ptr,), c_void
 )
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_claim_detached_ready_root = extern("pcc_gc_claim_detached_ready_root", (c_ptr,), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_note_relocation_read = extern(
@@ -709,7 +708,7 @@ def _channel_group_reserve(vthread):
     return group
 
 
-def _ready_release(node) -> None:
+def _ready_release(node, moved: int = 0) -> None:
     pool_kind = load_i64(node, 24)
     handle = load_ptr(node, 16)
     if ptr_is_null(handle) == 0:
@@ -719,7 +718,8 @@ def _ready_release(node) -> None:
             pcc_vthread_effect_note_waiter_root_leave()
         else:
             _effect(2, 0, -1, -1)
-    pcc_gc_store_root(node, null())
+    if moved == 0:
+        pcc_gc_store_root(node, null())
     if pool_kind == 2:
         _join_recycle(node)
         return
@@ -2126,8 +2126,22 @@ def _ready_node_take(node, scheduler_locked: int):
     or published by a later waker, never left READY without a queue entry.
     """
     _counter_add(global_addr("pcc_vthread_ready_count_py"), -1)
-    thread = pcc_gc_claim_detached_ready_root(node)
-    _ready_release(node)
+    moved: int = 0
+    # Match the ordinary GC0 ownership gate in py_obj._gc0_owner_fast_path.
+    # All existing no-park dequeue paths own the detached node exclusively.
+    # Its registered slot already owns the claim's one count. Move it and
+    # leave the slot NULL before recycling; never introduce an owner gap.
+    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
+            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+            and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0):
+        thread = load_ptr(node, 0)
+        store_ptr(node, 0, null())
+        moved = 1
+    else:
+        thread = pcc_gc_load_ptr(null(), node)
+        if ptr_is_null(thread) == 0:
+            py_incref(thread)
+    _ready_release(node, moved)
     if (
         ptr_is_null(thread) == 0
         and is_tagged_int(thread) == 0

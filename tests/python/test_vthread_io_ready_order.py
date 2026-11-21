@@ -20,6 +20,7 @@ def io_model():
         "pcc_vthread_io_ready_pending_py": Cell({0: 0}),
         "pcc_vthread_io_ready_turn_py": Cell({0: 0}),
         "pcc_vthread_ready_count_py": model.count,
+        **model.gc_flags,
     }
     model.namespace.update({
         "global_addr": slots.__getitem__,

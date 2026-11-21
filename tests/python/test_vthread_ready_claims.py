@@ -18,7 +18,6 @@ from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
 
 
 SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_virtual_thread_runtime.py"
-ROOT_OPERATIONS = SOURCE.with_name("py_obj.py")
 VTHREAD_TYPE = 113
 STATE = 32
 RUN_MARK = 40
@@ -45,6 +44,11 @@ class Model:
         self.registration_fails = False
         self.freed = []
         self.on_lock = None
+        self.gc_flags = {
+            "pcc_gc_refcount_atomic": Cell({0: 0}),
+            "pcc_diagnostics_runtime_log_fast_state": Cell({0: 0}),
+            "pcc_debug_runtime_enabled_cache": Cell({0: 0}),
+        }
         self.namespace = {
             "atomic_cas_i64": self.cas,
             "atomic_load_i64": lambda cell, offset, order: self.load(cell, offset),
@@ -64,7 +68,6 @@ class Model:
             "pcc_gc_scheduler_root_register_handle": self.register,
             "pcc_gc_store_root": lambda slot, value: self.store(slot, 0, value),
             "pcc_gc_load_ptr": lambda owner, slot: self.load(slot, 0),
-            "pcc_gc_claim_detached_ready_root": self.claim_stock_root,
             "_ready_release": self.release,
             "_join_release": self.release,
             "free": self.freed.append,
@@ -105,6 +108,8 @@ class Model:
         cell.fields[offset] = value
 
     def global_slot(self, name):
+        if name in self.gc_flags:
+            return self.gc_flags[name]
         if name == "pcc_vthread_io_ready_head_py":
             return self.io_head
         if name == "pcc_vthread_io_ready_tail_py":
@@ -132,15 +137,9 @@ class Model:
     def register(self, node):
         return None if self.registration_fails else node
 
-    def release(self, node):
+    def release(self, node, moved=0):
         assert node not in self.released, "scheduler root retired twice"
         self.released.append(node)
-
-    def claim_stock_root(self, node):
-        value = self.load(node, 0)
-        if value is not None:
-            self.retain(value, 1)
-        return value
 
     @staticmethod
     def retain(value, delta):
@@ -179,9 +178,9 @@ class Model:
         return self.namespace["_step_finished"](thread)
 
 
-@pytest.mark.parametrize("move", (False, True))
+@pytest.mark.parametrize("config", ("gc0", "tracing", "logged", "debug_unknown"))
 @pytest.mark.parametrize("runnable", (False, True))
-def test_detached_sole_scheduler_owner_transfers_or_drops_once(move, runnable):
+def test_detached_sole_scheduler_owner_transfers_or_drops_once(config, runnable):
     model = Model()
     thread = model.thread(state=1 if runnable else 4, mark=1)
     thread.references = 1  # Only the queue roots this object.
@@ -196,7 +195,10 @@ def test_detached_sole_scheduler_owner_transfers_or_drops_once(move, runnable):
         if obj.references == 0:
             obj.alive = False
 
-    def release(slot):
+    def release(slot, moved=0):
+        assert moved == (config == "gc0")
+        if moved:
+            assert slot.fields[0] is None
         value = slot.fields[0]
         slot.fields[0] = None
         if value is not None:
@@ -204,16 +206,12 @@ def test_detached_sole_scheduler_owner_transfers_or_drops_once(move, runnable):
         model.release(slot)
 
     ns = model.namespace
-    ns["_gc0_owner_fast_path"] = lambda: move
+    model.gc_flags["pcc_gc_refcount_atomic"].fields[0] = int(config != "tracing")
+    model.gc_flags["pcc_diagnostics_runtime_log_fast_state"].fields[0] = int(config == "logged")
+    model.gc_flags["pcc_debug_runtime_enabled_cache"].fields[0] = -1 if config == "debug_unknown" else 0
     ns["py_incref"] = lambda obj: adjust(obj, 1)
     ns["py_decref"] = lambda obj: adjust(obj, -1)
     ns["_ready_release"] = release
-    fn, = (
-        n for n in ast.parse(ROOT_OPERATIONS.read_text()).body
-        if isinstance(n, ast.FunctionDef) and n.name == "pcc_gc_claim_detached_ready_root"
-    )
-    fn.decorator_list = []
-    exec(compile(ast.Module([fn], type_ignores=[]), str(ROOT_OPERATIONS), "exec"), ns)
     claimed = ns["_ready_node_take"](node, 1)
     assert claimed is (thread if runnable else None)
     assert node.fields[0] is None and model.released == [node]
@@ -221,7 +219,7 @@ def test_detached_sole_scheduler_owner_transfers_or_drops_once(move, runnable):
         assert thread.alive and thread.references == 1
         adjust(thread, -1)
     assert not thread.alive and thread.references == 0
-    assert operations == ([-1] if move else [1, -1, -1])
+    assert operations == ([-1] if config == "gc0" else [1, -1, -1])
 
 
 @pytest.mark.integration
@@ -236,6 +234,9 @@ def test_detached_sole_ready_owner_owned_native(tmp_path, explicit_owned_runtime
     code = CACHED_POOL_ROOT_PROBE + r'''
     #include <stdio.h>
     extern int64_t pcc_refcount_load(int64_t *);
+    extern int32_t pcc_gc_refcount_atomic;
+    extern int32_t pcc_diagnostics_runtime_log_fast_state;
+    extern int32_t pcc_debug_runtime_enabled_cache;
 
     int main(int argc, char **argv) {
         if (argc != 2) return 10;
@@ -248,11 +249,21 @@ def test_detached_sole_ready_owner_owned_native(tmp_path, explicit_owned_runtime
         pcc_gc_collect(0);
         if (py_virtual_thread_ready_count() != 1 || pcc_gc_scheduler_root_count() != 1)
             return 12;
+        if (gc == 0 && (!pcc_gc_refcount_atomic ||
+                       pcc_diagnostics_runtime_log_fast_state != 0 ||
+                       pcc_debug_runtime_enabled_cache != 0)) return 19;
         PyObject *ready = py_virtual_thread_poll_ready();
         if (ready == NULL || py_virtual_thread_state(ready) != 2 ||
             py_virtual_thread_ready_count() != 0 || cached_pool_roots() != 1)
             return 13;
-        if (gc == 0 && pcc_refcount_load((int64_t *)ready) != 1) return 14;
+        if (gc == 0) {
+            if (pcc_refcount_load((int64_t *)ready) != 1) return 14;
+            /* The registered node is already NULL. The returned counted
+               owner must survive another stock GC0 collection. */
+            pcc_gc_collect(0);
+            if (pcc_refcount_load((int64_t *)ready) != 1 ||
+                py_virtual_thread_state(ready) != 2) return 18;
+        }
         if (py_virtual_thread_complete(ready, py_None) != 0) return 15;
         if (gc == 0) {
             int64_t watch[3];

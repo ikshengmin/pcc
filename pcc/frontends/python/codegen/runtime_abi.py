@@ -1798,6 +1798,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         # single-threaded kernel), written with the backend and the probe.
         'pcc_gc_refcount_fast',
         'pcc_gc_refcount_atomic',
+        'pcc_diagnostics_runtime_log_fast_state',
+        'pcc_debug_runtime_enabled_cache',
         'pcc_gc_backend4_no_refcounts',
         'pcc_gc_cms_mutator_assists',
         'pcc_gc_cms_queue_pushes',
@@ -3326,7 +3328,6 @@ def _cross_object_signatures_part_14():
 
 def _cross_object_signatures_part_15():
     return {
-    "pcc_gc_claim_detached_ready_root": (("c_ptr",), "c_ptr"),
     # GC4 evacuates object slabs (freestanding_gc_relocation_selector).
     "pcc_gc_page_of": (("c_ptr",), "c_ptr"),
     "pcc_gc_page_evacuating": (("c_ptr",), "c_int64"),

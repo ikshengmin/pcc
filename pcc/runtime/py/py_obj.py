@@ -1224,27 +1224,6 @@ def _gc0_owner_fast_path() -> int:
     )
 
 
-@c_abi_export("pcc_gc_claim_detached_ready_root")
-def pcc_gc_claim_detached_ready_root(slot):
-    """Return one running-claim owner from an exclusively detached ready node.
-
-    Caller is in the scheduler's no-park region and nobody can publish or
-    recycle this node before it is released. Its slot already owns one
-    reference. Ordinary nonmoving GC0 can transfer that count without a
-    paired increment/decrement; the caller's ensuing root clear is a no-op.
-    Tracing, relocation, provenance and diagnostic paths retain the slot
-    and acquired-result protocol, with the later release clearing the slot.
-    """
-    if _gc0_owner_fast_path() != 0:
-        value = load_ptr(slot, 0)
-        store_ptr(slot, 0, null())
-        return value
-    value = pcc_gc_load_ptr(null(), slot)
-    if ptr_is_null(value) == 0:
-        py_incref(value)
-    return value
-
-
 @c_abi_export("pcc_gc_store_return_root")
 def pcc_gc_store_return_root(slot, value) -> None:
     """Store or clear a function's shared return slot (return_lowering).
