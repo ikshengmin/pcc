@@ -7,6 +7,50 @@ handoff is `/Users/jiamo/pcc-recovery-archive/2026-10-21/README.md`. The 2026-10
 (source preservation, the remote agent's backups) is in git history at
 `38357808:docs/status.md`. All ten goals below remain open.
 
+## GC migration decision: use the GC0 base (2026-11-21)
+
+The last measured experiment 2 arm routed proven escaping float values
+through the old allocator without adding calls to ordinary allocation.
+Its nursery still reclaimed pages, but it never qualified as a
+dirty-only collector: its old-heap reference walk remained enabled, and
+cross-suspension float publication exhausted the bounded FLOAT pages
+on the four-worker handler.
+
+Five alternating Linux x86-64 in-process handler pairs per worker count
+(including the identical frozen GC0 control) used the same inputs as the
+first prototype below. All 30 processes returned all 10,000 timed
+results. The final candidate is private checkpoint `35b90c64`; frozen
+GC0 is again from `076fa37e`.
+
+| Workers | GC0 req/s, median | Candidate req/s, median | Ratio | Pairs at 90% |
+|---|---:|---:|---:|---:|
+| 1 | 16,528 | 8,243 | 49.9% | 0/5 |
+| 4 | 41,640 | 17,745 | 42.6% | 0/5 |
+
+Candidate peak RSS was 44.0/50.6 MiB against 22.7 MiB in both
+GC0 cases. The worst per-process p99 was 52.29/26.45 ms against
+17.77/1.49 ms; the candidate's longest recorded collection window
+was 48.50/28.02 ms. The frozen counter reported no event in these
+processes, which is not evidence of zero application pause. A separate
+qualified-for-admission but unpaired run recorded 189.34 ms with one
+worker. The identical frozen control varied substantially, especially
+at four workers (paired ratios 0.82–1.31), so this is not evidence of
+a small performance delta; all ten candidate pairs were nevertheless
+only 36.8–56.2% of their matches, far below the 90% gate.
+
+Reproduce with the native arguments below, using the preserved
+candidate ELF SHA-256
+`c7474f5003901b6bce8b58477d6d2a9dad2f4bcdbada7c8274446c82fbe285b7`
+and the same frozen ELF. Collect raw latencies with `--samples` in
+place of `--summary` for each arm. No independent macOS qualification
+was run; this is not a claim about all possible tracing collectors.
+
+The candidate missed the route gate. Continue the single-collector work
+from GC0, with biased reference counting and tracing cycle collection.
+Keep all five existing backends and the process-start selector in place.
+Do not merge the temporary nursery code or remove any backend on the
+strength of these results.
+
 ## GC migration experiment 2: first measurable nursery (2026-11-21)
 
 The temporary Linux x86-64 prototype combines the experiment 1 GC3
