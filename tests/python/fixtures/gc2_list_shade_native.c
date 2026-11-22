@@ -2,6 +2,7 @@
  * The fixture constructs a mark-active epoch; it does not run a full GC. */
 #include "py_internal.h"
 #include <stdio.h>
+#include <string.h>
 
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
@@ -16,9 +17,10 @@ extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern void pcc_gc_shade_gray_atomic(PyObject *, int64_t);
 extern void pcc_gc_gray_worklist_flush(void);
 extern PyObject *pcc_gc_gray_worklist_take_locked(void);
-extern int32_t pcc_gc_mark_active;
+extern int32_t pcc_gc_mark_active, pcc_gc_cms_wb_flushes;
 
-enum { WHITE = 8, GRAY = 16, COLORS = 56, WAIT_US = 1000000 };
+enum { WHITE = PY_FLAG_GC_WHITE, GRAY = PY_FLAG_GC_GRAY, BLACK = PY_FLAG_GC_BLACK,
+       COLORS = WHITE | GRAY | BLACK, WAIT_US = 1000000 };
 
 typedef struct {
     PyObject *owner, *early_child, *late_child;
@@ -53,9 +55,61 @@ static int64_t color(PyObject *obj) {
     return py_header_flags_load(py_header(obj)) & COLORS;
 }
 
-int main(void) {
+static int private_root_shade(void) {
+    PyObject *black = py_list_new(1), *white = py_list_new(0);
+    PyObject *root = NULL;
+    void *handle = pcc_gc_scheduler_root_register_handle(&root);
+    if (!black || !white || !handle) return 21;
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_alloc_stage_drain_locked();
+    pcc_gc_set_mark_color(black, BLACK);
+    pcc_gc_set_mark_color(white, WHITE);
+    if (pcc_gc_gray_count_load_acquire() != 0 || pcc_gc_mark_active) return 22;
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+
+    int32_t shades = __atomic_load_n(&pcc_gc_cms_wb_flushes, __ATOMIC_RELAXED);
+    /* Real list allocation + private root/lease initialization; no children. */
+    PyObject *fresh = py_list_new(0);
+    int32_t extra = __atomic_load_n(&pcc_gc_cms_wb_flushes, __ATOMIC_RELAXED) - shades;
+    if (!fresh || py_list_len(fresh) != 0 || !pcc_gc_object_index_seen_stable(fresh)
+        || color(fresh) != GRAY || pcc_gc_gray_count_load_acquire() != 1 || extra != 1) {
+        fprintf(stderr, "fresh shade=%d color=%lld gray=%lld\n", extra,
+                (long long)(fresh ? color(fresh) : 0),
+                (long long)pcc_gc_gray_count_load_acquire());
+        return 23;
+    }
+    /* General existing-root and genuine owning-field stores are separate. */
+    pcc_gc_store_root(&root, black);
+    if (root != black || color(black) != GRAY || pcc_gc_gray_count_load_acquire() != 2)
+        return 24;
+    py_list_append(black, white);
+    if (py_list_len(black) != 1 || color(white) != GRAY
+        || pcc_gc_gray_count_load_acquire() != 3) return 25;
+    pcc_gc_gray_worklist_flush();
+    pcc_py_gc_minor_graph_lock();
+    int found = 0;
+    for (int i = 0; i < 3; ++i) {
+        PyObject *item = pcc_gc_gray_worklist_take_locked();
+        if (item == fresh) found |= 1;
+        if (item == black) found |= 2;
+        if (item == white) found |= 4;
+    }
+    int complete = found == 7 && pcc_gc_gray_worklist_take_locked() == NULL;
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+    if (!complete) return 26;
+    pcc_gc_store_root(&root, NULL);
+    pcc_gc_scheduler_root_unregister_handle(handle);
+    puts("GC2_PRIVATE_ROOT_SHADE_OK fresh=1 old_black=1 old_white=1");
+    return 0;
+}
+
+int main(int argc, char **argv) {
     if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 1;
     py_gc_disable();
+    if (argc == 2 && strcmp(argv[1], "private") == 0) return private_root_shade();
+    if (argc != 1) return 1;
     Task task = {0};
     task.owner = py_list_new(4);
     task.early_child = py_list_new(0);

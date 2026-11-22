@@ -209,8 +209,10 @@ in the relevant section or issue and removes the entry.
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
    delayed cycle completes when allocation stops with all four workers
-   still alive. Next GC2: qualify the fresh-black private construction-root
-   shade before touching any shared barrier; see the
+   still alive. A native active-mark control ties one gray token to each
+   stock private empty-list construction root, separate from existing-root
+   and late owning-store shades. Next GC2: test a review-only private-root
+   candidate while keeping the two ordinary shades; see the
    [native screen](gc-gray-worklist.md#stock-gc2-native-completion-screen).
    No performance candidate merges before #9 is fixed.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
@@ -251,7 +253,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - GC2 prove the fresh private construction-root barrier with native controls: Codex, Linux x86-64, 2026-11-22 14:27 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -253,3 +253,16 @@ the common barrier, and GC2 deliberately allows it to shade an already
 black referent. Qualify that exact path and a genuine old-object mutation
 control before changing a barrier. Do not disable black re-shading globally
 from telemetry alone.
+
+The independent `private` variant of
+`tests/python/test_gc2_list_shade_native.py` holds a mark-active GC2 epoch
+with automatic collection off. On stock code, constructing one empty
+list increments the barrier counter and publishes exactly that list as a
+gray token. Republishing a previously black list through an ordinary
+root, then appending a white object through the normal owning list writer,
+adds one distinct token each. The separate threaded late-append control
+also still passes. This pins down an eligible narrow experiment: skip
+black re-graying only at a private construction root whose object has no
+initialized managed children yet. Keep ordinary root and owning stores
+unchanged and check that a genuinely white construction value still
+shades. This is not evidence that GC2 can skip all re-shading.
