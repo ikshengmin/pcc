@@ -16,6 +16,13 @@ class FixedStackByteSpan:
     extent: FixedByteExtent
 
 
+@dataclass(frozen=True)
+class FixedByteView:
+    span: FixedStackByteSpan
+    offset: object
+    length: object
+
+
 def allocate_fixed_byte_span(builder, extent):
     """Reserve this explicit capacity in one function, not a Go slice ABI."""
     if (not isinstance(extent, FixedByteExtent) or getattr(extent.backing, "identity", None) != BYTE_BACKING
@@ -51,3 +58,42 @@ def append_fixed_byte_words(builder, span, summary, words):
             builder.store(builder.trunc(value, i8), slot)
             offset += 1
     return replace(span, extent=result)
+
+
+def fixed_byte_view(builder, span):
+    if not isinstance(span, FixedStackByteSpan) or span.function is not builder.function:
+        raise ValueError("fixed byte view requires its owning function")
+    i64 = ir.IntType(64)
+    return FixedByteView(span, ir.Constant(i64, 0), ir.Constant(i64, span.extent.length))
+
+
+def _check_view_operands(builder, view, failure, *values):
+    if (not isinstance(view, FixedByteView) or view.span.function is not builder.function
+            or getattr(failure, "function", None) is not builder.function
+            or builder.block is failure or builder.block.is_terminated):
+        raise ValueError("fixed byte view and failure edge must belong to this function")
+    if any(value.type != ir.IntType(64) for value in (view.offset, view.length, *values)):
+        raise ValueError("fixed byte view bounds require i64 values")
+
+
+def _after_bounds_check(builder, condition, failure):
+    checked = builder.function.append_basic_block("fixed_byte.checked")
+    builder.cbranch(condition, checked, failure)
+    builder.position_at_end(checked)
+
+
+def slice_fixed_bytes(builder, view, low, high, failure):
+    """Take a subview of already written bytes, not a capacity extension."""
+    _check_view_operands(builder, view, failure, low, high)
+    ordered = builder.icmp_unsigned("<=", low, high)
+    within = builder.icmp_unsigned("<=", high, view.length)
+    _after_bounds_check(builder, builder.and_(ordered, within), failure)
+    return FixedByteView(view.span, builder.add(view.offset, low), builder.sub(high, low))
+
+
+def read_fixed_byte(builder, view, index, failure):
+    _check_view_operands(builder, view, failure, index)
+    _after_bounds_check(builder, builder.icmp_unsigned("<", index, view.length), failure)
+    offset = builder.add(view.offset, index)
+    slot = builder.gep(view.span.storage, (ir.Constant(ir.IntType(32), 0), offset), inbounds=True)
+    return builder.load(slot)

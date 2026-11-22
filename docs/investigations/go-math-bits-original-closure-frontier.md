@@ -493,3 +493,13 @@ and growth after a view cannot use this proof. The copied-string
 requirement does not grant managed allocation. Fifty-eight scoped
 and two adjacent native differential checks passed. The original
 caller is not yet lowered as a whole.
+
+Owned byte subviews now carry the same stack owner plus offset and
+length. Checked subviews cannot grow into uninitialized capacity;
+unsigned range checks also reject negative bounds, and the scalar load
+is emitted only on the success edge. A failure block in a different
+function rejects before emission. Seven dynamic native cases matched
+the explicit checked Go control (including reversed, negative and
+end bounds); 47 scoped checks and two native differentials passed.
+This does not supply general slicing, a Go panic owner, or an escaping
+string value.
