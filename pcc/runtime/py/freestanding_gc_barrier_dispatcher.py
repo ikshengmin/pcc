@@ -1,6 +1,7 @@
 """Shared write-barrier and five-backend step dispatch policy."""
 
 from pcc import i64
+from pcc.runtime.py.py_abi_constants import PY_TYPE_LIST, PY_TYPE_TUPLE
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
@@ -9,6 +10,7 @@ from pcc.unsafe import (
     atomic_rmw_i64,
     atomic_store_i64,
     define_global_i64,
+    function_addr,
     global_addr,
     global_load_ptr,
     int_to_ptr,
@@ -35,6 +37,8 @@ pcc_gc_shade_gray_atomic = extern(
 )
 pcc_container_lock_held = extern("pcc_container_lock_held", (), c_int64)
 pcc_gc_object_index_seen_stable = extern("pcc_gc_object_index_seen_stable", (c_ptr,), c_int64)
+pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
+pcc_gc_visit_object_slots = extern("pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64)
 
 
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
@@ -430,6 +434,95 @@ def pcc_gc3_review_note_owner_card(owner, value) -> None:
         return
     atomic_store_i64(buffer, _GC3_CARD_OWNERS + index * 8,
                      ptr_to_int(owner), "release")
+
+
+_GC3_FRONTIER_CAPACITY = 0
+_GC3_FRONTIER_COUNT = 8
+_GC3_FRONTIER_OLD_VISITS = 16
+_GC3_FRONTIER_STRONG_SLOTS = 24
+_GC3_FRONTIER_FAILED = 32
+_GC3_FRONTIER_ITEMS = 40
+_GC3_CARD_TYPE_TAG = 8
+_GC3_CARD_STRONG_ROLE = 1
+
+
+@c_abi_export("pcc_gc3_review_append_young_slot")
+def pcc_gc3_review_append_young_slot(slot, role: i64, frontier) -> None:
+    if role != _GC3_CARD_STRONG_ROLE:
+        return
+    store_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS,
+              load_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS) + 1)
+    child = load_ptr(slot, 0)
+    if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
+        return
+    if pcc_gc_granule_is_object_start(child) != 1:
+        return
+    if (load_i32(child, _GC3_CARD_OBJECT_FLAGS) & _GC3_CARD_YOUNG) == 0:
+        return
+    count: i64 = load_i64(frontier, _GC3_FRONTIER_COUNT)
+    if count >= load_i64(frontier, _GC3_FRONTIER_CAPACITY):
+        store_i64(frontier, _GC3_FRONTIER_FAILED, 1)
+        return
+    store_ptr(frontier, _GC3_FRONTIER_ITEMS + count * 8, child)
+    store_i64(frontier, _GC3_FRONTIER_COUNT, count + 1)
+
+
+@c_abi_export("pcc_gc3_review_scan_owner_cards_stopped")
+def pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) -> i64:
+    """Collect young frontier roots from dirty old list/tuple owners only.
+
+    A live card remains in the buffer across minor cuts until it has no
+    young referents. The buffer is caller-owned; an incomplete cut returns
+    -1 and latches overflow, so its partial frontier is never a verdict.
+    This review entry does not mark or free any object.
+    """
+    if (_selected_backend() != 3 or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(cards) != 0 or ptr_is_null(frontier) != 0
+            or ptr_diff(cards, frontier) == 0):
+        return -1
+    if (atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0):
+        return -1
+    used: i64 = load_i64(cards, _GC3_CARD_USED)
+    if (used < 0 or used > load_i64(cards, _GC3_CARD_CAPACITY)
+            or load_i64(cards, _GC3_CARD_OVERFLOW) != 0
+            or load_i64(frontier, _GC3_FRONTIER_CAPACITY) < 0):
+        return -1
+    store_i64(frontier, _GC3_FRONTIER_COUNT, 0)
+    store_i64(frontier, _GC3_FRONTIER_OLD_VISITS, 0)
+    store_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS, 0)
+    store_i64(frontier, _GC3_FRONTIER_FAILED, 0)
+    visit = function_addr("pcc_gc3_review_append_young_slot")
+    read: i64 = 0
+    retain: i64 = 0
+    while read < used:
+        owner = load_ptr(cards, _GC3_CARD_OWNERS + read * 8)
+        read = read + 1
+        if ptr_is_null(owner) != 0:
+            store_i64(cards, _GC3_CARD_OVERFLOW, 1)
+            return -1
+        # Retired owners are not roots, and their old header may be gone.
+        if pcc_gc_object_index_seen_stable(owner) == 0:
+            continue
+        if (load_i32(owner, _GC3_CARD_OBJECT_FLAGS) & _GC3_CARD_OLD) == 0:
+            continue
+        tag: i64 = load_i32(owner, _GC3_CARD_TYPE_TAG)
+        if tag != PY_TYPE_LIST and tag != PY_TYPE_TUPLE:
+            store_i64(cards, _GC3_CARD_OVERFLOW, 1)
+            return -1
+        previous: i64 = load_i64(frontier, _GC3_FRONTIER_COUNT)
+        store_i64(frontier, _GC3_FRONTIER_OLD_VISITS,
+                  load_i64(frontier, _GC3_FRONTIER_OLD_VISITS) + 1)
+        if (pcc_gc_visit_object_slots(owner, visit, frontier) == 0
+                or load_i64(frontier, _GC3_FRONTIER_FAILED) != 0):
+            store_i64(cards, _GC3_CARD_OVERFLOW, 1)
+            return -1
+        if load_i64(frontier, _GC3_FRONTIER_COUNT) != previous:
+            store_ptr(cards, _GC3_CARD_OWNERS + retain * 8, owner)
+            retain = retain + 1
+    store_i64(cards, _GC3_CARD_USED, retain)
+    return load_i64(frontier, _GC3_FRONTIER_COUNT)
 
 
 @c_abi_export("pcc_gc_note_slot_write_barrier")

@@ -559,3 +559,24 @@ models passed. Ordinary tuple owned-root construction already calls
 the owner-aware slot barrier; eager dictionary materialization has
 separate raw pair/result stores and is not qualified for nursery
 admission. No minor or performance result from these tests.
+
+### A stopped sparse cut retains a dirty owner while its young edge remains
+
+The native review scanner consumes owner tokens from the bounded buffer,
+not from the old heap. It checks current index membership before
+dereferencing an old token and uses the real slot visitor, limited to
+list/tuple strong slots. Only exact allocator-published young cells enter
+the frontier. It keeps cards with a remaining young edge across cuts,
+drops cleared or retired owners, and refuses an unsafe or incomplete
+cut. A frontier overflow latches failure rather than authorizing a
+partial result. This is still a review entry; it does not allocate or
+sweep a nursery and does not yet deduplicate repeated young seeds.
+
+Linux x86-64 pcc0/self: five rounds each with 64, 256 and 1,024 unrelated
+indexed clean old lists. Each of the 15 runs used 128 repeated cuts
+without intervening writes, exactly two dirty owners and two strong slots
+per cut, and zero clean-old visits. Clearing both edges dropped both
+cards. Frontier exhaustion, an invalid retired token and a non-stopped
+call were separate controls. Medians for the 128-cut batch were 22/23/24
+microseconds; one 1,024-list result took 906 microseconds. These are
+counts for the dirty scanner, not a qualified pause or complete minor.

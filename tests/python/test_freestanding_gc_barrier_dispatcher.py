@@ -35,6 +35,8 @@ PUBLIC_SYMBOLS = {
 OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     "pcc_gc3_review_owner_cards_set_stopped",
     "pcc_gc3_review_note_owner_card",
+    "pcc_gc3_review_scan_owner_cards_stopped",
+    "pcc_gc3_review_append_young_slot",
     # Heap StorePlans already hold the graph lock on GC4.
     # GC1/GC2's lock-free container stores shade through the barrier's
     # own count-free predicate (generator frames, container init).
@@ -86,6 +88,8 @@ RAW_FUNCTION_IMPORTS = {
     # The unlocked count-free shade holds the cycle phase by not parking.
     "pcc_thread_no_park_enter",
     "pcc_thread_no_park_exit",
+    "pcc_gc_granule_is_object_start",
+    "pcc_gc_visit_object_slots",
 } | RAW_PROVIDER_SYMBOLS
 RAW_GLOBAL_IMPORTS = {
     # The gate's automatic GC4 step leaves a due mark to its gate.
@@ -104,6 +108,8 @@ RAW_GLOBAL_IMPORTS = {
     "pcc_gc_forwarding_population",
     # Root-slot barriers take no lock in container mode (1db2494e).
     "pcc_gc_list_container_mode",
+    "pcc_gc_cms_sweep_pending",
+    "pcc_gc_concurrent_sweep_state",
     "pcc_gc_mark_active",
     "pcc_gc_metric_step",
     # Fixed with the collector: GC1/GC2 heap and root barriers skip the lock.
