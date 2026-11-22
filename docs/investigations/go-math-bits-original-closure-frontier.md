@@ -201,3 +201,22 @@ the slot or import check would not supply the required owned lifetime.
 Scoped checks: 254 focused and 15 unchanged Linux PCC branch
 executions; official Go executed the type-switch control and rejected
 seven invalid forms. Whole-project owned target assembly remains open.
+
+The existing shared managed-object plan now separates a logical
+`[]byte` view (offset, length, capacity) from the owner of repeated
+one-byte payloads. A managed string span can describe that same base
+owner, not a raw interior pointer. Allocation, root registration,
+mutation/alias proof, safepoint reload and physical offsets are still
+unresolved. `[]error` is intentionally not treated as scalar backing:
+Join also needs a separate traced interface-slice plan and normal slice
+operations. The original named `unsafe` import still rejects before IR.
+The focused suite passed 81 checks; an unchanged static-string PCC ELF
+control passed. The pinned `errors/join.go` matches the official
+GOROOT byte-for-byte, and an official caller passed nil/single checks and
+kept the returned multi-error bytes across a collection after growth.
+
+The repository already has a strict `LockedGoSourcePlan` for normal
+target packages (used by the Go Enry probe). Its schema has one row per
+import path, while the reference test graph has build instances. Next
+verify their normal roots separately rather than flattening test
+variants or substituting upstream objects.

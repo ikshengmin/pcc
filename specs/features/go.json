@@ -253,6 +253,7 @@
         "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
         "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
         "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+        "tests/go/test_managed_contracts.py::test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage",
         "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
         "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
       ],
@@ -262,7 +263,7 @@
           "reason": "The shared Go semantic source now admits bounded value-record arrays and preserves storage/runtime diagnostics. This does not renew historical evidence. Full-feature acceptance on this changed source remains unrun; candidate focused/whole-language validation and official-reference availability are reported separately.",
           "kind": "full-feature",
           "evidence": [],
-          "source_revision": "sha256:7041754fe225007bece9cac5dc89090b390110be1fd12059ed87e16d2a86388b",
+          "source_revision": "sha256:8a7aa9c724ae7feac4688a87bbcb13581d827273f5f85ebcd41e3572deaaf806",
           "backend": "self",
           "required_tests": [
             "tests/runtime_shared/test_managed_contracts.py::test_nominal_declaration_identity_is_not_underlying_or_spelling_identity",
@@ -281,6 +282,7 @@
             "tests/go/test_managed_contracts.py::test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner",
             "tests/go/test_managed_contracts.py::test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi",
             "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
+            "tests/go/test_managed_contracts.py::test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage",
             "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
             "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
           ],
@@ -294,7 +296,7 @@
       "diagnostics": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:7041754fe225007bece9cac5dc89090b390110be1fd12059ed87e16d2a86388b",
+        "source_revision": "sha256:8a7aa9c724ae7feac4688a87bbcb13581d827273f5f85ebcd41e3572deaaf806",
         "sources": [
           {
             "path": "pcc/support/managed_objects.py",
@@ -302,7 +304,7 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
+            "sha256": "1c4c6914c10b675276498f07a21480ce13b31ac7365c91def162b45cc420747f"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -311,7 +313,7 @@
         ]
       },
       "id": "go.shared-managed-compiler-contracts",
-      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support.",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. The byte-slice view and its separate scalar backing owner remain logical plans; no slice allocation or byte aliasing is admitted.",
       "evidence": []
     },
     {
@@ -1797,7 +1799,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:e280162fb034659594f8f13987e60155b3aa6d1339caffe8a10970a5e9b74a14",
+        "source_revision": "sha256:ce10754b890a86a378d5d6db1e5fa5aa29381d9dcedb2e1d8c27aa0cd1317ffb",
         "sources": [
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -1821,7 +1823,7 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
+            "sha256": "1c4c6914c10b675276498f07a21480ce13b31ac7365c91def162b45cc420747f"
           },
           {
             "path": "pcc/frontends/go/strings.py",
@@ -1879,7 +1881,7 @@
           "kind": "full-feature",
           "scope": "Decoded raw/interpreted string tags on admitted named struct fields, including groups and empty/absent equivalence. Tags remain part of assignment, method signatures, generic cache/symbol and managed compiler identity. Explicit value conversion ignores tags recursively while retaining nested nominal types, field order, package-private identities and array lengths. Existing aggregate copy/storage and static initialization are reused. Pointer conversions, embedded and blank fields, unsupported storage, reflection and runtime ABI remain outside this scope. No original math/bits or complete Go acceptance is claimed.",
           "status": "unrun",
-          "source_revision": "sha256:e280162fb034659594f8f13987e60155b3aa6d1339caffe8a10970a5e9b74a14",
+          "source_revision": "sha256:ce10754b890a86a378d5d6db1e5fa5aa29381d9dcedb2e1d8c27aa0cd1317ffb",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",
@@ -2507,7 +2509,7 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:9ea08ccaac85e495588d746440bdd6ac4d48be25f2ad38650fb087a490c0acc0",
+        "source_revision": "sha256:732eedba99cf607523e5c9012187f5311367cafdc015973a9f201d9394fe390c",
         "sources": [
           {
             "path": "pcc/frontends/go/interface_methods.py",
@@ -2527,7 +2529,7 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "bfefe989d3d9b2abbac2364c2249cc445234ee7c0d40b3c878170e98fe9e1610"
+            "sha256": "1c4c6914c10b675276498f07a21480ce13b31ac7365c91def162b45cc420747f"
           },
           {
             "path": "pcc/support/managed_objects.py",
@@ -2553,7 +2555,7 @@
           "kind": "full-feature",
           "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; this compiler-only model does not itself implement embedded-field source storage.",
           "status": "unrun",
-          "source_revision": "sha256:9ea08ccaac85e495588d746440bdd6ac4d48be25f2ad38650fb087a490c0acc0",
+          "source_revision": "sha256:732eedba99cf607523e5c9012187f5311367cafdc015973a9f201d9394fe390c",
           "mode": "pcc0",
           "platform": "linux-x86_64",
           "backend": "self",

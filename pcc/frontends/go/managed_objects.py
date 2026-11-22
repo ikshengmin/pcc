@@ -12,7 +12,10 @@ from pcc.support.managed_objects import (
 )
 from .callables import CallableType
 from .records import DefinedType, StructType, underlying
-from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, is_error_interface, is_string
+from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, SliceType, is_error_interface, is_string
+
+
+BYTE_BACKING = ManagedTypeIdentity('go', ('runtime-plan',), 'byte-backing')
 
 
 def type_identity(dtype):
@@ -32,6 +35,9 @@ def type_identity(dtype):
     if isinstance(dtype, ArrayType):
         return ManagedTypeIdentity('go', ('structural',), 'array',
                                    declaration=(dtype.count, type_identity(dtype.element)))
+    if isinstance(dtype, SliceType) and dtype.element == 'uint8':
+        return ManagedTypeIdentity('go', ('structural',), 'slice',
+                                   declaration=(type_identity(dtype.element),))
     if isinstance(dtype, StructType):
         fields = tuple((item.name, item.package, getattr(item, 'embedded', False),
                         type_identity(item.type), item.tag) for item in dtype.fields)
@@ -72,6 +78,14 @@ def value_plan(dtype):
                      ScalarFieldPlan(('length',), 'byte-length')),
             references=(ReferenceEdgePlan(('backing-owner',)),))
         requirements += ('go-string-owner-and-span-lowering',)
+    elif isinstance(base, SliceType) and base.element == 'uint8':
+        layout = ManagedLayoutPlan(identity,
+            scalars=(ScalarFieldPlan(('offset',), 'byte-offset'),
+                     ScalarFieldPlan(('length',), 'element-length'),
+                     ScalarFieldPlan(('capacity',), 'element-capacity')),
+            references=(ReferenceEdgePlan(('backing-owner',), BYTE_BACKING),))
+        requirements += ('go-slice-bounds-and-capacity', 'go-slice-backing-growth-and-aliases',
+                         'go-slice-owner-and-span-lowering')
     elif is_error_interface(dtype):
         layout = ManagedLayoutPlan(identity,
             scalars=(ScalarFieldPlan(('dynamic-type-and-method-table',), 'immutable-metadata'),),
@@ -84,6 +98,14 @@ def value_plan(dtype):
     else:
         raise ManagedContractError('Go managed value plan is not available for this type')
     return ManagedValuePlan(identity, 'unresolved', layout, requirements)
+
+
+def byte_backing_plan():
+    """Scalar byte payload only; the backing allocation/trace ABI is unresolved."""
+    byte = value_plan('uint8').layout
+    layout = ManagedLayoutPlan(BYTE_BACKING, element=byte, element_stride=1)
+    return ManagedValuePlan(BYTE_BACKING, 'unresolved', layout,
+                            ('go-byte-backing-allocation-and-extent',))
 
 
 def static_string_plan(data):

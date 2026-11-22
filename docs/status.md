@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   isolate the owned storage and borrow prerequisites of the unchanged
-   `errors/join.go:8:2` unsafe import, without bypassing package admission.
-   The pinned diagnostic union now parses the original type switch and
-   reaches package admission rather than another parser stop. See the
+   verify whether the existing `LockedGoSourcePlan` can express the
+   selected normal dependency roots for `math/bits`, separately from
+   test variants. On the diagnostic union, the first admission boundary is
+   still `errors/join.go:8:2`; the logical byte backing is not an ABI. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go errors Join owned byte lifetime frontier: Codex, Linux x86-64, 2026-11-22 02:16 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

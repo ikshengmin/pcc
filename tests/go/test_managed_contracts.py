@@ -17,7 +17,7 @@ from pcc.frontends.go.managed_objects import (
     managed_string_plan, static_string_plan, type_identity, value_plan,
 )
 from pcc.frontends.go.records import DefinedType, Field, StructType
-from pcc.frontends.go.types import ArrayType, ERROR_TYPE, PointerType
+from pcc.frontends.go.types import ArrayType, ERROR_TYPE, PointerType, SliceType
 from pcc.support.managed_objects import (
     MANAGED_REQUIREMENTS, ManagedContractError, ManagedTypeIdentity,
     pointer_map, unmet_requirements,
@@ -108,6 +108,27 @@ def test_static_bytes_are_not_managed_and_managed_spans_retain_the_base_owner():
     assert {'rooted_lifetime', 'safepoint_reload', 'object_abi'} <= set(unmet_requirements(managed.owner))
     with pytest.raises(ManagedContractError, match='owner'):
         managed_string_plan(None, offset=0, length=1)
+
+
+def test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage():
+    from pcc.frontends.go.managed_objects import byte_backing_plan
+
+    byte_slice = value_plan(SliceType('uint8'))
+    named_byte_slice = value_plan(DefinedType('Buffer', 'app', SliceType('uint8')))
+    owner = byte_backing_plan()
+    assert byte_slice.identity != named_byte_slice.identity
+    for plan in (byte_slice, named_byte_slice):
+        assert [f.path for f in plan.layout.scalars] == [('offset',), ('length',), ('capacity',)]
+        edge, = plan.layout.references
+        assert (edge.path, edge.role, edge.target) == (('backing-owner',), 'owned', owner.identity)
+        assert {'field_barriers', 'rooted_lifetime', 'safepoint_reload', 'object_abi'} <= set(unmet_requirements(plan))
+        with pytest.raises(ManagedContractError, match='unresolved'):
+            pointer_map(plan.layout, pointer_size=8)
+    assert (owner.layout.element.fixed_size, owner.layout.element_stride) == (1, 1)
+    assert owner.layout.element.references == ()
+    assert managed_string_plan(owner, offset=1, length=2).owner is owner
+    with pytest.raises(ManagedContractError):
+        value_plan(SliceType(ERROR_TYPE))
 
 
 def test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi(monkeypatch):
