@@ -65,7 +65,7 @@ Neither this diagnostic nor the controlled stopped assist qualifies A/B.
 ## Qualified tool identity and macOS commands
 
 The review branch includes the byte-identical pcc_perf tool and tests
-from master `8330c7d`. The native attestation linked against this review
+from master `98a93201`. The native attestation linked against this review
 runtime and returned 100 / -1 / -1. No handler arm was built on Linux:
 the matching gateway source is not available in that checkout.
 
@@ -75,7 +75,7 @@ with the benchmark's fixed gateway package available, use:
 ```sh
 uv run python scripts/pcc_perf.py arm gc2-stock-same-source
 uv run python scripts/pcc_perf.py arm gc2-goal-100 --gc2-pacer-percent 100
-uv run python scripts/pcc_perf.py ab gc2-stock-same-source gc2-goal-100 --pairs 5 --gc 0,2 --workers 1,4 --control 0
+uv run python scripts/pcc_perf.py ab gc2-stock-same-source gc2-goal-100 --pairs 5 --gc 0,2 --workers 1,4 --control 0 --latency-receipts
 uv run python scripts/pcc_perf.py table gc2-goal-100
 ```
 
@@ -86,6 +86,8 @@ RSS/tail latency and all five pairs, not just aggregate throughput.
 If either arm fails native qualification, preserve that receipt and
 stop the comparison.
 
-The current screen reports total stopped time, not per-pair maximum
-pause, RSS and p99. Those fields need to be recorded by the next
-measurement-tool slice before treating this command as the merge gate.
+The `--latency-receipts` run records all five pairs' QPS, maximum runtime
+collection STW, process peak RSS and timed request p99 in
+`run_receipts` in `ledger.jsonl` under `PCC_PERF_HOME`. CPU/RSS include
+output formatting. Do not substitute total stopped time for maximum
+pause. The commands are a reproduction recipe, not completed runs.
