@@ -158,3 +158,60 @@ would multiply that work. Reuse its behavior as a correctness oracle;
 separately specify how a bounded version sees roots published during
 callbacks, conservative stack/register changes and noncandidate owners
 created or mutated after the verdict. No collector ordering was changed.
+
+## Review options
+
+The common sweep must preserve two paths. For the cyclic isolate and
+its retained descendants, retain the existing early callback batch,
+finalizer phase, resurrection check and late silent clear. For the
+acyclic portion, start only a valid root of the dead owning graph
+with no remaining incoming candidate edge. Run only its finalizer
+behind an owning root and the correct address lease. Remove the
+dispatch's temporary root before the next stopped mark, then preserve
+a rescued object and its original weakrefs, or retire its outgoing
+strong edges and deliver the old callback-bearing weakrefs that are
+now truly due. Do not use the late silent list as the pending queue
+for those preexisting callbacks. A descendant is eligible only after
+its owning edge retires, and every user-code window invalidates an
+earlier reachability verdict. Any reordering relative to the cyclic
+phase must be checked against mixed graphs in the native control.
+
+**Option A, correctness arm.** Add an isolated, default-off arm that
+reuses the exact existing root recheck after a callback. This has no
+new write-side hot-path cost, but its two heap scans per callback
+make it unsuitable as an unqualified production route. Bound the
+first test to explicitly selected inputs and run CPython parity on
+all six current modes, plus mixed regions, callback-created roots,
+late-created weakrefs, exception TLS, memory pressure and nested
+`gc.collect()`. Measure visits and stopped time independently.
+Acquire the callback's existing necessary roots and leases, not a
+batch of candidate roots. GC4 requires its own reviewed movement and
+world-window treatment; do not quietly widen its current window.
+Never satisfy explicit collection by silently postponing work past
+its return.
+
+**Option B, candidate-only refresh.** Run one full settlement to start
+the sweep. For every callback window seed current explicit and
+conservative roots, then visit newly created noncandidate records and
+noncandidate owners with any published owning-slot changes. Follow
+only newly reached candidates, with their current outgoing strong
+edges. Once rescued, retire them from the batch and treat them as
+noncandidate owners in later windows. Journal entries require stable
+allocation identity or a relocation-aware record; do not retain raw
+slot pointers across resume. Retirement, initial publication, storage
+replacement, direct C stores, across-thread root publication and
+unknown C layouts are real coverage gates. A journal overflow, stale
+epoch, owner reuse or unresolved edge invalidates the incremental
+verdict and must reach the full oracle before any callback based on
+that verdict runs. Do not add a global branch to GC0 or enable the
+journal by default before this coverage exists.
+
+**Recommendation for review:** implement Option A as a test-only
+correctness arm first, not as a shipping optimization. Use that
+oracle to qualify Option B independently rather than combining a
+lifecycle rewrite with an unproved barrier. A Linux model visited
+six owners/targets at each of 16, 64 and 256 clean old owners and
+matched its separate full oracle; omitting one dirty writer produced
+the wrong answer, and known-incomplete inputs declined. All 21
+related model cases passed. No collector mode, macOS behavior or
+performance claim was changed.

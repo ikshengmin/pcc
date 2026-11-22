@@ -151,6 +151,12 @@ round compares it first. Stopped areas: none.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- #9 shared sweep production policy: review the
+  [callback ordering and bounded refresh options](investigations/gc-tracing-acyclic-weakref-resurrection.md#review-options).
+  Recommendation: use the disabled correctness arm as a reference first;
+  default-on recheck requires native parity and a measured bound. A
+  test-invoked correctness arm is independent of the production decision.
+
 - GC0 atomic reference-count CPU share: Linux has bounded user task-clock
   transport, but the owned atomic control showed exact-IP misses and the
   kernel refused the precise hardware cycle event (ENOENT). No sealed
@@ -294,9 +300,11 @@ in the relevant section or issue and removes the entry.
    retirement, new roots/cycles and candidate identity reuse.
    Owned Linux tests validate the stopped candidate-list storage and
    bounded strong/weak slot roles. The regular GC4 finish has no such
-   list and the current recheck still makes two heap walks. Next:
-   compare bounded recheck/fallback designs for the callback protocol.
-   No runtime ordering change.
+   list and the current recheck still makes two heap walks. A
+   candidate-only journal model stays flat at n/4n/16n old owners but
+   misses a single unrecorded writer. **Recommendation:** review a
+   test-gated full-recheck correctness arm before a production journal;
+   see the waiting list. No runtime ordering change.
    The old relocation fixture still fails before grouped take (GC3
    oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
@@ -469,7 +477,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Tracing post-callback candidate recheck journal and fallback design: Codex, Linux x86-64, 2026-11-22 12:12 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
