@@ -544,7 +544,9 @@ def probe(owner: Holder) -> bool:
     assert "result.local.borrowed.retain" not in caller
 
 
-@pytest.mark.parametrize("index,proven", [(0, True), (1, False)])
+@pytest.mark.parametrize(
+    "index,proven", [("0", True), ("1", True), ("-1", True), ("1 + 0", False)],
+)
 def test_exact_list_subscript_return_handoff_is_limited_to_proved_index(index, proven):
     text = _emit(f"""
 def read(owner: list[int]) -> int:

@@ -113,12 +113,24 @@ def boxed_int_instance_field_has_owner(host, fd, fn, value) -> bool:
     )
 
 
-def boxed_int_list_zero_has_owner(host, fd, fn, value) -> bool:
+def _boxed_int_list_literal_index(host, expr) -> bool:
+    if not _exact_int_repr(expr.ty):
+        return False
+    if isinstance(expr, IntLit):
+        index = expr.value
+    elif (isinstance(expr, UnaryOp) and expr.op == "-"
+          and isinstance(expr.operand, IntLit) and _exact_int_repr(expr.operand.ty)):
+        index = -expr.operand.value
+    else:
+        return False
+    return host._STATIC_TAGGED_INT_MIN <= index <= host._STATIC_TAGGED_INT_MAX
+
+
+def boxed_int_list_literal_has_owner(host, fd, fn, value) -> bool:
     """Prove the owning getitem path for a sole native list[int] formal."""
     if (not isinstance(value, Subscript) or not _exact_int_repr(value.ty)
             or not isinstance(value.obj, Name) or len(fd.args) != 1
-            or not isinstance(value.idx, IntLit) or value.idx.value != 0
-            or not _exact_int_repr(value.idx.ty)
+            or not _boxed_int_list_literal_index(host, value.idx)
             or fd.is_method or fd.name in host._hoisted_qualnames
             or not funcdef_defined_here(host, fd)):
         return False

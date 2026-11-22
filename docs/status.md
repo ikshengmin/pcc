@@ -172,14 +172,14 @@ in the relevant section or issue and removes the entry.
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #7, audit positive
-   and negative nonzero typed-list literal indices before widening the
-   one proved `values[0]` handoff; keep unproved producers on the existing
-   path until they have a native witness. The fixed field, list-zero and
-   typed-string cases in the [accessor audit](investigations/gc0-direct-boxed-int-accessor-owners.md)
-   now release the GC0 heap integer. The empty-list and invalid-string
-   witnesses still raise. Linux pcc0: 24 tests matched CPython on GC0–4
-   and 24 IR controls passed. macOS and pcc1 were not executed.
+   reproduction and acceptance. Platform: any; Next: #7, audit whether a
+   two-layer plain direct forwarding chain leaves a GC0 owner before
+   broadening beyond the one-layer proof. The [accessor audit](investigations/gc0-direct-boxed-int-accessor-owners.md)
+   field, literal-list and typed-string regression cases now release the
+   heap integer. The list proof includes tagged-range literal indices;
+   `[1]` and `[-1]` have both alias and detached native witnesses. Empty
+   list and invalid string still raise. Linux pcc0: 28 tests compared on
+   GC0–4 with CPython and 26 IR controls. No macOS or pcc1 execution.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -204,7 +204,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #7 nonzero literal list index audit: Codex, Linux x86-64, 2026-11-22 00:24 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

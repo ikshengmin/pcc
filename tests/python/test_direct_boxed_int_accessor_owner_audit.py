@@ -43,6 +43,17 @@ CASES = {
     "parse": (PARSE, 'result: object = returned("9223372036854775808")\n    assert result == n and result is not n'),
     "invalid": (PARSE, 'try:\n        result: object = returned("not-an-integer")\n    except ValueError:\n        pass\n    else:\n        raise AssertionError("expected ValueError")'),
 }
+for name, index in (("positive", 1), ("negative", -1)):
+    declaration = ITEM.replace("owner[0]", f"owner[{index}]")
+    for detached in (False, True):
+        setup = "owner: list[int] = [0, n]\n    "
+        use = "result: object = returned(owner)\n    "
+        action = (setup + "n = 0\n    " + use + "owner[1] = 0\n    "
+                  + "gc.collect()\n    assert result == 9223372036854775808"
+                  if detached else setup + use + "assert result is n")
+        suffix = "-detached" if detached else ""
+        CASES[f"nonzero-{name}{suffix}"] = declaration, action
+
 MARKER = "DIRECT_BOXED_INT_ACCESSOR_OK"
 
 

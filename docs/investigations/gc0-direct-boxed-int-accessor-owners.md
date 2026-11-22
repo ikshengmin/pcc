@@ -39,3 +39,15 @@ tree RSS and six xdist workers. The first harness attempt failed to select a
 marker from the indexed IR before any native test run; the successful
 attempt selected the unique caller/callee module and used the report's
 source-hash binding instead.
+
+## Nonzero literal list indices
+
+On claim `feb1e468`, both `[1]` and `[-1]` selected `py_list_getitem` in
+the linked input. Each had one GC0 `decref(1)` in the original-owner and
+overwritten-owner form, despite matching CPython behavior across GC0–4.
+With the bounded literal-index proof, all four reach `free(0)`. Negative
+integer syntax here is a unary minus over an integer literal. Expressions
+such as `1 + 0` remain outside the proof; no dynamic index, tuple, dict,
+cross-module or foreign ABI conclusion follows. The native matrix was
+28 cases, 52.04 s and 711,073,792 B peak process-tree RSS; 26 related IR
+controls passed. The previous archive guard and reproduction command apply.
