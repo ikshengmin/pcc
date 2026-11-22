@@ -373,7 +373,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: none.
+   Claims: pccDot (2026-11-22 19:55 UTC), #9 review only: validate sparse callback publication from the exact prior gray queue rather than walking all candidates, retaining bitmap and full oracle fallbacks.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
