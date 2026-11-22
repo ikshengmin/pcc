@@ -6,6 +6,8 @@ interfaces, or turn the private nil-error word into an interface ABI. Current
 string lowering consumes only the static span adapter; managed spans require
 an owner and retain unresolved root, barrier and safepoint obligations.
 """
+from dataclasses import dataclass
+
 from pcc.support.managed_objects import (
     ManagedContractError, ManagedLayoutPlan, ManagedSpanPlan,
     ManagedTypeIdentity, ManagedValuePlan, ReferenceEdgePlan, ScalarFieldPlan,
@@ -16,6 +18,14 @@ from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, SliceType,
 
 
 BYTE_BACKING = ManagedTypeIdentity('go', ('runtime-plan',), 'byte-backing')
+
+
+@dataclass(frozen=True)
+class FixedByteExtent:
+    """Constant dimensions only, with neither a backing ABI nor a lifetime."""
+    length: int
+    capacity: int
+    backing: ManagedValuePlan
 
 
 def type_identity(dtype):

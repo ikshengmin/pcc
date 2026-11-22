@@ -21,6 +21,7 @@ from pcc.frontends.go.interface_methods import (
 from pcc.frontends.go.interface_values import (
     boxed_interface_plan, interface_storage_plan, nil_interface_plan, transferred_interface_plan,
 )
+from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, ChannelSyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
@@ -2099,26 +2100,17 @@ class Analyzer:
                 self.indirect_call(expr)
                 return
             if (name == "make" and name not in owner.functions and name not in owner.types
-                    and name not in self.type_bindings
-                    and expr.args and expr.args[0].kind == "type"
-                    and isinstance(expr.args[0].value, (MapSyntax, ChannelSyntax))):
-                make_form = "make(map)" if isinstance(expr.args[0].value, MapSyntax) else "make(chan)"
-                if len(expr.args) > 2 or expr.spread is not None:
-                    raise GoDiagnostic(expr.token, f"{make_form} requires a type and at most one size")
-                if len(expr.args) == 2:
-                    size = expr.args[1]
-                    self.expression(size)
-                    value = size.constant
-                    untyped_real_constant = (
-                        isinstance(size.type, str) and size.type.startswith("untyped ")
-                        and is_float(size.type) and value is not None
-                    )
-                    if not (is_integer(size.type) or untyped_real_constant):
-                        raise GoDiagnostic(size.token, f"{make_form} size must be an integer")
-                    if value is not None and not (0 <= value <= integer_bounds("int")[1]
-                                                   and value == int(value)):
-                        raise GoDiagnostic(size.token, f"{make_form} size must be a nonnegative int")
-                self.resolve_type(expr.args[0].value)  # Storage rejects before lowering.
+                    and name not in self.type_bindings and expr.args and expr.args[0].kind == "type"):
+                syntax = expr.args[0].value
+                if isinstance(syntax, SliceSyntax):
+                    self.check_make_slice(expr)
+                if isinstance(syntax, (MapSyntax, ChannelSyntax)):
+                    make_form = "make(map)" if isinstance(syntax, MapSyntax) else "make(chan)"
+                    if len(expr.args) > 2 or expr.spread is not None:
+                        raise GoDiagnostic(expr.token, f"{make_form} requires a type and at most one size")
+                    if len(expr.args) == 2:
+                        self.make_size(expr.args[1], make_form)
+                    self.resolve_type(syntax)  # Storage rejects before lowering.
             if name in ("min", "max"):
                 self.minmax(expr)
                 return
@@ -2298,6 +2290,32 @@ class Analyzer:
     def field_access(self, field, token):
         if field.package and field.package != (self.package_path or "<main>"):
             raise GoDiagnostic(token, "cannot access unexported struct field " + field.name)
+
+    def make_size(self, size, form):
+        self.expression(size)
+        value = size.constant
+        untyped_real = (isinstance(size.type, str) and size.type.startswith("untyped ")
+                        and is_float(size.type) and value is not None)
+        if not (is_integer(size.type) or untyped_real):
+            raise GoDiagnostic(size.token, f"{form} size must be an integer")
+        if value is not None and not (0 <= value <= integer_bounds("int")[1] and value == int(value)):
+            raise GoDiagnostic(size.token, f"{form} size must be a nonnegative int")
+        return int(value) if value is not None else None
+
+    def check_make_slice(self, expr):
+        if len(expr.args) not in (2, 3):
+            raise GoDiagnostic(expr.token, "make(slice) requires a type, length and optional capacity")
+        dtype = self.resolve_type(expr.args[0].value, signature=True)
+        length = self.make_size(expr.args[1], "make(slice)")
+        capacity = self.make_size(expr.args[2], "make(slice)") if len(expr.args) == 3 else length
+        known = length is not None and capacity is not None
+        if known and length > capacity:
+            raise GoDiagnostic(expr.args[1].token, "make(slice) length cannot exceed capacity")
+        failure = UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
+                                "make(slice) requires owned slice backing storage")
+        failure.byte_span_extent = (FixedByteExtent(length, capacity, byte_backing_plan())
+                                    if known and dtype.element == "uint8" else None)
+        raise failure
 
     def minmax(self, expr):
         """Ordered scalar builtins, with one common source type for all inputs.

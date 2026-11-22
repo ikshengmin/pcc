@@ -452,3 +452,14 @@ and now stops in `appendBytes(b []byte, args ...uint32) []byte`
 16-byte appends and returns a string conversion; slice aliasing,
 capacity, return lifetime and string ownership remain separate from
 the assembly objects.
+
+The checked slice constructor now validates size, arity and constant
+length/capacity consistency. The unchanged `Name` expression at
+`cpu_x86.go:246` supplies an extent of (0,48); dynamic dimensions
+do not supply a static extent. The scalar backing plan stays
+unresolved and does not establish a call lifetime, alias proof or
+allocation. The exact full graph still rejects `appendBytes`'s
+slice carriers, so the next step is an independent call-growth and
+escape proof. All 178 adjacent checks and the owned static-string
+control passed; official Go executed the same constructor shapes
+and rejected four invalid forms.
