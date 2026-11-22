@@ -168,6 +168,24 @@ does not create a remembered edge after in-place promotion.
 Four new serial tests exercise these cases (19 focused host checks).
 They do not supply a native promotion implementation, lock proof or A/B.
 
+### What existing allocator provenance does and does not provide
+
+The Linux owned C fixture uses ordinary GC3 allocator cells, not a bump
+nursery. It does not register either cell in the tracing index. The
+exact published address is recognized by both `pcc_gc_granule_is_object_start`
+and `pcc_gc_pointer_is_managed`; an interior address, a reserved cell with
+a complete object-looking header, and a raw malloc with the same header
+are rejected. Retiring one published cell invalidates its cached positive
+without invalidating the other. These are lifecycle checks, not claims
+about mark/sweep survival for unregistered objects.
+
+`pcc_allocator_object_cell_span` returns no span until the per-cell
+record array exists, so it cannot be used as a record-free nursery
+iterator. A nursery must separately enumerate its published slab bounds
+or bitmap. Its cursor must distinguish generations when a slab is reused;
+address identity alone in this baseline only describes the currently
+allocated object. There is no production runtime or performance change.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the
