@@ -38,7 +38,7 @@ for _mnemonic in ("xchg", "xadd", "cmpxchg"):
         _mnemonic + " QWORD PTR [r11], r10",
         _mnemonic + " DWORD PTR [r11], r10d",
     )
-for _mnemonic in ("nop", "cdq", "cqo", "syscall", "mfence", "cpuid", "ret", "ud2"):
+for _mnemonic in ("nop", "cdq", "cqo", "syscall", "mfence", "cpuid", "xgetbv", "ret", "ud2"):
     _VARIANTS[_mnemonic] = (_mnemonic, _mnemonic.upper())
 
 _CONTEXTS = (

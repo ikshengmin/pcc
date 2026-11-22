@@ -420,3 +420,13 @@ and advanced to the separate `xgetbv` at `cpu_x86.go:15:6`.
 Validation: 156 scoped checks and the unchanged original CPUID assembly
 differential. The project graph still emits no IR or test binary; the
 CPUID object's link was only the isolated control.
+
+The owned x86 encoder now accepts no-operand XGETBV and rejects explicit
+operands. Linux owned ELF and the system assembler matched on a probe
+which tested CPUID leaf 1's OSXSAVE bit before reading XCR0. On this
+host the guarded instruction executed; a separate forced-disabled
+arm confirmed the guard bypasses the instruction and returns the zero
+receipt. All 248 adjacent checks and three native CPUID/XGETBV controls
+passed. The original `doinit` guard is
+`if X86.HasOSXSAVE { eax, _ := xgetbv() … }`; the project still has
+no XGETBV symbol owner binding.

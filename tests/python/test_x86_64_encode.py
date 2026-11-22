@@ -55,12 +55,34 @@ def test_cpuid_takes_no_explicit_operands():
         encode_instruction("cpuid eax", pc=0, labels={}, section_name=".text")
 
 
-@pytest.mark.integration
-@_X86_GATE
-def test_cpuid_native_owned_registers_match_system_oracle(tmp_path, monkeypatch):
+def test_xgetbv_takes_no_explicit_operands():
+    bare = encode_instruction("xgetbv", pc=91, labels={}, section_name=".text")
+    assert bare.code == bytes.fromhex("0f01d0") and not bare.relocations
+    with pytest.raises(X86EncodeError, match="xgetbv takes no operands"):
+        encode_instruction("xgetbv ecx", pc=0, labels={}, section_name=".text")
+
+
+def _execute_owned_and_system_assembly(assembly, tmp_path, monkeypatch):
     from pcc.backend.elf_x86_64 import link_static_executable
     from pcc.backend.x86_64_asm_driver import assemble_file
 
+    owned, reference, source = (tmp_path / name for name in ("owned", "reference", "same.s"))
+    with monkeypatch.context() as denied:
+        denied.setattr(subprocess, "Popen", lambda *_a, **_kw: pytest.fail("owned path invoked a tool"))
+        owned.write_bytes(link_static_executable([assemble_file(assembly)], entry="_start"))
+    owned.chmod(0o700)
+    source.write_text(assembly, encoding="utf-8")
+    subprocess.run([_CC, "-nostdlib", "-static", "-o", str(reference), str(source)],
+                   check=True, capture_output=True, timeout=30)
+    got = subprocess.run([str(owned)], check=True, capture_output=True, timeout=5)
+    want = subprocess.run([str(reference)], check=True, capture_output=True, timeout=5)
+    assert got.stdout == want.stdout and got.stderr == want.stderr == b""
+    return got.stdout
+
+
+@pytest.mark.integration
+@_X86_GATE
+def test_cpuid_native_owned_registers_match_system_oracle(tmp_path, monkeypatch):
     assembly = """.intel_syntax noprefix
 .text
 .globl _start
@@ -100,17 +122,50 @@ probe:
   pop rbx
   ret
 """
-    owned, reference, source = (tmp_path / name for name in ("owned", "reference", "same.s"))
-    with monkeypatch.context() as denied:
-        denied.setattr(subprocess, "Popen", lambda *_a, **_kw: pytest.fail("owned path invoked a tool"))
-        owned.write_bytes(link_static_executable([assemble_file(assembly)], entry="_start"))
-    owned.chmod(0o700)
-    source.write_text(assembly, encoding="utf-8")
-    subprocess.run([_CC, "-nostdlib", "-static", "-o", str(reference), str(source)],
-                   check=True, capture_output=True, timeout=30)
-    got = subprocess.run([str(owned)], check=True, capture_output=True, timeout=5)
-    want = subprocess.run([str(reference)], check=True, capture_output=True, timeout=5)
-    assert len(got.stdout) == 16 and got.stdout == want.stdout and got.stderr == want.stderr == b""
+    assert len(_execute_owned_and_system_assembly(assembly, tmp_path, monkeypatch)) == 16
+
+
+@pytest.mark.integration
+@_X86_GATE
+@pytest.mark.parametrize("disable", (False, True))
+def test_xgetbv_native_matches_system_oracle_only_under_osxsave(tmp_path, monkeypatch, disable):
+    forced_clear = "xor ecx, ecx" if disable else ""
+    assembly = f""".intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 16
+  mov QWORD PTR [rsp], 0
+  mov QWORD PTR [rsp + 8], 0
+  mov eax, 1
+  xor ecx, ecx
+  cpuid
+  {forced_clear}
+  mov r9d, 0x08000000
+  test ecx, r9d
+  je output
+  xor ecx, ecx
+  xgetbv
+  mov DWORD PTR [rsp], eax
+  mov DWORD PTR [rsp + 4], edx
+  mov QWORD PTR [rsp + 8], 1
+output:
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 16
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    raw = _execute_owned_and_system_assembly(assembly, tmp_path, monkeypatch)
+    assert len(raw) == 16
+    enabled, = raw[8:9]
+    assert enabled in (0, 1)
+    assert not disable or enabled == 0
+    assert enabled or raw[:8] == bytes(8)
+    (tmp_path / "executed-xgetbv.txt").write_text(str(enabled) + "\n")
 
 
 def _system_encoding(tmp_path: Path, instruction: str):
@@ -234,6 +289,7 @@ _EMITTER_SHAPES = (
     "syscall",
     "mfence",
     "cpuid",
+    "xgetbv",
     "ret",
     "ud2",
 )
