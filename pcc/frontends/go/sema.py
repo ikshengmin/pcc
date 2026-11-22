@@ -70,6 +70,7 @@ class Symbol:
     variadic_formal: bool = False
     # The owned runtime object a //go:linkname directive bound, if any.
     linkname: object = None
+    static_option_catalog_proof: object = None
 
 
 def integer_literal(expr):
@@ -457,7 +458,8 @@ def validate_value_types(program, *, source_only=False):
 
     def statement(stmt):
         for symbol in stmt.symbols:
-            storage(symbol.type, symbol.token)
+            if not (source_only and symbol.package_variable and symbol.static_option_catalog_proof is not None):
+                storage(symbol.type, symbol.token)
         for expr in stmt.exprs + stmt.targets:
             expression(expr)
         for child in stmt.body + (stmt.otherwise or []) + stmt.cases:
@@ -527,7 +529,8 @@ def validate_containment_cycles(declarations):
 
 class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None,
-                 source_only=False, native_functions=None, prove_scalar_slice_owners=False):
+                 source_only=False, native_functions=None, prove_scalar_slice_owners=False,
+                 static_option_catalogs=()):
         self.program = program
         self.imports = imports or {}
         self.dot_imports = {}
@@ -536,6 +539,21 @@ class Analyzer:
         self.generics = generics if generics is not None else GenericSession()
         self.source_only = source_only
         self.scalar_slice_owners = {}
+        self.static_option_catalogs = {}
+        if static_option_catalogs and not source_only:
+            raise ValueError("static option catalog metadata is source-only")
+        if static_option_catalogs:
+            from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest, bounded_static_option_builder
+            seen_catalogs = set()
+            for request in static_option_catalogs:
+                if (type(request) is not StaticOptionCatalogRequest or
+                        any(type(name) is not str or not name for name in (request.slot, request.builder, request.level)) or
+                        request.slot in seen_catalogs):
+                    raise ValueError("invalid or repeated static option source request")
+                seen_catalogs.add(request.slot)
+                proof = bounded_static_option_builder(program, request.builder, request.slot, request.level)
+                if proof is not None:
+                    self.static_option_catalogs[request.slot] = proof
         if source_only and prove_scalar_slice_owners:
             from pcc.frontends.go.slice_proof import scalar_slice_owner_group
             self.scalar_slice_owners = scalar_slice_owner_group(program) or {}
@@ -1163,6 +1181,15 @@ class Analyzer:
         if symbol.resolving:
             raise GoDiagnostic(symbol.token, "package initialization cycle" if symbol.package_variable else "constant initialization cycle")
         symbol.resolving = True
+        catalog = self.static_option_catalogs.get(symbol.token.text) if symbol.package_variable else None
+        if catalog is not None and symbol.declaration is None and symbol.linkname is None:
+            # A bounded source declaration, not a global storage owner. Keep
+            # its nominal element identity while denying materialized uses.
+            symbol.type = self.resolve_type(symbol.type, signature=True)
+            symbol.static_option_catalog_proof = catalog
+            symbol.abi_symbol = ""
+            symbol.resolved, symbol.resolving = True, False
+            return
         symbol.type = self.resolve_type(symbol.type)
         if not symbol.package_variable and interface_type(symbol.type) is not None:
             raise GoDiagnostic(symbol.token, "interface-typed initializer is not a constant")
@@ -1208,6 +1235,9 @@ class Analyzer:
         uncaught panic reports Error() of the runtime object, the fixed text
         of runtime/panic.go, so no interface value is materialized.
         """
+        if symbol.static_option_catalog_proof is not None:
+            raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
+                                "proved global record slice needs owned initialization and consumer storage")
         if getattr(symbol, 'linkname', None) is None:
             return
         from .runtime_provider import runtime_object

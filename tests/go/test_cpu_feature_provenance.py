@@ -172,3 +172,59 @@ func build() {
 """.replace(*change)
     program = parse_package((("builder.go", source),), require_main=False)
     assert bounded_static_option_builder(program, "build", "config", "hardware") is None
+
+
+def test_static_option_catalog_metadata_does_not_open_native_globals_or_uses():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances, parse_package
+    from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+    from pcc.frontends.go.types import SliceType
+
+    source = """package main
+type Item struct { Label string; Flag *bool; Enabled bool }
+var catalog []Item
+var Flags struct { A bool; B bool }
+func hardware() int32 { return 1 }
+func build() {
+    catalog = []Item{{Label:"a", Flag:&Flags.A}}
+    level := hardware()
+    if level < 2 { catalog = append(catalog, Item{Label:"b", Flag:&Flags.B}) }
+}
+func main() {}
+"""
+    units = (("catalog.go", source),)
+    request = StaticOptionCatalogRequest("catalog", "build", "hardware")
+    with pytest.raises(UnsupportedGo, match="slice types require shared-runtime") as ordinary:
+        compile_go(source, "catalog.go")
+    assert ordinary.value.line == 3
+
+    analyzer = Analyzer(parse_package(units, require_main=True), source_only=True,
+                        static_option_catalogs=(request,))
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as candidate:
+        analyzer.analyze()
+    assert candidate.value.line == 7
+    symbol = analyzer.globals["catalog"]
+    assert isinstance(symbol.type, SliceType) and symbol.type.element.name == "Item"
+    assert symbol.static_option_catalog_proof.capacity == 2
+    assert symbol.initializer is None and symbol.abi_symbol == ""
+
+    instances = {"main": SourceInstance("main", units, {}, static_option_catalogs=(request,))}
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as nested:
+        analyze_source_instances(instances, main_instance="main", target_triple="x86_64-unknown-linux-gnu")
+    assert nested.value.line == 7
+
+
+def test_invalid_static_option_catalog_request_never_authorizes_declaration():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+
+    units = (("catalog.go", """package main
+type Item struct { Label string; Flag *bool }
+var catalog []Item
+func main() {}
+"""),)
+    request = StaticOptionCatalogRequest("catalog", "unknownBuilder", "unknownLevel")
+    with pytest.raises(UnsupportedGo, match="slice types require shared-runtime") as caught:
+        analyze_source_instances({"main": SourceInstance("main", units, {}, static_option_catalogs=(request,))},
+                                 main_instance="main", target_triple="x86_64-unknown-linux-gnu")
+    assert caught.value.line == 3

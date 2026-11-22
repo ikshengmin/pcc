@@ -470,6 +470,14 @@ def scalar_slice_owner_group(program):
 
 
 @dataclass(frozen=True)
+class StaticOptionCatalogRequest:
+    """Names to look up and independently prove in an exact source package."""
+    slot: str
+    builder: str
+    level: str
+
+
+@dataclass(frozen=True)
 class StaticOptionBuilderProof:
     """Bounds and static field sources, not an initialized global descriptor."""
     record: str

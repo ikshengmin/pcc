@@ -53,6 +53,7 @@ class SourceInstance:
     units: tuple
     imports: dict
     native_functions: dict = field(default_factory=dict)
+    static_option_catalogs: tuple = ()
 
 
 def parse_package(units, *, require_main):
@@ -174,7 +175,8 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
                             package_path=None if path == main_package else path, generics=generics,
                             source_only=instances is not None,
                             prove_scalar_slice_owners=prove_scalar_slice_owners,
-                            native_functions=instance.native_functions if instances is not None else None)
+                            native_functions=instance.native_functions if instances is not None else None,
+                            static_option_catalogs=instance.static_option_catalogs if instances is not None else ())
         if owned:
             analyzer.owned_surface = frozenset(
                 [dtype.token.text for dtype in program.types] + [function.token.text for function in program.functions]

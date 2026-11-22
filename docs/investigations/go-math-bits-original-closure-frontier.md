@@ -680,3 +680,13 @@ or non-bool pointer sources. Seventy-six scoped checks and three
 standalone native/reference controls passed. The original global catalog
 is not yet represented or initialized by PCC, and its consumer flow is
 a separate obligation.
+
+An exact source-instance request now recomputes the bounded catalog
+proof before retaining the global's nominal record-slice declaration.
+It supplies neither initializer nor native ABI symbol; every materialized
+use still rejects. Ordinary Go compilation and an invalid proof request
+continue to stop at the declaration. On the exact 133-instance original
+graph the probe advances to `internal/cpu/cpu.go:231:20`, the dynamic
+`env[:i]` split after `indexByte`. No full package IR or test executable
+is produced. Seventy-eight adjacent checks and three standalone native
+differentials passed.
