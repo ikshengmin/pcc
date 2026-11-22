@@ -674,7 +674,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - pccDot (2026-11-22 23:08 UTC), close the first GC3 nursery admission group from actual handler allocation counts and the approved writer/exclusion matrix; test actual source, no broadened production admission.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
