@@ -328,8 +328,12 @@ in the relevant section or issue and removes the entry.
    aggregate change 0–3% within duplicate-parent noise. Not shipped.
    Stop-owner copy was only ~0.16 ms total across 512 Linux windows;
    waiting for peer rendezvous took 7.4–7.7 ms, so keep all snapshots.
-   Next: test whether #9-scoped owner-only readiness notification avoids
-   unnecessary peer wakeups, including multi-peer and lifecycle controls. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit ceafbf0](https://github.com/ikshengmin/pcc/commit/ceafbf09ed51ee4cc04f85938425dbd1141aa0f2)
+   separates callback owner readiness from peer resume. Four-peer Linux
+   chain time fell 23–29% (three 5/5 series); five-GC native lifecycle
+   checks passed. One-peer, HTTP and macOS remain unqualified.
+   Next: test notifying the owner only when its readiness predicate
+   becomes true, keeping departure/exited and normal resume invariants. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -383,7 +387,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:22 UTC), #9 review only: test dedicated readiness notification in callback rendezvous with one/four frozen peers and full lifecycle controls.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
