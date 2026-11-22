@@ -179,6 +179,13 @@ in the relevant section or issue and removes the entry.
   Recommendation: retain the review branch and do not merge until the
   pause/control gate qualifies. Continue ready GC2 work meanwhile.
 
+- GC2 exact-list bridge: run the [pinned Mac same-input A/B](https://github.com/ikshengmin/pcc/blob/ec60c7bed4e39baf963adfb9e841d812291374d8/docs/investigations/gc2-exact-list-worker-review.md#same-input-mac-handoff-sealed-arms)
+  and have Claude review lock/stop ordering, preservation of gray
+  credits and default-off scope. The [latest review evidence](https://github.com/ikshengmin/pcc/blob/0553ec68419ebeb976dd7fa21fb75e4cd2aea283/docs/investigations/gc2-exact-list-worker-review.md)
+  includes actual automatic marking, ownership and lifecycle controls;
+  it is not an A/B or permission to expand. Continue other eligible
+  GC units while those checks are pending.
+
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -398,9 +405,13 @@ in the relevant section or issue and removes the entry.
    Linux checks and two owned integration nodes passed. Ten host-Clang
    lanes remain unqualified in this workspace. The [other-backend C hold controls](https://github.com/ikshengmin/pcc/blob/862875c01cf91a390210edd8a6891912d4bebc0e/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
    passed with the flag present and absent on GC0/1/3/4, alongside the
-   existing all-five pcc0 ownership cases (eight nodes). Next classify
-   the candidate's truncated profiling stacks before any Mac analysis.
-   Master runtime and the separate pacer A/B branch are unchanged.
+   existing all-five pcc0 ownership cases (eight nodes). The
+   [profiling follow-up](https://github.com/ikshengmin/pcc/blob/0553ec68419ebeb976dd7fa21fb75e4cd2aea283/docs/investigations/gc2-exact-list-worker-review.md)
+   attributes clipped bridge frames to collection without changing
+   the denominator (87 host checks). Take other ready GC units while
+   the exact-list branch awaits Mac A/B and Claude's concurrency review;
+   do not add workers or enable it on master. Master runtime and the
+   separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -412,7 +423,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Attribute truncated GC2 review marking profiles without altering sample counts: Codex, Linux x86-64, 2026-11-22 10:58 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
