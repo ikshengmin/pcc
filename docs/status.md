@@ -361,8 +361,12 @@ in the relevant section or issue and removes the entry.
    Twelve Linux subprocesses (one/four mutators, bridge off/on, three each)
    kept rooted owners and children alive; candidate counters saw both
    shortcut and fallback, off had neither. Keep disabled. Ask Claude
-   to inspect no-park and graph lock order and finish; next force exact
-   oversized-work fallback independent of the workload's token order.
+   to inspect no-park and graph lock order and finish. The
+   [forced fallback probe](https://github.com/ikshengmin/pcc/blob/57402250070a8eccddcb8d37067a8a606d2afe27/docs/investigations/gc2-exact-list-worker-review.md)
+   passed 18 Linux cases: 32 slots shortcut, 33 ordinary fallback, tuple
+   bypass; each path debited one owner and published one child.
+   Next exercise a latched gray-worklist allocation fallback with
+   stock cursor and bridge contention before expanding the candidate.
    Master runtime and the pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -375,7 +379,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 bridge deterministic exact width and unsupported token fallback: Codex, Linux x86-64, 2026-11-22 10:10 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
