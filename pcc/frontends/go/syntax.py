@@ -392,6 +392,7 @@ class Function:
     variadic_frame_bytes: int = 0
     declaration_only: bool = False
     byte_append_summary: object = None
+    scalar_slice_owner_proof: object = None
 
 
 @dataclass

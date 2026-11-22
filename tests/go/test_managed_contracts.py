@@ -521,3 +521,47 @@ func main() {
     for name, _ in originals:
         assert (selected / name).read_bytes() == (root / name).read_bytes()
     assert run(reference) == Execution(0, b"cpu-source-ok", b"")
+
+
+def test_only_explicit_source_probe_type_checks_proved_scalar_slice_owners():
+    from pcc.frontends.go.branches import walk
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+
+    text = """package main
+func F(n uintptr) []uintptr { if n == 0 { return nil }; return G(n) }
+func G(n uintptr) []uintptr { var s []uintptr; s = append(s, n); if len(s) != 1 { return nil }; return s }
+func main() {}
+"""
+    source = {"main": SourceInstance("main", (("owners.go", text),), {})}
+    target = "x86_64-unknown-linux-gnu"
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
+        analyze_source_instances(source, main_instance="main", target_triple=target)
+    checked = analyze_source_instances(source, main_instance="main", target_triple=target,
+                                       prove_scalar_slice_owners=True)["main"]
+    maker = checked.functions["G"]
+    assert maker.result == SliceType("uintptr")
+    assert maker.scalar_slice_owner_proof.owner == "s"
+    assert [(local.token.text, local.type) for local in maker.locals] == [
+        ("n", "uintptr"), ("s", SliceType("uintptr")),
+    ]
+    append = next(stmt for stmt in walk(maker.body) if stmt.kind == "=").exprs[0]
+    assert append.kind == "managed_scalar_append" and append.args[1].type == "uintptr"
+    condition = next(stmt for stmt in walk(maker.body) if stmt.kind == "if").exprs[0]
+    assert condition.args[0].kind == "managed_scalar_len" and condition.args[0].type == "int"
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
+        compile_go(text)
+
+
+def test_scalar_slice_probe_still_checks_append_element_and_forbids_unproved_users():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+
+    target = "x86_64-unknown-linux-gnu"
+    base = "package main; func G(n uintptr)[]uintptr{var s []uintptr;s=append(s,n);return s};"
+    for code, message in (
+        (base.replace("append(s,n)", "append(s,uint32(n))") + "func main(){}", "cannot use uint32"),
+        (base + "func main(){_ = G(1)}", "outside a proved scalar slice owner"),
+    ):
+        with pytest.raises(GoDiagnostic, match=message):
+            analyze_source_instances({"main": SourceInstance("main", (("owners.go", code),), {})},
+                                     main_instance="main", target_triple=target,
+                                     prove_scalar_slice_owners=True)

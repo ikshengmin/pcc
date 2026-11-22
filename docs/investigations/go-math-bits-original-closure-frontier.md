@@ -647,3 +647,13 @@ The exact upstream cache-size file and CPUID assembly ran unchanged
 in an official Go 1.27.3 reference harness across collection; a
 separate PCC/Go static backing native control passed. The next step
 is to attach these proved roles to the ordinary source checker.
+
+An explicit source-only analyzer now resolves proved []uintptr signatures
+and locals, type-checks appended elements with ordinary Go assignability, and
+retains typed len, nil and forwarding results. Unproved callers and normal
+Go compilation still reject these managed slices. Eighty-three adjacent
+checks and three native/reference controls passed. For the exact 133-instance
+original graph, explicitly enabling the probe advances past the cache-size
+signatures to `internal/cpu/cpu.go:24:2`, the blank X86 field of named type
+`CacheLinePad` (a record containing only byte padding). This is before the
+actual cache-size bodies are checked; no test IR or native binary was emitted.

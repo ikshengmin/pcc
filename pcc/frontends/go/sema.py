@@ -404,6 +404,12 @@ def require_value_type(dtype, token, *, declaration=False):
 def validate_value_types(program, *, source_only=False):
     """Last semantic boundary over emitted carriers, excluding type declarations."""
     seen = set()
+    scalar_owner = None
+
+    def storage(dtype, token):
+        if scalar_owner is not None and dtype == SliceType("uintptr"):
+            return
+        require_value_type(dtype, token)
 
     def expression(expr):
         if expr is None or id(expr) in seen:
@@ -414,7 +420,7 @@ def validate_value_types(program, *, source_only=False):
             # Marked only at a specific borrow consumer, not on general loads.
             borrow_span(expr)
         elif expr.kind != "type":
-            require_value_type(expr.type, expr.token)
+            storage(expr.type, expr.token)
         for child in expr.args:
             expression(child)
         expression(expr.receiver)
@@ -422,7 +428,7 @@ def validate_value_types(program, *, source_only=False):
 
     def statement(stmt):
         for symbol in stmt.symbols:
-            require_value_type(symbol.type, symbol.token)
+            storage(symbol.type, symbol.token)
         for expr in stmt.exprs + stmt.targets:
             expression(expr)
         for child in stmt.body + (stmt.otherwise or []) + stmt.cases:
@@ -435,21 +441,23 @@ def validate_value_types(program, *, source_only=False):
     for function in program.functions:
         if source_only and function.byte_append_summary is not None:
             continue  # The proved helper carries no admitted slice value.
+        scalar_owner = function.scalar_slice_owner_proof if source_only else None
         for i, (_, dtype) in enumerate(function.params):
             if function.variadic and i == len(function.params)-1:
                 require_variadic_element(dtype, function.token)
             else:
                 require_value_type(dtype, function.token)
-        require_value_type(function.result, function.token)
+        storage(function.result, function.token)
         for symbol in function.locals + function.result_symbols:
             if symbol.variadic_formal:
                 require_variadic_element(symbol.type, symbol.token)
             else:
-                require_value_type(symbol.type, symbol.token)
+                storage(symbol.type, symbol.token)
         for expr in function.temporaries:
             expression(expr)
         for stmt in function.body:
             statement(stmt)
+    scalar_owner = None
     for declaration in program.variables:
         statement(declaration)
 
@@ -490,7 +498,7 @@ def validate_containment_cycles(declarations):
 
 class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None,
-                 source_only=False, native_functions=None):
+                 source_only=False, native_functions=None, prove_scalar_slice_owners=False):
         self.program = program
         self.imports = imports or {}
         self.dot_imports = {}
@@ -498,6 +506,10 @@ class Analyzer:
         self.package_path = package_path
         self.generics = generics if generics is not None else GenericSession()
         self.source_only = source_only
+        self.scalar_slice_owners = {}
+        if source_only and prove_scalar_slice_owners:
+            from pcc.frontends.go.slice_proof import scalar_slice_owner_group
+            self.scalar_slice_owners = scalar_slice_owner_group(program) or {}
         self.linkname_exports = {}
         self.native_functions = native_functions or {}
         self.bound_native_functions = {}
@@ -629,7 +641,8 @@ class Analyzer:
                                     'variadic methods and generic variadic functions need a qualified call contract')
             function.params = [(token, self.resolve_type(dtype, signature=(function.variadic and i == len(function.params)-1)))
                                for i, (token, dtype) in enumerate(function.params)]
-            function.result = self.resolve_type(function.result)
+            function.scalar_slice_owner_proof = self.scalar_slice_owners.get(function.token.text)
+            function.result = self.resolve_type(function.result, signature=function.scalar_slice_owner_proof is not None)
             if owner is not None:
                 if (owner.symbol != function.abi_symbol
                         or owner.parameters != tuple(dtype for _, dtype in function.params)
@@ -679,7 +692,8 @@ class Analyzer:
                     require_variadic_element(dtype, function.token)
                 else:
                     require_value_type(dtype, function.token)
-            require_value_type(function.result, function.token)
+            if function.scalar_slice_owner_proof is None:
+                require_value_type(function.result, function.token)
         self.type_bindings = {}
         for symbol in self.globals.values():
             self.resolve_constant(symbol)
@@ -1199,7 +1213,8 @@ class Analyzer:
         self.break_depth = 0
         self.allowed_fallthrough = None
         self.branches = Branches(function)
-        require_value_type(function.result, function.token)
+        if function.scalar_slice_owner_proof is None:
+            require_value_type(function.result, function.token)
         for i, (token, dtype) in enumerate(function.params):
             is_rest = function.variadic and i == len(function.params)-1
             if is_rest:
@@ -1245,8 +1260,13 @@ class Analyzer:
         if new_scope:
             self.scopes.pop()
 
+    def scalar_owner_local(self, name):
+        proof = getattr(self.function, "scalar_slice_owner_proof", None)
+        return self.source_only and proof is not None and proof.owner == name
+
     def declare(self, token, dtype, constant=None):
-        require_value_type(dtype, token)
+        if not (dtype == SliceType("uintptr") and self.scalar_owner_local(token.text)):
+            require_value_type(dtype, token)
         self.check_name(token, local_value=True)
         if len(self.scopes) == 1 and token.text in self.type_bindings:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
@@ -1394,7 +1414,11 @@ class Analyzer:
             previous = self.iota
             self.iota = statement.iota if kind == "const" else None
             try:
-                statement.type = self.resolve_type(statement.type)
+                scalar_owner = (kind == "var" and len(statement.names) == 1
+                                and self.scalar_owner_local(statement.names[0].text)
+                                and isinstance(statement.type, SliceSyntax)
+                                and statement.type.element == "uintptr")
+                statement.type = self.resolve_type(statement.type, signature=scalar_owner)
                 values = self.values(statement.exprs)
             finally:
                 self.iota = previous
@@ -1493,7 +1517,11 @@ class Analyzer:
                     message = "void function cannot return a value" if not expected else "return requires " + str(len(expected)) + " result value(s)"
                     raise GoDiagnostic(statement.token, message)
                 for value, dtype in zip(values, expected):
-                    coerce(value, dtype)
+                    if (self.function.scalar_slice_owner_proof is not None
+                            and dtype == SliceType("uintptr") and value.type == "untyped nil"):
+                        value.type = dtype
+                    else:
+                        coerce(value, dtype)
             statement.terminates = True
             return
         if kind in ("break", "continue"):
@@ -2129,6 +2157,14 @@ class Analyzer:
                     if len(expr.args) == 2:
                         self.make_size(expr.args[1], make_form)
                     self.resolve_type(syntax)  # Storage rejects before lowering.
+            if name == "append" and getattr(self.function, "scalar_slice_owner_proof", None) is not None:
+                values = self.values(expr.args)
+                if (len(values) != 2 or expr.spread is not None or values[0].type != SliceType("uintptr")
+                        or not self.scalar_owner_local(values[0].token.text)):
+                    raise GoDiagnostic(expr.token, "append requires the proved scalar slice owner")
+                coerce(values[1], "uintptr")
+                expr.kind, expr.type = "managed_scalar_append", values[0].type
+                return
             if name in ("min", "max"):
                 self.minmax(expr)
                 return
@@ -2149,8 +2185,11 @@ class Analyzer:
                     dtype = underlying(dtype.element)
                 expr.type = "int"  # Both builtins are typed int, including constants.
                 if isinstance(dtype, SliceType):
-                    borrow_span(arg)
-                    expr.kind = 'variadic_'+name
+                    if name == "len" and dtype == SliceType("uintptr") and self.scalar_owner_local(arg.token.text):
+                        expr.kind = "managed_scalar_len"
+                    else:
+                        borrow_span(arg)
+                        expr.kind = 'variadic_'+name
                 elif isinstance(dtype, ArrayType):
                     expr.kind = "array_len"
                     expr.constant = None if has_evaluated_call(arg) else dtype.count
@@ -2471,6 +2510,11 @@ class Analyzer:
         expr.kind, expr.type = 'indirect_call', sig.result
 
     def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
+        if (function.scalar_slice_owner_proof is not None and
+                (not self.source_only or getattr(self.function, "scalar_slice_owner_proof", None) is None
+                 or self.functions.get(function.token.text) is not function)):
+            raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
+                                "scalar slice result outside a proved scalar slice owner")
         if getattr(function, "byte_append_summary", None) is not None:
             raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
                                 "bounded byte helper requires a proved byte-span caller and storage binding")

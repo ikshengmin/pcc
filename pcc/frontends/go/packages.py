@@ -76,7 +76,8 @@ def parse_package(units, *, require_main):
     return program
 
 
-def _analyze_packages(packages, *, main_package, target_triple, standard_library=None, instances=None):
+def _analyze_packages(packages, *, main_package, target_triple, standard_library=None, instances=None,
+                      prove_scalar_slice_owners=False):
     from .source_plan import runtime_owner
 
     standard_used=set()
@@ -172,6 +173,7 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
                             package_path=None if path == main_package else path, generics=generics,
                             source_only=instances is not None,
+                            prove_scalar_slice_owners=prove_scalar_slice_owners,
                             native_functions=instance.native_functions if instances is not None else None)
         if owned:
             analyzer.owned_surface = frozenset(
@@ -196,12 +198,13 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
     return main, analyzed, order, standard_used
 
 
-def analyze_source_instances(instances, *, main_instance, target_triple):
+def analyze_source_instances(instances, *, main_instance, target_triple, prove_scalar_slice_owners=False):
     """Owned semantic probe for an exact graph. Never emit IR or a binary."""
     if not instances or any(type(instance) is not SourceInstance for instance in instances.values()):
         raise ValueError("exact Go source instances are required")
     _, analyzed, _, _ = _analyze_packages({}, main_package=main_instance, target_triple=target_triple,
-                                         instances=instances)
+                                         instances=instances,
+                                         prove_scalar_slice_owners=prove_scalar_slice_owners)
     return analyzed
 
 
