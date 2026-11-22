@@ -475,11 +475,14 @@ took exactly one same-cut full fallback because the current direct roots
 could not explain the write-barrier shade:
 
 - List append through `py_list_append`.
-- Dictionary value insertion through `py_dict_set` with an integer key.
+- Dictionary value insertion and replacement through `py_dict_set` with
+  an integer key; replacement overwrites a separately initialized entry.
 - Native instance field assignment through `py_instance_set_field`.
+- Replacement of an initialized list item through `py_list_set`.
+- Set insertion through `py_set_add`.
 
-These are three concrete paths, not a complete barrier audit. Dictionary
-replacement, additional runtime containers and field layouts, external
-native writers, and publication not mediated by these helpers need
-separate coverage. These tests do not establish safe batching across
+These are six concrete paths, not a complete barrier audit. Bulk slice
+and dictionary operations, additional field layouts, external native
+writers, and publication not mediated by these helpers need separate
+coverage. These tests do not establish safe batching across
 concurrent weakref readers.

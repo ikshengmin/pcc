@@ -51,8 +51,10 @@ static PyObject *finish_a(PyObject *self) {
         else if (rescue == 2) *caller_hold = target;
         else if (rescue == 5) *caller_hold = (PyObject *)((char *)target + 1);
         else if (rescue == 4) pcc_gc_pin(target);
-        else if (rescue == 6) py_dict_set(roots[HOLD], py_int_from_i64(7), target);
+        else if (rescue == 6 || rescue == 8) py_dict_set(roots[HOLD], py_int_from_i64(7), target);
         else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
+        else if (rescue == 9) py_list_set(roots[HOLD], 0, target);
+        else if (rescue == 10) py_set_add(roots[HOLD], target);
         else if (rescue == 3) py_list_append(roots[HOLD], target);
         else {
             pcc_gc_store_root(&roots[HOLD], target);
@@ -101,11 +103,14 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *b = py_instance_new(b_cls);
     PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
-    if (rescue == 3 || rescue == 6 || rescue == 7) {
-        PyObject *holder = rescue == 3 ? py_list_new(0) :
-                           rescue == 6 ? py_dict_new() : py_instance_new(a_cls);
+    if (rescue == 3 || (rescue >= 6 && rescue <= 10)) {
+        PyObject *holder = rescue == 3 || rescue == 9 ? py_list_new(0) :
+                           rescue == 6 || rescue == 8 ? py_dict_new() :
+                           rescue == 7 ? py_instance_new(a_cls) : py_set_new();
         if (!holder) { error = 14; return NULL; }
         pcc_gc_store_root(&roots[HOLD], holder);
+        if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
+        if (rescue == 9) py_list_append(holder, py_None);
         pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
         __atomic_fetch_and(&py_header(holder)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
     }
@@ -172,6 +177,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "pin") == 0) rescue = 4;
     if (argc > 1 && strcmp(argv[1], "dict-holder") == 0) rescue = 6;
     if (argc > 1 && strcmp(argv[1], "field-holder") == 0) rescue = 7;
+    if (argc > 1 && strcmp(argv[1], "dict-replace") == 0) rescue = 8;
+    if (argc > 1 && strcmp(argv[1], "list-replace") == 0) rescue = 9;
+    if (argc > 1 && strcmp(argv[1], "set-holder") == 0) rescue = 10;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
