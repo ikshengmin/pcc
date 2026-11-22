@@ -1357,6 +1357,12 @@ class Analyzer:
             coerce(expr, left.type)
             statement.exprs = [expr]
             return
+        if kind == "send":
+            channel = statement.exprs[0]
+            self.expression(channel)
+            # No channel type can reach Sema yet. Any successfully resolved
+            # operand has a non-channel type and is an invalid send target.
+            raise GoDiagnostic(channel.token, "cannot send to a non-channel value")
         if kind == "expression":
             expr = statement.exprs[0]
             self.expression(expr)

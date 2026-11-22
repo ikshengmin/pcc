@@ -1152,6 +1152,10 @@ class GoParser:
         while self.accept(","):
             left.append(self.expression())
         token = self.current
+        if self.accept("<-"):
+            if len(left) != 1:
+                self.fail(token, "send requires one channel expression")
+            return Stmt("send", token, exprs=[first, self.expression()])
         if token.kind in ("=", ":=", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^=", "&^=", "<<=", ">>="):
             self.index += 1
             if token.kind == ":=" and any(expr.kind != "name" for expr in left):

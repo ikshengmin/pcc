@@ -152,3 +152,11 @@ fails target dependency admission; no goroutine, channel or upstream
 test execution by PCC is claimed. The scoped suite passed 266 checks.
 Official Go 1.27.3 built and ran the four small valid originals and
 rejected the five invalid originals; only the reference executed them.
+
+The send-statement slice retains the target and value as separate
+expressions in the nested `b.signal <- true` at `242:13`; resolved
+scalar targets stay invalid. The pinned union now reaches the next
+original line of interest, `<-b.signal` at `247:2`. The scoped suite
+passed 202 checks. Official Go executed a nested send/receive control and
+rejected the scalar send. PCC still does not execute channels or the
+upstream test program.
