@@ -474,3 +474,13 @@ unchanged original helper, run in an official Go control, confirmed
 all three extents and the backing address. Forty-eight scoped checks
 and the unchanged PCC variadic native differential passed. Native
 byte writes and the carrying slice ABI are not introduced by this proof.
+
+The independent owned lowering now materializes one zeroed fixed
+entry-stack array and writes each checked byte offset. It rejects
+overflowing extent, wrong word width and use from another function
+before emitting stores. The same backing remains through each append.
+A public-IR/native ELF control using dynamic uint32 arguments matched
+48 bytes from official Go executing the unchanged original helper.
+Forty-one adjacent checks passed. This validates an isolated store
+primitive, not yet the original caller's source lifetime, a general
+slice carrier, or the returned string's ownership.
