@@ -12,7 +12,7 @@ A raw initialization is not necessarily a root, and a name ending in
 | `pcc_gc_try_init_ptr_locked`: list append | `_append_existing_capacity_gc0` and `_append_grow_gc0` allow nonmoving count-free mode. The destination is off-object; the list length makes the slot visible after the store. Growth can replace the backing, so deriving the owner from its raw address is not safe. `_list_get_gc0` instead writes a temporary result. | Old list, both spare-capacity and replacement-array paths; retain through two minors, overwrite/clear and observe retirement. |
 | `pcc_gc_try_init_ptr_locked`: dictionary insertion | `_dict_gc0_admitted_locked` can admit GC3. `_dict_set_gc0_locked` fills the off-object entry's key and value before publishing them through count/index fields; partial initialization can roll back. `_dict_get_gc0_locked` instead copies into a result slot. | Isolated young key and value under old dict; check insertion and failed second slot, then replacement and removal. Verify no card leak from rolled-back publication. |
 | Private sequence materialization and sort | `_dict_gc0_materialize` builds tuples and a list, including a separate raw list-pointer store for items. `_sorted_gc0` fills an off-object result array. Both admit nonmoving count-free mode. Private backing is not an old edge until its owner is old and published; late publication or old/black allocation during major GC needs an explicit owner boundary. | Force old/black construction or promotion only once that policy is chosen. Verify tuple/list child graphs and no intermediate publication on refusal. |
-| Persistent C roots / memoryview export | C-owner shade in `pcc_gc_cpy_handle_change_c_owners` accompanies persistent root/pin ownership. A GC3 address lease alone is a no-op; the memoryview export uses a separate registered root. These are root/handoff boundaries, not dirty old-card stores. | Hold exports and C handles across two minors, then release them and prove reclamation. If excluded from nursery, prove promotion before raw address exposure. |
+| Persistent C roots / memoryview export | C-owner shade in `pcc_gc_cpy_handle_change_c_owners` accompanies persistent root/pin ownership. A GC3 address lease may return token zero. The dedicated memoryview cache helper could register a root but the public path does not dispatch to it. These are root/handoff boundaries, not dirty old-card stores. | Hold exports and C handles across two minors, then release them and prove reclamation. If excluded from nursery, prove promotion before raw address exposure. |
 
 Many other value-only notifications cover temporary roots or completed native
 results, not owning heap writes. Do not turn every such notification into a card;
@@ -87,6 +87,35 @@ transaction. A detached slot cannot supply an owner; roots remain on the
 root path. A stale address, partial handoff, or reused owner/card also
 cannot be validated by the header bits alone. The candidate is not linked
 into the runtime and no ordinary call, load, or store changes today.
+
+### GC3 buffer export: live dispatch versus candidate helper
+
+`pcc_PyMemoryView_GET_BUFFER` reaches `_memoryview_owned_buffer`, which
+installs a raw cached `Py_buffer` with `internal == NULL`. The distinct
+`_memoryview_gc3_owned_buffer` registers a scheduler root before copying
+the exporter, but has no call site on this revision. Do not count that
+helper, or a model that returns a synthetic positive lease token, as a
+live export root. `PyObject_GetBuffer`/`PyBuffer_Release` uses a different
+explicit pin/release protocol and needs its own nursery witness.
+
+In the owned Linux native control an explicit scheduler owner keeps the
+view live. A bytes exporter is resolved via the public C cache entry. The
+same original raw `buf` address is readable after two real full collections,
+before any call that could refresh the pointer; the refresh returns the
+same cache and payload address. The run printed `dedicated-root=0`.
+It does not prove reclamation after releasing the view or protection
+without a live view/base. The companion CPython public exporter test is
+separate from this private layout check.
+
+The pre-existing `test_memoryview_owned_buffer_lifetime.py` model called
+the public entry but expected a dedicated root and triggered failure
+injection in the unreachable helper. Six cases in the unchanged suite
+failed before the fail-fast stop. Unlike the new test, they do not describe
+the current public dispatch. Do not admit bytes/bytearray buffer exporters
+to a nursery on the basis of these checks. First qualify promotion before
+an address escapes, the real persistent owner if one is required, and
+exactly balanced export release. The proposed nursery and GC3 runtime are
+unchanged by this round.
 
 ## Collector-entry root baseline
 
