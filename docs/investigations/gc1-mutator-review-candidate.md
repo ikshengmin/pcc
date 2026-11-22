@@ -25,9 +25,16 @@ collection STW was 2,961/3,371/3,414 microseconds in this synthetic
 diagnostic. This is not an A/B maximum-pause result, a no-loss control,
 macOS behavior, or pcc1. No production/master runtime has changed.
 
-Next Linux gate: check GC1 stop/repair under paused and reentered
-collection, including a terminal weakref/finalizer on the actual
-automatic sweep path. Next measurement, from an authorized
+The automatic-sweep finalizer checks passed in two Linux pcc0 native
+processes. A producer thread exits after creating a terminal cycle.
+Allocation while GC is disabled leaves both callbacks unrun; after
+reenabling, allocation alone delivers the weakref callback and then
+the finalizer exactly once. A separate native mode reenters
+`gc.collect()` only from inside the callback and does not redeliver
+or prematurely run the finalizer. CPython matches the ordinary
+non-reentrant case; its reentrant semantics are not assumed.
+
+Next measurement, from an authorized
 macOS checkout with the same gateway source: seal base and review HEAD
 under the same `PCC_PERF_HOME` from their separate worktrees, then run:
 
