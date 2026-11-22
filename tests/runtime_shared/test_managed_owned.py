@@ -128,26 +128,26 @@ def test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator(tmp_path, mo
 @pytest.mark.xdist_group(name="go-reference")
 def test_go_scalar_first_append_returns_a_live_owner_and_matches_go(tmp_path, monkeypatch):
     from pcc.backend.owned_object_emit import emit_owned_object
-    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
-    from pcc.ir.compat import ir
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_first_append_entry
     from tests.go.owned_execution import Execution, compile_reference, run
 
-    module = ir.Module()
-    module.triple = TARGET
-    append = ScalarSliceRuntime(module, gc_backend=0).first_append_function("uintptr")
-    fn = ir.Function(module, append.function_type, "scalar_slice_first_append")
-    builder = ir.IRBuilder(fn.append_basic_block("entry"))
-    builder.ret(builder.call(append, list(fn.args)))
+    fixture_dir = ROOT / "tests/go/fixtures"
+    producer = fixture_dir / "managed_slice_first_producer.go"
+    original = (producer.name, producer.read_text())
+    module, symbol = compile_scalar_first_append_entry((original,), function_name="first",
+                                                      target_triple=TARGET, gc_backend=0)
     adapter = tmp_path / "go_first_append.o"
     adapter.write_bytes(emit_owned_object(str(module), TARGET))
     expected = b"".join(x.to_bytes(8, "little") for x in (0, 1 << 63, (1 << 64) - 1))
     observed = _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_first_append.c",
-                                    extra_object=adapter, expected_gc0_stdout=expected)
-    source = ROOT / "tests/go/fixtures/managed_slice_first_append.go"
-    reference = compile_reference(((source.name, source.read_text()),), tmp_path / "reference",
-                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                    extra_object=adapter, expected_gc0_stdout=expected,
+                                    cpp_args=["-Dscalar_slice_first_append=" + symbol])
+    source = fixture_dir / "managed_slice_first_append.go"
+    reference = compile_reference((original, (source.name, source.read_text())),
+                                  tmp_path / "reference", compiler=os.environ["PCC_GO_REFERENCE"],
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
-    assert (reference.parent / source.name).read_bytes() == source.read_bytes()
+    for original_source in (source, producer):
+        assert (reference.parent / original_source.name).read_bytes() == original_source.read_bytes()
     assert run(reference) == Execution(0, observed, b"")
 
 

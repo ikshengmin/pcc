@@ -282,3 +282,42 @@ def test_opt_in_first_scalar_append_publishes_only_after_checked_initialization(
         runtime.first_append_function("int")
     with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
         compile_go("package main;func first(x uintptr)[]uintptr{var s []uintptr;return append(s,x)};func main(){}")
+
+
+def test_opt_in_closed_first_append_lowers_the_actual_source_producer():
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_first_append_entry
+    from pcc.frontends.go.lowering import function_symbol
+
+    source = ("package main; func Collect(value uintptr) []uintptr { "
+              "var result []uintptr; return append(result, value) }")
+    module, symbol = compile_scalar_first_append_entry(
+        (("producer.go", source),), function_name="Collect",
+        target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
+    )
+    assert symbol == function_symbol("Collect")
+    assert "define i32 @" + symbol in str(module)
+    assert "@__pcc_go_scalar_append_first_uintptr" in str(module)
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
+        compile_go(source + "; func main(){}")
+
+
+@pytest.mark.parametrize("producer", [
+    "func F(v uintptr) []uintptr { var x []uintptr; x = append(x, v); return append(x, v) }",
+    "func F(v uintptr) []uintptr { var x = [1]uintptr{v}; return append(x, v) }",
+    "func F(append uintptr) []uintptr { var x []uintptr; return append(x, append) }",
+    "func F(v uintptr) []uintptr { var append []uintptr; return append(append, v) }",
+    "func F(v uint8) []uintptr { var x []uintptr; return append(x, v) }",
+    "func F(v uintptr) []uintptr { var x []uintptr; return append(x, v...) }",
+    "func F(v uintptr) (x []uintptr) { var y []uintptr; return append(y, v) }",
+    "func F(v uintptr) []uintptr { var x []uintptr = nil; return append(x, v) }",
+    "func F(v uintptr) []uintptr { var x []uintptr; return append(x, v) }; var x uintptr",
+    "func F(v uintptr) []uintptr { var x []uintptr; return append(x, v) }; func extra() {}",
+])
+def test_opt_in_closed_first_append_rejects_unproved_source_before_emitting(producer):
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_first_append_entry
+
+    with pytest.raises(GoDiagnostic):
+        compile_scalar_first_append_entry(
+            (("producer.go", "package main;" + producer),), function_name="F",
+            target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
+        )

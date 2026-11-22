@@ -228,3 +228,47 @@ def byte_span_caller_proof(program, function_name, local, extent):
         if not all(_scalar_reads_only(expr, local) for expr in stmt.exprs + stmt.targets):
             return None
     return ByteSpanCallerProof(tuple(lengths), views, copies)
+
+
+@dataclass(frozen=True)
+class ScalarFirstAppendProof:
+    """One builtin append, on a newly declared zero-value slice."""
+    element: str
+    token: object
+
+
+def closed_scalar_first_append(program, function_name):
+    """Prove the complete contents of an isolated producer package.
+
+    No other declarations, imports, shadowing, calls, state or spread can
+    hide behind the opt-in entry. The uninitialized local is necessarily nil;
+    its only observation is append and its only escape is the returned value.
+    """
+    if (program.imports or program.types or program.constants or program.variables
+            or program.linknames or len(program.functions) != 1):
+        return None
+    fn = program.functions[0]
+    if (fn.token.text != function_name or function_name in {"_", "init", "append"}
+            or program.token.text != "main" or function_name == "main"
+            or fn.receiver is not None or fn.declaration_only or fn.type_parameters
+            or fn.variadic or len(fn.params) != 1 or len(fn.body) != 2
+            or any(name is not None for name in fn.result_names)):
+        return None
+    parameter, element = fn.params[0]
+    if (type(element) is not str or element not in {"uint8", "uintptr"}
+            or not _slice_of(fn.result, element) or parameter is None):
+        return None
+    protected = {"_", "append", "byte", "uint8", "uintptr"}
+    if parameter.text in protected or function_name in protected:
+        return None
+    declaration, returned = fn.body
+    if (declaration.kind != "var" or len(declaration.names) != 1 or declaration.exprs
+            or not _slice_of(declaration.type, element) or returned.kind != "return"
+            or len(returned.exprs) != 1 or not _builtin_call(returned.exprs[0], "append")):
+        return None
+    local = declaration.names[0].text
+    arguments = returned.exprs[0].args
+    if (local in protected or local == parameter.text or len(arguments) != 2
+            or not _name(arguments[0], local) or not _name(arguments[1], parameter.text)):
+        return None
+    return ScalarFirstAppendProof(element, fn.token)

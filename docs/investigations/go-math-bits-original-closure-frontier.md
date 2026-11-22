@@ -578,3 +578,14 @@ new owner; unsupported backend status leaves caller output unchanged.
 Twenty-four adjacent and four native checks passed. This exercises the
 optional ABI, not Go source lowering of the fixture by PCC, growth of a
 non-nil slice, or the full original cache-size function.
+
+An explicit owned entry now parses and proves an isolated one-function
+Go producer containing an implicit nil scalar-slice declaration followed
+by one builtin append and return. It rejects other state, additional
+declarations, shadowing, aliases and unproved bodies before IR. The exact
+producer file was unchanged between PCC and official Go. The native
+Linux x86-64 GC0 program and Go 1.27.3 emitted the same three words
+after collection; the driver is still a foreign status/handle observer.
+Thirty-five adjacent and four native checks passed. This is not a native
+Go result ABI, general package admission, or the actual CPU producer,
+which also needs growth from non-nil and loop-carried ownership.

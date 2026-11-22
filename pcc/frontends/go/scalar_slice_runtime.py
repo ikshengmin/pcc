@@ -111,3 +111,31 @@ class ScalarSliceRuntime:
         builder.ret(status)
         self.first_appends[element] = fn
         return fn
+
+
+def compile_scalar_first_append_entry(units, *, function_name, target_triple, gc_backend):
+    """Lower a checked complete producer through the explicit foreign entry.
+
+    The generated symbol uses the Go linkage encoder, while its temporary
+    ingress ABI is the shared result handle (status, out handle), not a Go
+    slice return ABI. Regular package lowering does not call this function.
+    """
+    from .diagnostics import UnsupportedGo
+    from .lowering import function_symbol
+    from .packages import parse_package
+    from .slice_proof import closed_scalar_first_append
+
+    program = parse_package(units, require_main=False)
+    proof = closed_scalar_first_append(program, function_name)
+    if proof is None:
+        token = (program.functions[0].token if len(program.functions) == 1 else program.token)
+        raise UnsupportedGo(token, "go.unsupported.slice-storage",
+                            "closed scalar first append requires a nil slice local and one scalar builtin append")
+    module = ir.Module(name="go_scalar_slice_entry")
+    module.triple = target_triple
+    helper = ScalarSliceRuntime(module, gc_backend=gc_backend).first_append_function(proof.element)
+    symbol = function_symbol(proof.token.text)
+    fn = ir.Function(module, helper.function_type, symbol)
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    builder.ret(builder.call(helper, list(fn.args)))
+    return module, symbol

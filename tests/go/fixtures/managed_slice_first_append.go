@@ -6,11 +6,6 @@ import (
     "runtime"
 )
 
-func first(v uintptr) []uintptr {
-    var s []uintptr
-    return append(s, v)
-}
-
 func main() {
     inputs := [3]uintptr{0, 1 << 63, ^uintptr(0)}
     var out [24]byte
