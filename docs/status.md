@@ -383,9 +383,12 @@ in the relevant section or issue and removes the entry.
    matched binary hash; 82 tool tests passed. macOS verification of GC2
    list bridge is ready (5 pairs, w1/w4, unchanged GC0, QPS/pause/RSS/p99).
    No gateway workload or Mac was executed in Linux. While waiting on
-   performance and source review, check GC2 finalizers/weakrefs through
-   this alternate path without expanding worker count or admission.
-   Master runtime and the separate pacer A/B branch are unchanged.
+   performance and source review, the
+   [automatic lifecycle check](https://github.com/ikshengmin/pcc/blob/25d340a11c01bcddad4fba1dedc28a759a29ba8d/docs/investigations/gc2-exact-list-worker-review.md#automatic-lifecycle-smoke-on-the-measured-runtime)
+   matched the ordinary CPython weakref/finalizer order, and passed 12
+   Linux owned runs including reentrant collect and positive shortcut
+   visits. Next check the real C-owned foreign handle during automatic
+   mark/sweep. Master runtime and the separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -397,7 +400,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 exact-list automatic weakref and finalizer under opaque bridge: Codex, Linux x86-64, 2026-11-22 10:41 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
