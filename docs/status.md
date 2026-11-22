@@ -227,6 +227,11 @@ in the relevant section or issue and removes the entry.
    passed, with native CPython comparisons for independent acyclic/cyclic
    parts, a cyclic downstream node, and resurrection of the cycle by the
    acyclic finalizer. Master runtime unchanged.
+   [Review commit 89da256](https://github.com/ikshengmin/pcc/commit/89da25675c1e1f1810b95f2a1be72346df09f342)
+   skips topology allocation when no weakref is registered and no listed
+   candidate can finalize. Linux passed 71 focused plus six native
+   generator checks. No-observer and finalizer-only fixtures prove the
+   selected path, not the zero-overhead performance gate.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -283,8 +288,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Avoid issue 9 planning for sweeps without observable callbacks: Codex, Linux x86-64, 2026-11-22 17:26 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
