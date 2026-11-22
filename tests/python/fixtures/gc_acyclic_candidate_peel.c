@@ -10,7 +10,7 @@ extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 
 enum { CROWDED_CHILDREN = 25 };
-enum { ACYCLIC_DROP = 1, CYCLICALLY_RETAINED = 2 };
+enum { ACYCLIC_DROP = 1, CYCLICALLY_RETAINED = 2, ACYCLIC_HEAD = 3 };
 
 static void mark_candidate(PyObject *obj) {
     pcc_gc_unpin(obj);
@@ -45,7 +45,7 @@ int main(void) {
     mark_candidate(crowded);
     pcc_py_gc_minor_graph_unlock();
     PyObject *vertices[] = {cycle, plain_child, downstream, plain_owner};
-    int64_t expected[] = {CYCLICALLY_RETAINED, ACYCLIC_DROP, CYCLICALLY_RETAINED, ACYCLIC_DROP};
+    int64_t expected[] = {CYCLICALLY_RETAINED, ACYCLIC_DROP, CYCLICALLY_RETAINED, ACYCLIC_HEAD};
     int64_t out[] = {0, 0, 0, 0};
     if (backend == 0 || backend == 4) {
         if (pcc_gc_tracing_classify_callback_cohort(vertices, 4, epoch, 16, out)

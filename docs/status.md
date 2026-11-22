@@ -188,25 +188,14 @@ in the relevant section or issue and removes the entry.
    callbacks and finalizers run too early under acyclic resurrection; filed
    by Claude on 2026-11-22 from the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
-   Linux pcc0 now runs the bounded, test-only classifier on actual object
-   slots across GC1–4. A second native reference arm runs the real
-   GC1–3 finalizer with the world running, stops again, and preserves
-   the child's callback weakref after rescue. Its no-rescue control
-   stays white. The terminal arm now retires the real owning field,
-   finalizes the child and delivers its weak callback once, in that order.
-   Nested explicit collections now pass in the reference arm and
-   preserve the outer pending exception by identity. The exact Linux
-   recheck visits 286/1,054/4,126 records at n/4n/16n with two rescued
-   candidates throughout. The native bounded reference visits only the
-   same two candidates in all three sizes and agrees with that oracle.
-   A callback store through an older registered owner is missed without
-   its journal entry; recording that owner restores parity in three
-   visits. The same bounded test now covers a callback-created owner;
-   incomplete journaling refuses and uses full recheck. The bounded
-   peel now lives in an inert freestanding runtime entry; native
-   GC1–3 invoke it explicitly, GC0/GC4 decline, and production has no
-   caller. Next #9: a test-invoked runtime handoff for the selected
-   head callback, without retaining the cohort over the resumed window.
+   The inert Linux pcc0 reference arm now classifies the exact stopped
+   cohort and dispatches one selected acyclic head on GC1–3. It rejects
+   a dependent child and a stale epoch before resuming. Native evidence
+   covers resurrection, no-rescue terminal order, nested collection and
+   a bounded refresh with explicit root and store records. No production
+   caller and no GC4 admission. Next #9: integrate a bounded stopped
+   refresh for a real rooted heap publication; prove complete coverage
+   before deciding on any default sweep change.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -223,9 +212,8 @@ in the relevant section or issue and removes the entry.
    GC0–4 against CPython and 36 IR checks. The typed dictionary
    lookup now shares the same runtime getter provenance, preserving
    temporary-key cleanup and consuming its NEW result once (28 native
-   cases, 43 IR checks). Next for #7: inventory remaining producer
-   contracts before broadening beyond these verified routes;
-   do not add a return-annotation or project-specific shortcut. #4 waits.
+   cases, 43 IR checks). #7 waits for a new reported native owner
+   witness, not an annotation or project-specific exception. #4 waits.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -246,7 +234,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 inert runtime dispatch of a selected acyclic frontier head: Codex, Linux x86-64, 2026-11-22 13:09 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -330,3 +330,18 @@ Linux native tests passed with a freshly built archive, plus eight ABI
 chunking tests. This is not the shipped #9 fix: a real caller must
 establish complete cohort provenance and qualify callback handoff and
 the bounded refresh after it; GC4 remains separately gated.
+
+The runtime classifier now distinguishes an initial zero-incoming
+head from the acyclic children released later by peeling. The test
+selection frame ends before `pcc_gc_tracing_dispatch_callback_head`
+runs the real finalizer on the chosen head. The dormant dispatcher
+takes only the selected object and the caller-bound verdict/epoch,
+not the cohort. It declines a dependent child, stale epoch or
+non-pending finalizer before opening the window, then uses the
+existing finalizer ownership and window protocol. The terminal child
+can dispatch only after the test retires its parent's real edge
+and classifies the remaining candidate. All three focused native tests
+passed with an exact Linux pcc0 archive. There is no production caller
+and no new collection-time instruction on existing paths. The
+runtime still needs an authoritative complete cohort and root/store
+coverage before default use.

@@ -11,7 +11,9 @@ extern PyObject *py_instance_new(void *);
 extern void py_class_add_method(PyObject *, const char *, void *);
 extern void py_instance_set_field(PyObject *, int32_t, PyObject *);
 extern PyObject *py_instance_get_field(PyObject *, int32_t);
-extern void py_user_del_dispatch(PyObject *);
+extern int64_t pcc_gc_tracing_classify_callback_cohort(
+    PyObject *const *, int64_t, int64_t, int64_t, int64_t *);
+extern int64_t pcc_gc_tracing_dispatch_callback_head(PyObject *, int64_t, int64_t);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 typedef void (*SlotVisitor)(PyObject **, int64_t, void *);
@@ -91,20 +93,32 @@ static int is_candidate(PyObject *o) {
     return (py_header_flags_load(py_header(o)) & PY_FLAG_GC_SWEEP_CANDIDATE) != 0;
 }
 
-static int run_one(int action) {
-    int64_t old_epoch = pcc_thread_world_stop_epoch_held();
-    PyObject *target = action == PARENT_FINALIZER ? candidate_parent : candidate_child;
-    if (old_epoch < 0 || !is_candidate(target)) return 0;
-    int64_t window[WINDOW_WORDS] = {0, 0};
-    pcc_gc_tracing_user_code_window_open(window);
-    if (pcc_thread_world_stop_epoch_held() >= 0) {
-        pcc_gc_tracing_user_code_window_close(window);
-        return 0;
+enum { TRIAL_ACYCLIC_CHILD = 1, TRIAL_ACYCLIC_HEAD = 3, HEAD_SLOT_BUDGET = 16 };
+
+static int64_t select_one(int action, int64_t epoch) {
+    PyObject *cohort[2] = {candidate_parent, candidate_child};
+    int64_t cohort_verdicts[2] = {0, 0};
+    if (action == CHILD_FINALIZER) {
+        if (py_instance_get_field(candidate_parent, ONLY_FIELD) != NULL) return 0;
+        cohort[0] = candidate_child;
+        return pcc_gc_tracing_classify_callback_cohort(cohort, 1, epoch, HEAD_SLOT_BUDGET,
+                                                      cohort_verdicts) ? cohort_verdicts[0] : 0;
     }
-    /* Dispatch owns its own temporary traced slot and address lease. */
-    py_user_del_dispatch(target);
-    pcc_gc_tracing_user_code_window_close(window);
-    return pcc_thread_world_stop_epoch_held() > old_epoch;
+    if (!pcc_gc_tracing_classify_callback_cohort(cohort, 2, epoch, HEAD_SLOT_BUDGET,
+                                                cohort_verdicts)
+        || cohort_verdicts[1] != TRIAL_ACYCLIC_CHILD
+        || pcc_gc_tracing_dispatch_callback_head(candidate_child, cohort_verdicts[1], epoch))
+        return 0;
+    return cohort_verdicts[0];
+}
+
+static int run_one(int action) {
+    int64_t epoch = pcc_thread_world_stop_epoch_held();
+    int64_t selected = select_one(action, epoch);
+    if (selected != TRIAL_ACYCLIC_HEAD) return 0;
+    PyObject *target = action == PARENT_FINALIZER ? candidate_parent : candidate_child;
+    if (pcc_gc_tracing_dispatch_callback_head(target, selected, epoch - 1)) return 0;
+    return pcc_gc_tracing_dispatch_callback_head(target, selected, epoch) == 1;
 }
 
 static void scrub_finished_callback_stack(void) {

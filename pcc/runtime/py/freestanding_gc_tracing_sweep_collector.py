@@ -648,7 +648,8 @@ _ACYCLIC_COHORT_PTR: i64 = 640
 _ACYCLIC_COUNT: i64 = 648
 _ACYCLIC_OWNER: i64 = 656
 _ACYCLIC_UNSUPPORTED: i64 = 664
-_ACYCLIC_SCRATCH_BYTES: i64 = 672
+_ACYCLIC_FRONTIER: i64 = 672
+_ACYCLIC_SCRATCH_BYTES: i64 = 736
 _ACYCLIC_SCAN_NEXT: i64 = 0
 _ACYCLIC_SCAN_EXAMINED: i64 = 8
 _ACYCLIC_SCAN_BYTES: i64 = 16
@@ -658,6 +659,7 @@ _ACYCLIC_ROLE_TYPE = 2
 _ACYCLIC_ROLE_DERIVED = 3
 _ACYCLIC_DROPPED = 1
 _ACYCLIC_RETAINED_BY_CYCLE = 2
+_ACYCLIC_HEAD = 3
 
 
 @c_abi_export("pcc_gc_tracing_callback_cohort_edge")
@@ -739,6 +741,7 @@ def pcc_gc_tracing_classify_callback_cohort(
     index: i64 = 0
     while index < count:
         if load_i64(scratch, _ACYCLIC_INCOMING + index * _ACYCLIC_WORD) == 0:
+            store_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD, 1)
             store_i64(scratch, _ACYCLIC_READY + queued * _ACYCLIC_WORD, index)
             queued += 1
         index += 1
@@ -763,9 +766,42 @@ def pcc_gc_tracing_classify_callback_cohort(
     index = 0
     while index < count:
         remaining = load_i64(scratch, _ACYCLIC_INCOMING + index * _ACYCLIC_WORD)
-        store_i64(verdicts, index * _ACYCLIC_WORD,
-                  _ACYCLIC_RETAINED_BY_CYCLE if remaining != 0 else _ACYCLIC_DROPPED)
+        verdict: i64 = _ACYCLIC_DROPPED
+        if remaining != 0:
+            verdict = _ACYCLIC_RETAINED_BY_CYCLE
+        elif load_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD) != 0:
+            verdict = _ACYCLIC_HEAD
+        store_i64(verdicts, index * _ACYCLIC_WORD, verdict)
         index += 1
+    return 1
+
+
+@c_abi_export("pcc_gc_tracing_dispatch_callback_head")
+def pcc_gc_tracing_dispatch_callback_head(target, verdict: i64, stop_epoch: i64) -> i64:
+    """Inert callback arm: accept only a freshly classified, still-dead head.
+
+    Internal caller must bind the verdict to this exact target and epoch,
+    finish the cohort frame before calling, and drop its temporary target
+    before refreshing roots. GC4 does not use this resumed-world arm.
+    """
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if (
+        backend < 1 or backend > 3 or verdict != _ACYCLIC_HEAD
+        or stop_epoch < 0 or pcc_thread_world_stop_epoch_held() != stop_epoch
+        or pcc_gc_tracing_is_sweep_candidate(target) == 0
+        or py_user_del_pending(target) == 0
+    ):
+        return 0
+    window = stack_alloc(16)
+    _user_code_window_open(window)
+    if pcc_thread_world_stop_epoch_held() >= 0:
+        _user_code_window_close(window)
+        return 0
+    # Dispatch owns and leases exactly the selected object, not the cohort.
+    py_user_del_dispatch(target)
+    _user_code_window_close(window)
+    if pcc_thread_world_stop_epoch_held() <= stop_epoch:
+        pcc_platform_abort()
     return 1
 
 
