@@ -381,3 +381,12 @@ its resurrection or allows the fixture to settle the terminal child.
 These are per-cohort invariants; no portable total order between
 independent cohorts is claimed. The real sweep still has no caller of
 the reference entry.
+
+The exact-target early queue in the inactive mixed arm uses the existing
+callback leases. It prepares live refs, ignores callback delivery for a
+marked-dead ref, and clears the selected target's callback-bearing refs
+before running either callback. Two live refs give a newest-first
+check and an unrooted third ref must not run. CPython and GC1–3
+independently produce `mixed 21 1 0` (callback IDs, one leaf finalizer,
+zero discarded-ref callbacks). This does not bound list traversal
+cost, implement late refs in the new arm, or admit GC4.

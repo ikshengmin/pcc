@@ -19,6 +19,8 @@ extern int64_t pcc_gc_tracing_dispatch_callback_head(PyObject *, int64_t, int64_
 extern int64_t pcc_gc_tracing_dispatch_classified_head(
     PyObject *const *, int64_t, int64_t, int64_t, int64_t);
 extern void py_user_del_dispatch(PyObject *);
+extern int64_t py_weakref_queue_tracing_target_callbacks(PyObject *, void *);
+extern void py_weakref_run_queued_callbacks(void *, int64_t);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern int64_t pcc_gc_tracing_refresh_callback_cohort(
@@ -41,11 +43,11 @@ static int64_t use_old_owner, use_new_owner, owner_in_journal, journal_incomplet
 /* The two candidate identities stand in for collector metadata, not roots.
  * Never load those raw pointers into a live recheck frame. */
 static PyObject *candidate_parent, *candidate_child;
-static PyObject *child_watch, *cycle_watch;
+static PyObject *child_watch, *cycle_watch, *cycle_watch_latest, *cycle_watch_discarded;
 /* These are collector metadata, never registered as roots. */
 enum { MIXED_CYCLE, MIXED_CHILD, MIXED_CYCLE_LEAF, MIXED_PARENT, MIXED_SIZE };
 static PyObject *mixed_cohort[MIXED_SIZE];
-static int64_t use_mixed_cohort, cycle_weak_calls, cycle_del_calls;
+static int64_t use_mixed_cohort, cycle_weak_calls, cycle_del_calls, cycle_weak_order, discarded_calls;
 static int64_t parent_calls, child_calls, weak_calls, ran_while_stopped;
 static int64_t should_rescue, reentry, nested_calls, callback_errors;
 static PyObject *pending_error;
@@ -108,16 +110,26 @@ static PyObject *child_weak_callback(void) {
     return py_int_from_i64(0);
 }
 
-static PyObject *cycle_weak_callback(void) {
+static PyObject *observe_cycle_weak(int64_t number) {
     if (pcc_thread_world_stop_epoch_held() >= 0 || cycle_del_calls
-        || py_weakref_call(cycle_watch) != py_None) callback_errors++;
+        || py_weakref_call(cycle_watch) != py_None
+        || py_weakref_call(cycle_watch_latest) != py_None) callback_errors++;
+    cycle_weak_order = 10 * cycle_weak_order + number;
     cycle_weak_calls++;
+    return py_int_from_i64(0);
+}
+
+static PyObject *cycle_weak_earlier(void) { return observe_cycle_weak(1); }
+static PyObject *cycle_weak_later(void) { return observe_cycle_weak(2); }
+
+static PyObject *cycle_weak_discarded(void) {
+    discarded_calls++;
     return py_int_from_i64(0);
 }
 
 static PyObject *cycle_leaf_del(PyObject *self) {
     (void)self;
-    if (pcc_thread_world_stop_epoch_held() >= 0 || cycle_weak_calls != 1)
+    if (pcc_thread_world_stop_epoch_held() >= 0 || cycle_weak_calls != 2)
         callback_errors++;
     cycle_del_calls++;
     return py_int_from_i64(0);
@@ -129,13 +141,20 @@ static int make_mixed_graph(void) {
     if (!list || !leaf_class) return 0;
     py_class_add_method(leaf_class, "__del__", (void *)cycle_leaf_del);
     PyObject *leaf = py_instance_new(leaf_class);
-    PyObject *callback = py_func_new((void *)cycle_weak_callback, NULL);
-    if (!leaf || !callback) return 0;
+    if (!leaf) return 0;
+    PyObject *early = py_func_new((void *)cycle_weak_earlier, NULL);
+    PyObject *late = py_func_new((void *)cycle_weak_later, NULL);
+    PyObject *discarded = py_func_new((void *)cycle_weak_discarded, NULL);
+    if (!early || !late || !discarded) return 0;
     py_list_append(list, list);
     py_list_append(list, leaf);
-    cycle_watch = py_weakref_new(leaf, callback);
-    if (!cycle_watch) return 0;
+    cycle_watch = py_weakref_new(leaf, early);
+    cycle_watch_latest = py_weakref_new(leaf, late);
+    cycle_watch_discarded = py_weakref_new(leaf, discarded);
+    if (!cycle_watch || !cycle_watch_latest || !cycle_watch_discarded) return 0;
     pcc_gc_scheduler_root_register(&cycle_watch);
+    pcc_gc_scheduler_root_register(&cycle_watch_latest);
+    pcc_gc_unpin(cycle_watch_discarded);
     pcc_gc_unpin(list);
     pcc_gc_unpin(leaf);
     mixed_cohort[MIXED_PARENT] = candidate_parent;
@@ -191,15 +210,26 @@ static int run_mixed(void) {
         || cycle_weak_calls || cycle_del_calls || child_calls || parent_calls) return 0;
     /* Explicit cyclic reference phase. Keep the unrelated acyclic weakref
      * live until its parent can rescind the original verdict. */
+    PyObject *pending[2] = {NULL, NULL};
+    int64_t queued = py_weakref_queue_tracing_target_callbacks(mixed_cohort[MIXED_CYCLE_LEAF], pending);
+    if (queued != 2 || cycle_weak_calls || discarded_calls) {
+        fprintf(stderr, "mixed queued=%lld first=%lld discarded=%lld\n",
+                (long long)queued, (long long)cycle_weak_calls, (long long)discarded_calls);
+        return 0;
+    }
     int64_t window[WINDOW_WORDS] = {0, 0};
     pcc_gc_tracing_user_code_window_open(window);
-    py_weakref_invalidate(mixed_cohort[MIXED_CYCLE_LEAF]);
+    py_weakref_run_queued_callbacks(pending, 0);
     py_user_del_dispatch(mixed_cohort[MIXED_CYCLE_LEAF]);
     pcc_gc_tracing_user_code_window_close(window);
-    if (cycle_weak_calls != 1 || cycle_del_calls != 1 || weak_calls || child_calls || parent_calls
+    if (cycle_weak_calls != 2 || cycle_del_calls != 1 || weak_calls || child_calls || parent_calls
         || pcc_gc_tracing_dispatch_classified_head(
-            mixed_cohort, MIXED_SIZE, MIXED_PARENT, epoch, HEAD_SLOT_BUDGET))
+            mixed_cohort, MIXED_SIZE, MIXED_PARENT, epoch, HEAD_SLOT_BUDGET)) {
+        fprintf(stderr, "mixed weak=%lld del=%lld order=%lld errors=%lld\n",
+                (long long)cycle_weak_calls, (long long)cycle_del_calls,
+                (long long)cycle_weak_order, (long long)callback_errors);
         return 0;
+    }
     /* Run a fresh stopped recheck before using any later callback verdict. */
     return 1;
 }
@@ -348,7 +378,11 @@ int main(int argc, char **argv) {
     mark_candidate(candidate_child);
     if (use_mixed_cohort) {
         mark_candidate(mixed_cohort[MIXED_CYCLE]);
+        /* Early weak sweep requires a settled mark, not a fresh allocation. */
+        __atomic_fetch_and(&py_header(mixed_cohort[MIXED_CYCLE_LEAF])->flags,
+                           ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
         mark_candidate(mixed_cohort[MIXED_CYCLE_LEAF]);
+        mark_candidate(cycle_watch_discarded);
     }
     pcc_py_gc_minor_graph_unlock();
 
@@ -388,7 +422,8 @@ int main(int argc, char **argv) {
     saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED) - saved;
     elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED) - elapsed;
     if (!check_first_verdict()) return 5;
-    if (use_mixed_cohort && (cycle_weak_calls != 1 || cycle_del_calls != 1
+    if (use_mixed_cohort && (cycle_weak_calls != 2 || cycle_del_calls != 1
+        || discarded_calls || cycle_weak_order != 21
         || py_weakref_call(cycle_watch) != py_None)) return 20;
     if (trial_bounded && saved != 2) return 17;
     if (trial_bounded && !journal_incomplete && (bounded_mask != BOTH_REACHED
@@ -410,7 +445,11 @@ int main(int argc, char **argv) {
     if (pcc_resume_world() != 0) return 13;
     if (use_mixed_cohort) {
         pcc_gc_store_root(&cycle_watch, NULL);
+        pcc_gc_store_root(&cycle_watch_latest, NULL);
         pcc_gc_scheduler_root_unregister(&cycle_watch);
+        pcc_gc_scheduler_root_unregister(&cycle_watch_latest);
+        printf("mixed %lld %lld %lld\n", (long long)cycle_weak_order,
+               (long long)cycle_del_calls, (long long)discarded_calls);
     }
     pcc_gc_store_root(&restored, NULL);
     pcc_gc_store_root(&child_watch, NULL);

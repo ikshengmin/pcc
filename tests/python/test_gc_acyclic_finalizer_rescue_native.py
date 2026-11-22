@@ -1,5 +1,6 @@
 """Native, test-invoked #9 correctness arm: rescue or terminal settlement."""
 import os
+import sys
 from pathlib import Path
 
 import pytest
@@ -17,6 +18,12 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
         source, binary, runtime_archive=explicit_owned_runtime,
         cpp_args=("-I", str(repo / "pcc/runtime/src")),
     )
+    oracle = _record_execution(
+        tmp_path, "cpython-mixed",
+        [sys.executable, str(repo / "tests/fixtures/native/constructor/mixed_weakref_order_oracle.py")],
+        dict(os.environ),
+    )
+    assert (oracle["returncode"], oracle["stdout"], oracle["stderr"]) == (0, "mixed 21 1 0\n", "")
     for backend in (1, 2, 3):
         for arm in ("rescue", "no-rescue"):
             for extra in ((), ("nested",), ("mixed",)):
@@ -25,8 +32,9 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
                     tmp_path, lane, [str(binary), arm, *extra],
                     dict(os.environ, PCC_GC_BACKEND=str(backend)),
                 )
+                cyclic_events = oracle["stdout"] if extra == ("mixed",) else ""
                 assert (result["returncode"], result["stdout"], result["stderr"]) == (
-                    0, "GC_ACYCLIC_FINALIZER_RESCUE_OK\n", "",
+                    0, cyclic_events + "GC_ACYCLIC_FINALIZER_RESCUE_OK\n", "",
                 ), (lane, result)
 
     # Count actual visits with the same two candidates and three sizes

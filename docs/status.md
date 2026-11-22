@@ -153,9 +153,11 @@ in the relevant section or issue and removes the entry.
 
 - #9 shared sweep production policy: review the
   [callback ordering and bounded refresh options](investigations/gc-tracing-acyclic-weakref-resurrection.md#review-options).
-  Recommendation: use the disabled correctness arm as a reference first;
-  default-on recheck requires native parity and a measured bound. A
-  test-invoked correctness arm is independent of the production decision.
+  Agent recommendation: review the now-executable disabled full-recheck
+  reference; use it as the correctness oracle and test a bounded candidate
+  on a review branch before activating production. Choose how to handle GC4's
+  existing closed window separately. The reference does not justify paying
+  a full-heap pass after every callback by default.
 
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
@@ -200,9 +202,11 @@ in the relevant section or issue and removes the entry.
    for incomplete coverage; ordinary setters are unchanged. The inert
    mixed-graph arm binds the selected head to a fresh stopped cohort,
    preserving the cyclic leaf's early callback and the acyclic child's
-   rescue or terminal order. Next #9: match the portable event constraints
-   against CPython, including same-target weakref order, before choosing a
-   default sweep policy.
+   rescue or terminal order. The mixed reference now matches CPython's
+   newest-first live weakref callbacks with no callback for a discarded ref.
+   Next #9: review the shared sweep policy before production wiring; see the
+   waiting list. GC2 cycle-completion diagnosis may run without merging a
+   performance candidate.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -241,7 +245,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 compare portable mixed weakref events with CPython: Codex, Linux x86-64, 2026-11-22 14:13 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
