@@ -336,7 +336,11 @@ in the relevant section or issue and removes the entry.
    only signals the private condition when the stop owner can proceed.
    Five-GC lifecycle and 112 native assertions passed; 256-node four-peer
    GC3 was 21.7% faster (7/7), narrowly outside control. GC1 remains noisy.
-   Next: verify the #9 public GC2 mark-to-sweep handoff against CPython. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit 1e7b72a](https://github.com/ikshengmin/pcc/commit/1e7b72a9382c3e0224fa2515a116d08d8d5385db)
+   routes GC2 through the nonmoving same-stop callback handoff. Linux:
+   192 focused native assertions, five-GC rendezvous lifecycle, and public
+   GC2 at 257 candidates with CPython order and no full callback recheck.
+   Next: verify and route a revalidated cohort from an earlier mark stop. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -390,7 +394,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:39 UTC), #9 review only: execute public and sealed GC2 mark-to-sweep handoff, then wire the shared callback route only if its ownership guards and CPython regressions hold.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
