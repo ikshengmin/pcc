@@ -113,6 +113,7 @@ def initial_report():
             "dependency_closure": unrun("owned source/build closure is missing: " + ", ".join(DEPENDENCIES)),
             "test_entry": unrun("original test declarations have not been registered"),
             "test_source_bindings": unrun("verified normal package sources and generated entry required"),
+            "test_source_parse": unrun("exact build-instance source bytes and import edges required"),
             "test_build": unrun("package admission, original dependency closure and test entry required"),
             "tests_and_examples": unrun("whole upstream test binary has not been built"),
         },
@@ -206,6 +207,59 @@ def bind_owned_test_sources(plan, project_files, generated):
     return result
 
 
+def parse_first_bound_test_dependency(bindings, plan, project_files, generated):
+    """Follow the real generated main's first import in the exact variant graph."""
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.syntax import GoDiagnostic
+
+    root = PACKAGE + ".test"
+    test_paths = {f"{PACKAGE_DIR}/{name}" for name in INTERNAL_TEST + EXTERNAL_TEST}
+    parsed = []
+
+    def parse(instance):
+        if instance not in bindings:
+            raise ValueError("missing exact test-source binding: " + instance)
+        row = bindings[instance]
+        units = []
+        for source in row["sources"]:
+            role, path = source["role"], source["path"]
+            if role == "generated":
+                if instance != root or path != "_testmain.go":
+                    raise ValueError("unexpected generated Go source for instance: " + instance)
+                raw = generated
+            elif role == "go":
+                files = project_files if path in test_paths else plan.original_files
+                raw = files.get(path)
+            else:
+                continue  # Source parsing cannot admit assembly or headers.
+            if raw is None or sha256(raw) != source["sha256"]:
+                raise ValueError("bound Go source bytes changed: " + path)
+            units.append((path, raw.decode("utf-8")))
+        program = parse_package(units, require_main=instance == root)
+        actual = {}
+        for imported in program.imports:
+            if imported.path not in row["imports"]:
+                raise ValueError("Go source import is not bound in " + instance + ": " + imported.path)
+            actual[imported.path] = row["imports"][imported.path]
+        parsed.append({"instance": instance, "package": program.token.text, "go_files": len(units),
+                       "declared_imports": actual,
+                       "non_source_imports": sorted(row["imports"].keys() - actual.keys())})
+        return program
+
+    instance = root
+    try:
+        main = parse(instance)
+        if not main.imports:
+            raise ValueError("generated Go test main has no dependency to parse")
+        instance = parsed[0]["declared_imports"][main.imports[0].path]
+        parse(instance)
+    except GoDiagnostic as error:
+        return {"status": "BLOCKED", "parsed": parsed, "blocked_instance": instance,
+                "diagnostic": str(error), "filename": error.filename, "line": error.line,
+                "column": error.column, "code": error.code}
+    return {"status": "PARSED", "parsed": parsed, "claim": "root and first exact dependency syntax only"}
+
+
 def run_owned(report, files, directory, *, source_root=None):
     row = report["owned"]
     row["package_frontend"] = {"status": "RUNNING"}
@@ -284,12 +338,18 @@ def run_owned(report, files, directory, *, source_root=None):
                     "status": "BOUND", "instances": len(bindings), "sha256": sha256(raw),
                     "claim": "original and generated source identity only; no compiler or ABI admission",
                 }
+                try:
+                    with owned_compilation():
+                        row["test_source_parse"] = parse_first_bound_test_dependency(bindings, plan, files, raw_entry)
+                except (ValueError, OSError) as error:
+                    row["test_source_parse"] = {"status": "BLOCKED", "diagnostic": str(error)}
         binding = row["test_source_bindings"]
+        parsed = row["test_source_parse"]
         row["test_build"] = {
             "status": "BLOCKED", "phase": "normal source preflight, no test variant admission",
             "source_packages": list(packages),
-            "diagnostic": closure.get("diagnostic", binding.get("diagnostic",
-                "test variants are not admitted to the compiler; native runtime/assembly owners remain unresolved")),
+            "diagnostic": closure.get("diagnostic", binding.get("diagnostic", parsed.get("diagnostic",
+                "test variants have syntax evidence only; runtime/assembly owners remain unresolved"))),
         }
         save(directory / "frontier.json", report)
         return

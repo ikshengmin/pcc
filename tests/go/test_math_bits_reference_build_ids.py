@@ -101,6 +101,31 @@ def test_owned_binding_uses_distinct_instances_without_external_generated_bytes(
         project.bind_owned_test_sources(normal, originals, b"owned entry only")
 
 
+def test_owned_parser_follows_exact_first_dependency_without_swapping_normal_source():
+    from types import SimpleNamespace
+
+    main = b'package main;import "os";func main(){}'
+    file = "src/os/file.go"
+    original = b'package os;import _ "runtime";func Stub(){}'
+    normal = SimpleNamespace(original_files={file: original})
+    bindings = {
+        MAIN: {"sources": [{"role": "generated", "path": "_testmain.go", "sha256": project.sha256(main)}],
+               "imports": {"os": "os" + S, "reflect": "reflect" + S}},
+        "os": {"sources": [], "imports": {}},
+        "os" + S: {"sources": [{"role": "go", "path": file, "sha256": project.sha256(original)}],
+                   "imports": {"runtime": "runtime" + S}},
+    }
+    receipt = project.parse_first_bound_test_dependency(bindings, normal, {}, main)
+    assert receipt["status"] == "PARSED"
+    assert [row["instance"] for row in receipt["parsed"]] == [MAIN, "os" + S]
+    assert receipt["parsed"][1]["declared_imports"] == {"runtime": "runtime" + S}
+    assert receipt["parsed"][0]["non_source_imports"] == ["reflect"]
+    assert receipt["parsed"][1]["go_files"] == 1
+    normal.original_files[file] = original + b" "
+    with pytest.raises(ValueError, match="bound Go source bytes changed"):
+        project.parse_first_bound_test_dependency(bindings, normal, {}, main)
+
+
 @pytest.mark.parametrize(("fault", "diagnostic"), [
     ("existing-wrong-instance", "build-instance selection differs"),
     ("changed-variant-file-ownership", "build-instance selection differs"),

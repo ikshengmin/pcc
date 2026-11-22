@@ -268,3 +268,14 @@ source tree produced digest
 `6f30c67047b6c7a48f3b8a575c95d161f9dcd71aeb39ce77987ffad507a52e2a`.
 All 89 scoped checks passed. This binds source identities, not compiler
 admission, the native ABI, or actual execution.
+
+The owned parser now reads the locally generated test main and follows
+its first declared import through that exact instance map. It keeps
+the compiler-added `reflect` edge distinct from declared imports and
+rechecks source hashes before parsing. On the isolated source-only
+tree it reached `os [math/bits.test]` and stopped at the unchanged
+`src/os/file.go:201:2`, the embedded `*File` in
+`fileWithoutReadFrom`. This is the real first bound package parse
+blocker, separate from the `errors.Join` diagnostic union. Ninety
+scoped checks passed. No native assembly, runtime owner or project
+test was admitted.
