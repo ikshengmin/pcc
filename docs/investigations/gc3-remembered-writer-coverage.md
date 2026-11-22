@@ -200,9 +200,19 @@ The standalone owned-C prototype uses two bounded bitmap words and a
 release-published tail. Linux pcc0 execution skips holes across cells
 63/64, excludes cell 127 from a previously frozen range, refuses bulk reuse
 while an in-place promoted cell remains, and reports a stale epoch after
-reuse. It executes with one thread; atomic instructions in this probe
-are not evidence of a correct multi-mutator or stopped-world handoff.
-There is no production runtime or performance change.
+reuse. The cursor-only case executes on one thread.
+
+The publish/stop case adds a real registered PCC mutator. It reserves but
+does not publish a test cell, waits for the collector's actual stop request,
+and polls inside a no-park region. The collector returns from the stop only
+after the complete payload and release tail are visible and the mutator is
+parked at no-park exit. A second cell published after resume cannot extend
+the frozen cursor. The unprotected control parks during the first poll;
+the stopped collector sees a zero tail and rejects the partial cell.
+Three owned native Linux cases passed. This proves the protocol at the
+prototype boundary, not production allocator integration, promotion or a
+weak-memory result on another architecture. No runtime or performance
+behavior changed.
 
 ## Collector-entry root baseline
 

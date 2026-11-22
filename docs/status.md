@@ -257,9 +257,11 @@ in the relevant section or issue and removes the entry.
    but did not expose it through the record-backed span lookup. A serial
    cursor model now separates the published tail from a pending reservation,
    an in-place old cell, and a reused span. A standalone Linux native
-   cursor probe passes the same boundaries across two bitmap words. Next:
-   native publish/stop interleaving before integrating a dormant allocator
-   path. Real promotion and concurrent handoff remain untested.
+   cursor probe passes the same boundaries across two bitmap words. A
+   real PCC-thread stop now sees a fully published test cell after no-park
+   exit, and no published cell in the unprotected control. Next: join
+   actual allocator-cell provenance to that test cursor in one native
+   probe. Production promotion and nursery activation are still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -271,7 +273,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 native publish and stop interleaving: Codex, Linux x86-64, 2026-11-22 08:03 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
