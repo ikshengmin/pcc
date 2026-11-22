@@ -93,3 +93,31 @@ was reproduced on master and fixed there by moving only its final entry,
 ordered sequence of all 1,202 signature AST pairs is unchanged. The focused
 ABI chunk and declaration/IR suite passed 10 checks; full native compiler
 bootstrap and CI were not run for this partition-only change.
+
+### Admission and ownership before adding parallel marker workers
+
+Stock GC2 does not have a worker pool: the CMS start/stop state and handle
+in `freestanding_gc_public_collection.py` own one worker. The generic
+`pcc_gc_tracing_step_cycle` takes the global graph lock before advancing
+the shared fallback cursor, claiming gray work, or modifying the shared
+trace stack. The owner-stack guard is thread-local, but the underlying
+stack count and buffer are not. C-extension scanning has a distinct
+unlock/relock handoff with one pending owner, backend, and epoch.
+
+The focused owned-C native case parks a registered helper behind the
+graph lock while the main thread publishes one real gray list with
+automatic collection disabled. The helper makes no progress while the
+lock is held and processes the node after release; the registered root
+keeps its identity. This isolates stock admission, not scheduler speed,
+fairness, or the duration of a scan. It does not measure four marker
+workers on the production workload.
+
+A parallel-scan candidate needs a single coordinator for cycle start,
+root seeding, C-extension handoffs, finish and sweep; per-helper scratch;
+and a bounded pool of whole-owner claims with epoch validation. Keep
+objects stable and retain the supported container slot protocol when
+scanning outside the graph lock. Termination must account for private
+producer tails and in-flight claims as well as the visible queue before
+final remark. Adding callers to the current mark slice does not create
+parallel scans for its lock-held paths. No pool size, speedup, or
+collector selection follows from this probe.

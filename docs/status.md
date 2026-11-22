@@ -335,9 +335,12 @@ in the relevant section or issue and removes the entry.
    macOS comparison commands. The pre-existing 51-entry runtime ABI
    chunk regression revealed by GC2 checks is fixed; all 1,202 ordinary
    signatures retain their exact flattened order and definitions.
-   No master runtime or A/B change. Next Linux GC2 slice: characterize
-   where the single CMS worker owns mark work and what coordination a
-   core-proportional worker group would need before trying it.
+   No master runtime or A/B change. Stock GC2's focused native
+   ownership probe exercises one real gray list: a second registered
+   thread cannot process it until the graph owner unlocks. The next GC2
+   worker slice is to model whole-owner claims and mark termination
+   with unpublished and in-flight work; do not enable another worker
+   against the current shared scratch or CMS lifecycle.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -349,7 +352,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 parallel mark worker ownership baseline: Codex, Linux x86-64, 2026-11-22 09:29 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
