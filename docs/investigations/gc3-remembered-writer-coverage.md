@@ -109,9 +109,13 @@ separate from this private layout check.
 
 The pre-existing `test_memoryview_owned_buffer_lifetime.py` model called
 the public entry but expected a dedicated root and triggered failure
-injection in the unreachable helper. Six cases in the unchanged suite
-failed before the fail-fast stop. Unlike the new test, they do not describe
-the current public dispatch. Do not admit bytes/bytearray buffer exporters
+injection in the unreachable helper. Six cases in that suite's original
+form failed before the fail-fast stop. The corrected tests call the
+dormant candidate directly where they inject its failures, keep the
+public-entry checks separate, and verify candidate cleanup with a
+synthetic token zero as well as positive-token doubles. The corrected
+host checks and exporter reference passed (65 cases); this does not turn
+the candidate into a live path. Do not admit bytes/bytearray buffer exporters
 to a nursery on the basis of these checks. First qualify promotion before
 an address escapes, the real persistent owner if one is required, and
 exactly balanced export release. The proposed nursery and GC3 runtime are

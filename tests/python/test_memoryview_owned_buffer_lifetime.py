@@ -1,8 +1,10 @@
 """Finite ownership/failure interleavings of the actual buffer runtime bodies.
 
-These models do not implement promotion or certify native movement. The
-separate owned-C regression executes real GC3 for that proof. Here allocation,
-root/lease bookkeeping and the CAS boundary are deterministic test doubles.
+These models do not implement promotion or certify native movement.
+The cached-exporter candidate is not dispatched by the public C entry.
+Its tests invoke it directly; the public-entry tests keep their own model
+path. Allocation, root/lease bookkeeping and CAS are deterministic doubles.
+The separate owned-C regression runs the real public GC3 path.
 Plan allocation ordering is a model assertion, not native frame-layout proof.
 The optimized-IR test separately checks the surviving scratch-frame boundary.
 Native dead-branch scratch contamination plus a collector stop is still a
@@ -24,7 +26,7 @@ RUNTIME = Path(__file__).resolve().parents[2] / "pcc/runtime/py"
 class BufferModel:
     OUTER, INNER, EXPORTER, SIBLING = 1000, 2000, 3000, 4000
 
-    def __init__(self, *, backend=3, conservative=True, failure=None):
+    def __init__(self, *, backend=3, conservative=True, failure=None, persistent_token=1):
         self.memory = {("pcc_gc_backend_selected", 0): backend}
         self.allocations = {}
         self.freed = []
@@ -43,6 +45,7 @@ class BufferModel:
         self.nested_copy_calls = 0
         self.conservative = conservative
         self.failure = failure
+        self.persistent_token = persistent_token
         self.before_cas = None
         self.write_observer = None
         self.constants = {
@@ -106,7 +109,8 @@ class BufferModel:
             self.namespace["pcc_gc_memoryview_initialize_owned_buffer"] = lambda *args: 0
         load_functions(
             RUNTIME / "py_capi_buffer_runtime.py",
-            {"pcc_PyMemoryView_GET_BUFFER", "pcc_memoryview_free_owned_buffer"},
+            {"pcc_PyMemoryView_GET_BUFFER", "pcc_memoryview_free_owned_buffer",
+             "_memoryview_gc3_owned_buffer"},
             self.namespace,
         )
         load_functions(
@@ -229,7 +233,7 @@ class BufferModel:
             if self.failure == "persistent-lease":
                 self.events.append(("acquire", slot, obj, -2, True))
                 return -2
-        token = 0 if self.is_conservative(slot) else 1
+        token = self.persistent_token if persistent else (0 if self.is_conservative(slot) else 1)
         if token:
             self.leases[obj] = self.leases.get(obj, 0) + 1
         self.events.append(("acquire", slot, obj, token, persistent))
@@ -314,7 +318,12 @@ class BufferModel:
             self.store(obj, offset, desired)
         return observed
 
-    def get(self, obj=None):
+    def get_candidate(self, obj=None):
+        return self.namespace["_memoryview_gc3_owned_buffer"](
+            self.OUTER if obj is None else obj,
+        )
+
+    def get_public(self, obj=None):
         return self.namespace["pcc_PyMemoryView_GET_BUFFER"](
             self.OUTER if obj is None else obj,
         )
@@ -338,7 +347,7 @@ class BufferModel:
 @pytest.mark.parametrize("conservative", (False, True))
 def test_persistent_lease_is_acquired_through_registered_heap_owner(conservative):
     model = BufferModel(conservative=conservative)
-    buffer = model.get()
+    buffer = model.get_candidate()
     meta = model.load(buffer, 72)
     assert buffer and meta and model.load(meta) == model.EXPORTER
     assert model.load(meta, 8) == 1
@@ -376,6 +385,20 @@ def test_persistent_lease_is_acquired_through_registered_heap_owner(conservative
     model.assert_no_resources()
 
 
+def test_candidate_with_zero_persistent_lease_still_registers_exporter():
+    model = BufferModel(persistent_token=0)
+    buffer = model.get_candidate()
+    assert buffer
+    meta = model.load(buffer, 72)
+    assert meta and model.load(meta) == model.EXPORTER
+    assert model.load(meta, 8) == 0
+    assert model.owners[model.EXPORTER] == 1
+    assert not any(model.leases.values())
+    assert list(model.registered.values()) == [meta]
+    model.dispose(buffer)
+    model.assert_no_resources()
+
+
 @pytest.mark.parametrize("failure", (
     "malloc-96", "malloc-24", "register", "borrowed", "nested-copy-1",
     "nested-copy-2", "move", "prepare", "persistent-lease", "initialize",
@@ -383,7 +406,7 @@ def test_persistent_lease_is_acquired_through_registered_heap_owner(conservative
 ))
 def test_candidate_failure_releases_every_partial_owner(failure):
     model = BufferModel(conservative=not failure.startswith("frame-"), failure=failure)
-    assert model.get() == 0 and model.errors
+    assert model.get_candidate() == 0 and model.errors
     assert model.load(model.OUTER, 24) == 0
     if failure.startswith("nested-copy-"):
         expected_owner = model.OUTER if failure.endswith("1") else model.INNER
@@ -411,12 +434,12 @@ def test_candidate_failure_releases_every_partial_owner(failure):
 @pytest.mark.parametrize("conservative", (False, True))
 def test_gc3_cache_hit_reuses_pointer_without_another_persistent_owner(conservative):
     model = BufferModel(conservative=conservative)
-    buffer = model.get()
+    buffer = model.get_candidate()
     meta = model.load(buffer, 72)
     before = (dict(model.allocations), dict(model.registered),
               dict(model.owners), dict(model.leases))
     start = len(model.events)
-    assert model.get() == buffer and model.load(buffer, 72) == meta
+    assert model.get_candidate() == buffer and model.load(buffer, 72) == meta
     assert (model.allocations, model.registered, model.owners, model.leases) == before
     assert not any(event[0] in ("register", "acquire", "plan_alloc", "prepare", "finish")
                    for event in model.events[start:])
@@ -428,8 +451,8 @@ def test_gc3_cache_hit_reuses_pointer_without_another_persistent_owner(conservat
 def test_cas_loser_releases_only_its_own_root_and_counted_lease():
     model = BufferModel()
     winners = []
-    model.before_cas = lambda: winners.append(model.get())
-    result = model.get()
+    model.before_cas = lambda: winners.append(model.get_candidate())
+    result = model.get_candidate()
     assert winners == [result] and result == model.load(model.OUTER, 24)
     meta = model.load(result, 72)
     assert model.leases[model.EXPORTER] == 1
@@ -442,7 +465,7 @@ def test_cas_loser_releases_only_its_own_root_and_counted_lease():
 
 def test_shared_nested_caches_have_independent_lifetimes_after_bases_clear():
     model = BufferModel()
-    outer, sibling = model.get(), model.get(model.SIBLING)
+    outer, sibling = model.get_candidate(), model.get_candidate(model.SIBLING)
     assert model.load(outer, 8) == model.INNER
     assert model.load(sibling, 8) == model.EXPORTER
     assert model.load(outer) == model.load(sibling) == model.EXPORTER + 24
@@ -460,7 +483,7 @@ def test_shared_nested_caches_have_independent_lifetimes_after_bases_clear():
 @pytest.mark.parametrize("malformed", (False, True))
 def test_refresh_never_writes_internal_even_temporarily(malformed):
     model = BufferModel()
-    buffer = model.get()
+    buffer = model.get_candidate()
     meta = model.load(buffer, 72)
     if malformed:
         model.store(model.INNER, 16, 0)
@@ -476,10 +499,10 @@ def test_refresh_never_writes_internal_even_temporarily(malformed):
 
 
 @pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
-def test_malformed_candidate_never_frees_uninitialized_internal(backend):
+def test_malformed_public_export_never_frees_uninitialized_internal(backend):
     model = BufferModel(backend=backend)
     model.store(model.INNER, 16, 0)
-    assert model.get() == 0 and model.errors
+    assert model.get_public() == 0 and model.errors
     model.assert_no_resources()
 
 
@@ -496,7 +519,7 @@ def test_fresh_initializer_clears_internal_before_early_failure():
 @pytest.mark.parametrize("backend", (3, 4))
 def test_relocation_finish_uses_same_buffer_owner_before_side_table_cleanup(backend):
     model = BufferModel(backend=backend)
-    buffer = model.get()
+    buffer = model.get_candidate() if backend == 3 else model.get_public()
     context = model.allocate(96)
     model.zero(context, 0, 96)
     model.store(context, 72, buffer)
@@ -527,11 +550,11 @@ def test_relocation_finish_uses_same_buffer_owner_before_side_table_cleanup(back
 @pytest.mark.parametrize("backend", (0, 1, 2, 4))
 def test_other_collectors_keep_refresh_contract_without_gc3_metadata(backend):
     model = BufferModel(backend=backend)
-    buffer = model.get()
+    buffer = model.get_public()
     assert model.allocations[buffer] == 96 and model.load(buffer, 72) == 0
     assert model.load(buffer, 48) == buffer + 80
     assert model.load(buffer, 56) == buffer + 88
-    assert model.get() == buffer  # Existing cached-address refresh contract.
+    assert model.get_public() == buffer  # Existing cached-address refresh contract.
     assert not model.registered and not any(model.leases.values())
     model.dispose(buffer)
     model.assert_no_resources()
@@ -543,7 +566,7 @@ def test_exporter_plan_is_prepared_under_lock_and_finished_after_unlock(
     conservative, failure,
 ):
     model = BufferModel(conservative=conservative, failure=failure)
-    buffer = model.get()
+    buffer = model.get_candidate()
     assert bool(buffer) == (failure is None)
     allocations = [event for event in model.events if event[0] == "plan_alloc"]
     prepares = [event for event in model.events if event[0] == "prepare"]
@@ -582,7 +605,7 @@ def test_exporter_plan_is_prepared_under_lock_and_finished_after_unlock(
 ))
 def test_early_failure_never_enters_exporter_plan_helper(failure):
     model = BufferModel(conservative=False, failure=failure)
-    assert model.get() == 0 and model.errors
+    assert model.get_candidate() == 0 and model.errors
     assert not any(event[0] in ("plan_alloc", "prepare", "finish", "graph_lock")
                    for event in model.events)
     model.assert_no_resources()

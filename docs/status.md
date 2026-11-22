@@ -246,9 +246,10 @@ in the relevant section or issue and removes the entry.
    index or major-phase read; it is not in the runtime. The live GC3
    memoryview C export retains the original buffer through its view/base
    across two majors, but has no dedicated cache exporter root: the
-   helper that would register one is not dispatched. Next: distinguish
-   dormant-helper tests from public dispatch; qualify export promotion
-   before admitting exporters to the nursery. Real nursery handoff is untested.
+   helper that would register one is not dispatched. Its tests now run
+   the dormant helper directly, separately from the public-entry controls.
+   Next: qualify the distinct `PyObject_GetBuffer` pin/release path before
+   admitting exporters to the nursery. Real nursery handoff is untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -260,7 +261,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 separate cached buffer candidate from public path tests: Codex, Linux x86-64, 2026-11-22 07:11 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
