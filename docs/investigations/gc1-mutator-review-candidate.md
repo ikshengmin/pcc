@@ -1,6 +1,9 @@
 # Worker-free GC1: first Linux candidate, not merged
 
-Base: master `531e9ec8d4fc0edc274799a40944936549cca394`.
+Runtime base: master `531e9ec8d4fc0edc274799a40944936549cca394`.
+For the performance baseline, use master `98a932017f494dcbdfd996e9ca614dc8c0d8f153`:
+it has the same compiler/runtime and benchmark sources as the runtime
+base, with the same tested receipt tool now on this branch.
 This branch changes only the proposed GC1 scheduling policy. GC1 does
 not start a CMS worker; allocation publishes debt without tracing
 from inside an allocation; an already-rooted application gate owns one
@@ -39,14 +42,17 @@ macOS checkout with the same gateway source: seal base and review HEAD
 under the same `PCC_PERF_HOME` from their separate worktrees, then run:
 
 ```sh
-# At base 531e9ec8:
-uv run python scripts/pcc_perf.py arm gc1-stock-531e9ec8
+# At master 98a93201 in a separate clean worktree:
+uv run python scripts/pcc_perf.py arm gc1-stock-98a93201
 # At review/gc1-mutator-20261122:
 uv run python scripts/pcc_perf.py arm gc1-mutator-review
-uv run python scripts/pcc_perf.py ab gc1-stock-531e9ec8 gc1-mutator-review --pairs 5 --gc 0,1 --workers 1,4 --control 0
+uv run python scripts/pcc_perf.py ab gc1-stock-98a93201 gc1-mutator-review --pairs 5 --gc 0,1 --workers 1,4 --control 0 --latency-receipts
 uv run python scripts/pcc_perf.py table gc1-mutator-review
 ```
 
-Keep the same gateway inputs and existing memory limits. Report maximum
-pause separately from throughput. Do not merge before the controls and
+Use the same `PCC_PERF_HOME`, gateway package and existing memory limits
+for both worktrees. The five paired raw QPS, maximum collection STW,
+process peak RSS and timed p99 values are in `run_receipts` in
+`ledger.jsonl` under that home. CPU/RSS include output formatting.
+Report maximum pause separately from throughput. Do not merge before the controls and
 native multi-mutator checks qualify this candidate.

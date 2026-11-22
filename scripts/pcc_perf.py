@@ -67,6 +67,7 @@ import bisect
 import collections
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -89,6 +90,7 @@ COLLECTORS = (0, 1, 2, 3, 4)
 WORKERS = (1, 4)
 # PCC_GC_COUNTER indexes the handler program reports.
 STW_SUM_US = 120
+STW_MAX_US = 121
 SWEEP_PHASE_US = (133, 137, 141)
 LOCK_WAIT_COUNT = (146, 149, 152, 155)
 LOCK_WAIT_US = (147, 150, 153, 156)
@@ -154,10 +156,75 @@ def arm_dir(name: str) -> Path:
     return HOME / "arms" / name
 
 
-def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None) -> Path:
+def _gc2_pacer_percent(identity: dict) -> int | None:
+    value = identity.get("gc2_pacer_percent")
+    if value is not None and (type(value) is not int or not 0 <= value <= 10000):
+        raise SystemExit("GC2 pacer percent must be an integer from 0 to 10000")
+    return value
+
+
+def _pacer_env(collector: int, percent: int | None) -> dict:
+    env = {"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)}
+    if collector == 2 and percent is not None:
+        env["PCC_GC2_PACER_PERCENT"] = str(percent)
+    return env
+
+
+def _read_arm_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"cannot read arm receipt {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"invalid arm receipt: {path}")
+    return data
+
+
+def _sealed_runtime_env(binary: Path, collector: int) -> dict:
+    identity = _read_arm_json(binary.parent / "source.json")
+    build_report = _read_arm_json(binary.parent / "build.json")
+    percent = _gc2_pacer_percent(identity)
+    built_percent = _gc2_pacer_percent(build_report)
+    if percent is not None or built_percent is not None:
+        if (not build_report.get("complete") or percent != built_percent
+                or identity.get("revision") != build_report.get("revision")
+                or build_report.get("gc2_pacer_attested") != {"on": percent, "off": -1, "gc0": -1}):
+            raise SystemExit(f"arm {binary.parent.name} has no matching GC2 pacer attestation")
+    return _pacer_env(collector, percent)
+
+
+def _attest_gc2_pacer(arm: Path, runtime: Path, percent: int, compiler) -> dict:
+    source = arm / "programs/gc2_pacer_attest.py"
+    binary = arm / "gc2_pacer_attest"
+    source.write_text(
+        'from pcc.extern import extern, c_int64\n'
+        'backend = extern("pcc_gc_backend", (), c_int64)\n'
+        'mode = extern("pcc_gc2_pacer_mode", (), c_int64)\n'
+        'backend()\nprint(mode())\n'
+    )
+    compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
+             runtime_archive=str(runtime))
+    observed = {}
+    for label, collector, mode, expected in (
+        ("on", 2, percent, percent), ("off", 2, None, -1), ("gc0", 0, percent, -1),
+    ):
+        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
+                             env=_pacer_env(collector, mode))
+        if (run.returncode, run.stdout, run.stderr) != (0, f"{expected}\n", ""):
+            raise SystemExit(f"arm {arm.name}: GC2 pacer attestation {label} failed: "
+                             f"{run.returncode} {run.stdout[-200:]} {run.stderr[-200:]}")
+        observed[label] = expected
+    return observed
+
+
+def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
+         *, gc2_pacer_percent: int | None = None) -> Path:
     """Copy HEAD's files into the arm, then the working tree's version of
     every file under ``with_paths`` (tracked or new; a file deleted there
     is deleted in the arm). Returns the arm directory."""
+    _gc2_pacer_percent({"gc2_pacer_percent": gc2_pacer_percent})
     root = REPO_ROOT if root is None else root
     arm = arm_dir(name)
     source = arm / "source"
@@ -204,6 +271,7 @@ def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None) 
                 target.read_bytes()).hexdigest()
     (arm / "source.json").write_text(json.dumps({
         "revision": head, "arm": name, "with": list(with_paths),
+        "gc2_pacer_percent": gc2_pacer_percent,
         "overlaid": sorted(set(overlaid)), "left_out": dirty,
         "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
         "dirty_diff_bytes": len(diff), "files": files,
@@ -297,8 +365,10 @@ def build_child(arm: Path) -> int:
     verify()
     started = time.monotonic()
     runtime = Path(ensure_target_runtime(str(source / "pcc/runtime"), host_target_triple()))
+    percent = _gc2_pacer_percent(identity)
     report = {
         "complete": False, "revision": identity["revision"], "runtime": str(runtime),
+        "gc2_pacer_percent": percent,
         "runtime_sha256": digest(runtime), "runtime_seconds": time.monotonic() - started,
         "programs": {}, "runs": [],
     }
@@ -316,6 +386,9 @@ def build_child(arm: Path) -> int:
         PCC_SELF_BACKEND_OBJECT_CACHE_IDENTITY="pcc-perf",
         PCC_SELF_BACKEND_OBJECT_CACHE_DIR=str(HOME / "object-cache"),
     )
+    if percent is not None:
+        report["gc2_pacer_attested"] = _attest_gc2_pacer(arm, runtime, percent, compile_python)
+        save()
     for program in PROGRAMS:
         binary = arm / program
         started = time.monotonic()
@@ -333,8 +406,7 @@ def build_child(arm: Path) -> int:
             for argv, expected in cases:
                 run = subprocess.run(
                     argv, capture_output=True, text=True, timeout=120,
-                    env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector),
-                         "BENCH_N": "31"},
+                    env=dict(_pacer_env(collector, percent), BENCH_N="31"),
                 )
                 report["runs"].append({
                     "program": program, "gc": collector, "argv": argv[1:],
@@ -400,10 +472,34 @@ def binary_of(name: str, program: str = "native_stats") -> Path:
     binary = arm_dir(name) / program
     if not binary.is_file():
         raise SystemExit(f"arm {name} has no {program}: build it with `arm {name}`")
+    env = _sealed_runtime_env(binary, 2)
+    if "PCC_GC2_PACER_PERCENT" in env:
+        report = _read_arm_json(binary.parent / "build.json")
+        recorded = report.get("programs", {}).get(program, {}).get("sha256")
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != recorded:
+            raise SystemExit(f"arm {name} binary does not match its sealed build: {program}")
     return binary
 
 
 # ---- runs ----------------------------------------------------------------
+
+def _rss_bytes(value: int, platform: str) -> int | None:
+    if platform.startswith("linux"):
+        return value * 1024
+    if platform == "darwin":
+        return value
+    return None
+
+
+def _handler_p99_ms(data: dict) -> float:
+    samples = data.get("latencies_ms")
+    count = data["requests"]
+    if (not isinstance(samples, list) or count <= 0 or len(samples) != count
+            or any(type(value) not in (int, float) or value < 0 or not math.isfinite(value)
+                   for value in samples)):
+        raise SystemExit("handler latency receipt missing or does not match timed requests")
+    return sorted(samples)[(99 * count + 99) // 100 - 1]
+
 
 def _wait_with_usage(self, *args, **kwargs):
     """Popen._try_wait replacement that keeps the child's resource usage."""
@@ -413,6 +509,7 @@ def _wait_with_usage(self, *args, **kwargs):
         return self.pid, 0
     if pid == self.pid:
         self._pcc_usage = usage.ru_utime + usage.ru_stime
+        self._pcc_peak_rss_bytes = _rss_bytes(usage.ru_maxrss, sys.platform)
     return pid, status
 
 
@@ -421,13 +518,14 @@ class MeasuredPopen(subprocess.Popen):
 
 
 def run_once(binary: Path, collector: int, workers: int, rounds: int,
-             concurrency: int = 100) -> dict:
+             concurrency: int = 100, *, latency_receipts: bool = False) -> dict:
     """One handler run: requests per second, the processor time of one
     request and the counters it reports."""
+    data_mode = "--samples" if latency_receipts else "--summary"
     process = MeasuredPopen(
-        [str(binary), str(concurrency), "0", str(rounds), "--summary", str(workers)],
+        [str(binary), str(concurrency), "0", str(rounds), data_mode, str(workers)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+        env=_sealed_runtime_env(binary, collector),
     )
     try:
         stdout, stderr = process.communicate(timeout=600)
@@ -441,11 +539,20 @@ def run_once(binary: Path, collector: int, workers: int, rounds: int,
     data = json.loads(stdout)
     counters = {int(key): value for key, value in data.get("gc", {}).items()}
     executed = data["requests"] + data.get("warmup_requests", 0)
+    max_stw_us = counters.get(STW_MAX_US)
+    peak_rss_bytes = getattr(process, "_pcc_peak_rss_bytes", None)
+    if latency_receipts and (data["requests"] != concurrency * rounds
+                             or type(max_stw_us) is not int or max_stw_us < 0
+                             or type(peak_rss_bytes) is not int or peak_rss_bytes <= 0):
+        raise SystemExit("handler receipt missing required request count, maximum STW, or peak RSS")
     return {
         "qps": data["requests"] / (data["finished_at"] - data["started_at"]),
         "requests": data["requests"],
         "cpu_us": 1e6 * getattr(process, "_pcc_usage", 0.0) / executed,
         "stw_ms": counters.get(STW_SUM_US, 0) / 1000.0,
+        "max_stw_us": max_stw_us,
+        "peak_rss_bytes": peak_rss_bytes,
+        "latency_p99_ms": _handler_p99_ms(data) if latency_receipts else None,
         "sweep_ms": sum(counters.get(index, 0) for index in SWEEP_PHASE_US) / 1000.0,
         "lock_waits": sum(counters.get(index, 0) for index in LOCK_WAIT_COUNT),
         "lock_wait_ms": sum(counters.get(index, 0) for index in LOCK_WAIT_US) / 1000.0,
@@ -477,6 +584,15 @@ def summarize_pairs(first: list[dict], second: list[dict],
         "lock_waits_a": median(first, "lock_waits"),
         "lock_waits_b": median(second, "lock_waits"),
     }
+    metrics = ("qps", "max_stw_us", "peak_rss_bytes", "latency_p99_ms")
+    if any("max_stw_us" in run for run in first + second):
+        sources = (("a", first), ("b", second))
+        if control is not None:
+            sources += (("control", control),)
+        row["run_receipts"] = {
+            label: [{key: run.get(key) for key in metrics} for run in runs]
+            for label, runs in sources
+        }
     if control is not None:
         row["control_ratios"] = ratios(control)
         row["control_change_percent"] = (
@@ -534,11 +650,16 @@ def apply_control(rows: list[dict], collector: int | None = None,
 
 
 def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
-            control_arm: str | None = None) -> list[dict]:
+            control_arm: str | None = None, *, latency_receipts: bool = False) -> list[dict]:
     arms = [(a, binary_of(a)), (b, binary_of(b))]
     if control_arm is not None:
         arms.append((control_arm, binary_of(control_arm)))
+    pacer_modes = {
+        name: _gc2_pacer_percent(_read_arm_json(binary.parent / "source.json"))
+        for name, binary in arms
+    } if 2 in collectors else {}
     runs: dict[tuple, list[dict]] = {}
+    receipt_flags = {"latency_receipts": True} if latency_receipts else {}
     for index in range(pairs):
         for collector in collectors:
             for count in workers:
@@ -547,7 +668,7 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
                 shift = index % len(arms)
                 for name, binary in arms[shift:] + arms[:shift]:
                     runs.setdefault((collector, count, name), []).append(
-                        run_once(binary, collector, count, rounds))
+                        run_once(binary, collector, count, rounds, **receipt_flags))
     results = []
     for collector in collectors:
         for count in workers:
@@ -557,6 +678,11 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
             row.update({"gc": collector, "workers": count, "a": a, "b": b,
                         "requests": rounds * 100, "time": time.time(),
                         "load": os.getloadavg()[0]})
+            if latency_receipts:
+                row["latency_receipts"] = True
+                row["rss_scope"] = "process"
+            if collector == 2 and any(mode is not None for mode in pacer_modes.values()):
+                row["gc2_pacer_percent_by_arm"] = pacer_modes
             results.append(row)
     return results
 
@@ -670,7 +796,7 @@ def run_primitive(binary: Path, name: str, batch: int, milliseconds: int,
     out = subprocess.run(
         [str(binary), "prim", name, str(batch), str(milliseconds), str(workers)],
         capture_output=True, text=True, timeout=600,
-        env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+        env=_sealed_runtime_env(binary, collector),
     )
     if out.returncode != 0:
         raise SystemExit(
@@ -973,7 +1099,7 @@ def profile(name: str, collector: int, workers: int, seconds: int,
         output = Path(directory) / target.name
         process = subprocess.Popen(
             [str(binary), *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+            env=_sealed_runtime_env(binary, collector),
         )
         try:
             time.sleep(0.3)
@@ -1077,6 +1203,8 @@ def main(argv: list[str] | None = None) -> int:
     arm.add_argument("name")
     arm.add_argument("--with", dest="with_paths", action="append", default=[],
                      metavar="PATH", help="take PATH from the working tree, not HEAD")
+    arm.add_argument("--gc2-pacer-percent", type=int,
+                     help="seal and verify the review runtime GC2 pacer opt-in (0–10000)")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
@@ -1101,6 +1229,8 @@ def main(argv: list[str] | None = None) -> int:
     ab.add_argument("--gc", type=_numbers, default=COLLECTORS)
     ab.add_argument("--workers", type=_numbers, default=WORKERS)
     ab.add_argument("--rounds", type=int, default=100)
+    ab.add_argument("--latency-receipts", action="store_true",
+                    help="record timed request p99 in each pair (CPU/RSS include output formatting)")
     control = ab.add_mutually_exclusive_group()
     control.add_argument("--control", type=int, default=None, metavar="GC",
                          help="a measured collector the change cannot reach; "
@@ -1167,7 +1297,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "arm":
-        sealed = seal(args.name, tuple(args.with_paths))
+        if args.gc2_pacer_percent is None:
+            sealed = seal(args.name, tuple(args.with_paths))
+        else:
+            sealed = seal(args.name, tuple(args.with_paths),
+                          gc2_pacer_percent=args.gc2_pacer_percent)
         identity = json.loads((sealed / "source.json").read_text())
         print(f"arm {args.name}: {identity['revision'][:9]} with "
               f"{len(identity['overlaid'])} working-tree files", flush=True)
@@ -1196,8 +1330,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.control is not None and args.control not in args.gc:
             parser.error(f"--control {args.control} is not among the measured collectors")
         with performance_lock():
+            flags = {"latency_receipts": True} if args.latency_receipts else {}
             rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds,
-                           control_arm=args.control_arm)
+                           control_arm=args.control_arm, **flags)
         apply_control(rows, collector=args.control)
         print_comparison(rows)
         append_ledger(rows)
