@@ -250,3 +250,65 @@ def test_owned_native_four_task_cohort_emits_four_distinct_sample_streams(tmp_pa
     assert len({sample.pid for task in receipts for sample in task.samples}) == 1
     with pytest.raises(ValueError, match="expected 3 owned tasks, saw 4"):
         RING.capture_cooperative_cohort([str(binary)], env=clean_env, expected_tasks=3)
+
+
+def test_exact_site_tally_validates_provenance_and_retains_unknown_denominator():
+    image = _elf(_EXE_LOAD)
+    sha = hashlib.sha256(image).hexdigest()
+    rows = [RING.SealedSample(RING.TaskSample(pc, 7, 7, 500_000), offset, sha)
+            for pc, offset in ((0x400080, 128), (0x400081, 129), (1, None))]
+    site = RING.ExactSite("site", 128, image[128:130])
+    assert RING.exact_site_sample_tally(rows, image, [site]) == {
+        "exact_site_samples": {"site": 1}, "other_executable_samples": 1,
+        "unmapped_samples": 1, "total_samples": 3,
+    }
+    with pytest.raises(ValueError, match="site bytes"):
+        RING.exact_site_sample_tally(rows, image, [RING.ExactSite("bad", 128, b"\xff")])
+    with pytest.raises(ValueError, match="site is not entirely"):
+        RING.exact_site_sample_tally(rows, image, [RING.ExactSite("tail", 511, b"\0\0")])
+    with pytest.raises(ValueError, match="does not match"):
+        RING.exact_site_sample_tally(
+            [RING.SealedSample(rows[0].sample, 129, sha)], image, [site],
+        )
+    with pytest.raises(ValueError, match="does not match"):
+        RING.exact_site_sample_tally(
+            [RING.SealedSample(rows[0].sample, 128, "0" * 64)], image, [site],
+        )
+
+
+@pytest.mark.integration
+def test_owned_linux_exact_instruction_calibration(tmp_path):
+    if sys.platform != "linux" or RING.platform.machine() != "x86_64":
+        return
+    from pcc.backend.elf_x86_64 import link_static_executable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    source = Path(__file__).with_name("fixtures") / "pcc_perf_linux_atomic_x64_asm.txt"
+    for locked in (False, True):
+        asm = source.read_text()
+        if not locked:
+            asm = asm.replace("lock xadd", "xadd")
+        obj = assemble_file(asm)
+        syms = {symbol.name: symbol for symbol in obj.symbols}
+        payload = link_static_executable([obj])
+        binary = tmp_path / ("atomic" if locked else "plain")
+        binary.write_bytes(payload)
+        binary.chmod(0o755)
+        entry = RING.ELF_HEADER.unpack_from(payload)[4]
+        pc = entry + syms["probe_instruction"].value - syms["_start"].value
+        loop_end = entry + syms["probe_loop_end"].value - syms["_start"].value
+        assert syms["probe_instruction"].section_index == syms["_start"].section_index
+        offset = RING.read_executable_image(payload).file_offset(pc)
+        assert offset is not None
+        code = payload[offset:offset + (9 if locked else 8)]
+        assert code.startswith(bytes.fromhex("f0 48 0f c1 05" if locked else "48 0f c1 05"))
+        rows = RING.capture_sealed_cooperative_child(
+            binary, hashlib.sha256(payload).hexdigest(), env={"PATH": "/nonexistent"},
+        )
+        assert any(pc <= row.sample.ip < loop_end for row in rows)
+        result = RING.exact_site_sample_tally(rows, payload, [RING.ExactSite("xadd", offset, code)])
+        assert (result["exact_site_samples"]["xadd"] + result["other_executable_samples"]
+                + result["unmapped_samples"]) == len(rows)
+        # Task-clock sampling is not evidence that the processor spent one
+        # sample's worth of time executing the instruction at each exact IP.
+        print({"locked": locked, **result})

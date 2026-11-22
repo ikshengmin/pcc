@@ -1,0 +1,52 @@
+.intel_syntax noprefix
+.text
+.globl _start
+.globl probe_instruction
+.globl probe_loop_end
+_start:
+  mov eax, 1
+  mov edi, 1
+  lea rsi, marker_ready[rip]
+  mov edx, 6
+  syscall
+  xor eax, eax
+  xor edi, edi
+  lea rsi, go[rip]
+  mov edx, 1
+  syscall
+  movzx eax, byte ptr go[rip]
+  cmp eax, 71
+  jne failed
+  mov ecx, 20000000
+probe_loop:
+  mov eax, 1
+probe_instruction:
+  lock xadd qword ptr counter[rip], rax
+  sub ecx, 1
+  jne probe_loop
+probe_loop_end:
+  mov rax, qword ptr counter[rip]
+  cmp eax, 20000000
+  jne failed
+  mov eax, 1
+  mov edi, 1
+  lea rsi, marker_done[rip]
+  mov edx, 5
+  syscall
+  xor edi, edi
+  jmp finish
+failed:
+  mov edi, 1
+finish:
+  mov eax, 60
+  syscall
+.data
+.p2align 3
+counter:
+  .quad 0
+go:
+  .byte 0
+marker_ready:
+  .byte 82, 69, 65, 68, 89, 10
+marker_done:
+  .byte 68, 79, 78, 69, 10

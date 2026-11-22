@@ -95,3 +95,23 @@ trial and a wrong-count rejection both passed; 33 focused nodes
 passed in all. This is a cooperative fixed pool and not a claim that
 an arbitrary dynamic workload cannot spawn a transient task. Next
 calibrate instruction-site attribution in an owned native control.
+
+## Exact-IP calibration: software task clock cannot supply the GC0 ratio
+
+The x86-64 owned assembler and linker built a minimal static control
+that actually executes 20 million `xadd` operations, with and without
+`lock`. The native code checks its final counter. The known instruction
+start comes from the original owned object labels plus the final ELF
+entry; we independently check the opcode bytes in the selected image,
+then keep all other/unmapped samples in the denominator.
+
+Across three captures per shape, locked-loop sample totals were
+99/90/90, and unlocked totals 86/90/100. Both ran the intended loop,
+but every capture had **zero** exact-start samples on `xadd` itself.
+Therefore an ordinary task-clock sample's address must not be read as
+an exact atomic-instruction CPU-share measurement, even on this known
+hot loop. No reference-counting percentage or optimization verdict
+follows. Thirty-five focused nodes passed. Next test whether the
+Linux host can actually provide precision-qualified hardware samples;
+if not, keep this tool as transport/localization and leave the atomic
+CPU-share gate open.

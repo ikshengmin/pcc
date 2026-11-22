@@ -373,6 +373,7 @@ def capture_cooperative_cohort(argv, *, env: dict, expected_tasks: int) -> list[
 class SealedSample:
     sample: TaskSample
     file_offset: int | None
+    binary_sha256: str
 
 
 def capture_sealed_cooperative_child(binary, expected_sha256: str, *, env: dict) -> list[SealedSample]:
@@ -407,4 +408,44 @@ def capture_sealed_cooperative_child(binary, expected_sha256: str, *, env: dict)
             remaining -= len(chunk)
         if remaining or stream.read(1) or digest.hexdigest() != expected_sha256:
             raise ValueError("sealed executable changed during capture")
-    return [SealedSample(sample, image.file_offset(sample.ip)) for sample in samples]
+    return [SealedSample(sample, image.file_offset(sample.ip), expected_sha256) for sample in samples]
+
+
+@dataclass(frozen=True)
+class ExactSite:
+    label: str
+    file_offset: int
+    code: bytes
+
+
+def exact_site_sample_tally(readings: list[SealedSample], data: bytes, sites: list[ExactSite]) -> dict:
+    """Count exact sampled PCs at verified instruction starts, not CPU time."""
+    image = read_executable_image(data)
+    digest = hashlib.sha256(data).hexdigest()
+    by_offset = {}
+    counts = {}
+    for site in sites:
+        if (not site.label or site.label in counts or site.file_offset in by_offset
+                or not 1 <= len(site.code) <= 16):
+            raise ValueError("empty or ambiguous exact instruction site")
+        if not any(text.file_offset <= site.file_offset
+                   and site.file_offset + len(site.code) <= text.file_offset + text.end - text.address
+                   for text in image.ranges):
+            raise ValueError("instruction site is not entirely file-backed executable text")
+        if data[site.file_offset:site.file_offset + len(site.code)] != site.code:
+            raise ValueError("instruction site bytes do not match the sealed image")
+        by_offset[site.file_offset] = site.label
+        counts[site.label] = 0
+    other = unmapped = 0
+    for reading in readings:
+        if (reading.binary_sha256 != digest
+                or reading.file_offset != image.file_offset(reading.sample.ip)):
+            raise ValueError("sample receipt does not match the sealed PC mapping")
+        if reading.file_offset is None:
+            unmapped += 1
+        elif reading.file_offset not in by_offset:
+            other += 1
+        else:
+            counts[by_offset[reading.file_offset]] += 1
+    return {"exact_site_samples": counts, "other_executable_samples": other,
+            "unmapped_samples": unmapped, "total_samples": len(readings)}
