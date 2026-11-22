@@ -86,7 +86,10 @@ def test_debug_merge_rebases_sections_and_survives_partial_relink(tmp_path, kind
 def test_windowed_debug_merge_matches_ordinary_and_releases_budget(tmp_path, staged):
     objects = [_object('first', 'one.py', 2), _object('second', 'two.py', 22)]
     paths = _write_pcos(tmp_path, objects)
-    expected = link_relocatable_native(objects, _source_view=True)
+    # The windowed route always prepares an executable, so its stack-map
+    # table takes the runtime format; compare with the ordinary merge of an
+    # executable, not with a relocatable merge (which keeps version 2).
+    expected = link_relocatable_native(objects, _source_view=True, _final_executable=True)
     budget = _budget()
     result = host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=staged)
     try:

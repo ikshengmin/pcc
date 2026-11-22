@@ -6,13 +6,13 @@ import builtins
 import hashlib
 import json
 import platform
-import shutil
 import subprocess
 import sys
 import pytest
 from pcc.frontends.cpp import CppDiagnostic, CppParser
 from tests.cpp.owned_execution import (Execution, assert_exact, compile_host_cpp,
     compile_reference_cpp, run_executable, write_host_executable)
+from tests.host_capabilities import gnu_gxx
 
 TARGET = 'x86_64-unknown-linux-gnu'
 # Original alias-probe source retained from the previous review, byte-for-byte.
@@ -64,7 +64,7 @@ def _host():
 
 
 def _compiler():
-    compiler = shutil.which('g++')
+    compiler = gnu_gxx()
     if compiler is None:
         pytest.fail('actual G++ unavailable; no substitute')
     return compiler
@@ -106,7 +106,7 @@ def test_non_type_collision_keeps_explicit_unsupported():
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source', POSITIVE, ids=[r[0] for r in POSITIVE])
 @pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
-@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
+@pytest.mark.pcc_gate(probe=lambda: gnu_gxx() is not None)
 def test_identical_source_owned_and_gcc17_return42(tmp_path, monkeypatch, name, source):
     _host()
     compiler = _compiler()
@@ -140,7 +140,7 @@ def test_identical_source_owned_and_gcc17_return42(tmp_path, monkeypatch, name, 
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source,code', INVALID, ids=[r[0] for r in INVALID])
 @pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
-@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
+@pytest.mark.pcc_gate(probe=lambda: gnu_gxx() is not None)
 def test_same_invalid_source_gcc17_rejects(tmp_path, name, source, code):
     _host()
     path = tmp_path / (name + '.cpp')
@@ -156,7 +156,7 @@ def test_same_invalid_source_gcc17_rejects(tmp_path, name, source, code):
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
-@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
+@pytest.mark.pcc_gate(probe=lambda: gnu_gxx() is not None)
 def test_non_type_collision_is_not_a_semantic_negative(tmp_path):
     _host()
     units = (('non_type.cpp', NON_TYPE_BOUNDARY),)
