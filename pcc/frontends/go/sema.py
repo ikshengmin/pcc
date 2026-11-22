@@ -1920,8 +1920,8 @@ class Analyzer:
             if maximum is not None:
                 raise GoDiagnostic(maximum.token, "three-index slicing is not valid for strings")
             # Owned strings currently have immutable, process-lifetime byte
-            # backing. A slice only changes the {data,len} view. Prove that
-            # no bounds panic is needed; never emit an unchecked unproved GEP.
+            # backing. A slice only changes the {data,len} view. Reuse
+            # static bounds facts or emit an explicit checked borrowed view.
             const_extent = len(base.constant) if base.constant is not None else None
             extent = base.value if const_extent is None and base.kind == "string_slice" else const_extent
             lo = 0 if low is None else low.constant
@@ -1940,9 +1940,15 @@ class Analyzer:
             # but not by its upper bound. Keep low <= high as a separate proof.
             lower_hi = hi if hi is not None else 0
             if not safe_hi or max_lo is None or max_lo > lower_hi:
-                raise UnsupportedGo(expr.token, 'go.unsupported.string-bounds-panic',
-                                    "unproven string slice bounds require shared-runtime bounds-panic support")
-            expr.kind, expr.type = "string_slice", default_type(base.type)
+                if base.kind != "name" or base.constant is not None:
+                    raise UnsupportedGo(expr.token, 'go.unsupported.string-bounds-panic',
+                                        "unproven string slice bounds require shared-runtime bounds-panic support")
+                # A loaded string already owns an immutable descriptor; only
+                # its bounds must be checked, not materialized or copied.
+                expr.kind = "checked_string_slice"
+            else:
+                expr.kind = "string_slice"
+            expr.type = default_type(base.type)
             # This is a length fact, not a Go constant expression.
             expr.value = hi - lo if hi is not None and lo is not None else None
             if self.function is not None:

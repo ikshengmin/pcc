@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify the dynamic string-subview boundary in CPU option parsing
-   at `internal/cpu/cpu.go:231:20` under the opt-in exact-source probe.
-   Proved catalog declarations retain metadata but still reject executable
-   uses; no native global is emitted. See the
+   qualify the index-only range consumer of the proved CPU option
+   catalog at `internal/cpu/cpu.go:255:19`; no global backing is
+   emitted yet. Checked borrowed string subviews now run on Linux and
+   advance the exact source probe through the dynamic splits. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go checked dynamic borrowed string subviews: Codex, Linux x86-64, 2026-11-22 05:06 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -690,3 +690,15 @@ graph the probe advances to `internal/cpu/cpu.go:231:20`, the dynamic
 `env[:i]` split after `indexByte`. No full package IR or test executable
 is produced. Seventy-eight adjacent checks and three standalone native
 differentials passed.
+
+Named immutable string descriptors now support checked two-index
+subviews. Bounds evaluate once in source order; high is checked
+against byte length before low is checked against high; no payload
+pointer is formed on failure. The Linux bootstrap terminal path
+matched Go 1.27.3 on valid byte views and six invalid bounds,
+including negative, very wide unsigned, reversed and competing
+bounds (initial panic line and exit status, not stack or recover).
+One hundred thirty-nine adjacent checks and two native nodes
+passed. The exact source probe now stops at the catalog range
+receiver in `internal/cpu/cpu.go:255:19`; neither this catalog nor
+the whole upstream package has a native build.

@@ -560,14 +560,19 @@ class Lowerer:
             self.builder.store(right, right_copy)
             equal = self.aggregate_equal(expr.args[0].type, left_copy, right_copy)
             return self.builder.not_(equal) if expr.value == "!=" else equal
-        if expr.kind == "string_slice":
+        if expr.kind in ("string_slice", "checked_string_slice"):
+            checked = expr.kind == "checked_string_slice"
+            if checked and "linux" not in self.module.triple.split("-"):
+                raise UnsupportedGo(expr.token, "go.unsupported.string-bounds-panic",
+                                    "checked string slices currently require owned Linux terminal panic support")
             base, *provided = expr.args
             header = self.expression(base)
             values = iter(provided)
-            bounds = []
+            bounds, signedness = [], []
             for present in expr.slice_bounds[:2]:
                 if not present:
                     bounds.append(None)
+                    signedness.append(False)
                     continue
                 operand = next(values)
                 number = self.expression(operand)
@@ -575,12 +580,28 @@ class Lowerer:
                     extend = self.builder.sext if integer_signed(operand.type) else self.builder.zext
                     number = extend(number, ir.IntType(64))
                 bounds.append(number)
+                signedness.append(integer_signed(operand.type))
             low, high = bounds
             if low is None and high is None:
                 return header
-            data = self.builder.extract_value(header, 0)
+            extent = self.builder.extract_value(header, 1)
+            if checked and high is not None:
+                check_low = self.function.append_basic_block("string_slice_check_low")
+                panic_high = self.function.append_basic_block("string_slice_bad_high")
+                self.builder.cbranch(self.builder.icmp_unsigned("<=", high, extent), check_low, panic_high)
+                self.builder.position_at_end(panic_high)
+                self.builtin_io.string_slice_bounds_panic(high, extent, signed=signedness[1], high=True)
+                self.builder.position_at_end(check_low)
             if high is None:
-                high = self.builder.extract_value(header, 1)
+                high = extent
+            if checked and low is not None:
+                ready = self.function.append_basic_block("string_slice_ready")
+                panic_low = self.function.append_basic_block("string_slice_bad_low")
+                self.builder.cbranch(self.builder.icmp_unsigned("<=", low, high), ready, panic_low)
+                self.builder.position_at_end(panic_low)
+                self.builtin_io.string_slice_bounds_panic(low, high, signed=signedness[0], high=False)
+                self.builder.position_at_end(ready)
+            data = self.builder.extract_value(header, 0)
             length = high
             if low is not None:
                 data = self.builder.gep(data, [low])
