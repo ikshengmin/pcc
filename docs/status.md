@@ -156,14 +156,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- #9 shared sweep production policy: review the
-  [callback ordering and bounded refresh options](investigations/gc-tracing-acyclic-weakref-resurrection.md#review-options).
-  Agent recommendation: review the now-executable disabled full-recheck
-  reference; use it as the correctness oracle and test a bounded candidate
-  on a review branch before activating production. Choose how to handle GC4's
-  existing closed window separately. The reference does not justify paying
-  a full-heap pass after every callback by default.
-
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -215,8 +207,14 @@ in the relevant section or issue and removes the entry.
    preserving the cyclic leaf's early callback and the acyclic child's
    rescue or terminal order. The mixed reference now matches CPython's
    newest-first live weakref callbacks with no callback for a discarded ref.
-   Next #9: review the shared sweep policy before production wiring; see the
-   waiting list. Native Linux GC2 now reproduces zero mark completions
+   Next #9: the production candidate on a review branch, in the shape and
+   under the six conditions Claude approved on #9 at the maintainer's
+   request on 2026-11-22
+   ([review](https://github.com/ikshengmin/pcc/issues/9#issuecomment-7081477887)):
+   layered acyclic order computed once, a barrier remark after each window
+   instead of the full re-mark, and the full recheck kept as oracle and
+   fallback. First report how many HTTP-workload collections run user code.
+   No further inert or dormant #9 slices. Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
    delayed cycle completes when allocation stops with all four workers
@@ -504,7 +502,11 @@ in the relevant section or issue and removes the entry.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
-   [multi-language status](multilanguage-status.md). Platform: any. Next:
+   [multi-language status](multilanguage-status.md). Platform: any.
+   Before pushing a frontend result, run the affected language's whole
+   ordinary suite (AGENTS.md: whole affected-language validation).
+   Checkpoint regression #10 came from two Go commits (`d9735bfdd`,
+   `feef5185c`) that changed diagnostics without it. Next:
    review the proposed [shared Go/Java managed storage](design/go-shared-managed-storage.md)
    before implementation. Agent recommendation: freeze new source-shape
    admissions; do not qualify on the GC0-only prototype. Existing probes
