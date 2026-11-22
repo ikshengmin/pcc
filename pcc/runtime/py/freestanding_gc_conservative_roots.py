@@ -514,6 +514,29 @@ def _capture_thread_words(context) -> None:
     store_i64(context, _WORDS_COUNT, count)
 
 
+@c_abi_export("pcc_gc_callback_singleton_conservative_root")
+def pcc_gc_callback_singleton_conservative_root(node) -> i64:
+    """Look for one candidate in the stopped stack cut, without a heap walk.
+
+    Capture BEFORE loading its managed address into this frame. The caller
+    holds the stopped world and passes the allocator's unmanaged node.
+    """
+    context = stack_alloc(_WORDS_CONTEXT_BYTES)
+    _capture_thread_words(context)
+    words = load_ptr(context, _WORDS_DATA)
+    count: i64 = load_i64(context, _WORDS_COUNT)
+    obj = load_ptr(node, 0)
+    rooted: i64 = _extent_has_word(words, count, obj, load_i64(node, 8))
+    owner = load_ptr(node, 48)
+    if ptr_is_null(owner) == 0:
+        span = load_ptr(owner, 64)
+        while rooted == 0 and ptr_is_null(span) == 0:
+            rooted = _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16))
+            span = load_ptr(span, 40)
+    free(words)
+    return rooted
+
+
 @c_abi_export("pcc_gc_conservative_step_pin_begin")
 def pcc_gc_conservative_step_pin_begin(context) -> None:
     # A bounded GC3 step freezes only stack words, never the object list.

@@ -405,6 +405,8 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
     black unless ``allow_black`` asks for a re-scan.
     """
     old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
+    if (old & 1024) == 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) == 2:
+        return
     if (old & (16 | 524288)) != 0 or (
         allow_black == 0 and pcc_gc_object_is_black(obj, old) != 0
     ):

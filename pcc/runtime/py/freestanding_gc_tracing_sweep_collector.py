@@ -64,6 +64,15 @@ pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
 pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
+pcc_gc_gray_registered_roots = extern("pcc_gc_gray_registered_roots", (), c_void)
+pcc_gc_callback_singleton_conservative_root = extern(
+    "pcc_gc_callback_singleton_conservative_root", (c_ptr,), c_int64
+)
+pcc_gc_gray_count_load_acquire = extern("pcc_gc_gray_count_load_acquire", (), c_int64)
+pcc_gc_gray_count_store_release = extern("pcc_gc_gray_count_store_release", (c_int64,), c_void)
+pcc_gc_gray_worklist_clear_stopped = extern("pcc_gc_gray_worklist_clear_stopped", (), c_void)
+pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+
 pcc_gc_mark_root_gray_if_known = extern(
     "pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void
 )
@@ -960,6 +969,104 @@ def pcc_gc_tracing_dispatch_classified_head(
     return pcc_gc_tracing_dispatch_callback_head(target, verdict, stop_epoch)
 
 
+# Review-only production admission. This is a true sweep route, not the
+# injected-callback fixtures. A single acyclic object has one real ready layer.
+# Multi-object topology, GC2/4 and uncovered barriers stay on the old route.
+_CALLBACK_SWEEP_CANDIDATE = 1024
+_CALLBACK_FRESH_ALLOCATION = 16384
+_CALLBACK_MARK_WINDOW = 2
+_CALLBACK_GRAY = 16
+_CALLBACK_BLACK = 32
+
+
+@c_abi_export("pcc_gc_review_acyclic_singleton")
+def _review_acyclic_singleton(stop_epoch: i64, backend: i64):
+    if (
+        (backend != 1 and backend != 3)
+        or stop_epoch < 0
+        or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
+        or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        or pcc_gc_gray_count_load_acquire() != 0
+        or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0) != 1
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0) <= 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+           != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    ):
+        return null()
+    node = load_ptr(global_load_ptr("pcc_gc_tracing_candidate_nodes"), 0)
+    if pcc_gc_object_node_is_active(node) == 0:
+        return null()
+    obj = load_ptr(node, 0)
+    if (
+        (load_i32(obj, abi_constant("object.header.flags_offset")) & _CALLBACK_FRESH_ALLOCATION) != 0
+        or pcc_gc_tracing_is_sweep_candidate(obj) == 0
+        or load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen")
+        or py_user_del_pending(obj) == 0
+    ):
+        return null()
+    cohort = stack_alloc(8)
+    verdict = stack_alloc(8)
+    store_ptr(cohort, 0, obj)
+    if pcc_gc_tracing_classify_callback_cohort(cohort, 1, stop_epoch, 64, verdict) == 0:
+        return null()
+    return node if load_i64(verdict, 0) == _ACYCLIC_HEAD else null()
+
+
+@c_abi_export("pcc_gc_review_remark_singleton_after_window")
+def _review_remark_singleton_after_window(node) -> None:
+    """Only the singleton can be rescued. Never seed/scan the survivor heap.
+
+    Treat an insertion shade without a current root as ambiguous: a callback
+    can write to temporary storage, or it can publish into an old object.
+    Until the shared coverage and drop cases are proven, use the existing
+    full oracle for that unresolved case.
+    """
+    prior_gray: i64 = pcc_gc_gray_count_load_acquire()
+    conservative: i64 = pcc_gc_callback_singleton_conservative_root(node)
+    pcc_gc_gray_registered_roots()
+    obj = load_ptr(node, 0)
+    flags: i64 = load_i32(obj, abi_constant("object.header.flags_offset"))
+    now_gray: i64 = pcc_gc_gray_count_load_acquire()
+    explicit: i64 = pcc_gc_object_node_is_address_pinned(node, obj)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+    if prior_gray != 0 or now_gray > 1:
+        # The same stopped-world oracle also resets the old mark worklist.
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+        return
+    if conservative != 0 or explicit != 0 or (flags & _CALLBACK_GRAY) != 0:
+        pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
+        flags = load_i32(obj, abi_constant("object.header.flags_offset"))
+        store_i32(obj, abi_constant("object.header.flags_offset"), flags & ~_CALLBACK_SWEEP_CANDIDATE)
+    pcc_gc_gray_worklist_clear_stopped()
+    pcc_gc_gray_count_store_release(0)
+
+
+@c_abi_export("pcc_gc_review_sweep_acyclic_singleton")
+def _review_sweep_acyclic_singleton(node, budget: i64, backend: i64) -> i64:
+    finalizers: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    listed = stack_alloc(8)
+    nodes = stack_alloc(8)
+    count = stack_alloc(8)
+    commit = stack_alloc(8)
+    # Real PASS0 routes the finalizer through the existing user-code window,
+    # but its weakrefs have not been cleared yet.
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+    _sweep_finalizers(1, backend, finalizers, listed, nodes, count, commit)
+    _review_remark_singleton_after_window(node)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+    weak_callbacks: i64 = _sweep_weak_callbacks(1)
+    if weak_callbacks != 0:
+        _review_remark_singleton_after_window(node)
+    else:
+        atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+    py_weakref_clear_tracing_candidates()
+    return _sweep_clear_and_reclaim(
+        budget, 1, 0, load_i64(listed, 0), load_ptr(nodes, 0),
+        load_i64(count, 0), load_i64(commit, 0),
+    )
+
+
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:
@@ -975,6 +1082,10 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     held: i64 = pcc_thread_world_stop_epoch_held()
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+    backend_for_review: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    review_node = _review_acyclic_singleton(held, backend_for_review)
+    if ptr_is_null(review_node) == 0:
+        return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
     # Keep phase-local object aliases out of the coordinator's live frame.
     # This is not a root filter: every phase still uses the full root scanner.
     weak_callbacks: i64 = _sweep_weak_callbacks(count_free)

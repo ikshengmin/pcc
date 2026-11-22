@@ -1,0 +1,43 @@
+"""CPython event oracle versus the actual sealed-candidate production sweep."""
+import os
+from pathlib import Path
+import sys
+
+import pytest
+
+from tests.owned_c_execution import compile_owned_c_with_runtime
+from tests.owned_runtime_c_fixture import admitted_runtime
+from tests.python.process_timeout import run_process_group_timeout
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture(scope="module")
+def _singleton_sweep(tmp_path_factory):
+    binary = tmp_path_factory.mktemp("gc_acyclic_production") / "sweep"
+    compile_owned_c_with_runtime(
+        ROOT / "tests/fixtures/native/gc_acyclic_singleton_production.c", binary,
+        runtime_archive=admitted_runtime(),
+        cpp_args=("-I", str(ROOT / "pcc/runtime/src")),
+    )
+    return binary
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("arm", ("terminal", "rescue"))
+def test_acyclic_singleton_production_sweep_matches_cpython(_singleton_sweep, backend, arm):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_singleton_weakref_oracle.py"
+    expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
+    assert expected.returncode == 0 and expected.stderr == ""
+    assert expected.stdout == ("del:1 live:1\n" if arm == "rescue" else "del:1 weak:1 live:0\n")
+    actual = run_process_group_timeout(
+        [str(_singleton_sweep), arm, "route"], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert (actual.returncode, actual.stdout) == (0, expected.stdout)
+    # A stopped candidate-only remark must not masquerade as one that passed
+    # by falling back globally. Publication with unresolved attribution uses
+    # the fail-closed oracle for now.
+    assert actual.stderr == ("full=1\n" if arm == "rescue" else "full=0\n")
