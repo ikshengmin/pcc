@@ -46,6 +46,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.slice-storage': 'go.capability.slice-storage',
     'go.unsupported.string-bounds-panic': 'go.capability.string-bounds-panic',
     'go.unsupported.unsafe-operations': 'go.capability.unsafe-operations',
+    'go.unsupported.map-storage': 'go.capability.map-storage',
 }
 
 

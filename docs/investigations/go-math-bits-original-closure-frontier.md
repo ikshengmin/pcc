@@ -44,3 +44,16 @@ The pinned source union now advances to `testing/benchmark.go:116:8`
 at `extra map[string]float64` (parser expected a name, found `map`).
 This does not change the separate missing target-specific source
 selection or qualify its original test entry.
+
+
+## Map declaration syntax
+
+Ordinary map type declarations now retain the key, element and source
+location. The modeled invalid slice key remains a source error; a valid
+map such as `map[string]float64` reaches `go.unsupported.map-storage`
+before IR. The identical small original compiled and ran with the pinned
+official Go 1.27.3 reference; no owned map execution is claimed. Ninety
+adjacent tests passed. The pinned source union now stops at
+`testing/benchmark.go:170:18` in `make(map[string]float64, 16)`.
+The original math/bits test build remains blocked by the separate
+target-specific `os` source closure.

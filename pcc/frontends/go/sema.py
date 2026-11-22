@@ -23,7 +23,7 @@ from pcc.frontends.go.interface_values import (
 )
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
-    ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax,
+    ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax, MapSyntax,
     PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration, TypeInstantiationSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
@@ -879,6 +879,19 @@ class Analyzer:
             return result
         if isinstance(dtype, InterfaceSyntax):
             return self.resolve_interface(dtype)
+        if isinstance(dtype, MapSyntax):
+            # Go's indirect map value can mention its owning named type.
+            # Preserve type checking of this syntax before stopping at the
+            # shared storage boundary; nothing here creates a runtime map.
+            self.pointer_type_depth += 1
+            try:
+                if isinstance(dtype.key, MapSyntax) or not comparable(self.resolve_type(dtype.key, signature=True)):
+                    raise GoDiagnostic(dtype.token, "invalid map key type: key must be comparable")
+                self.resolve_type(dtype.element, signature=True)
+            finally:
+                self.pointer_type_depth -= 1
+            raise UnsupportedGo(dtype.token, 'go.unsupported.map-storage',
+                                'map types require shared-runtime storage support')
         if isinstance(dtype, SliceSyntax):
             if not signature:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.slice-storage',

@@ -272,6 +272,13 @@ class TypeInstantiationSyntax:
 
 
 @dataclass
+class MapSyntax:
+    token: Token
+    key: object
+    element: object
+
+
+@dataclass
 class StructSyntax:
     token: Token
     fields: list
@@ -518,6 +525,12 @@ class GoParser:
             return self.interface_type()
         if self.at("func"):
             return self.function_type()
+        if self.at("map") and not signature:
+            token = self.take("map")
+            self.take("[")
+            key = self.datatype()
+            self.take("]")
+            return MapSyntax(token, key, self.datatype())
         if signature and self.current.kind in ("map", "chan", "<-"):
             token = self.current
             self.constraint_type()
