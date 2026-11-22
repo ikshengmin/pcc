@@ -371,9 +371,12 @@ in the relevant section or issue and removes the entry.
    Five focused Linux native suites passed. The
    [reserved cursor mode](https://github.com/ikshengmin/pcc/blob/04d395b0c4eba8ed616338df5093412640fb5c54/docs/investigations/gc2-exact-list-worker-review.md)
    also skips the outstanding owner without scanning: six forced native
-   interleaves and 18 automatic runs passed. Next check the parallel
-   depth-first-stack path when another owner points back to a claim.
-   Master runtime and the pacer A/B branch are unchanged.
+   interleaves and 18 automatic runs passed. The
+   [depth-first-stack follow-up](https://github.com/ikshengmin/pcc/blob/28a23fd7d25b8deb253e6ea3e61652fc661dd2a1/docs/investigations/gc2-exact-list-worker-review.md)
+   also drops the duplicate hint when another owner points to a claim;
+   12 controlled interleaves and the automatic tests passed. Next add a
+   review-only startup selector and native attestation to make a sealed
+   measurement possible. Master runtime and the pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -385,7 +388,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 reserved owner dedup in concurrent DFS stack review: Codex, Linux x86-64, 2026-11-22 10:26 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
