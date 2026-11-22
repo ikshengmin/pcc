@@ -19,11 +19,13 @@ from pcc.frontends.python.py_ast import (
     IfExpr,
     IntLit,
     IntType,
+    ListType,
     Name,
     RawPointerType,
     Return,
     StrLit,
     StrType,
+    Subscript,
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
@@ -108,6 +110,27 @@ def boxed_int_instance_field_has_owner(host, fd, fn, value) -> bool:
         and any(name == value.name and field_ty == value.ty
                 for name, field_ty in ty.fields)
         and host.class_lowering.lookup_field_index(info, value.name) is not None
+    )
+
+
+def boxed_int_list_zero_has_owner(host, fd, fn, value) -> bool:
+    """Prove the owning getitem path for a sole native list[int] formal."""
+    if (not isinstance(value, Subscript) or not _exact_int_repr(value.ty)
+            or not isinstance(value.obj, Name) or len(fd.args) != 1
+            or not isinstance(value.idx, IntLit) or value.idx.value != 0
+            or not _exact_int_repr(value.idx.ty)
+            or fd.is_method or fd.name in host._hoisted_qualnames
+            or not funcdef_defined_here(host, fd)):
+        return False
+    formal = fd.args[0]
+    ty = formal.annotation
+    params = fn.function_type.args
+    return (
+        formal.name == value.obj.ident and formal.kind in ("pos", "pos_only")
+        and not formal.has_default and isinstance(ty, ListType)
+        and _exact_int_repr(ty.elem) and ty == value.obj.ty
+        and live_import_global_slot(host, formal.name) is None
+        and len(params) == 1 and isinstance(params[0], ir.PointerType)
     )
 
 

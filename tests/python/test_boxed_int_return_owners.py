@@ -542,3 +542,26 @@ def probe(owner: Holder) -> bool:
     caller = _body(text)
     assert "@user_bridge_handoff_read(" in caller
     assert "result.local.borrowed.retain" not in caller
+
+
+@pytest.mark.parametrize("index,proven", [(0, True), (1, False)])
+def test_exact_list_subscript_return_handoff_is_limited_to_proved_index(index, proven):
+    text = _emit(f"""
+def read(owner: list[int]) -> int:
+    return owner[{index}]
+
+def probe(owner: list[int]) -> bool:
+    result: object = read(owner)
+    return bool(result)
+""", strict=True)
+    callee = _body(text, "read")
+    producer = re.search(r"(%[^ ]+) = call ptr [^\n]*@py_list_getitem\(", callee)
+    assert producer is not None
+    assert re.search(
+        r"@pcc_gc_store_return_root\(ptr [^,]+, ptr " + re.escape(producer[1]) + r"\)",
+        callee,
+    )
+    assert "@py_err_occurred(" in callee
+    caller = _body(text)
+    assert "@user_bridge_handoff_read(" in caller
+    assert ("result.local.borrowed.retain" not in caller) == proven

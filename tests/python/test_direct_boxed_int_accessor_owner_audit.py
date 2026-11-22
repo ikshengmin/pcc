@@ -39,6 +39,7 @@ CASES = {
     "subscript": (ITEM, "owner: list[int] = [n]\n    result: object = returned(owner)\n    assert result is n"),
     "field-detached": (FIELD, "owner = Holder(n)\n    n = 0\n    result: object = returned(owner)\n    owner.value = 0\n    gc.collect()\n    assert result == 9223372036854775808"),
     "subscript-detached": (ITEM, "owner: list[int] = [n]\n    n = 0\n    result: object = returned(owner)\n    owner[0] = 0\n    gc.collect()\n    assert result == 9223372036854775808"),
+    "subscript-empty": (ITEM, 'owner: list[int] = []\n    try:\n        result: object = returned(owner)\n    except IndexError:\n        pass\n    else:\n        raise AssertionError("expected IndexError")'),
     "parse": (PARSE, 'result: object = returned("9223372036854775808")\n    assert result == n and result is not n'),
     "invalid": (PARSE, 'try:\n        result: object = returned("not-an-integer")\n    except ValueError:\n        pass\n    else:\n        raise AssertionError("expected ValueError")'),
 }
@@ -114,6 +115,5 @@ def test_native_accessor_baseline(
         if record["category"] == "refcount" and record["value1"] == PY_TYPE_INT:
             terminal[record["ptr"]] = (record["event"], record["value0"])
     assert terminal, "missing actual heap-int provenance"
-    if shape in {"field", "field-detached", "parse", "invalid"}:
-        assert set(terminal.values()) == {("free", 0)}, terminal
+    assert set(terminal.values()) == {("free", 0)}, terminal
     (tmp_path / "heap-int-terminal.json").write_text(json.dumps(terminal) + "\n")
