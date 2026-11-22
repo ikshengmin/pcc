@@ -157,28 +157,6 @@ in the relevant section or issue and removes the entry.
   default-on recheck requires native parity and a measured bound. A
   test-invoked correctness arm is independent of the production decision.
 
-- GC0 atomic reference-count CPU share: Linux has bounded user task-clock
-  transport, but the owned atomic control showed exact-IP misses and the
-  kernel refused the precise hardware cycle event (ENOENT). No sealed
-  gateway arm is available here. Recommendation: use a host with a
-  qualified attribution method and the same sealed workload; the
-  [measurement note](investigations/gc0-atomic-attribution-preflight.md)
-  records the preflights and Mac localization commands. Neither
-  software instruction PCs nor helper call totals qualify the 10% gate.
-
-- GC1 review candidate has focused Linux evidence but waits on the
-  unchanged-GC0 control and maximum-pause comparison. Run the exact
-  [macOS A/B commands](https://github.com/ikshengmin/pcc/blob/f7f15a289f543a22e29de46ec2a532378ca808a0/docs/investigations/gc1-mutator-review-candidate.md).
-  Recommendation: retain the review branch and do not merge until the
-  pause/control gate qualifies. Continue ready GC2 work meanwhile.
-
-- GC2 exact-list bridge: run the [pinned Mac same-input A/B](https://github.com/ikshengmin/pcc/blob/ec60c7bed4e39baf963adfb9e841d812291374d8/docs/investigations/gc2-exact-list-worker-review.md#same-input-mac-handoff-sealed-arms)
-  and have Claude review lock/stop ordering, preservation of gray
-  credits and default-off scope. The [latest review evidence](https://github.com/ikshengmin/pcc/blob/0553ec68419ebeb976dd7fa21fb75e4cd2aea283/docs/investigations/gc2-exact-list-worker-review.md)
-  includes actual automatic marking, ownership and lifecycle controls;
-  it is not an A/B or permission to expand. Continue other eligible
-  GC units while those checks are pending.
-
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -379,9 +357,10 @@ in the relevant section or issue and removes the entry.
    The review follow-up
    [`f7f15a28`](https://github.com/ikshengmin/pcc/commit/f7f15a289f543a22e29de46ec2a532378ca808a0)
    also passed GC1 automatic weakref/finalizer delivery across disable/
-   enable and a native callback that reentered collect. Runtime changes
-   remain off master pending measured maximum pause and the unchanged
-   GC0 A/B control, below. GC2 now has a native stock arithmetic
+   enable and a native callback that reentered collect. The macOS A/B
+   of 2026-11-22 (section "macOS verification" below) measured it as a
+   loss: w1 -17.9%, w4 -47.1%, maximum STW 21 -> 68 ms and 19 -> 110 ms.
+   It stays off master; next is debt-proportional step work. GC2 now has a native stock arithmetic
    control for live-byte threshold, minimum/override, step budget and
    debt discharge. A stock GC2 native harness now records assist/mark/
    stop counters for 48,000 list allocations split across one or four
@@ -472,9 +451,11 @@ in the relevant section or issue and removes the entry.
    existing all-five pcc0 ownership cases (eight nodes). The
    [profiling follow-up](https://github.com/ikshengmin/pcc/blob/0553ec68419ebeb976dd7fa21fb75e4cd2aea283/docs/investigations/gc2-exact-list-worker-review.md)
    attributes clipped bridge frames to collection without changing
-   the denominator (87 host checks). Take other ready GC units while
-   the exact-list branch awaits Mac A/B and Claude's concurrency review;
-   do not add workers or enable it on master. Master runtime and the
+   the denominator (87 host checks). The macOS A/B and Claude's review of
+   2026-11-22 put the exact-list branch within noise (w1 +0.9%, w4 -0.0%)
+   with no lock/stop defect found; do not merge or extend it. A Go-style
+   per-worker gray-buffer design note is the recommended next GC2 marking
+   step. Master runtime and the
    separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -550,6 +531,64 @@ in the relevant section or issue and removes the entry.
    Stage1), even if the pcc1-dependent results of item 7 (CLI parity, GPU M2,
    proof-checker stage 3) are still open. From then on an agent told "推进"
    starts no new item; it reports that the review is due and waits.
+
+## macOS verification: five collectors, asyncio, GC1/GC2 candidates and GC0 profile (local Mac, 2026-11-22)
+
+Claude ran these on the local Apple Silicon Mac (12 cores, system load 5.8 to
+7.7 during the runs) with one fresh `PCC_PERF_HOME` and the sibling
+`pcc-gateway` checkout at `c1feb53`. The handler is the owned in-process
+handler, not the C512 network server. Local Mac evidence only; no Linux or pcc1.
+
+Five collectors at master `fd567f664`, arm `master-fd567f66`, two `table`
+runs, plus `pcc_perf.py asyncio` (88,674 req/s), in req/s:
+
+- GC0: w1 49,168 / 49,599; w4 103,898 / 104,934 (w4 is 118% of asyncio).
+- GC1: w1 34,855 / 35,365; w4 69,097 / 69,793.
+- GC2: w1 36,382 / 35,899; w4 49,208 / 48,150. At w4 the table reports
+  0 ms stopped, 10 to 12 ms lock wait and 105 us CPU per request; the A/B
+  receipts below show peak RSS about 265 MiB against about 100 MiB for the
+  other tracing collectors. Cause not investigated.
+- GC3: w1 34,411 / 35,107; w4 69,706 / 69,387.
+- GC4: w1 27,045 / 27,112; w4 37,985 / 36,222; 113 to 139 ms stopped.
+
+GC1 review candidate (`review/gc1-mutator-20261122` at `00f9fe1a3`
+against `98a932017`, `ab --pairs 5 --gc 0,1 --workers 1,4 --control 0
+--latency-receipts`): w1 34,442 -> 28,267 (-17.9%, 1/5 pair wins, loss
+beyond the 4.5% GC0 floor); w4 69,609 -> 36,802 (-47.1%, 0/5; all five
+pair ratios 0.52 to 0.54, but the tool reports it inconclusive because one
+GC0 control pair measured 1.783 and set a 78.3% floor). Maximum STW rose
+from 21 to 68 ms (w1) and from 19 to 110 ms (w4); peak RSS from 85 to
+95 MiB (w1) and from 99 to 139 MiB (w4). The candidate does not meet its
+pause gate. Do not merge it. Claude's recommendation: make GC1's step work
+proportional to allocation debt (Lua's stepmul) instead of the fixed
+512-unit cap, then measure again.
+
+GC2 exact-list bridge (`review/gc2-exact-list-20261122` at `0553ec684`
+against `55a90b4ad`, same options with `--rounds 100`): w1 +0.9% and
+w4 -0.0%, both within the GC0 floors of 2.1% and 2.8%; maximum STW and
+p99 also unchanged within run-to-run spread. Claude's source review found
+no lock/stop or gray-credit defect. The candidate is not a gain. Claude's
+recommendation: drop this line; one global claim slot for lists of 32 or
+fewer items gives little parallelism and is type-specific, and its backend
+checks in the shared `pcc_gc_trace_stack_drain_work` and mark slice add
+loads on GC1, GC3 and GC4. Pursue Go-style per-worker gray buffers with
+atomic shading instead, as a design note first.
+
+GC0 atomic reference-count share (`pcc_perf.py top master-fd567f66 --gc 0
+--seconds 8 --limit 80`, `/usr/bin/sample`, function self time): the
+incref/decref/retain/release helpers total 2.62 of 20.33 us per request at
+w1 (12.9%) and 4.91 of 42.64 us at w4 (11.5%). This bounds the atomic
+instructions from above; it is not an instruction-level share, so the 10%
+gate is not settled by it. Larger GC0 owners in the same profiles:
+`pcc_gc_store_root` (1.41 and 2.64 us), container lock/unlock (0.75 and
+1.49 us), pin/unpin (0.83 and 1.32 us), `_tlv_get_addr` (0.55 and 1.00 us)
+and `memset` (0.41 and 0.83 us). Claude's recommendation: do not pursue
+biased counting; the atomic part is a fraction of a helper share that
+barely exceeds 10%, and the root store, pins and container locks are larger
+owners for GC0.
+
+Reproduce with `scripts/pcc_perf.py arm`, `table`, `asyncio`, `ab` and
+`top` as above, each arm sealed from a clean worktree at the named commit.
 
 ## GC0–4: optimize each collector before unifying
 
