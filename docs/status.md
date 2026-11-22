@@ -261,7 +261,8 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: none.
+   Claims:
+   - Build issue 9 acyclic topology once for actual layered sweep: Codex, Linux x86-64, 2026-11-22 16:24 UTC, area runtime-gc
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
