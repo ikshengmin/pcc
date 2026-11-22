@@ -67,3 +67,23 @@ The unchanged guards admitted 17 accessor/conversion cases in 34.18 s
 (619,249,664 B). Each case compares pcc0 on five collectors to CPython.
 There were also 27 adjacent IR controls, including the actual conversion
 helper, its lease acquire/release and its error path. No Mac or pcc1.
+
+## Indexed-list ownership follows the selected accessor
+
+Runtime positive and negative indices in an ordinary native
+`list[int]` return were a new concrete witness. The actual linked
+callee calls `py_list_getitem` for both; Python identity and values
+matched CPython across five collectors, but each left one GC0
+`decref(1)`. The ordinary out-of-range control raised `IndexError`.
+
+The owning result rule is now shared with the emitter's indexed list
+accessor selection. Its proof comes from the native getter, the
+receiver's actual local pointer formal and ordinary positional
+signature, not the source spelling or count of literals. The caller
+consumes that NEW reference once. A computed index inside the callee
+is also covered. Neither the list indexing/error algorithm nor the
+foreign/CPython or machine-int boundaries change. The Linux pcc0
+accessor file passed 21 cases across all five GC modes and CPython,
+and 29 adjacent ownership IR checks passed. Negative detached and
+positive alias cases reached GC0 `free(0)`. No Mac/pcc1 run, no
+general tuple/dict or arbitrary return-annotation claim.

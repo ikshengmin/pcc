@@ -32,6 +32,7 @@ from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.cpy_import_state import live_import_global_slot
 from pcc.frontends.python.codegen.str_default_cells import funcdef_defined_here
+from pcc.frontends.python.codegen.subscript_lowering import native_list_getitem_returns_new
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
 
@@ -113,37 +114,34 @@ def boxed_int_instance_field_has_owner(host, fd, fn, value) -> bool:
     )
 
 
-def _boxed_int_list_literal_index(host, expr) -> bool:
-    if not _exact_int_repr(expr.ty):
-        return False
-    if isinstance(expr, IntLit):
-        index = expr.value
-    elif (isinstance(expr, UnaryOp) and expr.op == "-"
-          and isinstance(expr.operand, IntLit) and _exact_int_repr(expr.operand.ty)):
-        index = -expr.operand.value
-    else:
-        return False
-    return host._STATIC_TAGGED_INT_MIN <= index <= host._STATIC_TAGGED_INT_MAX
-
-
-def boxed_int_list_literal_has_owner(host, fd, fn, value) -> bool:
-    """Prove the owning getitem path for a sole native list[int] formal."""
+def boxed_int_native_list_getitem_has_owner(host, fd, fn, value) -> bool:
+    """Use the native owning accessor protocol, not the index's spelling."""
     if (not isinstance(value, Subscript) or not _exact_int_repr(value.ty)
-            or not isinstance(value.obj, Name) or len(fd.args) != 1
-            or not _boxed_int_list_literal_index(host, value.idx)
+            or not isinstance(value.obj, Name)
+            or not _exact_int_repr(value.idx.ty)
+            or not native_list_getitem_returns_new(value.obj.ty, value.idx.ty)
             or fd.is_method or fd.name in host._hoisted_qualnames
             or not funcdef_defined_here(host, fd)):
         return False
-    formal = fd.args[0]
-    ty = formal.annotation
     params = fn.function_type.args
-    return (
-        formal.name == value.obj.ident and formal.kind in ("pos", "pos_only")
-        and not formal.has_default and isinstance(ty, ListType)
-        and _exact_int_repr(ty.elem) and ty == value.obj.ty
-        and live_import_global_slot(host, formal.name) is None
-        and len(params) == 1 and isinstance(params[0], ir.PointerType)
-    )
+    # Only ordinary native formals. A native pointer at the receiver's
+    # actual parameter position rules out a shape inferred from an alias or
+    # from the return annotation alone.
+    if (len(params) != len(fd.args)
+            or any(formal.kind not in ("pos", "pos_only") or formal.has_default
+                   for formal in fd.args)):
+        return False
+    for i, formal in enumerate(fd.args):
+        if formal.name != value.obj.ident:
+            continue
+        ty = formal.annotation
+        return (
+            isinstance(ty, ListType) and _exact_int_repr(ty.elem)
+            and ty == value.obj.ty
+            and live_import_global_slot(host, formal.name) is None
+            and isinstance(params[i], ir.PointerType)
+        )
+    return False
 
 
 def _direct_unary_boxed_int_def(host, fd, fn) -> bool:

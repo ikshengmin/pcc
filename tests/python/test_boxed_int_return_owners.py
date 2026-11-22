@@ -587,16 +587,16 @@ def probe(owner: Holder) -> bool:
     assert "result.local.borrowed.retain" not in caller
 
 
-@pytest.mark.parametrize(
-    "index,proven", [("0", True), ("1", True), ("-1", True), ("1 + 0", False)],
-)
-def test_exact_list_subscript_return_handoff_is_limited_to_proved_index(index, proven):
+@pytest.mark.parametrize("index", ("0", "1", "-1", "1 + 0", "index", "index - 1"))
+def test_exact_list_subscript_return_handoff_follows_the_owning_getitem(index):
+    params = ", index: int" if "index" in index else ""
+    args = ", index" if "index" in index else ""
     text = _emit(f"""
-def read(owner: list[int]) -> int:
+def read(owner: list[int]{params}) -> int:
     return owner[{index}]
 
-def probe(owner: list[int]) -> bool:
-    result: object = read(owner)
+def probe(owner: list[int]{params}) -> bool:
+    result: object = read(owner{args})
     return bool(result)
 """, strict=True)
     callee = _body(text, "read")
@@ -609,7 +609,7 @@ def probe(owner: list[int]) -> bool:
     assert "@py_err_occurred(" in callee
     caller = _body(text)
     assert "@user_bridge_handoff_read(" in caller
-    assert ("result.local.borrowed.retain" not in caller) == proven
+    assert "result.local.borrowed.retain" not in caller
 
 
 def test_dynamic_formal_conversion_consumes_the_real_owned_result():

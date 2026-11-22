@@ -34,6 +34,10 @@ PARSE = """
 def returned(text: str) -> int:
     return int(text)
 """
+RUNTIME_INDEX = """
+def returned(owner: list[int], index: int) -> int:
+    return owner[index]
+"""
 CASES = {
     "field": (FIELD, "owner = Holder(n)\n    result: object = returned(owner)\n    assert result is n"),
     "subscript": (ITEM, "owner: list[int] = [n]\n    result: object = returned(owner)\n    assert result is n"),
@@ -53,6 +57,19 @@ for name, index in (("positive", 1), ("negative", -1)):
                   if detached else setup + use + "assert result is n")
         suffix = "-detached" if detached else ""
         CASES[f"nonzero-{name}{suffix}"] = declaration, action
+
+CASES.update({
+    "runtime-index-positive": (RUNTIME_INDEX,
+        "owner: list[int] = [0, n]\n    result: object = returned(owner, two - 1)\n    assert result is n"),
+    "runtime-index-negative-detached": (RUNTIME_INDEX,
+        "owner: list[int] = [0, n]\n    n = 0\n    result: object = returned(owner, 1 - two)\n    "
+        "owner[1] = 0\n    gc.collect()\n    assert result == 9223372036854775808"),
+    "runtime-index-computed": (RUNTIME_INDEX.replace("owner[index]", "owner[index - 1]"),
+        "owner: list[int] = [0, n]\n    result: object = returned(owner, two)\n    assert result is n"),
+    "runtime-index-error": (RUNTIME_INDEX,
+        'owner: list[int] = [0, n]\n    try:\n        result: object = returned(owner, two)\n    '
+        'except IndexError:\n        pass\n    else:\n        raise AssertionError("expected IndexError")'),
+})
 
 DYNAMIC = """
 def returned(value: object) -> int:
@@ -126,6 +143,8 @@ def test_native_accessor_baseline(
             matches.append(index)
         assert len(matches) == 1, matches
         assert any("user_program_returned" in name for name in call_paths["exercise"]), call_paths
+        if shape.startswith("runtime-index-"):
+            assert "py_list_getitem" in call_paths["returned"], call_paths
         (tmp_path / "callee-calls.json").write_text(json.dumps(call_paths) + "\n")
         return tuple(matches)
 

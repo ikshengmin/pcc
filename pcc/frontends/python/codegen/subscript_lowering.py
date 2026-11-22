@@ -18,6 +18,11 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
+def native_list_getitem_returns_new(receiver: Type, index: Type) -> bool:
+    """The exact indexed list route selects the owning py_list_getitem ABI."""
+    return isinstance(receiver, ListType) and isinstance(index, (IntType, BoolType))
+
+
 def _same_type_kind(a: Type, b: Type) -> bool:
     return type(a) is type(b)
 
@@ -300,12 +305,10 @@ class SubscriptLoweringMixin:
         span = getattr(expr, "span", None)
         elem_ty: Optional[Type] = None
         key_obj: Optional[ir.Value] = None
-        if isinstance(obj_ty, (ListType, TupleType)) and not isinstance(expr.idx.ty, (IntType, BoolType)):
-            # Only an integer key takes the indexed accessors; any other key
-            # (a slice object, an __index__ instance) is the object
-            # subscript's, as in augmented assignment.
-            return None
         if isinstance(obj_ty, ListType):
+            if not native_list_getitem_returns_new(obj_ty, expr.idx.ty):
+                # Slices and __index__ instances use the object subscript.
+                return None
             idx = self._emit_index_expr_as_i64(expr.idx)
             got = self.builder.call(
                 self.runtime["py_list_getitem"],
@@ -314,6 +317,8 @@ class SubscriptLoweringMixin:
             )
             elem_ty = obj_ty.elem
         elif isinstance(obj_ty, TupleType):
+            if not isinstance(expr.idx.ty, (IntType, BoolType)):
+                return None
             idx = self._emit_index_expr_as_i64(expr.idx)
             got = self.builder.call(
                 self.runtime["py_tuple_getitem"],
