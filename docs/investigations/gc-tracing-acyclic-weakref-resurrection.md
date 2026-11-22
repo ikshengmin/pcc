@@ -763,3 +763,22 @@ and candidate archives: compile the parent with
 compile/run the candidate with `--ready-base-binary <parent-output>/sweep_scale`.
 Keep the guarded process scope and record the CPU set and all parent-control
 pairs.
+
+The stop mutex already protects a monotone owner predicate until resume:
+a park or exited wait increases the ready count, and unregister updates
+both the parked and live counts before notifying. Check that same predicate
+before signaling the private condition; intermediate peers cannot satisfy
+the owner's wait. Generic world-condition paths are untouched. The model
+covers partial readiness, the last park, live-count contraction, and the
+no-peer predicate. The native four-peer lifecycle still passed for all
+five backends.
+
+In a five-pair screen (three runs per arm), the four-peer GC1/3 medians
+improved by 13–19%, within the largest duplicate-parent excursion in
+each cell. A focused repeat at 256 nodes, pinned to CPUs 4–8 (seven
+alternating pairs, median of seven native runs per arm), reduced GC3
+elapsed time by 21.7%, 7/7 pairs, against a 20.4% largest parent-control
+excursion. GC1 was 7.5% faster, also 7/7, inside its 16.3% control
+excursion. Keep this scoped to the review branch: evidence for GC3 at
+256 nodes and four peers is narrow; GC1, HTTP and macOS remain
+unqualified.

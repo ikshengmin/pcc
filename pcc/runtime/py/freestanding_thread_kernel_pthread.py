@@ -505,12 +505,23 @@ def pcc_cond_broadcast(cond) -> int:
     return 0
 
 
+def _signal_callback_owner_when_ready(ready) -> None:
+    # Under the world mutex, park and enter-exited only improve this
+    # predicate. An exited peer cannot run again until final resume.
+    # Unregistration tests it after updating both parked and live counts.
+    live: int = _world_i64(global_addr("pcc_live_thread_count_py"))
+    if (live <= 1 or _world_i64(global_addr("pcc_parked_thread_count_py"))
+            + _world_i64(global_addr("pcc_exited_thread_count_py")) >= live - 1):
+        if pcc_cond_signal(ready) != 0:
+            pcc_platform_abort()
+
+
 def _notify_stop_owner_ready(world_cond) -> None:
     ready = global_load_ptr("pcc_world_active_ready_cond_py")
     if ptr_is_null(ready):
         pcc_cond_broadcast(world_cond)
-    elif pcc_cond_signal(ready) != 0:
-        pcc_platform_abort()
+    else:
+        _signal_callback_owner_when_ready(ready)
 
 
 pcc_allocator_thread_cache_enter = extern(
@@ -1959,8 +1970,8 @@ def pcc_thread_unregister_current() -> None:
         # The normal wakeup may also serve a registration/resume waiter.
         # A changed live count must reach a private stop-owner wait as well.
         ready = global_load_ptr("pcc_world_active_ready_cond_py")
-        if not ptr_is_null(ready) and pcc_cond_signal(ready) != 0:
-            pcc_platform_abort()
+        if not ptr_is_null(ready):
+            _signal_callback_owner_when_ready(ready)
         pcc_cond_broadcast(global_load_ptr("pcc_world_cond_py"))
     pthread_mutex_unlock(lock)
     # All exception/buffer/allocator cleanup that can reenter graph locking
