@@ -109,6 +109,23 @@ missing paths and separating the compiler-owned and other roles. A
 selected file with changed locked bytes is distinguished from a missing
 file. This metadata does not change owned admission or qualify the gate.
 The scoped Go reference/closure suite passed 56 checks, and the helper
-reproduced the counts above from the official capture. Next classify
-those 62 other inputs before any source materialization or runtime/ABI
-substitution.
+reproduced the counts above from the official capture.
+
+## Inputs outside the current runtime exclusion patterns
+
+On the same pinned Linux/amd64 graph, these 62 physical files are owned
+by 24 package paths. The four-context lock has no package entry for nine
+of them. Go's selected roles and importing package instances, not file
+name guesses, separate the missing inputs:
+
+| Number | Selected role and location | Boundary |
+| ---: | --- | --- |
+| 22 | `GoFiles` in `compress/flate` (15), `compress/gzip` (2), `hash/crc32` (4), `text/tabwriter` (1) | Original Go sources on the `testing/internal/testdeps → runtime/pprof` branch. Pin separately; CRC's selected assembly remains open. |
+| 10 | `GoFiles` in `internal/chacha8rand` (2), `internal/coverage/rtcov` (1), `internal/goos` (3), `internal/profilerecord` (1), `internal/trace/tracev2` (3) | Only imported by official `runtime`, `runtime/pprof`, `runtime/trace` or `internal/runtime/sys` in this graph. Reconcile with the owned runtime before granting admission. |
+| 29 | `SFiles`: 27 in packages already present; one each in `hash/crc32` and `internal/chacha8rand` | Selected Go assembler inputs; a Go file pin cannot handle their ABI or replace their symbols. |
+| 1 | `HFiles`: `crypto/internal/boring/goboringcrypto.h` | Header listed in the reference package; the row has no selected Cgo or C sources. This by itself is not evidence of a cgo dependency. |
+
+No selected nonexcluded C source, cgo source, object or embedded asset was
+missing. Do not expand the runtime exclusion rules from this audit alone,
+compile the union as one file set, or treat the source-only pin as a complete
+build closure.
