@@ -321,9 +321,11 @@ in the relevant section or issue and removes the entry.
    Sparse prior-gray trial passed correctness (112 native cases; exact
    rooted callback publication plus six malformed-queue controls), but
    retest was inside host noise; do not carry the optimization forward.
-   Next: attribute stopped callback cost to world transitions, root-cut
-   capture, candidate pin/precision checks and drain before the next
-   optimization candidate; preserve all correct review paths. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Linux guarded phase probe at 256 callbacks per kind: world reopen/
+   reacquire ~52%, stopped stack cut ~24%, candidate matching ~7–8%.
+   Exact observed order retained; measurement instrumentation not shipped.
+   Next: filter frozen callback stack words before the per-word visitor,
+   preserving unchanged unfiltered fallback and exact root checks. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -377,7 +379,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:00 UTC), #9 review only: measure the stopped callback path by phase on real callback chains and select a larger optimization from evidence; no speculative pin/gray trial and no master runtime merge.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
