@@ -48,7 +48,7 @@ static void *allocate(void *context) {
 
 int main(int argc, char **argv) {
     if (argc != 3 || (argv[1][0] != '1' && argv[1][0] != '4') || argv[1][1]
-            || (argv[2][0] != '0' && argv[2][0] != '1') || argv[2][1])
+            || (argv[2][0] < '0' || argv[2][0] > '2') || argv[2][1])
         return 1;
     int workers = argv[1][0] - '0';
     if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 2;

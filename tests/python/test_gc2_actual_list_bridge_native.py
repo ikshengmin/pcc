@@ -17,7 +17,7 @@ def test_gc2_actual_list_bridge_preserves_automatic_collection(tmp_path, explici
     env = dict(os.environ, PCC_GC_BACKEND="2", PCC_GC_DEBT_THRESHOLD="131072")
     for repeat in range(3):
         for workers in (1, 4):
-            for enabled in (0, 1) if repeat % 2 == 0 else (1, 0):
+            for enabled in (0, 1, 2) if repeat % 2 == 0 else (2, 1, 0):
                 result = _record_execution(
                     tmp_path, f"bridge-{workers}-{enabled}-{repeat}",
                     [str(binary), str(workers), str(enabled)], env,

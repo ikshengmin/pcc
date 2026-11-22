@@ -70,10 +70,13 @@ static void *scan_ordinary(void *arg) {
     return NULL;
 }
 
-int main(void) {
+int main(int argc, char **argv) {
+    if (argc != 2 || (argv[1][0] != '1' && argv[1][0] != '2') || argv[1][1])
+        return 9;
+    int mode = argv[1][0] - '0';
     if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 1;
     py_gc_disable();
-    __atomic_store_n(&pcc_gc2_review_list_bridge_enabled, 1, __ATOMIC_RELEASE);
+    __atomic_store_n(&pcc_gc2_review_list_bridge_enabled, mode, __ATOMIC_RELEASE);
     Race race = {0};
     PyObject *owner = py_list_new(1), *child = py_list_new(0), *root = NULL;
     void *handle = pcc_gc_scheduler_root_register_handle(&root);
@@ -126,7 +129,7 @@ int main(void) {
     if (credit != 1 || !closed || token != child || extra || root != owner ||
         (py_header_flags_load(py_header(owner)) & COLORS) != MARK_BLACK ||
         (py_header_flags_load(py_header(child)) & COLORS) != MARK_GRAY ||
-        race.ordinary != 1 || race.alternate != 0) {
+        race.ordinary != (mode == 1) || race.alternate != (mode == 2)) {
         fprintf(stderr, "ordinary=%lld alternate=%lld gray=%lld closed=%d child=%d extra=%d\n",
                 (long long)race.ordinary, (long long)race.alternate, (long long)credit,
                 closed, token == child, extra != NULL);
@@ -134,6 +137,7 @@ int main(void) {
     }
     pcc_gc_store_root(&root, NULL);
     pcc_gc_scheduler_root_unregister_handle(handle);
-    puts("GC2_CONTESTED_BRIDGE_OK ordinary=1 alternate=0 gray=1");
+    printf("GC2_CONTESTED_BRIDGE_OK mode=%d ordinary=%lld alternate=%lld gray=1\n",
+           mode, (long long)race.ordinary, (long long)race.alternate);
     return 0;
 }

@@ -165,3 +165,26 @@ the new archive passed all three fresh processes with
 gray credit. Four other focused native suites (automatic finish,
 forced width, stopped claim gaps, short-list supported layout) also
 passed using the exact rebuilt archive.
+
+## Reserve ownership in the bounded cursor pass
+
+The owned test selects mode 2 to add a second experiment: while holding
+the graph lock, the ordinary cursor will advance past the single
+reserved owner without scanning it or debiting its gray credit. This
+still costs one unit of the slice's bounded search allowance. It does
+not mutate the reservation, and the pending owner's credit continues
+to prevent an empty-queue handoff. With mode 1, the earlier duplicate-
+credit defense remains directly testable. Mode 0 remains the bridge-
+off correctness control. All selectors are native fixture-only.
+
+The deterministic contention probe expects mode 1's ordinary scanner
+to retire once and its alternate scanner to return zero. It expects
+mode 2 to exchange those results, still leaving one gray child and
+one child token. This check covers the ordinary cursor pass, not the
+separate depth-first trace stack or every producer handoff.
+
+The previous binary returned one cursor retirement for both selector
+values. The new source-matched Linux binary passed 3 forced interleaves
+per value, and the automatic liveness harness passed 18 executions
+(1/4 allocating mutators, modes 0/1/2, three repeats). The other three
+owned probe nodes passed; no wall-time comparison was attempted.

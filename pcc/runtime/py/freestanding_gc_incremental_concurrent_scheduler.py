@@ -1028,10 +1028,13 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     elif ptr_is_null(node) != 0 and queue_only == 0:
         node = pcc_gc_object_walk_first()
     review_queued = null()
+    review_mode: i64 = 0
+    if stopped == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2:
+        review_mode = atomic_load_i32(
+            global_addr("pcc_gc2_review_list_bridge_enabled"), 0, "acquire"
+        )
     if (
-        stopped == 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2
-        and atomic_load_i32(global_addr("pcc_gc2_review_list_bridge_enabled"), 0, "acquire") != 0
+        review_mode != 0
         and pcc_py_gc_minor_graph_lock_depth() == 1
         and load_i64(global_addr("pcc_gc_tracing_finish_claim_epoch"), 0) == 0
     ):
@@ -1047,6 +1050,11 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
             review_token: i64 = pcc_gc2_review_claim_open_locked(owner_slot, review_epoch)
             if review_token != 0:
                 return _gc2_review_list_bridge(owner_slot, review_epoch, review_token)
+    reserved_owner = null()
+    if review_mode == 2:
+        # The owning bridge cannot clear its claim until it gets the graph
+        # lock back. This locked slice must not rescan its cursor token.
+        reserved_owner = global_load_ptr("pcc_gc2_review_claim_owner")
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
     while (local_processed < remaining_budget
@@ -1112,6 +1120,11 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
             if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
                 node = nxt
                 continue
+        if ptr_eq(obj, reserved_owner) != 0:
+            # Debit the bounded search allowance, not gray credit. The
+            # original scan still owns the object and its outstanding work.
+            node = nxt
+            continue
         flags: i64 = load_i32(obj, 12)
         if (flags & 16) != 0:
             if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) != 0:
