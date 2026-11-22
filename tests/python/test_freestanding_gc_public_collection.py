@@ -361,6 +361,21 @@ extern int64_t pcc_gc_trace_extension_roots_epoch;
 extern int64_t pcc_gc_trace_extension_roots_backend;
 
 void *pcc_platform_getenv(void *name) { (void)name; return NULL; }
+/* This fixture deliberately keeps the exact-list review bridge off. */
+void *pcc_gc2_review_claim_owner;
+int64_t pcc_gc2_review_claim_open_locked(void *slot, int64_t epoch) {
+    (void)slot; (void)epoch; abort(); return 0;
+}
+int64_t pcc_gc2_review_claim_close_locked(
+        void *slot, int64_t epoch, int64_t token, int64_t work) {
+    (void)slot; (void)epoch; (void)token; (void)work; abort(); return 0;
+}
+int64_t pcc_gc_trace_gc2_rooted_short_list(void *slot, int64_t epoch) {
+    (void)slot; (void)epoch; abort(); return 0;
+}
+void pcc_thread_no_park_enter(void) { abort(); }
+void pcc_thread_no_park_exit(void) { abort(); }
+
 int64_t pcc_platform_write(int64_t fd, void *data, int64_t length) {
     (void)fd;
     (void)data;

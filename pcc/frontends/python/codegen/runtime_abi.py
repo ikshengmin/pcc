@@ -1728,6 +1728,7 @@ RUNTIME_GLOBALS: dict[str, ir.Type] = {
 # extra live LLVM type objects while importing this module.
 FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc2_review_list_bridge_enabled",
         "pcc_gc_deferred_free_active",
         "pcc_gc_pressure_active",
         'pcc_gc_backend4_remembered_page_incomplete',
@@ -1874,6 +1875,11 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc2_review_claim_epoch",
+        "pcc_gc2_review_claim_sequence",
+        "pcc_gc2_review_claim_token",
+        "pcc_gc2_review_list_bridge_fallbacks",
+        "pcc_gc2_review_list_bridge_visits",
         "pcc_gc_backend3_young_cut_commits",
         "pcc_gc_backend3_young_cut_freed",
         "pcc_gc_scalar_sweep_state",
@@ -2035,6 +2041,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_gc2_review_claim_owner",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_worker_head",
         "pcc_gc_scalar_sweep_head",

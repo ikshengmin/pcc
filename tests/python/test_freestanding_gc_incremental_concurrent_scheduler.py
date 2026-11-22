@@ -25,6 +25,9 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 # A thread's unpublished allocation debt and count (pcc_gc_cms_note_alloc).
 TLS_STORAGE_SYMBOLS = {"pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes"}
 OWNED_SYMBOLS = {
+    "pcc_gc2_exact_list_bridge_mode",
+    "pcc_gc2_exact_list_bridge_read_gc2",
+    "pcc_gc2_review_list_bridge",
     "pcc_gc_cms_note_alloc",
     # A thread publishes its allocation debt in batches.
     "pcc_gc_cms_note_alloc_flush",
@@ -51,6 +54,12 @@ OWNED_SYMBOLS = {
     "pcc_gc_backend4_maybe_auto_step",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc2_review_claim_close_locked",
+    "pcc_gc2_review_claim_open_locked",
+    "pcc_gc_trace_gc2_rooted_short_list",
+    "pcc_platform_getenv",
+    "pcc_thread_no_park_enter",
+    "pcc_thread_no_park_exit",
     "pcc_gc_object_walk_first",
     "pcc_gc_object_walk_next",
     "pcc_gc_gray_worklist_take_locked",
@@ -108,8 +117,14 @@ RAW_FUNCTION_IMPORTS = {
 # Thread-locals the strict object defines: a thread's unpublished allocation
 # debt and its pending push count until a batch is due.
 OWNED_THREAD_LOCALS = {"pcc_gc_tls_alloc_debt", "pcc_gc_tls_alloc_pushes"}
+OWNED_DATA_SYMBOLS = {
+    "pcc_gc2_review_list_bridge_enabled",
+    "pcc_gc2_review_list_bridge_fallbacks",
+    "pcc_gc2_review_list_bridge_visits",
+}
 
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc2_review_claim_owner",
     # No mark begins while a finished mark's deferred frees remain.
     "pcc_gc_concurrent_sweep_state",
     "pcc_gc_gray_worklist_flush_requested",
@@ -324,7 +339,7 @@ def test_incremental_concurrent_scheduler_has_exact_strict_object_closure(
         if line.strip() and " U " not in line
     }
     tls_initializers = {symbol + "$tlv$init" for symbol in TLS_STORAGE_SYMBOLS}
-    assert defined - tls_initializers == OWNED_SYMBOLS | TLS_STORAGE_SYMBOLS
+    assert defined - tls_initializers == OWNED_SYMBOLS | OWNED_DATA_SYMBOLS | TLS_STORAGE_SYMBOLS
 
 
 def test_incremental_concurrent_scheduler_preserves_bounded_policy_order() -> None:
@@ -434,7 +449,14 @@ def test_production_archive_has_one_incremental_concurrent_scheduler_owner(
         timeout=30,
     )
     assert symbols_result.returncode == 0, symbols_result.stdout + symbols_result.stderr
-    for symbol in OWNED_SYMBOLS:
+    member = ":freestanding_gc_incremental_concurrent_scheduler.o:"
+    imports = {
+        line.split()[-1].lstrip("_")
+        for line in symbols_result.stdout.splitlines()
+        if member in line and " U " in line
+    }
+    assert imports - {"tlv_bootstrap"} == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    for symbol in OWNED_SYMBOLS | OWNED_DATA_SYMBOLS:
         owners = [
             line
             for line in symbols_result.stdout.splitlines()

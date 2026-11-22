@@ -51,6 +51,9 @@ class _SchedulerMemory(_RawCollectorMemory):
             "pcc_gc_tracing_finish_claim_epoch": bytearray(8),
             "pcc_gc_tracing_finish_claim_backend": bytearray(8),
             "pcc_gc_cms_worker_current": bytearray(4),
+            # This stock model starts after selecting the disabled review
+            # mode. The native startup tests cover latching from the env.
+            "pcc_gc2_review_list_bridge_enabled": bytearray(4),
             ENABLED: bytearray(4),
             THRESHOLD0: bytearray(4),
         })

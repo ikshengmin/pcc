@@ -17,6 +17,13 @@ MANAGED_SOURCE = RUNTIME_DIR / "py" / "py_gc_backend.py"
 MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
+    "pcc_gc2_review_claim_clear_locked",
+    "pcc_gc2_review_claim_close_locked",
+    "pcc_gc2_review_claim_discard_stale_stopped_locked",
+    "pcc_gc2_review_claim_may_request_remark_locked",
+    "pcc_gc2_review_claim_open_locked",
+    "pcc_gc_trace_gc2_rooted_short_list",
+    "pcc_gc_trace_gc2_short_list_slot",
     "pcc_gc_begin_mark_cycle",
     "pcc_gc_drain_all_gray_locked_slice",
     "pcc_gc_drain_all_gray_unlocked",
@@ -39,11 +46,19 @@ OWNED_SYMBOLS = {
 # The tracer's work stack: children shaded while a drain owns the stack are
 # traced after their parent instead of on another whole-list pass.
 OWNED_DATA_SYMBOLS = {
+    "pcc_gc2_review_claim_epoch",
+    "pcc_gc2_review_claim_owner",
+    "pcc_gc2_review_claim_sequence",
+    "pcc_gc2_review_claim_token",
     "pcc_gc_trace_stack",
     "pcc_gc_trace_stack_count",
 }
 TLS_STORAGE_SYMBOLS = {"pcc_gc_trace_stack_owner"}
 RAW_FUNCTION_IMPORTS = {
+    "pcc_gc_gray_worklist_note",
+    "pcc_gc_object_index_seen_stable",
+    "pcc_py_gc_minor_graph_lock_depth",
+    "pcc_thread_owns_stopped_world",
     "pcc_gc_object_walk_first",
     "pcc_gc_object_walk_next",
     # The finish reads a walked record's bit through its span and cell.
@@ -86,6 +101,8 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_tracing_candidates_seal",
 }
 RAW_GLOBAL_IMPORTS = {
+    "pcc_gc2_review_list_bridge_enabled",
+    "pcc_gc_nonmoving_count_free",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_list_container_mode",
     "pcc_gc_backend_selected",
@@ -275,7 +292,14 @@ def test_production_archive_has_one_common_mark_cycle_owner(
         timeout=30,
     )
     assert symbols_result.returncode == 0, symbols_result.stdout + symbols_result.stderr
-    for symbol in OWNED_SYMBOLS:
+    member = ":freestanding_gc_common_mark_cycle.o:"
+    imports = {
+        line.split()[-1].lstrip("_")
+        for line in symbols_result.stdout.splitlines()
+        if member in line and " U " in line
+    }
+    assert imports - {"tlv_bootstrap"} == RAW_FUNCTION_IMPORTS | RAW_GLOBAL_IMPORTS
+    for symbol in OWNED_SYMBOLS | OWNED_DATA_SYMBOLS:
         owners = [
             line
             for line in symbols_result.stdout.splitlines()

@@ -308,3 +308,18 @@ read positive shortcut visits. The CPython control explicitly drives
 its collector at the two semantic checkpoints; it is not an
 automatic-cadence comparison. Neither owned resurrection arm calls
 `gc.collect()`. The already sealed performance source is unchanged.
+
+## Raw ownership and disabled-control model checks
+
+The review symbols now have explicit width entries in the raw ABI
+registry. Regression tests check both changed modules' exact external
+imports and single owners from the actual PCC-built archive. The
+disabled scheduler model sets the resolved off selector, and the
+external CMS fixture aborts if a candidate-only call is reached.
+These are not substitutes for the prior owned runtime tests.
+
+Linux passed 108 focused source, model, archive and ABI checks, plus
+both owned selector and automatic-scheduler tests on the fresh archive.
+Ten host-`clang` lanes still require that compiler and were not
+qualified on this host. No macOS, full-suite, bootstrap or performance
+claim is made.
