@@ -148,11 +148,6 @@ due now.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- GC3 generational design ([#8](https://github.com/ikshengmin/pcc/issues/8)):
-  approve the proposed scoped nursery and sparse remembered-set plan, or name
-  the writer/lifetime case that needs redesign. Recommendation: review the
-  barrier, root/pin coverage and major handoff before the first code slice.
-
 - PCC validation checkpoint (rule 13): Linux `gh workflow run` returned
   unauthenticated and no run was launched. Use an authenticated GitHub
   Actions dispatch with baseline `7ce5cf6635b0893ceca1f06932b1127745099223`
@@ -219,10 +214,22 @@ in the relevant section or issue and removes the entry.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next: GC3's first test-only or
-   runtime-inert slice, once the maintainer or named reviewer approves
-   [the generational design](https://github.com/ikshengmin/pcc/issues/8).
-   No implementation or performance result is claimed by the design round.
+   Measure with `scripts/pcc_perf.py`. Next: GC3's first slice, the
+   test-only or runtime-inert sparse remembered-set model with its
+   missed-writer, clean-card, persistent-card and promotion controls. The
+   maintainer named Claude reviewer on 2026-11-22, and Claude approved
+   [the generational design](https://github.com/ikshengmin/pcc/issues/8)
+   in direction: slice 2 and activation must also meet the six conditions
+   in [the review](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
+   Ready GC units that wait on no review, for another agent or whenever the
+   GC3 unit is claimed or blocked, in this order: the GC plan's step 5
+   (GC0 atomic reference-count CPU share, one hour at most), then step 4
+   (GC1 mutator-stepped incremental without a marker thread, then the GC2
+   pacer and assist). GC4 phase two waits for GC3. The agent's
+   recommendation, which the maintainer approved on 2026-11-22: while item 2
+   has a ready unit, an untargeted round takes it before item 3; when one of
+   item 2's units waits on review, this "Next" still lists the item's other
+   ready units.
 
    Claims:
    - none
