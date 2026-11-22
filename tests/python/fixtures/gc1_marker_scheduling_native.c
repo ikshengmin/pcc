@@ -10,6 +10,7 @@ extern void pcc_gc_incremental_maybe_auto_step(void);
 
 extern int64_t pcc_gc_tracing_finish_commits;
 extern int32_t pcc_gc_cms_worker_starts;
+extern int32_t pcc_gc_cms_mutator_assists;
 
 enum { METRIC_CMS_WORKER_STARTS = 11, METRIC_SWEEP_CANDIDATE_CALLS = 126 };
 
@@ -26,7 +27,7 @@ static int check_startup(void) {
     if (root != value) return 4;
 
     int64_t starts = pcc_gc_telemetry(METRIC_CMS_WORKER_STARTS);
-    int64_t expected = backend == 0 ? 0 : 1;
+    int64_t expected = backend <= 1 ? 0 : 1;
     if (starts != expected) return 5;
     for (int i = 0; i < 3; ++i) {
         pcc_gc_maybe_start_cms_worker();
@@ -53,6 +54,16 @@ static int check_automatic_progress(int expected_workers) {
     pcc_gc_store_root(&owner, rooted);
 
     int64_t initial_commits = __atomic_load_n(&pcc_gc_tracing_finish_commits, __ATOMIC_ACQUIRE);
+    py_gc_disable();
+    for (int i = 0; i < 5000; ++i) {
+        PyObject *temporary = py_list_new(0);
+        if (!temporary) return 29;
+        py_decref(temporary);
+        pcc_gc_safepoint();
+    }
+    if (__atomic_load_n(&pcc_gc_tracing_finish_commits, __ATOMIC_ACQUIRE) != initial_commits)
+        return 30;
+    py_gc_enable();
     for (int i = 0; i < 80000; ++i) {
         PyObject *temporary = py_list_new(0);
         if (!temporary) return 23;
@@ -68,6 +79,8 @@ static int check_automatic_progress(int expected_workers) {
     if (__atomic_load_n(&pcc_gc_cms_worker_starts, __ATOMIC_ACQUIRE) != expected_workers)
         return 26;
     if (owner != rooted || !pcc_gc_pointer_is_managed(owner)) return 27;
+    if (__atomic_load_n(&pcc_gc_cms_mutator_assists, __ATOMIC_ACQUIRE) != 0)
+        return 31;
     pcc_gc_store_root(&owner, NULL);
     pcc_gc_scheduler_root_unregister_handle(handle);
     printf("GC1_AUTOMATIC_PROGRESS_OK starts=%d\n", expected_workers);

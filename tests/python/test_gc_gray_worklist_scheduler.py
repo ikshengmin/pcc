@@ -769,8 +769,19 @@ def test_allocation_assist_waits_for_hidden_tails_without_paying_debt_or_sweepin
     # (pcc_gc_cms_note_alloc batches per thread): publish one byte at a time.
     publish = memory.namespace["pcc_gc_cms_publish_alloc"]
     note_alloc = lambda size: publish(size, 1)
+    prior_request = memory.scalar(REQUEST)
     note_alloc(1)
     note_alloc(1)
+    if backend == 1:
+        # GC1 batches debt only; its later rooted application gate owns
+        # marking. GC2 must still use the original concurrent assist.
+        assert results == [] and memory.scalar(DEBT) == 258
+        assert memory.scalar("pcc_gc_cms_queue_pushes") == 2
+        assert memory.scalar("pcc_gc_cms_mutator_assists") == 0
+        assert memory.gray == 2 and memory.scalar(REQUEST) == prior_request
+        assert memory.scalar(CURSOR) == cursor and not memory.node_next_reads(before)
+        assert not memory.completions
+        return
     assert results == [(4, 0), (4, 0)]
     assert memory.scalar(DEBT) == 258  # Only actual completions may pay debt.
     assert memory.gray == 2 and memory.scalar(REQUEST) == 1

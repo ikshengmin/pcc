@@ -154,6 +154,7 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
 pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
+pcc_gc_incremental_maybe_auto_step = extern("pcc_gc_incremental_maybe_auto_step", (), c_void)
 pcc_gc_tracing_debt_threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
@@ -2094,6 +2095,11 @@ def _gc_automatic_collection_enabled() -> int:
     return 1
 
 
+# The generic in-auto-step flag is GC4's relocation exclusion. Taking it
+# would prevent the ordinary concurrently seeded GC1 mark from starting.
+define_global_i32("pcc_gc1_mutator_gate_active", 0)
+
+
 def _gc_maybe_auto_collect() -> None:
     # The automatic collection pending for GC0..GC3 (they share the flag
     # that compiled gates poll with GC4's automatic step). py_gc_track
@@ -2115,8 +2121,26 @@ def _gc_maybe_auto_collect() -> None:
     backend: int = _gc_backend_fast()
     if backend == 0:
         pcc_gc_collect(0)
+    elif backend == 1:
+        owner = global_addr("pcc_gc1_mutator_gate_active")
+        if atomic_rmw_i32("xchg", owner, 0, 1, "acq_rel") != 0:
+            atomic_store_i32(pending, 0, 1, "release")
+            return
+        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
+            if pcc_gc_sweep_owed() == 0:
+                pcc_gc_incremental_maybe_auto_step()
+            if pcc_gc_sweep_owed() != 0:
+                _gc_tracing_automatic_collect(0)
+        if (
+            load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+            or pcc_gc_sweep_owed() != 0
+            or atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
+               >= pcc_gc_tracing_debt_threshold()
+        ):
+            atomic_store_i32(pending, 0, 1, "release")
+        atomic_store_i32(owner, 0, 0, "release")
     else:
-        # The collector thread of GC1, GC2 and GC3 left a traced mark's
+        # The collector thread of GC2 and GC3 left a traced mark's
         # final remark to this collection (pcc_gc_cms_finish_pending).
         finish: int = atomic_rmw_i32(
             "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"

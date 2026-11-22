@@ -1157,21 +1157,28 @@ def pcc_gc_incremental_concurrent_step(budget: i64) -> i64:
 
 @c_abi_export("pcc_gc_incremental_maybe_auto_step")
 def pcc_gc_incremental_maybe_auto_step() -> None:
-    if load_i32(global_addr("pcc_gc_in_auto_step"), 0) != 0:
+    # Its application gate serializes the mark/sweep transaction and has
+    # rooted all compiled inputs. The general allocation path only records
+    # debt; it does not allow GC1 to mark a half-initialized object.
+    if (
+        load_i32(global_addr("pcc_gc_backend_selected"), 0) != 1
+        or load_i32(global_addr("py_gc_enabled"), 0) == 0
+        or load_i32(global_addr("py_gc_threshold0"), 0) <= 0
+        or load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0
+        or pcc_thread_no_park_depth() != 0
+        or pcc_py_gc_minor_graph_lock_depth() != 0
+    ):
         return
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 1:
+    debt: i64 = atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
+    if (
+        load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
+        and debt < pcc_gc_tracing_debt_threshold()
+    ):
         return
-    # GC1 marks on its collector thread, concurrently with every mutator;
-    # allocation sites record debt there (pcc_gc_cms_note_alloc).
-    pcc_gc_maybe_start_cms_worker()
-    if pcc_threads_enabled() != 0:
-        return
-    debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0)
-    if debt < pcc_gc_tracing_debt_threshold():
-        return
-    store_i32(global_addr("pcc_gc_in_auto_step"), 0, 1)
-    pcc_gc_incremental_concurrent_step(pcc_gc_tracing_budget_from_debt())
-    store_i32(global_addr("pcc_gc_in_auto_step"), 0, 0)
+    budget: i64 = pcc_gc_tracing_budget_from_debt()
+    if budget > 512:
+        budget = 512
+    pcc_gc_incremental_concurrent_step(budget)
 
 
 @c_abi_export("pcc_gc_backend4_maybe_auto_step")
@@ -1334,6 +1341,7 @@ def _cms_publish_alloc(bytes: i64, pushes: i64) -> None:
     # allocations skip the threshold's arithmetic.
     if (
         load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 1
         and debt >= pcc_gc_tracing_debt_threshold() * 4
         and load_i32(global_addr("py_gc_enabled"), 0) != 0
         and load_i32(global_addr("py_gc_threshold0"), 0) > 0
@@ -1370,9 +1378,10 @@ def pcc_gc_note_alloc(bytes: i64) -> None:
     if backend >= 1 and backend <= 4:
         # The shared mark worker also serves the moving collectors. Their
         # copying, remapping and finalizers retain application-gate ownership.
-        pcc_gc_maybe_start_cms_worker()
+        if backend != 1:
+            pcc_gc_maybe_start_cms_worker()
         pcc_gc_cms_note_alloc(bytes)
-        if backend == 4:
+        if backend == 1 or backend == 4:
             debt: i64 = atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
             if debt >= pcc_gc_tracing_debt_threshold():
                 atomic_store_i32(global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release")

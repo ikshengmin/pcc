@@ -310,9 +310,9 @@ def _pcc_gc_config_parse_backend(raw, default: i64) -> i64:
 
 @c_abi_export("pcc_gc_maybe_start_cms_worker")
 def pcc_gc_maybe_start_cms_worker() -> None:
-    # All tracing backends mark here; moving phases retain their gate protocol.
+    # GC1 marks on application mutators. GC2–4 retain the CMS worker.
     selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected < 1 or selected > 4:
+    if selected < 2 or selected > 4:
         return
     if pcc_threads_enabled() == 0:
         return
@@ -325,7 +325,7 @@ def pcc_gc_maybe_start_cms_worker() -> None:
         return
     # The backend may have changed after the optimistic read above.
     selected = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected < 1 or selected > 4:
+    if selected < 2 or selected > 4:
         atomic_store_i32(
             global_addr("pcc_gc_cms_worker_started"), 0, 0, "release"
         )
