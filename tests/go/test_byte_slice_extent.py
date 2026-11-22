@@ -233,8 +233,50 @@ def test_bounded_byte_owner_never_accepts_changed_step_or_wrong_element_type():
     for source, match in (
         (BOUND_OWNER_SOURCE.replace("0, 8", "0, 4"), r"make\(slice\) requires owned"),
         (BOUND_OWNER_SOURCE.replace("uint32(2)", "uint64(2)"), "cannot use uint64"),
-        (BOUND_OWNER_SOURCE.replace('return "fixed"', '_ = data[0]; return "fixed"'), "checked byte index"),
+        (BOUND_OWNER_SOURCE.replace('return "fixed"', '_ = data; return "fixed"'),
+         r"make\(slice\) requires owned"),
     ):
         with pytest.raises(GoDiagnostic, match=match):
             instance = SourceInstance("main", (("bytes.go", source),), {}, bounded_byte_callers=(request,))
             analyze_source_instances({"main": instance}, main_instance="main", target_triple=target)
+
+
+BOUND_VIEWS_SOURCE = BOUND_OWNER_SOURCE.replace('return "fixed"', """
+    for len(data) > 0 && data[0] == ' ' { data = data[1:] }
+    for i, c := range data { if c == 0 { data = data[:i]; break } }
+    return "fixed"
+""")
+
+
+def test_bounded_byte_owner_checks_index_views_and_range_as_distinct_roles():
+    from pcc.frontends.go.branches import walk
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import BoundedByteCallerRequest
+
+    request = BoundedByteCallerRequest("Name", "data")
+    instance = SourceInstance("main", (("bytes.go", BOUND_VIEWS_SOURCE),), {}, bounded_byte_callers=(request,))
+    analyzer = analyze_source_instances({"main": instance}, main_instance="main",
+                                        target_triple="x86_64-unknown-linux-gnu")["main"]
+    body = analyzer.functions["Name"].body
+    check = next(node for node in walk(body) if node.kind == "for")
+    assert check.exprs[0].args[1].args[0].kind == "bounded_byte_index"
+    assert check.body[0].exprs[0].kind == "bounded_byte_view"
+    ranged = next(node for node in walk(body) if node.kind == "range")
+    assert ranged.exprs[0].kind == "bounded_byte_range" and ranged.evaluate_range
+    assert [symbol.type for symbol in ranged.init.symbols] == ["int", "uint8"]
+    assert ranged.body[0].body[0].exprs[0].kind == "bounded_byte_view"
+    assert analyzer.functions["Name"].bounded_byte_proof.views == 2
+
+
+@pytest.mark.parametrize("change,error", [
+    ("data[0]", "data[-1]"), ("data[:i]", "data[0:i:8]"),
+])
+def test_bounded_byte_owner_rejects_invalid_and_unqualified_bounds(change, error):
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import BoundedByteCallerRequest
+
+    instance = SourceInstance("main", (("bytes.go", BOUND_VIEWS_SOURCE.replace(change, error)),), {},
+                              bounded_byte_callers=(BoundedByteCallerRequest("Name", "data"),))
+    with pytest.raises(GoDiagnostic, match="nonnegative or representable|nonnegative|two-index"):
+        analyze_source_instances({"main": instance}, main_instance="main",
+                                 target_triple="x86_64-unknown-linux-gnu")

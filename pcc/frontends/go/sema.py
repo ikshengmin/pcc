@@ -1813,7 +1813,10 @@ class Analyzer:
                 statement.evaluate_range = True
                 value_types = ("int",) if copied is None else ("int", dtype.element)
             elif isinstance(dtype, SliceType):
-                borrow_span(ranged)
+                if dtype == SliceType("uint8") and self.bounded_byte_local(ranged.token.text):
+                    ranged.kind = "bounded_byte_range"
+                else:
+                    borrow_span(ranged)
                 if len(statement.targets) > 2:
                     raise GoDiagnostic(statement.token, "slice range permits at most two iteration variables")
                 statement.evaluate_range = True
@@ -2048,6 +2051,15 @@ class Analyzer:
                     valid = isinstance(dtype, (ArrayType, SliceType))
                 if not valid:
                     raise GoDiagnostic(base.token, "cannot slice a value of type " + str(base.type))
+                if dtype == SliceType("uint8") and self.bounded_byte_local(base.token.text):
+                    if maximum is not None:
+                        raise UnsupportedGo(maximum.token, 'go.unsupported.slice-storage',
+                                            "bounded byte owner only admits two-index views")
+                    if (low is not None and high is not None and low.constant is not None
+                            and high.constant is not None and low.constant > high.constant):
+                        raise GoDiagnostic(expr.token, "slice indices are not in ascending order")
+                    expr.kind, expr.type = "bounded_byte_view", dtype
+                    return
                 if (isinstance(dtype, SliceType) and maximum is None and
                         all(n is None or n.constant == 0 for n in (low,high))):
                     # [:] and [:0] need no panic path on any slice, including
@@ -2139,8 +2151,13 @@ class Analyzer:
                 expr.type = "uint8"
                 return
             if base.type == SliceType("uint8") and self.bounded_byte_local(base.token.text):
-                raise UnsupportedGo(index.token, 'go.unsupported.slice-storage',
-                                    "bounded byte owner still needs a checked byte index")
+                if not is_integer(index.type):
+                    raise GoDiagnostic(index.token, "bounded byte index must be an integer")
+                if index.constant is not None and not 0 <= index.constant <= integer_bounds("int")[1]:
+                    raise GoDiagnostic(index.token, "bounded byte index must be nonnegative and representable as int")
+                coerce(index, default_type(index.type))
+                expr.kind, expr.type = "bounded_byte_index", "uint8"
+                return
             array_type = underlying(base.type)
             if isinstance(array_type, PointerType) and isinstance(underlying(array_type.element), ArrayType):
                 base = self.dereference(base)
@@ -2705,6 +2722,9 @@ class Analyzer:
             expr.type = target
             expr.pointer_depth, expr.pointer_nonnull = arg.pointer_depth, arg.pointer_nonnull
             return
+        if is_string(target) and arg.type == SliceType("uint8") and self.bounded_byte_local(arg.token.text):
+            raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion',
+                                "returning bounded bytes requires an independently owned string copy")
         if is_string(target) and is_integer(arg.type):
             if arg.constant is None:
                 raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion', "integer-to-string conversion requires shared-runtime allocation support")

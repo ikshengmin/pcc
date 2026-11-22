@@ -225,15 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify byte reads, bounds and views on the proved local CPU Name
-   owner, beginning at `internal/cpu/cpu_x86.go:257:28`. Its constant
-   make, three append sites and length are now typed in the opt-in
-   source probe. No CPU Name result or native catalog is emitted. See the
+   qualify a copied immutable byte result with ownership surviving
+   the original CPU Name frame. The exact source probe is stopped at
+   `internal/cpu/cpu_x86.go:269:9` (`string(data)`) after typing the
+   byte read, two views and range. Native Name and catalog are unbuilt.
+   See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go bounded byte owner subview and index roles: Codex, Linux x86-64, 2026-11-22 05:32 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

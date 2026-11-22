@@ -764,3 +764,13 @@ builder to its first checked read at `internal/cpu/cpu_x86.go:257:28`.
 Eighty adjacent checks and four isolated native byte-operation
 differentials passed. The original CPU Name was not lowered or
 executed by PCC; its dynamic byte views and copied result remain open.
+
+The explicit local byte-owner checker now retains typed checked
+indexes, two-index views and a range that captures its original
+descriptor. Runtime bounds checks remain lowering obligations;
+negative or nonrepresentable constant indexes and three-index views
+do not enter this lane. The exact source probe gets through both
+original Name trimming loops and stops at `string(data)` in
+`internal/cpu/cpu_x86.go:269:9`. Fifty-eight adjacent and seven
+native/reference controls passed. Returning a raw view into the
+temporary backing is still forbidden.
