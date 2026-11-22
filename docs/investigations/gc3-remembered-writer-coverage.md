@@ -541,3 +541,21 @@ source witness now tests the positive GC3 route. The dictionary witness
 is intentionally unchanged: its private initialize path is not included.
 The fast list first-store, tuple private builders, foreign escape, the
 persistent sparse owner/card store and the actual minor remain gates.
+
+The next review increment covers the two raw list append first stores
+that do not use StorePlan. It reuses the owner flags already fetched by
+the transaction. After the existing first-store admission succeeds, an
+old GC3 list publishes its owner before its new logical length becomes
+visible. That covers both writing into spare capacity and transferring
+the off-object backing to a larger array. The existing value shade,
+locking, and allocation/growth logic are retained. Refused first stores
+publish no new card.
+
+The linked list fixture returned 37 on the exact review parent (the
+first append advanced its length but recorded no owner). On the new image it
+recorded the old list at both first stores and preserved order, length,
+capacity and values. All five mode lanes and 18 existing-focused host
+models passed. Ordinary tuple owned-root construction already calls
+the owner-aware slot barrier; eager dictionary materialization has
+separate raw pair/result stores and is not qualified for nursery
+admission. No minor or performance result from these tests.

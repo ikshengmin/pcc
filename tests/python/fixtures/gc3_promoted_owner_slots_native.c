@@ -58,10 +58,12 @@ int main(void) {
     owner->h.flags = child->h.flags = PY_FLAG_GC_YOUNG;
     child->byte_len = 1;
     child->data[0] = 'y';
-    owner->length = owner->capacity = 1;
-    owner->items = malloc(sizeof(PyObject *));
+    owner->length = 1;
+    owner->capacity = 2;
+    owner->items = malloc(2 * sizeof(PyObject *));
     if (!owner->items) return 3;
     owner->items[0] = (PyObject *)child;
+    owner->items[1] = NULL;
 
     if (pcc_allocator_object_publish_fresh(child) != 1 ||
         pcc_allocator_object_publish_fresh(owner) != 1) return 4;
@@ -143,8 +145,22 @@ int main(void) {
     if (pcc_stop_the_world() != 0) return 29;
     if (pcc_gc3_review_owner_cards_set_stopped(NULL) != 1) return 30;
     if (pcc_resume_world() != 0) return 31;
+    OwnerCards append = {2, 0, 0, {NULL, NULL}};
+    if (pcc_stop_the_world() != 0) return 34;
+    if (pcc_gc3_review_owner_cards_set_stopped(&append) != 1) return 35;
+    if (pcc_resume_world() != 0) return 36;
+    py_list_append(object, (PyObject *)child); /* First write to spare storage. */
+    if (owner->length != 2 || owner->capacity != 2 || append.used != 1
+        || append.owners[0] != object || owner->items[1] != (PyObject *)child) return 37;
+    py_list_append(object, (PyObject *)child); /* First write after publication of a larger array. */
+    if (owner->length != 3 || owner->capacity != 4 || append.used != 2
+        || append.owners[1] != object || append.overflow
+        || owner->items[1] != (PyObject *)child || owner->items[2] != (PyObject *)child) return 38;
+    if (pcc_stop_the_world() != 0) return 39;
+    if (pcc_gc3_review_owner_cards_set_stopped(NULL) != 1) return 40;
+    if (pcc_resume_world() != 0) return 41;
     pcc_gc_store_ptr((PyObject *)tuple, tuple->items, NULL);
-    pcc_gc_store_ptr(object, owner->items, NULL);
+    for (int i = 0; i < owner->length; ++i) pcc_gc_store_ptr(object, owner->items + i, NULL);
     if (pcc_allocator_object_retire_live(child) != 1) return 11;
     free(child);
     puts("GC3_PROMOTED_STRONG_SLOT_OK");

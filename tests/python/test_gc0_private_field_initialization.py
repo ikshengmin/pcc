@@ -105,9 +105,12 @@ class CapacityModel(InitModel):
                                # A full list is handed to the doubling path
                                # (test_list_append_growth_gc0's); declining
                                # here keeps this transaction's own contract.
+                               "_GC3_OLD_LIST_OWNER": 256,
                                "_append_grow_gc0": self.grow})
         self.grown = []
-        load_body("py_list.py", "_append_existing_capacity_gc0", self.namespace)
+        for name in ("_container_fast_admitted", "_container_fast_still_admitted",
+                     "_append_existing_capacity_gc0"):
+            load_body("py_list.py", name, self.namespace)
 
     def grow(self, list_slot, item_slot, items, capacity):
         assert self.depth == 0

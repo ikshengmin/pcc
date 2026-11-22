@@ -92,6 +92,9 @@ py_list_reverse = extern("py_list_reverse", (c_ptr,), c_void)
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
+pcc_gc3_review_note_owner_card = extern(
+    "pcc_gc3_review_note_owner_card", (c_ptr, c_ptr), c_void
+)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_obj_eq = extern("py_obj_eq", (c_ptr, c_ptr), c_int32)
 py_str_eq = extern("py_str_eq", (c_ptr, c_ptr), c_int32)
@@ -855,6 +858,18 @@ def _container_fast_still_admitted() -> int:
     return 1
 
 
+_GC3_OLD_LIST_OWNER = 256
+
+
+def _note_gc3_old_list_first_store(lst, destination) -> None:
+    # The list's item buffer is not the owner. Reserve this edge before
+    # length makes the element visible and the existing lock permits a stop.
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3:
+        child = load_ptr(destination, 0)
+        if ptr_is_null(child) == 0 and is_tagged_int(child) == 0:
+            pcc_gc3_review_note_owner_card(lst, child)
+
+
 def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     """One nonparking transaction for an existing private append position."""
     if _container_fast_admitted() == 0:
@@ -873,7 +888,8 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
     if not _list_is_sane(lst, -101):
         _list_unlock(locked)
         return -2
-    if (load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0:
+    owner_flags: int = load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET)
+    if (owner_flags & PY_FLAG_GC_DEALLOCATING) != 0:
         _list_unlock(locked)
         return 0
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
@@ -883,8 +899,11 @@ def _append_existing_capacity_gc0(list_slot, item_slot) -> int:
         _list_unlock(locked)
         return _append_grow_gc0(list_slot, item_slot, full_items, capacity)
     items = load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(items, length * C_POINTER_SIZE), item_slot)
+    destination = ptr_add(items, length * C_POINTER_SIZE)
+    result: int = pcc_gc_try_init_ptr_locked(destination, item_slot)
     if result != 0:
+        if (owner_flags & _GC3_OLD_LIST_OWNER) != 0:
+            _note_gc3_old_list_first_store(lst, destination)
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     _list_unlock(locked)
     return result
@@ -918,7 +937,8 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
         free(new_items)
         return -2
     length: int = load_i64(lst, PYLISTOBJECT_LENGTH_OFFSET)
-    if ((load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_DEALLOCATING) != 0
+    owner_flags: int = load_i32(lst, PYOBJECTHEADER_FLAGS_OFFSET)
+    if ((owner_flags & PY_FLAG_GC_DEALLOCATING) != 0
             or ptr_eq(load_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET), old_items) == 0
             or load_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET) != old_capacity
             or length < 0 or length > old_capacity):
@@ -929,8 +949,11 @@ def _append_grow_gc0(list_slot, item_slot, old_items, old_capacity: int) -> int:
     memset(ptr_add(new_items, length * C_POINTER_SIZE), 0, (new_capacity - length) * C_POINTER_SIZE)
     store_ptr(lst, PYLISTOBJECT_ITEMS_OFFSET, new_items)
     store_i64(lst, PYLISTOBJECT_CAPACITY_OFFSET, new_capacity)
-    result: int = pcc_gc_try_init_ptr_locked(ptr_add(new_items, length * C_POINTER_SIZE), item_slot)
+    destination = ptr_add(new_items, length * C_POINTER_SIZE)
+    result: int = pcc_gc_try_init_ptr_locked(destination, item_slot)
     if result != 0:
+        if (owner_flags & _GC3_OLD_LIST_OWNER) != 0:
+            _note_gc3_old_list_first_store(lst, destination)
         store_i64(lst, PYLISTOBJECT_LENGTH_OFFSET, length + 1)
     _list_unlock(locked)
     free(old_items)

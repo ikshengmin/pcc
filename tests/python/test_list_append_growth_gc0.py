@@ -104,6 +104,7 @@ class ListMemory:
             memory.depth = 0
 
         globals_ = {"pcc_gc_backend_selected": 0, "pcc_gc_refcount_atomic": 1,
+                    "pcc_gc_nonmoving_count_free": 0,
                     "pcc_diagnostics_runtime_log_fast_state": 0,
                     "pcc_gc_foreign_lease_active": 0}
         namespace = {name: getattr(abi, name) for name in dir(abi) if name.isupper()}
@@ -121,6 +122,7 @@ class ListMemory:
             # The list's transaction lock (container or graph lock).
             "_list_lock": lambda _list: lock(), "_list_unlock": lambda _list: unlock(),
             "_list_is_sane": lambda value, code: True,
+            "_GC3_OLD_LIST_OWNER": 256,
             "C_POINTER_SIZE": 8,
         })
         original_load = namespace["load_i32"]
@@ -128,8 +130,9 @@ class ListMemory:
                                  if isinstance(base, str) and base in globals_ else original_load(base, offset))
         tree = ast.parse(RUNTIME.read_text())
         nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name in ("_append_existing_capacity_gc0", "_append_grow_gc0")]
-        assert len(nodes) == 2
+                 and node.name in ("_container_fast_admitted", "_container_fast_still_admitted",
+                                   "_append_existing_capacity_gc0", "_append_grow_gc0")]
+        assert len(nodes) == 4
         code = compile(ast.Module(nodes, type_ignores=[]), str(RUNTIME), "exec")
         for const in code.co_consts:
             if isinstance(const, types.CodeType):
