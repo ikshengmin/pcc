@@ -323,3 +323,12 @@ both owned selector and automatic-scheduler tests on the fresh archive.
 Ten host-`clang` lanes still require that compiler and were not
 qualified on this host. No macOS, full-suite, bootstrap or performance
 claim is made.
+
+The startup flag was also forced on for GC0, GC1, GC3 and GC4 using one
+owned C-handle contract binary. Each of those four collectors passed
+both with and without the inherited GC2 flag. The established six
+pcc0 foreign-handle nodes and both review bridge nodes passed together
+(8 nodes). The pcc1 fixture's initial auto-provision attempt stopped
+at the shared lock before compilation; the qualifying retry explicitly
+disabled auto-provision and ran only pcc0. This is not pcc1 or macOS
+evidence and does not extend the measurement candidate.

@@ -142,7 +142,10 @@ def test_c_owned_foreign_handle_survives_until_decref(
 ):
     binary = _build_foreign_program(tmp_path, pcc_runtime_archive, python_program_compiler,
                                     C_OWNED_PROGRAM)
-    result = _run_foreign_program(binary, backend)
+    _assert_c_owned_foreign_result(backend, _run_foreign_program(binary, backend))
+
+
+def _assert_c_owned_foreign_result(backend, result):
     assert (result.returncode, result.stderr) == (0, ""), (backend, result)
     # Refcounting GC0 must release synchronously on the final Py_DECREF.
     # Tracing collectors may defer the single release to gc.collect().

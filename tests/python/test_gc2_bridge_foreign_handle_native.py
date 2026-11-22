@@ -7,8 +7,11 @@ import pytest
 
 from tests.python.owned_regression_support import _record_execution, explicit_owned_runtime
 from tests.python.test_gc_foreign_handle_collection_native import (
+    C_OWNED_PROGRAM,
     FOREIGN_PROGRAM_HEADER,
+    _assert_c_owned_foreign_result,
     _build_foreign_program,
+    _run_foreign_program,
 )
 
 
@@ -98,3 +101,21 @@ def test_gc2_bridge_auto_sweep_respects_two_then_one_c_owner(tmp_path, explicit_
             assert (result["returncode"], result["stderr"]) == (0, ""), result
             expected = r"2\n[1-9]\d*\n" if enabled else r"0\n0\n"
             assert re.fullmatch(expected + r"GC2_C_HOLDER_OK\n", result["stdout"]), result
+
+
+@pytest.mark.integration
+def test_gc2_bridge_flag_does_not_change_c_holders_in_other_backends(
+    tmp_path, explicit_owned_runtime, monkeypatch,
+):
+    from pcc.frontends.python.pipeline import compile_python
+
+    # Identical owned program and expected C ABI contract; only the inherited
+    # GC2 review selector changes between fresh runtime processes.
+    binary = _build_foreign_program(tmp_path, explicit_owned_runtime, compile_python, C_OWNED_PROGRAM)
+    for backend in (0, 1, 3, 4):
+        for enabled in (False, True):
+            if enabled:
+                monkeypatch.setenv("PCC_GC2_EXACT_LIST_BRIDGE", "1")
+            else:
+                monkeypatch.delenv("PCC_GC2_EXACT_LIST_BRIDGE", raising=False)
+            _assert_c_owned_foreign_result(backend, _run_foreign_program(binary, backend))
