@@ -809,3 +809,27 @@ contested and nested stop lifecycle passed on all five GCs, including
 GC2 in callback mode. This does not resolve sweeps of a verdict from a
 different stop, qualify automatic handoffs or GC4, or establish a
 performance, HTTP, native pcc1 or Darwin result.
+
+### Revalidated candidate list from a previous stop
+
+The earlier-epoch route took the full pre-sweep reachability refresh but
+still selected legacy callback order afterwards. On GC1–3 a two-node
+chain produced `b-weak a-weak b-del a-del`, and even when a peer rooted B
+between the mark and sweep stops, it ran A's weak callback before A's
+finalizer. Both fixtures counted three full rechecks.
+
+The initial stopped refresh remains mandatory. For an idle, nonmoving
+marker with a complete sealed commit, it can only remove sweep flags.
+Compact that commit's records to the still-flagged nodes and pass the
+currently validated stop locally to the layered planner; do not
+overwrite the real finish epoch. Residual singletons use the layered
+caller-relative root cut as well. The older same-stop singleton route,
+missing/incomplete cohort fallback, and GC4 are unchanged.
+
+The Linux pcc0 fixtures now match CPython with one pre-sweep recheck and
+no post-callback full recheck on either shape. The previous-stop live
+publication keeps the original B weakref and delivers A's finalizer and
+weak callback in that order. There were 198 focused native assertions
+across GC1–3, including the six new earlier-stop cases. These are
+production sweep-entry fixtures, not asynchronous scheduling or
+HTTP/macOS qualification.

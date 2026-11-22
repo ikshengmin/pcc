@@ -1274,11 +1274,11 @@ def _review_remark_layer_at_stop(plan, nodes, count: i64, caller,
 
 
 @c_abi_export("pcc_gc_review_layer_plan")
-def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
+def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64, validated_epoch: i64):
     if (
-        (backend < 1 or backend > 3) or count < 2
+        (backend < 1 or backend > 3) or count <= 0
         or ptr_is_null(nodes) != 0 or stop_epoch < 0
-        or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
+        or stop_epoch != validated_epoch
         or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
         or pcc_gc_gray_count_load_acquire() != 0
         or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
@@ -1372,6 +1372,37 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
     return _sweep_clear_and_reclaim(budget, 1, 0, 1, nodes, count, commit)
 
 
+@c_abi_export("pcc_gc_review_compact_refreshed_candidates")
+def _review_compact_refreshed_candidates(held: i64) -> i64:
+    # The caller has just run the full stopped refresh, which can only
+    # remove candidate flags. A sealed list remains complete for the
+    # survivors of that filtering. Compact record pointers, not roots.
+    commit: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+    count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+    nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+    if (held < 0 or ptr_is_null(nodes) != 0 or count <= 0 or commit <= 0
+            or commit != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+            or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+            or pcc_gc_gray_count_load_acquire() != 0
+            or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0):
+        return -1
+    kept: i64 = 0
+    index: i64 = 0
+    while index < count:
+        node = load_ptr(nodes, index * _ACYCLIC_WORD)
+        if pcc_gc_object_node_is_active(node) != 0:
+            obj = load_ptr(node, 0)
+            flags: i64 = load_i32(obj, abi_constant("object.header.flags_offset"))
+            if (flags & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                if kept != index:
+                    store_ptr(nodes, kept * _ACYCLIC_WORD, node)
+                kept += 1
+        index += 1
+    store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, kept)
+    return held
+
+
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:
@@ -1385,16 +1416,27 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # its verdicts stand. Keep the separate post-finalizer refresh for PEP
     # 442 resurrection.
     held: i64 = pcc_thread_world_stop_epoch_held()
-    if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
-        pcc_gc_tracing_recheck_reachability_after_finalizers()
+    validated_epoch: i64 = load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
     backend_for_review: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend_for_review >= 1 and backend_for_review <= 3:
-        review_node = _review_acyclic_singleton(held, backend_for_review)
-        if ptr_is_null(review_node) == 0:
-            return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
+    review: i64 = 1 if backend_for_review >= 1 and backend_for_review <= 3 else 0
+    previous_stop: i64 = 1 if held < 0 or held != validated_epoch else 0
+    if previous_stop != 0:
+        pcc_gc_tracing_recheck_reachability_after_finalizers()
+        if review != 0:
+            validated_epoch = _review_compact_refreshed_candidates(held)
+    if review != 0:
+        if previous_stop == 0:
+            review_node = _review_acyclic_singleton(held, backend_for_review)
+            if ptr_is_null(review_node) == 0:
+                return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
         review_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
         review_count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
-        plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count)
+        # An earlier stop can shrink to a single node. Keep it on the
+        # layered route and its caller-relative root cut; the narrower
+        # singleton shortcut assumes a same-stop finished mark.
+        plan = null()
+        if review_count > 1 or previous_stop != 0:
+            plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count, validated_epoch)
         if ptr_is_null(plan) == 0:
             layers: i64 = pcc_gc_callback_layers_count(plan)
             if layers > 0:

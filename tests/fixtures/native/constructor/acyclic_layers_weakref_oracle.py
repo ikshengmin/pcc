@@ -104,6 +104,9 @@ weak_b = weakref.ref(b, lambda _: events.append("b-weak"))
 if peer_mode:
     peer = threading.Thread(target=weakref_peer)
     peer.start()
+if sys.argv[1] == "prior-live":
+    held = weak_b()
+    assert held is b
 if rescue or same_layer_peer:
     del a
     del b

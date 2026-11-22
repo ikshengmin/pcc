@@ -129,6 +129,24 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 2, 3))
+@pytest.mark.parametrize("arm", ("prior-chain", "prior-live"))
+def test_earlier_mark_stop_revalidates_before_callback_sweep(_layered_sweep, backend, arm):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
+    expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), arm], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
+    # The stale stop pays its necessary initial full check exactly once,
+    # not once per callback. The live publication must not get a callback.
+    assert actual.stderr == "full=1 scans=0\n"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("count", (63, 64, 65, 255, 256, 257))
 @pytest.mark.parametrize("keep", (True, False), ids=("keep", "drop"))
 def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, backend, count, keep):

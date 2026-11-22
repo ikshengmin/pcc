@@ -314,7 +314,19 @@ static void *weakref_peer(void *unused) {
     return NULL;
 }
 
+static void *publish_between_stops(void *unused) {
+    (void)unused;
+    PyObject *b = py_weakref_call(roots[WEAK_B]);
+    if (!b || b == py_None) { error = 45; return NULL; }
+    pcc_gc_store_root(&roots[HOLD], b);
+    py_decref(b);
+    return NULL;
+}
+
 int main(int argc, char **argv) {
+    int prior = argc > 1 && (strcmp(argv[1], "prior-chain") == 0 ||
+                             strcmp(argv[1], "prior-live") == 0);
+    int prior_live = argc > 1 && strcmp(argv[1], "prior-live") == 0;
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
     late_new = argc > 1 && strcmp(argv[1], "late-new") == 0;
     idle_worker = argc > 1 && strcmp(argv[1], "worker") == 0;
@@ -392,6 +404,13 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
     pcc_py_gc_minor_graph_unlock();
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
+    if (prior) {
+        if (pcc_resume_world() != 0) return 46;
+        if (prior_live && (pcc_thread_start(&thread, publish_between_stops, NULL) ||
+                           pcc_thread_join(thread, NULL) || error)) return 47;
+        if (pcc_stop_the_world() != 0 ||
+            pcc_thread_world_stop_epoch_held() == pcc_gc_tracing_finish_stop_epoch) return 48;
+    }
     int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
     int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(candidate_count);
