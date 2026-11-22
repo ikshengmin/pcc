@@ -194,8 +194,15 @@ reset while live, preserving its address. Reuse advances the epoch, and
 a stale cursor reports an error rather than masquerading as exhaustion.
 Four modeled cases plus adjacent tests passed (18 total). A real iterator
 must use bounded word bitmaps, acquire/release publication, and a safe
-handoff, not the model's unbounded integers. There is no runtime or
-performance change.
+handoff, not the model's unbounded integers.
+
+The standalone owned-C prototype uses two bounded bitmap words and a
+release-published tail. Linux pcc0 execution skips holes across cells
+63/64, excludes cell 127 from a previously frozen range, refuses bulk reuse
+while an in-place promoted cell remains, and reports a stale epoch after
+reuse. It executes with one thread; atomic instructions in this probe
+are not evidence of a correct multi-mutator or stopped-world handoff.
+There is no production runtime or performance change.
 
 ## Collector-entry root baseline
 

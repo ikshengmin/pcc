@@ -256,9 +256,10 @@ in the relevant section or issue and removes the entry.
    recognized an exact allocator-published cell without a tracing index
    but did not expose it through the record-backed span lookup. A serial
    cursor model now separates the published tail from a pending reservation,
-   an in-place old cell, and a reused span. Next: implement a standalone
-   owned native cursor probe with epoch validation; keep it out of production
-   dispatch. Real promotion and concurrent handoff are untested.
+   an in-place old cell, and a reused span. A standalone Linux native
+   cursor probe passes the same boundaries across two bitmap words. Next:
+   native publish/stop interleaving before integrating a dormant allocator
+   path. Real promotion and concurrent handoff remain untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -270,7 +271,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 owned native slab cursor probe: Codex, Linux x86-64, 2026-11-22 07:23 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
