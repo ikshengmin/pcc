@@ -215,3 +215,15 @@ matched its separate full oracle; omitting one dirty writer produced
 the wrong answer, and known-incomplete inputs declined. All 21
 related model cases passed. No collector mode, macOS behavior or
 performance claim was changed.
+
+The first executable reference-arm slice is
+`tests/python/test_gc_acyclic_candidate_peel_native.py`.
+It runs the bounded peel on real list slots during an actual held
+stopped-world epoch in all four tracing backends. An acyclic chain
+(including duplicate ownership) peels; a list cycle retains its
+downstream acyclic list. Insufficient slot budget, edge overflow and a
+resumed stop epoch leave the verdict output unchanged. This prototype
+takes a fixture-validated, already resolved cohort and uses a small
+linear map; it is not a scalable allocator/index or a finalizer
+scheduler. Production dispatch, weakref ordering and the original
+failing generator case are unchanged.
