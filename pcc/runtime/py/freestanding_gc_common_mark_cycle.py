@@ -4,6 +4,8 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
+    atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i64,
     atomic_store_i32,
     atomic_store_i64,
@@ -66,6 +68,12 @@ pcc_gc_gray_registered_roots = extern("pcc_gc_gray_registered_roots", (), c_void
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_forwarding_index_find = extern(
     "pcc_gc_forwarding_index_find", (c_ptr,), c_ptr
+)
+pcc_gc_object_index_seen_stable = extern(
+    "pcc_gc_object_index_seen_stable", (c_ptr,), c_int64
+)
+pcc_py_gc_minor_graph_lock_depth = extern(
+    "pcc_py_gc_minor_graph_lock_depth", (), c_int64
 )
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
@@ -224,6 +232,71 @@ def pcc_gc_trace_stack_drain_work(budget: i64, work_left) -> i64:
                 else:
                     store_i64(work_left, 0, remaining - work)
     return processed
+
+
+_GC2_REVIEW_LIST_LIMIT = 32
+_GC2_REVIEW_LIST_INDEX_MISS = 1
+_GC2_REVIEW_LIST_UNSUPPORTED_SLOT = 2
+
+
+@c_abi_export("pcc_gc_trace_gc2_short_list_slot")
+def _gc2_short_list_slot(slot, role: i64, failed) -> None:
+    if role != 1:  # exact built-in list slots must all be owned
+        store_i64(failed, 0, _GC2_REVIEW_LIST_UNSUPPORTED_SLOT)
+        return
+    child = load_ptr(slot, 0)
+    if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
+        return
+    if pcc_gc_object_index_seen_stable(child) == 0:
+        # Staged allocations and unindexed forms stay on the original path.
+        store_i64(failed, 0, _GC2_REVIEW_LIST_INDEX_MISS)
+        return
+    pcc_gc_shade_gray_atomic(child, 0)
+
+
+@c_abi_export("pcc_gc_trace_gc2_rooted_short_list")
+def pcc_gc_trace_gc2_rooted_short_list(owner_slot, epoch: i64) -> i64:
+    """Review-only source kernel, never selected by an ordinary mark.
+
+    Caller owns a stable traced slot for the whole call. No raw item slot
+    survives the container lock. 0 means fallback (shaded children may stay
+    gray); positive means work for one short, fully visited list. This entry
+    neither blackens the owner nor retires its gray credit.
+    """
+    if (
+        ptr_is_null(owner_slot) != 0 or epoch <= 0
+        or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2
+        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+        or load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0
+        or pcc_py_gc_minor_graph_lock_depth() != 0
+    ):
+        return 0
+    obj = load_ptr(owner_slot, 0)
+    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
+        return 0
+    if load_i32(obj, abi_constant("object.header.type_tag_offset")) != abi_constant("object.type.list"):
+        return 0
+    result: i64 = 0
+    pcc_container_lock(obj)
+    if (
+        atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+        and atomic_load_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire") == epoch
+    ):
+        length: i64 = load_i64(obj, abi_constant("object.list.length_offset"))
+        if length >= 0 and length <= _GC2_REVIEW_LIST_LIMIT:
+            state = stack_alloc(16)
+            failed = stack_alloc(8)
+            store_i64(failed, 0, 0)
+            handled: i64 = pcc_gc_visit_object_slots_slice(
+                obj, 0, _GC2_REVIEW_LIST_LIMIT, _gc2_short_list_slot, failed, state
+            )
+            if (
+                handled != 0 and load_i64(failed, 0) == 0
+                and load_i64(state, 0) == -1 and load_i64(state, 8) == length
+            ):
+                result = 1 if length == 0 else length
+    pcc_container_unlock(obj)
+    return result
 
 
 @c_abi_export("pcc_gc_trace_referents_work")

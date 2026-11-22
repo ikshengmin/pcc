@@ -3206,6 +3206,7 @@ def _cross_object_signatures_part_12():
     "pcc_gc_deferred_free_worker_drain": (("c_int64",), "c_int64"),
     "pcc_gc_deferred_free_drain_raw_chain": (("c_ptr", "c_int64", "c_int64"), "c_void"),
     "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
+    "pcc_gc_trace_gc2_rooted_short_list": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc_gray_worklist_note": (("c_ptr",), "c_void"),
     "pcc_gc_gray_worklist_flush": ((), "c_void"),
     "pcc_gc_gray_worklist_take_locked": ((), "c_ptr"),
