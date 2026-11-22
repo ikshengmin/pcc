@@ -384,6 +384,7 @@ class Function:
     pack_sites: list = field(default_factory=list)
     variadic_alloc_sites: int = 0
     variadic_frame_bytes: int = 0
+    declaration_only: bool = False
 
 
 @dataclass
@@ -814,8 +815,13 @@ class GoParser:
         if receiver is not None:
             receiver = (receiver[0] or blank, receiver[1])
         result, result_names = self.function_results()
-        return Function(name, params, result, self.block(), result_names=result_names,
-                        receiver=receiver, type_parameters=type_parameters, variadic=variadic)
+        declaration_only = self.at(";")
+        if declaration_only and type_parameters:
+            self.fail(name, "generic function declaration requires a body")
+        body = [] if declaration_only else self.block()
+        return Function(name, params, result, body, result_names=result_names,
+                        receiver=receiver, type_parameters=type_parameters,
+                        variadic=variadic, declaration_only=declaration_only)
 
     def type_parameter_list(self):
         parameters = []

@@ -33,6 +33,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.goroutines': 'go.capability.goroutines',
     'go.unsupported.channel-storage': 'go.capability.channel-storage',
     'go.unsupported.select': 'go.capability.select',
+    'go.unsupported.external-function-owner': 'go.capability.external-function-owner',
     'go.unsupported.function-values': 'go.capability.function-values',
     'go.unsupported.owned-runtime-surface': 'go.capability.owned-runtime-surface',
     'go.unsupported.method-values': 'go.capability.method-values',

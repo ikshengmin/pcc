@@ -288,3 +288,11 @@ the bodyless declaration of the runtime-owned `sigpipe`. Scoped
 evidence: 116 checks, an unchanged named-value native differential,
 and official Go's valid embedded-pointer and invalid interface/pointer
 cases. No Go pointer-bearing record was executed by PCC.
+
+Bodyless declarations now preserve their signature separately from a
+real empty definition and reject before IR without a native owner.
+The exact bound `os` source parses past `func sigpipe()` and stops at
+the qualified embedding `sync.Mutex` in `os/getwd.go:14:2`. The scoped
+suite passed 208 checks. Official Go linked and ran the same form with
+an explicit assembly body and rejected a bodyless generic function.
+PCC did not invoke either the assembly implementation or a host shim.

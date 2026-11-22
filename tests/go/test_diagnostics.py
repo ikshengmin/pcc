@@ -91,6 +91,7 @@ CASES = [
     ('goroutines', original('func f(){}', 'go f()')),
     ('channel-storage', original(body='_ = make(chan bool)')),
     ('select', original(body='select {}')),
+    ('external-function-owner', original('func External()')),
 ]
 
 

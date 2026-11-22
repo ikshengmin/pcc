@@ -581,6 +581,9 @@ class Analyzer:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
         for function in self.program.functions:
+            if function.declaration_only:
+                raise UnsupportedGo(function.token, 'go.unsupported.external-function-owner',
+                                    "bodyless function requires an owned implementation and ABI binding")
             if function.receiver is not None:
                 token, raw = function.receiver
                 receiver_base = raw.element if isinstance(raw, PointerSyntax) else raw
