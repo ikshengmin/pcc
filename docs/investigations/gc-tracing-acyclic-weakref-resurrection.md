@@ -438,3 +438,27 @@ PCC_RUNTIME_ARCHIVE=/absolute/path/to/libpy_runtime_pcc_py.a \
     --stdout "$out/results.txt" --stderr "$out/errors.txt" \
     -- uv run python tests/python/measure_gc_acyclic_layers_scale.py "$out"
 ```
+
+### Root extent and explicit-pin follow-up
+
+The allocator-verified extent hull rejects an empty conservative root
+cut before testing each candidate extent. A candidate reached from current
+roots retires its sweep flag during the gray-queue drain, not in a second
+candidate-wide scan. Verify two independent guards: an unaligned raw
+interior pointer written into the suspended caller must still rescue its
+owner, and a newly pinned candidate must keep its owned descendants.
+The second case was red on the prior review runtime for both GC1 and GC3:
+the pinned owner survived but its child ran its finalizer. The old general
+sweep-candidate predicate excluded pins before the root check. Both cases
+pass in the new native candidate.
+
+Seven alternating native A/B pairs per combination on Linux compared the
+same sealed chain fixture and its original review runtime to this change.
+At 64 candidates, zero unrelated live lists, GC1 median paired time fell
+by 39% (7/7 faster), GC3 by 18% (5/7 faster); with 16,384 live lists the
+reductions were 47% (6/7) and 37% (7/7). Runs used the same exact candidate
+counts and still entered one callback window per candidate, with no full
+recheck. These are narrow native screens, not the required five-pair
+`pcc_perf` gate. Four-candidate GC3 was not a clear win. The explicit-pin
+check still visits the bounded vector at each callback stop and the
+linear-scale gate remains open.

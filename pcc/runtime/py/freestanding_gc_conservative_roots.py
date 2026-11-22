@@ -15,6 +15,7 @@ from pcc.unsafe import (
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
+    int_to_ptr,
     load_i32,
     load_i64,
     load_ptr,
@@ -563,6 +564,14 @@ def pcc_gc_callback_singleton_conservative_root(node, context) -> i64:
             rooted = _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16))
             span = load_ptr(span, 40)
     return rooted
+
+
+@c_abi_export("pcc_gc_callback_cut_may_hit")
+def pcc_gc_callback_cut_may_hit(context, low: i64, high: i64) -> i64:
+    if low <= 0 or high <= low:
+        return 1
+    return _extent_has_word(load_ptr(context, _WORDS_DATA), load_i64(context, _WORDS_COUNT),
+                            int_to_ptr(low), high - low)
 
 
 @c_abi_export("pcc_gc_callback_root_cut_release")

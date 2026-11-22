@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -81,6 +81,8 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "mixed-rescue": "a-del a-weak b-live\n",
         "late-new": "a-del a-weak b-del b-new b-weak b-dead\n",
         "worker": "a-del a-weak b-del b-weak b-dead\n",
+        "pin": "a-del a-weak b-live\n",
+        "interior": "a-del a-weak b-live\n",
     }[arm]
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,

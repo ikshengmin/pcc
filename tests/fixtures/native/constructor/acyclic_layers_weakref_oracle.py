@@ -9,7 +9,7 @@ holder = []
 late_refs = []
 late_new = sys.argv[1] == "late-new"
 indirect = sys.argv[1] == 'holder'
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue")
+rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior")
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
@@ -41,7 +41,7 @@ class Tail:
 
 b = B()
 a = A()
-if sys.argv[1] == "mixed-tail":
+if sys.argv[1] in ("mixed-tail", "pin"):
     b.tail = Tail()
 if mixed:
     b.child = b

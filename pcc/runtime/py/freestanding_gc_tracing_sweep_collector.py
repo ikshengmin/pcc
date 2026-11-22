@@ -1131,6 +1131,11 @@ pcc_gc_callback_layers_range = extern(
     "pcc_gc_callback_layers_range", (c_ptr, c_int64), c_int64
 )
 pcc_gc_callback_layers_node = extern("pcc_gc_callback_layers_node", (c_ptr, c_int64), c_ptr)
+pcc_gc_callback_layers_hull_low = extern("pcc_gc_callback_layers_hull_low", (c_ptr,), c_int64)
+pcc_gc_callback_layers_hull_high = extern("pcc_gc_callback_layers_hull_high", (c_ptr,), c_int64)
+pcc_gc_callback_cut_may_hit = extern(
+    "pcc_gc_callback_cut_may_hit", (c_ptr, c_int64, c_int64), c_int64
+)
 py_weakref_layer_snapshot_create = extern(
     "py_weakref_layer_snapshot_create", (c_ptr, c_int64), c_ptr
 )
@@ -1165,7 +1170,7 @@ def _review_layer_finalizer(node, window) -> i64:
 
 
 @c_abi_export("pcc_gc_review_collect_layer_roots")
-def _review_collect_layer_roots(nodes, count: i64, cut) -> i64:
+def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
     # Peel off the write-barrier evidence before looking at actual roots.
     # It can contain a transient store or publication into an old owner.
     # A sealed vector of at most 64 candidates lets us keep an unmanaged bit
@@ -1198,13 +1203,19 @@ def _review_collect_layer_roots(nodes, count: i64, cut) -> i64:
             pos += 1
         pcc_gc_gray_worklist_clear_stopped()
         pcc_gc_gray_count_store_release(0)
+    raw_possible: i64 = pcc_gc_callback_cut_may_hit(
+        cut, pcc_gc_callback_layers_hull_low(plan), pcc_gc_callback_layers_hull_high(plan),
+    )
     pos = 0
     while pos < count:
         node = load_ptr(nodes, pos * 8)
         obj = load_ptr(node, 0)
-        if pcc_gc_tracing_is_sweep_candidate(obj) != 0:
+        # The ordinary candidate predicate excludes pins. Here a newly
+        # pinned candidate is itself a root, and its children must survive.
+        if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
             if (pcc_gc_object_node_is_address_pinned(node, obj) != 0
-                    or pcc_gc_callback_singleton_conservative_root(node, cut) != 0):
+                    or (raw_possible != 0
+                        and pcc_gc_callback_singleton_conservative_root(node, cut) != 0)):
                 pcc_gc_mark_root_gray_if_known(obj)
         pos += 1
     pcc_gc_gray_registered_roots()
@@ -1216,34 +1227,31 @@ def _review_collect_layer_roots(nodes, count: i64, cut) -> i64:
         if (load_i32(obj, abi_constant("object.header.flags_offset")) & _CALLBACK_GRAY) != 0:
             pcc_gc_trace_referents(obj)
             pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
+            # This closure came from actual current roots, not write-barrier
+            # evidence. Retire the candidate bit as we drain the queue.
+            flags: i64 = load_i32(obj, offset)
+            store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
             pcc_gc_gray_count_decrement_acq_rel()
     if suspected != 0:
         pos = 0
         while pos < count:
             if (suspected & (1 << pos)) != 0:
                 obj = load_ptr(load_ptr(nodes, pos * 8), 0)
-                if pcc_gc_object_is_white(obj, load_i32(obj, offset)) != 0:
+                if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
                     # Some observed store is not explained by current
                     # candidate/root reachability: do not lose a live edge
                     # from an old owner, or keep a cleared edge as a root.
                     return 0
             pos += 1
-    pos = 0
-    while pos < count:
-        obj = load_ptr(load_ptr(nodes, pos * 8), 0)
-        flags: i64 = load_i32(obj, offset)
-        if (flags & _CALLBACK_SWEEP_CANDIDATE) != 0 and pcc_gc_object_is_white(obj, flags) == 0:
-            store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
-        pos += 1
     pcc_gc_gray_worklist_clear_stopped()
     return 1
 
 
 @c_abi_export("pcc_gc_review_remark_layer_at_stop")
-def _review_remark_layer_at_stop(nodes, count: i64, caller) -> None:
+def _review_remark_layer_at_stop(plan, nodes, count: i64, caller) -> None:
     cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
     pcc_gc_conservative_capture_callback_words(cut, caller)
-    precise: i64 = _review_collect_layer_roots(nodes, count, cut)
+    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut)
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     if precise == 0:
         _recheck_reachability_after_window(cut)
@@ -1325,7 +1333,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             # A sibling may revive another sibling even through raw C roots
             # that do not shade. Settle that window before dispatching again.
             if _review_layer_finalizer(node, window) != 0:
-                _review_remark_layer_at_stop(nodes, count, caller)
+                _review_remark_layer_at_stop(plan, nodes, count, caller)
             pos += 1
         store_ptr(pending, 0, null())
         store_ptr(pending, 8, null())
@@ -1337,7 +1345,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             _user_code_window_open(window)
             py_weakref_run_queued_callbacks(pending, 0)
             _user_code_window_close(window)
-            _review_remark_layer_at_stop(nodes, count, caller)
+            _review_remark_layer_at_stop(plan, nodes, count, caller)
         layer += 1
     py_weakref_layer_snapshot_release(weak_snapshot)
     peeled: i64 = pcc_gc_callback_layers_range(plan, layers)

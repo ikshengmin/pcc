@@ -50,7 +50,11 @@ _PLAN_LAYER_COUNT = 72
 _PLAN_PEELED = 80
 _PLAN_OWNER = 88
 _PLAN_INVALID = 96
-_PLAN_BYTES = 104
+_PLAN_HULL_LOW = 104
+_PLAN_HULL_HIGH = 112
+_PLAN_BYTES = 120
+_NODE_OBJECT_BYTES = 8
+_NODE_OWNER_SPANS = 48
 
 _SLICE_NEXT = 0
 _SLICE_EXAMINED = 8
@@ -161,6 +165,9 @@ def pcc_gc_callback_layers_build(nodes, count: i64, stop_epoch: i64):
     memset(vertices, 0, count * _VERTEX_BYTES)
     mask: i64 = capacity - 1
     store_i64(plan, _PLAN_MASK, mask)
+    hull_low: i64 = 9223372036854775807
+    hull_high: i64 = 0
+    fixed_extents: i64 = 1
     i: i64 = 0
     while i < count:
         node = load_ptr(nodes, i * _WORD)
@@ -175,7 +182,22 @@ def pcc_gc_callback_layers_build(nodes, count: i64, stop_epoch: i64):
             return null()
         store_ptr(keys, key_slot + _ENTRY_KEY, obj)
         store_i64(keys, key_slot + _ENTRY_ID, i)
+        # GC1/3 do not register GC4 backing spans. Decline this cheap
+        # rejection if a candidate has any separate owner metadata.
+        size: i64 = load_i64(node, _NODE_OBJECT_BYTES)
+        base: i64 = ptr_to_int(obj)
+        if (ptr_is_null(load_ptr(node, _NODE_OWNER_SPANS)) == 0
+                or base <= 0 or size <= 0 or size > 9223372036854775807 - base):
+            fixed_extents = 0
+        elif fixed_extents != 0:
+            if base < hull_low:
+                hull_low = base
+            if base + size > hull_high:
+                hull_high = base + size
         i += 1
+    if fixed_extents != 0:
+        store_i64(plan, _PLAN_HULL_LOW, hull_low)
+        store_i64(plan, _PLAN_HULL_HIGH, hull_high)
     i = 0
     progress = stack_alloc(_SLICE_BYTES)
     while i < count:
@@ -264,3 +286,13 @@ def pcc_gc_callback_layers_layer_of(plan, target) -> i64:
 @c_abi_export("pcc_gc_callback_layers_contains")
 def pcc_gc_callback_layers_contains(plan, target, layer: i64) -> i64:
     return 1 if pcc_gc_callback_layers_layer_of(plan, target) == layer else 0
+
+
+@c_abi_export("pcc_gc_callback_layers_hull_low")
+def pcc_gc_callback_layers_hull_low(plan) -> i64:
+    return load_i64(plan, _PLAN_HULL_LOW)
+
+
+@c_abi_export("pcc_gc_callback_layers_hull_high")
+def pcc_gc_callback_layers_hull_high(plan) -> i64:
+    return load_i64(plan, _PLAN_HULL_HIGH)

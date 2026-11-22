@@ -49,6 +49,8 @@ static PyObject *finish_a(PyObject *self) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
         if (!target || target == py_None) error = 6;
         else if (rescue == 2) *caller_hold = target;
+        else if (rescue == 5) *caller_hold = (PyObject *)((char *)target + 1);
+        else if (rescue == 4) pcc_gc_pin(target);
         else if (rescue == 3) py_list_append(roots[HOLD], target);
         else {
             pcc_gc_store_root(&roots[HOLD], target);
@@ -84,7 +86,8 @@ static void *seal_on_departing_thread(void *unused) {
     const char *fields[] = {"child", "tail"};
     if (pcc_current_thread_id() <= 0) { error = 8; return NULL; }
     PyClassObject *a_cls = py_class_new("LayerA", NULL, 0, fields, 1);
-    PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, mixed == 2 ? 2 : 1);
+    int want_tail = mixed == 2 || rescue == 4;
+    PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, want_tail ? 2 : 1);
     if (!a_cls || !b_cls) { error = 9; return NULL; }
     pcc_gc_store_root(&roots[CLASS_A], (PyObject *)a_cls);
     pcc_gc_store_root(&roots[CLASS_B], (PyObject *)b_cls);
@@ -104,7 +107,7 @@ static void *seal_on_departing_thread(void *unused) {
         __atomic_fetch_and(&py_header(holder)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
     }
     PyObject *tail = NULL;
-    if (mixed == 2) {
+    if (want_tail) {
         PyClassObject *tail_cls = py_class_new("LayerTail", NULL, 0, NULL, 0);
         if (!tail_cls) { error = 15; return NULL; }
         pcc_gc_store_root(&roots[CLASS_TAIL], (PyObject *)tail_cls);
@@ -133,7 +136,7 @@ static void *seal_on_departing_thread(void *unused) {
     pcc_gc_unpin(b);
     pcc_py_gc_minor_graph_lock();
     PyObject *items[] = {a, b, tail};
-    for (int i = 0; i < (mixed == 2 ? 3 : 2); ++i) {
+    for (int i = 0; i < (want_tail ? 3 : 2); ++i) {
         PyObject *obj = items[i];
         int index = rescue || i >= 2 ? i : 1-i;
         nodes[index] = pcc_gc_object_index_find(obj);
@@ -163,6 +166,8 @@ int main(int argc, char **argv) {
     finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
+    if (argc > 1 && strcmp(argv[1], "pin") == 0) rescue = 4;
+    if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
     if (argc > 1 && strcmp(argv[1], "mixed-tail") == 0) mixed = 2;
@@ -188,7 +193,7 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_candidates_reset();
     pcc_gc_tracing_candidates_note(nodes[0]);
     pcc_gc_tracing_candidates_note(nodes[1]);
-    if (mixed == 2) pcc_gc_tracing_candidates_note(nodes[2]);
+    if (mixed == 2 || rescue == 4) pcc_gc_tracing_candidates_note(nodes[2]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
@@ -196,7 +201,7 @@ int main(int argc, char **argv) {
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
-    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 ? 3 : 2);
+    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 ? 3 : 2);
     int64_t scans = pcc_gc_metric_layer_weak_registry_scans - scans_start;
     int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;
@@ -217,6 +222,7 @@ int main(int argc, char **argv) {
     }
     PyObject *b = py_weakref_call(roots[WEAK_B]);
     if (rescue == 2 && (raw != b || raw == py_None || raw == NULL)) error = 13;
+    if (rescue == 5 && (!b || b == py_None || raw != (PyObject *)((char *)b + 1))) error = 19;
     note(b == py_None ? 5 : 6);
     const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del", "b-new"};
     for (int i = 0; i < event_count; ++i)
