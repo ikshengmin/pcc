@@ -232,6 +232,14 @@ in the relevant section or issue and removes the entry.
    candidate can finalize. Linux passed 71 focused plus six native
    generator checks. No-observer and finalizer-only fixtures prove the
    selected path, not the zero-overhead performance gate.
+   [Review commit b708d89](https://github.com/ikshengmin/pcc/commit/b708d891bf83ed395081251b8b3d1e280af08fc2)
+   walks the weakref registry once for a stable multi-layer sweep with one
+   registered mutator at the initial stop. A link mutation invalidates the
+   borrowed snapshot; a mutator already registered at entry keeps the
+   per-layer scan. Linux: 75 focused plus 53 weakref regression checks,
+   including native insertion in a callback and pre-existing worker
+   fallback. One initial registry walk remains; no unrelated-size or
+   general multi-mutator performance claim.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -288,8 +296,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Bound repeated weakref walks in layered issue 9 sweeps: Codex, Linux x86-64, 2026-11-22 17:32 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
