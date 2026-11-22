@@ -307,8 +307,9 @@ in the relevant section or issue and removes the entry.
    owned PCC-emitted C child. Fourteen transport/protocol checks passed.
    The actual stripped ELF's sampled PCs now map through file-backed
    executable ranges; unknown PCs stay unattributed (25 focused checks).
-   Next tie capture and address mapping to the same sealed file identity
-   before examining refcount instruction sites. The native GC1 scheduling baseline verifies
+   Capture and address mapping now share an opened, SHA-verified ELF,
+   even if the pathname changes (26 focused checks). Next check explicit
+   kernel loss and event run counters before attributing the stream. The native GC1 scheduling baseline verifies
    one CMS startup on each GC1–4 and none on GC0, with a rooted object
    surviving two explicit collections. A separate native GC1 workload
    reached an automatic mark commit and sweep without explicit collection
@@ -429,7 +430,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC0 Linux sealed executable identity around sample capture: Codex, Linux x86-64, 2026-11-22 11:11 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

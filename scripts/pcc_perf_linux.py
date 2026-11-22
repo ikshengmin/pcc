@@ -8,10 +8,12 @@ from __future__ import annotations
 
 import ctypes
 import fcntl
+import hashlib
 import mmap
 import os
 import platform
 import selectors
+import stat
 import struct
 import subprocess
 import sys
@@ -54,6 +56,7 @@ ELF_PT_LOAD = 1
 ELF_PT_DYNAMIC = 2
 ELF_PT_INTERP = 3
 ELF_PF_X = 1
+MAX_SEALED_ELF_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -257,7 +260,7 @@ def _verify_marker_eof(pipe) -> None:
         raise ValueError("owned child left an output pipe open") from exc
 
 
-def capture_cooperative_child(argv, *, env: dict) -> list[TaskSample]:
+def capture_cooperative_child(argv, *, env: dict, _pass_fds=()) -> list[TaskSample]:
     """Sample the directly spawned, single-task helper between READY and DONE.
 
     Internal test/benchmark transport, for an owned executable with the
@@ -267,7 +270,7 @@ def capture_cooperative_child(argv, *, env: dict) -> list[TaskSample]:
         raise OSError("child task-clock capture requires Linux")
     with subprocess.Popen(argv, env=env, stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          bufsize=0) as child:
+                          bufsize=0, pass_fds=_pass_fds) as child:
         try:
             _receive_marker(child.stdout, b"READY\n", 3)
             if child.poll() is not None:
@@ -288,3 +291,45 @@ def capture_cooperative_child(argv, *, env: dict) -> list[TaskSample]:
                 child.wait(timeout=3)
     _verify_task(samples, child.pid, child.pid)
     return samples
+
+
+
+@dataclass(frozen=True)
+class SealedSample:
+    sample: TaskSample
+    file_offset: int | None
+
+
+def capture_sealed_cooperative_child(binary, expected_sha256: str, *, env: dict) -> list[SealedSample]:
+    """Tie the spawned image and its mapped sampled PCs to one open file."""
+    if sys.platform != "linux":
+        raise OSError("sealed task-clock capture requires Linux")
+    fd = os.open(binary, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW | os.O_NONBLOCK)
+    with os.fdopen(fd, "rb") as stream:
+        metadata = os.fstat(fd)
+        if (not stat.S_ISREG(metadata.st_mode) or not 0 < metadata.st_size <= MAX_SEALED_ELF_BYTES
+                or metadata.st_mode & (stat.S_ISUID | stat.S_ISGID)):
+            raise ValueError("sealed capture needs a bounded unprivileged regular ELF file")
+        data = stream.read(metadata.st_size + 1)
+        if len(data) != metadata.st_size or hashlib.sha256(data).hexdigest() != expected_sha256:
+            raise ValueError("sealed executable has a different SHA-256")
+        image = read_executable_image(data)
+        if image.machine != ELF_MACHINES.get(platform.machine()):
+            raise ValueError("sealed executable is not for the local instruction set")
+        # Do not resolve the path again at exec time. Keep the original inode
+        # open in the cooperative child, and recheck the bytes after capture.
+        samples = capture_cooperative_child(
+            [f"/proc/self/fd/{fd}"], env=env, _pass_fds=(fd,),
+        )
+        stream.seek(0)
+        remaining = metadata.st_size
+        digest = hashlib.sha256()
+        while remaining:
+            chunk = stream.read(min(remaining, 1 << 20))
+            if not chunk:
+                break
+            digest.update(chunk)
+            remaining -= len(chunk)
+        if remaining or stream.read(1) or digest.hexdigest() != expected_sha256:
+            raise ValueError("sealed executable changed during capture")
+    return [SealedSample(sample, image.file_offset(sample.ip)) for sample in samples]

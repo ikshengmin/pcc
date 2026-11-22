@@ -65,3 +65,13 @@ PCs have no attribution. Twenty-five focused checks passed, including
 kernel samples from the actual owned ELF and malformed-image controls.
 Next bind acquisition to the bytes of the selected sealed executable;
 instruction/GC boundary classification remains a later measurement.
+
+A cooperative sealed capture now hashes one open, regular unprivileged
+ELF, executes that descriptor, maps PCs using its bytes, and verifies
+the descriptor contents again afterward. A path replacement does not
+change the opened executable; an initially different hash or a content
+change during capture fails. Tests executed the actual compiled ELF
+both normally and after replacing its original path, and checked a
+drifted file with a negative control. All 26 focused nodes passed.
+Next obtain explicit kernel loss and scheduling counters for the same
+sample stream. No atomic classification or workload share is claimed.

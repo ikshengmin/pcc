@@ -1,4 +1,5 @@
 """Deterministic Linux UAPI ring controls for pcc_perf's preflight."""
+import hashlib
 import importlib.util
 import os
 import struct
@@ -90,7 +91,7 @@ def test_child_protocol_refuses_a_persistently_open_output_pipe():
 
 
 @pytest.mark.integration
-def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_runtime):
+def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_runtime, monkeypatch):
     from tests.owned_c_execution import compile_owned_c_with_runtime
 
     if sys.platform != "linux":
@@ -111,6 +112,23 @@ def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_run
     offsets = [image.file_offset(sample.ip) for sample in samples]
     assert any(offset is not None and offset < len(blob) for offset in offsets)
     assert image.file_offset(0) is None
+
+    expected = hashlib.sha256(blob).hexdigest()
+    resolved = RING.capture_sealed_cooperative_child(binary, expected, env={"PATH": "/nonexistent"})
+    assert any(sample.file_offset is not None for sample in resolved)
+    assert sum(sample.sample.period_ns for sample in resolved) > 0
+    original_capture = RING.capture_cooperative_child
+
+    def move_original_after_open(argv, **kwargs):
+        binary.rename(binary.with_suffix(".original"))
+        binary.write_bytes(b"another file at the original pathname")
+        return original_capture(argv, **kwargs)
+
+    monkeypatch.setattr(RING, "capture_cooperative_child", move_original_after_open)
+    resolved = RING.capture_sealed_cooperative_child(binary, expected, env={"PATH": "/nonexistent"})
+    assert any(sample.file_offset is not None for sample in resolved)
+    with pytest.raises(ValueError, match="different SHA-256"):
+        RING.capture_sealed_cooperative_child(binary, expected, env={"PATH": "/nonexistent"})
 
 
 def _elf(*segments, kind=2, machine=62, entry=0x400080):
@@ -150,3 +168,27 @@ def test_elf_pc_mapping_excludes_memory_tail_gaps_and_non_executable_data():
 def test_elf_pc_mapping_fails_closed(data, reason):
     with pytest.raises(ValueError, match=reason):
         RING.read_executable_image(data)
+
+
+def test_sealed_capture_rejects_in_place_content_drift(tmp_path, monkeypatch):
+    if sys.platform != "linux":
+        return
+    binary = tmp_path / "path"
+    expected_machine = RING.ELF_MACHINES.get(RING.platform.machine())
+    if expected_machine is None:
+        # On a different Linux architecture ELF parsing fails earlier.
+        expected_machine = RING.ELF_MACHINES["x86_64"]
+        monkeypatch.setattr(RING.platform, "machine", lambda: "x86_64")
+    original = _elf(_EXE_LOAD, machine=expected_machine)
+    binary.write_bytes(original)
+    digest = hashlib.sha256(original).hexdigest()
+
+    def mutate(_, **kwargs):
+        # Use a stand-in for the completed successful child; the post-run
+        # guard must reread the file rather than trusting the initial bytes.
+        binary.write_bytes(original[:-1] + b"X")
+        return [RING.TaskSample(0x400080, 7, 7, 500_000)]
+
+    monkeypatch.setattr(RING, "capture_cooperative_child", mutate)
+    with pytest.raises(ValueError, match="changed during capture"):
+        RING.capture_sealed_cooperative_child(binary, digest, env={})
