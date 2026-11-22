@@ -369,3 +369,23 @@ The separate native scan-budget case `[3-0]` failed at its
 `unexpected_head` fixture check, before the scan. Its code, fixture and
 runtime are unchanged by this round. Do not count it as a passing control
 or as evidence about the new indexed-allocation test.
+
+## Private dictionary items publication during active major mark
+
+The Linux pcc0 owned fixture calls the real native private items builder
+directly and asserts fast status 1, rather than allowing the public
+adapter to hide a fallback. A source dictionary whose key and value are
+white is observed under the fixture-held active mark. The returned
+list and its private tuple are distinct indexed black allocations with
+page marks. The tuple's original key and value are gray with page marks;
+an unrelated white object remains white. Diagnostic exclusion of the
+fast path returns 0 with no output or child shading before the same
+input is accepted with diagnostics disabled. This is an early gate
+control, not a simulation of failure after a partial tuple store.
+
+Reproduce using a source-matched threaded runtime archive and Linux pcc0:
+`PCC_RUNTIME_ARCHIVE=<archive> uv run pytest -m integration
+tests/python/test_gc3_indexed_allocation_native.py` (five native controls).
+This fixes the boundary for a future owner-aware publication hook.
+It does not run a nursery, a minor or Darwin, and changes no runtime
+dispatch. The private sorted-list writer is separate.

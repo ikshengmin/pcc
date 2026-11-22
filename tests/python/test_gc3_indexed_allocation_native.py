@@ -60,3 +60,11 @@ def test_gc3_distinguishes_managed_heap_store_from_registered_root(tmp_path, ind
     assert (result["returncode"], result["stdout"], result["stderr"]) == (
         0, "GC3_MANAGED_AND_ROOT_STORES_OK\n", "",
     ), result
+
+
+@pytest.mark.integration
+def test_gc3_private_dictionary_materialization_during_active_mark(tmp_path, indexed_allocation_binary):
+    result = _execute_gc3(tmp_path, indexed_allocation_binary, "materialize")
+    assert (result["returncode"], result["stdout"], result["stderr"]) == (
+        0, "GC3_DICT_PRIVATE_MATERIALIZATION_OK\n", "",
+    ), result

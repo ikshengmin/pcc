@@ -279,6 +279,9 @@ in the relevant section or issue and removes the entry.
    control at an artificially held active-mark boundary checked index,
    bitmap, and both list append paths. A second Linux native control
    checked dictionary insertion/replacement and the value-only initializer.
+   The native private dict-items builder now confirms indexed black list and
+   tuple results, both child identities, and no output on fast-path refusal.
+   Next writer witness: private sorted-list publication under active mark.
    The dictionary transaction witness identifies the commit point after both
    slots succeed; rollback publishes no edge. Linux native GC3 also
    exercised the raw generator frame's set, replace and clear. Native heap
@@ -449,7 +452,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 private dictionary materialization native publication witness: Codex, Linux x86-64, 2026-11-22 11:48 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

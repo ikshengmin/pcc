@@ -93,6 +93,60 @@ static int check_generator_frame_store(void) {
     return 0;
 }
 
+/* Call the actual fast helper and check its status: the public dict
+ * adapter hides a fast-path refusal by running the rooted slow path. */
+extern int64_t user_py_dict__dict_gc0_materialize(PyObject *, int64_t, PyObject **);
+extern int32_t pcc_diagnostics_runtime_log_fast_state;
+
+enum { DICT_MATERIALIZE_ITEMS = 2 };
+
+static int check_dictionary_private_materialization(void) {
+    PyObject *dict = py_dict_new_presized(8);
+    PyObject *key = py_str_new("gc3-materialize-key", sizeof("gc3-materialize-key") - 1);
+    PyObject *value = py_list_new(0);
+    PyObject *control = py_list_new(0);
+    if (!dict || !key || !value || !control)
+        return fail("dictionary materialization input");
+    py_dict_set(dict, key, value);
+
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_set_mark_color(dict, PY_FLAG_GC_BLACK);
+    pcc_gc_set_mark_color(key, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(value, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(control, PY_FLAG_GC_WHITE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+
+    PyObject *out = NULL;
+    __atomic_store_n(&pcc_diagnostics_runtime_log_fast_state, 1, __ATOMIC_RELEASE);
+    int64_t refused = user_py_dict__dict_gc0_materialize(dict, DICT_MATERIALIZE_ITEMS, &out);
+    __atomic_store_n(&pcc_diagnostics_runtime_log_fast_state, 0, __ATOMIC_RELEASE);
+    if (refused || out || color(key) != PY_FLAG_GC_WHITE || color(value) != PY_FLAG_GC_WHITE)
+        return fail("refused materialization changed output or colors");
+
+    int64_t accepted = user_py_dict__dict_gc0_materialize(dict, DICT_MATERIALIZE_ITEMS, &out);
+    if (accepted != 1 || !out || color(out) != PY_FLAG_GC_BLACK
+        || !pcc_gc_object_index_find(out) || pcc_gc_page_mark_test(out) != 1)
+        return fail("published list is not indexed black");
+    PyListObject *published = (PyListObject *)out;
+    if (published->length != 1 || !published->items || !published->items[0])
+        return fail("one committed pair");
+    PyObject *pair = published->items[0];
+    if (color(pair) != PY_FLAG_GC_BLACK || !pcc_gc_object_index_find(pair)
+        || pcc_gc_page_mark_test(pair) != 1)
+        return fail("published tuple is not indexed black");
+    if (color(key) != PY_FLAG_GC_GRAY || color(value) != PY_FLAG_GC_GRAY
+        || pcc_gc_page_mark_test(key) != 1 || pcc_gc_page_mark_test(value) != 1)
+        return fail("published tuple children not shaded");
+    if (py_tuple_getitem(pair, 0) != key || py_tuple_getitem(pair, 1) != value
+        || color(control) != PY_FLAG_GC_WHITE || pcc_gc_page_mark_test(control) != 0)
+        return fail("tuple identity or independent white control");
+
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC3_DICT_PRIVATE_MATERIALIZATION_OK");
+    return 0;
+}
+
 static PyObject *registered_root;
 
 static int check_managed_and_root_stores(void) {
@@ -135,6 +189,7 @@ int main(int argc, char **argv) {
     if (pcc_gc_backend() != 3) return fail("backend");
     py_gc_disable();
     if (argc == 2 && argv[1][0] == 'd') return check_dictionary_first_store();
+    if (argc == 2 && argv[1][0] == 'm') return check_dictionary_private_materialization();
     if (argc == 2 && argv[1][0] == 'g') return check_generator_frame_store();
     if (argc == 2 && argv[1][0] == 's') return check_managed_and_root_stores();
     if (argc != 1) return fail("mode");
