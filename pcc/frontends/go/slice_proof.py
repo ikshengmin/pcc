@@ -30,8 +30,10 @@ class ByteSpanCallerProof:
     views: int
     string_copies: int
     local: str
+    capacity: int
     allocation: object = field(repr=False, compare=False)
     append_calls: tuple = field(repr=False, compare=False)
+    copy_returns: tuple = field(repr=False, compare=False)
 
 
 def _name(expr, value):
@@ -212,7 +214,8 @@ def byte_span_caller_proof(program, function_name, local, extent):
             closed = True
     if allocation is None:
         return None
-    views, copies = 0, 0
+    views = 0
+    copy_returns = []
     for stmt in walk(fn.body):
         if stmt is allocation or id(stmt) in append_steps:
             continue
@@ -230,7 +233,7 @@ def byte_span_caller_proof(program, function_name, local, extent):
         if stmt.kind == "return" and len(stmt.exprs) == 1:
             value = stmt.exprs[0]
             if _builtin_call(value, "string") and len(value.args) == 1 and _name(value.args[0], local):
-                copies += 1
+                copy_returns.append(value)
                 continue
         if stmt.kind == "range" and len(stmt.exprs) == 1 and _name(stmt.exprs[0], local):
             if not all(_scalar_reads_only(target, local) for target in stmt.targets):
@@ -238,8 +241,8 @@ def byte_span_caller_proof(program, function_name, local, extent):
             continue
         if not all(_scalar_reads_only(expr, local) for expr in stmt.exprs + stmt.targets):
             return None
-    return ByteSpanCallerProof(tuple(lengths), views, copies, local,
-                               allocation.exprs[0], tuple(append_calls))
+    return ByteSpanCallerProof(tuple(lengths), views, len(copy_returns), local, extent.capacity,
+                               allocation.exprs[0], tuple(append_calls), tuple(copy_returns))
 
 
 def bounded_byte_caller_from_source(program, request):

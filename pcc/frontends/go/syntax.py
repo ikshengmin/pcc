@@ -346,6 +346,7 @@ class Expr:
     variadic_mode: str | None = None
     pack_count: int = 0
     catalog_pointees: tuple = ()
+    bounded_string_result: object = None
 
 
 @dataclass

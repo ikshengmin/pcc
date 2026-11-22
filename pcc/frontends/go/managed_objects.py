@@ -149,3 +149,15 @@ def static_string_plan(data):
 def managed_string_plan(owner, *, offset=None, length=None):
     """Retain a base owner; never assume derived pointers are rewritten by GC."""
     return ManagedSpanPlan('managed', owner=owner, offset=offset, length=length)
+
+@dataclass(frozen=True)
+class BoundedStringResult:
+    """A fresh runtime owner is necessary; never return the source span."""
+    maximum: int
+    destination: ManagedSpanPlan
+
+
+def bounded_stack_string_result(maximum):
+    if type(maximum) is not int or not 0 <= maximum <= MAX_BOUNDED_BYTE_OWNER:
+        raise ManagedContractError("invalid bounded stack string capacity")
+    return BoundedStringResult(maximum, managed_string_plan(byte_backing_plan(), offset=0))

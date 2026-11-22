@@ -280,3 +280,40 @@ def test_bounded_byte_owner_rejects_invalid_and_unqualified_bounds(change, error
     with pytest.raises(GoDiagnostic, match="nonnegative or representable|nonnegative|two-index"):
         analyze_source_instances({"main": instance}, main_instance="main",
                                  target_triple="x86_64-unknown-linux-gnu")
+
+
+def test_bounded_string_return_has_a_distinct_owned_result_plan():
+    from pcc.frontends.go.branches import walk
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import BoundedByteCallerRequest
+    from pcc.support.managed_objects import unmet_requirements
+
+    source = BOUND_VIEWS_SOURCE.replace('return "fixed"', 'return string(data)')
+    units = (("bytes.go", source),)
+    caller = BoundedByteCallerRequest("Name", "data")
+    instance = SourceInstance("main", units, {}, bounded_byte_callers=(caller,))
+    checked = analyze_source_instances({"main": instance}, main_instance="main",
+                                       target_triple="x86_64-unknown-linux-gnu")["main"]
+    fn = checked.functions["Name"]
+    returned = next(stmt for stmt in walk(fn.body) if stmt.kind == "return")
+    expr = returned.exprs[0]
+    assert expr.kind == "bounded_byte_string_copy" and expr.type == "string"
+    plan = expr.bounded_string_result
+    assert plan.maximum == 8
+    assert plan.destination.backing == "managed" and plan.destination.offset == 0
+    assert "rooted_lifetime" in unmet_requirements(plan.destination.owner)
+    assert expr.args[0].symbol is fn.locals[0]  # source, not the returned owner
+
+    # Capturing or materializing the byte slice invalidates the whole proof.
+    escape = source.replace("return string(data)", "alias := data; return string(alias)")
+    instance = SourceInstance("main", (("bytes.go", escape),), {}, bounded_byte_callers=(caller,))
+    with pytest.raises(UnsupportedGo, match=r"make\(slice\) requires owned"):
+        analyze_source_instances({"main": instance}, main_instance="main",
+                                 target_triple="x86_64-unknown-linux-gnu")
+
+    for use in ("_ = Name()", "_ = Name"):
+        units = (("bytes.go", source.replace("func main() {}", "func main() {" + use + "}")),)
+        instance = SourceInstance("main", units, {}, bounded_byte_callers=(caller,))
+        with pytest.raises(UnsupportedGo, match="copied string result requires an owned call boundary"):
+            analyze_source_instances({"main": instance}, main_instance="main",
+                                     target_triple="x86_64-unknown-linux-gnu")

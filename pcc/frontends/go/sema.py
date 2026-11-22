@@ -22,7 +22,9 @@ from pcc.frontends.go.interface_methods import (
 from pcc.frontends.go.interface_values import (
     boxed_interface_plan, interface_storage_plan, nil_interface_plan, transferred_interface_plan,
 )
-from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan, value_plan
+from pcc.frontends.go.managed_objects import (
+    FixedByteExtent, bounded_stack_string_result, byte_backing_plan, value_plan,
+)
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, ChannelSyntax, Expr, Function, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
@@ -2723,6 +2725,11 @@ class Analyzer:
             expr.pointer_depth, expr.pointer_nonnull = arg.pointer_depth, arg.pointer_nonnull
             return
         if is_string(target) and arg.type == SliceType("uint8") and self.bounded_byte_local(arg.token.text):
+            proof = self.function.bounded_byte_proof
+            if any(expr is returned for returned in proof.copy_returns):
+                expr.kind, expr.type = "bounded_byte_string_copy", target
+                expr.bounded_string_result = bounded_stack_string_result(proof.capacity)
+                return
             raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion',
                                 "returning bounded bytes requires an independently owned string copy")
         if is_string(target) and is_integer(arg.type):
@@ -2764,7 +2771,14 @@ class Analyzer:
                 return self.imported(base.value, expression.token).functions.get(expression.value)
         return None
 
+    def require_copied_result_boundary(self, expr, function):
+        proof = function.bounded_byte_proof
+        if proof is not None and proof.string_copies:
+            raise UnsupportedGo(expr.token, 'go.unsupported.dynamic-string-conversion',
+                                "copied string result requires an owned call boundary")
+
     def function_reference(self, expr, function):
+        self.require_copied_result_boundary(expr, function)
         sig = CallableType(tuple(t for _, t in function.params), function.result, function.variadic)
         require_callable_abi(sig, expr.token)
         expr.kind, expr.type, expr.symbol = "function_ref", sig, function
@@ -2783,6 +2797,7 @@ class Analyzer:
         expr.kind, expr.type = 'indirect_call', sig.result
 
     def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
+        self.require_copied_result_boundary(expr, function)
         if (function.scalar_slice_owner_proof is not None and
                 (not self.source_only or getattr(self.function, "scalar_slice_owner_proof", None) is None
                  or self.functions.get(function.token.text) is not function)):

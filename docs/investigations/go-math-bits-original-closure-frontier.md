@@ -784,3 +784,13 @@ over-capacity inputs reject without changing the output; zero-length
 copy does not touch the source. Eighty-nine adjacent and nine native
 tests passed. This qualifies the helper, not the original Name code or
 the ordinary Go string return ABI.
+
+The exact direct `return string(data)` now retains a distinct
+managed destination plan with its source capacity and zero-based
+result span. No ordinary caller or function reference may consume
+it before an owned-result ABI is available. The exact source probe
+gets through the unchanged CPU Name body, and stops in cache-size
+`extractBits` at `internal/cpu/datacache_x86.go:36:14`, a dynamic
+signed shift count. Eighty-five adjacent checks and four native
+byte-helper differentials passed. Original CPU and upstream test IR
+remain unemitted.
