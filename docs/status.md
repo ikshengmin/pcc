@@ -377,8 +377,14 @@ in the relevant section or issue and removes the entry.
    12 controlled interleaves and the automatic tests passed. The
    [startup selector](https://github.com/ikshengmin/pcc/blob/d658048175e19b7ea67e1a31cc45cb10bbd15c00/docs/investigations/gc2-exact-list-worker-review.md)
    now attests the optional GC2 mode: 12 Linux scope/spelling cases, 18
-   automatic cases and 8 ABI checks passed. Next bind it to sealed
-   pcc_perf identity, build attestation and per-arm A/B receipts.
+   automatic cases and 8 ABI checks passed. The
+   [sealed Mac A/B handoff](https://github.com/ikshengmin/pcc/blob/ec60c7bed4e39baf963adfb9e841d812291374d8/docs/investigations/gc2-exact-list-worker-review.md#same-input-mac-handoff-sealed-arms)
+   binds the flag to arm identity, an actual native on/off/GC0 probe and
+   matched binary hash; 82 tool tests passed. macOS verification of GC2
+   list bridge is ready (5 pairs, w1/w4, unchanged GC0, QPS/pause/RSS/p99).
+   No gateway workload or Mac was executed in Linux. While waiting on
+   performance and source review, check GC2 finalizers/weakrefs through
+   this alternate path without expanding worker count or admission.
    Master runtime and the separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -391,7 +397,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Seal GC2 exact list mode in review pcc_perf arms and A-B receipts: Codex, Linux x86-64, 2026-11-22 10:35 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
