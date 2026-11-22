@@ -3,6 +3,8 @@
 import ast
 from pathlib import Path
 
+import pytest
+
 from pcc.runtime.py import py_abi_constants as abi
 from tests.python.gc.gc3_sparse_remembered_model import Model
 
@@ -161,10 +163,11 @@ def test_gc3_raw_generator_frame_retains_owner_at_the_store_transaction():
         assert memory[items, 0] == value
 
 
-def test_gc3_generic_nonmoving_store_delegates_without_the_owner():
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+def test_only_gc3_generic_heap_store_transports_the_owner(backend):
     owner, field, root, young = 10, 20, 30, 40
     flags = {
-        "pcc_gc_backend_selected": 3,
+        "pcc_gc_backend_selected": backend,
         "pcc_gc_nonmoving_count_free": 1,
         "pcc_gc_config_initialized": 1,
         "pcc_gc_backend4_no_refcounts": 1,
@@ -177,14 +180,18 @@ def test_gc3_generic_nonmoving_store_delegates_without_the_owner():
         "global_addr": lambda name: name,
         "load_i32": lambda name, offset: flags[name],
         "_gc0_owner_fast_path": lambda: 0,
-        "_gc_backend_fast": lambda: 3,
+        "_gc_backend_fast": lambda: backend,
         "_store_root_nonmoving_tracing": lambda *args: stores.append(args),
+        "_store_heap_nonmoving_gc3": lambda *args: stores.append(args),
     }
     store_heap = _source_function("py_obj.py", "pcc_gc_store_ptr", bindings)
     store_root = _source_function("py_obj.py", "pcc_gc_store_root", bindings)
     store_heap(owner, field, young)
     store_root(root, young)
-    assert stores == [(field, young, 3), (root, young, 3)]
+    assert stores == [
+        (owner, field, young) if backend == 3 else (field, young, backend),
+        (root, young, backend),
+    ]
 
 
 def test_gc3_root_helper_never_shades_an_unindexed_cell_even_during_major():

@@ -4,9 +4,14 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_load_i64,
     atomic_rmw_i32,
+    atomic_rmw_i64,
+    atomic_store_i64,
+    define_global_i64,
     global_addr,
     global_load_ptr,
+    int_to_ptr,
     is_tagged_int,
     load_i32,
     load_i64,
@@ -14,6 +19,7 @@ from pcc.unsafe import (
     null,
     ptr_diff,
     ptr_is_null,
+    ptr_to_int,
     stack_alloc,
     store_i32,
     store_i64,
@@ -385,6 +391,47 @@ def pcc_gc_count_free_barrier_shade(value) -> None:
     pcc_thread_no_park_exit()
 
 
+# Review-only stopped observer. Its caller owns this scratch layout and
+# installs/removes it between stops. No heap walker consumes this buffer.
+define_global_i64("pcc_raw_gc3_owner_cards", 0)
+_GC3_CARD_CAPACITY = 0
+_GC3_CARD_USED = 8
+_GC3_CARD_OVERFLOW = 16
+_GC3_CARD_OWNERS = 24
+_GC3_CARD_OBJECT_FLAGS = 12
+_GC3_CARD_OLD = 256
+_GC3_CARD_YOUNG = 128
+
+
+@c_abi_export("pcc_gc3_review_owner_cards_set_stopped")
+def pcc_gc3_review_owner_cards_set_stopped(buffer) -> i64:
+    if _selected_backend() != 3 or pcc_thread_owns_stopped_world() == 0:
+        return 0
+    atomic_store_i64(global_addr("pcc_raw_gc3_owner_cards"), 0,
+                     ptr_to_int(buffer), "release")
+    return 1
+
+
+@c_abi_export("pcc_gc3_review_note_owner_card")
+def pcc_gc3_review_note_owner_card(owner, value) -> None:
+    bits: i64 = atomic_load_i64(global_addr("pcc_raw_gc3_owner_cards"), 0, "acquire")
+    if bits == 0:
+        return
+    if (atomic_load_i32(owner, _GC3_CARD_OBJECT_FLAGS, "acquire") & _GC3_CARD_OLD) == 0:
+        return
+    if (atomic_load_i32(value, _GC3_CARD_OBJECT_FLAGS, "acquire") & _GC3_CARD_YOUNG) == 0:
+        return
+    buffer = int_to_ptr(bits)
+    if atomic_load_i64(buffer, _GC3_CARD_OVERFLOW, "relaxed") != 0:
+        return
+    index: i64 = atomic_rmw_i64("add", buffer, _GC3_CARD_USED, 1, "relaxed")
+    if index >= load_i64(buffer, _GC3_CARD_CAPACITY):
+        atomic_store_i64(buffer, _GC3_CARD_OVERFLOW, 1, "release")
+        return
+    atomic_store_i64(buffer, _GC3_CARD_OWNERS + index * 8,
+                     ptr_to_int(owner), "release")
+
+
 @c_abi_export("pcc_gc_note_slot_write_barrier")
 def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     """The store barrier of every tracing collector; GC0 owes none.
@@ -404,6 +451,10 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     if ptr_is_null(owner) == 0:
         if is_tagged_int(owner) != 0:
             return
+        if backend == 3:
+            # Direct writes hold no-park across the store; planned writes
+            # already hold the destination container or graph lock.
+            pcc_gc3_review_note_owner_card(owner, value)
         if pcc_container_lock_held() != 0:
             # Container mode: the store holds the owner's container lock, and
             # the marker scans that owner under the same lock

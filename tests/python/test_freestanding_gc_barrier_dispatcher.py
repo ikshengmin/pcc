@@ -33,6 +33,8 @@ PUBLIC_SYMBOLS = {
     "pcc_gc_step",
 }
 OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
+    "pcc_gc3_review_owner_cards_set_stopped",
+    "pcc_gc3_review_note_owner_card",
     # Heap StorePlans already hold the graph lock on GC4.
     # GC1/GC2's lock-free container stores shade through the barrier's
     # own count-free predicate (generator frames, container init).
@@ -222,7 +224,7 @@ def test_barrier_dispatcher_has_exact_strict_object_closure(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == OWNED_SYMBOLS
+    assert defined == OWNED_SYMBOLS | {"pcc_raw_gc3_owner_cards"}
 
 
 def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:

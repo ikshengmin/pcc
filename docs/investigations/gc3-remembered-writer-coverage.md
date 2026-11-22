@@ -521,3 +521,23 @@ promote before exposure. Keep raw buffer exports and managed Go/Java
 stores excluded until their ownership boundaries are validated. A first
 review arm must report the actual admitted fraction on its sealed
 handler, not the gross upper bound in this table.
+
+### Transport the receiver on ordinary GC3 owning writes
+
+The generic nonmoving GC3 heap store now supplies the actual receiver to
+the slot barrier; the root store remains ownerless. Planned writes still
+use the same slot barrier inside their enclosing lock. A review-only
+stopped observer records an old receiver when its written referent is
+young, without consulting the referent's old index or the major mark flag.
+Overflow is explicit; no real collector reads this scratch buffer.
+
+The linked Linux control uses an old list with an off-object array and an
+old tuple with an inline slot. It records the list through the direct
+store and the tuple through its StorePlan; a caller root records nothing,
+and an extra store into a full buffer sets overflow without altering its
+earlier entries. GC0/1/2/4 reject installation. Five backend runs and
+the owned barrier symbol closure passed. The old generic-ownerless
+source witness now tests the positive GC3 route. The dictionary witness
+is intentionally unchanged: its private initialize path is not included.
+The fast list first-store, tuple private builders, foreign escape, the
+persistent sparse owner/card store and the actual minor remain gates.

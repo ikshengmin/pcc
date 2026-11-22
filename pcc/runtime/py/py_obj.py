@@ -765,7 +765,10 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         # the store, write the slot and shade the value in a cycle. Do that
         # under one no-park scope, as a root store does, without the graph
         # lock that serialized every such store with the marker.
-        _store_root_nonmoving_tracing(slot, value, backend)
+        if backend == 3:
+            _store_heap_nonmoving_gc3(owner, slot, value)
+        else:
+            _store_root_nonmoving_tracing(slot, value, backend)
         return
     plan = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(plan, owner, backend)
@@ -1137,6 +1140,21 @@ def pcc_gc_store_root_plan_finish(plan) -> None:
 @c_abi_export("pcc_gc_store_ptr_plan_finish")
 def pcc_gc_store_ptr_plan_finish(plan) -> None:
     _pcc_gc_store_plan_finish(plan, 0)
+
+
+def _store_heap_nonmoving_gc3(owner, slot, value) -> None:
+    # Preserve the real owning receiver, including a list's off-object
+    # item array. An ownerless/opaque route keeps the existing root path.
+    if ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0:
+        _store_root_nonmoving_tracing(slot, value, 3)
+        return
+    pcc_thread_no_park_enter()
+    store_ptr(slot, 0, value)
+    pcc_gc_note_slot_write_barrier(owner, slot, value)
+    pcc_thread_no_park_exit()
+    atomic_rmw_i64(
+        "add", global_addr("pcc_gc_metric_shards"), pcc_gc_metric_shard() + 16, 1, "relaxed"
+    )
 
 
 def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
