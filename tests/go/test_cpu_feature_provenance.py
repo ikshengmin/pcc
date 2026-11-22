@@ -122,3 +122,53 @@ def test_direct_static_scalar_field_reference_matches_official_go(tmp_path, monk
     reference = compile_reference(units, tmp_path / "official", compiler=os.environ["PCC_GO_REFERENCE"],
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
     assert run(binary) == run(reference) == Execution(0, b"", b"")
+
+
+def test_selected_x86_option_builder_proves_catalog_capacity_and_static_fields():
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import bounded_static_option_builder
+
+    recipe, _ = load_linux_normal_plan()
+    manifest = json.loads(recipe)
+    source = []
+    for leaf in manifest["packages"]["internal/cpu"]["files"]["go"]:
+        name = "src/internal/cpu/" + leaf
+        original = (FIXTURE / name).read_bytes()
+        assert manifest["files"][name] == [len(original), sha256(original)]
+        source.append((name, original.decode()))
+    proof = bounded_static_option_builder(parse_package(source, require_main=False),
+                                          "doinit", "options", "getGOAMD64level")
+    assert proof.record == "option" and proof.capacity == 23
+    assert proof.initial_count == 8 and proof.thresholds == ((2, 5), (3, 5), (4, 5))
+    assert tuple(proof.count_at(level) for level in range(1, 5)) == (23, 18, 13, 8)
+    assert len(proof.feature_fields) == 23 and len(set(proof.feature_fields)) == 23
+    assert {owner for owner, field in proof.feature_fields} == {"X86"}
+    assert proof.unbound_exports == ("X86",)
+
+
+@pytest.mark.parametrize("change", [
+    ("&Flags.B", "&local"),
+    ("&Flags.B", "&Flags.Number"),
+    ('"b"', '"a"'),
+    ("if level < 2", "for level < 2"),
+    ("if level < 2", "if level < 2 && enabled()"),
+    ("return }", "escape(config); return }"),
+    ("return }", "_ = func() { escape(config) }; return }"),
+])
+def test_option_builder_rejects_unbounded_or_nonstatic_sources(change):
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import bounded_static_option_builder
+
+    source = """package example
+type Item struct { Label string; Flag *bool; Enabled bool }
+var config []Item
+var Flags struct { A bool; B bool; Number int }
+func hardware() int32
+func build() {
+    config = []Item{{Label:"a", Flag:&Flags.A}}
+    level := hardware()
+    if level < 2 { config = append(config, Item{Label:"b", Flag:&Flags.B}) }
+    return }
+""".replace(*change)
+    program = parse_package((("builder.go", source),), require_main=False)
+    assert bounded_static_option_builder(program, "build", "config", "hardware") is None

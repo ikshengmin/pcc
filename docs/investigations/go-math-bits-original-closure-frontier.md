@@ -669,3 +669,14 @@ That global is filled by a bounded builder whose Feature pointers
 refer to package bool fields; unlike the scalar cache-size slice it
 needs record backing and initialization provenance. No native
 package build or upstream tests ran.
+
+The unchanged x86 option-builder prefix now proves eight initial records
+and at most three five-record append groups, with counts 23/18/13/8 for
+GOAMD64 v1/v2/v3/v4 respectively. Every Feature expression addresses a
+distinct declared package bool field; the one-sided X86 linker export
+is explicitly unresolved, not an invented native binding. The proof
+rejects unbounded loops, duplicate labels, captured uses and non-static
+or non-bool pointer sources. Seventy-six scoped checks and three
+standalone native/reference controls passed. The original global catalog
+is not yet represented or initialized by PCC, and its consumer flow is
+a separate obligation.

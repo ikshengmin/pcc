@@ -3,7 +3,7 @@ from dataclasses import dataclass, replace
 
 from pcc.frontends.go.branches import walk
 from pcc.frontends.go.managed_objects import FixedByteExtent
-from pcc.frontends.go.syntax import SliceSyntax
+from pcc.frontends.go.syntax import PointerSyntax, SliceSyntax, StructSyntax, TypeName
 
 
 _U32_SHIFT_COUNTS = frozenset(str(number) for number in range(32))
@@ -467,3 +467,157 @@ def scalar_slice_owner_group(program):
 
     complete = set()
     return result if all(acyclic(name, set(), complete) for name in result) else None
+
+
+@dataclass(frozen=True)
+class StaticOptionBuilderProof:
+    """Bounds and static field sources, not an initialized global descriptor."""
+    record: str
+    initial_count: int
+    thresholds: tuple[tuple[int, int], ...]
+    feature_fields: tuple[tuple[str, str], ...]
+    unbound_exports: tuple[str, ...]
+
+    @property
+    def capacity(self):
+        return self.initial_count + sum(count for _, count in self.thresholds)
+
+    def count_at(self, level):
+        if type(level) is not int:
+            raise ValueError("option level must be an integer")
+        return self.initial_count + sum(count for limit, count in self.thresholds if level < limit)
+
+
+def bounded_static_option_builder(program, builder_name, slot, level_function):
+    """Prove a bounded single-owner initializer prefix for a global slice.
+
+    A nonempty literal is followed by conditional straight-line append
+    groups. Each literal has a distinct string label and a direct pointer
+    to a package boolean field. This does not prove other consumers, target
+    initialization order, fixture offsets, or a native record representation.
+    """
+    from pcc.frontends.go.strings import literal_bytes
+
+    if any(item.alias != "_" for item in program.imports) or "append" in _package_names(program):
+        return None
+    variables = {token.text: stmt for stmt in program.variables for token in stmt.names}
+    global_slot = variables.get(slot)
+    if (global_slot is None or len(global_slot.names) != 1 or global_slot.exprs
+            or not isinstance(global_slot.type, SliceSyntax)):
+        return None
+    element = global_slot.type.element
+    if not isinstance(element, TypeName) or element.qualifier is not None:
+        return None
+    record = element.token.text
+    definitions = [decl for decl in program.types if decl.token.text == record]
+    if len(definitions) != 1 or definitions[0].alias or not isinstance(definitions[0].type, StructSyntax):
+        return None
+    layout = definitions[0].type
+    if any(layout.embedded):
+        return None
+    labels = [token.text for token, dtype in layout.fields if dtype == "string"]
+    features = [token.text for token, dtype in layout.fields
+                if isinstance(dtype, PointerSyntax) and dtype.element == "bool"]
+    if (len(labels) != 1 or len(features) != 1 or
+            any(token.text not in (*labels, *features) and dtype != "bool" for token, dtype in layout.fields)
+            or len({token.text for token, _ in layout.fields}) != len(layout.fields)
+            or any(token.text == "_" for token, _ in layout.fields)):
+        return None
+    label_key, feature_key = labels[0], features[0]
+    builders = [fn for fn in program.functions if fn.token.text == builder_name]
+    producers = [fn for fn in program.functions if fn.token.text == level_function]
+    if len(builders) != 1 or len(producers) != 1:
+        return None
+    builder, producer = builders[0], producers[0]
+    if (builder.params or builder.result != "void" or builder.receiver is not None
+            or builder.type_parameters or len(builder.body) < 2 or producer.params
+            or producer.result != "int32" or producer.receiver is not None or producer.type_parameters):
+        return None
+
+    seen_labels, seen_fields, field_order = set(), set(), []
+
+    def typed_element(dtype):
+        return isinstance(dtype, TypeName) and dtype.qualifier is None and dtype.token.text == record
+
+    def item(expr, *, elided):
+        if (expr.kind != "composite" or (expr.value is not None if elided else not typed_element(expr.value))
+                or len(expr.args) != 2 or len(expr.keys) != 2
+                or any(key is None or key.kind != "name" for key in expr.keys)):
+            return False
+        pairs = {key.value: value for key, value in zip(expr.keys, expr.args)}
+        if set(pairs) != {label_key, feature_key}:
+            return False
+        label, address = pairs[label_key], pairs[feature_key]
+        if label.kind != "string" or address.kind != "unary" or address.value != "&" or len(address.args) != 1:
+            return False
+        selector = address.args[0]
+        if selector.kind != "selector" or len(selector.args) != 1 or selector.args[0].kind != "name":
+            return False
+        owner, field = selector.args[0].value, selector.value
+        declaration = variables.get(owner)
+        if (declaration is None or len(declaration.names) != 1 or not isinstance(declaration.type, StructSyntax)
+                or sum(token.text == field and dtype == "bool" for token, dtype in declaration.type.fields) != 1):
+            return False
+        text = literal_bytes(label.token)
+        key = (owner, field)
+        if not text or text in seen_labels or key in seen_fields:
+            return False
+        seen_labels.add(text)
+        seen_fields.add(key)
+        field_order.append(key)
+        return True
+
+    def write(stmt):
+        return (stmt.kind == "=" and len(stmt.targets) == len(stmt.exprs) == 1
+                and _name(stmt.targets[0], slot))
+
+    setup, level = builder.body[:2]
+    if not write(setup):
+        return None
+    initial = setup.exprs[0]
+    if (initial.kind != "composite" or not isinstance(initial.value, SliceSyntax)
+            or not typed_element(initial.value.element) or not initial.args
+            or any(key is not None for key in initial.keys)
+            or not all(item(value, elided=True) for value in initial.args)):
+        return None
+    if (level.kind != ":=" or len(level.names) != len(level.exprs) or len(level.names) != 1
+            or not _builtin_call(level.exprs[0], level_function) or level.exprs[0].args):
+        return None
+    level_name = level.names[0].text
+    thresholds, end = [], 2
+    for node in builder.body[2:]:
+        if (node.kind != "if" or node.init is not None or node.otherwise
+                or len(node.body) != 1 or len(node.exprs) != 1 or not write(node.body[0])):
+            break
+        control, append = node.exprs[0], node.body[0].exprs[0]
+        if (control.kind != "binary" or control.value != "<" or len(control.args) != 2
+                or not _name(control.args[0], level_name) or not _builtin_call(append, "append")
+                or len(append.args) < 2 or not _name(append.args[0], slot)):
+            return None
+        limit = _literal_dimension(control.args[1])
+        if limit is None or limit > (1 << 31) - 1 or (thresholds and thresholds[-1][0] >= limit):
+            return None
+        if not all(item(value, elided=False) for value in append.args[1:]):
+            return None
+        thresholds.append((limit, len(append.args) - 1))
+        end += 1
+    def slot_use(expr):
+        if _name(expr, slot):
+            return True
+        if expr.kind == "func_literal":
+            return any(slot_use(child) for stmt in walk(expr.value.body)
+                       for child in (*stmt.exprs, *stmt.targets))
+        return any(slot_use(child) for child in _expression_children(expr))
+
+    if any(slot_use(expr) for stmt in walk(builder.body[end:]) for expr in (*stmt.exprs, *stmt.targets)):
+        return None
+    owners = {owner for owner, _ in field_order}
+    protected = {slot, record, level_function, "append"} | owners
+    if any(token.text in protected for stmt in walk(builder.body)
+           if stmt.kind in {"var", "const", ":="} for token in stmt.names):
+        return None
+    relevant = [link for link in program.linknames if link.local in protected]
+    if any(link.target is not None or link.local not in owners for link in relevant):
+        return None
+    exports = tuple(sorted({link.local for link in relevant}))
+    return StaticOptionBuilderProof(record, len(initial.args), tuple(thresholds), tuple(field_order), exports)

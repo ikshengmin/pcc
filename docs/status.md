@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify the bounded global CPU option-slice builder and its static
-   field owners, exposed at `internal/cpu/cpu.go:207:13` by the opt-in
-   exact-source probe. Named pure padding now works; default escaping
-   slices remain unadmitted. See the
+   bind the proved CPU options catalog extent and unresolved static
+   exports to a source-only global record-slice declaration. The actual
+   frontier remains `internal/cpu/cpu.go:207:13`; the original builder
+   proves capacity and fields, not runtime ABI or consumers. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go CPU option-slice builder bounded static ownership: Codex, Linux x86-64, 2026-11-22 04:58 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
