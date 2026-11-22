@@ -132,3 +132,28 @@ def test_acyclic_sweep_with_only_finalizers_keeps_layer_order(_layered_sweep, ba
     assert (actual.returncode, actual.stdout, actual.stderr) == (
         0, "legacy=0 reclaimed=2 callbacks=2 recheck=0\na-del b-del\n", "",
     )
+
+
+@pytest.fixture(scope="module")
+def _layered_cpy_owner(tmp_path_factory):
+    binary = tmp_path_factory.mktemp("gc_layered_cpy_owner") / "sweep"
+    compile_owned_c_with_runtime(
+        ROOT / "tests/fixtures/native/gc_layered_cpy_owner.c", binary,
+        runtime_archive=admitted_runtime(),
+        cpp_args=("-I", str(ROOT / "pcc/runtime/src")),
+    )
+    return binary
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("arm", ("keep", "withdraw"))
+def test_layered_sweep_checks_independent_cpy_owner(_layered_cpy_owner, backend, arm):
+    actual = run_process_group_timeout(
+        [str(_layered_cpy_owner), arm], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    expected = ("del=1 released=0 reclaimed=1 usable=1 full=0\n" if arm == "keep"
+                else "del=1 released=1 reclaimed=2 usable=0 full=1\n")
+    assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected, "")

@@ -498,3 +498,14 @@ match CPython's events, using one expected fallback per indirect
 publication. These are C-ABI controls, not a substitute for loading an
 extension or testing an independently owned CpyHandle, direct field
 writes outside these APIs, or arbitrary foreign code.
+
+The independent foreign-handle control uses a real `py_cpy_handle_new`
+with an opaque payload and explicit release callback. An acyclic
+finalizer reaches the handle through its candidate child edge and
+acquires a public `Py_INCREF` owner in an unregistered C slot. On GC1
+and GC3 the payload remains usable after the sweep, with no full
+recheck or release. When `Py_DECREF` withdraws that C owner inside the
+same callback, the one ambiguity fallback reclaims both candidates
+and releases the exact payload once. This tests independent CpyHandle
+ownership inside the new window; it does not test an owner's arbitrary
+raw third-party field as a managed reachability edge.
