@@ -255,6 +255,11 @@ in the relevant section or issue and removes the entry.
    39%/18% lower median paired GC1/3 time (7/7 and 5/7 wins).
    Explicit-pin visits and per-callback stops remain. No general scale
    or official A/B qualification and no master runtime change.
+   [Review commit acb2b7c](https://github.com/ikshengmin/pcc/commit/acb2b7c6f3416ff3e3f90b2cece92cd1e35def24)
+   brings the Linux focused suite to 83 passes. The native old-owner
+   dictionary insertion and instance field writes preserve a sibling
+   through one same-cut fallback and match CPython, as did old list
+   append. This is not a complete shared-store audit.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -311,8 +316,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Verify issue 9 layered publication via rooted dictionaries and instance fields: Codex, Linux x86-64, 2026-11-22 18:00 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
