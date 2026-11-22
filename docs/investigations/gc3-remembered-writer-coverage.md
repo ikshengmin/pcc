@@ -454,3 +454,32 @@ gets through the earlier modes and reproduces a separate GC1
 `watch() is resurrected[0]`. A direct rerun of that exact linked
 executable failed at the same assertion. That test was not weakened;
 the focused decline/scalar witness passed independently.
+
+### Dormant stopped promotion transaction
+
+The test-invoked entry verifies a published exact object cell on GC3 and
+refuses to run without stopped-world ownership or during major mark or
+sweep. It reserves the existing per-slab object record and checks a
+caller-owned card slot before changing the header. That card represents
+the whole promoted owner; it conservatively stays dirty until a future
+minor can examine the live slots. With neither a fallible preflight nor
+another mutator in the commit interval, the entry reuses actual cell
+registration, records the card and flips the age under one no-park
+lease. An occupied card leaves the cell young and unpublished in the old
+index; retry uses the same allocated record. The address is unchanged.
+
+This is not a minor, a nursery allocation route or a production
+remembered set: the entry has no runtime caller and no automatic
+collection uses the caller's card. No store or root route is changed.
+The 20 existing functions in the emitted module kept identical IR
+bodies after canonicalizing local labels and matching string literals
+by bytes; the other runtime objects are identical.
+
+Linux x86-64 host-pcc0/self passed eight linked cases with a source-
+matched owned archive: real list promotion with an indexless strong
+child; GC0/1/2/4 refusal without touching the supplied invalid address;
+and three slab cases, including prepared-record retry and a rooted
+same-address payload surviving two explicit collections. The list
+fixture also rejects a running world, interior address, active mark,
+pending sweep, and occupied card. Tests compare the owner, record,
+header and child identities. No Mac, native-pcc1 or performance claim.

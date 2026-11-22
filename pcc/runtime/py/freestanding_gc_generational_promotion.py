@@ -7,6 +7,7 @@ from pcc.runtime.py.py_abi_constants import (
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    atomic_load_i32,
     atomic_load_i64,
     atomic_rmw_i32,
     atomic_store_i64,
@@ -73,6 +74,77 @@ pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
+
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
+pcc_allocator_object_node_record_ensure = extern(
+    "pcc_allocator_object_node_record_ensure", (c_ptr,), c_ptr
+)
+pcc_gc_object_index_record_find = extern(
+    "pcc_gc_object_index_record_find", (c_ptr, c_ptr), c_ptr
+)
+pcc_gc_register_object_cell = extern(
+    "pcc_gc_register_object_cell", (c_ptr, c_int64), c_int64
+)
+
+_PROMOTE_CELL_FLAGS = 12
+_PROMOTE_CELL_YOUNG = 128
+_PROMOTE_CELL_OLD = 256
+_PROMOTE_CELL_AGE = 384
+_PROMOTE_CARD_OWNER = 0
+
+
+@c_abi_export("pcc_gc_backend3_promote_published_cell_stopped")
+def pcc_gc_backend3_promote_published_cell_stopped(obj, size: i64, card) -> i64:
+    """Dormant entry: move one published GC3 cell into old provenance in place.
+
+    Only a stopped collector with an exclusive, persistent card slot and the
+    cell's allocation size may call this. The card records the entire owner
+    conservatively, even if that owner proves to have no young edges later.
+    No allocation, store, mark, sweep, or dispatch path calls this entry yet.
+    """
+    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(card) != 0 or size < 16):
+        return 0
+    if (atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0):
+        return 0
+    if pcc_gc_granule_is_object_start(obj) != 1:
+        return 0
+    flags: i64 = load_i32(obj, _PROMOTE_CELL_FLAGS)
+    age: i64 = flags & _PROMOTE_CELL_AGE
+    if age == _PROMOTE_CELL_OLD:
+        if ptr_eq(load_ptr(card, _PROMOTE_CARD_OWNER), obj) != 0:
+            return 1 if ptr_is_null(pcc_gc_object_index_find(obj)) == 0 else 0
+        return 0
+    if age != _PROMOTE_CELL_YOUNG:
+        return 0
+    record = pcc_allocator_object_node_record_ensure(obj)
+    if ptr_is_null(record) != 0:
+        return 0
+    if (ptr_is_null(load_ptr(card, _PROMOTE_CARD_OWNER)) == 0
+            or ptr_is_null(pcc_gc_object_index_record_find(record, obj)) == 0
+            or ptr_is_null(pcc_gc_object_index_find(obj)) == 0):
+        return 0
+
+    # The record allocation is finished and no thread can mutate the slot.
+    # Reuse the real lockless record publication rather than inventing one.
+    # Neither age nor an old-to-young owner is visible to a later stop alone.
+    pcc_thread_no_park_enter()
+    store_i32(obj, _PROMOTE_CELL_FLAGS, flags & ~_PROMOTE_CELL_AGE)
+    if pcc_gc_register_object_cell(obj, size) == 0:
+        store_i32(obj, _PROMOTE_CELL_FLAGS, flags)
+        pcc_thread_no_park_exit()
+        return 0
+    store_ptr(card, _PROMOTE_CARD_OWNER, obj)
+    store_i32(obj, _PROMOTE_CELL_FLAGS,
+              load_i32(obj, _PROMOTE_CELL_FLAGS) | _PROMOTE_CELL_OLD)
+    pcc_thread_no_park_exit()
+    return 1
 
 
 @c_abi_export("pcc_gc_generational_pointer_can_have_header")

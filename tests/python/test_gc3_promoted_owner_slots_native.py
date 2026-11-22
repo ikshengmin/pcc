@@ -17,9 +17,13 @@ def test_gc3_promoted_owner_walks_indexless_child_as_strong_slot(tmp_path, expli
         source, binary, runtime_archive=explicit_owned_runtime,
         cpp_args=("-I", str(repo / "pcc/runtime/src")),
     )
-    result = _record_execution(
-        tmp_path, "promoted-owner", [str(binary)], dict(os.environ, PCC_GC_BACKEND="3"),
-    )
-    assert (result["returncode"], result["stdout"], result["stderr"]) == (
-        0, "GC3_PROMOTED_STRONG_SLOT_OK\n", "",
-    ), result
+    for backend in range(5):
+        result = _record_execution(
+            tmp_path, f"promoted-owner-gc{backend}", [str(binary)],
+            dict(os.environ, PCC_GC_BACKEND=str(backend)),
+        )
+        expected = ("GC3_PROMOTED_STRONG_SLOT_OK" if backend == 3
+                    else "GC3_PROMOTION_OTHER_BACKEND_INERT_OK")
+        assert (result["returncode"], result["stdout"], result["stderr"]) == (
+            0, expected + "\n", "",
+        ), result

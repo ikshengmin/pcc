@@ -17,6 +17,7 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 OWNED_SYMBOLS = {
     "pcc_gc_backend3_drain_promotion_worklist",
+    "pcc_gc_backend3_promote_published_cell_stopped",
     "pcc_gc_backend3_enqueue_promotion_owner",
     "pcc_gc_backend3_promote_cext_owner_referents",
     "pcc_gc_backend3_promote_cext_slot_transaction",
@@ -38,6 +39,16 @@ OWNED_SYMBOLS = {
     "pcc_gc_trace_referents_for_promotion_mode",
 }
 RAW_FUNCTION_IMPORTS = {
+    "pcc_allocator_object_node_record_ensure",
+    "pcc_gc_register_object_cell",
+    "pcc_gc_granule_is_object_start",
+    "pcc_gc_object_index_record_find",
+    "pcc_gc_mark_active",
+    "pcc_gc_concurrent_sweep_state",
+    "pcc_gc_cms_sweep_pending",
+    "pcc_thread_owns_stopped_world",
+    "pcc_thread_no_park_enter",
+    "pcc_thread_no_park_exit",
     "pcc_gc_backend4_no_refcounts",
     "pcc_gc_resolve_borrowed_root_slot_unlocked",
     "pcc_py_gc_defer_tripwire",

@@ -12,6 +12,7 @@ extern void *pcc_allocator_object_cell_span(void *);
 extern void *pcc_allocator_object_cell_locate(void *, void *);
 extern void *pcc_allocator_object_node_record_find(void *);
 extern int64_t pcc_gc_register_object_cell(PyObject *, int64_t);
+extern int64_t pcc_gc_backend3_promote_published_cell_stopped(PyObject *, int64_t, PyObject **);
 extern void *pcc_gc_object_walk_first(void);
 extern void *pcc_gc_object_walk_next(void *);
 extern int64_t pcc_allocator_metadata_mapped;
@@ -71,9 +72,9 @@ static int check_unindexed_lifecycle(void) {
     return 0;
 }
 
-/* Exercise the existing ordinary GC3 record path at the same address. This
- * does not implement promotion: the fixture alone controls the age bits,
- * keeps an explicit root and allocates outside any collection transaction.
+/* Exercise the dormant promotion entry at the same address, with an
+ * explicit caller root across two real majors. The fixture alone creates
+ * the starting young cell and reserves the card; no nursery is enabled.
  */
 static int check_old_record(int inspect_prepare) {
     if (pcc_gc_backend() != 3) return 20;
@@ -124,19 +125,16 @@ static int check_old_record(int inspect_prepare) {
             __atomic_load_n(&pcc_allocator_metadata_mapped, __ATOMIC_RELAXED) != metadata)
             return 33;
     }
-    /* GC3's current ordinary indexed objects need neither legacy age bit.
-     * This fixture has no other mutator; production would need a genuine
-     * no-park commit and fallback when its metadata reserve fails.
-     */
-    pcc_thread_no_park_enter();
-    cell->h.flags &= ~PY_FLAG_GC_YOUNG;
-    int64_t status = pcc_gc_register_object_cell(object, bytes);
-    pcc_thread_no_park_exit();
-    if (status != 1) return 25;
+    PyObject *card = NULL;
+    if (pcc_stop_the_world() != 0) return 34;
+    int64_t status = pcc_gc_backend3_promote_published_cell_stopped(object, bytes, &card);
+    if (pcc_resume_world() != 0 || status != 1 || card != object) return 25;
     void *record = pcc_gc_object_index_find(object);
     void *span = pcc_allocator_object_cell_span(object);
     if (!record || !span || root != object || (prepared && record != prepared)) return 26;
-    if (pcc_gc_register_object_cell(object, bytes) != 1 ||
+    if (pcc_stop_the_world() != 0) return 35;
+    status = pcc_gc_backend3_promote_published_cell_stopped(object, bytes, &card);
+    if (pcc_resume_world() != 0 || status != 1 || card != object ||
         pcc_gc_object_index_find(object) != record || record_visits(record) != 1)
         return 27;
     for (int round = 0; round < 2; ++round) {
