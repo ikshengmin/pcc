@@ -1,4 +1,5 @@
 /* Drives the real sweep from a sealed mark, not a planner-only entry. */
+#include <Python.h>
 #include "py_internal.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -24,13 +25,41 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, ROOTS };
+enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, ROOTS };
 static PyObject *roots[ROOTS];
 static void *nodes[3];
 static int rescue, withdrawn, mixed, silent, finalizer_only, late_new, idle_worker, error;
 static int worker_started, worker_done;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
+static int ext_edge_visits;
+
+struct ExtensionHolder { PyObject_HEAD PyObject *edge; };
+
+static int traverse_extension(PyObject *self, visitproc visit, void *arg) {
+    struct ExtensionHolder *holder = (struct ExtensionHolder *)self;
+    if (holder->edge) ++ext_edge_visits;
+    Py_VISIT(holder->edge);
+    return 0;
+}
+
+static PyType_Slot extension_slots[] = {
+    {Py_tp_traverse, (void *)traverse_extension}, {0, NULL}
+};
+static PyType_Spec extension_spec = {
+    "layered.ExtensionHolder", sizeof(struct ExtensionHolder), 0,
+    Py_TPFLAGS_DEFAULT | Py_TPFLAGS_HAVE_GC, extension_slots
+};
+
+static PyObject *new_extension_holder(void) {
+    PyObject *ty = PyType_FromSpec(&extension_spec);
+    if (!ty) return NULL;
+    pcc_gc_store_root(&roots[EXT_TYPE], ty);
+    PyObject *obj = PyType_GenericAlloc((PyTypeObject *)ty, 0);
+    if (!obj) return NULL;
+    pcc_gc_publish_initialized(obj);
+    return obj;
+}
 
 static void note(int event) {
     if (event_count >= 6 || pcc_thread_world_stop_epoch_held() >= 0) error = 5;
@@ -64,6 +93,9 @@ static PyObject *finish_a(PyObject *self) {
             if (PyList_Append(roots[HOLD], target) != 0) error = 32;
         } else if (rescue == 16) {
             if (PyObject_SetAttrString(roots[HOLD], "child", target) != 0) error = 33;
+        } else if (rescue == 17) {
+            struct ExtensionHolder *holder = (struct ExtensionHolder *)roots[HOLD];
+            pcc_gc_store_ptr(roots[HOLD], &holder->edge, target);
         } else if (rescue >= 11 && rescue <= 13) {
             // The incoming value was installed in an unreachable source
             // before the mark. This callback adds no separate source shade.
@@ -128,7 +160,8 @@ static void *seal_on_departing_thread(void *unused) {
     if (rescue == 3 || rescue >= 6) {
         PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 ? py_list_new(0) :
                            rescue == 6 || rescue == 8 || rescue == 11 || rescue == 14 ? py_dict_new() :
-                           rescue == 7 || rescue == 16 ? py_instance_new(a_cls) : py_set_new();
+                           rescue == 7 || rescue == 16 ? py_instance_new(a_cls) :
+                           rescue == 17 ? new_extension_holder() : py_set_new();
         if (!holder) { error = 14; return NULL; }
         pcc_gc_store_root(&roots[HOLD], holder);
         if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
@@ -215,6 +248,7 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "capi-dict") == 0) rescue = 14;
     if (argc > 1 && strcmp(argv[1], "capi-list") == 0) rescue = 15;
     if (argc > 1 && strcmp(argv[1], "capi-attr") == 0) rescue = 16;
+    if (argc > 1 && strcmp(argv[1], "extension-field") == 0) rescue = 17;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
@@ -271,6 +305,8 @@ int main(int argc, char **argv) {
     PyObject *b = py_weakref_call(roots[WEAK_B]);
     if (rescue == 2 && (raw != b || raw == py_None || raw == NULL)) error = 13;
     if (rescue == 5 && (!b || b == py_None || raw != (PyObject *)((char *)b + 1))) error = 19;
+    if (rescue == 17 && (!b || b == py_None || !ext_edge_visits ||
+                         ((struct ExtensionHolder *)roots[HOLD])->edge != b)) error = 34;
     note(b == py_None ? 5 : 6);
     const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del", "b-new"};
     for (int i = 0; i < event_count; ++i)

@@ -509,3 +509,14 @@ same callback, the one ambiguity fallback reclaims both candidates
 and releases the exact payload once. This tests independent CpyHandle
 ownership inside the new window; it does not test an owner's arbitrary
 raw third-party field as a managed reachability edge.
+
+A separate arm allocates a GC-capable native extension instance using
+`PyType_FromSpec` and `PyType_GenericAlloc`, colors the rooted instance
+black before the callback, and installs the dying candidate into its
+custom struct field using `pcc_gc_store_ptr`. GC1/3 match CPython's
+events with one full fallback: the native `tp_traverse` actually sees
+the non-null field through `Py_VISIT`, and the weak target survives as
+the exact published object. This covers the shared barrier contract for
+that field, not arbitrary raw C assignments or the currently stubbed
+`PyObject_GC_Track` API. The Linux focused run passed all 107 checks.
+Darwin was not run.

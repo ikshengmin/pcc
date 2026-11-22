@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -94,6 +94,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "capi-dict": "a-del a-weak b-live\n",
         "capi-list": "a-del a-weak b-live\n",
         "capi-attr": "a-del a-weak b-live\n",
+        "extension-field": "a-del a-weak b-live\n",
     }[arm]
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,
@@ -101,7 +102,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
                  PCC_GC_DEBT_THRESHOLD="1099511627776"),
     )
     assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
-    rechecks = 2 if arm in ("mixed", "mixed-tail") else 1 if arm in ("withdrawn", "holder", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr") else 0
+    rechecks = 2 if arm in ("mixed", "mixed-tail") else 1 if arm in ("withdrawn", "holder", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field") else 0
     scans = {"late-new": 3, "worker": 2}.get(arm, 1)
     assert actual.stderr == f"full={rechecks} scans={scans}\n"
 
