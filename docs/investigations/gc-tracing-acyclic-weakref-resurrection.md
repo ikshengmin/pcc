@@ -682,3 +682,24 @@ ms with unrelated lists, and 19.0/18.3 ms with unrelated weakrefs
 or the official HTTP/no-observer A/B. The sealed 16→64 increase on
 GC1 without unrelated records was about 4.7×, so a strict linear bound
 is not yet proven. Cohorts above 256 and Darwin remain unqualified.
+
+### Admission with unrelated weak observers
+
+A nonempty process weakref registry no longer by itself admits a layered
+graph. While stopped, the exact main-list directory can rule out every
+candidate, provided the late list is empty. Still build the graph for a
+matching weak target or any candidate with a pending finalizer (including
+a generator), and preserve the old admission whenever directory coverage
+is uncertain. The freestanding graph builder still only owns topology;
+the existing review entry does the observer check in the weakref owner
+before allocating the graph. Its cross-object signature is unchanged.
+
+In Linux native parent/candidate runs, both backends previously entered
+the review path for the same two quiet dying objects if 128 refs to an
+unrelated live object existed. With the exact check, both quiet forms
+use the legacy path (without a graph), whether an unrelated class has
+a `__del__` or not. A real candidate callback with no finalizer still
+uses the review path and delivers twice; mixed cyclic and finalizer
+controls retain their existing behavior. All 80 focused native
+assertions, six admission-model cases, and the 180-run callback grid
+passed. No claim of zero aggregate overhead or a `pcc_perf` win yet.

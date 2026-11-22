@@ -148,7 +148,9 @@ def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, bac
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("silent", "silent-live-del"))
+@pytest.mark.parametrize("arm", (
+    "silent", "silent-live-del", "silent-unrelated-weakrefs", "silent-unrelated-weakrefs-live-del",
+))
 def test_acyclic_sweep_without_observers_keeps_legacy_path(_layered_sweep, backend, arm):
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,
@@ -160,6 +162,19 @@ def test_acyclic_sweep_without_observers_keeps_legacy_path(_layered_sweep, backe
     assert (actual.returncode, actual.stdout, actual.stderr) == (
         0, "legacy=1 reclaimed=2 callbacks=0 recheck=0\n", "",
     )
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+def test_acyclic_sweep_with_only_weak_callbacks_keeps_review_path(_layered_sweep, backend):
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), "only-weakrefs"], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        0, "legacy=0 reclaimed=2 callbacks=2 recheck=0\n", "",
+    )
+
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))

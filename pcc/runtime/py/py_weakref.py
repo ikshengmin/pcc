@@ -32,6 +32,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_LIST,
     PY_TYPE_NONE,
     PY_TYPE_STR,
+    PY_TYPE_GEN,
     PY_TYPE_TUPLE,
     PY_TYPE_USER_CLASS_START,
     PY_TYPE_VALUEBOX,
@@ -1058,6 +1059,45 @@ def py_weakref_queue_tracing_candidates(pending_cell) -> int:
                     count = count + 1
         wr = nxt
     return count
+
+
+pcc_gc_callback_layers_build_graph = extern(
+    "pcc_gc_callback_layers_build_graph", (c_ptr, c_int64, c_int64), c_ptr
+)
+pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
+py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
+
+
+@c_abi_export("pcc_gc_callback_layers_build")
+def pcc_gc_callback_layers_build(nodes, count: int, stop_epoch: int):
+    """Admit a review graph only if this batch can run or expose user code.
+
+    The low-level collector already handles an empty weak registry. With a
+    nonempty registry, only a stopped exact directory and an empty late
+    list can prove unrelated observers irrelevant. An unknown result keeps
+    the original graph builder, including the cyclic residual path.
+    """
+    if (_target_directory_available() != 0
+            and ptr_is_null(global_load_ptr("py_weakref_head")) == 0
+            and ptr_is_null(global_load_ptr("py_weakref_late_head")) != 0
+            and pcc_thread_owns_stopped_world() != 0
+            and ptr_is_null(nodes) == 0 and count > 0):
+        class_finalizers: int = load_i32(global_addr("pcc_class_del_defined_count"), 0)
+        i: int = 0
+        while i < count:
+            node = load_ptr(nodes, i * 8)
+            if pcc_gc_object_node_is_active(node) != 0:
+                target = load_ptr(node, 0)
+                if ptr_is_null(_target_directory_head(target)) == 0:
+                    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
+                if ((class_finalizers != 0
+                     or load_i32(target, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_GEN)
+                        and pcc_gc_tracing_is_sweep_candidate(target) != 0
+                        and py_user_del_pending(target) != 0):
+                    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
+            i += 1
+        return null()
+    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
 
 
 pcc_gc_callback_layers_contains = extern(

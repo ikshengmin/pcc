@@ -174,7 +174,7 @@ static void *seal_on_departing_thread(void *unused) {
     }
     PyObject *a = py_instance_new(a_cls);
     PyObject *b = py_instance_new(b_cls);
-    PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
+    PyObject *callback = (silent && silent != 5) || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
     if (rescue == 3 || rescue >= 6) {
         PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 || rescue == 18 ? py_list_new(0) :
@@ -209,13 +209,27 @@ static void *seal_on_departing_thread(void *unused) {
         pcc_gc_unpin(tail);
     } else if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
     else if (!rescue && (peer_mode == 0 || peer_mode == 3)) py_instance_set_field((PyInstanceObject *)a, 0, b);
-    if (silent == 2) {
+    if (silent == 2 || silent == 4) {
         PyClassObject *other = py_class_new("InactiveFinalizer", NULL, 0, NULL, 0);
         if (!other) { error = 17; return NULL; }
         pcc_gc_store_root(&roots[CLASS_TAIL], (PyObject *)other);
         py_class_add_method(other, "__del__", (PyObject *)(uintptr_t)finish_tail);
     }
-    if (!silent && !finalizer_only) {
+    if (silent == 3 || silent == 4) {
+        PyObject *live = py_instance_new(a_cls);
+        PyObject *unrelated = py_list_new(0);
+        if (!live || !unrelated) { error = 45; return NULL; }
+        pcc_gc_store_root(&roots[HOLD], live);
+        pcc_gc_store_root(&roots[WEAK_NEW], unrelated);
+        // These refs have no edge to either sealed candidate, even when
+        // an unrelated class elsewhere has a real __del__ method.
+        for (int i = 0; i < 128; ++i) {
+            PyObject *ref = py_weakref_new(live, NULL);
+            if (!ref) { error = 46; return NULL; }
+            py_list_append(unrelated, ref);
+        }
+    }
+    if ((!silent || silent == 5) && !finalizer_only) {
         PyObject *wa = py_weakref_new(a, callback);
         PyObject *wb = py_weakref_new(b, callback);
         if (!wa || !wb) { error = 11; return NULL; }
@@ -306,6 +320,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "peer-new") == 0) peer_mode = 3;
     silent = argc > 1 && strcmp(argv[1], "silent") == 0;
     if (argc > 1 && strcmp(argv[1], "silent-live-del") == 0) silent = 2;
+    if (argc > 1 && strcmp(argv[1], "silent-unrelated-weakrefs") == 0) silent = 3;
+    if (argc > 1 && strcmp(argv[1], "silent-unrelated-weakrefs-live-del") == 0) silent = 4;
+    if (argc > 1 && strcmp(argv[1], "only-weakrefs") == 0) silent = 5;
     finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;

@@ -135,8 +135,8 @@ def pcc_gc_callback_layers_release(plan) -> None:
     free(plan)
 
 
-@c_abi_export("pcc_gc_callback_layers_build")
-def pcc_gc_callback_layers_build(nodes, count: i64, stop_epoch: i64):
+@c_abi_export("pcc_gc_callback_layers_build_graph")
+def pcc_gc_callback_layers_build_graph(nodes, count: i64, stop_epoch: i64):
     if count <= 0 or count > _MAX_CANDIDATES or ptr_is_null(nodes) != 0:
         return null()
     if stop_epoch < 0 or pcc_thread_world_stop_epoch_held() != stop_epoch:

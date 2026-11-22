@@ -581,3 +581,39 @@ def test_target_directory_oom_retires_only_raw_records_and_keeps_legacy_links():
     model.decref(new)
     assert model.head == old and model.load(old, 32) == 0
     assert model.managed_freed == [new]
+
+
+@pytest.mark.parametrize("case", (
+    "unrelated", "weakref", "finalizer", "generator", "late-list", "disabled",
+))
+def test_review_graph_admission_requires_actual_observer_or_uncertainty(case):
+    model = WeakBatch(backend=1)
+    batch = model.stack_alloc(16)
+    record = model.stack_alloc(16)
+    target = model.allocate_object(
+        64, abi.PY_TYPE_GEN if case == "generator" else abi.PY_TYPE_LIST, 0,
+    )
+    model.store(batch, 0, record)
+    model.store(batch, 8, 0)
+    model.store(record, 0, target)
+    model.heads["py_weakref_head"] = 0x1000
+    if case == "late-list":
+        model.heads["py_weakref_late_head"] = 0x2000
+    model.words[0xE050] = int(case == "finalizer")
+    old_addr = model.ns["global_addr"]
+    model.ns["global_addr"] = (
+        lambda name: 0xE050 if name == "pcc_class_del_defined_count" else old_addr(name)
+    )
+    calls = []
+    model.ns.update(
+        _target_directory_available=lambda: int(case != "disabled"),
+        _target_directory_head=lambda obj: int(case == "weakref" and obj == target),
+        pcc_gc_object_node_is_active=lambda node: int(node == record),
+        pcc_gc_tracing_is_sweep_candidate=lambda obj: int(obj == target),
+        py_user_del_pending=lambda obj: int(obj == target and case in ("finalizer", "generator")),
+        pcc_gc_callback_layers_build_graph=lambda *args: calls.append(args) or 0x4000,
+    )
+    load_functions(SOURCE, {"pcc_gc_callback_layers_build"}, model.ns)
+    plan = model.ns["pcc_gc_callback_layers_build"](batch, 2, 7)
+    expected = (0, []) if case == "unrelated" else (0x4000, [(batch, 2, 7)])
+    assert (plan, calls) == expected
