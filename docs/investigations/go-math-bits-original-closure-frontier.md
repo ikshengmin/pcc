@@ -68,3 +68,41 @@ before IR. The field and make originals execute with official Go 1.27.3;
 87 adjacent checks passed. The separate pinned source union now reaches
 `testing/benchmark.go:238:2`, an unsupported `go` statement. No owned map
 allocation or goroutine support is implied.
+
+## Official Linux/amd64 dependency selection
+
+At `9857d0d2`, the exact repository-pinned official Go 1.27.3 archive
+(SHA-256 `65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40`)
+ran metadata selection only:
+
+```sh
+env GOTOOLCHAIN=local GOENV=off GOWORK=off GOPROXY=off GOSUMDB=off \
+    GO111MODULE=off CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GOAMD64=v1 \
+    GOFLAGS= GOEXPERIMENT= GODEBUG= GOCACHEPROG= GOMAXPROCS=2 \
+    "$GOROOT/bin/go" list -deps -test -json math/bits
+```
+
+Use an explicit verified GOROOT and isolated GOCACHE, GOTMPDIR and GOPATH.
+The existing `decode_graph`, `validate_graph`, and `reference_build_ids`
+checks accept this capture. The portable build-instance digest equals
+the checked-in pin
+`220a909f4e633dcfdb0eb92c31d74ad4425bb87eb48538d9e600cfb45d804b54`:
+133 instances, 91 test variants, 511 import-map edges. No original Go test
+or test binary was run.
+
+| Officially selected physical source | same locked bytes | absent from lock |
+| --- | ---: | ---: |
+| All selected sources (excluding generated test entry) | 567 | 345 |
+| Missing under compiler-owned runtime/unsafe exclusions | | 283 (258 Go, 20 assembly, 5 headers) |
+| Missing outside those exclusions | | 62 (32 Go, 29 assembly, 1 header) |
+
+Zero present selected files differed; 104 files in the four-context union
+were not selected. All 45 selected `os` Go files are already locked, as are
+the five selected `fmt`, ten `testing` and one
+`testing/internal/testdeps` Go files. The current `os` error means the
+gate hasn't assembled the exact target graph; it doesn't mean that
+`os` source is absent from the repository. Supplying the whole union would
+add unrelated platform/experiment files without filling the real gaps.
+Next expose this exact gap proof through the existing receipt entry, then
+require real materialization and owned runtime/ABI handling before claiming
+project acceptance.

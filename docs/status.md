@@ -225,15 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   measure the exact Linux/amd64 `math/bits` test dependency selection using
-   the pinned official Go 1.27.3 tool and compare it with the vendored
-   source union. Do not run acceptance tests or inject the union into the
-   actual gate. Ordinary map syntax and `make` operands are recognized,
-   not allocated; the separate pinned union now reaches the `go`
-   statement at `testing/benchmark.go:238:2`.
+   make the exact Linux/amd64 Go math/bits dependency-gap receipt
+   reproducible in the existing reference selection path, without
+   admitting a partial graph. Official source selection matches the
+   locked build-instance digest, with 567 present and 345 absent
+   physical files; all 45 selected `os` Go files are pinned. See the
+   [closure audit](investigations/go-math-bits-original-closure-frontier.md).
+   No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go math/bits exact Linux dependency selection: Codex, Linux x86-64, 2026-11-22 01:42 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
