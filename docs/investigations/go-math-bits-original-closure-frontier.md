@@ -566,3 +566,15 @@ The Go adapter and two independent native runtime controls passed;
 source shape starts at nil and appends one uintptr, as used by both
 cache-size producers; storage growth and source-result ownership still
 need dedicated proofs.
+
+The opt-in first append from nil now allocates one scalar word into a
+temporary result slot, checks status, initializes the element, and only
+then publishes its new owning handle to the caller. Native x86-64 GC0
+kept the single root live after the producer frame returned and through
+collection, then dropped it without residue. The three observed full-width
+words matched the unchanged Go fixture under Go 1.27.3, including zero
+and two high-bit values. Null output and unsupported collectors leave no
+new owner; unsupported backend status leaves caller output unchanged.
+Twenty-four adjacent and four native checks passed. This exercises the
+optional ABI, not Go source lowering of the fixture by PCC, growth of a
+non-nil slice, or the full original cache-size function.

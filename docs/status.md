@@ -225,16 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify a nil-to-first-append scalar slice producer and its result
-   owner before opening any Go source lowering. The checked Go descriptor
-   calls the real optional allocator on Linux x86-64 GC0; GC1–4 reject it.
-   The real blocker remains `internal/cpu/datacache_x86.go:15:23`.
-   See the
+   prove the closed Go source shape for nil-to-first-append and route
+   only proved producers to the optional owned result helper.
+   Linux x86-64 GC0 retained the initialized result through collection;
+   GC1–4 reject this ABI. The real blocker remains
+   `internal/cpu/datacache_x86.go:15:23`. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go scalar first append and returned owner: Codex, Linux x86-64, 2026-11-22 04:15 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

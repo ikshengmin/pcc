@@ -260,3 +260,25 @@ def test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir(trip
     with pytest.raises(ManagedContractError, match="Linux x86-64 GC0"):
         ScalarSliceRuntime(module, gc_backend=backend)
     assert not module.globals
+
+
+def test_opt_in_first_scalar_append_publishes_only_after_checked_initialization():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    fn = runtime.first_append_function("uintptr")
+    assert fn is runtime.first_append_function("uintptr")
+    assert fn.linkage == "internal"
+    text = str(module)
+    assert "alloca ptr" in text and "br i1" in text
+    allocate = text.split("scalar_append_allocate:", 1)[1].split("scalar_append_invalid:", 1)[0]
+    assert allocate.index("call i32 (ptr, i64, ptr) @pcc_rt_managed_alloc") < allocate.index("br i1")
+    ready = text.split("scalar_append_ready:", 1)[1].split("scalar_append_done:", 1)[0]
+    assert ready.index("@pcc_rt_managed_data") < ready.index("store i64") < ready.index("store ptr")
+    with pytest.raises(ManagedContractError, match="qualified scalar"):
+        runtime.first_append_function("int")
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
+        compile_go("package main;func first(x uintptr)[]uintptr{var s []uintptr;return append(s,x)};func main(){}")

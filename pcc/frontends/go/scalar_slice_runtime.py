@@ -9,6 +9,10 @@ from pcc.support.managed_objects import ManagedContractError, pointer_map
 from .managed_objects import scalar_slice_backing_plan
 
 
+# Existing pcc_shared_managed.h status, not a Go panic or error value.
+_BAD_LAYOUT = 3
+
+
 class ScalarSliceRuntime:
     """One module's immutable runtime-v1 descriptors and exact allocation ABI."""
 
@@ -18,6 +22,7 @@ class ScalarSliceRuntime:
             raise ManagedContractError("Go scalar slice envelope requires Linux x86-64 GC0")
         self.module = module
         self.descriptors = {}
+        self.first_appends = {}
 
     def descriptor(self, element):
         layout = scalar_slice_backing_plan(element).layout
@@ -37,6 +42,13 @@ class ScalarSliceRuntime:
             self.descriptors[element] = storage
         return self.descriptors[element]
 
+    def _matching_function(self, name, signature):
+        existing = self.module.globals.get(name)
+        if existing is not None and (not isinstance(existing, ir.Function)
+                                     or existing.function_type != signature):
+            raise ManagedContractError("incompatible shared managed ABI: " + name)
+        return existing
+
     def allocate(self, builder, element, count, output):
         """Emit status = alloc(descriptor, i64 count, handle **out)."""
         pointer = ir.IntType(8).as_pointer()
@@ -46,10 +58,56 @@ class ScalarSliceRuntime:
             raise ManagedContractError("scalar slice allocation requires its module, i64 count and handle output")
         signature = ir.FunctionType(ir.IntType(32), [pointer, i64, pointer.as_pointer()])
         name = "pcc_rt_managed_alloc"
-        existing = self.module.globals.get(name)
-        if existing is not None and (not isinstance(existing, ir.Function)
-                                     or existing.function_type != signature):
-            raise ManagedContractError("incompatible shared managed allocation ABI")
+        existing = self._matching_function(name, signature)
         desc = self.descriptor(element)
         alloc = existing if existing is not None else ir.Function(self.module, signature, name)
         return builder.call(alloc, [builder.bitcast(desc, pointer), count, output])
+
+    def first_append_function(self, element):
+        """Nil plus one scalar, returning status and an owning result handle.
+
+        The caller adopts this new handle and uses an offset/length/capacity
+        of 0/1/1. Output must not alias a prior live handle or managed payload.
+        Failure leaves output untouched. No safepoint follows data-address
+        resolution, and the helper never leaks its temporary handle slot.
+        """
+        layout = scalar_slice_backing_plan(element).layout
+        if element in self.first_appends:
+            return self.first_appends[element]
+        pointer = ir.IntType(8).as_pointer()
+        handle_out = pointer.as_pointer()
+        i32 = ir.IntType(32)
+        i64 = ir.IntType(64)
+        word = ir.IntType(8 * layout.element_stride)
+        self._matching_function("pcc_rt_managed_alloc", ir.FunctionType(i32, [pointer, i64, handle_out]))
+        data_type = ir.FunctionType(pointer, [pointer])
+        data_name = "pcc_rt_managed_data"
+        data = self._matching_function(data_name, data_type)
+        fn = ir.Function(self.module, ir.FunctionType(i32, [word, handle_out]),
+                         "__pcc_go_scalar_append_first_" + element)
+        fn.linkage = "internal"
+        value, output = fn.args
+        builder = ir.IRBuilder(fn.append_basic_block("entry"))
+        allocate = fn.append_basic_block("scalar_append_allocate")
+        invalid = fn.append_basic_block("scalar_append_invalid")
+        ready = fn.append_basic_block("scalar_append_ready")
+        done = fn.append_basic_block("scalar_append_done")
+        builder.cbranch(builder.icmp_unsigned("==", output, ir.Constant(handle_out, None)), invalid, allocate)
+        builder.position_at_end(invalid)
+        builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+        builder.position_at_end(allocate)
+        temporary = builder.alloca(pointer)
+        status = self.allocate(builder, element, ir.Constant(i64, 1), temporary)
+        builder.cbranch(builder.icmp_unsigned("==", status, ir.Constant(i32, 0)), ready, done)
+        builder.position_at_end(ready)
+        owner = builder.load(temporary)
+        if data is None:
+            data = ir.Function(self.module, data_type, data_name)
+        payload = builder.call(data, [owner])
+        builder.store(value, builder.bitcast(payload, word.as_pointer()))
+        builder.store(owner, output)
+        builder.branch(done)
+        builder.position_at_end(done)
+        builder.ret(status)
+        self.first_appends[element] = fn
+        return fn

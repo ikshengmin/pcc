@@ -258,6 +258,8 @@
         "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_emits_pointer_free_descriptor_and_alloc_call",
         "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir",
         "tests/runtime_shared/test_managed_owned.py::test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator",
+        "tests/go/test_managed_contracts.py::test_opt_in_first_scalar_append_publishes_only_after_checked_initialization",
+        "tests/runtime_shared/test_managed_owned.py::test_go_scalar_first_append_returns_a_live_owner_and_matches_go",
         "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
         "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
       ],
@@ -291,6 +293,8 @@
             "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_emits_pointer_free_descriptor_and_alloc_call",
             "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir",
             "tests/runtime_shared/test_managed_owned.py::test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator",
+            "tests/go/test_managed_contracts.py::test_opt_in_first_scalar_append_publishes_only_after_checked_initialization",
+            "tests/runtime_shared/test_managed_owned.py::test_go_scalar_first_append_returns_a_live_owner_and_matches_go",
             "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
             "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
           ],
@@ -316,7 +320,7 @@
           },
           {
             "path": "pcc/frontends/go/scalar_slice_runtime.py",
-            "sha256": "465e5a6b10763c5dd22c1dc053934472d59cef4d688f22529763940f36df8063"
+            "sha256": "676b2a3d3a8e26df9f2007323212b61fc17d99c34e155c9bde86259c48e60a16"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -325,7 +329,7 @@
         ]
       },
       "id": "go.shared-managed-compiler-contracts",
-      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice.",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice. The explicit nil-to-first-append helper transfers an initialized backing owner without changing output on failure; only its isolated GC0 ABI is exercised.",
       "evidence": []
     },
     {

@@ -119,7 +119,40 @@ def test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator(tmp_path, mo
                          extra_object=adapter, cpp_args=["-DPCC_TEST_GO_SCALAR_ADAPTER"])
 
 
-def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=()):
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: (
+    bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and bool(os.environ.get("PCC_GO_REFERENCE"))
+    and bool(os.environ.get("PCC_GO_REFERENCE_CACHE"))
+    and sys.platform == "linux" and platform.machine() == "x86_64"
+))
+@pytest.mark.xdist_group(name="go-reference")
+def test_go_scalar_first_append_returns_a_live_owner_and_matches_go(tmp_path, monkeypatch):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+    from tests.go.owned_execution import Execution, compile_reference, run
+
+    module = ir.Module()
+    module.triple = TARGET
+    append = ScalarSliceRuntime(module, gc_backend=0).first_append_function("uintptr")
+    fn = ir.Function(module, append.function_type, "scalar_slice_first_append")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    builder.ret(builder.call(append, list(fn.args)))
+    adapter = tmp_path / "go_first_append.o"
+    adapter.write_bytes(emit_owned_object(str(module), TARGET))
+    expected = b"".join(x.to_bytes(8, "little") for x in (0, 1 << 63, (1 << 64) - 1))
+    observed = _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_first_append.c",
+                                    extra_object=adapter, expected_gc0_stdout=expected)
+    source = ROOT / "tests/go/fixtures/managed_slice_first_append.go"
+    reference = compile_reference(((source.name, source.read_text()),), tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    assert (reference.parent / source.name).read_bytes() == source.read_bytes()
+    assert run(reference) == Execution(0, observed, b"")
+
+
+def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=(),
+                         expected_gc0_stdout=b""):
     from pcc.driver.project import TranslationUnit
     from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
     from pcc.runtime.shared_managed_build import managed_runtime_objects
@@ -152,4 +185,6 @@ def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=No
                                 capture_output=True, timeout=10, preexec_fn=limit_native_address_space)
         (tmp_path / f"gc{collector}.stdout").write_bytes(result.stdout)
         (tmp_path / f"gc{collector}.stderr").write_bytes(result.stderr)
-        assert (result.returncode, result.stdout, result.stderr) == (0, b"", b""), collector
+        expected_stdout = expected_gc0_stdout if collector == 0 else b""
+        assert (result.returncode, result.stdout, result.stderr) == (0, expected_stdout, b""), collector
+    return (tmp_path / "gc0.stdout").read_bytes()
