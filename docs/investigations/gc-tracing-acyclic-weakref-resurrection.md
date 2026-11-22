@@ -227,3 +227,24 @@ takes a fixture-validated, already resolved cohort and uses a small
 linear map; it is not a scalable allocator/index or a finalizer
 scheduler. Production dispatch, weakref ordering and the original
 failing generator case are unchanged.
+
+The next executable reference arm, in
+`tests/python/test_gc_acyclic_finalizer_rescue_native.py`, calls the
+actual user finalizer from an owned native program with the world
+running and then uses the real full stopped reachability recheck.
+With a registered resurrection root, both parent and child drop out
+of the dead cohort and the child's callback weakref still resolves.
+Without that root, both remain candidates and the child finalizer
+and weak callback have not run. All six GC1–3 combinations passed,
+including 60 repetitions of the same linked artifact.
+
+The fixture scopes raw candidate addresses to completed native frames
+and scrubs the retired callback stack before recheck. Its initial
+attempt to disable conservative scanning was invalid: a registered
+thread without a snapshot aborts the verifier. The successful test
+keeps normal stack/register scanning on and differs only in real root
+publication. This is not a collector-entry stack filtering change.
+GC4 retains its current stopped-world user-code policy and is not
+included in this resumed-window reference arm. The fixture does not
+yet retire the non-resurrected parent's fields or dispatch the
+child's terminal callback; production #9 remains open.

@@ -211,9 +211,11 @@ in the relevant section or issue and removes the entry.
    by Claude on 2026-11-22 from the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
    Linux pcc0 now runs the bounded, test-only classifier on actual object
-   slots across GC1–4. Next #9 slice: invoke one acyclic finalizer and
-   recheck rescue before settling its dependent child; no default path
-   changes until correctness and the recheck bound are proven.
+   slots across GC1–4. A second native reference arm runs the real
+   GC1–3 finalizer with the world running, stops again, and preserves
+   the child's callback weakref after rescue. Its no-rescue control
+   stays white. Next: retire the non-resurrected parent's owning edge
+   and prove the child's terminal callback order. No default path change.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -253,7 +255,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 acyclic finalizer native stop and rescue reference arm: Codex, Linux x86-64, 2026-11-22 12:18 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
