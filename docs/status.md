@@ -156,20 +156,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
-  Agent recommendation: use the same allocator and root protocol on GC0–4;
-  do not implement another source-shape admission or promote the GC0-only envelope.
-  Open review points: descriptor/header extent, complete write-path coverage,
-  and allocation/caller-result root transfer.
-
-- TinyXML2 open virtual destruction: earlier project-only proof
-  recommendation withdrawn. Agent recommendation: infer C++ destructor
-  exception specifications from declarations and subobjects, enforce
-  nonthrowing override contracts, and preserve ordinary virtual destructor
-  dispatch and terminate behavior. [Cross-TU evidence](investigations/tinyxml2-explicit-virtual-destructor-effects.md)
-  remains a regression target; a project name or closed build list is not
-  an effect certificate.
-
 - Whether the operating system's Metal shader compiler is an accepted platform
   boundary under the pcc1 ownership contract (item 5; open point in the
   [local-model architecture](design/pcc-local-model-architecture.md)). The
@@ -506,10 +492,18 @@ in the relevant section or issue and removes the entry.
    Before pushing a frontend result, run the affected language's whole
    ordinary suite (AGENTS.md: whole affected-language validation).
    Checkpoint regression #10 came from two Go commits (`d9735bfdd`,
-   `feef5185c`) that changed diagnostics without it. Next:
-   review the proposed [shared Go/Java managed storage](design/go-shared-managed-storage.md)
-   before implementation. Agent recommendation: freeze new source-shape
-   admissions; do not qualify on the GC0-only prototype. Existing probes
+   `feef5185c`) that changed diagnostics without it. Next,
+   in order. Go/Java: the first gate of the
+   [shared managed storage](design/go-shared-managed-storage.md) contract
+   that Claude approved at the maintainer's request on 2026-11-22
+   ([#13](https://github.com/ikshengmin/pcc/issues/13)): one described
+   layout tag on the existing header, a pointer-free and a reference-bearing
+   control on GC0–4, then generic slices. New Go source-shape admissions stay
+   frozen and the GC0-only v1 envelope is not promoted. C++ (TinyXML2
+   `1199:9`): destructor exception specifications and the non-throwing
+   override rule instead of effect proofs, as approved in
+   [#14](https://github.com/ikshengmin/pcc/issues/14); the project-only
+   effect domain is rejected. Existing probes
    are not native upstream acceptance. The opt-in source probe reached
    `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
