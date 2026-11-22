@@ -69,6 +69,34 @@ def test_pointer_bearing_record_remains_unadmitted():
     assert caught.value.code == "go.unsupported.pointer-storage"
 
 
+def test_static_field_proof_rejects_local_and_pointer_derived_places():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.pointer_flow import NONNULL, StaticLifetime, static_scalar_field_fact
+
+    source = """package main
+    type State struct{ Flag bool }
+    var X86 struct{ Nested State }
+    func work(p *State) {
+        var local State
+        _ = &X86.Nested.Flag
+        _ = &local.Flag
+        if p != nil { _ = &p.Flag }
+    }
+    func main() {}
+    """
+    result = analyze_source_instances({"main": SourceInstance("main", (("proof.go", source),), {})},
+                                      main_instance="main", target_triple="x86_64-unknown-linux-gnu")
+    work = result["main"].program.functions[0]
+    addresses = [stmt.exprs[0] for stmt in walk(work.body)
+                 if stmt.kind == "=" and stmt.exprs[0].kind == "address"]
+    assert len(addresses) == 3
+    static, local, derived = [static_scalar_field_fact(expr.args[0]) for expr in addresses]
+    assert static.nulls == NONNULL
+    root, = static.lifetimes
+    assert isinstance(root, StaticLifetime) and root.symbol.token.text == "X86"
+    assert local is derived is None
+
+
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
 def test_direct_static_scalar_field_reference_matches_official_go(tmp_path, monkeypatch):

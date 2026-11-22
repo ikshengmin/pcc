@@ -348,3 +348,12 @@ with PCC and matches official Go (one native comparison, two scoped
 checks). It does not justify accepting arbitrary aggregate pointers,
 global slice storage, the initialization sequence, or the bodyless
 `cpuid`/`xgetbv`/`getGOAMD64level` symbols.
+
+The pointer checker now has the explicit direct scalar-field proof:
+the field path must end at an ordinary package variable, not a local,
+dereferenced receiver, indexed place or runtime linkname. Its fact
+retains the static base owner; all other places keep their existing
+analysis. The new proof is not authorization for aggregate storage
+or alias transport. Scoped validation: 189 checks and 24 selected
+pointer integration checks. The selected `option` declaration still
+rejects pending the distinction between metadata and storage uses.

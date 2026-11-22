@@ -12,7 +12,7 @@ from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.branches import walk
 from pcc.frontends.go.records import underlying
 from pcc.frontends.go.types import (
-    ArrayType, PointerType, Results, is_string, result_types,
+    ArrayType, PointerType, Results, is_float, is_integer, is_string, result_types,
 )
 
 
@@ -51,6 +51,27 @@ class PointerFact:
 
 NULL = PointerFact(NIL)
 UNPROVEN = PointerFact(UNKNOWN)
+
+
+def static_scalar_field_fact(place):
+    """A direct scalar field path rooted in ordinary package storage.
+
+    This proof is about the pointee, not permission to store its pointer in an
+    aggregate. Dynamic indices, indirect places and runtime-owned linknames
+    are excluded here even if another analysis can prove a particular use.
+    """
+    if place.kind != "field" or not (
+        underlying(place.type) == "bool" or is_integer(place.type) or is_float(place.type)
+    ):
+        return None
+    while place.kind == "field":
+        place = place.args[0]
+    if place.kind not in ("name", "selector"):
+        return None
+    base = place.symbol
+    if base is None or not base.package_variable or base.linkname is not None:
+        return None
+    return PointerFact(NONNULL, frozenset({StaticLifetime(base)}))
 
 
 def pointer(dtype):
@@ -265,7 +286,8 @@ class PointerFlow:
                         LocalLifetime(self.owner, symbol, symbol.depth))
             return PointerFact(NONNULL, frozenset({lifetime}))
         if expr.kind == 'field':
-            return self.address(expr.args[0], state, check, saved)
+            fact = static_scalar_field_fact(expr)
+            return fact if fact is not None else self.address(expr.args[0], state, check, saved)
         if expr.kind == 'index':
             base, index = expr.args
             if base.addressable:
