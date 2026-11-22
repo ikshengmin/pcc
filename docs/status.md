@@ -216,13 +216,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   isolate native virtual dispatch and cleanup/effect proof for the
-   unchanged TinyXML2's explicit `node->~XMLNode()` at `1199:9`. Do not
-   bypass the placement destruction effects gate. Its prior static
-   pointer copy-list declaration compiles; the project has not linked.
+   prove one bound direct helper call in a destructor, preserving virtual
+   final-overrider dispatch and rejecting unknown or escaping calls.
+   [The minimal pair](multilanguage-status.md) shows closed virtual
+   destruction itself already executes; a same-TU helper is sufficient
+   to trigger TinyXML2's destruction-effect diagnostic. Leave the
+   upstream project unqualified until its real recursive and virtual
+   cleanup chain is covered.
 
    Claims:
-   - TinyXML2 explicit virtual destructor effects: Codex, Linux x86-64, 2026-11-22 01:07 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
