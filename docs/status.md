@@ -139,16 +139,17 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline: its failures and cancelled lanes predate rule 13
-and are not regressions. Pending:
-[run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775),
-dispatched by Claude from the local Mac on 2026-11-22 with
-`base_sha=7ce5cf6635b0893ceca1f06932b1127745099223` and
-`expected_sha=0f638af5bbaf8fb62b3e97d74e15d40fe3b89132`; the next untargeted
-round after completion compares it first. Partial comparison: Linux Go
-ordinary changed from pass to fail for three exact nodes ([#10](https://github.com/ikshengmin/pcc/issues/10)).
-The C++ integration lane was still running. Stopped areas: `frontend-go`
-until the #10 fix lands; the checkpoint itself has not advanced.
+That run is a red baseline. Pending: none.
+[Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
+at `0f638af5b` completed red and did not replace it. The
+[checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
+identifies three Go ordinary node regressions
+([#10](https://github.com/ikshengmin/pcc/issues/10)), one Rust integration
+node regression ([#11](https://github.com/ikshengmin/pcc/issues/11)),
+and a separate Windows collection blocker
+([#12](https://github.com/ikshengmin/pcc/issues/12)).
+Stopped areas: `frontend-go` and `frontend-rust` until their fixes land.
+Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
 answers here or in chat; the agent that next takes the unit records the answer
@@ -195,7 +196,10 @@ in the relevant section or issue and removes the entry.
    passed 132 focused ordinary checks and six owned Linux index cases.
    Broader Go validation with the pinned oracle is pending because the
    Linux memory preflight refused the second run; no limit was relaxed.
-   Finish validation before landing it, then #9 (GC1–4 weak
+   Finish that validation when the host can admit it. The next actionable
+   checkpoint regression is [#11](https://github.com/ikshengmin/pcc/issues/11)
+   (Rust cfg-disabled macro body); #12 tracks Windows collection separately.
+   Then #9 (GC1–4 weak
    callbacks and finalizers run too early under acyclic resurrection; filed
    by Claude on 2026-11-22 from the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
@@ -267,7 +271,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Finish exact checkpoint comparisons after 45020986775 completed: Codex, Linux x86-64, 2026-11-22 15:13 UTC, area checkpoint
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
