@@ -612,3 +612,14 @@ the surviving alias continued to append after the original handle
 was dropped. The raw words matched Go 1.27.3. Thirty-seven adjacent
 and six native checks passed. The caller's logical length still needs
 to flow through nil/in-capacity/full branches in one owning state.
+
+The optional owned handle-and-length transition now selects first
+allocation, in-capacity mutation, or growth. Successful replacement
+publishes both slots before releasing the prior handle; failures leave
+both slots unchanged. The native x86-64 GC0 loop appended nine values
+with collection between appends and retained the original alias while
+the current owner grew. Roots returned to baseline. A real constrained
+allocation failure preserved handle, length and contents. The nine
+words matched Go 1.27.3. Thirty-eight adjacent and seven native checks
+passed. This control drives the helper from a foreign observer; proving
+and lowering the original Go loop remains a separate source step.

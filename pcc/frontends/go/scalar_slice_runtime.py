@@ -26,6 +26,7 @@ class ScalarSliceRuntime:
         self.first_appends = {}
         self.full_appends = {}
         self.in_capacity_appends = {}
+        self.state_appends = {}
 
     def descriptor(self, element):
         layout = scalar_slice_backing_plan(element).layout
@@ -247,6 +248,96 @@ class ScalarSliceRuntime:
         builder.store(value, slot)
         builder.ret(ir.Constant(i32, 0))
         self.in_capacity_appends[element] = fn
+        return fn
+
+    def append_owned_state_function(self, element):
+        """Append to a caller-owned, zero-offset (handle, length) state.
+
+        The two distinct metadata slots are not managed payload. A live
+        non-nil slot owns one handle; an empty nil state has length zero.
+        A failed transition leaves both slots and every live handle intact.
+        On replacement, aliases must have their own acquired handles.
+        """
+        layout = scalar_slice_backing_plan(element).layout
+        if element in self.state_appends:
+            return self.state_appends[element]
+        pointer = ir.IntType(8).as_pointer()
+        i32, i64 = ir.IntType(32), ir.IntType(64)
+        handle_out, length_out = pointer.as_pointer(), i64.as_pointer()
+        word = ir.IntType(8 * layout.element_stride)
+        drop_name = "pcc_rt_managed_drop"
+        drop_type = ir.FunctionType(ir.VoidType(), [pointer])
+        drop = self._matching_function(drop_name, drop_type)
+        first = self.first_append_function(element)
+        full = self.full_append_function(element)
+        within = self.in_capacity_append_function(element)
+        if drop is None:
+            drop = ir.Function(self.module, drop_type, drop_name)
+        count = self.module.globals["pcc_rt_managed_element_count"]
+        fn = ir.Function(self.module, ir.FunctionType(i32, [handle_out, length_out, word]),
+                         "__pcc_go_scalar_append_owned_" + element)
+        fn.linkage = "internal"
+        owner_slot, length_slot, value = fn.args
+        builder = ir.IRBuilder(fn.append_basic_block("entry"))
+        inspect = fn.append_basic_block("scalar_state_inspect")
+        nil = fn.append_basic_block("scalar_state_nil")
+        capped = fn.append_basic_block("scalar_state_capped")
+        valid_capacity = fn.append_basic_block("scalar_state_valid_capacity")
+        initial = fn.append_basic_block("scalar_state_initial")
+        growth = fn.append_basic_block("scalar_state_growth")
+        exchange = fn.append_basic_block("scalar_state_exchange")
+        publish = fn.append_basic_block("scalar_state_publish")
+        replacement_done = fn.append_basic_block("scalar_state_replacement_done")
+        reuse = fn.append_basic_block("scalar_state_reuse")
+        reusing = fn.append_basic_block("scalar_state_reusing")
+        reuse_done = fn.append_basic_block("scalar_state_reuse_done")
+        invalid = fn.append_basic_block("scalar_state_invalid")
+        overlapping = builder.icmp_unsigned("==", owner_slot, builder.bitcast(length_slot, handle_out))
+        missing = builder.or_(builder.icmp_unsigned("==", owner_slot, ir.Constant(handle_out, None)),
+                              builder.icmp_unsigned("==", length_slot, ir.Constant(length_out, None)))
+        builder.cbranch(builder.or_(overlapping, missing), invalid, inspect)
+        builder.position_at_end(inspect)
+        old = builder.load(owner_slot)
+        length = builder.load(length_slot)
+        temporary = builder.alloca(pointer)
+        builder.cbranch(builder.icmp_unsigned("==", old, ir.Constant(pointer, None)), nil, capped)
+        builder.position_at_end(nil)
+        builder.cbranch(builder.icmp_unsigned("==", length, ir.Constant(i64, 0)), initial, invalid)
+        builder.position_at_end(capped)
+        capacity = builder.call(count, [old])
+        builder.cbranch(builder.icmp_unsigned(">", length, capacity), invalid, valid_capacity)
+        builder.position_at_end(valid_capacity)
+        builder.cbranch(builder.icmp_unsigned("==", length, capacity), growth, reuse)
+        builder.position_at_end(initial)
+        initial_status = builder.call(first, [value, temporary])
+        builder.branch(exchange)
+        builder.position_at_end(growth)
+        growth_status = builder.call(full, [old, value, temporary])
+        builder.branch(exchange)
+        builder.position_at_end(exchange)
+        replacement_status = builder.phi(i32)
+        replacement_status.add_incoming(initial_status, initial)
+        replacement_status.add_incoming(growth_status, growth)
+        builder.cbranch(builder.icmp_unsigned("==", replacement_status, ir.Constant(i32, 0)),
+                        publish, replacement_done)
+        builder.position_at_end(publish)
+        builder.store(builder.load(temporary), owner_slot)
+        builder.store(builder.add(length, ir.Constant(i64, 1)), length_slot)
+        builder.call(drop, [old])
+        builder.branch(replacement_done)
+        builder.position_at_end(replacement_done)
+        builder.ret(replacement_status)
+        builder.position_at_end(reuse)
+        reuse_status = builder.call(within, [old, length, value])
+        builder.cbranch(builder.icmp_unsigned("==", reuse_status, ir.Constant(i32, 0)), reusing, reuse_done)
+        builder.position_at_end(reusing)
+        builder.store(builder.add(length, ir.Constant(i64, 1)), length_slot)
+        builder.branch(reuse_done)
+        builder.position_at_end(reuse_done)
+        builder.ret(reuse_status)
+        builder.position_at_end(invalid)
+        builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+        self.state_appends[element] = fn
         return fn
 
 

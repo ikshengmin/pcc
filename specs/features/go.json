@@ -266,6 +266,8 @@
         "tests/runtime_shared/test_managed_owned.py::test_go_scalar_full_growth_preserves_both_owners_and_matches_go",
         "tests/go/test_managed_contracts.py::test_opt_in_in_capacity_append_checks_length_and_does_not_allocate",
         "tests/runtime_shared/test_managed_owned.py::test_go_scalar_within_capacity_aliases_share_writes_and_match_go",
+        "tests/go/test_managed_contracts.py::test_opt_in_append_owned_state_preserves_slots_until_success",
+        "tests/runtime_shared/test_managed_owned.py::test_go_scalar_loop_state_transitions_are_failure_atomic_and_match_go",
         "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
         "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
       ],
@@ -307,6 +309,8 @@
             "tests/runtime_shared/test_managed_owned.py::test_go_scalar_full_growth_preserves_both_owners_and_matches_go",
             "tests/go/test_managed_contracts.py::test_opt_in_in_capacity_append_checks_length_and_does_not_allocate",
             "tests/runtime_shared/test_managed_owned.py::test_go_scalar_within_capacity_aliases_share_writes_and_match_go",
+            "tests/go/test_managed_contracts.py::test_opt_in_append_owned_state_preserves_slots_until_success",
+            "tests/runtime_shared/test_managed_owned.py::test_go_scalar_loop_state_transitions_are_failure_atomic_and_match_go",
             "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
             "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
           ],
@@ -332,7 +336,7 @@
           },
           {
             "path": "pcc/frontends/go/scalar_slice_runtime.py",
-            "sha256": "cc006b44a4b8dc2449b8fe089a821d5c5eab521a4c4504555b4f7813c22cc338"
+            "sha256": "6160f5c10dea7009ce668f86884d447157b4698f4b1aaf8b652d831dda6df0fa"
           },
           {
             "path": "pcc/frontends/go/slice_proof.py",
@@ -345,7 +349,7 @@
         ]
       },
       "id": "go.shared-managed-compiler-contracts",
-      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice. The explicit nil-to-first-append helper transfers an initialized backing owner without changing output on failure; its isolated GC0 source entry proves a whole one-function producer package and emits a foreign status/owned-handle ABI. The isolated full-backing growth helper allocates and copies before publishing new ownership; the original owner is unchanged. The separate in-capacity path does not allocate or replace that owner; it bounds the explicit logical length and writes through existing aliases. This is not native Go slice return or general package lowering.",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice. The explicit nil-to-first-append helper transfers an initialized backing owner without changing output on failure; its isolated GC0 source entry proves a whole one-function producer package and emits a foreign status/owned-handle ABI. The isolated full-backing growth helper allocates and copies before publishing new ownership; the original owner is unchanged. The separate in-capacity path does not allocate or replace that owner; it bounds the explicit logical length and writes through existing aliases. One explicit loop-carried handle-and-length transition chooses all three paths and only transfers or drops ownership on success. This is not native Go slice return or general package lowering.",
       "evidence": []
     },
     {

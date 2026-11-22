@@ -361,3 +361,22 @@ def test_opt_in_in_capacity_append_checks_length_and_does_not_allocate():
     assert "@memcpy" not in str(module)
     with pytest.raises(ManagedContractError, match="qualified scalar"):
         runtime.in_capacity_append_function("int")
+
+
+def test_opt_in_append_owned_state_preserves_slots_until_success():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    append = runtime.append_owned_state_function("uintptr")
+    assert append is runtime.append_owned_state_function("uintptr")
+    text = str(module).split("define internal i32 @__pcc_go_scalar_append_owned_uintptr", 1)[1]
+    assert "@__pcc_go_scalar_append_first_uintptr" in text
+    assert "@__pcc_go_scalar_append_in_capacity_uintptr" in text
+    assert "@__pcc_go_scalar_append_full_uintptr" in text
+    publish = text.split("scalar_state_publish:", 1)[1].split("scalar_state_invalid:", 1)[0]
+    assert publish.index("store ptr") < publish.index("store i64") < publish.index("@pcc_rt_managed_drop")
+    with pytest.raises(ManagedContractError, match="qualified scalar"):
+        runtime.append_owned_state_function("bool")
