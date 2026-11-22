@@ -228,3 +228,28 @@ Positive gray credit with no finish request puts this snapshot before
 the finish handoff, not evidence of a missed zero-credit wake. Next
 measure queue publication and depletion at active matched worker counts.
 The Mac C512 workload was not executed here.
+
+The follow-up reads the phase words directly. In the earlier fixture,
+sampling sweep calls through `pcc_gc_telemetry` flushed the sampling
+producer's own debt and live-byte batches once; it did not flush other
+producers. The new observations add no flush or GC gate. The separate
+`hold` control uses the same allocation count, then keeps every worker
+alive at ordinary gates, without allocating, for a 50 ms bounded window
+or until the open mark commits. Three alternating direct and hold pairs
+ran with the same runtime and threshold.
+
+In the measured delayed w4 hold run, all four threads were still present
+with 18,303 gray credits, both batch lists nonempty, no fallback or flush,
+zero allocation debt and 43,046 reported GC2 write shades. After the idle
+gates it committed while all four were still present, with zero gray
+credit. Two of three direct w4 runs had the same delayed pattern at join
+(6,842 and 16,580 credits; 42,431 and 43,171 shades), so the symptom is
+timing-dependent. The w1 direct runs completed 12/10/11 marks with 5–7
+reported write shades. Direct counters were sampled individually, so these
+are not simultaneous invariants for each changing field. This is evidence
+of in-load replenishment, not hidden-tail starvation or a lost finish
+handoff. `_list_allocate_unpublished` publishes its fresh private root via
+the common barrier, and GC2 deliberately allows it to shade an already
+black referent. Qualify that exact path and a genuine old-object mutation
+control before changing a barrier. Do not disable black re-shading globally
+from telemetry alone.

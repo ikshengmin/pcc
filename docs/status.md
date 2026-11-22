@@ -206,10 +206,13 @@ in the relevant section or issue and removes the entry.
    newest-first live weakref callbacks with no callback for a discarded ref.
    Next #9: review the shared sweep policy before production wiring; see the
    waiting list. Native Linux GC2 now reproduces zero mark completions
-   during all three four-worker allocation runs, versus 5–11 at one worker;
-   the four-worker runs mark-finish only after workers exit. Next GC2:
-   distinguish slow gray consumption from an unserved finish handoff with
-   the workers still active; do not merge a performance candidate.
+   during a four-worker allocation load. An extended native control finds
+   published gray work rather than a missing flush or finish signal; a
+   delayed cycle completes when allocation stops with all four workers
+   still alive. Next GC2: qualify the fresh-black private construction-root
+   shade before touching any shared barrier; see the
+   [native screen](gc-gray-worklist.md#stock-gc2-native-completion-screen).
+   No performance candidate merges before #9 is fixed.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -248,7 +251,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - GC2 identify the active gray-work bottleneck in the native four-worker workload: Codex, Linux x86-64, 2026-11-22 14:22 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
