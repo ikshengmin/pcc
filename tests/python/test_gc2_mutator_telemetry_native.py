@@ -21,9 +21,26 @@ def test_gc2_one_and_four_mutators_publish_scheduler_telemetry(tmp_path, explici
                 tmp_path, f"w{workers}-{repeat}", [str(binary), str(workers)], env,
             )
             assert (result["returncode"], result["stderr"]) == (0, ""), result
+            output = result["stdout"].splitlines()
+            assert len(output) == 5, result
             assert re.fullmatch(
                 rf"GC2_MUTATOR_TELEMETRY_OK workers={workers} lists=48000 "
                 r"assists=\d+ traces=[1-9]\d* sweeps=[1-9]\d* "
-                r"work_stw=\d+ stw=[1-9]\d* max_stw_us=[1-9]\d*\n",
-                result["stdout"],
+                r"work_stw=\d+ stw=[1-9]\d* max_stw_us=[1-9]\d*",
+                output[0],
             ), result
+
+            stages = {}
+            for stage, line in zip(("before", "mid", "joined", "drained"), output[1:], strict=True):
+                match = re.fullmatch(
+                    rf"{stage} epoch=(\d+) finishes=(\d+) sweeps=(\d+) "
+                    r"live_bytes=(\d+) mark=[01] gray=(\d+) flush=[01] finish=[01] sweep=[01]",
+                    line,
+                )
+                assert match, (stage, result)
+                stages[stage] = tuple(map(int, match.groups()))
+            before, mid, joined, drained = stages.values()
+            assert before[1] <= mid[1] <= joined[1] <= drained[1], result
+            assert before[2] <= mid[2] <= joined[2] <= drained[2], result
+            assert drained[1] > before[1] and drained[2] > before[2], result
+            assert before[3] > 0 and drained[3] > 0, result

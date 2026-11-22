@@ -205,8 +205,11 @@ in the relevant section or issue and removes the entry.
    rescue or terminal order. The mixed reference now matches CPython's
    newest-first live weakref callbacks with no callback for a discarded ref.
    Next #9: review the shared sweep policy before production wiring; see the
-   waiting list. GC2 cycle-completion diagnosis may run without merging a
-   performance candidate.
+   waiting list. Native Linux GC2 now reproduces zero mark completions
+   during all three four-worker allocation runs, versus 5–11 at one worker;
+   the four-worker runs mark-finish only after workers exit. Next GC2:
+   distinguish slow gray consumption from an unserved finish handoff with
+   the workers still active; do not merge a performance candidate.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -245,7 +248,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - GC2 compare native cycle completion at one and four workers: Codex, Linux x86-64, 2026-11-22 14:19 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

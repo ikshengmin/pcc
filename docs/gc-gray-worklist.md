@@ -202,3 +202,29 @@ Mac execution, native self-host, complete collector correctness and seven
 rotated frozen A/B pairs for this tail increment with collection counts,
 outer-pause p99 and peak heap remain unverified. Performance results for the
 initial batch must not be attributed to this increment.
+
+### Stock GC2 native completion screen
+
+Linux x86-64 pcc0, source-matched archive at `ca79bee`, stock GC2 with
+`PCC_GC_DEBT_THRESHOLD=131072`, one vs four physical PCC worker threads,
+48,000 total empty-list allocations per process, three alternating pairs.
+Run `PCC_RUNTIME_ARCHIVE=<matched archive> uv run pytest -m integration
+tests/python/test_gc2_mutator_telemetry_native.py`. No CMS pause, explicit
+collect, or added mutator gate in the measured allocation loop. Snapshots
+are independently read counters, not a coherent stop. The reported live
+bytes are published tracked object bytes, not RSS; background deltas can
+still be buffered. `finishes` counts committed marks; `sweeps` counts
+sweep calls, not completed cycles.
+
+At worker join, w1 committed 5/11/11 marks, took 5/11/11 recorded stops,
+and published 575,360/181,760/214,560 live bytes. All w4 runs still had
+mark epoch 1 active, zero committed marks or stops, 8,780–11,586 gray
+credits, no flush/finish/sweep flag, and 1,920,160 live bytes. The ordinary
+gate drain then committed one mark and logged one stop in each w4 run
+(maximum 7.98–8.37 ms); the first-stop observation did not yet show a
+drop in published live bytes. This reproduces lack of in-load progress on
+a finite allocation workload, not a permanent deadlock or an HTTP A/B.
+Positive gray credit with no finish request puts this snapshot before
+the finish handoff, not evidence of a missed zero-credit wake. Next
+measure queue publication and depletion at active matched worker counts.
+The Mac C512 workload was not executed here.
