@@ -399,3 +399,14 @@ all 16 result bytes including high-bit values, and the complete unchanged
 Go control also matched official Go. Thirty-three focused result checks
 and 22 integration checks passed. This establishes the adapter-side ABI,
 not the source-to-body binding for the original CPUID.
+
+The isolated owned CPUID adapter is pinned to both unchanged inputs
+(`cpu_x86.go` declarations and `cpu_x86.s`) and to Linux/amd64. It
+translates ABI0's four uint32 slots into PCC's two register pairs,
+preserving RBX. A public-IR caller linked the owned object and produced
+the same 32 bytes as official Go assembling the unchanged original
+`cpu_x86.s` for leaf/subleaf (0,0) and (7,1). Inserts, instruction
+changes and a wrong target reject. Fifty-nine scoped checks and the
+native differential passed. This is not an automatic Go linker
+provider and does not admit `xgetbv`, `getGOAMD64level` or the
+whole-package tests.
