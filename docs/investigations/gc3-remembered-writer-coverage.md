@@ -223,6 +223,17 @@ positives. All five native fixture variants passed under Linux pcc0. The
 test tail/bitmap itself is still test-owned; ordinary allocation,
 collection and performance behavior are unchanged.
 
+A separate owned native probe manually prepares a valid bytes cell without
+a tracing record. The ordinary index registration rejects its legacy
+YOUNG bit. With a registered root and fixture-controlled normalization
+to the existing GC3 old representation, the same address gains an
+ordinary record and span; a repeat registration returns the same
+record. It keeps identity and bytes through two full collections.
+This is the single-mutator baseline only. Actual promotion needs a
+preflighted record, a remembered-edge reserve and a non-parking
+publication transaction, not a direct header write from the fixture.
+Both native lifecycle cases passed under Linux pcc0.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

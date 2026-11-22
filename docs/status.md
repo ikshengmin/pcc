@@ -262,8 +262,10 @@ in the relevant section or issue and removes the entry.
    exit, and no published cell in the unprotected control. The same
    owned native probe now checks real allocator cells: published exact
    addresses need no tracing index, and stopped incomplete cells remain
-   unknown. Next: qualify conversion of an actual published indexless
-   cell to one stable old record without moving it or changing dispatch.
+   unknown. With an explicit owner and fixture-managed age, a published
+   indexless cell now gets a stable old record at its original address
+   and survives two majors. Next: verify preparation failure and
+   ownership handoff before proposing a dormant runtime entry.
    Production promotion and nursery activation are still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -276,7 +278,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 indexless cell to stable old record native baseline: Codex, Linux x86-64, 2026-11-22 08:10 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
