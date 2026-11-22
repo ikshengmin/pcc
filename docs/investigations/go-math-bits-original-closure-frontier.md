@@ -325,3 +325,13 @@ its `_ [CacheLinePadSize]byte` padding field. It has not executed either
 the byte or string branch of `hashStr` with PCC. The focused suite passed
 249 checks and the selected existing Go generic integration subset
 passed 97 checks; an official Go reference ran both byte and string controls.
+
+Nonempty blank `[N]byte` fields now occupy their true physical slots.
+Positional operands still evaluate once in source order; blank fields
+are neither selectable nor keyed and are skipped by equality. The
+selected `CacheLinePad` declaration is past this boundary. The exact
+source-instance walk now stops at `internal/cpu/cpu.go:212:2`, the
+`*bool` field in `option`. Scoped validation: 137 checks and 22
+integration/native checks, including same-input Linux PCC and official
+Go for the byte padding and expression ordering. No pointer-bearing
+`option` or upstream test executed.

@@ -954,11 +954,15 @@ class Analyzer:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.limit-struct-fields', "struct exceeds implementation limit (256 fields)")
             fields, names = [], set()
             for index, (token, field_type) in enumerate(dtype.fields):
-                if token.text == "_":
-                    raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields', "blank struct fields are not implemented")
-                if token.text in names:
-                    raise GoDiagnostic(token, "duplicate struct field " + token.text)
-                names.add(token.text)
+                blank = token.text == "_"
+                if blank:
+                    if not isinstance(field_type, ArraySyntax):
+                        raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields',
+                                            "only fixed byte-array blank padding is implemented")
+                else:
+                    if token.text in names:
+                        raise GoDiagnostic(token, "duplicate struct field " + token.text)
+                    names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
                 embedded = bool(dtype.embedded and dtype.embedded[index])
                 if embedded and isinstance(field_type, PointerSyntax):
@@ -972,6 +976,10 @@ class Analyzer:
                     raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
                                         "embedded pointer fields require lifetime storage and receiver adjustment")
                 field_type = self.resolve_type(field_type, signature=signature)
+                if blank and (not isinstance(field_type, ArrayType) or field_type.element != "uint8"
+                              or field_type.count == 0):
+                    raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields',
+                                        "only nonempty fixed byte-array blank padding is implemented")
                 if embedded and (not isinstance(field_type, DefinedType)
                                  or not isinstance(underlying(field_type), StructType)):
                     raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
@@ -1014,7 +1022,9 @@ class Analyzer:
             count = dtype.count if isinstance(dtype, ArrayType) else len(dtype.fields)
             values = [None] * count
             for index, item in zip(expr.indices, expr.args):
-                values[index] = self.static_initializer(item)
+                value = self.static_initializer(item)
+                if not isinstance(dtype, StructType) or dtype.fields[index].name != "_":
+                    values[index] = value
             return tuple(values)
         if expr.kind == "call" and expr.symbol is None and same_underlying_ignoring_tags(expr.type, expr.args[0].type):
             return self.static_initializer(expr.args[0])
@@ -1696,6 +1706,8 @@ class Analyzer:
                 names = [field.name for field in dtype.fields]
                 for position, (key, item) in enumerate(zip(expr.keys, expr.args)):
                     if key is not None:
+                        if key.kind == "name" and key.value == "_":
+                            raise GoDiagnostic(key.token, "blank field cannot be a struct literal key")
                         if key.kind != "name" or key.parenthesized or key.value not in names:
                             raise GoDiagnostic(key.token, "unknown or invalid struct literal field")
                         index = names.index(key.value)
@@ -1953,6 +1965,8 @@ class Analyzer:
                 dtype = underlying(base.type)
             if not isinstance(dtype, StructType):
                 raise GoDiagnostic(expr.token, "field selector requires a struct value")
+            if expr.value == "_":
+                raise GoDiagnostic(expr.token, "blank field cannot be selected")
             names = [field.name for field in dtype.fields]
             if expr.value not in names:
                 if any(field.embedded for field in dtype.fields):

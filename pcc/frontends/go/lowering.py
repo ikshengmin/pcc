@@ -537,7 +537,10 @@ class Lowerer:
             values = [self.expression(item) for item in expr.args]
             storage = self.temps[id(expr)]
             self.builder.store(ir.Constant(ir_type(expr.type), None), storage)
+            dtype = underlying(expr.type)
             for index, value in zip(expr.indices, values):
+                if isinstance(dtype, StructType) and dtype.fields[index].name == "_":
+                    continue  # The positional operand was still evaluated in order.
                 index_type = ir.IntType(32 if expr.kind == "struct" else 64)
                 element = self.builder.gep(storage, [ir.Constant(ir.IntType(32), 0), ir.Constant(index_type, index)])
                 self.builder.store(value, element)
@@ -818,9 +821,9 @@ class Lowerer:
         """
         dtype = underlying(dtype)
         if isinstance(dtype, ArrayType):
-            components = [dtype.element] * dtype.count
+            components = [(index, dtype.element) for index in range(dtype.count)]
         elif isinstance(dtype, StructType):
-            components = [field.type for field in dtype.fields]
+            components = [(index, field.type) for index, field in enumerate(dtype.fields) if field.name != "_"]
         elif is_string(dtype):
             return self.string_compare_values("==", self.builder.load(left), self.builder.load(right))
         elif is_float(dtype):
@@ -831,7 +834,7 @@ class Lowerer:
             return ir.Constant(ir.IntType(1), 1)
         unequal = self.function.append_basic_block("aggregate.unequal")
         done = self.function.append_basic_block("aggregate.done")
-        for index, element in enumerate(components):
+        for index, element in components:
             # Use the same typed GEP/load path as existing aggregate fields
             # and array indexing; no shared extractvalue type inference needed.
             indices = [ir.Constant(ir.IntType(32), 0),
