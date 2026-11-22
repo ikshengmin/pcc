@@ -285,3 +285,14 @@ case passed three times per mode (12 Linux owned runs). The ordinary
 isolated reference uses CPython and passed. CPython reentry semantics,
 C-extension ownership, and resurrection are not established here.
 The sealed performance revision's runtime source is unchanged.
+
+The C-ownership follow-up reuses the actual foreign-handle C fixture.
+Two independent persistent C holds are created on a thread that exits;
+a real automatic sweep runs with both, then another runs with one.
+The native process verifies both the raw object identity and the
+remaining C reference count while ownership still exists. In the
+candidate arm actual shortcut visits increased while the foreign
+reference was held in each phase. After the last Py_DECREF, explicit
+collection releases the payload exactly once. The same owned ELF
+passed three times per mode on Linux. This is not whole NumPy or
+third-party extension acceptance and does not change the runtime.
