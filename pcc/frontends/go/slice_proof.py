@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field, replace
 
 from pcc.frontends.go.branches import walk
-from pcc.frontends.go.managed_objects import FixedByteExtent
+from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan
 from pcc.frontends.go.syntax import PointerSyntax, SliceSyntax, StructSyntax, TypeName
 
 
@@ -19,10 +19,19 @@ class ByteAppendSummary:
 
 
 @dataclass(frozen=True)
+class BoundedByteCallerRequest:
+    function: str
+    local: str
+
+
+@dataclass(frozen=True)
 class ByteSpanCallerProof:
     append_lengths: tuple[int, ...]
     views: int
     string_copies: int
+    local: str
+    allocation: object = field(repr=False, compare=False)
+    append_calls: tuple = field(repr=False, compare=False)
 
 
 def _name(expr, value):
@@ -168,6 +177,7 @@ def byte_span_caller_proof(program, function_name, local, extent):
         return None
     allocation = None
     append_steps, lengths = set(), []
+    append_calls = []
     closed = False
     for stmt in fn.body:
         matches_declaration = (stmt.kind == ":=" and len(stmt.names) == 1 and stmt.names[0].text == local
@@ -193,6 +203,7 @@ def byte_span_caller_proof(program, function_name, local, extent):
                 except ValueError:
                     return None
                 append_steps.add(id(stmt))
+                append_calls.append(call)
                 lengths.append(extent.length)
                 continue
         if any(_mentions(expr, local) for item in walk((stmt,)) for expr in item.exprs + item.targets):
@@ -227,7 +238,30 @@ def byte_span_caller_proof(program, function_name, local, extent):
             continue
         if not all(_scalar_reads_only(expr, local) for expr in stmt.exprs + stmt.targets):
             return None
-    return ByteSpanCallerProof(tuple(lengths), views, copies)
+    return ByteSpanCallerProof(tuple(lengths), views, copies, local,
+                               allocation.exprs[0], tuple(append_calls))
+
+
+def bounded_byte_caller_from_source(program, request):
+    """Discover a small literal backing and recompute its whole caller proof."""
+    if any(imported.alias != "_" for imported in program.imports):
+        return None
+    functions = [fn for fn in program.functions if fn.token.text == request.function and fn.receiver is None]
+    if len(functions) != 1:
+        return None
+    for stmt in functions[0].body:
+        if (stmt.kind != ":=" or len(stmt.names) != 1 or stmt.names[0].text != request.local
+                or len(stmt.exprs) != 1 or not _builtin_call(stmt.exprs[0], "make")):
+            continue
+        args = stmt.exprs[0].args
+        if len(args) != 3 or args[0].kind != "type" or not _slice_of(args[0].value, "uint8"):
+            return None
+        length, capacity = (_literal_dimension(arg) for arg in args[1:])
+        if length is None or capacity is None or not 0 <= length <= capacity <= 4096:
+            return None
+        extent = FixedByteExtent(length, capacity, byte_backing_plan())
+        return byte_span_caller_proof(program, request.function, request.local, extent)
+    return None
 
 
 @dataclass(frozen=True)

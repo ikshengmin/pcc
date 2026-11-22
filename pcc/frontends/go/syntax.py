@@ -395,6 +395,7 @@ class Function:
     declaration_only: bool = False
     byte_append_summary: object = None
     scalar_slice_owner_proof: object = None
+    bounded_byte_proof: object = None
 
 
 @dataclass

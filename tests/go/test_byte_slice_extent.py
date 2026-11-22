@@ -188,3 +188,53 @@ def test_exact_byte_helper_signature_is_source_metadata_only(monkeypatch):
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(helper + "func main(){}")
     assert caught.value.code == "go.unsupported.slice-storage"
+
+
+BOUND_OWNER_SOURCE = """package main
+func appendBytes(b []byte, args ...uint32) []byte {
+    for _, v := range args { b=append(b,byte(v),byte(v>>8),byte(v>>16),byte(v>>24)) }
+    return b
+}
+func Name() string {
+    data := make([]byte, 0, 8)
+    data = appendBytes(data, uint32(1))
+    data = appendBytes(data, uint32(2))
+    if len(data) != 8 { panic("extent") }
+    return "fixed"
+}
+func main() {}
+"""
+
+
+def test_explicit_bounded_byte_owner_types_exact_allocation_and_appends_only():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import BoundedByteCallerRequest
+
+    units = (("bytes.go", BOUND_OWNER_SOURCE),)
+    request = BoundedByteCallerRequest("Name", "data")
+    owner = SourceInstance("main", units, {}, bounded_byte_callers=(request,))
+    target = "x86_64-unknown-linux-gnu"
+    analysis = analyze_source_instances({"main": owner}, main_instance="main", target_triple=target)["main"]
+    body = analysis.functions["Name"].body
+    assert [item.exprs[0].kind for item in body[:3]] == [
+        "bounded_byte_make", "bounded_byte_append", "bounded_byte_append",
+    ]
+    assert body[3].exprs[0].args[0].kind == "bounded_byte_len"
+    assert analysis.functions["Name"].bounded_byte_proof.append_lengths == (4, 8)
+    with pytest.raises(UnsupportedGo, match="slice types require shared-runtime"):
+        compile_go(BOUND_OWNER_SOURCE)
+
+
+def test_bounded_byte_owner_never_accepts_changed_step_or_wrong_element_type():
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import BoundedByteCallerRequest
+    request = BoundedByteCallerRequest("Name", "data")
+    target = "x86_64-unknown-linux-gnu"
+    for source, match in (
+        (BOUND_OWNER_SOURCE.replace("0, 8", "0, 4"), r"make\(slice\) requires owned"),
+        (BOUND_OWNER_SOURCE.replace("uint32(2)", "uint64(2)"), "cannot use uint64"),
+        (BOUND_OWNER_SOURCE.replace('return "fixed"', '_ = data[0]; return "fixed"'), "checked byte index"),
+    ):
+        with pytest.raises(GoDiagnostic, match=match):
+            instance = SourceInstance("main", (("bytes.go", source),), {}, bounded_byte_callers=(request,))
+            analyze_source_instances({"main": instance}, main_instance="main", target_triple=target)

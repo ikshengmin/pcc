@@ -754,3 +754,13 @@ reference checks passed. The exact source probe now reaches the
 original CPU Name's `make([]byte,0,48)` at
 `internal/cpu/cpu_x86.go:246:10`. Native catalog storage and upstream
 test execution remain unbuilt.
+
+An explicit bounded-caller request now rechecks the whole byte-owner
+shape, binds the exact small constant make and append calls, and
+type-checks their uint32 inputs and the owner's len. Changed capacity,
+wrong element types and unproved callers still reject. The exact
+source-instance probe advances through the original CPU Name's 48-byte
+builder to its first checked read at `internal/cpu/cpu_x86.go:257:28`.
+Eighty adjacent checks and four isolated native byte-operation
+differentials passed. The original CPU Name was not lowered or
+executed by PCC; its dynamic byte views and copied result remain open.

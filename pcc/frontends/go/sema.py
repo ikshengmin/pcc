@@ -437,9 +437,11 @@ def validate_value_types(program, *, source_only=False):
     """Last semantic boundary over emitted carriers, excluding type declarations."""
     seen = set()
     scalar_owner = None
+    byte_owner = None
 
     def storage(dtype, token):
-        if scalar_owner is not None and dtype == SliceType("uintptr"):
+        if (scalar_owner is not None and dtype == SliceType("uintptr") or
+                byte_owner is not None and dtype == SliceType("uint8")):
             return
         require_value_type(dtype, token)
 
@@ -479,6 +481,7 @@ def validate_value_types(program, *, source_only=False):
         if source_only and function.byte_append_summary is not None:
             continue  # The proved helper carries no admitted slice value.
         scalar_owner = function.scalar_slice_owner_proof if source_only else None
+        byte_owner = function.bounded_byte_proof if source_only else None
         for i, (_, dtype) in enumerate(function.params):
             if function.variadic and i == len(function.params)-1:
                 require_variadic_element(dtype, function.token)
@@ -494,7 +497,7 @@ def validate_value_types(program, *, source_only=False):
             expression(expr)
         for stmt in function.body:
             statement(stmt)
-    scalar_owner = None
+    scalar_owner = byte_owner = None
     for declaration in program.variables:
         statement(declaration)
 
@@ -536,7 +539,7 @@ def validate_containment_cycles(declarations):
 class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None,
                  source_only=False, native_functions=None, prove_scalar_slice_owners=False,
-                 static_option_catalogs=()):
+                 static_option_catalogs=(), bounded_byte_callers=()):
         self.program = program
         self.imports = imports or {}
         self.dot_imports = {}
@@ -545,6 +548,21 @@ class Analyzer:
         self.generics = generics if generics is not None else GenericSession()
         self.source_only = source_only
         self.scalar_slice_owners = {}
+        self.bounded_byte_callers = {}
+        if bounded_byte_callers and not source_only:
+            raise ValueError("bounded byte caller metadata is source-only")
+        if bounded_byte_callers:
+            from pcc.frontends.go.slice_proof import BoundedByteCallerRequest, bounded_byte_caller_from_source
+            seen_callers = set()
+            for request in bounded_byte_callers:
+                if (type(request) is not BoundedByteCallerRequest
+                        or any(type(value) is not str or not value for value in (request.function, request.local))
+                        or request.function in seen_callers):
+                    raise ValueError("invalid or repeated bounded byte caller source request")
+                seen_callers.add(request.function)
+                proof = bounded_byte_caller_from_source(program, request)
+                if proof is not None:
+                    self.bounded_byte_callers[request.function] = proof
         self.static_option_catalogs = {}
         self.static_catalog_writes = {}
         self.static_catalog_places = {}
@@ -703,6 +721,7 @@ class Analyzer:
             function.params = [(token, self.resolve_type(dtype, signature=(function.variadic and i == len(function.params)-1)))
                                for i, (token, dtype) in enumerate(function.params)]
             function.scalar_slice_owner_proof = self.scalar_slice_owners.get(function.token.text)
+            function.bounded_byte_proof = self.bounded_byte_callers.get(function.token.text)
             function.result = self.resolve_type(function.result, signature=function.scalar_slice_owner_proof is not None)
             if owner is not None:
                 if (owner.symbol != function.abi_symbol
@@ -1337,9 +1356,14 @@ class Analyzer:
         proof = getattr(self.function, "scalar_slice_owner_proof", None)
         return self.source_only and proof is not None and proof.owner == name
 
+    def bounded_byte_local(self, name):
+        proof = getattr(self.function, "bounded_byte_proof", None)
+        return self.source_only and proof is not None and proof.local == name
+
     def declare(self, token, dtype, constant=None):
         catalog = self.static_catalog_copy_catalog if token is self.static_catalog_copy_token else None
-        if not (dtype == SliceType("uintptr") and self.scalar_owner_local(token.text)) and catalog is None:
+        if (catalog is None and not (dtype == SliceType("uintptr") and self.scalar_owner_local(token.text))
+                and not (dtype == SliceType("uint8") and self.bounded_byte_local(token.text))):
             require_value_type(dtype, token)
         self.check_name(token, local_value=True)
         if len(self.scopes) == 1 and token.text in self.type_bindings:
@@ -2114,6 +2138,9 @@ class Analyzer:
                 # expression even when both operands happen to be constant.
                 expr.type = "uint8"
                 return
+            if base.type == SliceType("uint8") and self.bounded_byte_local(base.token.text):
+                raise UnsupportedGo(index.token, 'go.unsupported.slice-storage',
+                                    "bounded byte owner still needs a checked byte index")
             array_type = underlying(base.type)
             if isinstance(array_type, PointerType) and isinstance(underlying(array_type.element), ArrayType):
                 base = self.dereference(base)
@@ -2369,6 +2396,7 @@ class Analyzer:
                 syntax = expr.args[0].value
                 if isinstance(syntax, SliceSyntax):
                     self.check_make_slice(expr)
+                    return
                 if isinstance(syntax, (MapSyntax, ChannelSyntax)):
                     make_form = "make(map)" if isinstance(syntax, MapSyntax) else "make(chan)"
                     if len(expr.args) > 2 or expr.spread is not None:
@@ -2406,6 +2434,8 @@ class Analyzer:
                 if isinstance(dtype, SliceType):
                     if name == "len" and dtype == SliceType("uintptr") and self.scalar_owner_local(arg.token.text):
                         expr.kind = "managed_scalar_len"
+                    elif name == "len" and dtype == SliceType("uint8") and self.bounded_byte_local(arg.token.text):
+                        expr.kind = "bounded_byte_len"
                     else:
                         borrow_span(arg)
                         expr.kind = 'variadic_'+name
@@ -2587,6 +2617,10 @@ class Analyzer:
         known = length is not None and capacity is not None
         if known and length > capacity:
             raise GoDiagnostic(expr.args[1].token, "make(slice) length cannot exceed capacity")
+        proof = getattr(self.function, "bounded_byte_proof", None)
+        if proof is not None and expr is proof.allocation and known and dtype == SliceType("uint8"):
+            expr.kind, expr.type = "bounded_byte_make", dtype
+            return
         failure = UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
                                 "make(slice) requires owned slice backing storage")
         failure.byte_span_extent = (FixedByteExtent(length, capacity, byte_backing_plan())
@@ -2735,6 +2769,15 @@ class Analyzer:
             raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
                                 "scalar slice result outside a proved scalar slice owner")
         if getattr(function, "byte_append_summary", None) is not None:
+            proof = getattr(self.function, "bounded_byte_proof", None)
+            if proof is not None and any(expr is call for call in proof.append_calls):
+                values = self.values(expr.args)
+                if not values or values[0].type != SliceType("uint8") or not self.bounded_byte_local(values[0].token.text):
+                    raise GoDiagnostic(expr.token, "bounded append requires its original local byte owner")
+                for value in values[1:]:
+                    coerce(value, "uint32")
+                expr.kind, expr.type, expr.symbol = "bounded_byte_append", SliceType("uint8"), function
+                return
             raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
                                 "bounded byte helper requires a proved byte-span caller and storage binding")
         if function.type_parameters:
