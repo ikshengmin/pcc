@@ -520,3 +520,28 @@ the exact published object. This covers the shared barrier contract for
 that field, not arbitrary raw C assignments or the currently stubbed
 `PyObject_GC_Track` API. The Linux focused run passed all 107 checks.
 Darwin was not run.
+
+### Bounded stopped stack capture
+
+The layered review path now copies and sorts only stopped caller and
+parked-mutator words inside the proven candidate address hull. An empty
+cut allocates nothing. The proof requires nonmoving, fixed candidate
+extents without backing spans; a missing hull keeps the complete cut.
+On ambiguity the world remains stopped and the legacy oracle gets a fresh
+**unfiltered** cut, since an old live object's address can fall outside
+the hull. No change to ordinary root capture, singleton or GC4 admission.
+The native caller-only old-list test writes a candidate into a list
+accessible exclusively from an unregistered caller slot, then verifies
+the CPython event order and one full fallback. All 109 Linux focused
+checks passed, including the caller interior pointer and parked-thread
+controls. Darwin was not run.
+
+The owned chain probe ran seven alternating same-input pairs per cell
+against the exact prior review runtime (168 fresh processes). At 64
+candidates the median paired time reduction was 27% (GC1) and 31% (GC3)
+without unrelated data, and 32% (GC1) and 30% (GC3) with 16,384 rooted
+lists, 7/7 wins in each cell. Every run still finalized and reclaimed
+exactly 64 candidates without fallback in those cells, using one window
+per finalizer. At four candidates wins were mixed in some cells. This
+isolates the cut cost; it is neither the pcc_perf no-observer A/B nor
+proof of linear scaling or safe same-layer batching.

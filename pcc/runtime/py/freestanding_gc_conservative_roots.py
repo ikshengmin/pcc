@@ -11,6 +11,7 @@ from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED
 from pcc.unsafe import (
     free,
+    function_addr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -521,34 +522,60 @@ def _capture_thread_words(context) -> None:
     store_i64(context, _WORDS_COUNT, count)
 
 
+# The caller's first three cells are the existing stopped root-cut format.
+# The filter is local to the visitor; legacy root seeding sees no new layout.
+_CALLBACK_FILTER_WORDS: i64 = 0
+_CALLBACK_FILTER_LOW: i64 = 8
+_CALLBACK_FILTER_HIGH: i64 = 16
+_CALLBACK_FILTER_BYTES: i64 = 24
+
+
+@c_abi_export("pcc_gc_conservative_record_callback_word")
+def _record_callback_word(word, filter_ctx) -> None:
+    value: i64 = ptr_to_int(word)
+    if (value >= load_i64(filter_ctx, _CALLBACK_FILTER_LOW)
+            and value < load_i64(filter_ctx, _CALLBACK_FILTER_HIGH)):
+        _record_word(word, load_ptr(filter_ctx, _CALLBACK_FILTER_WORDS))
+
+
 @c_abi_export("pcc_gc_conservative_capture_callback_words")
-def pcc_gc_conservative_capture_callback_words(context, caller) -> None:
+def pcc_gc_conservative_capture_callback_words(context, caller, low: i64, high: i64) -> None:
     if pcc_thread_world_stop_epoch_held() < 0 or ptr_is_null(caller) != 0:
         pcc_platform_abort()
         return
     store_ptr(context, _WORDS_DATA, null())
     store_i64(context, _WORDS_COUNT, 0)
     store_i64(context, _WORDS_CAPACITY, 0)
-    visited: i64 = pcc_thread_visit_conservative_callback_words(_record_word, context, caller)
+    filter_ctx = stack_alloc(_CALLBACK_FILTER_BYTES)
+    visitor_ctx = context
+    visitor = function_addr("pcc_gc_conservative_record_word")
+    if low > 0 and high > low:
+        store_ptr(filter_ctx, _CALLBACK_FILTER_WORDS, context)
+        store_i64(filter_ctx, _CALLBACK_FILTER_LOW, low)
+        store_i64(filter_ctx, _CALLBACK_FILTER_HIGH, high)
+        visitor_ctx = filter_ctx
+        visitor = function_addr("pcc_gc_conservative_record_callback_word")
+    visited: i64 = pcc_thread_visit_conservative_callback_words(visitor, visitor_ctx, caller)
     if visited < 0:
         pcc_platform_abort()
         return
     capacity: i64 = load_i64(context, _WORDS_COUNT)
-    words = malloc(capacity * _WORD_BYTES if capacity > 0 else _WORD_BYTES)
+    if capacity == 0:
+        return
+    words = malloc(capacity * _WORD_BYTES)
     if ptr_is_null(words):
         pcc_platform_abort()
         return
     store_ptr(context, _WORDS_DATA, words)
     store_i64(context, _WORDS_COUNT, 0)
     store_i64(context, _WORDS_CAPACITY, capacity)
-    captured: i64 = pcc_thread_visit_conservative_callback_words(_record_word, context, caller)
+    captured: i64 = pcc_thread_visit_conservative_callback_words(visitor, visitor_ctx, caller)
     if captured != visited or load_i64(context, _WORDS_COUNT) != capacity:
         free(words)
         pcc_platform_abort()
         return
     count: i64 = _sort_words(words, capacity)
     store_i64(context, _WORDS_COUNT, count)
-
 
 @c_abi_export("pcc_gc_callback_singleton_conservative_root")
 def pcc_gc_callback_singleton_conservative_root(node, context) -> i64:

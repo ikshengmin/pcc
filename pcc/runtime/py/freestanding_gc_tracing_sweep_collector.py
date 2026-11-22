@@ -1118,7 +1118,7 @@ def _review_sweep_acyclic_singleton(node, budget: i64, backend: i64) -> i64:
 
 
 pcc_gc_conservative_capture_callback_words = extern(
-    "pcc_gc_conservative_capture_callback_words", (c_ptr, c_ptr), c_void
+    "pcc_gc_conservative_capture_callback_words", (c_ptr, c_ptr, c_int64, c_int64), c_void
 )
 pcc_gc_callback_layers_build = extern(
     "pcc_gc_callback_layers_build", (c_ptr, c_int64, c_int64), c_ptr
@@ -1250,10 +1250,17 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
 @c_abi_export("pcc_gc_review_remark_layer_at_stop")
 def _review_remark_layer_at_stop(plan, nodes, count: i64, caller) -> None:
     cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
-    pcc_gc_conservative_capture_callback_words(cut, caller)
+    low: i64 = pcc_gc_callback_layers_hull_low(plan)
+    high: i64 = pcc_gc_callback_layers_hull_high(plan)
+    pcc_gc_conservative_capture_callback_words(cut, caller, low, high)
     precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut)
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     if precise == 0:
+        if low > 0 and high > low:
+            # A valid old owner can lie outside the candidate hull. The
+            # full oracle must see the unfiltered words from this same stop.
+            pcc_gc_callback_root_cut_release(cut)
+            pcc_gc_conservative_capture_callback_words(cut, caller, 0, 0)
         _recheck_reachability_after_window(cut)
     pcc_gc_callback_root_cut_release(cut)
 
@@ -1295,7 +1302,7 @@ def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
 @c_abi_export("pcc_gc_review_full_recheck_from_caller")
 def _review_full_recheck_from_caller(caller) -> None:
     cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
-    pcc_gc_conservative_capture_callback_words(cut, caller)
+    pcc_gc_conservative_capture_callback_words(cut, caller, 0, 0)
     _recheck_reachability_after_window(cut)
     pcc_gc_callback_root_cut_release(cut)
 

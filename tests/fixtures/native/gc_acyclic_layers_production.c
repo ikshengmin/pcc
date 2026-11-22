@@ -93,6 +93,10 @@ static PyObject *finish_a(PyObject *self) {
             if (PyList_Append(roots[HOLD], target) != 0) error = 32;
         } else if (rescue == 16) {
             if (PyObject_SetAttrString(roots[HOLD], "child", target) != 0) error = 33;
+        } else if (rescue == 18) {
+            PyObject *holder = *caller_hold;
+            if (!holder) error = 35;
+            else py_list_append(holder, target);
         } else if (rescue == 17) {
             struct ExtensionHolder *holder = (struct ExtensionHolder *)roots[HOLD];
             pcc_gc_store_ptr(roots[HOLD], &holder->edge, target);
@@ -158,12 +162,13 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
     if (rescue == 3 || rescue >= 6) {
-        PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 ? py_list_new(0) :
+        PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 || rescue == 18 ? py_list_new(0) :
                            rescue == 6 || rescue == 8 || rescue == 11 || rescue == 14 ? py_dict_new() :
                            rescue == 7 || rescue == 16 ? py_instance_new(a_cls) :
                            rescue == 17 ? new_extension_holder() : py_set_new();
         if (!holder) { error = 14; return NULL; }
-        pcc_gc_store_root(&roots[HOLD], holder);
+        if (rescue == 18) *caller_hold = holder;
+        else pcc_gc_store_root(&roots[HOLD], holder);
         if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
         if (rescue == 9 || rescue == 12) py_list_append(holder, py_None);
         pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
@@ -249,13 +254,14 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "capi-list") == 0) rescue = 15;
     if (argc > 1 && strcmp(argv[1], "capi-attr") == 0) rescue = 16;
     if (argc > 1 && strcmp(argv[1], "extension-field") == 0) rescue = 17;
+    if (argc > 1 && strcmp(argv[1], "caller-old-holder") == 0) rescue = 18;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
     if (argc > 1 && strcmp(argv[1], "mixed-tail") == 0) mixed = 2;
     if (argc > 1 && strcmp(argv[1], "mixed-rescue") == 0) { mixed = 1; rescue = 1; }
     // Unregistered storage in the suspended owner’s caller frame. This slot
-    // starts empty; the callback creates a new root through a saved address.
+    // starts empty; the fixture or callback publishes through its saved address.
     PyObject *volatile raw = NULL;
     caller_hold = &raw;
     if (pcc_current_thread_id() <= 0) return 19;
@@ -307,6 +313,7 @@ int main(int argc, char **argv) {
     if (rescue == 5 && (!b || b == py_None || raw != (PyObject *)((char *)b + 1))) error = 19;
     if (rescue == 17 && (!b || b == py_None || !ext_edge_visits ||
                          ((struct ExtensionHolder *)roots[HOLD])->edge != b)) error = 34;
+    if (rescue == 18 && (roots[HOLD] != NULL || !raw || !b || b == py_None)) error = 36;
     note(b == py_None ? 5 : 6);
     const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del", "b-new"};
     for (int i = 0; i < event_count; ++i)
