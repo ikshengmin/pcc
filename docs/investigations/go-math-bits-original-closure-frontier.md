@@ -463,3 +463,14 @@ slice carriers, so the next step is an independent call-growth and
 escape proof. All 178 adjacent checks and the owned static-string
 control passed; official Go executed the same constructor shapes
 and rejected four invalid forms.
+
+The selected package's byte-append source proof recognizes the closed
+uint32 loop and its four byte shifts (0, 8, 16, 24), including the
+returned input-alias contract. A different result, escaped slice or
+shadowed builtin does not qualify. With the checked (0,48) input,
+the original call counts produce extents 16, 32 and 48 on the same
+backing; an additional word is rejected by this in-place proof. The
+unchanged original helper, run in an official Go control, confirmed
+all three extents and the backing address. Forty-eight scoped checks
+and the unchanged PCC variadic native differential passed. Native
+byte writes and the carrying slice ABI are not introduced by this proof.

@@ -52,3 +52,66 @@ def test_unchanged_cpu_name_make_has_the_selected_constant_extent():
     assert (caught.value.filename, caught.value.line) == (path, 246)
     extent = caught.value.byte_span_extent
     assert (extent.length, extent.capacity) == (0, 48)
+
+
+def test_exact_append_bytes_prefix_preserves_capacity_and_backing_owner():
+    import json
+
+    from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import append_within_extent, byte_append_summary
+    from scripts.ci_go_math_bits_project import sha256
+    from scripts.go_std_closure import FIXTURE, load_linux_normal_plan
+
+    pin = json.loads(load_linux_normal_plan()[0])
+    files = pin["packages"]["internal/cpu"]["files"]["go"]
+    units = []
+    for name in files:
+        name = "src/internal/cpu/" + name
+        raw = (FIXTURE / name).read_bytes()
+        assert pin["files"][name] == [len(raw), sha256(raw)]
+        units.append((name, raw.decode()))
+    program = parse_package(units, require_main=False)
+    summary = byte_append_summary(program, "appendBytes")
+    assert summary.bytes_per_word == 4 and summary.shifts == (0, 8, 16, 24)
+    name_fn = next(fn for fn in program.functions if fn.token.text == "Name")
+    counts = [
+        len(stmt.exprs[0].args) - 1 for stmt in name_fn.body
+        if stmt.kind == "=" and stmt.exprs[0].kind == "call" and stmt.exprs[0].value == "appendBytes"
+    ]
+    assert counts == [4, 4, 4]
+    owner = byte_backing_plan()
+    extent = FixedByteExtent(0, 48, owner)
+    observed = []
+    for count in counts:
+        extent = append_within_extent(extent, summary, count)
+        observed.append(extent.length)
+        assert extent.backing is owner and extent.capacity == 48
+    assert observed == [16, 32, 48]
+    with pytest.raises(ValueError, match="capacity"):
+        append_within_extent(extent, summary, 1)
+
+
+@pytest.mark.parametrize("extra", (
+    "func append(){}",
+    "var byte int",
+))
+def test_shadowed_builtins_cannot_prove_in_place_growth(extra):
+    from pcc.frontends.go.slice_proof import byte_append_summary
+    from pcc.frontends.go.syntax import GoParser
+
+    code = ("package p;func f(b []byte,args ...uint32)[]byte{"
+            "for _,v:=range args{b=append(b,byte(v))};return b};" + extra)
+    program = GoParser().parse(code, "shadow.go", require_main=False)
+    assert byte_append_summary(program, "f") is None
+
+
+def test_retained_or_replaced_slice_is_not_a_caller_backing_proof():
+    from pcc.frontends.go.slice_proof import byte_append_summary
+    from pcc.frontends.go.syntax import GoParser
+
+    prefix = "package p;var saved []byte;func f(b []byte,args ...uint32)[]byte{"
+    step = "for _,v:=range args{b=append(b,byte(v))};"
+    for rest in ("saved=b;return b}", "return saved}"):
+        program = GoParser().parse(prefix + step + rest, "escape.go", require_main=False)
+        assert byte_append_summary(program, "f") is None
