@@ -332,3 +332,11 @@ pcc0 foreign-handle nodes and both review bridge nodes passed together
 at the shared lock before compilation; the qualifying retry explicitly
 disabled auto-provision and ran only pcc0. This is not pcc1 or macOS
 evidence and does not extend the measurement candidate.
+
+Profiling classification now recognizes all five actual owned bridge,
+short-list scan and claim entry symbols even if `sample` cannot unwind
+to the outer worker. Five clipped-stack controls preserve the total
+busy-sample denominator and leave ordinary list lock time in its own
+category; 87 host tool checks passed. No real sampling or A/B was
+executed here. The already pinned Mac measurement is still valid; use
+this later tool revision if collecting `top`/`gap` attribution.

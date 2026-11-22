@@ -120,7 +120,11 @@ CATEGORIES = (
     # marks through pcc_gc_tracing_step_cycle when it pays allocation debt.
     ("collect", ("pcc_gc_safepoint", "pcc_gc_collect_tracing", "pcc_gc_collect",
                  "py_gc_collect", "pcc_gc_alloc_stage_drain_stopped",
-                 "pcc_gc_cms_worker_main_py", "pcc_gc_tracing_step_cycle")),
+                 "pcc_gc_cms_worker_main_py", "pcc_gc_tracing_step_cycle",
+                 # A clipped stack may not retain either outer worker frame.
+                 "pcc_gc2_review_list_bridge", "pcc_gc_trace_gc2_rooted_short_list",
+                 "pcc_gc_trace_gc2_short_list_slot", "pcc_gc2_review_claim_open_locked",
+                 "pcc_gc2_review_claim_close_locked")),
     # pcc_gc_register_object_cell indexes an allocator cell; the other two
     # are its fallbacks in pcc_gc_alloc.
     ("register", ("pcc_gc_note_object_allocated_sized", "pcc_gc_alloc_stage_note",

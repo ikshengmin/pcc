@@ -802,3 +802,25 @@ def test_comparison_records_exact_list_selector_only_for_gc2(tmp_path, monkeypat
     rows = PERF.compare("base", "candidate", 1, (0, 2), (1,), 10)
     assert "gc2_exact_list_bridge_by_arm" not in rows[0]
     assert rows[1]["gc2_exact_list_bridge_by_arm"] == {"base": False, "candidate": True}
+
+
+@pytest.mark.parametrize("anchor", (
+    "pcc_gc2_review_list_bridge",
+    "pcc_gc_trace_gc2_rooted_short_list",
+    "pcc_gc_trace_gc2_short_list_slot",
+    "pcc_gc2_review_claim_open_locked",
+    "pcc_gc2_review_claim_close_locked",
+))
+def test_exact_list_review_profile_counts_truncated_gc_frames_as_collection(anchor):
+    # The clipped collector stack has no outer marker or CMS entry frame.
+    # It still owns the allocator/lock work below it, without changing the
+    # busy sample denominator or unrelated list-mutation attribution.
+    rows = [
+        [0, 24, anchor],
+        [1, 8, "malloc"],
+        [1, 6, "pcc_thread_graph_lock_acquire_for"],
+        [0, 13, "op_list_append"],
+        [1, 5, "pcc_thread_graph_lock_acquire_for"],
+    ]
+    assert PERF.category_shares(rows) == {"collect": 24, "program": 8, "graph-lock": 5}
+    assert sum(PERF.category_shares(rows).values()) == sum(PERF.function_shares(rows).values())
