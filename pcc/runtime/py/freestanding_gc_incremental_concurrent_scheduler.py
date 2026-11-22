@@ -638,6 +638,92 @@ def pcc_gc_tracing_debt_threshold() -> i64:
     return threshold
 
 
+GC2_MIN_GROWTH = 4194304
+GC2_MAX_WORK = 512
+GC2_MAX_BYTES = 9223372036854775807
+
+
+@c_abi_export("pcc_gc2_pacer_mode")
+def _gc2_pacer_mode() -> i64:
+    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2:
+        return -1
+    if load_i64(global_addr("pcc_gc_debt_threshold_override"), 0) > 0:
+        return -1
+    return load_i32(global_addr("pcc_gc2_pacer_percent"), 0)
+
+
+@c_abi_export("pcc_gc2_pacer_goal")
+def pcc_gc2_pacer_goal(live: i64, percent: i64) -> i64:
+    if live < 0:
+        live = 0
+    if percent < 0:
+        percent = 0
+    if percent > 10000:
+        percent = 10000
+    room: i64 = GC2_MAX_BYTES - live
+    growth: i64 = GC2_MIN_GROWTH
+    if percent != 0:
+        whole: i64 = unsigned_div_i64(live, 100)
+        tail: i64 = unsigned_div_i64((live - whole * 100) * percent, 100)
+        if tail > room or whole > unsigned_div_i64(room - tail, percent):
+            return GC2_MAX_BYTES
+        desired: i64 = whole * percent + tail
+        if desired > growth:
+            growth = desired
+    if growth > room:
+        return GC2_MAX_BYTES
+    return live + growth
+
+
+@c_abi_export("pcc_gc2_pacer_trigger")
+def pcc_gc2_pacer_trigger(live: i64, goal: i64) -> i64:
+    if live >= goal:
+        return goal
+    headroom: i64 = unsigned_div_i64(goal - live, 4)
+    if headroom == 0:
+        headroom = 1
+    return goal - headroom
+
+
+@c_abi_export("pcc_gc2_pacer_due")
+def pcc_gc2_pacer_due() -> i64:
+    percent: i64 = _gc2_pacer_mode()
+    if percent < 0:
+        return -1
+    live: i64 = atomic_load_i64(global_addr("pcc_gc_tracing_marked_bytes"), 0, "acquire")
+    goal: i64 = pcc_gc2_pacer_goal(live, percent)
+    heap: i64 = atomic_load_i64(global_addr("pcc_gc_live_bytes"), 0, "acquire")
+    return 1 if heap >= pcc_gc2_pacer_trigger(live, goal) else 0
+
+
+@c_abi_export("pcc_gc2_pacer_budget")
+def pcc_gc2_pacer_budget(goal: i64, trigger: i64, heap: i64, allocated: i64) -> i64:
+    if allocated <= 0 or heap < trigger:
+        return 0
+    units: i64 = unsigned_div_i64(allocated - 1, 64) + 1
+    if units >= GC2_MAX_WORK:
+        return GC2_MAX_WORK
+    bonus: i64 = units
+    if heap < goal:
+        width: i64 = goal - trigger
+        pressure: i64 = heap - trigger
+        if pressure <= unsigned_div_i64(GC2_MAX_BYTES, units):
+            bonus = unsigned_div_i64(units * pressure, width)
+        else:
+            # Exact quotient without overflowing. Only used for enormous
+            # synthetic heap snapshots; actual GC2 widths take the fast path.
+            bonus = 0
+            remainder: i64 = 0
+            for i in range(units):
+                if remainder >= width - pressure:
+                    bonus = bonus + 1
+                    remainder = remainder - (width - pressure)
+                else:
+                    remainder = remainder + pressure
+    result: i64 = units + bonus
+    return GC2_MAX_WORK if result > GC2_MAX_WORK else result
+
+
 @c_abi_export("pcc_gc_tracing_budget_from_debt")
 def pcc_gc_tracing_budget_from_debt() -> i64:
     debt: i64 = load_i64(global_addr("pcc_gc_debt_bytes"), 0)
@@ -1329,19 +1415,27 @@ def _cms_publish_alloc(bytes: i64, pushes: i64) -> None:
     )
     previous: i64 = atomic_rmw_i64("add", global_addr("pcc_gc_debt_bytes"), 0, bytes, "acq_rel")
     debt: i64 = previous + bytes
-    # An assist is automatic collection too: none while gc.disable() or
-    # threshold0 == 0 holds. Only a marking cycle has one, so most
-    # allocations skip the threshold's arithmetic.
+    # Allocation batches are paced against managed heap occupancy only
+    # in the opt-in GC2 arm. Mark debt remains a separate work ledger.
     if (
         load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-        and debt >= pcc_gc_tracing_debt_threshold() * 4
         and load_i32(global_addr("py_gc_enabled"), 0) != 0
         and load_i32(global_addr("py_gc_threshold0"), 0) > 0
     ):
+        budget: i64 = 0
+        percent: i64 = _gc2_pacer_mode()
+        if percent >= 0:
+            live: i64 = atomic_load_i64(global_addr("pcc_gc_tracing_marked_bytes"), 0, "acquire")
+            goal: i64 = pcc_gc2_pacer_goal(live, percent)
+            heap: i64 = atomic_load_i64(global_addr("pcc_gc_live_bytes"), 0, "acquire")
+            budget = pcc_gc2_pacer_budget(goal, pcc_gc2_pacer_trigger(live, goal), heap, bytes)
+        elif debt >= pcc_gc_tracing_debt_threshold() * 4:
+            budget = pcc_gc_tracing_budget_from_debt()
+            if budget > 512:
+                budget = 512
+        if budget <= 0:
+            return
         atomic_rmw_i32("add", global_addr("pcc_gc_cms_mutator_assists"), 0, 1, "relaxed")
-        budget: i64 = pcc_gc_tracing_budget_from_debt()
-        if budget > 512:
-            budget = 512
         commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
         processed: i64 = pcc_gc_tracing_step_cycle(budget)
         pcc_gc_tracing_discharge_debt(processed)

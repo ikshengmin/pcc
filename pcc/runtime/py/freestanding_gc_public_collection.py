@@ -51,6 +51,7 @@ pcc_gc_tracing_step_cycle = extern(
 pcc_gc_gray_count_load_acquire = extern(
     "pcc_gc_gray_count_load_acquire", (), c_int64
 )
+pcc_gc2_pacer_due = extern("pcc_gc2_pacer_due", (), c_int64)
 pcc_gc_tracing_debt_threshold = extern(
     "pcc_gc_tracing_debt_threshold", (), c_int64
 )
@@ -168,9 +169,15 @@ def pcc_gc_cms_worker_main_py(arg):
             # debt (pcc_gc_finish_tracing_cycle).
             due: i64 = marking
             if due == 0 and atomic_load_i32(sweep_pending, 0, "acquire") == 0:
-                debt_slot = global_addr("pcc_gc_debt_bytes")
-                if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
-                    due = 1
+                pacing: i64 = -1
+                if backend == 2:
+                    pacing = pcc_gc2_pacer_due()
+                if pacing >= 0:
+                    due = pacing
+                else:
+                    debt_slot = global_addr("pcc_gc_debt_bytes")
+                    if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
+                        due = 1
             handoff: i64 = 0
             if marking != 0 and pcc_gc_gray_count_load_acquire() == 0:
                 # The gray work is traced: a mutator finishes the mark and
@@ -414,6 +421,11 @@ def pcc_gc_config_ensure() -> i64:
     store_i32(global_addr("pcc_gc_pause"), 0, pause)
     store_i32(global_addr("pcc_gc_stepmul"), 0, stepmul)
     store_i64(global_addr("pcc_gc_debt_threshold_override"), 0, threshold)
+    if backend == 2:
+        pacer_percent: i64 = pcc_gc_config_parse_env_i32(
+            pcc_platform_getenv(cstr("PCC_GC2_PACER_PERCENT")), -1, -1, 10000
+        )
+        store_i32(global_addr("pcc_gc2_pacer_percent"), 0, pacer_percent)
     store_i32(global_addr("pcc_gc_minor_heap_size"), 0, minor_heap_size)
     store_i32(global_addr("pcc_gc_minor_alloc_max"), 0, minor_alloc_max)
     store_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0, refcount_probe)

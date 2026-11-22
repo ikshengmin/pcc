@@ -1849,6 +1849,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_next_object_id',
         'pcc_gc_object_node_free_count',
         'pcc_gc_pause',
+        'pcc_gc2_pacer_percent',
         'pcc_gc_read_barrier_enabled',
         'pcc_gc_relocation_barrier_forwards',
         'pcc_gc_relocation_forwards',
@@ -3334,6 +3335,7 @@ def _cross_object_signatures_part_15():
     # Allocation debt is published per thread in batches.
     "pcc_gc_cms_note_alloc_flush": ((), "c_void"),
     "pcc_gc_cms_publish_alloc": (("c_int64", "c_int64"), "c_void"),
+    "pcc_gc2_pacer_due": ((), "c_int64"),
     # Live bytes are published per thread in batches.
     "pcc_gc_live_bytes_note": (("c_int64",), "c_void"),
     "pcc_gc_live_bytes_flush": ((), "c_void"),

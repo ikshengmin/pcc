@@ -248,6 +248,7 @@ define_global_i64("pcc_gc_live_bytes", 0)
 # Bytes the last completed tracing mark found reachable (Go's heap marked):
 # the pacing threshold grows with it, not with garbage awaiting its sweep.
 define_global_i64("pcc_gc_tracing_marked_bytes", 0)
+define_global_i32("pcc_gc2_pacer_percent", -1)
 define_global_i32("pcc_gc_pause", 1000)
 define_global_i32("pcc_gc_stepmul", 10000)
 define_global_i64("pcc_gc_debt_threshold_override", 0)

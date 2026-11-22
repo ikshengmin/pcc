@@ -115,6 +115,7 @@ class _SchedulerMemory(_RawCollectorMemory):
         _install(self.namespace, SOURCE.with_name("freestanding_gc_incremental_concurrent_scheduler.py"), {
             "pcc_gc_cms_note_alloc", "pcc_gc_tracing_debt_threshold",
             "pcc_gc_tracing_budget_from_debt", "pcc_gc_tracing_discharge_debt",
+            "pcc_gc2_pacer_due", "_gc2_pacer_mode",
         })
         _install(self.namespace, SOURCE.with_name("freestanding_gc_public_collection.py"), {
             "pcc_gc_cms_worker_main_py",
