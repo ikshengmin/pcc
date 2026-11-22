@@ -841,6 +841,32 @@ def py_weakref_queue_tracing_candidates(pending_cell) -> int:
     return count
 
 
+pcc_gc_callback_layers_contains = extern(
+    "pcc_gc_callback_layers_contains", (c_ptr, c_ptr, c_int64), c_int64
+)
+
+
+@c_abi_export("py_weakref_queue_tracing_layer")
+def py_weakref_queue_tracing_layer(plan, layer: int, pending_cell) -> int:
+    """Settle only the current acyclic layer, before running any queued code."""
+    count: int = 0
+    wr = global_load_ptr("py_weakref_head")
+    while ptr_is_null(wr) == 0:
+        nxt = load_ptr(wr, _WEAKREF_NEXT)
+        target = load_ptr(wr, _WEAKREF_TARGET)
+        if (pcc_gc_callback_layers_contains(plan, target, layer) != 0
+                and _tracing_target_dies(target) != 0):
+            if (ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0
+                    and (load_i32(wr, PYOBJECTHEADER_FLAGS_OFFSET)
+                         & (_TRACING_WEAK_SWEEP_CANDIDATE | PY_FLAG_GC_DEALLOCATING)) == 0):
+                if _queue_callback_hold(wr, pending_cell, 0) != 0:
+                    return -1
+                count += 1
+            store_ptr(wr, _WEAKREF_TARGET, null())
+        wr = nxt
+    return count
+
+
 @c_abi_export("py_weakref_queue_tracing_target_callbacks")
 def py_weakref_queue_tracing_target_callbacks(target, pending_cell) -> int:
     """Prepare just one exact tracing target's early callback-bearing refs.

@@ -3326,8 +3326,17 @@ def _cross_object_signatures_part_14():
 
 def _cross_object_signatures_part_15():
     return {
+    'pcc_gc_callback_layers_build': (('c_ptr', 'c_int64', 'c_int64'), 'c_ptr'),
+    'pcc_gc_callback_layers_release': (('c_ptr',), 'c_void'),
+    'pcc_gc_callback_layers_count': (('c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_layers_range': (('c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_layers_node': (('c_ptr', 'c_int64'), 'c_ptr'),
+    'pcc_gc_callback_layers_contains': (('c_ptr', 'c_ptr', 'c_int64'), 'c_int64'),
+    'py_weakref_queue_tracing_layer': (('c_ptr', 'c_int64', 'c_ptr'), 'c_int64'),
     "pcc_gc_callback_singleton_conservative_root": (("c_ptr", "c_ptr"), "c_int64"),
     "pcc_gc_callback_root_cut_release": (("c_ptr",), "c_void"),
+    "pcc_thread_visit_conservative_callback_words": (("c_ptr", "c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_conservative_capture_callback_words": (("c_ptr", "c_ptr"), "c_void"),
     "pcc_gc_conservative_capture_thread_words": (("c_ptr",), "c_void"),
     "pcc_gc_scan_captured_thread_roots": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc_seed_roots_with_stop_cut": (("c_ptr",), "c_void"),

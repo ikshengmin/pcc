@@ -48,6 +48,9 @@ pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_thread_visit_conservative_words = extern(
     "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
 )
+pcc_thread_visit_conservative_callback_words = extern(
+    "pcc_thread_visit_conservative_callback_words", (c_ptr, c_ptr, c_ptr), c_int64
+)
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
 pcc_thread_snapshot_stopped_world_owner = extern(
     "pcc_thread_snapshot_stopped_world_owner", (), c_int64
@@ -509,6 +512,35 @@ def _capture_thread_words(context) -> None:
     store_i64(context, _WORDS_COUNT, 0)
     store_i64(context, _WORDS_CAPACITY, capacity)
     captured: i64 = pcc_thread_visit_conservative_words(_record_word, context)
+    if captured != visited or load_i64(context, _WORDS_COUNT) != capacity:
+        free(words)
+        pcc_platform_abort()
+        return
+    count: i64 = _sort_words(words, capacity)
+    store_i64(context, _WORDS_COUNT, count)
+
+
+@c_abi_export("pcc_gc_conservative_capture_callback_words")
+def pcc_gc_conservative_capture_callback_words(context, caller) -> None:
+    if pcc_thread_world_stop_epoch_held() < 0 or ptr_is_null(caller) != 0:
+        pcc_platform_abort()
+        return
+    store_ptr(context, _WORDS_DATA, null())
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, 0)
+    visited: i64 = pcc_thread_visit_conservative_callback_words(_record_word, context, caller)
+    if visited < 0:
+        pcc_platform_abort()
+        return
+    capacity: i64 = load_i64(context, _WORDS_COUNT)
+    words = malloc(capacity * _WORD_BYTES if capacity > 0 else _WORD_BYTES)
+    if ptr_is_null(words):
+        pcc_platform_abort()
+        return
+    store_ptr(context, _WORDS_DATA, words)
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, capacity)
+    captured: i64 = pcc_thread_visit_conservative_callback_words(_record_word, context, caller)
     if captured != visited or load_i64(context, _WORDS_COUNT) != capacity:
         free(words)
         pcc_platform_abort()

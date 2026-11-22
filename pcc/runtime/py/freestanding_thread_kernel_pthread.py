@@ -789,6 +789,48 @@ def pcc_thread_visit_conservative_words(visitor, context) -> int:
     return visited
 
 
+@c_abi_export("pcc_thread_visit_conservative_callback_words")
+def pcc_thread_visit_conservative_callback_words(visitor, context, caller) -> int:
+    # A sealed same-stop sweep already accounted for the owner's caller
+    # registers. They cannot change while that call is suspended; callback
+    # stores into addressable caller slots are observed by scanning that
+    # live stack again. The collector's disposable scratch is not a root.
+    if ptr_is_null(visitor) or pcc_thread_world_stop_epoch_held() < 0:
+        return -1
+    visited: int = 0
+    owner = global_load_ptr("pcc_tls_thread_record_py")
+    node = global_load_ptr("pcc_thread_records_head_py")
+    while ptr_is_null(node) == 0:
+        if ptr_is_null(caller) == 0 and ptr_to_int(node) == ptr_to_int(owner):
+            lower: int = ptr_to_int(caller)
+            upper: int = load_i64(node, 32) + 16
+            if (lower & 7) != 0 or upper < lower or upper - lower > 1073741824:
+                return -1
+            read_at: int = 0
+            while read_at < upper - lower:
+                call_void_ptr2(visitor, load_ptr(caller, read_at), context)
+                visited += 1
+                read_at += 8
+            node = load_ptr(node, 0)
+            continue
+        size: int = load_i64(node, _THREAD_ROOT_BYTES)
+        data = load_ptr(node, _THREAD_ROOT_DATA)
+        if size <= 0 or ptr_is_null(data):
+            return -1
+        offset: int = 0
+        while offset < _THREAD_ROOT_REGISTER_BYTES:
+            call_void_ptr2(visitor, load_ptr(node, _THREAD_ROOT_REGISTERS + offset), context)
+            offset = offset + 8
+            visited = visited + 1
+        offset = 0
+        while offset < size:
+            call_void_ptr2(visitor, load_ptr(data, offset), context)
+            offset = offset + 8
+            visited = visited + 1
+        node = load_ptr(node, 0)
+    return visited
+
+
 def _thread_record_mark(state: int, frame) -> None:
     # Caller holds the world lock. Publish before advertising parked/exited;
     # the raw flush neither allocates nor polls nor acquires another lock.
