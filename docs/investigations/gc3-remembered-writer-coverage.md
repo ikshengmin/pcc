@@ -68,6 +68,26 @@ owner and perform its header-bit check independently of this legacy index
 gate. Registered roots stay root-only. Linux pcc0: four native controls;
 five source witnesses. No Mac, pcc1, performance or actual nursery run.
 
+### Inert managed-store classifier
+
+The test-only freestanding probe takes the existing backend decision and the
+actual heap owner as arguments. After rejecting non-GC3, root/NULL and tagged
+arguments, it reads the owner's flags, then the value's flags only if the
+owner is non-young. The predicate intentionally does not require a legacy
+OLD bit: GC3's current indexed objects have neither age bit. The owned
+Linux executable tests all four inactive backends with addresses which
+would fault if dereferenced, and old/young, young/young, old/old, NULL and
+immediate inputs. The IR has two atomic flags loads with no calls, stores,
+index, radix or active-mark read. Four inactive-backend cases in this
+standalone probe do not constitute a production control A/B.
+
+The predicate is not a barrier. An eventual production caller has to pair
+the dirty-card enqueue with edge publication in the same no-park
+transaction. A detached slot cannot supply an owner; roots remain on the
+root path. A stale address, partial handoff, or reused owner/card also
+cannot be validated by the header bits alone. The candidate is not linked
+into the runtime and no ordinary call, load, or store changes today.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

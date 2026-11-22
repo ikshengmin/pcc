@@ -241,10 +241,11 @@ in the relevant section or issue and removes the entry.
    slots succeed; rollback publishes no edge. Linux native GC3 also
    exercised the raw generator frame's set, replace and clear. Native heap
    and registered-root controls plus source tests confirm the common fast
-   path drops the owner and shades only indexed values. Next: an inert GC3
-   owner-transport slice that preserves the old path for other collectors;
-   check ordinary code generation before any nursery activation.
-   A concurrent nursery handoff is still untested.
+   path drops the owner and shades only indexed values. A standalone owned
+   native probe classifies old-to-young edges with two header reads and no
+   index or major-phase read; it is not in the runtime. Next: qualify the
+   separate memoryview export root before designing its nursery promotion
+   path. A concurrent nursery handoff remains untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -256,7 +257,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 inert managed-store owner transport: Codex, Linux x86-64, 2026-11-22 07:04 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
