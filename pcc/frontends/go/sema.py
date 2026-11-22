@@ -1258,6 +1258,9 @@ class Analyzer:
 
     def statement(self, statement):
         kind = statement.kind
+        if kind == "select":
+            raise UnsupportedGo(statement.token, 'go.unsupported.select',
+                                "select scheduling and channel readiness are not implemented")
         if kind == "empty":
             return
         if kind == "type":

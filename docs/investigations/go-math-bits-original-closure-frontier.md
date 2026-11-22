@@ -175,3 +175,11 @@ storage boundary. The diagnostic union now stops at the original
 `select` in `testing/testing.go:2747:4`. The focused suite passed 225
 checks; official Linux/amd64 Go ran the directional channel control and
 rejected all five invalid arguments. PCC never created a channel.
+
+Select now preserves the original communication and default clauses at
+`testing/testing.go:2747:4`. Scheduling and readiness still reject
+before IR. The first gap in this diagnostic union is now
+`context/context.go:109:9` (`Done() <-chan struct{}`). Scoped evidence:
+257 focused checks and 15 unchanged owned Linux ELF branch controls;
+official Go ran a select with send, receive, default and labeled break
+and rejected six invalid cases. No owned select was executed.

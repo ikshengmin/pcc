@@ -68,10 +68,10 @@ class Branches:
                     if position(label.token) <= position(statement.token):
                         self.back_edges.append((position(label.token), position(statement.token)))
                 else:
-                    allowed = ('for', 'range', 'switch') if kind == 'break' else ('for', 'range')
+                    allowed = ('for', 'range', 'switch', 'select') if kind == 'break' else ('for', 'range')
                     if label is not None:
                         # Only the directly labeled statement is a target;
-                        # a label labeling another label is not a for/switch.
+                        # a label labeling another label is not a control target.
                         target = label.body[0] if len(label.body) == 1 else None
                         if (target is None or target.kind not in allowed or
                                 not any(target is control for control in controls)):
@@ -82,7 +82,7 @@ class Branches:
                         if target is None:
                             raise GoDiagnostic(statement.token, kind + ' outside loop')
                     statement.control_target = target
-            nested = [*controls, statement] if kind in ('for', 'range', 'switch') else controls
+            nested = [*controls, statement] if kind in ('for', 'range', 'switch', 'select') else controls
             if statement.init is not None:
                 self.resolve([statement.init], controls)
             self.resolve(statement.body, nested)

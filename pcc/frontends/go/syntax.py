@@ -1087,17 +1087,34 @@ class GoParser:
                 else:
                     self.fail(label, "expected case or default in expression switch")
                 self.take(":")
-                body = []
-                while not self.at("case") and not self.at("default") and not self.at("}"):
-                    if self.accept(";"):
-                        continue
-                    if self.at("const") or self.at("var"):
-                        body.extend(self.declarations())
-                    else:
-                        body.append(self.statement())
-                    self.end_statement()
-                cases.append(Stmt(label.kind, label, exprs=expressions, body=body))
+                cases.append(Stmt(label.kind, label, exprs=expressions, body=self.clause_body()))
             return Stmt("switch", token, exprs=[] if selector is None else [selector], init=init, cases=cases)
+        if self.accept("select"):
+            self.take("{")
+            cases, has_default = [], False
+            while not self.accept("}"):
+                label, communication = self.current, None
+                if self.accept("case"):
+                    communication = self.simple()
+                    kind = communication.kind
+                    receive = (kind in ("expression", "=", ":=") and len(communication.exprs) == 1
+                               and communication.exprs[0].kind == "receive"
+                               and len(communication.targets or []) <= 2)
+                    if kind != "send" and not receive:
+                        self.fail(communication.token, "select case requires send or receive")
+                elif self.accept("default"):
+                    if has_default:
+                        self.fail(label, "select has multiple defaults")
+                    has_default = True
+                else:
+                    self.fail(label, "expected case or default in select")
+                self.take(":")
+                body = self.clause_body()
+                for child in body:
+                    if child.kind == "fallthrough":
+                        self.fail(child.token, "cannot fallthrough in select")
+                cases.append(Stmt(label.kind, label, init=communication, body=body))
+            return Stmt("select", token, cases=cases)
         if self.accept("if"):
             previous_literals, self.named_literals = self.named_literals, False
             # The optional SimpleStmt before ';' may itself be empty.
@@ -1189,6 +1206,18 @@ class GoParser:
         if len(left) != 1:
             self.fail(token, "expression statement must contain one function call")
         return Stmt("expression", first.token, exprs=left)
+
+    def clause_body(self):
+        body = []
+        while self.current.kind not in ("case", "default", "}"):
+            if self.accept(";"):
+                continue
+            if self.current.kind in ("const", "var"):
+                body.extend(self.declarations())
+            else:
+                body.append(self.statement())
+            self.end_statement()
+        return body
 
     def expression_list(self, terminator=None):
         result = [self.expression()]

@@ -77,11 +77,11 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # The union parses the original benchmark's channel operand and now
-    # stops in testing.go. This is not a platform build selection.
-    with pytest.raises(GoDiagnostic, match=r"^testing\.go:2747:4: Go: unsupported statement 'select'$") as caught:
+    # The union parses testing's original select and next stops at
+    # context.Context's channel result. This is not a platform build selection.
+    with pytest.raises(UnsupportedGo, match=r"^context\.go:109:9: Go: this interface signature type constructor") as caught:
         compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('testing.go', 2747, 4)
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('context.go', 109, 9)
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
 
 
