@@ -457,7 +457,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - GC3 grouped generator frame caller root transfer witness: Codex, Linux x86-64, 2026-11-22 11:54 UTC, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
