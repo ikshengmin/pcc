@@ -727,3 +727,39 @@ shade. Linux passed 112 focused native assertions and the 180-process
 4/16/64 callback grid again. The remaining candidate walk on every
 window is unchanged; strict scaling, Darwin and the HTTP gate remain
 unqualified.
+
+### Separate stop-owner readiness for a callback rendezvous
+
+A Linux phase probe attributed the 512 close-world calls for a 256-node
+callback chain to ~7.4–7.7 ms of rendezvous (peer parking/wait), compared
+with ~0.16 ms for copying the stop owner's stack and ~0.1 ms draining
+staged allocations. Don't skip either stack capture or a callback
+stop. Instead, exclusive multi-peer #9 callback stops let the owner wait
+on a separate condition, protected by the same world mutex. Parking or
+entering an exited wait can signal the owner without waking mutators that
+still need to wait for final resume. Unregistration notifies both
+audiences. The owner predicate and all parked snapshots are unchanged.
+An allocation refusal or stop outside this review scope keeps the
+original shared condition; nested stops keep the chosen condition until
+the outer resume. Registration and resume still use the world condition.
+
+On Linux, matched 64/256-node callback probes with four registered
+mutator peers and one collector preserved the exact CPython order and
+every stop. Three guarded experiments (CPU sets 0–4 and 4–8; the last
+using the checked-in measurement driver) gave paired median elapsed
+reductions of 23–29% for GC1 and GC3 across the two lengths, 5/5 for each
+four-peer cell each time. Duplicate-control variations sometimes cover
+individual cells; the 256-node GC1 result crossed its own floor in all
+three experiments and the GC3 result crossed it twice. One-peer results
+were noisy, so no gain or no-loss claim there. This is not HTTP throughput
+or production/macOS qualification. The Linux focused run passed 112
+native cases; a separate lifecycle probe passed all five backends with
+blocking entry/return, departure, contested and nested stopped ownership,
+and final resume. The actual callback oracles remain GC1/3.
+
+Reproduce with the identical new fixture and exact source-matched parent
+and candidate archives: compile the parent with
+`measure_gc_acyclic_layers_scale.py <parent-output> --compile-only`, then
+compile/run the candidate with `--ready-base-binary <parent-output>/sweep_scale`.
+Keep the guarded process scope and record the CPU set and all parent-control
+pairs.

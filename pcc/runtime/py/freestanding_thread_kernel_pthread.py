@@ -100,6 +100,12 @@ define_thread_local_i32("pcc_tls_exit_unregisters_py", 0)
 define_thread_local_ptr_null("pcc_tls_parked_epoch_py")
 define_global_ptr_null("pcc_world_lock_py")
 define_global_ptr_null("pcc_world_cond_py")
+# Distinct owner readiness is used only for a multi-peer callback stop.
+# Both pointers are protected by the world lock; the allocation lives as
+# long as the existing world condition.
+define_global_ptr_null("pcc_world_callback_ready_cond_py")
+define_global_ptr_null("pcc_world_active_ready_cond_py")
+_THREAD_CALLBACK_MARK_WINDOW = 2  # freestanding_gc_tracing_sweep_collector.
 define_global_i32("pcc_world_init_state_py", 0)
 define_global_i64("pcc_next_thread_id_py", 1)
 define_global_i64("pcc_live_thread_count_py", 0)
@@ -497,6 +503,14 @@ def pcc_cond_broadcast(cond) -> int:
     if ptr_is_null(cond) or pthread_cond_broadcast(cond) != 0:
         return -1
     return 0
+
+
+def _notify_stop_owner_ready(world_cond) -> None:
+    ready = global_load_ptr("pcc_world_active_ready_cond_py")
+    if ptr_is_null(ready):
+        pcc_cond_broadcast(world_cond)
+    elif pcc_cond_signal(ready) != 0:
+        pcc_platform_abort()
 
 
 pcc_allocator_thread_cache_enter = extern(
@@ -947,7 +961,7 @@ def _enter_exited(frame) -> int:
         global_addr("pcc_exited_thread_count_py"),
         _world_i64(global_addr("pcc_exited_thread_count_py")) + 1,
     )
-    pcc_cond_broadcast(global_load_ptr("pcc_world_cond_py"))
+    _notify_stop_owner_ready(global_load_ptr("pcc_world_cond_py"))
     pthread_mutex_unlock(lock)
     return 1
 
@@ -1595,7 +1609,7 @@ def pcc_thread_safepoint() -> None:
                 global_addr("pcc_parked_thread_count_py"),
                 _world_i64(global_addr("pcc_parked_thread_count_py")) + 1,
             )
-            pcc_cond_broadcast(cond)
+            _notify_stop_owner_ready(cond)
         if trace_count <= 8:
             offset: int = (trace_count - 1) * 16 + 8
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
@@ -1696,7 +1710,7 @@ def pcc_stop_the_world() -> int:
                 global_addr("pcc_parked_thread_count_py"),
                 _world_i64(global_addr("pcc_parked_thread_count_py")) + 1,
             )
-            pcc_cond_broadcast(cond)
+            _notify_stop_owner_ready(cond)
         if trace_count <= 8:
             offset: int = (trace_count - 1) * 16 + 8
             store_i64(trace_records, offset, load_i64(trace_records, offset) + 1)
@@ -1733,6 +1747,20 @@ def pcc_stop_the_world() -> int:
         epoch = 1
     _world_store_i64(global_addr("pcc_stop_epoch_py"), epoch)
     _world_store_i64(global_addr("pcc_parked_thread_count_py"), 0)
+    ready = cond
+    if (_world_i64(global_addr("pcc_live_thread_count_py")) > 2
+            and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire")
+                == _THREAD_CALLBACK_MARK_WINDOW):
+        callback_ready = global_load_ptr("pcc_world_callback_ready_cond_py")
+        if ptr_is_null(callback_ready):
+            callback_ready = pcc_cond_new()
+            if not ptr_is_null(callback_ready):
+                global_store_ptr("pcc_world_callback_ready_cond_py", callback_ready)
+        if not ptr_is_null(callback_ready):
+            ready = callback_ready
+            global_store_ptr("pcc_world_active_ready_cond_py", callback_ready)
+    # Awakening mutators from a prior epoch still uses the world condition.
+    # Only the current owner's all-peers-ready wait may use the private one.
     pcc_cond_broadcast(cond)
     while _world_i64(global_addr("pcc_live_thread_count_py")) > 1 and _world_i64(
         global_addr("pcc_parked_thread_count_py")
@@ -1741,7 +1769,7 @@ def pcc_stop_the_world() -> int:
     ) - 1:
         if _suspend_permitted(lock) == 0:
             return -1
-        pthread_cond_wait(cond, lock)
+        pthread_cond_wait(ready, lock)
     # Every other mutator is parked or exited: none of them polls before the
     # world resumes (a thread leaving an exited wait or registering checks
     # the stopped world under this lock), so this thread's own polls while
@@ -1799,6 +1827,7 @@ def pcc_resume_world() -> int:
     _world_store_i64(global_addr("pcc_stop_owner_thread_id_py"), 0)
     _world_store_i64(global_addr("pcc_stop_depth_py"), 0)
     _world_store_i64(global_addr("pcc_parked_thread_count_py"), 0)
+    global_store_ptr("pcc_world_active_ready_cond_py", null())
     pcc_cond_broadcast(cond)
     pthread_mutex_unlock(lock)
     _thread_trace(20, epoch, 0, null())
@@ -1927,6 +1956,11 @@ def pcc_thread_unregister_current() -> None:
         live = _world_i64(global_addr("pcc_live_thread_count_py"))
         if live > 0:
             _world_store_i64(global_addr("pcc_live_thread_count_py"), live - 1)
+        # The normal wakeup may also serve a registration/resume waiter.
+        # A changed live count must reach a private stop-owner wait as well.
+        ready = global_load_ptr("pcc_world_active_ready_cond_py")
+        if not ptr_is_null(ready) and pcc_cond_signal(ready) != 0:
+            pcc_platform_abort()
         pcc_cond_broadcast(global_load_ptr("pcc_world_cond_py"))
     pthread_mutex_unlock(lock)
     # All exception/buffer/allocator cleanup that can reenter graph locking

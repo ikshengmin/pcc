@@ -254,3 +254,46 @@ def test_callback_chain_scale_matches_cpython(_callback_scale_sweep, backend, co
             assert cohort > 256  # beyond the retired fixed review cap
     else:
         assert reclaimed == cohort == count
+
+
+@pytest.fixture(scope="module")
+def _callback_ready_lifecycle(tmp_path_factory):
+    binary = tmp_path_factory.mktemp("gc_callback_ready_lifecycle") / "world"
+    compile_owned_c_with_runtime(
+        ROOT / "tests/fixtures/native/gc_callback_ready_lifecycle.c", binary,
+        runtime_archive=admitted_runtime(),
+        cpp_args=("-I", str(ROOT / "pcc/runtime/src")),
+    )
+    return binary
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend,mode", ((0, "normal"), (1, "callback"), (2, "normal"),
+                                          (3, "callback"), (4, "normal")))
+def test_callback_ready_does_not_strand_blocking_or_departing_peers(
+    _callback_ready_lifecycle, backend, mode,
+):
+    result = run_process_group_timeout(
+        [str(_callback_ready_lifecycle), mode], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert result.returncode == 0 and not result.stdout and not result.stderr, result
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+def test_callback_order_with_four_frozen_peers(_callback_scale_sweep, backend):
+    count = 64
+    result = run_process_group_timeout(
+        [str(_callback_scale_sweep), str(count), "0", "0", "2", "0", "4"], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert result.returncode == 0 and not result.stderr, result
+    assert re.fullmatch(
+        rf"weak=0 scans=0 n={count} live=0 del={count} reclaimed={count} full=0"
+        rf" windows={2*count} us=\d+\n"
+        rf"events={'DW' * count} callbacks={count} public=0 cohort={count}\n",
+        result.stdout,
+    ), result

@@ -20,7 +20,7 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { MAX_CANDIDATES = 256, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
+enum { MAX_PEERS = 4, MAX_CANDIDATES = 256, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
 static void *nodes[MAX_CANDIDATES];
 /* Identities for comparisons only, not registered roots or C locals across
  * collection. The departing setup thread owns the last strong variables. */
@@ -31,7 +31,7 @@ static int event_count, weak_callbacks, public_collect;
 static int64_t cohort_at_first_finalizer;
 static PyObject *roots[ROOTS];
 static int candidates, old_count, weak_count, observe_candidates, finalized, setup_error;
-static int peer_ready, peer_done;
+static int peer_ready, peer_done, peer_failed;
 
 static int parse_int(const char *arg) {
     int result = 0;
@@ -132,21 +132,25 @@ static void *make_graph(void *argument) {
 
 static void *idle_peer(void *unused) {
     (void)unused;
-    int status = pcc_current_thread_id() > 0 ? 1 : -1;
-    __atomic_store_n(&peer_ready, status, __ATOMIC_RELEASE);
-    if (status > 0)
-        while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    if (pcc_current_thread_id() <= 0) {
+        __atomic_store_n(&peer_failed, 1, __ATOMIC_RELEASE);
+        return NULL;
+    }
+    __atomic_add_fetch(&peer_ready, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
     return NULL;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3 || argc > 6) return 11;
+    if (argc < 3 || argc > 7) return 11;
     candidates = parse_int(argv[1]);
     old_count = parse_int(argv[2]);
     const int with_peer = argc >= 4;
     if (with_peer) weak_count = parse_int(argv[3]);
     if (argc >= 5) observe_candidates = parse_int(argv[4]);
-    if (argc == 6) public_collect = parse_int(argv[5]);
+    if (argc >= 6) public_collect = parse_int(argv[5]);
+    int peer_count = argc >= 7 ? parse_int(argv[6]) : with_peer;
+    if (peer_count < 0 || peer_count > MAX_PEERS) return 31;
     if (observe_candidates < 0 || observe_candidates > 2 ||
         public_collect < 0 || public_collect > 1 ||
         (public_collect && observe_candidates != 2)) return 25;
@@ -158,11 +162,12 @@ int main(int argc, char **argv) {
     void *thread = NULL;
     if (pcc_thread_start(&thread, make_graph, NULL) || pcc_thread_join(thread, NULL)) return 14;
     if (setup_error) return setup_error;
-    if (with_peer) {
-        if (pcc_thread_start(&thread, idle_peer, NULL)) return 20;
-        int ready;
-        while (!(ready = __atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
-        if (ready < 0) return 21;
+    void *peers[MAX_PEERS];
+    for (int i = 0; i < peer_count; ++i)
+        if (pcc_thread_start(&peers[i], idle_peer, NULL)) return 20;
+    while (__atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE) < peer_count) {
+        if (__atomic_load_n(&peer_failed, __ATOMIC_ACQUIRE)) return 21;
+        pcc_thread_safepoint();
     }
     int64_t full_before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_before = pcc_gc_metric_layer_weak_registry_scans;
@@ -190,9 +195,10 @@ int main(int argc, char **argv) {
         if (pcc_resume_world() != 0) return 16;
     }
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - full_before;
+    __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
+    for (int i = 0; i < peer_count; ++i)
+        if (pcc_thread_join(peers[i], NULL)) return 22;
     if (with_peer) {
-        __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
-        if (pcc_thread_join(thread, NULL)) return 22;
         printf("weak=%d scans=%lld ", weak_count,
                (long long)(pcc_gc_metric_layer_weak_registry_scans - scans_before));
     }

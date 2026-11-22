@@ -27,6 +27,8 @@ pairing.add_argument("--target-base-binary", type=Path,
                      help="same probe linked before the target-local directory")
 pairing.add_argument("--callback-grid", action="store_true",
                      help="check and separately time sealed and public callback chains")
+pairing.add_argument("--ready-base-binary", type=Path,
+                     help="same callback probe linked before owner-only readiness notification")
 parser.add_argument("--callback-binary", type=Path,
                     help="reuse a verified binary from this exact callback-grid source")
 args = parser.parse_args()
@@ -49,6 +51,50 @@ else:
     )
 if args.compile_only:
     raise SystemExit(0)
+if args.ready_base_binary is not None:
+    base = args.ready_base_binary.resolve(strict=True)
+
+    def ready_sample(arm, gc, n, peers):
+        samples = []
+        for _ in range(3):
+            result = run_process_group_timeout(
+                [str(arm), str(n), "0", "0", "2", "0", str(peers)], timeout=12,
+                env=dict(os.environ, PCC_GC_BACKEND=str(gc),
+                         PCC_GC_DEBT_THRESHOLD="1099511627776"),
+            )
+            pattern = (
+                rf"weak=0 scans=0 n={n} live=0 del={n} reclaimed={n}"
+                rf" full=0 windows={2*n} us=(\d+)\n"
+                rf"events={'DW' * n} callbacks={n} public=0 cohort={n}\n"
+            )
+            match = re.fullmatch(pattern, result.stdout)
+            assert result.returncode == 0 and not result.stderr and match is not None, (
+                arm, gc, n, peers, result
+            )
+            samples.append(int(match[1]))
+        return statistics.median(samples)
+
+    for gc, n, peers in itertools.product((1, 3), (64, 256), (1, 4)):
+        pairs = []
+        control = []
+        for i in range(5):
+            first = ready_sample(base, gc, n, peers)
+            if i % 2:
+                c = ready_sample(binary, gc, n, peers)
+                b = ready_sample(base, gc, n, peers)
+            else:
+                b = ready_sample(base, gc, n, peers)
+                c = ready_sample(binary, gc, n, peers)
+            pairs.append((b, c))
+            control.append((first, ready_sample(base, gc, n, peers)))
+        for label, samples in (("control", control), ("ab", pairs)):
+            print(json.dumps({
+                "case": [gc, n, peers, label], "pairs_us": samples,
+                "wins": sum(b < a for a, b in samples),
+                "median_ratio": statistics.median(b / a for a, b in samples),
+            }), flush=True)
+    raise SystemExit(0)
+
 if args.callback_grid:
     oracle = repo / "tests/fixtures/native/constructor/acyclic_layers_scale_oracle.py"
     sizes = (4, 16, 64)
