@@ -18,8 +18,8 @@ class FieldHolder:
 field_holder = FieldHolder()
 late_refs = []
 late_new = sys.argv[1] == "late-new"
-indirect = sys.argv[1] == 'holder'
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update")
+indirect = sys.argv[1] in ("holder", "capi-list")
+rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr")
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
@@ -33,9 +33,9 @@ class A:
             late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
         if indirect:
             holder.append(weak_b())
-        elif sys.argv[1] in ("dict-holder", "dict-replace"):
+        elif sys.argv[1] in ("dict-holder", "dict-replace", "capi-dict"):
             dict_holder[7] = weak_b()
-        elif sys.argv[1] == "field-holder":
+        elif sys.argv[1] in ("field-holder", "capi-attr"):
             field_holder.child = weak_b()
         elif sys.argv[1] == "list-replace":
             list_holder[0] = weak_b()

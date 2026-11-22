@@ -490,3 +490,11 @@ These are nine concrete paths, not a complete barrier audit. Additional
 field layouts, external native writers and publication not mediated by
 these helpers need separate coverage. These tests do not establish safe batching across
 concurrent weakref readers.
+
+A separate C caller now exercises the public `PyDict_SetItem`,
+`PyList_Append` and `PyObject_SetAttrString` entries with managed owners
+and an otherwise dying candidate value. GC1/3 preserve the value and
+match CPython's events, using one expected fallback per indirect
+publication. These are C-ABI controls, not a substitute for loading an
+extension or testing an independently owned CpyHandle, direct field
+writes outside these APIs, or arbitrary foreign code.

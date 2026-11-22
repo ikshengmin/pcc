@@ -15,6 +15,9 @@ extern int64_t pcc_gc_tracing_sweep_unreachable(int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern int64_t pcc_gc_tracing_finish_commits, pcc_gc_tracing_finish_stop_epoch;
 extern int64_t pcc_gc_metric_layer_weak_registry_scans;
+extern int PyDict_SetItem(PyObject *, PyObject *, PyObject *);
+extern int PyList_Append(PyObject *, PyObject *);
+extern int PyObject_SetAttrString(PyObject *, const char *, PyObject *);
 extern void pcc_gc_cms_stop_worker(void);
 extern void pcc_gc_begin_explicit_tracing_collect(void);
 extern void pcc_gc_end_explicit_tracing_collect(void);
@@ -55,7 +58,13 @@ static PyObject *finish_a(PyObject *self) {
         else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
         else if (rescue == 9) py_list_set(roots[HOLD], 0, target);
         else if (rescue == 10) py_set_add(roots[HOLD], target);
-        else if (rescue >= 11) {
+        else if (rescue == 14) {
+            if (PyDict_SetItem(roots[HOLD], py_int_from_i64(7), target) != 0) error = 31;
+        } else if (rescue == 15) {
+            if (PyList_Append(roots[HOLD], target) != 0) error = 32;
+        } else if (rescue == 16) {
+            if (PyObject_SetAttrString(roots[HOLD], "child", target) != 0) error = 33;
+        } else if (rescue >= 11 && rescue <= 13) {
             // The incoming value was installed in an unreachable source
             // before the mark. This callback adds no separate source shade.
             PyObject *source = py_instance_get_field((PyInstanceObject *)self, 0);
@@ -103,7 +112,7 @@ static void *seal_on_departing_thread(void *unused) {
     if (pcc_current_thread_id() <= 0) { error = 8; return NULL; }
     PyClassObject *a_cls = py_class_new("LayerA", NULL, 0, fields, 1);
     int want_tail = mixed == 2 || rescue == 4;
-    int bulk = rescue >= 11;
+    int bulk = rescue >= 11 && rescue <= 13;
     PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, want_tail ? 2 : 1);
     if (!a_cls || !b_cls) { error = 9; return NULL; }
     pcc_gc_store_root(&roots[CLASS_A], (PyObject *)a_cls);
@@ -117,9 +126,9 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
     if (rescue == 3 || rescue >= 6) {
-        PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 ? py_list_new(0) :
-                           rescue == 6 || rescue == 8 || rescue == 11 ? py_dict_new() :
-                           rescue == 7 ? py_instance_new(a_cls) : py_set_new();
+        PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 ? py_list_new(0) :
+                           rescue == 6 || rescue == 8 || rescue == 11 || rescue == 14 ? py_dict_new() :
+                           rescue == 7 || rescue == 16 ? py_instance_new(a_cls) : py_set_new();
         if (!holder) { error = 14; return NULL; }
         pcc_gc_store_root(&roots[HOLD], holder);
         if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
@@ -203,6 +212,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "dict-update") == 0) rescue = 11;
     if (argc > 1 && strcmp(argv[1], "list-slice") == 0) rescue = 12;
     if (argc > 1 && strcmp(argv[1], "set-update") == 0) rescue = 13;
+    if (argc > 1 && strcmp(argv[1], "capi-dict") == 0) rescue = 14;
+    if (argc > 1 && strcmp(argv[1], "capi-list") == 0) rescue = 15;
+    if (argc > 1 && strcmp(argv[1], "capi-attr") == 0) rescue = 16;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
@@ -229,7 +241,7 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_candidates_reset();
     pcc_gc_tracing_candidates_note(nodes[0]);
     pcc_gc_tracing_candidates_note(nodes[1]);
-    if (mixed == 2 || rescue == 4 || rescue >= 11) pcc_gc_tracing_candidates_note(nodes[2]);
+    if (mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13)) pcc_gc_tracing_candidates_note(nodes[2]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
@@ -237,7 +249,7 @@ int main(int argc, char **argv) {
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
-    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 || rescue >= 11 ? 3 : 2);
+    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13) ? 3 : 2);
     int64_t scans = pcc_gc_metric_layer_weak_registry_scans - scans_start;
     int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;
