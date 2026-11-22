@@ -484,3 +484,12 @@ A public-IR/native ELF control using dynamic uint32 arguments matched
 Forty-one adjacent checks passed. This validates an isolated store
 primitive, not yet the original caller's source lifetime, a general
 slice carrier, or the returned string's ownership.
+
+The exact selected CPU caller now has a conservative source-shape
+proof: one fixed make, three straight-line in-capacity appends,
+two local reslices, scalar reads, and one required copied string
+result. Address taking, aliases, unknown calls, shadowing, backedges
+and growth after a view cannot use this proof. The copied-string
+requirement does not grant managed allocation. Fifty-eight scoped
+and two adjacent native differential checks passed. The original
+caller is not yet lowered as a whole.
