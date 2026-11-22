@@ -41,6 +41,7 @@ SOURCE_ROOT_ENV = "PCC_GO_MATH_BITS_SOURCE_ROOT"
 # Official go list -deps -test -json math/bits, linux/amd64/v1, cgo off.
 # Hash of the portable JSON-lines selection, NOT a hash of package contents.
 REFERENCE_BUILD_IDS_SHA256 = "220a909f4e633dcfdb0eb92c31d74ad4425bb87eb48538d9e600cfb45d804b54"
+REFERENCE_BUILD_IDS_FILE = "tests/go/fixtures/math_bits_reference_build_instances.jsonl"
 NORMAL = ("bits.go", "bits_errors.go", "bits_tables.go")
 INTERNAL_TEST = ("export_test.go",)
 EXTERNAL_TEST = ("bits_test.go", "example_math_test.go", "example_test.go")
@@ -53,6 +54,7 @@ DRIVERS = (
     "scripts/ci_go_math_bits_project.py", "scripts/ci_source_frontier_support.py",
     "scripts/go_package_test_entry.py",
     "scripts/go_std_closure.py",
+    REFERENCE_BUILD_IDS_FILE,
     "tests/go/upstream/go1.27.3/pcc-linux-amd64-math-bits-normal-plan.json",
     "tests/go/upstream/go1.27.3/pcc-linux-amd64-profiling-source-pin.json",
     "scripts/cpython_conformance/run.py", "scripts/ci_validation_run.py",
@@ -110,6 +112,7 @@ def initial_report():
             "package_frontend": {"status": "UNRUN"},
             "dependency_closure": unrun("owned source/build closure is missing: " + ", ".join(DEPENDENCIES)),
             "test_entry": unrun("original test declarations have not been registered"),
+            "test_source_bindings": unrun("verified normal package sources and generated entry required"),
             "test_build": unrun("package admission, original dependency closure and test entry required"),
             "tests_and_examples": unrun("whole upstream test binary has not been built"),
         },
@@ -150,7 +153,7 @@ def verify_owned_normal_sources(root, files):
             or plan.packages[PACKAGE].go != normal_paths
             or any(plan.original_files[path] != files[path] for path in normal_paths)):
         raise ValueError("verified Go plan disagrees with unchanged math/bits normal originals")
-    return {
+    return plan, {
         "status": "SOURCES_VERIFIED", "claim": "normal-package original bytes only",
         "target": plan.target, "plan_sha256": plan.lock_sha256, "roots": list(plan.roots),
         "packages": len(plan.packages), "files": len(plan.original_files),
@@ -158,6 +161,49 @@ def verify_owned_normal_sources(root, files):
         "unresolved": [{"package": name, "owner": owner, "files": list(paths)}
                        for name, owner, paths in plan.unresolved(plan.packages)],
     }
+
+
+def bind_owned_test_sources(plan, project_files, generated):
+    """Bind original bytes to exact test build-instance IDs, not to an executable."""
+    raw = (ROOT / REFERENCE_BUILD_IDS_FILE).read_bytes()
+    if sha256(raw) != REFERENCE_BUILD_IDS_SHA256:
+        raise ValueError("pinned Go test build-instance selection SHA256 mismatch")
+    suffix = " [" + PACKAGE + ".test]"
+    internal, external, entry = PACKAGE + suffix, PACKAGE + "_test" + suffix, PACKAGE + ".test"
+    test_paths = {f"{PACKAGE_DIR}/{name}" for name in INTERNAL_TEST + EXTERNAL_TEST}
+    roles = (("GoFiles", "go", "go"), ("SFiles", "assembly", "asm"), ("HFiles", "headers", "header"))
+    result = {}
+    for line in raw.splitlines():
+        row = json.loads(line)
+        key, directory = row["ImportPath"], row["SourceDir"]
+        remapped = set(row["ImportMap"].values())
+        imports = {dep: dep for dep in row["Imports"] if dep not in remapped}
+        imports.update(row["ImportMap"])
+        if len(imports) != len(row["Imports"]):
+            raise ValueError("ambiguous compiler import identity in test instance: " + key)
+        if key == entry:
+            sources = [{"role": "generated", "path": "_testmain.go", "sha256": sha256(generated)}]
+        else:
+            ordinary = plan.packages.get(directory)
+            if ordinary is None:
+                raise ValueError("normal source package is missing for test instance: " + key)
+            sources = []
+            for field, attribute, role in roles:
+                names = tuple(f"src/{directory}/{name}" for name in row[field])
+                if field == "GoFiles" and key in (internal, external):
+                    expected_names = NORMAL + INTERNAL_TEST if key == internal else EXTERNAL_TEST
+                    expected = tuple(f"{PACKAGE_DIR}/{name}" for name in expected_names)
+                else:
+                    expected = getattr(ordinary, attribute)
+                if names != expected:
+                    raise ValueError("normal source selection differs for test instance: " + key)
+                for path in names:
+                    files = project_files if path in test_paths else plan.original_files
+                    if path not in files:
+                        raise ValueError("normal source is missing for test instance: " + path)
+                    sources.append({"role": role, "path": path, "sha256": sha256(files[path])})
+        result[key] = {"sources": sources, "imports": imports}
+    return result
 
 
 def run_owned(report, files, directory, *, source_root=None):
@@ -222,14 +268,28 @@ def run_owned(report, files, directory, *, source_root=None):
         # variants before a test-specific source/ABI binding exists.
         try:
             with owned_compilation():
-                closure = verify_owned_normal_sources(source_root, files)
+                plan, closure = verify_owned_normal_sources(source_root, files)
         except (ValueError, OSError) as error:
             closure = {"status": "BLOCKED", "diagnostic": str(error)}
         row["dependency_closure"] = closure
+        if closure["status"] == "SOURCES_VERIFIED":
+            try:
+                bindings = bind_owned_test_sources(plan, files, raw_entry)
+            except (ValueError, OSError) as error:
+                row["test_source_bindings"] = {"status": "BLOCKED", "diagnostic": str(error)}
+            else:
+                raw = json.dumps(bindings, sort_keys=True, separators=(",", ":")).encode()
+                (directory / "owned-test-source-bindings.json").write_bytes(raw)
+                row["test_source_bindings"] = {
+                    "status": "BOUND", "instances": len(bindings), "sha256": sha256(raw),
+                    "claim": "original and generated source identity only; no compiler or ABI admission",
+                }
+        binding = row["test_source_bindings"]
         row["test_build"] = {
             "status": "BLOCKED", "phase": "normal source preflight, no test variant admission",
             "source_packages": list(packages),
-            "diagnostic": closure.get("diagnostic", "test variants and owned runtime/assembly owners are not bound"),
+            "diagnostic": closure.get("diagnostic", binding.get("diagnostic",
+                "test variants are not admitted to the compiler; native runtime/assembly owners remain unresolved")),
         }
         save(directory / "frontier.json", report)
         return

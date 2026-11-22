@@ -256,3 +256,15 @@ locked files into a tree without `bin` or `pkg/tool`: source status
 test build `BLOCKED`, test execution `UNRUN`. The scoped suite passed
 88 checks and the CI environment wiring test passed. GitHub Actions
 was not run for this change.
+
+The same source-only path now emits `owned-test-source-bindings.json`
+using the existing pinned build-instance IDs and import maps. It binds
+133 instances and 912 distinct original package files, with 511 remapped
+imports. The ordinary and internally augmented `math/bits` instances
+remain distinct; the external tests bind the latter, and generated main
+binds the recompiled `reflect`. Only the locally generated main bytes
+enter its own identity, not an upstream Go cache copy. The real isolated
+source tree produced digest
+`6f30c67047b6c7a48f3b8a575c95d161f9dcd71aeb39ce77987ffad507a52e2a`.
+All 89 scoped checks passed. This binds source identities, not compiler
+admission, the native ABI, or actual execution.

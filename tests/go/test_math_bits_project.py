@@ -126,7 +126,8 @@ def test_owned_source_root_uses_verified_bytes_without_admitting_runtime_or_test
         {"package": "os", "owner": "PCC-generated layout header", "files": ["go_asm.h"]},
     ]
     assert own["test_entry"]["status"] == "PASS" and own["test_build"]["status"] == "BLOCKED"
-    assert "test variants" in own["test_build"]["diagnostic"]
+    assert own["test_source_bindings"]["status"] == "BLOCKED"
+    assert "normal source package is missing" in own["test_build"]["diagnostic"]
     assert not (root / "bin").exists()
     assert not (output / "package-tests.ll").exists()
     assert report["complete_build_closure"] is report["project_accepted"] is False

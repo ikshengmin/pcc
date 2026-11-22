@@ -67,6 +67,40 @@ def test_actual_ordinary_and_recompiled_roots_are_not_the_same_graph(tmp_path):
     assert project.reference_build_ids(elsewhere[::-1], tmp_path / "other-go", tmp_path / "other-cache") == result
 
 
+def test_owned_binding_uses_distinct_instances_without_external_generated_bytes():
+    from types import SimpleNamespace
+
+    from scripts.go_std_closure import load_linux_normal_plan
+
+    manifest = json.loads(load_linux_normal_plan()[0])
+    outputs = {}
+    packages = {}
+    roles = {"go": "go", "asm": "assembly", "header": "headers"}
+    for path, package in manifest["packages"].items():
+        files = {attr: tuple(f"src/{path}/{name}" for name in package["files"][role])
+                 for role, attr in roles.items()}
+        packages[path] = SimpleNamespace(**files)
+        for paths in files.values():
+            outputs.update((name, name.encode()) for name in paths)
+    _, originals = project.load_inputs()
+    for name in project.NORMAL:
+        path = f"{project.PACKAGE_DIR}/{name}"
+        outputs[path] = originals[path]
+    normal = SimpleNamespace(packages=packages, original_files=outputs)
+    bindings = project.bind_owned_test_sources(normal, originals, b"owned entry only")
+    assert len(bindings) == 133
+    assert bindings[P]["sources"] != bindings[P + S]["sources"]
+    assert bindings[P + S]["sources"][-1]["path"] == "src/math/bits/export_test.go"
+    assert bindings[P + "_test" + S]["imports"][P] == P + S
+    assert bindings[MAIN]["imports"]["reflect"] == "reflect" + S
+    assert bindings[MAIN]["sources"] == [{
+        "role": "generated", "path": "_testmain.go", "sha256": project.sha256(b"owned entry only"),
+    }]
+    del outputs["src/fmt/print.go"]
+    with pytest.raises(ValueError, match="normal source is missing"):
+        project.bind_owned_test_sources(normal, originals, b"owned entry only")
+
+
 @pytest.mark.parametrize(("fault", "diagnostic"), [
     ("existing-wrong-instance", "build-instance selection differs"),
     ("changed-variant-file-ownership", "build-instance selection differs"),

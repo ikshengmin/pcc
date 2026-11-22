@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   bind original `math/bits` test variants as source identities without
-   replacing any normal locked package. The owned runner can now verify
-   all 914 normal-plan originals from an explicit source-only tree;
-   native runtime/assembly owners and test variants remain blocked. See the
+   feed the generated test main and first exact bound dependency to the
+   owned package parser without flattening build instances. The source-only
+   runner now binds 133 distinct package instances; runtime and native
+   assembly ownership still block whole-project compilation. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go original math bits test variant source binding: Codex, Linux x86-64, 2026-11-22 02:27 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
