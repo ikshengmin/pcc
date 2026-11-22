@@ -48,6 +48,8 @@ class WeakBatch:
         ns = {name: getattr(abi, name) for name in dir(abi) if name.startswith("PY")}
         ns.update(
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
+            atomic_load_i32=lambda base, offset, _: self.load(base, offset),
+            atomic_store_i32=lambda base, offset, value, _: self.store(base, offset, value),
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             global_load_ptr=lambda name: self.none if name == "py_None" else self.heads[name],
             global_store_ptr=self.global_store,
@@ -118,8 +120,11 @@ class WeakBatch:
         return self.heads["py_weakref_late_head"]
 
     def window_addr(self, name):
-        assert name == "pcc_weakref_late_windows"
-        return 0xE000
+        return {
+            "pcc_weakref_late_windows": 0xE000,
+            "pcc_weakref_layer_snapshot_active": 0xE008,
+            "pcc_weakref_layer_snapshot_dirty": 0xE010,
+        }[name]
 
     @property
     def windows(self):

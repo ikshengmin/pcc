@@ -40,6 +40,9 @@ from pcc.runtime.py.py_abi_constants import (
 
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
+    atomic_load_i32,
+    atomic_store_i32,
+    define_global_i64,
     calloc,
     cstr,
     define_global_i32,
@@ -71,6 +74,7 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_gc_backend0_is_weak_candidate = extern(
     "pcc_gc_backend0_is_weak_candidate", (c_ptr,), c_int64
 )
@@ -157,6 +161,19 @@ _WEAKREF_BYTES = 56
 define_global_i32("pcc_weakref_late_windows", 0)
 
 
+# A sweep-local weakref index borrows linked records only while all mutators
+# are stopped. A mutation invalidates it for the rest of the entire sweep;
+# no raw record can then be consumed, including on an address reuse.
+define_global_i32("pcc_weakref_layer_snapshot_active", 0)
+define_global_i32("pcc_weakref_layer_snapshot_dirty", 0)
+define_global_i64("pcc_gc_metric_layer_weak_registry_scans", 0)
+
+
+def _invalidate_layer_snapshot() -> None:
+    if atomic_load_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, "acquire") != 0:
+        atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, 1, "release")
+
+
 def _weakref_target_is_base_object(target) -> int:
     tag: int = load_i32(target, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     if tag != PY_TYPE_INSTANCE and tag < PY_TYPE_USER_CLASS_START:
@@ -182,6 +199,7 @@ def _py_none():
 
 
 def _unlink(wr) -> None:
+    _invalidate_layer_snapshot()
     prev = load_ptr(wr, 32)
     nxt = load_ptr(wr, 40)
     if ptr_eq(prev, wr) != 0:
@@ -209,6 +227,7 @@ def _unlink(wr) -> None:
 
 
 def _link_main(wr) -> None:
+    _invalidate_layer_snapshot()
     head = global_load_ptr("py_weakref_head")
     store_ptr(wr, _WEAKREF_PREV, null())
     store_ptr(wr, _WEAKREF_NEXT, head)
@@ -218,6 +237,7 @@ def _link_main(wr) -> None:
 
 
 def _link_late(wr) -> None:
+    _invalidate_layer_snapshot()
     head = global_load_ptr("py_weakref_late_head")
     store_ptr(wr, _WEAKREF_PREV, null())
     store_ptr(wr, _WEAKREF_NEXT, head)
@@ -348,6 +368,7 @@ def py_weakref_call(ref):
         return none_obj
     resolved = pcc_gc_note_relocation_read(target)
     if ptr_eq(resolved, target) == 0:
+        _invalidate_layer_snapshot()
         store_ptr(ref, 16, resolved)
         target = resolved
     py_incref(target)
@@ -846,23 +867,122 @@ pcc_gc_callback_layers_contains = extern(
 )
 
 
+pcc_gc_callback_layers_layer_of = extern(
+    "pcc_gc_callback_layers_layer_of", (c_ptr, c_ptr), c_int64
+)
+
+_WEAK_GROUP_BYTES = 16
+_WEAK_GROUP_HEAD = 0
+_WEAK_GROUP_TAIL = 8
+_WEAK_GROUP_START = 8
+_WEAK_ENTRY_BYTES = 16
+_WEAK_ENTRY_REF = 0
+_WEAK_ENTRY_NEXT = 8
+
+
+def _count_weak_registry_scan() -> None:
+    addr = global_addr("pcc_gc_metric_layer_weak_registry_scans")
+    store_i64(addr, 0, load_i64(addr, 0) + 1)
+
+
+@c_abi_export("py_weakref_layer_snapshot_release")
+def py_weakref_layer_snapshot_release(snapshot) -> None:
+    if ptr_is_null(snapshot) != 0:
+        return
+    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, 0, "release")
+    index: int = 0
+    layers: int = load_i64(snapshot, 0)
+    while index < layers:
+        group: int = _WEAK_GROUP_START + index * _WEAK_GROUP_BYTES
+        entry = load_ptr(snapshot, group + _WEAK_GROUP_HEAD)
+        while ptr_is_null(entry) == 0:
+            nxt = load_ptr(entry, _WEAK_ENTRY_NEXT)
+            free(entry)
+            entry = nxt
+        index += 1
+    free(snapshot)
+
+
+@c_abi_export("py_weakref_layer_snapshot_create")
+def py_weakref_layer_snapshot_create(plan, layers: int):
+    if layers < 2:
+        return null()
+    wr = global_load_ptr("py_weakref_head")
+    if ptr_is_null(wr) != 0:
+        return null()
+    # There cannot be a mutator parked halfway through a weak-list change
+    # which started before the snapshot was armed. Threads that join during
+    # a callback see the armed bit before changing their first weakref link.
+    if pcc_thread_live_count() != 1:
+        return null()
+    snapshot = calloc(1, _WEAK_GROUP_START + layers * _WEAK_GROUP_BYTES)
+    if ptr_is_null(snapshot) != 0:
+        return null()
+    store_i64(snapshot, 0, layers)
+    _count_weak_registry_scan()
+    while ptr_is_null(wr) == 0:
+        layer: int = pcc_gc_callback_layers_layer_of(plan, load_ptr(wr, _WEAKREF_TARGET))
+        if layer >= 0:
+            entry = malloc(_WEAK_ENTRY_BYTES)
+            if ptr_is_null(entry) != 0:
+                py_weakref_layer_snapshot_release(snapshot)
+                return null()
+            store_ptr(entry, _WEAK_ENTRY_REF, wr)
+            store_ptr(entry, _WEAK_ENTRY_NEXT, null())
+            group: int = _WEAK_GROUP_START + layer * _WEAK_GROUP_BYTES
+            tail = load_ptr(snapshot, group + _WEAK_GROUP_TAIL)
+            if ptr_is_null(tail) != 0:
+                store_ptr(snapshot, group + _WEAK_GROUP_HEAD, entry)
+            else:
+                store_ptr(tail, _WEAK_ENTRY_NEXT, entry)
+            store_ptr(snapshot, group + _WEAK_GROUP_TAIL, entry)
+        wr = load_ptr(wr, _WEAKREF_NEXT)
+    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, 0, "release")
+    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, 1, "release")
+    return snapshot
+
+
+def _queue_one_layer_weakref(wr, target, pending_cell) -> int:
+    count: int = 0
+    if _tracing_target_dies(target) != 0:
+        if (ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0
+                and (load_i32(wr, PYOBJECTHEADER_FLAGS_OFFSET)
+                     & (_TRACING_WEAK_SWEEP_CANDIDATE | PY_FLAG_GC_DEALLOCATING)) == 0):
+            if _queue_callback_hold(wr, pending_cell, 0) != 0:
+                return -1
+            count = 1
+        store_ptr(wr, _WEAKREF_TARGET, null())
+    return count
+
+
 @c_abi_export("py_weakref_queue_tracing_layer")
-def py_weakref_queue_tracing_layer(plan, layer: int, pending_cell) -> int:
+def py_weakref_queue_tracing_layer(snapshot, plan, layer: int, pending_cell) -> int:
     """Settle only the current acyclic layer, before running any queued code."""
     count: int = 0
+    if (ptr_is_null(snapshot) == 0
+            and atomic_load_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, "acquire") == 0):
+        entry = load_ptr(snapshot, _WEAK_GROUP_START + layer * _WEAK_GROUP_BYTES + _WEAK_GROUP_HEAD)
+        while ptr_is_null(entry) == 0:
+            wr = load_ptr(entry, _WEAK_ENTRY_REF)
+            target = load_ptr(wr, _WEAKREF_TARGET)
+            if pcc_gc_callback_layers_contains(plan, target, layer) != 0:
+                queued: int = _queue_one_layer_weakref(wr, target, pending_cell)
+                if queued < 0:
+                    return -1
+                count += queued
+            entry = load_ptr(entry, _WEAK_ENTRY_NEXT)
+        return count
     wr = global_load_ptr("py_weakref_head")
+    if ptr_is_null(wr) == 0:
+        _count_weak_registry_scan()
     while ptr_is_null(wr) == 0:
         nxt = load_ptr(wr, _WEAKREF_NEXT)
         target = load_ptr(wr, _WEAKREF_TARGET)
-        if (pcc_gc_callback_layers_contains(plan, target, layer) != 0
-                and _tracing_target_dies(target) != 0):
-            if (ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0
-                    and (load_i32(wr, PYOBJECTHEADER_FLAGS_OFFSET)
-                         & (_TRACING_WEAK_SWEEP_CANDIDATE | PY_FLAG_GC_DEALLOCATING)) == 0):
-                if _queue_callback_hold(wr, pending_cell, 0) != 0:
-                    return -1
-                count += 1
-            store_ptr(wr, _WEAKREF_TARGET, null())
+        if pcc_gc_callback_layers_contains(plan, target, layer) != 0:
+            queued: int = _queue_one_layer_weakref(wr, target, pending_cell)
+            if queued < 0:
+                return -1
+            count += queued
         wr = nxt
     return count
 
@@ -989,6 +1109,7 @@ def _invalidate_chain(wr, target) -> None:
             # releases the ignored owned result before clearing its exception.
             _weakref_run_callback(wr)
         elif ptr_eq(resolved, wr_target) == 0:
+            _invalidate_layer_snapshot()
             store_ptr(wr, _WEAKREF_TARGET, resolved)
         wr = nxt
 

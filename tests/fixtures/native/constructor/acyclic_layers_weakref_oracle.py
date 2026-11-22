@@ -6,6 +6,8 @@ import weakref
 events = []
 held = None
 holder = []
+late_refs = []
+late_new = sys.argv[1] == "late-new"
 indirect = sys.argv[1] == 'holder'
 rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue")
 withdrawn = sys.argv[1] == "withdrawn"
@@ -17,6 +19,8 @@ class A:
     def __del__(self):
         global held
         events.append("a-del")
+        if late_new:
+            late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
         if indirect:
             holder.append(weak_b())
         elif rescue or withdrawn:

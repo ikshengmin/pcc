@@ -14,16 +14,18 @@ extern void pcc_gc_tracing_candidates_seal(int64_t);
 extern int64_t pcc_gc_tracing_sweep_unreachable(int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern int64_t pcc_gc_tracing_finish_commits, pcc_gc_tracing_finish_stop_epoch;
+extern int64_t pcc_gc_metric_layer_weak_registry_scans;
 extern void pcc_gc_cms_stop_worker(void);
 extern void pcc_gc_begin_explicit_tracing_collect(void);
 extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, HOLD, ROOTS };
+enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, ROOTS };
 static PyObject *roots[ROOTS];
 static void *nodes[3];
-static int rescue, withdrawn, mixed, silent, finalizer_only, error;
+static int rescue, withdrawn, mixed, silent, finalizer_only, late_new, idle_worker, error;
+static int worker_started, worker_done;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 
@@ -31,9 +33,18 @@ static void note(int event) {
     if (event_count >= 6 || pcc_thread_world_stop_epoch_held() >= 0) error = 5;
     else events[event_count++] = event;
 }
+static PyObject *weak_event(PyObject *captures, PyObject *args);
 static PyObject *finish_a(PyObject *self) {
     (void)self;
     note(1);
+    if (late_new) {
+        PyObject *target = py_weakref_call(roots[WEAK_B]);
+        PyObject *callback = py_func_new((void *)weak_event, NULL);
+        PyObject *ref = target && target != py_None && callback ? py_weakref_new(target, callback) : NULL;
+        if (!ref) error = 24;
+        else pcc_gc_store_root(&roots[WEAK_NEW], ref);
+        if (target) py_decref(target);
+    }
     if (rescue || withdrawn) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
         if (!target || target == py_None) error = 6;
@@ -62,6 +73,7 @@ static PyObject *weak_event(PyObject *captures, PyObject *args) {
     PyObject *ref = py_tuple_get(args, 0);
     if (ref == roots[WEAK_A]) note(2);
     else if (ref == roots[WEAK_B]) note(4);
+    else if (ref == roots[WEAK_NEW]) note(8);
     else error = 7;
     if (ref) py_decref(ref);
     return py_int_from_i64(0);
@@ -134,8 +146,18 @@ static void *seal_on_departing_thread(void *unused) {
     return NULL;
 }
 
+static void *parked_observer(void *unused) {
+    (void)unused;
+    if (pcc_current_thread_id() <= 0) return NULL;
+    __atomic_store_n(&worker_started, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&worker_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
+    late_new = argc > 1 && strcmp(argv[1], "late-new") == 0;
+    idle_worker = argc > 1 && strcmp(argv[1], "worker") == 0;
     silent = argc > 1 && strcmp(argv[1], "silent") == 0;
     if (argc > 1 && strcmp(argv[1], "silent-live-del") == 0) silent = 2;
     finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;
@@ -156,6 +178,10 @@ int main(int argc, char **argv) {
     if (pcc_thread_start(&thread, seal_on_departing_thread, NULL) ||
         pcc_thread_join(thread, NULL)) return 20;
     if (error) return error;
+    if (idle_worker) {
+        if (pcc_thread_start(&thread, parked_observer, NULL)) return 25;
+        while (!__atomic_load_n(&worker_started, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    }
     if (pcc_stop_the_world() != 0) return 21;
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
@@ -168,12 +194,18 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
     pcc_py_gc_minor_graph_unlock();
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
+    int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
     int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 ? 3 : 2);
+    int64_t scans = pcc_gc_metric_layer_weak_registry_scans - scans_start;
     int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 22;
+    if (idle_worker) {
+        __atomic_store_n(&worker_done, 1, __ATOMIC_RELEASE);
+        if (pcc_thread_join(thread, NULL)) return 26;
+    }
     if (silent || finalizer_only) {
         printf("legacy=%lld reclaimed=%lld callbacks=%d recheck=%lld\n",
                (long long)pass0, (long long)reclaimed, event_count, (long long)full);
@@ -186,10 +218,10 @@ int main(int argc, char **argv) {
     PyObject *b = py_weakref_call(roots[WEAK_B]);
     if (rescue == 2 && (raw != b || raw == py_None || raw == NULL)) error = 13;
     note(b == py_None ? 5 : 6);
-    const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del"};
+    const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del", "b-new"};
     for (int i = 0; i < event_count; ++i)
         printf("%s%s", i ? " " : "", names[events[i]]);
     puts("");
-    fprintf(stderr, "full=%lld\n", (long long)full);
+    fprintf(stderr, "full=%lld scans=%lld\n", (long long)full, (long long)scans);
     return error;
 }

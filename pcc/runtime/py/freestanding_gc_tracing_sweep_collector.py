@@ -72,6 +72,7 @@ pcc_gc_callback_root_cut_release = extern("pcc_gc_callback_root_cut_release", (c
 pcc_gc_conservative_capture_thread_words = extern(
     "pcc_gc_conservative_capture_thread_words", (c_ptr,), c_void
 )
+pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
 pcc_gc_seed_roots_with_stop_cut = extern("pcc_gc_seed_roots_with_stop_cut", (c_ptr,), c_void)
 pcc_gc_gray_count_load_acquire = extern("pcc_gc_gray_count_load_acquire", (), c_int64)
 pcc_gc_gray_count_store_release = extern("pcc_gc_gray_count_store_release", (c_int64,), c_void)
@@ -362,7 +363,10 @@ def _recheck_reachability_after_window(context) -> None:
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
     cleared_candidates: i64 = 0
-    pcc_gc_seed_roots_with_stop_cut(context)
+    if ptr_is_null(context) != 0:
+        pcc_gc_seed_roots()
+    else:
+        pcc_gc_seed_roots_with_stop_cut(context)
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
         # This sweep owns a fixed disposal set. A finalizer can allocate an
         # object outside it, then leave that object temporarily unreachable.
@@ -1127,8 +1131,12 @@ pcc_gc_callback_layers_range = extern(
     "pcc_gc_callback_layers_range", (c_ptr, c_int64), c_int64
 )
 pcc_gc_callback_layers_node = extern("pcc_gc_callback_layers_node", (c_ptr, c_int64), c_ptr)
+py_weakref_layer_snapshot_create = extern(
+    "py_weakref_layer_snapshot_create", (c_ptr, c_int64), c_ptr
+)
+py_weakref_layer_snapshot_release = extern("py_weakref_layer_snapshot_release", (c_ptr,), c_void)
 py_weakref_queue_tracing_layer = extern(
-    "py_weakref_queue_tracing_layer", (c_ptr, c_int64, c_ptr), c_int64
+    "py_weakref_queue_tracing_layer", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
 )
 pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
 pcc_gc_gray_worklist_take_locked = extern("pcc_gc_gray_worklist_take_locked", (), c_ptr)
@@ -1308,6 +1316,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
     layer: i64 = 0
     window = stack_alloc(16)
     pending = stack_alloc(16)
+    weak_snapshot = py_weakref_layer_snapshot_create(plan, layers)
     while layer < layers:
         pos: i64 = pcc_gc_callback_layers_range(plan, layer)
         end: i64 = pcc_gc_callback_layers_range(plan, layer + 1)
@@ -1320,7 +1329,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             pos += 1
         store_ptr(pending, 0, null())
         store_ptr(pending, 8, null())
-        weak: i64 = py_weakref_queue_tracing_layer(plan, layer, pending)
+        weak: i64 = py_weakref_queue_tracing_layer(weak_snapshot, plan, layer, pending)
         if weak < 0:
             pcc_platform_abort()
         if weak > 0:
@@ -1330,6 +1339,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             _user_code_window_close(window)
             _review_remark_layer_at_stop(nodes, count, caller)
         layer += 1
+    py_weakref_layer_snapshot_release(weak_snapshot)
     peeled: i64 = pcc_gc_callback_layers_range(plan, layers)
     pcc_gc_callback_layers_release(plan)
     if peeled != count:
@@ -1354,17 +1364,18 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
     backend_for_review: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    review_node = _review_acyclic_singleton(held, backend_for_review)
-    if ptr_is_null(review_node) == 0:
-        return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
-    review_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
-    review_count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
-    plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count)
-    if ptr_is_null(plan) == 0:
-        layers: i64 = pcc_gc_callback_layers_count(plan)
-        if layers > 0:
-            return _review_sweep_layers(plan, layers, review_nodes, review_count, budget, ptr_add(frame_address(), 16))
-        pcc_gc_callback_layers_release(plan)
+    if backend_for_review == 1 or backend_for_review == 3:
+        review_node = _review_acyclic_singleton(held, backend_for_review)
+        if ptr_is_null(review_node) == 0:
+            return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
+        review_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+        review_count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+        plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count)
+        if ptr_is_null(plan) == 0:
+            layers: i64 = pcc_gc_callback_layers_count(plan)
+            if layers > 0:
+                return _review_sweep_layers(plan, layers, review_nodes, review_count, budget, ptr_add(frame_address(), 16))
+            pcc_gc_callback_layers_release(plan)
     # Keep phase-local object aliases out of the coordinator's live frame.
     # This is not a root filter: every phase still uses the full root scanner.
     weak_callbacks: i64 = _sweep_weak_callbacks(count_free)

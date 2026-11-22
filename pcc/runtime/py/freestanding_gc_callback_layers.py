@@ -248,13 +248,19 @@ def pcc_gc_callback_layers_node(plan, position: i64):
     return load_ptr(load_ptr(plan, _PLAN_NODES), i * _WORD)
 
 
-@c_abi_export("pcc_gc_callback_layers_contains")
-def pcc_gc_callback_layers_contains(plan, target, layer: i64) -> i64:
+@c_abi_export("pcc_gc_callback_layers_layer_of")
+def pcc_gc_callback_layers_layer_of(plan, target) -> i64:
     if ptr_is_null(target) != 0:
-        return 0
+        return -1
     keys = load_ptr(plan, _PLAN_KEYS)
     slot: i64 = _key_slot(keys, load_i64(plan, _PLAN_MASK), target)
     if ptr_is_null(load_ptr(keys, slot + _ENTRY_KEY)) != 0:
-        return 0
+        return -1
     i: i64 = load_i64(keys, slot + _ENTRY_ID)
-    return 1 if load_i64(load_ptr(plan, _PLAN_VERTICES), i * _VERTEX_BYTES + _VERTEX_INCOMING) == -layer - 1 else 0
+    state: i64 = load_i64(load_ptr(plan, _PLAN_VERTICES), i * _VERTEX_BYTES + _VERTEX_INCOMING)
+    return -state - 1 if state < 0 else -1
+
+
+@c_abi_export("pcc_gc_callback_layers_contains")
+def pcc_gc_callback_layers_contains(plan, target, layer: i64) -> i64:
+    return 1 if pcc_gc_callback_layers_layer_of(plan, target) == layer else 0
