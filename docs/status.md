@@ -285,8 +285,13 @@ in the relevant section or issue and removes the entry.
    non-plain comparison that refuses after the copy without publishing.
    Linux native GC0–4 now confirms only GC0 allocates inline generator
    frames; GC3 takes the list path and shades its child. A live frame
-   prevents switching collectors. Next: verify grouped frame transfers
-   at the heap-slot-to-caller-root boundary.
+   prevents switching collectors. The group helpers currently decline;
+   the native regression now checks unchanged cells, GC3 active-mark
+   invariants and scalar transfer into registered caller roots. A separate
+   unchanged generator integration case now reproduces a GC1 resurrection
+   disagreement with CPython: next isolate the weakref identity check
+   at `generator_root_groups.py:280`. The old relocation fixture also
+   fails before grouped take (GC3 oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
    slots succeed; rollback publishes no edge. Linux native GC3 also
    exercised the raw generator frame's set, replace and clear. Native heap
@@ -457,7 +462,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 grouped generator frame caller root transfer witness: Codex, Linux x86-64, 2026-11-22 11:54 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

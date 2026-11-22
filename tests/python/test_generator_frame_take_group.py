@@ -1,7 +1,7 @@
 """Rooted frame batches: source/IR and native controls.
 
-Native admitted return=1 and reference semantics are separate evidence from
-emitted call presence. No timing, stack-size or throughput assertion is made.
+The native decline/scalar path and reference semantics are separate evidence
+from emitted call presence. No timing, stack-size or throughput assertion is made.
 """
 import os
 from pathlib import Path
@@ -176,10 +176,6 @@ def test_frontend_emitter_probe_covers_registered_consumer_and_all_exits(source_
 NATIVE_SHAPES = r'''
 #include "py_internal.h"
 #include <stdio.h>
-extern int32_t pcc_gc_backend4_no_refcounts;
-extern int32_t pcc_log_init_state;
-extern int32_t pcc_diagnostics_runtime_log_fast_state;
-extern int32_t pcc_gc_refcount_provenance_probe;
 extern int32_t pcc_gc_mark_active;
 extern int64_t pcc_gc_gray_count_load_acquire(void);
 extern int64_t pcc_gc_metric_store_count(void);
@@ -201,10 +197,6 @@ int main(void) {
     py_cpy_handle_set_release_fn(foreign_release);
     roots[2] = py_cpy_handle_new(&foreign_token);
     if (!roots[0] || !roots[1] || !roots[2]) return 1;
-    int admitted = (backend == 3 || backend == 4) && pcc_gc_backend4_no_refcounts
-        && pcc_log_init_state == 2 && !pcc_diagnostics_runtime_log_fast_state
-        && !pcc_gc_refcount_provenance_probe;
-    if ((backend == 3 || backend == 4) && !pcc_gc_refcount_provenance_probe && !admitted) return 13;
     int counts[7] = {0, 1, 2, 15, 16, 17, 18};
     for (int test = 0; test < 7; test++) {
         for (int i = 0; i < 18; i++) {
@@ -212,14 +204,14 @@ int main(void) {
             py_gen_frame_set(roots[0], i, roots[1]);
         }
         int count = counts[test];
-        int result = py_gen_frame_take_group(roots[0], 0, count, outputs);
-        if (result != (admitted && count >= 2 && count <= 16)) return 2;
-        if (!result) {
-            for (int i = 0; i < 18; i++) {
-                if (outputs[i] || ((PyListObject *)roots[0])->items[i] != roots[1]) return 3;
-            }
-            /* Compiler fallback reloads the rooted frame before each scalar. */
-            for (int i = 0; i < count; i++) outputs[i] = py_gen_frame_take(roots[0], i);
+        if (py_gen_frame_take_group(roots[0], 0, count, outputs) != 0) return 2;
+        for (int i = 0; i < 18; i++) {
+            if (outputs[i] || ((PyListObject *)roots[0])->items[i] != roots[1]) return 3;
+        }
+        /* The emitted fallback reloads its rooted frame before each take. */
+        for (int i = 0; i < count; i++) {
+            PyObject *frame = pcc_gc_load_ptr(0, &roots[0]);
+            outputs[i] = py_gen_frame_take(frame, i);
         }
         for (int i = 0; i < count; i++) {
             if (outputs[i] != roots[1] || ((PyListObject *)roots[0])->items[i]) return 4;
@@ -246,7 +238,7 @@ int main(void) {
         pcc_gc_store_root(&outputs[i], 0);
         py_gen_frame_set(roots[0], i, roots[1]);
     }
-    if (admitted) {
+    if (backend == 3) {
         pcc_gc_pin(roots[1]);
         pcc_py_gc_minor_graph_lock();
         int64_t depth = pcc_py_gc_minor_graph_lock_depth();
@@ -254,17 +246,31 @@ int main(void) {
         int64_t stores = pcc_gc_metric_store_count();
         int64_t refs = py_header(roots[1])->refcount;
         __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
-        if (py_gen_frame_take_group(roots[0], 0, 16, outputs) != 1) return 10;
+        if (py_gen_frame_take_group(roots[0], 0, 16, outputs) != 0
+                || py_gen_frame_clear_group(roots[0], 0, 16) != 0) return 10;
         if (pcc_py_gc_minor_graph_lock_depth() != depth
                 || pcc_gc_gray_count_load_acquire() != gray
-                || pcc_gc_metric_store_count() != stores + 16
+                || pcc_gc_metric_store_count() != stores
                 || py_header(roots[1])->refcount != refs) return 11;
         for (int i = 0; i < 16; i++) {
-            if (outputs[i] != roots[1] || !(py_header(outputs[i])->flags & PY_FLAG_GC_PINNED)) return 12;
+            if (outputs[i] || ((PyListObject *)roots[0])->items[i] != roots[1]
+                    || !(py_header(roots[1])->flags & PY_FLAG_GC_PINNED)) return 12;
         }
         __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
         pcc_py_gc_minor_graph_unlock();
         pcc_gc_unpin(roots[1]);
+        /* Actually consume the values with the scalar route and exercise a
+           public collection with the caller's registered results retained. */
+        for (int i = 0; i < 18; i++) {
+            outputs[i] = py_gen_frame_take(pcc_gc_load_ptr(0, &roots[0]), i);
+            if (outputs[i] != roots[1] || ((PyListObject *)roots[0])->items[i]) return 13;
+        }
+        pcc_gc_store_root(&roots[1], 0);
+        py_gc_collect();
+        for (int i = 0; i < 18; i++) {
+            if (!outputs[i] || py_obj_type_tag(outputs[i]) != PY_TYPE_LIST
+                || py_list_len(outputs[i]) != 0 || outputs[i] != outputs[0]) return 14;
+        }
     }
     for (int i = 0; i < 18; i++) pcc_gc_store_root(&outputs[i], 0);
     for (int i = 0; i < 3; i++) pcc_gc_store_root(&roots[i], 0);
@@ -331,7 +337,7 @@ int main(void) {
 
 
 @pytest.mark.integration
-def test_native_group_admission_boundaries_foreign_fallback_and_gray_state(tmp_path, pcc_runtime_archive):
+def test_native_group_declines_without_mutation_and_scalar_handoff_survives(tmp_path, pcc_runtime_archive):
     executable = _native(tmp_path, pcc_runtime_archive, "frame_group_shapes", NATIVE_SHAPES)
     for backend in range(5):
         result = _run(executable, backend)

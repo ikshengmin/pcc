@@ -425,3 +425,32 @@ reopen that part of the writer inventory.
 Thirteen native Linux pcc0 cases pass using the same focused archive
 command above, five of them the per-backend layout test. No performance,
 GC3 minor, pcc1 or macOS run.
+
+## Grouped generator restores currently take the scalar branch
+
+The compiled consumer still attempts grouped take, but the current
+public runtime entry always declines, as does grouped clear. The old
+shapes test incorrectly required return 1 for a GC3 heap group; its
+unchanged Linux archive reproduced exit 2. The corrected test checks
+decline without output or input changes across group boundaries and
+with a C-compatible handle; it reloads the registered owner before
+each scalar take. Under GC3 active mark, declined take and clear
+leave gray credit, pin, depth, store count and cells unchanged. The
+real scalar route then empties those cells and its registered caller
+results remain valid across explicit collection.
+
+The separate forced-relocation fixture was left unchanged. Its
+baseline exits 6 on GC3 (oldification did not copy a value) and 3 on
+GC4 (the relocation set selected nothing), both before reaching
+group take. Those failures are not evidence about the grouped
+helper or today's actual forwarding. Source-matched Linux pcc0;
+no macOS, pcc1, actual minor, activation or throughput result.
+
+With the same archive, the unchanged
+`test_no_log_generator_group_finalization_and_cleanup_matches_reference`
+gets through the earlier modes and reproduces a separate GC1
+`resurrection` disagreement with CPython at
+`tests/fixtures/native/constructor/generator_root_groups.py:280`:
+`watch() is resurrected[0]`. A direct rerun of that exact linked
+executable failed at the same assertion. That test was not weakened;
+the focused decline/scalar witness passed independently.
