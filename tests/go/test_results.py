@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import struct
 
 import pytest
 
@@ -77,6 +78,65 @@ def test_imported_multi_results_keep_package_function_identity():
     dtype = module.globals[function_symbol("Pair", "lib")].function_type.return_type
     assert [item.width for item in dtype.elements] == [64, 64]
     assert "extractvalue " + str(dtype) in str(module)
+
+
+FOUR_WORDS = """package main
+func Feature(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32) {
+    return eaxArg + 1, eaxArg ^ 0xaabbccdd, ecxArg + 2, ecxArg ^ 0xccddeeff
+}
+func main() {
+    a,b,c,d:=Feature(0x81234567,0xfedcba98)
+    if a!=0x81234568 || b!=0x2b9889ba || c!=0xfedcba9a || d!=0x32015467 { panic("tuple order") }
+}
+"""
+
+
+def test_four_u32_results_have_exact_go_public_ir_types():
+    module = compile_go(FOUR_WORDS, "words.go")
+    function = module.globals[function_symbol("Feature")]
+    assert [arg.width for arg in function.function_type.args] == [32, 32]
+    assert [item.width for item in function.function_type.return_type.elements] == [32, 32, 32, 32]
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_four_u32_native_results_roundtrip_and_sysv_register_order(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    units = (("words.go", FOUR_WORDS),)
+    symbol = function_symbol("Feature")
+    observer = f""".intel_syntax noprefix
+.text
+.globl _start
+_start:
+  mov edi, 0x81234567
+  mov esi, 0xfedcba98
+  call {symbol}
+  sub rsp, 16
+  mov QWORD PTR [rsp], rax
+  mov QWORD PTR [rsp + 8], rdx
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 16
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        compiled = compile_owned(units)
+        image = link_static_executable([assemble_file(observer), parse_relocatable(compiled.object)], entry="_start")
+    own_main, raw = tmp_path / "main", tmp_path / "register-observer"
+    write_artifact(compiled, own_main)
+    raw.write_bytes(image)
+    raw.chmod(0o700)
+    reference = compile_reference(units, tmp_path / "official", compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    assert run(own_main) == run(reference) == Execution(0, b"", b"")
+    assert run(raw) == Execution(0, struct.pack("<4I", 0x81234568, 0x2B9889BA, 0xFEDCBA9A, 0x32015467), b"")
 
 
 RAW_RESULTS = [

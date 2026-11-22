@@ -390,3 +390,12 @@ encoder/cache suite passed 244 checks and this native control passed.
 This does not interpret the Go assembly frame or supply the bodyless
 Go declaration, XGETBV or the build-level routine. Next establish the
 actual PCC tuple result transport before binding any original symbol.
+
+The exact two-`uint32` argument, four-`uint32` result shape now has
+an owned native register observation. The two input words enter via
+EDI/ESI. PCC returns the first two words in RAX and the last two in
+RDX, each low word first. A separate owned-assembled caller read
+all 16 result bytes including high-bit values, and the complete unchanged
+Go control also matched official Go. Thirty-three focused result checks
+and 22 integration checks passed. This establishes the adapter-side ABI,
+not the source-to-body binding for the original CPUID.
