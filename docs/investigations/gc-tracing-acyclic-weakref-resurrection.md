@@ -295,3 +295,13 @@ slot budget refuse without changing the report. This native test
 admits only its known callback and fixed live graph; it does not
 justify ignoring other roots, stores or allocations in production.
 No shipped barrier, weakref semantics or sweep dispatch changed.
+
+The `rescue journal <size>` arm has the real finalizer append itself
+to a preexisting registered list outside the candidate cohort. No root
+slot changes. The deliberately omitted journal sees zero rescues, but
+the full oracle rescues both objects. Explicitly recording the changed
+list in the reference arm lets the bounded visitor find both in three
+visits at each size and each of GC1–3. This uses actual list publication
+and an explicit test journal, not proof that all production authors
+would log that store. With the explicit-root and lifecycle arms there
+are now 30 Linux native process executions. No default behavior changed.

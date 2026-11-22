@@ -199,8 +199,11 @@ in the relevant section or issue and removes the entry.
    recheck visits 286/1,054/4,126 records at n/4n/16n with two rescued
    candidates throughout. The native bounded reference visits only the
    same two candidates in all three sizes and agrees with that oracle.
-   Next #9: exercise a registered old owner mutated during the callback;
-   an explicit-root-only refresh cannot cover it. No default path change.
+   A callback store through an older registered owner is missed without
+   its journal entry; recording that owner restores parity in three
+   visits. Next #9: qualify a real new-owner publication pathway and
+   fall back when its callback-window record cannot be proven.
+   No default path change.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -240,7 +243,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 bounded rescue through a real old-owner callback write: Codex, Linux x86-64, 2026-11-22 12:57 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

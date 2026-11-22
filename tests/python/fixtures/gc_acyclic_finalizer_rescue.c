@@ -27,7 +27,8 @@ enum { ONLY_FIELD = 0, WINDOW_WORDS = 2, SCRUB_WORDS = 4096 };
 enum { PARENT_FINALIZER, CHILD_FINALIZER };
 enum { FIRST_PARENT = 1, SECOND_CHILD = 2, THIRD_WEAK = 3 };
 
-static PyObject *restored, *live_heap;
+static PyObject *restored, *live_heap, *outside_owner;
+static int64_t use_old_owner, owner_in_journal;
 /* The two candidate identities stand in for collector metadata, not roots.
  * Never load those raw pointers into a live recheck frame. */
 static PyObject *candidate_parent, *candidate_child;
@@ -50,7 +51,13 @@ static PyObject *parent_del(PyObject *self) {
     parent_calls++;
     parent_position = ++sequence;
     observe_callback_boundary();
-    if (should_rescue) pcc_gc_store_root(&restored, self);
+    if (should_rescue && use_old_owner) {
+        py_list_append(outside_owner, self);
+        if (py_list_len(outside_owner) != 1) callback_errors++;
+        else owner_in_journal = 1; /* Explicit record by the reference arm only. */
+    } else if (should_rescue) {
+        pcc_gc_store_root(&restored, self);
+    }
     return py_int_from_i64(0);
 }
 
@@ -178,33 +185,41 @@ static void seed_child_from_slot(PyObject **slot, int64_t role, void *context) {
     if (*slot == candidate_child) trial->found |= REACHED_CHILD;
 }
 
-/* This arm admits only the fixture's closed callback: a publication to the
- * participating scheduler root, no dirty external owner, no relocation.
- * A production collector cannot infer those conditions from a finalizer. */
-static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left,
+/* The bounded arm knows this callback's one participating root and its
+ * exact explicit owner journal. There is no production store hook here. */
+static int inspect_owner_slots(PyObject *owner, int64_t *slots_left, struct Trial *trial) {
+    int64_t cursor = 0;
+    do {
+        if (!*slots_left) return 0;
+        int64_t state[VISITOR_WORDS] = {0, 0};
+        int64_t limit = *slots_left < VISITOR_BATCH ? *slots_left : VISITOR_BATCH;
+        if (!pcc_gc_visit_object_slots_slice(owner, cursor, limit,
+                         seed_child_from_slot, trial, state)
+            || trial->unsupported || state[VISITOR_VISITS] < 0
+            || state[VISITOR_VISITS] > limit
+            || (state[VISITOR_CURSOR] != VISITOR_END && state[VISITOR_CURSOR] <= cursor))
+            return 0;
+        *slots_left -= state[VISITOR_VISITS];
+        cursor = state[VISITOR_CURSOR];
+    } while (cursor != VISITOR_END);
+    return 1;
+}
+
+static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left, int64_t with_journal,
                            int64_t *mask_out, int64_t *visits_out) {
     if (sealed_epoch < 0 || pcc_thread_world_stop_epoch_held() != sealed_epoch) return 0;
     struct Trial trial = {0, 0};
     if (restored == candidate_parent) trial.found = REACHED_PARENT;
     else if (restored != NULL) return 0;
     int64_t examined = 0, seen = 0;
+    if (with_journal && owner_in_journal) {
+        if (!inspect_owner_slots(outside_owner, &slots_left, &trial)) return 0;
+        examined++;
+    }
     while (seen != trial.found) {
         int64_t next = (trial.found & ~seen) & REACHED_PARENT ? REACHED_PARENT : REACHED_CHILD;
         PyObject *owner = next == REACHED_PARENT ? candidate_parent : candidate_child;
-        int64_t cursor = 0;
-        do {
-            if (!slots_left) return 0;
-            int64_t state[VISITOR_WORDS] = {0, 0};
-            int64_t limit = slots_left < VISITOR_BATCH ? slots_left : VISITOR_BATCH;
-            if (!pcc_gc_visit_object_slots_slice(owner, cursor, limit,
-                         seed_child_from_slot, &trial, state)
-                || trial.unsupported || state[VISITOR_VISITS] < 0
-                || state[VISITOR_VISITS] > limit
-                || (state[VISITOR_CURSOR] != VISITOR_END && state[VISITOR_CURSOR] <= cursor))
-                return 0;
-            slots_left -= state[VISITOR_VISITS];
-            cursor = state[VISITOR_CURSOR];
-        } while (cursor != VISITOR_END);
+        if (!inspect_owner_slots(owner, &slots_left, &trial)) return 0;
         seen |= next;
         examined++;
     }
@@ -222,8 +237,11 @@ static int check_first_verdict(void) {
                 parent_dead, child_dead, (long long)should_rescue);
         return 0;
     }
-    if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped
-        || (should_rescue ? restored != candidate_parent : restored != NULL)) return 0;
+    if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped) return 0;
+    if (use_old_owner) {
+        if (restored || !owner_in_journal || py_list_get(outside_owner, 0) != candidate_parent)
+            return 0;
+    } else if (should_rescue ? restored != candidate_parent : restored != NULL) return 0;
     if (py_weakref_call(child_watch) != candidate_child || parent_position != FIRST_PARENT)
         return 0;
     return 1;
@@ -235,12 +253,18 @@ int main(int argc, char **argv) {
     should_rescue = argv[1][0] == 'r';
     reentry = argc == 3 && argv[2][0] == 'n';
     int64_t heap_size = argc == 4 ? atoi(argv[3]) : 0;
-    int trial_bounded = argc == 4 && argv[2][0] == 'b';
+    use_old_owner = argc == 4 && argv[2][0] == 'j';
+    int trial_bounded = (argc == 4 && argv[2][0] == 'b') || use_old_owner;
     if (argc == 4 && (!should_rescue || heap_size <= 0 || heap_size > 2048)) return 1;
     py_gc_disable();
     if (!make_graph() || (heap_size && !make_fixed_live_graph(heap_size))) return 2;
     pcc_gc_scheduler_root_register(&restored);
     pcc_gc_scheduler_root_register(&child_watch);
+    if (use_old_owner) {
+        outside_owner = py_list_new(1);
+        if (!outside_owner) return 2;
+        pcc_gc_scheduler_root_register(&outside_owner);
+    }
     if (reentry) {
         pending_error = py_exc_new(PY_EXC_VALUEERROR, "outer acyclic callback error");
         if (!pending_error) return 3;
@@ -256,11 +280,16 @@ int main(int argc, char **argv) {
     int64_t bounded_mask = -1, bounded_visits = -1;
     if (trial_bounded) {
         int64_t stopped = pcc_thread_world_stop_epoch_held();
-        if (bounded_recheck(stopped, 0, &bounded_mask, &bounded_visits)
-            || bounded_recheck(stopped - 1, REFERENCE_SLOT_BUDGET,
+        if (bounded_recheck(stopped, 0, 1, &bounded_mask, &bounded_visits)
+            || bounded_recheck(stopped - 1, REFERENCE_SLOT_BUDGET, 1,
                                &bounded_mask, &bounded_visits)
             || bounded_mask != -1 || bounded_visits != -1) return 15;
-        if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET,
+        if (use_old_owner) {
+            int64_t missed = -1, missed_visits = -1;
+            if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 0, &missed, &missed_visits)
+                || missed || missed_visits) return 16;
+        }
+        if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 1,
                              &bounded_mask, &bounded_visits)) return 16;
     }
     int64_t calls = __atomic_load_n(&pcc_gc_metric_sweep_recheck_calls, __ATOMIC_RELAXED);
@@ -273,7 +302,8 @@ int main(int argc, char **argv) {
     saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED) - saved;
     elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED) - elapsed;
     if (!check_first_verdict()) return 5;
-    if (trial_bounded && (bounded_mask != BOTH_REACHED || bounded_visits != 2 || saved != 2))
+    if (trial_bounded && (bounded_mask != BOTH_REACHED
+                         || bounded_visits != (use_old_owner ? 3 : 2) || saved != 2))
         return 17;
     if (!should_rescue) {
         if (!retire_parent_edge() || !run_one(CHILD_FINALIZER)) return 8;
@@ -294,6 +324,10 @@ int main(int argc, char **argv) {
     pcc_gc_store_root(&child_watch, NULL);
     pcc_gc_scheduler_root_unregister(&child_watch);
     pcc_gc_scheduler_root_unregister(&restored);
+    if (use_old_owner) {
+        pcc_gc_store_root(&outside_owner, NULL);
+        pcc_gc_scheduler_root_unregister(&outside_owner);
+    }
     if (heap_size) {
         if (py_list_len(live_heap) != heap_size) return 14;
         pcc_gc_store_root(&live_heap, NULL);
