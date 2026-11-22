@@ -80,3 +80,22 @@ def test_explicit_destructor_keeps_unproved_internal_callees_and_overrides_gated
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp((("unproved.cpp", source_for_internal_helper(specifier, effect)),))
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
+
+
+@pytest.mark.integration
+def test_late_nonvirtual_member_leaf_effect_has_a_real_definition(tmp_path):
+    # The member's body follows the destructor, as Unlink follows XMLNode's
+    # destructor in TinyXML2. This independent direct edge needs resolution
+    # before tackling recursive or dynamically dispatched cleanup.
+    source = (
+        PREFIX + "struct O{O(int*p):out(p){} int*out;~O();void cleanup();};"
+        "O::~O(){cleanup();} void O::cleanup(){*out=42;}"
+        "int cpp_test_entry(){long long raw[16];int result=1;"
+        "O*p=new(raw)O(&result);p->~O();return result;}"
+    )
+    units = (("late-member.cpp", source),)
+    reference = compile_reference_with_new(units, tmp_path / "reference")
+    assert_exact(run_executable(reference), EXPECTED)
+    with pytest.raises(CppDiagnostic) as error:
+        compile_host_cpp(units)
+    assert error.value.code == "cpp.unsupported.placement-constructor-effects"

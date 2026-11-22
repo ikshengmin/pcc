@@ -216,14 +216,13 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   map the actual `XMLNode` destruction call graph and isolate its first
-   open-virtual or recursive effect edge, before expanding the exact
-   bound-leaf proof. The original still stops at `tinyxml2.cpp:1199:9`;
-   nonvirtual/final explicit destruction can now call a proved TU-local
-   leaf, but is not a substitute for the upstream virtual chain.
+   prove a late-defined, direct nonvirtual member effect during explicit
+   destruction, using the [TinyXML2 graph and minimal witness](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
+   The unchanged project remains at `1199:9`; recursive and virtual
+   final-overrider closure are separate obligations.
 
    Claims:
-   - TinyXML2 recursive virtual effect graph: Codex, Linux x86-64, 2026-11-22 01:14 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
