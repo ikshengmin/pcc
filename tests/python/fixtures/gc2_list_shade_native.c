@@ -12,6 +12,7 @@ extern void pcc_list_lock(PyObject *);
 extern void pcc_list_unlock(PyObject *);
 extern int64_t pcc_gc_alloc_stage_drain_locked(void);
 extern int64_t pcc_gc_object_index_seen_stable(PyObject *);
+extern void pcc_gc_note_private_construction_root(PyObject **);
 extern int64_t pcc_gc_gray_count_load_acquire(void);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern void pcc_gc_shade_gray_atomic(PyObject *, int64_t);
@@ -57,13 +58,15 @@ static int64_t color(PyObject *obj) {
 
 static int private_root_shade(void) {
     PyObject *black = py_list_new(1), *white = py_list_new(0);
+    PyObject *construction_white = py_list_new(0);
     PyObject *root = NULL;
     void *handle = pcc_gc_scheduler_root_register_handle(&root);
-    if (!black || !white || !handle) return 21;
+    if (!black || !white || !construction_white || !handle) return 21;
     pcc_py_gc_minor_graph_lock();
     pcc_gc_alloc_stage_drain_locked();
     pcc_gc_set_mark_color(black, BLACK);
     pcc_gc_set_mark_color(white, WHITE);
+    pcc_gc_set_mark_color(construction_white, WHITE);
     if (pcc_gc_gray_count_load_acquire() != 0 || pcc_gc_mark_active) return 22;
     __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
     pcc_py_gc_minor_graph_unlock();
@@ -73,12 +76,15 @@ static int private_root_shade(void) {
     PyObject *fresh = py_list_new(0);
     int32_t extra = __atomic_load_n(&pcc_gc_cms_wb_flushes, __ATOMIC_RELAXED) - shades;
     if (!fresh || py_list_len(fresh) != 0 || !pcc_gc_object_index_seen_stable(fresh)
-        || color(fresh) != GRAY || pcc_gc_gray_count_load_acquire() != 1 || extra != 1) {
+        || color(fresh) != BLACK || pcc_gc_gray_count_load_acquire() != 0 || extra != 0) {
         fprintf(stderr, "fresh shade=%d color=%lld gray=%lld\n", extra,
                 (long long)(fresh ? color(fresh) : 0),
                 (long long)pcc_gc_gray_count_load_acquire());
         return 23;
     }
+    pcc_gc_note_private_construction_root(&construction_white);
+    if (color(construction_white) != GRAY || pcc_gc_gray_count_load_acquire() != 1)
+        return 27;
     /* General existing-root and genuine owning-field stores are separate. */
     pcc_gc_store_root(&root, black);
     if (root != black || color(black) != GRAY || pcc_gc_gray_count_load_acquire() != 2)
@@ -91,7 +97,7 @@ static int private_root_shade(void) {
     int found = 0;
     for (int i = 0; i < 3; ++i) {
         PyObject *item = pcc_gc_gray_worklist_take_locked();
-        if (item == fresh) found |= 1;
+        if (item == construction_white) found |= 1;
         if (item == black) found |= 2;
         if (item == white) found |= 4;
     }
@@ -101,7 +107,7 @@ static int private_root_shade(void) {
     if (!complete) return 26;
     pcc_gc_store_root(&root, NULL);
     pcc_gc_scheduler_root_unregister_handle(handle);
-    puts("GC2_PRIVATE_ROOT_SHADE_OK fresh=1 old_black=1 old_white=1");
+    puts("GC2_PRIVATE_ROOT_SHADE_OK fresh=0 construction_white=1 old_black=1 old_white=1");
     return 0;
 }
 

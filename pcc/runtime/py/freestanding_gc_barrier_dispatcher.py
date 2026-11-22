@@ -429,6 +429,34 @@ def pcc_gc_note_slot_write_barrier(owner, slot, value) -> None:
     pcc_gc_count_free_barrier_shade(value)
 
 
+@c_abi_export("pcc_gc_note_private_construction_root")
+def pcc_gc_note_private_construction_root(slot) -> None:
+    """Publish a private root whose new object has no managed children yet.
+
+    Unlike an ordinary root republish, a GC2 black value at this boundary
+    cannot acquire new children through this store. A white value from
+    before the mark boundary must still be shaded. The caller must finish
+    initialization through normal managed stores, not reuse this entry for
+    an already published object.
+    """
+    value = load_ptr(slot, 0)
+    if _selected_backend() != 2:
+        pcc_gc_note_slot_write_barrier(null(), slot, value)
+        return
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return
+    pcc_thread_no_park_enter()
+    if (
+        atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+        and pcc_gc_object_index_seen_stable(value) != 0
+    ):
+        flags: i64 = atomic_load_i32(value, 12, "acquire")
+        if (flags & 524288) == 0 and pcc_gc_object_is_white(value, flags) != 0:
+            atomic_rmw_i32("add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed")
+            pcc_gc_shade_gray_atomic(value, 0)
+    pcc_thread_no_park_exit()
+
+
 @c_abi_export("pcc_gc_note_root_slot_barrier")
 def pcc_gc_note_root_slot_barrier(slot) -> None:
     """The store barrier for the value a producer just published in ``slot``,

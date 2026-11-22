@@ -24,8 +24,8 @@ def test_gc2_list_scan_and_late_writer_publish_distinct_gray_work(tmp_path, expl
             "GC2_LIST_SHADE_OK scanned=1 late_barrier=1 queue=2\n"
         ), result
 
-    result = _record_execution(tmp_path, "private-root-stock", [str(binary), "private"], env)
+    result = _record_execution(tmp_path, "private-root-candidate", [str(binary), "private"], env)
     assert (result["returncode"], result["stderr"]) == (0, ""), result
     assert result["stdout"] == (
-        "GC2_PRIVATE_ROOT_SHADE_OK fresh=1 old_black=1 old_white=1\n"
+        "GC2_PRIVATE_ROOT_SHADE_OK fresh=0 construction_white=1 old_black=1 old_white=1\n"
     ), result

@@ -117,6 +117,9 @@ pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_
 pcc_gc_slot_lease_acquire = extern("pcc_gc_slot_lease_acquire", (c_ptr, c_int64), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_note_private_construction_root = extern(
+    "pcc_gc_note_private_construction_root", (c_ptr,), c_void
+)
 pcc_gc_note_slot_write_barrier = extern(
     "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
 )
@@ -603,7 +606,7 @@ def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
     if token < 0:
         return -1
     l = load_ptr(output, 0)
-    pcc_gc_note_slot_write_barrier(null(), output, l)
+    pcc_gc_note_private_construction_root(output)
     stride: i64 = i64(C_POINTER_SIZE)
     items = malloc(cap * stride)
     if ptr_is_null(items):

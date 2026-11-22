@@ -3326,6 +3326,7 @@ def _cross_object_signatures_part_14():
 
 def _cross_object_signatures_part_15():
     return {
+    "pcc_gc_note_private_construction_root": (("c_ptr",), "c_void"),
     # GC4 evacuates object slabs (freestanding_gc_relocation_selector).
     "pcc_gc_page_of": (("c_ptr",), "c_ptr"),
     "pcc_gc_page_evacuating": (("c_ptr",), "c_int64"),
