@@ -61,11 +61,44 @@ static int check_dictionary_first_store(void) {
     return 0;
 }
 
+static int check_generator_frame_store(void) {
+    PyObject *frame = py_gen_frame_new(2);
+    PyObject *value = py_list_new(0);
+    PyObject *replacement = py_list_new(0);
+    PyObject *other = py_list_new(0);
+    if (!frame || !value || !replacement || !other) return fail("generator allocation");
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_set_mark_color(frame, PY_FLAG_GC_BLACK);
+    pcc_gc_set_mark_color(value, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(replacement, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(other, PY_FLAG_GC_WHITE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+
+    PyListObject *backing = (PyListObject *)frame;
+    py_gen_frame_set(frame, 0, value);
+    if (backing->items[0] != value || color(value) != PY_FLAG_GC_GRAY
+        || pcc_gc_page_mark_test(value) != 1)
+        return fail("generator first store");
+    py_gen_frame_set(frame, 0, replacement);
+    if (backing->items[0] != replacement || color(replacement) != PY_FLAG_GC_GRAY
+        || pcc_gc_page_mark_test(replacement) != 1)
+        return fail("generator replacement");
+    py_gen_frame_set(frame, 0, NULL);
+    if (backing->items[0] != NULL || color(other) != PY_FLAG_GC_WHITE
+        || pcc_gc_page_mark_test(other) != 0)
+        return fail("generator clear");
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC3_GENERATOR_STORE_OK");
+    return 0;
+}
+
 int main(int argc, char **argv) {
-    (void)argv;
     if (pcc_gc_backend() != 3) return fail("backend");
     py_gc_disable();
-    if (argc == 2) return check_dictionary_first_store();
+    if (argc == 2 && argv[1][0] == 'd') return check_dictionary_first_store();
+    if (argc == 2 && argv[1][0] == 'g') return check_generator_frame_store();
+    if (argc != 1) return fail("mode");
     PyObject *child_growth = py_list_new(0);
     PyObject *child_spare = py_list_new(0);
     PyObject *unwritten = py_list_new(0);

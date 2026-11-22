@@ -47,6 +47,16 @@ An implementation must establish that a stopped collector cannot see the
 committed fields without their card. This does not install or time that
 barrier. The focused source/model and adjoining dict tests passed 28 cases.
 
+The GC3 raw list-backed generator frame witness executes
+`py_gen_frame_new` and `py_gen_frame_set` natively under a controlled
+active major. First store and replacement preserve identity and shade just
+the stored child; clearing sets the slot to NULL. The source witness
+observes the backing-store write and value-only shade between acquisition
+and release of the frame's own container lock. The owner is available at
+that transaction, not inside the shade function. Neither witness covers
+the inline frame path, a minor, or card retirement. Linux pcc0: three
+native writer controls and three source witnesses passed; Mac not run.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

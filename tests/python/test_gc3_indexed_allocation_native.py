@@ -42,3 +42,12 @@ def test_gc3_dict_and_ownerless_first_store_during_active_mark(tmp_path, indexed
     assert (result["returncode"], result["stdout"], result["stderr"]) == (
         0, "GC3_DICT_FIRST_STORE_OK\n", "",
     ), result
+
+
+
+@pytest.mark.integration
+def test_gc3_raw_generator_frame_set_replace_clear_during_active_mark(tmp_path, indexed_allocation_binary):
+    result = _execute_gc3(tmp_path, indexed_allocation_binary, "generator")
+    assert (result["returncode"], result["stdout"], result["stderr"]) == (
+        0, "GC3_GENERATOR_STORE_OK\n", "",
+    ), result

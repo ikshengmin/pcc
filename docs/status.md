@@ -238,9 +238,11 @@ in the relevant section or issue and removes the entry.
    bitmap, and both list append paths. A second Linux native control
    checked dictionary insertion/replacement and the value-only initializer.
    The dictionary transaction witness identifies the commit point after both
-   slots succeed; rollback publishes no edge. Next: qualify the corresponding
-   GC3 generator-frame write, then build the owner-aware path with
-   root-only stores separate. A concurrent nursery handoff is still untested.
+   slots succeed; rollback publishes no edge. Linux native GC3 also
+   exercised the raw generator frame's set, replace and clear. Next:
+   establish the general managed-store owner path separately from true
+   root stores; do not enable nursery or change the other collectors.
+   A concurrent nursery handoff is still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -252,7 +254,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 generator-frame writer witness: Codex, Linux x86-64, 2026-11-22 06:30 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

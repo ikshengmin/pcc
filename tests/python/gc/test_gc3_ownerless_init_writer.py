@@ -117,3 +117,45 @@ def test_gc3_dict_pair_publication_has_one_owner_boundary_and_no_rollback_edge()
     assert model.full_reachable_young((owner,)) == {key, value}
     assert model.minor((owner,)).live_young == {key, value}
     assert model.minor(()).live_young == {key, value}
+
+
+def test_gc3_raw_generator_frame_retains_owner_at_the_store_transaction():
+    frame, items, first, replacement = 0x1000, 0x2000, 0x3000, 0x4000
+    memory = {
+        (frame, abi.PYLISTOBJECT_LENGTH_OFFSET): 2,
+        (frame, abi.PYLISTOBJECT_ITEMS_OFFSET): items,
+        (items, 0): 0,
+    }
+    events = []
+
+    def store(address, offset, value):
+        events.append(("store", address, value))
+        memory[address, offset] = value
+
+    bindings = {
+        "pcc_gc_backend": lambda: 3,
+        "ptr_is_null": lambda pointer: pointer == 0,
+        "global_addr": lambda name: name,
+        "load_i32": lambda pointer, offset: (
+            1 if pointer == "pcc_gc_nonmoving_count_free" else abi.PY_TYPE_LIST
+        ),
+        "load_i64": lambda address, offset: memory[address, offset],
+        "load_ptr": lambda address, offset: memory[address, offset],
+        "store_ptr": store,
+        "ptr_add": lambda pointer, offset: pointer + offset,
+        "pcc_container_lock": lambda owner: events.append(("lock", owner)),
+        "pcc_gc_count_free_store_shade": lambda value: events.append(("shade", value)),
+        "pcc_container_unlock": lambda owner: events.append(("unlock", owner)),
+    }
+    for name in ("PY_TYPE_GEN", "PYLISTOBJECT_LENGTH_OFFSET",
+                 "PYLISTOBJECT_ITEMS_OFFSET", "C_POINTER_SIZE"):
+        bindings[name] = getattr(abi, name)
+    _source_function("py_gen.py", "_frame_list_raw", bindings)
+    commit = _source_function("py_gen.py", "py_gen_frame_set", bindings)
+    for value in (first, replacement, 0):
+        events.clear()
+        commit(frame, 0, value)
+        assert events == [
+            ("lock", frame), ("shade", value), ("store", items, value), ("unlock", frame),
+        ]
+        assert memory[items, 0] == value
