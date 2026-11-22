@@ -520,3 +520,11 @@ rejects before emission. Twenty-six checks and four native differentials
 passed. This uses an isolated function-local destination, not an
 escaping Go string or heap-backed slice. The counted copy contract is
 available for a future owned runtime allocation.
+
+The exact source-only package path now binds the closed byte-append
+helper's signature and proof. A normal compile or an unproved caller
+still rejects it; no executable descriptor or IR is supplied. The
+real selected graph advances to the allocating `DataCacheSizes() []uintptr`
+at `internal/cpu/datacache_x86.go:15:23`; that result genuinely escapes,
+so the fixed local byte plan cannot apply. The scoped suite passed
+146 checks and five native byte/variadic differentials.

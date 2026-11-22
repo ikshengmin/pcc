@@ -374,10 +374,11 @@ class GenericSession:
         # (including requests made by instances) have drained to completion.
         self.instances.drain(build)
 
-    def validate_abstract(self, programs):
+    def validate_abstract(self, programs, *, source_only=False):
         from pcc.frontends.go.pointer_flow import validate_pointer_flow
         from pcc.frontends.go.syntax import Program
-        functions = [function for program in programs for function in program.functions]
+        functions = [function for program in programs for function in program.functions
+                     if not (source_only and function.byte_append_summary is not None)]
         # Abstract calls retain concrete pointer parameters and their source
         # obligations. No pointer type argument is admitted, and generic
         # declarations themselves are independently checked even when unused.

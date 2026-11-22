@@ -188,11 +188,11 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
         raise GoDiagnostic(main.token, "Go scalar frontend requires a supported 64-bit target")
     generics.materialize()
     for program in order:
-        validate_value_types(program)
+        validate_value_types(program, source_only=instances is not None)
     # One closed check includes every concrete function plus all independently
     # typed generic declarations/signature selections, including unused ones.
     # Filtering non-emitted declarations afterward does not weaken the proof.
-    generics.validate_abstract(order)
+    generics.validate_abstract(order, source_only=instances is not None)
     return main, analyzed, order, standard_used
 
 

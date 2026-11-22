@@ -391,6 +391,7 @@ class Function:
     variadic_alloc_sites: int = 0
     variadic_frame_bytes: int = 0
     declaration_only: bool = False
+    byte_append_summary: object = None
 
 
 @dataclass

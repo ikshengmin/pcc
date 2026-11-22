@@ -401,7 +401,7 @@ def require_value_type(dtype, token, *, declaration=False):
             require_value_type(field.type, token)
 
 
-def validate_value_types(program):
+def validate_value_types(program, *, source_only=False):
     """Last semantic boundary over emitted carriers, excluding type declarations."""
     seen = set()
 
@@ -433,6 +433,8 @@ def validate_value_types(program):
             statement(stmt.post)
 
     for function in program.functions:
+        if source_only and function.byte_append_summary is not None:
+            continue  # The proved helper carries no admitted slice value.
         for i, (_, dtype) in enumerate(function.params):
             if function.variadic and i == len(function.params)-1:
                 require_variadic_element(dtype, function.token)
@@ -599,6 +601,19 @@ class Analyzer:
                 if type(owner) is not NativeFunctionBinding or function.receiver is not None:
                     raise UnsupportedGo(function.token, 'go.unsupported.external-function-owner',
                                         "bodyless function requires an owned implementation and ABI binding")
+            if self.source_only and function.variadic and isinstance(function.result, SliceSyntax):
+                from pcc.frontends.go.slice_proof import byte_append_summary
+
+                summary = byte_append_summary(self.program, function.token.text)
+                if summary is not None:
+                    # This exact closed source shape was checked separately.
+                    # Resolve its signature, but do not admit callers or an
+                    # executable slice descriptor through this source probe.
+                    function.byte_append_summary = summary
+                    function.params = [(token, self.resolve_type(dtype, signature=True))
+                                       for token, dtype in function.params]
+                    function.result = self.resolve_type(function.result, signature=True)
+                    continue
             if function.receiver is not None:
                 token, raw = function.receiver
                 receiver_base = raw.element if isinstance(raw, PointerSyntax) else raw
@@ -675,7 +690,7 @@ class Analyzer:
             if main.params or main.result != "void" or main.type_parameters:
                 raise GoDiagnostic(main.token, "main must have no parameters and no result")
         for function in self.program.functions:
-            if not function.declaration_only:
+            if not function.declaration_only and function.byte_append_summary is None:
                 self.analyze_function(function)
         for file_imports in self.imports.values():
             for binding in file_imports.values():
@@ -2453,6 +2468,9 @@ class Analyzer:
         expr.kind, expr.type = 'indirect_call', sig.result
 
     def call(self, expr, function, *, receiver=None, pointer_receiver_type=None):
+        if getattr(function, "byte_append_summary", None) is not None:
+            raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
+                                "bounded byte helper requires a proved byte-span caller and storage binding")
         if function.type_parameters:
             function = self.generics.select(self, function, expr.args)
         values = self.values(expr.args)

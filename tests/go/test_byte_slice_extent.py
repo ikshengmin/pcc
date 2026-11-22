@@ -165,3 +165,26 @@ def test_legacy_octal_capacity_cannot_be_reinterpreted_as_decimal_proof():
     code = "package p;func f() int { data:=make([]byte,0,010);return cap(data) }"
     program = GoParser().parse(code, "octal.go", require_main=False)
     assert byte_span_caller_proof(program, "f", "data", FixedByteExtent(0, 10, byte_backing_plan())) is None
+
+
+def test_exact_byte_helper_signature_is_source_metadata_only(monkeypatch):
+    from pcc.frontends.go.lowering import Lowerer
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+
+    helper = ("package main;func appendWords(b []byte,args ...uint32)[]byte{"
+              "for _,v:=range args{b=append(b,byte(v))};return b};")
+    def analyze(body):
+        source = helper + f"func main(){{{body}}}"
+        row = SourceInstance("main", (("helper.go", source),), {})
+        return analyze_source_instances({"main": row}, main_instance="main",
+                                        target_triple="x86_64-unknown-linux-gnu")
+
+    monkeypatch.setattr(Lowerer, "lower", lambda *_: pytest.fail("source-only helper reached IR"))
+    result = analyze("")["main"]
+    bound = result.functions["appendWords"].byte_append_summary
+    assert bound.shifts == (0,)
+    with pytest.raises(UnsupportedGo, match="requires a proved byte-span caller"):
+        analyze("_=appendWords(nil,42)")
+    with pytest.raises(UnsupportedGo) as caught:
+        compile_go(helper + "func main(){}")
+    assert caught.value.code == "go.unsupported.slice-storage"
