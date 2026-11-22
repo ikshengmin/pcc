@@ -213,7 +213,7 @@ pcc_gc_index_py_remove = extern(
 
 def _target_directory_supported() -> int:
     backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    return 1 if ((backend == 1 or backend == 3)
+    return 1 if ((backend >= 1 and backend <= 3)
                  and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0) else 0
 
 

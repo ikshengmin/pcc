@@ -782,3 +782,30 @@ excursion. GC1 was 7.5% faster, also 7/7, inside its 16.3% control
 excursion. Keep this scoped to the review branch: evidence for GC3 at
 256 nodes and four peers is narrow; GC1, HTTP and macOS remain
 unqualified.
+
+### Admit nonmoving GC2 at the same stopped mark handoff
+
+The stock review branch's GC2 path used the legacy ordering even when
+its finished mark and sweep were in the same stop: public 4/16/64-node
+collections produced all weak callbacks before any finalizer. On a
+sealed candidate graph, an acyclic owner's resurrection could also no
+longer keep the child's original weakref. GC1 and GC3 gave the CPython
+event sequence with the same fixtures.
+
+GC2 uses the same nonmoving candidate vector and sealed commit as GC1/3.
+Use the same singleton/layer and exact weak-target index admission on
+GC1–3. Keep the same held finish epoch, idle marker, empty gray queue,
+sealed commit and no-forwarding checks. The normal marker will not
+advance while the callback window holds its dedicated mark state. GC4
+and the legacy fallbacks are unchanged.
+
+Linux pcc0, using the verified 205-member native runtime: 192 focused
+assertions across GC1–3, including CPython order and weak identity,
+independent C owner keep/withdraw, peer publication and departure,
+cyclic residue, silent cohorts, and public and sealed callback chains.
+Public GC2 reaches 257 candidate records with the exact CPython
+alternation and zero full callback rechecks. Blocking, departure and
+contested and nested stop lifecycle passed on all five GCs, including
+GC2 in callback mode. This does not resolve sweeps of a verdict from a
+different stop, qualify automatic handoffs or GC4, or establish a
+performance, HTTP, native pcc1 or Darwin result.

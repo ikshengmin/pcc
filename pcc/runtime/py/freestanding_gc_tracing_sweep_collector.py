@@ -986,7 +986,8 @@ def pcc_gc_tracing_dispatch_classified_head(
 
 # Review-only production admission. This is a true sweep route, not the
 # injected-callback fixtures. A single acyclic object has one real ready layer.
-# Multi-object topology, GC2/4 and uncovered barriers stay on the old route.
+# The layered path handles multi-object topology. GC4 and uncovered
+# barriers stay on the old route; GC4 requires a separate review.
 _CALLBACK_SWEEP_CANDIDATE = 1024
 _CALLBACK_FRESH_ALLOCATION = 16384
 _CALLBACK_MARK_WINDOW = 2
@@ -1000,7 +1001,7 @@ _CALLBACK_ROOT_CUT_BYTES = 24
 @c_abi_export("pcc_gc_review_acyclic_singleton")
 def _review_acyclic_singleton(stop_epoch: i64, backend: i64):
     if (
-        (backend != 1 and backend != 3)
+        (backend < 1 or backend > 3)
         or stop_epoch < 0
         or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
         or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
@@ -1275,7 +1276,7 @@ def _review_remark_layer_at_stop(plan, nodes, count: i64, caller,
 @c_abi_export("pcc_gc_review_layer_plan")
 def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
     if (
-        (backend != 1 and backend != 3) or count < 2
+        (backend < 1 or backend > 3) or count < 2
         or ptr_is_null(nodes) != 0 or stop_epoch < 0
         or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
         or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
@@ -1387,7 +1388,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
         pcc_gc_tracing_recheck_reachability_after_finalizers()
     backend_for_review: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend_for_review == 1 or backend_for_review == 3:
+    if backend_for_review >= 1 and backend_for_review <= 3:
         review_node = _review_acyclic_singleton(held, backend_for_review)
         if ptr_is_null(review_node) == 0:
             return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)

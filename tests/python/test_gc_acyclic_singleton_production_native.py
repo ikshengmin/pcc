@@ -25,7 +25,7 @@ def _singleton_sweep(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("arm", (
     "terminal", "rescue", "thread-hold", "thread-drop", "thread-publish", "thread-publish-clear",
 ))
@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart", "peer-new"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
@@ -128,7 +128,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("count", (63, 64, 65, 255, 256, 257))
 @pytest.mark.parametrize("keep", (True, False), ids=("keep", "drop"))
 def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, backend, count, keep):
@@ -147,7 +147,7 @@ def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, bac
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("arm", (
     "silent", "silent-live-del", "silent-unrelated-weakrefs", "silent-unrelated-weakrefs-live-del",
 ))
@@ -164,7 +164,7 @@ def test_acyclic_sweep_without_observers_keeps_legacy_path(_layered_sweep, backe
     )
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 def test_acyclic_sweep_with_only_weak_callbacks_keeps_review_path(_layered_sweep, backend):
     actual = run_process_group_timeout(
         [str(_layered_sweep), "only-weakrefs"], timeout=15,
@@ -177,7 +177,7 @@ def test_acyclic_sweep_with_only_weak_callbacks_keeps_review_path(_layered_sweep
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 def test_acyclic_sweep_with_only_finalizers_keeps_layer_order(_layered_sweep, backend):
     actual = run_process_group_timeout(
         [str(_layered_sweep), "finalizer-only"], timeout=15,
@@ -201,7 +201,7 @@ def _layered_cpy_owner(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("arm", ("keep", "withdraw"))
 def test_layered_sweep_checks_independent_cpy_owner(_layered_cpy_owner, backend, arm):
     actual = run_process_group_timeout(
@@ -227,7 +227,7 @@ def _callback_scale_sweep(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 @pytest.mark.parametrize("count", (4, 16, 64, 128, 256))
 @pytest.mark.parametrize("public", (False, True), ids=("sealed", "public"))
 def test_callback_chain_scale_matches_cpython(_callback_scale_sweep, backend, count, public):
@@ -268,7 +268,7 @@ def _callback_ready_lifecycle(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend,mode", ((0, "normal"), (1, "callback"), (2, "normal"),
+@pytest.mark.parametrize("backend,mode", ((0, "normal"), (1, "callback"), (2, "callback"),
                                           (3, "callback"), (4, "normal")))
 def test_callback_ready_does_not_strand_blocking_or_departing_peers(
     _callback_ready_lifecycle, backend, mode,
@@ -282,7 +282,7 @@ def test_callback_ready_does_not_strand_blocking_or_departing_peers(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("backend", (1, 2, 3))
 def test_callback_order_with_four_frozen_peers(_callback_scale_sweep, backend):
     count = 64
     result = run_process_group_timeout(
