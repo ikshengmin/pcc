@@ -389,3 +389,22 @@ tests/python/test_gc3_indexed_allocation_native.py` (five native controls).
 This fixes the boundary for a future owner-aware publication hook.
 It does not run a nursery, a minor or Darwin, and changes no runtime
 dispatch. The private sorted-list writer is separate.
+
+## Private sorted-list publication during active major mark
+
+The same Linux pcc0 fixture requires actual fast-helper success for a
+small list taking insertion sort and an 18-element tuple taking reverse
+merge sort with scratch storage. The published list is a new indexed
+black object; the sorted slots hold the original object identities
+and every copied child is gray with its page bit set. The source order
+and an unrelated white object's color do not change. A mixed list
+forces a non-plain comparison refusal: the input marks prove the
+private copy ran, but the result slot stays null and no exception is
+published. This distinguishes a post-copy refusal from an admission
+gate; it does not assert immediate reclamation of the private part.
+
+The eight native cases use the same source-matched archive command
+above. The raw merge scratch is not an old owning container: it holds
+a transient permutation while the original children remain rooted in
+the output array. No nursery/minor, production code change, macOS,
+pcc1 or throughput claim.

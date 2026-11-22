@@ -147,6 +147,73 @@ static int check_dictionary_private_materialization(void) {
     return 0;
 }
 
+extern int64_t user_py_obj_ops_compare__sorted_gc0(PyObject **, int64_t, PyObject **);
+
+enum { SORT_INSERTION_INPUT = 4, SORT_MERGE_INPUT = 18 };
+
+static int check_private_sorted_publication(int large, int refused) {
+    int64_t count = large ? SORT_MERGE_INPUT : SORT_INSERTION_INPUT;
+    PyObject *source = large ? py_tuple_new(count) : py_list_new(count);
+    PyObject *control = py_list_new(0);
+    PyObject *children[SORT_MERGE_INPUT];
+    if (!source || !control) return fail("sort input lists");
+    for (int64_t i = 0; i < count; i++) {
+        char bytes[2];
+        bytes[0] = (char)('a' + i);
+        bytes[1] = 'x';
+        children[i] = refused && i == 0 ? py_list_new(0) : py_str_new(bytes, 2);
+        if (!children[i]) return fail("sort child allocation");
+    }
+    for (int64_t pos = 0; pos < count; pos++) {
+        /* Swap pairs so both ascending and descending require reordering. */
+        PyObject *child = children[pos ^ 1];
+        if (large) py_tuple_set_item(source, pos, child);
+        else py_list_append(source, child);
+    }
+
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_set_mark_color(source, PY_FLAG_GC_BLACK);
+    pcc_gc_set_mark_color(control, PY_FLAG_GC_WHITE);
+    for (int64_t i = 0; i < count; i++)
+        pcc_gc_set_mark_color(children[i], PY_FLAG_GC_WHITE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+
+    PyObject *out = NULL;
+    int64_t status = user_py_obj_ops_compare__sorted_gc0(&source, large, &out);
+    if (refused) {
+        /* An actual non-plain comparison refuses after the copy, not at
+         * admission: copied inputs are already marked, but nothing escapes. */
+        if (status || out || py_err_occurred()) return fail("sort refusal published");
+        for (int64_t i = 0; i < count; i++) {
+            if (color(children[i]) != PY_FLAG_GC_GRAY || pcc_gc_page_mark_test(children[i]) != 1)
+                return fail("sort refusal missed the post-copy boundary");
+        }
+    } else {
+        if (status != 1 || !out || out == source || color(out) != PY_FLAG_GC_BLACK
+            || !pcc_gc_object_index_find(out) || pcc_gc_page_mark_test(out) != 1)
+            return fail("sort private allocation");
+        PyListObject *published = (PyListObject *)out;
+        if (published->length != count || !published->items)
+            return fail("sort publication length");
+        for (int64_t i = 0; i < count; i++) {
+            PyObject *expected = children[large ? count - 1 - i : i];
+            if (published->items[i] != expected || color(expected) != PY_FLAG_GC_GRAY
+                || pcc_gc_page_mark_test(expected) != 1)
+                return fail("sort position or copied child shade");
+        }
+    }
+    for (int64_t pos = 0; pos < count; pos++) {
+        PyObject *original = large ? py_tuple_getitem(source, pos) : py_list_get(source, pos);
+        if (original != children[pos ^ 1]) return fail("sort changed source order");
+    }
+    if (color(control) != PY_FLAG_GC_WHITE || pcc_gc_page_mark_test(control) != 0)
+        return fail("unrelated sort control is shaded");
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC3_PRIVATE_SORT_PUBLICATION_OK");
+    return 0;
+}
+
 static PyObject *registered_root;
 
 static int check_managed_and_root_stores(void) {
@@ -190,6 +257,9 @@ int main(int argc, char **argv) {
     py_gc_disable();
     if (argc == 2 && argv[1][0] == 'd') return check_dictionary_first_store();
     if (argc == 2 && argv[1][0] == 'm') return check_dictionary_private_materialization();
+    if (argc == 2 && argv[1][0] == 'i') return check_private_sorted_publication(0, 0);
+    if (argc == 2 && argv[1][0] == 'r') return check_private_sorted_publication(1, 0);
+    if (argc == 2 && argv[1][0] == 'f') return check_private_sorted_publication(0, 1);
     if (argc == 2 && argv[1][0] == 'g') return check_generator_frame_store();
     if (argc == 2 && argv[1][0] == 's') return check_managed_and_root_stores();
     if (argc != 1) return fail("mode");

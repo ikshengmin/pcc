@@ -68,3 +68,12 @@ def test_gc3_private_dictionary_materialization_during_active_mark(tmp_path, ind
     assert (result["returncode"], result["stdout"], result["stderr"]) == (
         0, "GC3_DICT_PRIVATE_MATERIALIZATION_OK\n", "",
     ), result
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("mode", ("insertion", "reverse-merge", "fallback"))
+def test_gc3_private_sorted_publication_during_active_mark(tmp_path, indexed_allocation_binary, mode):
+    result = _execute_gc3(tmp_path, indexed_allocation_binary, mode)
+    assert (result["returncode"], result["stdout"], result["stderr"]) == (
+        0, "GC3_PRIVATE_SORT_PUBLICATION_OK\n", "",
+    ), result
