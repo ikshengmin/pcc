@@ -318,8 +318,12 @@ in the relevant section or issue and removes the entry.
    Rejected stopped pin-batch micro-optimization: 112 native assertions
    passed, but two paired Linux screens did not repeat a result beyond
    duplicate-parent noise. No runtime changes from this trial were pushed.
-   Next: use the exact prior gray queue for sparse callback publications,
-   preserving conservative/foreign pins and the full fallback. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Sparse prior-gray trial passed correctness (112 native cases; exact
+   rooted callback publication plus six malformed-queue controls), but
+   retest was inside host noise; do not carry the optimization forward.
+   Next: attribute stopped callback cost to world transitions, root-cut
+   capture, candidate pin/precision checks and drain before the next
+   optimization candidate; preserve all correct review paths. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -373,7 +377,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 19:55 UTC), #9 review only: validate sparse callback publication from the exact prior gray queue rather than walking all candidates, retaining bitmap and full oracle fallbacks.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
