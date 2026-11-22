@@ -541,3 +541,16 @@ in a CPUID-dependent loop. Eighty-four focused checks and one independent
 native static-string differential passed. Next: qualify the real runtime
 backing lifetime, then growth and ownership transfer; do not reuse the
 function-local byte stack array.
+
+The existing opt-in shared managed ABI has a native scalar backing
+lifetime control on Linux x86-64 GC0. An owned C producer allocates
+pointer-free repeated words, hands the caller a different owning root
+cell and drops its original handle. The caller reads the full-width
+words after an actual collection, observes allocated-empty distinct
+from nil, then releases the final owner and observes reclamation.
+Overflow and attempts to read a reference slot leave the output
+unchanged. Both this control and the existing graph fixture passed
+with a current-codegen owned archive; the same binaries explicitly
+rejected other collectors. No runtime code or Go semantics changed.
+Next bind the checked Go scalar layout to this optional descriptor
+and call boundary without opening the default link path.

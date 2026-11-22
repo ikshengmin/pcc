@@ -88,14 +88,24 @@ def test_managed_optional_object_has_exact_abi_and_no_boxed_adapter_arithmetic(t
 @pytest.mark.integration
 @pytest.mark.pcc_gate(probe=lambda: bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and sys.platform == "linux" and platform.machine() == "x86_64")
 def test_shared_managed_real_gc0_graph_and_rejection(tmp_path, monkeypatch):
+    _run_managed_fixture(tmp_path, monkeypatch, "managed_graph.c")
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and sys.platform == "linux" and platform.machine() == "x86_64")
+def test_shared_scalar_slice_owner_survives_producer_and_collection(tmp_path, monkeypatch):
+    _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_owner.c")
+
+
+def _run_managed_fixture(tmp_path, monkeypatch, fixture_name):
     from pcc.driver.project import TranslationUnit
     from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
     from pcc.runtime.shared_managed_build import managed_runtime_objects
     from tests.owned_runtime_c_fixture import admitted_runtime
 
     archive = admitted_runtime()
-    fixture = Path(__file__).with_name("fixtures") / "managed_graph.c"
-    binary = tmp_path / "managed_graph"
+    fixture = Path(__file__).with_name("fixtures") / fixture_name
+    binary = tmp_path / fixture.stem
     with monkeypatch.context() as patch:
         def forbidden(*args, **kwargs):
             raise AssertionError("managed compile/link attempted external ownership")
