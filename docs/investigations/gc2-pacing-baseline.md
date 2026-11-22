@@ -145,3 +145,17 @@ expected child in each slot. This uses the real slot visitor without the
 graph-locked mark callback. Same-stripe owners may still serialize.
 No concurrent writer, collection, mark publication, extra runtime
 worker, or A/B was exercised by this test.
+
+The following owned-C guard runs with automatic GC disabled and stages
+a controlled active mark on stock GC2. The locked slot visitor sees a
+pre-existing child in two slots and uses the actual atomic shade API:
+one gray credit and one queue entry, not two. A second registered
+thread attempts a public append to the same list while the visitor owns
+its container lock. The visitor does not see the late child; after
+unlock the ordinary append barrier shades it. Both producer batches
+then expose exactly the two expected children. Three fresh Linux
+processes passed. This is a mark-publication test, not full-cycle
+termination or a throughput claim. The atomic shade path can allocate
+a gray batch; an integration candidate must qualify bounded failure
+handling and must not assume that captured slots remain valid
+after container unlock.
