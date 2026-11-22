@@ -315,10 +315,13 @@ in the relevant section or issue and removes the entry.
    debt discharge. A stock GC2 native harness now records assist/mark/
    stop counters for 48,000 list allocations split across one or four
    mutators. An isolated model now separates live heap goal, start
-   headroom and capped assist-during-mark. Next: build a strictly opt-in
-   GC2 review candidate using the sealed target and a heap-progress
-   counter independent of work debt; require a pressure workload that
-   actually enters assist. No pacer A/B yet.
+   headroom and capped assist-during-mark. Opt-in review candidate
+   [`4c64bd32`](https://github.com/ikshengmin/pcc/commit/4c64bd32007ec66ff11c3438db43c3b221ba0a91)
+   used actual GC2 marking with controlled occupancy: one batch assisted
+   and paid down mark debt with no occupancy decrease. All default/override
+   and non-GC2 controls stayed disabled. Next: test automatic GC2 pacing
+   on real allocations with opt-in on and off, without a threshold override.
+   No runtime behavior on master changed; no pacer A/B yet.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -330,7 +333,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 opt-in heap goal and assist candidate: Codex, Linux x86-64, 2026-11-22 09:03 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
