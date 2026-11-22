@@ -259,9 +259,12 @@ in the relevant section or issue and removes the entry.
    an in-place old cell, and a reused span. A standalone Linux native
    cursor probe passes the same boundaries across two bitmap words. A
    real PCC-thread stop now sees a fully published test cell after no-park
-   exit, and no published cell in the unprotected control. Next: join
-   actual allocator-cell provenance to that test cursor in one native
-   probe. Production promotion and nursery activation are still untested.
+   exit, and no published cell in the unprotected control. The same
+   owned native probe now checks real allocator cells: published exact
+   addresses need no tracing index, and stopped incomplete cells remain
+   unknown. Next: qualify conversion of an actual published indexless
+   cell to one stable old record without moving it or changing dispatch.
+   Production promotion and nursery activation are still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -273,7 +276,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 stopped cursor with actual allocator-cell provenance: Codex, Linux x86-64, 2026-11-22 08:08 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

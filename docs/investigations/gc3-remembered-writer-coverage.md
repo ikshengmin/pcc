@@ -211,8 +211,17 @@ the frozen cursor. The unprotected control parks during the first poll;
 the stopped collector sees a zero tail and rejects the partial cell.
 Three owned native Linux cases passed. This proves the protocol at the
 prototype boundary, not production allocator integration, promotion or a
-weak-memory result on another architecture. No runtime or performance
-behavior changed.
+weak-memory result on another architecture.
+
+Two further executions use real reserved object cells rather than just
+synthetic payload words. During a protected stop, the complete first cell
+is visible to the exact allocator and managed-pointer queries without a
+tracing record, while the reserved second cell is unknown. The unprotected
+stop still sees a written type tag but no payload or allocator provenance.
+After resume both cells become managed; explicit retirement removes both
+positives. All five native fixture variants passed under Linux pcc0. The
+test tail/bitmap itself is still test-owned; ordinary allocation,
+collection and performance behavior are unchanged.
 
 ## Collector-entry root baseline
 

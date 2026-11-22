@@ -13,7 +13,10 @@ from tests.python.owned_regression_support import _record_execution, explicit_ow
     ((), "GC3_NURSERY_CURSOR_NATIVE_OK"),
     (("stw",), "GC3_NURSERY_CURSOR_STW_OK"),
     (("unprotected",), "GC3_NURSERY_CURSOR_UNPROTECTED_CONTROL_OK"),
-], ids=["cursor", "publish-stop", "unprotected-control"])
+    (("rs",), "GC3_NURSERY_REAL_CELL_STW_OK"),
+    (("ru",), "GC3_NURSERY_REAL_CELL_UNPROTECTED_OK"),
+], ids=["cursor", "publish-stop", "unprotected-control", "real-cell-stop",
+        "real-cell-unprotected-control"])
 def test_owned_nursery_cursor_rejects_stale_epoch_and_freezes_range(
     tmp_path, explicit_owned_runtime, arguments, expected,
 ):

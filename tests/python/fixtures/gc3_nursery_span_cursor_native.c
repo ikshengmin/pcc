@@ -4,6 +4,7 @@
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 enum { CELL_BITS = 64, CELL_COUNT = 2 * CELL_BITS };
 enum { CURSOR_STALE = -2, CURSOR_END = -1 };
@@ -107,6 +108,14 @@ static int check_cursor(void) {
  */
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
+extern void *pcc_allocator_alloc_object(int64_t);
+extern int64_t pcc_allocator_object_publish_fresh(void *);
+extern int64_t pcc_allocator_object_retire_live(void *);
+
+typedef struct {
+    PyObjectHeader header;
+    uint64_t payload;
+} SlabTestCell;
 
 typedef struct {
     Span span;
@@ -114,6 +123,7 @@ typedef struct {
     unsigned resumed;
     uint64_t header[2];
     int protect_publication;
+    SlabTestCell *cell[2];
 } StopProbe;
 
 static void *publish_during_stop(void *arg) {
@@ -121,26 +131,57 @@ static void *publish_during_stop(void *arg) {
     if (pcc_current_thread_id() <= 0) return (void *)1;
     if (probe->protect_publication) pcc_thread_no_park_enter();
     probe->header[0] = 0x1234;
+    if (probe->cell[0]) probe->cell[0]->header.type_tag = PY_TYPE_INT;
     __atomic_store_n(&probe->ready, 1, __ATOMIC_RELEASE);
     while (pcc_thread_stop_requested_acquire() == 0) {
         /* No scheduler calls or data access that could publish the cell. */
     }
     pcc_thread_safepoint();  /* Negative control parks before commit. */
     probe->header[1] = 0x5678;
+    if (probe->cell[0]) {
+        probe->cell[0]->payload = 0x5678;
+        if (pcc_allocator_object_publish_fresh(probe->cell[0]) != 1) {
+            if (probe->protect_publication) pcc_thread_no_park_exit();
+            return (void *)2;
+        }
+    }
     publish(&probe->span, 0);
     /* The protected path polls the pending stop at this outermost exit. */
     if (probe->protect_publication) pcc_thread_no_park_exit();
     __atomic_store_n(&probe->resumed, 1, __ATOMIC_RELEASE);
-    publish(&probe->span, 1);   /* Cannot extend the frozen range. */
+    if (probe->cell[1]) {
+        pcc_thread_no_park_enter();
+        probe->cell[1]->header.type_tag = PY_TYPE_INT;
+        probe->cell[1]->payload = 0x9abc;
+        int64_t rc = pcc_allocator_object_publish_fresh(probe->cell[1]);
+        if (rc == 1) publish(&probe->span, 1);
+        pcc_thread_no_park_exit();
+        if (rc != 1) return (void *)3;
+    } else {
+        publish(&probe->span, 1);   /* Cannot extend the frozen range. */
+    }
     return NULL;
 }
 
-static int check_stop_handoff(int protect_publication) {
-    StopProbe probe = {{1, 0, {0, 0}, {0, 0}}, 0, 0, {0, 0}, protect_publication};
+static int check_stop_handoff(int protect_publication, int actual_cells) {
+    StopProbe probe = {{1, 0, {0, 0}, {0, 0}}, 0, 0, {0, 0},
+                       protect_publication, {NULL, NULL}};
     void *thread = NULL, *status = NULL;
     if (pcc_gc_backend() != 3) return 20;
     py_gc_disable();
     if (pcc_current_thread_id() <= 0) return 21;
+    if (actual_cells) {
+        for (int i = 0; i < 2; ++i) {
+            SlabTestCell *cell = pcc_allocator_alloc_object(sizeof(SlabTestCell));
+            if (!cell) return 29;
+            cell->header.refcount = 1;
+            cell->header.type_tag = 0;
+            cell->header.flags = 0;
+            cell->payload = 0;
+            if (pcc_gc_granule_is_object_start(cell) == 1) return 30;
+            probe.cell[i] = cell;
+        }
+    }
     if (pcc_thread_start(&thread, publish_during_stop, &probe) != 0 || !thread)
         return 22;
     while (!__atomic_load_n(&probe.ready, __ATOMIC_ACQUIRE))
@@ -155,18 +196,47 @@ static int check_stop_handoff(int protect_publication) {
           probe.header[1] == 0x5678 && next_young(&probe.span, &frozen) == 0
         : frozen.limit == 0 && probe.header[0] == 0x1234 &&
           probe.header[1] == 0 && next_young(&probe.span, &frozen) == CURSOR_END;
+    int provenance = 1;
+    if (actual_cells) {
+        PyObject *cell = (PyObject *)probe.cell[0];
+        provenance = !pcc_gc_object_index_find(cell) &&
+            !pcc_gc_object_index_find((PyObject *)probe.cell[1]) &&
+            pcc_gc_granule_is_object_start(probe.cell[1]) != 1 &&
+            (protect_publication
+             ? pcc_gc_granule_is_object_start(cell) == 1 &&
+               pcc_gc_pointer_is_managed(cell) == 1 && probe.cell[0]->payload == 0x5678
+             : pcc_gc_granule_is_object_start(cell) != 1 &&
+               pcc_gc_pointer_is_managed(cell) == 0 && probe.cell[0]->payload == 0);
+    }
     if (pcc_resume_world() != 0) return 24;
     if (pcc_thread_join(thread, &status) != 0 || status != NULL) return 25;
-    if (incomplete != 0 || !parked || !published) return 26;
+    if (incomplete != 0 || !parked || !published || !provenance) return 26;
     if (next_young(&probe.span, &frozen) != CURSOR_END) return 27;
     Cursor fresh = snapshot(&probe.span);
     if (next_young(&probe.span, &fresh) != 0 || next_young(&probe.span, &fresh) != 1)
         return 28;
+    if (actual_cells) {
+        for (int i = 0; i < 2; ++i) {
+            PyObject *cell = (PyObject *)probe.cell[i];
+            if (!pcc_gc_pointer_is_managed(cell) || pcc_gc_object_index_find(cell))
+                return 31;
+            if (pcc_allocator_object_retire_live(cell) != 1 ||
+                pcc_gc_pointer_is_managed(cell))
+                return 32;
+            free(cell);
+        }
+        puts(protect_publication ? "GC3_NURSERY_REAL_CELL_STW_OK"
+                                 : "GC3_NURSERY_REAL_CELL_UNPROTECTED_OK");
+        return 0;
+    }
     puts(protect_publication ? "GC3_NURSERY_CURSOR_STW_OK"
                              : "GC3_NURSERY_CURSOR_UNPROTECTED_CONTROL_OK");
     return 0;
 }
 
 int main(int argc, char **argv) {
-    return argc == 2 ? check_stop_handoff(argv[1][0] == 's') : check_cursor();
+    if (argc != 2) return check_cursor();
+    int actual_cells = argv[1][0] == 'r';
+    int protect_publication = actual_cells ? argv[1][1] == 's' : argv[1][0] == 's';
+    return check_stop_handoff(protect_publication, actual_cells);
 }
