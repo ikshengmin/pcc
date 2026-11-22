@@ -4450,6 +4450,41 @@
           }
         ]
       }
+    },
+    {
+      "id": "cpp.explicit-destruction-local-leaf-effect",
+      "title": "Direct TU-local leaf call effects during nonvirtual and final explicit destruction",
+      "chapter_ids": [
+        "class.dtor",
+        "expr.call",
+        "basic.link"
+      ],
+      "scope": "Destructor closure admits a bound call-free TU-local C++ leaf selected as the exact direct call, for nonvirtual or final virtual destruction. Arguments and generated subobject cleanup still traverse the ordinary effect proof. Open virtual overrides, unresolved, external and recursive calls remain outside this slice. Linux pcc0 native controls match g++; no TinyXML2 or pcc1 qualification.",
+      "tests": [
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_explicit_destructor_executes_proved_internal_leaf_call",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_explicit_destructor_keeps_unproved_internal_callees_and_overrides_gated",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_virtual_explicit_closed_destructor_executes_final_overrider"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:902d72e97386749487f2363386c705910a1f4a62dec799831f802154a3445fbd",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "4a206c9e9a06fcf85056c0afdf235eefad83a946f9914c4570925455c4721ebe"
+          },
+          {
+            "path": "pcc/frontends/cpp/lifetimes.py",
+            "sha256": "77912f1f7245f846233d20cb3683cc5f433232281d90af35a89a81db7d6bc8fa"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "c40984840c1bc6a28ecc1e98768abd7cbae43d10e26e2e08f61fc845f6740e0b"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {

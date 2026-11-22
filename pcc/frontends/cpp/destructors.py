@@ -240,19 +240,20 @@ def request_body(parser, symbol, coord):
     request_template_body(parser, symbol, coord)
 
 
-def _closed_destruction_body(body, cleanup_destructors):
+def _closed_destruction_body(body, cleanup_destructors, direct_helpers):
     """Prove a finite chain of bound bodies, not merely absence of throw syntax.
 
     Only exact cleanup-call nodes emitted by our lifetime owner may recurse
-    into a previously proven D1. A name, declaration, user call or unknown
-    function effect cannot establish this proof.
+    into a previously proven D1. A direct helper must have been bound to a
+    proven TU-local leaf at call selection, not guessed by emitted name.
     """
     pending = [body]
     while pending:
         node = pending.pop()
         if isinstance(node, c_ast.FuncCall):
             selected = cleanup_destructors.get(node)
-            if selected is None or not getattr(selected, "closed_destruction_body", False):
+            if (node not in direct_helpers
+                    and (selected is None or not getattr(selected, "closed_destruction_body", False))):
                 return False
         pending.extend(child for _name, child in node.children())
     return True
@@ -262,7 +263,13 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
     """One cleanup/proof owner for parsed bodies and concretely replayed Patterns."""
     selected = member_destructors(definition, scope, parser=parser)
     previous_calls = parser.lifetimes.cleanup_destructors
+    previous_helpers = parser.lifetimes.direct_destructor_helpers
     parser.lifetimes.cleanup_destructors = {}
+    direct_helpers = {}
+    if not getattr(symbol, "method_virtual", False) or getattr(symbol, "method_final", False):
+        parser.lifetimes.direct_destructor_helpers = (symbol, direct_helpers)
+    else:
+        parser.lifetimes.direct_destructor_helpers = None
     parser.lifetimes.enter()
     try:
         parser.lifetimes.register_members(this, selected)
@@ -273,10 +280,11 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
             from pcc.frontends.cpp.virtual_functions import vptr_store
             body.block_items.insert(0, vptr_store(definition, this, coord))
         body.block_items.extend(parser.lifetimes.current_cleanup(coord))
-        closed = _closed_destruction_body(body, parser.lifetimes.cleanup_destructors)
+        closed = _closed_destruction_body(body, parser.lifetimes.cleanup_destructors, direct_helpers)
     finally:
         parser.lifetimes.leave()
         parser.lifetimes.cleanup_destructors = previous_calls
+        parser.lifetimes.direct_destructor_helpers = previous_helpers
     # Every destructor admitted here has the implicit non-throwing exception
     # specification ([except.spec]/8: explicit specifications are rejected
     # above and no member or base destructor may throw), so an exception

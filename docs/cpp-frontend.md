@@ -508,3 +508,14 @@ aggregate. The Linux pcc0 execution matches g++ across two calls after
 reassigning an element. General pointer expressions, multidimensional
 pointer arrays, dynamic initialization and external-inline sharing remain
 outside this slice.
+
+
+### Bound TU-local leaf calls in explicit destruction
+
+The effect proof for a nonvirtual or final virtual destructor can include
+an exact direct call to an already bound TU-local C++ leaf with no calls.
+It records the selected semantic identity, then still traverses arguments
+and the generated subobject cleanup in the complete body. No unknown,
+external, recursive or open-virtual call is covered. Linux pcc0 and g++
+agree on both native witnesses. This is not exception unwinding support
+or a qualification of TinyXML2's full virtual destruction graph.

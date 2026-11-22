@@ -16,6 +16,7 @@ class AutomaticLifetimes:
         self.frames = []
         self.controls = []
         self.cleanup_destructors = None
+        self.direct_destructor_helpers = None
 
     def enter(self):
         self.frames.append([])

@@ -1545,6 +1545,11 @@ class CppParser:
             # fallthrough behavior. Appending after a return is harmless AST.
             body.block_items.append(c_ast.Return(c_ast.Constant("int", "0", coord), coord))
         function = c_ast.FuncDef(declaration, None, body, coord)
+        if (member_owner is None and symbol.internal_linkage
+                and symbol.language_linkage == "C++" and not symbol.variadic
+                and result_plan is None):
+            from pcc.frontends.cpp.constructors import call_free_body
+            symbol.closed_destructor_leaf_helper = call_free_body(body)
         if self.variadic_virtual_obligations is not None and symbol.variadic:
             self.variadic_virtual_obligations.bound(symbol, function)
         return function
@@ -2836,9 +2841,13 @@ class CppParser:
         if getattr(selected, 'class_result_abi', None) is not None:
             from pcc.frontends.cpp.class_result_calls import selected_call
             return selected_call(self, selected, converted, coord)
-        return call_result(c_ast.FuncCall(c_ast.ID(selected.c_name, coord),
-                                          c_ast.ExprList(converted, coord), coord), selected.dtype, coord,
-                           allow_class=ordinary_class_result_context(self))
+        call = c_ast.FuncCall(c_ast.ID(selected.c_name, coord), c_ast.ExprList(converted, coord), coord)
+        observer = self.lifetimes.direct_destructor_helpers
+        if (observer is not None and observer[0] is self.current_function
+                and selected.template_origin is None
+                and getattr(selected, "closed_destructor_leaf_helper", False)):
+            observer[1][call] = selected
+        return call_result(call, selected.dtype, coord, allow_class=ordinary_class_result_context(self))
 
     def _explicit_template_arguments(self, allow_class_types=False):
         """Parse type-ids or typed expressions, never re-lex or replace tokens.

@@ -43,3 +43,40 @@ def test_virtual_explicit_helper_effect_is_not_assumed_safe(tmp_path):
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp(units)
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
+
+
+def source_for_internal_helper(specifier, effect):
+    return (
+        PREFIX + effect
+        + "struct Object{Object(int*p):total(p){} int* total; "
+        + specifier + " ~Object(){mark(total);}};"
+        + "int cpp_test_entry(){long long raw[16];int result=1;"
+          "Object*p=new(raw)Object(&result);p->~Object();return result;}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("specifier", ("", "virtual"))
+def test_explicit_destructor_executes_proved_internal_leaf_call(tmp_path, specifier):
+    # The virtual case names a final destructor, so no unknown override can
+    # acquire the static owner's proof. Nonvirtual destruction is already a
+    # direct D1. The helper is a bound TU-local definition in both cases.
+    source = source_for_internal_helper(specifier, "static inline void mark(int*p){*p=42;}")
+    if specifier:
+        source = source.replace("~Object(){", "~Object() final {")
+    units = (("internal.cpp", source),)
+    binary = tmp_path / "owned"
+    write_host_executable(compile_host_cpp(units), binary)
+    reference = compile_reference_with_new(units, tmp_path / "reference")
+    assert_exact(run_executable(binary), EXPECTED)
+    assert_exact(run_executable(reference), EXPECTED)
+
+
+@pytest.mark.parametrize(("specifier", "effect"), [
+    ("", "void later(int*);static inline void mark(int*p){later(p);}"),
+    ("virtual", "static inline void mark(int*p){*p=42;}"),
+])
+def test_explicit_destructor_keeps_unproved_internal_callees_and_overrides_gated(specifier, effect):
+    with pytest.raises(CppDiagnostic) as error:
+        compile_host_cpp((("unproved.cpp", source_for_internal_helper(specifier, effect)),))
+    assert error.value.code == "cpp.unsupported.placement-constructor-effects"
