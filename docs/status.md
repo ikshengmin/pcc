@@ -307,8 +307,12 @@ in the relevant section or issue and removes the entry.
    candidates): four shade words, 256-record review bound. Linux 180
    callback-bearing runs and 68 assertions passed, with sealed and public
    timing separated. Larger cohorts, strict scaling, Mac and HTTP unqualified.
-   Next: keep unobservable cohorts out of the review graph despite
-   unrelated live weakrefs; preserve actual observable and cyclic arms. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit a2b1e44](https://github.com/ikshengmin/pcc/commit/a2b1e44f397812bfc4e11b32aaf6951412949a65)
+   keeps a provably unobservable batch out of the graph despite unrelated
+   live weakrefs. Linux: 80 focused native assertions, six models and 180
+   callback-bearing reruns; no zero-overhead or Mac acceptance claim.
+   Next: remove the fixed review shade-mask/candidate limit instead of
+   merely raising it; check real public collections above 256 records. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -362,7 +366,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 19:29 UTC), #9 review branch only: avoid building an acyclic graph for a provably unobservable batch while unrelated live weakrefs exist; keep exact proof and fail-closed controls.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
