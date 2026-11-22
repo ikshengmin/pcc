@@ -296,8 +296,11 @@ in the relevant section or issue and removes the entry.
    The paired native owner/child probe confirms GC1–4 also finalize a
    child rescued by an acyclic parent's finalizer; CPython and GC0
    wait until the child's final drop. The cyclic-parent control agrees.
-   Next: test a stop/recheck boundary between dependent acyclic
-   finalizers. No runtime ordering change.
+   A test-only stop/recheck model covers rescued children, edge
+   retirement, new roots/cycles and candidate identity reuse.
+   Next: audit which existing visitor/lease and candidate storage
+   can support that boundary without a full-heap walk per callback.
+   No runtime ordering change.
    The old relocation fixture still fails before grouped take (GC3
    oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
@@ -470,7 +473,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Tracing acyclic callback stop and refreshed reachability witness: Codex, Linux x86-64, 2026-11-22 12:06 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

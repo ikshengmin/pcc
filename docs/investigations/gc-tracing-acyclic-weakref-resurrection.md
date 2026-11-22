@@ -102,3 +102,19 @@ acyclic graph or changing the order of its entries cannot make the
 already-queued child's finalizer safe. A later design must retire
 ownership in dependency order and revalidate a child's eligibility
 after user code, preserving the existing cyclic-isolate batch.
+
+## Post-callback stopped boundary (test model)
+
+The new model treats a user callback window as invalidating the current
+eligibility decision. A fresh stopped view protects the child that the
+parent's finalizer made reachable. If the parent stays white, the child
+still does not qualify until that strong edge is actually retired.
+Two apparently independent candidates cannot be assumed batch-safe:
+a callback can publish a root to its peer through an external
+observation. The model also rejects stale views, defers a newly formed
+cycle to the cyclic path, and keys finalizer state on logical allocation
+identity rather than an address alone. Six model cases plus the nine
+graph checks pass on guarded Linux; this is not a native stop-window,
+lease, code change, or throughput result. Next map the model to the
+existing collector visitors, root/lease boundaries, and candidate
+storage without adding an unbounded full-heap rescan per callback.
