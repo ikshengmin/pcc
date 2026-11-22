@@ -326,8 +326,10 @@ in the relevant section or issue and removes the entry.
    Exact observed order retained; measurement instrumentation not shipped.
    Early stack word filter trial passed 112 native checks plus bounds/ABI;
    aggregate change 0–3% within duplicate-parent noise. Not shipped.
-   Next: measure duplicated stop-owner snapshot cost and certify the
-   lazy-capture boundary before attempting a transition optimization. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Stop-owner copy was only ~0.16 ms total across 512 Linux windows;
+   waiting for peer rendezvous took 7.4–7.7 ms, so keep all snapshots.
+   Next: test whether #9-scoped owner-only readiness notification avoids
+   unnecessary peer wakeups, including multi-peer and lifecycle controls. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -381,7 +383,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:18 UTC), #9 review only: measure duplicated stop-owner snapshots and stop readiness separately, preserving all scheduler semantics.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
