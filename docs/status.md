@@ -196,7 +196,15 @@ in the relevant section or issue and removes the entry.
    layered acyclic order computed once, a barrier remark after each window
    instead of the full re-mark, and the full recheck kept as oracle and
    fallback. First report how many HTTP-workload collections run user code.
-   No further inert or dormant #9 slices. Native Linux GC2 now reproduces zero mark completions
+   No further inert or dormant #9 slices.
+   [Review commit b6bd012](https://github.com/ikshengmin/pcc/commit/b6bd012021a79fdca767c5e82041c2e1eab1be12)
+   routes the sealed acyclic singleton through actual sweep on GC1/3. Linux
+   pcc0 passed 41 focused tests including four CPython comparisons: zero full
+   rechecks for terminal death and one fallback on publication in the rescue
+   fixture. No master runtime change. Next: finish the HTTP count (diagnostic
+   runtime built; gateway compile hit the Linux memory guard), then widen to
+   topological layers, cross-thread weakref and the other admission checks.
+   Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
    delayed cycle completes when allocation stops with all four workers
@@ -248,8 +256,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Issue 9 prove sibling resurrection and per-callback full recheck: Codex, Linux x86-64, 2026-11-22 15:36 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
