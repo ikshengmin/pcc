@@ -287,9 +287,14 @@ in the relevant section or issue and removes the entry.
    bounds the layered stack copy to candidate address ranges and gives any
    full oracle a fresh unfiltered snapshot. Linux: 109 focused checks;
    64-candidate chain time fell 27%/31% for GC1/3 (7/7 pairs each).
-   Next: batch safe finalizer windows within a layer without missing a
-   sibling rescue, and remove repeated candidate/weakref scans before
-   scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit d08f401](https://github.com/ikshengmin/pcc/commit/d08f401b8653c1607fdfc0e14f7f076ca35df96b)
+   verifies a same-layer sibling held solely on a parked peer’s C stack,
+   and terminal death when that peer exits first (113 Linux checks).
+   Maintainer clarification, 2026-11-22 (“可以”): check event counts and
+   per-object ordering for independent same-layer siblings; keep exact
+   CPython order for dependencies. No batching safety claim.
+   Next: remove repeated candidate/weakref scans while preserving parked
+   sibling roots, then reassess safe batching and independent-heap scale. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -343,7 +348,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 18:25 UTC), #9 review branch only: qualify real same-layer sibling observation from a second mutator, including a raw stack-only weakref borrow and withdrawal before the stop; use this to validate readiness for batching.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
