@@ -512,6 +512,12 @@ def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monke
     assert not (source / "docs").exists()
     identity = json.loads((arm / "source.json").read_text())
     assert identity["gc2_pacer_percent"] == 100
+    assert identity["gc2_exact_list_bridge"] is False
+    exact = PERF.seal("exact", root=repository, gc2_exact_list_bridge=True)
+    exact_identity = json.loads((exact / "source.json").read_text())
+    assert exact_identity["revision"] == identity["revision"]
+    assert exact_identity["gc2_exact_list_bridge"] is True
+    assert exact_identity["gc2_pacer_percent"] is None
     assert identity["overlaid"] == [
         "pcc/runtime/gone.py", "pcc/runtime/mine.py", "pcc/runtime/new.py"]
     assert sorted(identity["left_out"]) == ["pcc/other.py", "scripts/unfinished.py"]
@@ -715,3 +721,84 @@ def test_handler_receipts_keep_peak_pause_memory_and_p99_per_pair(tmp_path, monk
 def test_handler_p99_refuses_invalid_timed_sample_sets(samples):
     with pytest.raises(SystemExit, match="latency receipt missing"):
         PERF._handler_p99_ms({"requests": 1, "latencies_ms": samples})
+
+
+def test_exact_list_mode_rejects_missing_drifted_and_changed_build_receipts(tmp_path, monkeypatch):
+    monkeypatch.setattr(PERF, "HOME", tmp_path)
+    monkeypatch.setenv("PCC_GC2_EXACT_LIST_BRIDGE", "1")
+    arm = tmp_path / "arms/test"
+    arm.mkdir(parents=True)
+    binary = arm / "native_stats"
+    binary.write_bytes(b"owned")
+    identity = arm / "source.json"
+    report = arm / "build.json"
+    assert "PCC_GC2_EXACT_LIST_BRIDGE" not in PERF._sealed_runtime_env(binary, 2)
+    metadata = {"revision": "rev", "gc2_exact_list_bridge": True}
+    identity.write_text(json.dumps(metadata))
+    with pytest.raises(SystemExit, match="no matching GC2 exact-list attestation"):
+        PERF.binary_of("test")
+    built = {
+        **metadata, "complete": True,
+        "gc2_exact_list_attested": {"on": 2, "off": 0, "gc0": 0},
+        "programs": {"native_stats": {"sha256": PERF.hashlib.sha256(b"owned").hexdigest()}},
+    }
+    report.write_text(json.dumps(built))
+    assert PERF.binary_of("test") == binary
+    assert PERF._sealed_runtime_env(binary, 2)["PCC_GC2_EXACT_LIST_BRIDGE"] == "1"
+    for backend in (0, 1, 3, 4):
+        assert "PCC_GC2_EXACT_LIST_BRIDGE" not in PERF._sealed_runtime_env(binary, backend)
+    for changed in ({"gc2_exact_list_bridge": False}, {"revision": "different"},
+                    {"gc2_exact_list_attested": {"on": 2, "off": 0, "gc0": 2}}):
+        report.write_text(json.dumps({**built, **changed}))
+        with pytest.raises(SystemExit, match="no matching GC2 exact-list attestation"):
+            PERF.binary_of("test")
+    report.write_text(json.dumps(built))
+    binary.write_bytes(b"different file")
+    with pytest.raises(SystemExit, match="binary does not match"):
+        PERF.binary_of("test")
+    with pytest.raises(SystemExit, match="separate arms"):
+        PERF.seal("bad", gc2_exact_list_bridge=True, gc2_pacer_percent=100)
+    with pytest.raises(SystemExit, match="must be a boolean"):
+        PERF._gc2_exact_list_bridge({"gc2_exact_list_bridge": 1})
+
+
+def test_exact_list_attestation_deliberately_poisons_gc0_env(tmp_path, monkeypatch):
+    (tmp_path / "programs").mkdir()
+    compiled = []
+    observed = []
+
+    def compiler(source, binary, **kwargs):
+        compiled.append(Path(source).read_text())
+        assert kwargs["runtime_archive"] == str(tmp_path / "runtime.a")
+
+    def run(argv, *, env, **kwargs):
+        raw = env.get("PCC_GC2_EXACT_LIST_BRIDGE")
+        backend = env["PCC_GC_BACKEND"]
+        observed.append((backend, raw))
+        value = 2 if backend == "2" and raw == "1" else 0
+        return subprocess.CompletedProcess(argv, 0, f"{value}\n", "")
+
+    monkeypatch.setattr(PERF.subprocess, "run", run)
+    assert PERF._attest_gc2_exact_list_bridge(tmp_path, tmp_path / "runtime.a", compiler) == {
+        "on": 2, "off": 0, "gc0": 0,
+    }
+    assert observed == [("2", "1"), ("2", None), ("0", "1")]
+    assert "pcc_gc2_exact_list_bridge_mode" in compiled[0]
+    monkeypatch.setattr(PERF.subprocess, "run", lambda argv, *, env, **kwargs:
+                        subprocess.CompletedProcess(
+                            argv, 0, "2\n" if env.get("PCC_GC2_EXACT_LIST_BRIDGE") else "0\n", "",
+                        ))
+    with pytest.raises(SystemExit, match="attestation gc0 failed"):
+        PERF._attest_gc2_exact_list_bridge(tmp_path, tmp_path / "runtime.a", compiler)
+
+
+def test_comparison_records_exact_list_selector_only_for_gc2(tmp_path, monkeypatch):
+    for name, bridge in (("base", False), ("candidate", True)):
+        arm = tmp_path / name
+        arm.mkdir()
+        (arm / "source.json").write_text(json.dumps({"gc2_exact_list_bridge": bridge}))
+    monkeypatch.setattr(PERF, "binary_of", lambda name: tmp_path / name / "native_stats")
+    monkeypatch.setattr(PERF, "run_once", lambda *args: _run(100))
+    rows = PERF.compare("base", "candidate", 1, (0, 2), (1,), 10)
+    assert "gc2_exact_list_bridge_by_arm" not in rows[0]
+    assert rows[1]["gc2_exact_list_bridge_by_arm"] == {"base": False, "candidate": True}

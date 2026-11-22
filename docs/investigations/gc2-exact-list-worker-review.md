@@ -226,3 +226,47 @@ one/four-mutator runs passed. Mode 2 in the automatic run was selected
 by startup environment, not by a direct runtime global write. Mode 0
 was unset; mode 1 remained a separate fixture control. Eight ABI checks
 passed. Native macOS and wall-time A/B were not run.
+
+## Same-input Mac handoff: sealed arms
+
+Use the exact commit containing this section as `REVIEW_SHA`. Run in
+the maintainer's existing Mac checkout with the same gateway source for
+both arms. Do not run another benchmark or compiler build concurrently.
+The baseline below is the unchanged master runtime of this review series.
+
+```sh
+# Set REVIEW_SHA to the full commit SHA from the linked review receipt.
+# Set PCC_GATEWAY_PACKAGE to your checkout's pcc_gateway package directory.
+(
+set -e
+test -n "$REVIEW_SHA" && test -f "$PCC_GATEWAY_PACKAGE/structured.py" || exit 1
+export PCC_GATEWAY_PACKAGE
+git fetch shenming master review/gc2-exact-list-20261122
+root="$(mktemp -d "${TMPDIR:-/tmp}/pcc-gc2-list-pair.XXXXXX")"
+export PCC_PERF_HOME="$root/perf"
+git worktree add --detach "$root/base" 55a90b4ad55389f4c2fb3a0d2f28ee29ddc8896b
+git worktree add --detach "$root/review" "$REVIEW_SHA"
+(cd "$root/base" && uv run python scripts/pcc_perf.py arm gc2-list-base)
+(cd "$root/review" && uv run python scripts/pcc_perf.py arm gc2-list-review --gc2-exact-list-bridge)
+(cd "$root/review" && uv run python scripts/pcc_perf.py ab gc2-list-base gc2-list-review \
+  --pairs 5 --gc 0,2 --workers 1,4 --rounds 100 --control 0 --latency-receipts)
+(cd "$root/review" && uv run python scripts/pcc_perf.py table gc2-list-review --rounds 100)
+printf 'Receipts: %s\n' "$PCC_PERF_HOME"
+)
+```
+
+Keep both `build.json` receipts and `$PCC_PERF_HOME/ledger.jsonl`.
+The candidate arm requires exact mode attestation `on=2, off=0, gc0=0`
+and the matching program hash; GC0 is deliberately tested with the
+flag present during attestation. The tool passes the setting only for
+GC2 and records it per arm. Read paired throughput, maximum runtime
+STW, peak process RSS, and timed request p99 together against the GC0
+noise floor. The workload is the owned handler, not the C512 network
+server. The bridge and heap-goal pacer are separate experiments.
+
+Linux ran 82 focused host tool tests and compiled and executed the
+actual three-mode `pcc_perf` attestation using the source-matched owned
+archive. It returned `on=2, off=0, gc0=0`. Linux did not build the
+gateway arms or run A/B: the gateway package is absent and the host
+cannot provide the default 6 GiB tree cap plus 8 GiB reserve. No
+resource limit was reduced and no Mac execution is claimed here.

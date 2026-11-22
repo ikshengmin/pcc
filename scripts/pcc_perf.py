@@ -163,10 +163,22 @@ def _gc2_pacer_percent(identity: dict) -> int | None:
     return value
 
 
-def _pacer_env(collector: int, percent: int | None) -> dict:
+def _gc2_exact_list_bridge(identity: dict) -> bool:
+    value = identity.get("gc2_exact_list_bridge", False)
+    if type(value) is not bool:
+        raise SystemExit("GC2 exact-list bridge selector must be a boolean")
+    if value and _gc2_pacer_percent(identity) is not None:
+        raise SystemExit("measure the GC2 pacer and exact-list bridge in separate arms")
+    return value
+
+
+def _collector_env(collector: int, percent: int | None, bridge: bool = False) -> dict:
     env = {"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)}
-    if collector == 2 and percent is not None:
-        env["PCC_GC2_PACER_PERCENT"] = str(percent)
+    if collector == 2:
+        if percent is not None:
+            env["PCC_GC2_PACER_PERCENT"] = str(percent)
+        if bridge:
+            env["PCC_GC2_EXACT_LIST_BRIDGE"] = "1"
     return env
 
 
@@ -192,39 +204,69 @@ def _sealed_runtime_env(binary: Path, collector: int) -> dict:
                 or identity.get("revision") != build_report.get("revision")
                 or build_report.get("gc2_pacer_attested") != {"on": percent, "off": -1, "gc0": -1}):
             raise SystemExit(f"arm {binary.parent.name} has no matching GC2 pacer attestation")
-    return _pacer_env(collector, percent)
+    bridge = _gc2_exact_list_bridge(identity)
+    built_bridge = _gc2_exact_list_bridge(build_report)
+    if bridge or built_bridge:
+        if (not build_report.get("complete") or bridge != built_bridge
+                or identity.get("revision") != build_report.get("revision")
+                or build_report.get("gc2_exact_list_attested") != {"on": 2, "off": 0, "gc0": 0}):
+            raise SystemExit(f"arm {binary.parent.name} has no matching GC2 exact-list attestation")
+    return _collector_env(collector, percent, bridge)
 
 
-def _attest_gc2_pacer(arm: Path, runtime: Path, percent: int, compiler) -> dict:
-    source = arm / "programs/gc2_pacer_attest.py"
-    binary = arm / "gc2_pacer_attest"
+def _attest_gc2_mode(arm: Path, runtime: Path, compiler, feature: str,
+                     symbol: str, probes) -> dict:
+    source = arm / "programs" / f"{feature}_attest.py"
+    binary = arm / f"{feature}_attest"
     source.write_text(
         'from pcc.extern import extern, c_int64\n'
         'backend = extern("pcc_gc_backend", (), c_int64)\n'
-        'mode = extern("pcc_gc2_pacer_mode", (), c_int64)\n'
+        f'mode = extern("{symbol}", (), c_int64)\n'
         'backend()\nprint(mode())\n'
     )
     compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
              runtime_archive=str(runtime))
     observed = {}
-    for label, collector, mode, expected in (
-        ("on", 2, percent, percent), ("off", 2, None, -1), ("gc0", 0, percent, -1),
-    ):
-        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
-                             env=_pacer_env(collector, mode))
+    for label, env, expected in probes:
+        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30, env=env)
         if (run.returncode, run.stdout, run.stderr) != (0, f"{expected}\n", ""):
-            raise SystemExit(f"arm {arm.name}: GC2 pacer attestation {label} failed: "
+            raise SystemExit(f"arm {arm.name}: {feature} attestation {label} failed: "
                              f"{run.returncode} {run.stdout[-200:]} {run.stderr[-200:]}")
         observed[label] = expected
     return observed
 
 
+def _attest_gc2_pacer(arm: Path, runtime: Path, percent: int, compiler) -> dict:
+    return _attest_gc2_mode(arm, runtime, compiler, "gc2_pacer", "pcc_gc2_pacer_mode", (
+        ("on", _collector_env(2, percent), percent),
+        ("off", _collector_env(2, None), -1),
+        ("gc0", _collector_env(0, percent), -1),
+    ))
+
+
+def _attest_gc2_exact_list_bridge(arm: Path, runtime: Path, compiler) -> dict:
+    return _attest_gc2_mode(
+        arm, runtime, compiler, "gc2_exact_list", "pcc_gc2_exact_list_bridge_mode", (
+            ("on", _collector_env(2, None, True), 2),
+            ("off", _collector_env(2, None), 0),
+            # Deliberately pass the external flag to GC0 to catch a runtime
+            # with a missing backend guard, not just a filtered environment.
+            ("gc0", dict(_collector_env(0, None), PCC_GC2_EXACT_LIST_BRIDGE="1"), 0),
+        ),
+    )
+
+
 def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
-         *, gc2_pacer_percent: int | None = None) -> Path:
+         *, gc2_pacer_percent: int | None = None, gc2_exact_list_bridge: bool = False) -> Path:
     """Copy HEAD's files into the arm, then the working tree's version of
     every file under ``with_paths`` (tracked or new; a file deleted there
     is deleted in the arm). Returns the arm directory."""
-    _gc2_pacer_percent({"gc2_pacer_percent": gc2_pacer_percent})
+    mode_identity = {
+        "gc2_pacer_percent": gc2_pacer_percent,
+        "gc2_exact_list_bridge": gc2_exact_list_bridge,
+    }
+    _gc2_pacer_percent(mode_identity)
+    _gc2_exact_list_bridge(mode_identity)
     root = REPO_ROOT if root is None else root
     arm = arm_dir(name)
     source = arm / "source"
@@ -271,7 +313,7 @@ def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
                 target.read_bytes()).hexdigest()
     (arm / "source.json").write_text(json.dumps({
         "revision": head, "arm": name, "with": list(with_paths),
-        "gc2_pacer_percent": gc2_pacer_percent,
+        **mode_identity,
         "overlaid": sorted(set(overlaid)), "left_out": dirty,
         "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
         "dirty_diff_bytes": len(diff), "files": files,
@@ -366,9 +408,10 @@ def build_child(arm: Path) -> int:
     started = time.monotonic()
     runtime = Path(ensure_target_runtime(str(source / "pcc/runtime"), host_target_triple()))
     percent = _gc2_pacer_percent(identity)
+    bridge = _gc2_exact_list_bridge(identity)
     report = {
         "complete": False, "revision": identity["revision"], "runtime": str(runtime),
-        "gc2_pacer_percent": percent,
+        "gc2_pacer_percent": percent, "gc2_exact_list_bridge": bridge,
         "runtime_sha256": digest(runtime), "runtime_seconds": time.monotonic() - started,
         "programs": {}, "runs": [],
     }
@@ -389,6 +432,9 @@ def build_child(arm: Path) -> int:
     if percent is not None:
         report["gc2_pacer_attested"] = _attest_gc2_pacer(arm, runtime, percent, compile_python)
         save()
+    if bridge:
+        report["gc2_exact_list_attested"] = _attest_gc2_exact_list_bridge(arm, runtime, compile_python)
+        save()
     for program in PROGRAMS:
         binary = arm / program
         started = time.monotonic()
@@ -406,7 +452,7 @@ def build_child(arm: Path) -> int:
             for argv, expected in cases:
                 run = subprocess.run(
                     argv, capture_output=True, text=True, timeout=120,
-                    env=dict(_pacer_env(collector, percent), BENCH_N="31"),
+                    env=dict(_collector_env(collector, percent, bridge), BENCH_N="31"),
                 )
                 report["runs"].append({
                     "program": program, "gc": collector, "argv": argv[1:],
@@ -473,7 +519,7 @@ def binary_of(name: str, program: str = "native_stats") -> Path:
     if not binary.is_file():
         raise SystemExit(f"arm {name} has no {program}: build it with `arm {name}`")
     env = _sealed_runtime_env(binary, 2)
-    if "PCC_GC2_PACER_PERCENT" in env:
+    if {"PCC_GC2_PACER_PERCENT", "PCC_GC2_EXACT_LIST_BRIDGE"} & env.keys():
         report = _read_arm_json(binary.parent / "build.json")
         recorded = report.get("programs", {}).get(program, {}).get("sha256")
         if hashlib.sha256(binary.read_bytes()).hexdigest() != recorded:
@@ -654,10 +700,13 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
     arms = [(a, binary_of(a)), (b, binary_of(b))]
     if control_arm is not None:
         arms.append((control_arm, binary_of(control_arm)))
-    pacer_modes = {
-        name: _gc2_pacer_percent(_read_arm_json(binary.parent / "source.json"))
-        for name, binary in arms
+    mode_identities = {
+        name: _read_arm_json(binary.parent / "source.json") for name, binary in arms
     } if 2 in collectors else {}
+    pacer_modes = {name: _gc2_pacer_percent(identity) for name, identity in mode_identities.items()}
+    bridge_modes = {
+        name: _gc2_exact_list_bridge(identity) for name, identity in mode_identities.items()
+    }
     runs: dict[tuple, list[dict]] = {}
     receipt_flags = {"latency_receipts": True} if latency_receipts else {}
     for index in range(pairs):
@@ -683,6 +732,8 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
                 row["rss_scope"] = "process"
             if collector == 2 and any(mode is not None for mode in pacer_modes.values()):
                 row["gc2_pacer_percent_by_arm"] = pacer_modes
+            if collector == 2 and any(bridge_modes.values()):
+                row["gc2_exact_list_bridge_by_arm"] = bridge_modes
             results.append(row)
     return results
 
@@ -1205,6 +1256,8 @@ def main(argv: list[str] | None = None) -> int:
                      metavar="PATH", help="take PATH from the working tree, not HEAD")
     arm.add_argument("--gc2-pacer-percent", type=int,
                      help="seal and verify the review runtime GC2 pacer opt-in (0–10000)")
+    arm.add_argument("--gc2-exact-list-bridge", action="store_true",
+                     help="seal and verify the GC2 exact-list review mode")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
@@ -1297,11 +1350,12 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "arm":
-        if args.gc2_pacer_percent is None:
-            sealed = seal(args.name, tuple(args.with_paths))
-        else:
-            sealed = seal(args.name, tuple(args.with_paths),
-                          gc2_pacer_percent=args.gc2_pacer_percent)
+        mode_options = {}
+        if args.gc2_pacer_percent is not None:
+            mode_options["gc2_pacer_percent"] = args.gc2_pacer_percent
+        if args.gc2_exact_list_bridge:
+            mode_options["gc2_exact_list_bridge"] = True
+        sealed = seal(args.name, tuple(args.with_paths), **mode_options)
         identity = json.loads((sealed / "source.json").read_text())
         print(f"arm {args.name}: {identity['revision'][:9]} with "
               f"{len(identity['overlaid'])} working-tree files", flush=True)
