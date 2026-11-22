@@ -23,3 +23,13 @@ sweep. A positive native automatic-progress case must not call
 collectors keep their current worker policy and keep the existing
 root/weakref/finalizer tests. No runtime or performance change in this
 baseline.
+
+The automatic-progress native mode allocates temporary lists, reaches the
+actual application safe point, and checks for a completed mark and a
+candidate sweep while preserving a separate scheduler root. It never calls
+`gc.collect()`; debt threshold is 131,072 bytes. The workload first passes
+on stock expecting one worker start, then returns the dedicated wrong-worker
+status after real progress when asked to expect zero. Six guarded Linux
+native cases passed, including both expectations. This supplies the red
+control for a worker-free candidate, but does not prove that turning the
+worker off alone makes automatic progress.
