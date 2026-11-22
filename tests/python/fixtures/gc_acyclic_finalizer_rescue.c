@@ -4,6 +4,7 @@
 #include "py_internal.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 
 extern PyObject *py_class_new(const char *, void *, int32_t, const char **, int32_t);
 extern PyObject *py_instance_new(void *);
@@ -16,12 +17,14 @@ extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern void pcc_gc_tracing_user_code_window_open(void *);
 extern void pcc_gc_tracing_user_code_window_close(void *);
 extern void pcc_gc_tracing_recheck_reachability_after_finalizers(void);
+extern int64_t pcc_gc_metric_sweep_recheck_calls, pcc_gc_metric_sweep_recheck_nodes;
+extern int64_t pcc_gc_metric_sweep_recheck_work, pcc_gc_metric_sweep_recheck_sum_us;
 
 enum { ONLY_FIELD = 0, WINDOW_WORDS = 2, SCRUB_WORDS = 4096 };
 enum { PARENT_FINALIZER, CHILD_FINALIZER };
 enum { FIRST_PARENT = 1, SECOND_CHILD = 2, THIRD_WEAK = 3 };
 
-static PyObject *restored;
+static PyObject *restored, *live_heap;
 /* The two candidate identities stand in for collector metadata, not roots.
  * Never load those raw pointers into a live recheck frame. */
 static PyObject *candidate_parent, *candidate_child;
@@ -122,6 +125,18 @@ static int make_graph(void) {
 
 /* This arm knows its only parent->child edge. A generalized implementation
  * must prove the same condition for every current owning slot. */
+static int make_fixed_live_graph(int64_t size) {
+    live_heap = py_list_new(size);
+    if (!live_heap) return 0;
+    pcc_gc_scheduler_root_register(&live_heap);
+    for (int64_t i = 0; i < size; i++) {
+        PyObject *live = py_list_new(0);
+        if (!live) return 0;
+        py_list_append(live_heap, live);
+    }
+    return py_list_len(live_heap) == size;
+}
+
 static int retire_parent_edge(void) {
     if (!is_candidate(candidate_parent) || !is_candidate(candidate_child)
         || py_instance_get_field(candidate_parent, ONLY_FIELD) != candidate_child)
@@ -139,13 +154,30 @@ static int settle_child_weakref(void) {
     return py_weakref_call(child_watch) == py_None;
 }
 
+static int check_first_verdict(void) {
+    int parent_dead = is_candidate(candidate_parent);
+    int child_dead = is_candidate(candidate_child);
+    if (parent_dead != !should_rescue || child_dead != !should_rescue) {
+        fprintf(stderr, "parent-candidate=%d child-candidate=%d rescue=%lld\n",
+                parent_dead, child_dead, (long long)should_rescue);
+        return 0;
+    }
+    if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped
+        || (should_rescue ? restored != candidate_parent : restored != NULL)) return 0;
+    if (py_weakref_call(child_watch) != candidate_child || parent_position != FIRST_PARENT)
+        return 0;
+    return 1;
+}
+
 int main(int argc, char **argv) {
     int64_t backend = pcc_gc_backend();
-    if ((argc != 2 && argc != 3) || backend < 1 || backend > 3) return 1;
+    if (argc < 2 || argc > 4 || backend < 1 || backend > 3) return 1;
     should_rescue = argv[1][0] == 'r';
     reentry = argc == 3 && argv[2][0] == 'n';
+    int64_t heap_size = argc == 4 ? atoi(argv[3]) : 0;
+    if (argc == 4 && (!should_rescue || heap_size <= 0 || heap_size > 2048)) return 1;
     py_gc_disable();
-    if (!make_graph()) return 2;
+    if (!make_graph() || (heap_size && !make_fixed_live_graph(heap_size))) return 2;
     pcc_gc_scheduler_root_register(&restored);
     pcc_gc_scheduler_root_register(&child_watch);
     if (reentry) {
@@ -160,18 +192,16 @@ int main(int argc, char **argv) {
     pcc_py_gc_minor_graph_unlock();
 
     if (!is_candidate(candidate_child) || !run_one(PARENT_FINALIZER)) return 4;
+    int64_t calls = __atomic_load_n(&pcc_gc_metric_sweep_recheck_calls, __ATOMIC_RELAXED);
+    int64_t visits = __atomic_load_n(&pcc_gc_metric_sweep_recheck_nodes, __ATOMIC_RELAXED);
+    int64_t saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED);
+    int64_t elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED);
     recheck_without_raw_candidate_locals();
-    int parent_dead = is_candidate(candidate_parent);
-    int child_dead = is_candidate(candidate_child);
-    if (parent_dead != !should_rescue || child_dead != !should_rescue) {
-        fprintf(stderr, "parent-candidate=%d child-candidate=%d rescue=%lld\n",
-                parent_dead, child_dead, (long long)should_rescue);
-        return 5;
-    }
-    if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped
-        || (should_rescue ? restored != candidate_parent : restored != NULL)) return 6;
-    if (py_weakref_call(child_watch) != candidate_child || parent_position != FIRST_PARENT)
-        return 7;
+    calls = __atomic_load_n(&pcc_gc_metric_sweep_recheck_calls, __ATOMIC_RELAXED) - calls;
+    visits = __atomic_load_n(&pcc_gc_metric_sweep_recheck_nodes, __ATOMIC_RELAXED) - visits;
+    saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED) - saved;
+    elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED) - elapsed;
+    if (!check_first_verdict()) return 5;
     if (!should_rescue) {
         if (!retire_parent_edge() || !run_one(CHILD_FINALIZER)) return 8;
         recheck_without_raw_candidate_locals();
@@ -191,6 +221,13 @@ int main(int argc, char **argv) {
     pcc_gc_store_root(&child_watch, NULL);
     pcc_gc_scheduler_root_unregister(&child_watch);
     pcc_gc_scheduler_root_unregister(&restored);
+    if (heap_size) {
+        if (py_list_len(live_heap) != heap_size) return 14;
+        pcc_gc_store_root(&live_heap, NULL);
+        pcc_gc_scheduler_root_unregister(&live_heap);
+        printf("recheck %lld %lld %lld %lld\n",
+               (long long)calls, (long long)visits, (long long)saved, (long long)elapsed);
+    }
     puts("GC_ACYCLIC_FINALIZER_RESCUE_OK");
     return 0;
 }

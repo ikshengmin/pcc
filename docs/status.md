@@ -195,9 +195,10 @@ in the relevant section or issue and removes the entry.
    stays white. The terminal arm now retires the real owning field,
    finalizes the child and delivers its weak callback once, in that order.
    Nested explicit collections now pass in the reference arm and
-   preserve the outer pending exception by identity. Next #9: measure
-   its real recheck visit count at n/4n/16n and qualify the bounded
-   refresh path before enabling dispatch. No default path change.
+   preserve the outer pending exception by identity. The exact Linux
+   recheck visits 286/1,054/4,126 records at n/4n/16n with two rescued
+   candidates throughout. Next #9: qualify the bounded refresh path
+   against that oracle. No default path change.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -237,7 +238,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 native recheck scaling on fixed callback root and growing heap: Codex, Linux x86-64, 2026-11-22 12:28 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

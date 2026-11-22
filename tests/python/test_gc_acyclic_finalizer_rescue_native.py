@@ -28,3 +28,22 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
                 assert (result["returncode"], result["stdout"], result["stderr"]) == (
                     0, "GC_ACYCLIC_FINALIZER_RESCUE_OK\n", "",
                 ), (lane, result)
+
+    # Count real stopped-node visits, not noisy timing, with the same
+    # two callback candidates and three sizes of unrelated live heap.
+    for backend in (1, 2, 3):
+        visits = []
+        for size in (128, 512, 2048):
+            result = _record_execution(
+                tmp_path, f"gc{backend}-scale-{size}",
+                [str(binary), "rescue", "scale", str(size)],
+                dict(os.environ, PCC_GC_BACKEND=str(backend)),
+            )
+            assert result["returncode"] == 0 and not result["stderr"], (backend, size, result)
+            metrics, marker = result["stdout"].splitlines()
+            assert marker == "GC_ACYCLIC_FINALIZER_RESCUE_OK"
+            name, calls, nodes, saved, _elapsed = metrics.split()
+            assert (name, int(calls), int(saved)) == ("recheck", 1, 2)
+            visits.append(int(nodes))
+        assert visits[1] - visits[0] == 2 * (512 - 128), (backend, visits)
+        assert visits[2] - visits[0] == 2 * (2048 - 128), (backend, visits)

@@ -270,3 +270,18 @@ combinations additionally passes ten executions of the same artifact.
 The tested root remains registered across the callback; this evidence
 does not extend to a callback mutating arbitrary weakref links or
 qualify GC4's window.
+
+## Native full-recheck control: fixed callback graph, growing live heap
+
+The reference executable now also takes `rescue scale <128|512|2048>`.
+Only an unrelated registered heap grows; each measured interval is one
+stopped recheck that rescues the same parent and child. Its existing
+phase counter reports 286, 1,054 and 4,126 visits on each of GC1–3,
+exactly two visits per additional live record. Five runs per point had
+median phase times of 115/227/895 us on GC1, 107/229/872 us on GC2 and
+109/246/781 us on GC3. These Linux counter timings are controls, not
+HTTP A/B evidence. The native test asserts the visit slope and rescue
+count, not a timing range. The pointer-bearing first-verdict check runs
+in a separate frame so additional metric locals cannot keep the second
+candidate alive through the conservative recheck. The 12 lifecycle
+controls and nine scaled executions all pass.
