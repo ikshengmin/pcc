@@ -812,12 +812,12 @@ def _runtime_signatures_part_16():
     "py_obj_call": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_default": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     "py_obj_call_default_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
-    "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     }
 
 
 def _runtime_signatures_part_17():
     return {
+    "py_obj_call_sync": (_PYOBJ, [_PYOBJ, _PYOBJ, _PYOBJ], False),
     # for k, v in x.items(): the dict whose entries the loop walks, or NULL.
     "py_dict_items_loop_source": (_PYOBJ, [_PYOBJ], False),
     # iter(x) for ``a, b = x``: a non-iterable type raises CPython's

@@ -86,3 +86,10 @@ not an end-to-end request pause. Linux wait4 RSS is normalized from KiB
 and macOS RSS is already bytes. Missing measurements fail receipt mode.
 The pcc_perf focused suite passed 79 checks, including a real local
 wait4 child; no gateway A/B or macOS execution was performed.
+
+The pre-existing runtime ABI bound failure (51 entries in part 16)
+was reproduced on master and fixed there by moving only its final entry,
+`py_obj_call_sync`, to the beginning of the next chunk. The flattened
+ordered sequence of all 1,202 signature AST pairs is unchanged. The focused
+ABI chunk and declaration/IR suite passed 10 checks; full native compiler
+bootstrap and CI were not run for this partition-only change.
