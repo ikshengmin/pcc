@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the namespace aggregate Entity array; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the function-local static pointer initializer; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -445,6 +445,21 @@
       "id": "dcl.inline",
       "title": "The inline specifier",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.inline"
+    },
+    {
+      "id": "basic.start.static",
+      "title": "Static initialization",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/basic.start.static"
+    },
+    {
+      "id": "dcl.init.aggr",
+      "title": "Aggregates",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.init.aggr"
+    },
+    {
+      "id": "dcl.array",
+      "title": "Arrays",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.array"
     }
   ],
   "features": [
@@ -4332,6 +4347,38 @@
           {
             "path": "pcc/frontends/cpp/sema.py",
             "sha256": "186d9dbd549c1e69e4f835b8e213dc3a4e455801e4e7f49536dc6e1d14f1d107"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.namespace-static-const-trivial-record-array",
+      "title": "Namespace static const fixed arrays of trivial scalar-member aggregates",
+      "chapter_ids": [
+        "basic.link",
+        "basic.start.static",
+        "dcl.init.aggr",
+        "dcl.array"
+      ],
+      "scope": "A fixed one-dimensional array of complete, trivial scalar-member aggregates declared static const in namespace scope has constant explicit-brace initialization. Integral/enum fields, null pointers and static address/string fields are checked by the existing scalar constant owner. Omitted elements are zero-initialized. No dynamic initialization, nontrivial destruction, nested arrays, external ODR or native pcc1 qualification.",
+      "tests": [
+        "tests/cpp/test_cpp_namespace_const_record_array.py::test_namespace_record_array_is_static_storage_without_initializer_function",
+        "tests/cpp/test_cpp_namespace_const_record_array.py::test_namespace_record_array_matches_explicit_cpp17",
+        "tests/cpp/test_cpp_namespace_const_record_array.py::test_namespace_record_array_does_not_weaken_source_rules"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:863c6a6d6d5e35860336ab00b3e5b48a009d38bfcdfed9b4a780a86dda8811c3",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/objects.py",
+            "sha256": "875fcbec235a6a387e9452ab3342b0340593fd012d27472aa09f3f0c2430ea8c"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "2af4b4897d47ac18202443c135643de1e0b1289d65fa02938ddfcee0c998ba0d"
           }
         ]
       }

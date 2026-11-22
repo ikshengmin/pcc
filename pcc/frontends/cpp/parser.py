@@ -1159,8 +1159,15 @@ class CppParser:
                     namespace_function=namespace_owner is not None and is_function,
                 )
             else:
+                namespace_static_record_array = (
+                    not is_function and member_owner is None and parent.kind == "namespace"
+                    and storage is not None and storage.value == "static"
+                    and self.language_linkage is None and not template_parameters
+                    and isinstance(result_type, ConstType) and is_class_type(result_type)
+                )
                 name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
                                                            member=member_owner is not None,
+                                                           allow_class_element=namespace_static_record_array,
                                                            namespace_function=namespace_owner is not None and is_function)
         finally:
             self.scope = parent

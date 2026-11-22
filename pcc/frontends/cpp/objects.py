@@ -14,7 +14,7 @@ Original implementation; no upstream compiler source is copied.
 """
 
 from pcc.frontends.c.ast import c_ast
-from pcc.frontends.cpp.classes import is_class_type
+from pcc.frontends.cpp.classes import is_class_type, trivial_special_members
 from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.sema import Symbol
@@ -97,6 +97,54 @@ def zero_initializer(parser, dtype, coord):
     return c_ast.Cast(target, zero, coord)
 
 
+def _check_static_const_record_array(parser, dtype, storage, has_initializer, coord):
+    """One fixed array of complete, scalar-member trivial aggregate records."""
+    element = dtype.element
+    if (parser.scope.kind != "namespace" or parser.language_linkage is not None
+            or storage != "static" or not has_initializer or dtype.bound is None
+            or not isinstance(element, ConstType) or not is_class_type(element)):
+        raise CppDiagnostic("cpp.unsupported.namespace-array-objects",
+                            "namespace arrays require static aggregate initialization and ODR rules", coord)
+    owner = unqualified(element)
+    if (not owner.complete or owner.is_union or not owner.definition.aggregate
+            or not trivial_special_members(owner)
+            or not all(parser.types.integral(member.dtype)
+                       or is_enum_type(member.dtype) or pointer_type(member.dtype)
+                       for member in owner.definition.members)):
+        raise CppDiagnostic("cpp.unsupported.class-array-lifetime",
+                            "static record arrays require a trivial scalar-member aggregate", coord)
+
+
+def _static_record_array_initializer(parser, dtype, coord):
+    from pcc.frontends.cpp.initializers import (
+        ListInitializer, lower_aggregate_initializer, parse_initializer_list,
+    )
+
+    parser._accept("=")
+    if parser._peek().value != "{":
+        raise CppDiagnostic("cpp.unsupported.static-initialization-analysis",
+                            "static record arrays require explicit braces", coord)
+    initializer = parse_initializer_list(parser)
+
+    def member_value(expression, target, where):
+        parser._require_value(expression)
+        return static_value(parser, expression, target, where)[0]
+
+    values = []
+    for clause in initializer.clauses:
+        if not isinstance(clause, ListInitializer):
+            raise CppDiagnostic("cpp.unsupported.aggregate-brace-elision",
+                                "a record array element requires explicit braces", clause.node.coord)
+        if len(values) >= dtype.bound:
+            raise CppDiagnostic("cpp.too-many-initializers",
+                                "too many static record array elements", clause.coord)
+        values.append(lower_aggregate_initializer(
+            dtype.element, clause, parser.types, member_value, scope=parser.scope,
+        ))
+    # C zero-fills omitted records and scalar members; no lifetime loop.
+    return c_ast.InitList(values, initializer.coord)
+
+
 def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     """Bind before initialization; merge declarations of the same entity.
 
@@ -108,13 +156,12 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
     coord = name.coord
     if name.value == "main" and not parser.scope.namespace_path():
         raise CppDiagnostic("cpp.main-object", "main cannot name a global object", coord)
-    if array_type(dtype):
-        raise CppDiagnostic("cpp.unsupported.namespace-array-objects",
-                            "namespace arrays require static aggregate initialization and ODR rules", coord)
     has_initializer = parser._peek().value in ("=", "{")
     specifier = storage.value if storage is not None else ("extern" if implicit_extern else None)
     definition = specifier != "extern" or has_initializer
-    if is_class_type(dtype):
+    if array_type(dtype):
+        _check_static_const_record_array(parser, dtype, specifier, has_initializer, coord)
+    elif is_class_type(dtype):
         owner = unqualified(dtype)
         previous = parser.scope.names.get(name.value)
         linkage = parser.language_linkage or getattr(previous, "language_linkage", "C++")
@@ -145,7 +192,9 @@ def parse_namespace_object(parser, name, dtype, storage, implicit_extern=False):
             if definition and not first else symbol.object_declaration)
     init = None
     proof = None
-    if has_initializer:
+    if array_type(dtype):
+        init = _static_record_array_initializer(parser, dtype, coord)
+    elif has_initializer:
         init, proof = static_initializer(parser, dtype, coord)
     elif definition:
         init = zero_initializer(parser, dtype, coord)

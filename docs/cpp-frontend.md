@@ -473,3 +473,15 @@ test links two same-name functions in different TUs without merging them,
 checks their local ELF bindings, and matches the explicit g++ reference.
 Declaration-only, named-namespace and external-inline extensions are not
 admitted by this change.
+
+
+### Namespace static const arrays of trivial aggregates
+
+A fixed one-dimensional namespace `static const` array can now initialize
+complete, trivial aggregate records with explicit braces. N4659
+[basic.start.static], [dcl.array] and [dcl.init.aggr] govern storage, bound
+and element initializers. Existing scalar conversion and constant proofs
+cover integral/enum fields and static pointers; the C aggregate emitter
+zero-fills omitted records without runtime initialization or destruction.
+Nested arrays, nontrivial special members, dynamic initialization and
+brace elision retain their separate boundaries.
