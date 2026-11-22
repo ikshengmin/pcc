@@ -450,9 +450,13 @@ in the relevant section or issue and removes the entry.
    provenance, record and card preflight, in-place no-park commit.
    Linux: eight native cases, including two subsequent GC3 collections;
    20 existing emitted bodies unchanged. No production caller or nursery.
-   Next GC3: measurable GC3-only review candidate, anchored to the real
-   handler allocation census, with exact writer/root coverage and
-   n/4n/16n zero clean-old visits; no widening before that result.
+   [GC3 census 39e1b8b](https://github.com/ikshengmin/pcc/commit/39e1b8bbfeec1b98af5afac92dac64fe1db7e1e0):
+   tuples and lists account for 53.5–55.2% of logged allocations in two
+   sequential single-carrier gateway controls. This is not sealed handler
+   throughput or an admitted share. Next GC3: on review make the ordinary
+   list/tuple owning stores carry the owner (flip the old ownerless test
+   in the same unit), keep unproved or foreign paths out, then demonstrate
+   an admitted share and n/4n/16n zero clean-old visits on the sealed arm.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -674,7 +678,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:08 UTC), close the first GC3 nursery admission group from actual handler allocation counts and the approved writer/exclusion matrix; test actual source, no broadened production admission.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
