@@ -356,9 +356,14 @@ in the relevant section or issue and removes the entry.
    credit. The [stopped epoch-reset follow-up](https://github.com/ikshengmin/pcc/blob/f564e16e73c7e684a79a1981a106a9cd57226081/docs/investigations/gc2-exact-list-worker-review.md)
    also passed three native runs of a late old worker returning after the
    new epoch had claimed the same list, using real bitmap rotation.
-   Next verify a gated bridge to the actual mark and finish path in
-   review, including unsupported-work fallback; ordinary stock and the
-   pacer A/B branch are unchanged.
+   The [test-gated automatic bridge](https://github.com/ikshengmin/pcc/blob/51d00e120424f0141e6322042868dae28ab58a7a/docs/investigations/gc2-exact-list-worker-review.md)
+   now takes one task through the actual GC2 slice and real finish/sweep.
+   Twelve Linux subprocesses (one/four mutators, bridge off/on, three each)
+   kept rooted owners and children alive; candidate counters saw both
+   shortcut and fallback, off had neither. Keep disabled. Ask Claude
+   to inspect no-park and graph lock order and finish; next force exact
+   oversized-work fallback independent of the workload's token order.
+   Master runtime and the pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -370,7 +375,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 short-list alternate scan through actual mark scheduler on review: Codex, Linux x86-64, 2026-11-22 10:05 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
