@@ -839,7 +839,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "tests/go/fixtures/minmax.go",
@@ -1027,7 +1027,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "pcc/frontends/go/generics.py",
@@ -2307,7 +2307,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
@@ -2461,7 +2461,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           }
         ]
       },
@@ -2658,7 +2658,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "pcc/frontends/go/generics.py",
@@ -3094,7 +3094,7 @@
           },
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "tests/go/fixtures/minmax.go",
@@ -3220,7 +3220,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/packages.py",
-            "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+            "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -4187,7 +4187,7 @@
         "message": "'Go scalar frontend requires a supported 64-bit target'",
         "source": {
           "path": "pcc/frontends/go/packages.py",
-          "sha256": "bb9c80785ab09bda9afd2de9ec5d3d6d2436240d23b54296bec959878db46bee"
+          "sha256": "317050b321bd94e4d7e13e77c32feab55765c16f5184c3a744d977ea823c3a30"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },

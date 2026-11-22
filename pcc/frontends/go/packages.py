@@ -45,6 +45,14 @@ class ImportBinding:
     used: bool = False
 
 
+@dataclass(frozen=True)
+class SourceInstance:
+    """One selected source package; import spellings resolve to exact instances."""
+    logical: str
+    units: tuple
+    imports: dict
+
+
 def parse_package(units, *, require_main):
     units = tuple(units)
     if not units:
@@ -66,17 +74,20 @@ def parse_package(units, *, require_main):
     return program
 
 
-def compile_packages(packages, *, main_package, target_triple, standard_library=None):
+def _analyze_packages(packages, *, main_package, target_triple, standard_library=None, instances=None):
+    from .source_plan import runtime_owner
+
     standard_used=set()
     if standard_library is not None:
-        from .source_plan import GoSourcePlanError, LockedGoSourcePlan, runtime_owner
+        from .source_plan import GoSourcePlanError, LockedGoSourcePlan
         if type(standard_library) is not LockedGoSourcePlan:
             raise GoSourcePlanError("expected a checked original Go source plan")
         standard_library.check_target(target_triple)
         conflicts=set(packages).intersection(standard_library.packages)
         if conflicts:
             raise GoSourcePlanError("project input replaces locked standard package: "+min(conflicts))
-    if main_package not in packages:
+    providers = packages if instances is None else instances
+    if main_package not in providers:
         raise ValueError("Go main package source is missing")
     analyzed, active, order = {}, set(), []
     generics = GenericSession()
@@ -90,7 +101,17 @@ def compile_packages(packages, *, main_package, target_triple, standard_library=
         if locked:
             standard_used.add(path)
         owned = path not in packages and path in OWNED_PACKAGES
-        if owned:
+        if instances is not None:
+            instance = instances.get(path)
+            if instance is None:
+                raise GoDiagnostic(import_token, "exact test source instance is missing: " + path)
+            if runtime_owner(instance.logical):
+                raise UnsupportedGo(import_token, "go.unsupported.owned-runtime-surface",
+                                    "original source is supplied but PCC runtime/intrinsic owner is unavailable: "
+                                    + instance.logical)
+            units = instance.units
+            owned = False
+        elif owned:
             # Never substitute the host runtime, an assembly implementation or
             # a package's same-named original Go file for PCC's source owner.
             units=OWNED_PACKAGES[path]
@@ -111,6 +132,13 @@ def compile_packages(packages, *, main_package, target_triple, standard_library=
         active.add(path)
         imports = {}
         for imported in program.imports:
+            destination = imported.path
+            if instances is not None:
+                destination = instance.imports.get(imported.path)
+                dependency_source = instances.get(destination)
+                if dependency_source is None or dependency_source.logical != imported.path:
+                    raise GoDiagnostic(imported.token, "exact test import binding is missing for "
+                                       + path + ": " + imported.path)
             if imported.path == "unsafe":
                 if standard_library is not None and "unsafe" in standard_library.packages:
                     standard_used.add("unsafe")
@@ -119,7 +147,7 @@ def compile_packages(packages, *, main_package, target_triple, standard_library=
                     raise UnsupportedGo(imported.token, "go.unsupported.unsafe-operations",
                                         "package unsafe operations require pointer and layout semantics, which are not implemented")
                 continue
-            dependency = visit(imported.path, imported.token)
+            dependency = visit(destination, imported.token)
             if imported.alias == "_":
                 # Blank imports still visit/check the entire dependency graph,
                 # but introduce no file-scope name or unused-import obligation.
@@ -158,6 +186,21 @@ def compile_packages(packages, *, main_package, target_triple, standard_library=
     # typed generic declarations/signature selections, including unused ones.
     # Filtering non-emitted declarations afterward does not weaken the proof.
     generics.validate_abstract(order)
+    return main, analyzed, order, standard_used
+
+
+def analyze_source_instances(instances, *, main_instance, target_triple):
+    """Owned semantic probe for an exact graph. Never emit IR or a binary."""
+    if not instances or any(type(instance) is not SourceInstance for instance in instances.values()):
+        raise ValueError("exact Go source instances are required")
+    _, analyzed, _, _ = _analyze_packages({}, main_package=main_instance, target_triple=target_triple,
+                                         instances=instances)
+    return analyzed
+
+
+def compile_packages(packages, *, main_package, target_triple, standard_library=None):
+    main, _, order, standard_used = _analyze_packages(packages, main_package=main_package,
+                                                     target_triple=target_triple, standard_library=standard_library)
     # Declarations and signature-only abstract selections never reach IR.
     linked = Program(main.token, [function for program in order for function in program.functions], [],
                      variables=[variable for program in order for variable in program.variables])

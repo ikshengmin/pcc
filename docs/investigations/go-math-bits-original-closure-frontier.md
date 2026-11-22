@@ -305,3 +305,14 @@ passed 119 checks; two owned Linux ELF differentials matched official
 Go for local and cross-package value-record copy. The latter used a
 small original value record, not the standard mutex. The original
 project still has no admitted lock, assembly ABI, or native test binary.
+
+The original runner now feeds bound imports to the same owned semantic
+package walker without coalescing normal and test instances. The walker
+keeps separate symbols for a control's two versions of one import path,
+rejects missing bindings, and never supplies original runtime sources as
+an owned implementation. The selected real graph now follows the
+`os` sources and first stops at `internal/bytealg/bytealg.go:37:16`
+(`string | []byte`). All 157 scoped checks and an unchanged Linux PCC
+ELF/reference source-plan control passed. This semantic probe never
+lowers the test graph or consumes external objects; runtime/assembly
+owners and compiler-added non-source edges are not qualified.
