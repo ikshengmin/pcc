@@ -215,9 +215,11 @@ in the relevant section or issue and removes the entry.
    [GC2 review candidate](https://github.com/ikshengmin/pcc/commit/02308ff036d18b4353ea7be7065c939456087c8c)
    avoids re-graying only that private root. It completed 3–4 marks in
    all five matched Linux four-worker allocation runs, versus 0–2 stock.
-   Next GC2: verify under matched HTTP load and macOS with an unaffected
-   control arm before any adoption; see the
-   [native screen](gc-gray-worklist.md#stock-gc2-native-completion-screen).
+   The [matched HTTP screen](gc-gray-worklist.md#gc2-private-root-candidate-http-screen)
+   did not qualify it: five Linux C512 pairs per worker count, zero errors,
+   paired QPS −0.2% / −4.3% at w1/w4 and a worse w4 worst pause/RSS
+   despite better medians. Keep it review-only; next locate the GC2 w4
+   gray-work owners and estimate the ceiling before the per-worker design.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -256,7 +258,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - GC2 run a source-matched HTTP review screen against stock: Codex, Linux x86-64, 2026-11-22 14:37 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

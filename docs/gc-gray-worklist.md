@@ -288,3 +288,40 @@ at the same existing GC1 `global-old` finalizer assertion in both
 IR modes; it is not a passing all-five gate. Native pcc1 and Mac were
 not executed. Keep the candidate out of master pending #9 and a
 matched HTTP/latency/RSS/stop-time A/B with an independent control arm.
+
+### GC2 private-root candidate HTTP screen
+
+Five alternating pairs per carrier count on Linux x86-64. Same gateway
+[`b1490486`](https://github.com/ikshengmin/pcc-gateway/commit/b1490486a993c9528dcbfeecf499daba18ae0ef1)
+Web Frameworks GET `/` production server, configured for a loopback port
+and one or four carriers. Stock uses the `ca97bac` core code (same
+runtime sources as `ca79bee`); candidate is review `02308ff`.
+Both are pcc0/self executables with owned runtime archives, no dynamic
+section. The same shim on both prints GC counters only after shutdown.
+Each fresh server serves one empty 200 startup check, then official
+zrk 3.0.0 closed-loop GET `/`, no keepalive, three client threads:
+C50 for 5 s and C512 for 15 s, 8 s request timeout. All 20 main legs
+and their warmups were all-2xx with zero client errors and drain exit 0.
+The builds used 300 s / 1 GiB tree guard, not the official perf arm;
+each timed pair used a 90 s / 1 GiB guard.
+
+| Carriers | Median QPS stock / review | Median paired QPS change; wins | Median request p99, ms | Worst observed max STW, ms | Worst server peak RSS, MiB |
+|---|---:|---:|---:|---:|---:|
+| 1 | 668 / 667 | −0.2%; 2/5 | 1790 / 1682 | 258 / 146 | 394 / 171 |
+| 4 | 1644 / 1604 | −4.3%; 2/5 | 446 / 457 | 231 / 365 | 374 / 579 |
+
+w4 mark commits were `[25,31,28,26,32]` stock and
+`[19,29,34,30,22]` candidate, through warmup, measured load and drain.
+Unlike the short allocation harness, stock did commit during this long
+HTTP load. The w4 candidate's median max pause and peak RSS improved
+(204 → 135 ms; 250 → 229 MiB), but its worst observed values got worse.
+Reported GC2 shade counts did not decrease at w4 under this load
+(median 622,857 → 694,305), so the specific constructor is not an
+established owner of the broader HTTP problem. No qualifying throughput
+gain, no independent A/A noise control and no Mac result. Do not merge
+this candidate based on the allocation-workload win.
+
+Executable SHA-256: stock
+`58ea650afa64601dbc736b055b84220e268be1e47b93748fe33e50905c1da86c`;
+candidate
+`7a07dde3e4cb9f93c2b81d837ffebbe9b10a667258e040a4ba5ffccc2b8414c5`.
