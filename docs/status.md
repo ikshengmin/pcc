@@ -339,9 +339,12 @@ in the relevant section or issue and removes the entry.
    ownership probe exercises one real gray list: a second registered
    thread cannot process it until the graph owner unlocks. A test-only
    model now covers bounded whole-owner claims and refuses final remark
-   with unpublished or in-flight work. Next GC2 worker slice: identify
-   a safe out-of-lock scan of one exact built-in owner with stable
-   container slots, cancellation and no runtime opt-in by default.
+   with unpublished or in-flight work. Three Linux native processes
+   observed two independent rooted lists' real slot visitors overlap
+   while the graph was locked. Next GC2 worker slice: exercise an
+   exact-list slot visitor with the existing GC2 atomic shading
+   protocol and a native mutation/late-child contrast, without enabling
+   parallel workers.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -353,7 +356,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 disjoint list slot scan native boundary: Codex, Linux x86-64, 2026-11-22 09:35 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

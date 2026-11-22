@@ -134,3 +134,14 @@ roots and work again before sweep. Four model cases cover both completion
 orders, capacity, duplicate shading, late work, retry and stale results.
 The model does not establish memory ordering, object stability, lock
 ordering, or runtime performance.
+
+A separate Linux owned-C test initializes stock GC2's count-free list
+container mode (observe it after first allocation) and chooses two real
+rooted built-in lists on distinct lock stripes. Two registered threads
+each take the same list lock used for mutations and hold inside the
+strong-slot visitor. Both callbacks overlap while a third thread owns
+the global graph lock. Three subprocesses passed with exactly the
+expected child in each slot. This uses the real slot visitor without the
+graph-locked mark callback. Same-stripe owners may still serialize.
+No concurrent writer, collection, mark publication, extra runtime
+worker, or A/B was exercised by this test.
