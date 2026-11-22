@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   preserve the Go map type operand inside `make` at
-   `testing/benchmark.go:170:18`, without admitting runtime allocation.
-   Ordinary map fields retain key/value syntax and an explicit pre-IR
-   map-storage diagnostic. The whole math/bits project still lacks the
-   target-specific dependency closure. TinyXML2 open virtual effects and
-   the Java CI-only closure are pending.
+   measure the exact Linux/amd64 `math/bits` test dependency selection using
+   the pinned official Go 1.27.3 tool and compare it with the vendored
+   source union. Do not run acceptance tests or inject the union into the
+   actual gate. Ordinary map syntax and `make` operands are recognized,
+   not allocated; the separate pinned union now reaches the `go`
+   statement at `testing/benchmark.go:238:2`.
 
    Claims:
-   - Go make map type operand: Codex, Linux x86-64, 2026-11-22 01:38 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

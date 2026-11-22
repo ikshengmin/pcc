@@ -57,3 +57,14 @@ adjacent tests passed. The pinned source union now stops at
 `testing/benchmark.go:170:18` in `make(map[string]float64, 16)`.
 The original math/bits test build remains blocked by the separate
 target-specific `os` source closure.
+
+
+## Explicit make map operand
+
+The parser preserves `make(map[string]float64, 16)` as a type operand and
+a size expression. Obvious noninteger, negative and surplus sizes remain
+source errors. A valid call reaches the same explicit storage boundary
+before IR. The field and make originals execute with official Go 1.27.3;
+87 adjacent checks passed. The separate pinned source union now reaches
+`testing/benchmark.go:238:2`, an unsupported `go` statement. No owned map
+allocation or goroutine support is implied.

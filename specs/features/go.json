@@ -3695,25 +3695,29 @@
         "map-types",
         "structs"
       ],
-      "scope": "Ordinary declarations retain map key/value type syntax and location; modeled key comparability remains a source check. Valid declarations reach the explicit storage boundary. No map representation, IR, operations, signatures or pcc1 qualification. The unchanged original was separately compiled and executed by official Go 1.27.3.",
+      "scope": "Ordinary declarations and explicit map type operands in make retain key/value syntax and location. Modeled key comparability and make size validity remain source checks. Valid inputs stop at explicit map storage before IR. No map representation, signatures or pcc1 acceptance. Both same originals execute under official Go 1.27.3.",
       "tests": [
         "tests/go/test_map_field_syntax.py::test_map_field_parses_and_preserves_key_value_and_location",
         "tests/go/test_map_field_syntax.py::test_invalid_map_key_is_not_a_runtime_capability_error",
-        "tests/go/test_map_field_syntax.py::test_official_go_accepts_the_original_map_field_program"
+        "tests/go/test_map_field_syntax.py::test_official_go_accepts_the_original_map_field_program",
+        "tests/go/test_map_field_syntax.py::test_make_retains_map_type_and_size_operands",
+        "tests/go/test_map_field_syntax.py::test_make_map_stops_at_the_explicit_storage_boundary",
+        "tests/go/test_map_field_syntax.py::test_obvious_invalid_make_size_remains_a_source_error",
+        "tests/go/test_map_field_syntax.py::test_official_go_executes_the_original_make_map_program"
       ],
       "diagnostics": [],
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:b9797013b7bc206e900d637059dd58a3beae7dd33ec3307cfb521aa7d1de5636",
+        "source_revision": "sha256:ab5821053a77259fb2e214370926fe56f53b6284c66ba593c781c644873edddb",
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "ce91127c7fe2f8d9309093b69e21043020fcb756d8c87cead45669b7175060d2"
+            "sha256": "281a4016c1891222ff7a97a41c6dade5d9d9dfd1f6cd412a3375f5837fe1b383"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
-            "sha256": "179670ce7a4ecfba025d6074bd40db2983005c80e463d98b73be6eed9975a21f"
+            "sha256": "1aa791d6c47cfd09f9f7e08f179c6d78d8ef8b93d1a54b38abeae925cf4da2fb"
           }
         ]
       }

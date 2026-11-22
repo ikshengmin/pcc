@@ -2011,6 +2011,26 @@ class Analyzer:
             if local is not None or name in owner.globals and name not in self.type_bindings:
                 self.indirect_call(expr)
                 return
+            if (name == "make" and name not in owner.functions and name not in owner.types
+                    and name not in self.type_bindings
+                    and expr.args and expr.args[0].kind == "type"
+                    and isinstance(expr.args[0].value, MapSyntax)):
+                if len(expr.args) > 2 or expr.spread is not None:
+                    raise GoDiagnostic(expr.token, "make(map) requires a type and at most one size")
+                if len(expr.args) == 2:
+                    size = expr.args[1]
+                    self.expression(size)
+                    value = size.constant
+                    untyped_real_constant = (
+                        isinstance(size.type, str) and size.type.startswith("untyped ")
+                        and is_float(size.type) and value is not None
+                    )
+                    if not (is_integer(size.type) or untyped_real_constant):
+                        raise GoDiagnostic(size.token, "make(map) size must be an integer")
+                    if value is not None and not (0 <= value <= integer_bounds("int")[1]
+                                                   and value == int(value)):
+                        raise GoDiagnostic(size.token, "make(map) size must be a nonnegative int")
+                self.resolve_type(expr.args[0].value)  # Map storage rejects before lowering.
             if name in ("min", "max"):
                 self.minmax(expr)
                 return

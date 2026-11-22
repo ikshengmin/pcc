@@ -1223,7 +1223,7 @@ class GoParser:
                 left = Expr("func_literal", token, FunctionLiteral(signature, body))
             else:
                 left = Expr("type", token, signature)
-        elif self.at("[") or self.at("struct") or self.at("interface"):
+        elif self.at("[") or self.at("struct") or self.at("interface") or self.at("map"):
             dtype = self.datatype(literal=True)
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
         elif self.accept("integer"):
