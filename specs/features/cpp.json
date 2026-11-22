@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the function-local static array of const-char pointers; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the braced scalar initializer of a function-local static pointer; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -4411,6 +4411,38 @@
           {
             "path": "pcc/frontends/cpp/local_statics.py",
             "sha256": "9851772594c0006d21ee193d48ece80eda229b748326cc6c9af5976f227a2967"
+          },
+          {
+            "path": "pcc/frontends/cpp/objects.py",
+            "sha256": "875fcbec235a6a387e9452ab3342b0340593fd012d27472aa09f3f0c2430ea8c"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.local-static-const-char-pointer-array",
+      "title": "One-dimensional local static arrays of const-char pointers",
+      "chapter_ids": [
+        "stmt.dcl",
+        "basic.start.static",
+        "dcl.init.aggr",
+        "conv.ptr"
+      ],
+      "scope": "A non-template, non-external-inline block static array of const-char pointers takes explicit braces containing ordinary string addresses or null pointer constants. Its first dimension may be inferred. Reassigned slots persist between calls without a dynamic initialization guard. Multidimensional arrays, general pointer expressions and native pcc1 are not admitted.",
+      "tests": [
+        "tests/cpp/test_cpp_local_static_string_pointer_array.py::test_local_static_string_pointer_array_is_a_constant_initializer",
+        "tests/cpp/test_cpp_local_static_string_pointer_array.py::test_local_static_string_pointer_array_matches_explicit_cpp17",
+        "tests/cpp/test_cpp_local_static_string_pointer_array.py::test_local_static_string_pointer_array_rejects_unproved_variants"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:91f3c9db231a70cca566efd908a22d0385c99bee76b1f12dd7a28ae5e696c19f",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/local_static_arrays.py",
+            "sha256": "e837ba2b9b4eca7d8b710e140f34d174cb6a09acea331632154264857fe3b12b"
           },
           {
             "path": "pcc/frontends/cpp/objects.py",

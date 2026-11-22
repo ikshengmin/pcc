@@ -2,25 +2,29 @@
 
 The caller has checked the local-static owner, including inline/template and
 switch boundaries. Existing array Sema owns bounds, explicit braces and
-narrowing. Only typed integral/enum constants reach shared C static storage;
-no runtime expression or dynamic-initialization guard is projected.
+narrowing. Typed integral/enum constants and a single dimension of const-char
+pointers (string addresses and nulls) reach shared C static storage; no
+runtime expression or dynamic-initialization guard is projected.
 """
 
+from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.arrays import (
     const_array_elements, deduce_list_bound, lower_array_initializer,
 )
 from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
 from pcc.frontends.cpp.initializers import parse_initializer_list
+from pcc.frontends.cpp.objects import static_value
 from pcc.frontends.cpp.sema import Symbol
-from pcc.frontends.cpp.types import array_type, is_enum_type
+from pcc.frontends.cpp.types import PointerType, array_type, is_enum_type, qualify_const, unqualified
 
 
 def declare(parser, name, dtype, *, for_init=False):
     leaf = dtype
     while array_type(leaf):
         leaf = leaf.element
-    if not (parser.types.integral(leaf) or is_enum_type(leaf)):
+    string_pointers = unqualified(dtype.element) == PointerType(qualify_const("char"))
+    if not (parser.types.integral(leaf) or is_enum_type(leaf) or string_pointers):
         raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
                             'local static arrays require integral or enum elements', name.coord)
     # Do not complete an unknown bound before its initializer is parsed. This
@@ -33,6 +37,13 @@ def declare(parser, name, dtype, *, for_init=False):
 
     def constant_element(expression, target, coord):
         parser._require_value(expression)
+        if string_pointers:
+            node = expression.node
+            if not expression.null_pointer and not (
+                    isinstance(node, c_ast.Constant) and node.type == "string"):
+                raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
+                                    'local static const-char pointer arrays require string or null elements', coord)
+            return static_value(parser, expression, target, coord)[0]
         parser._convert(expression, target, coord)
         proof = converted_fact(parser._constant_fact(expression), target, parser.types, coord)
         if proof.status != KNOWN:
@@ -48,7 +59,7 @@ def declare(parser, name, dtype, *, for_init=False):
             parser._check_object_type(dtype, name.coord)
             symbol.dtype = dtype
         initializer = lower_array_initializer(dtype, initializer, parser.types, constant_element)
-    elif equals is not None or parser._peek().value == '(':
+    elif string_pointers or equals is not None or parser._peek().value == '(':
         raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
                             'local static arrays require explicit brace initialization', name.coord)
     else:

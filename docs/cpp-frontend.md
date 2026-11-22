@@ -496,3 +496,14 @@ The existing scalar pointer constant owner and the C static-storage
 projection are used without a dynamic initialization guard. A reassigned
 pointer persists between calls without changing a separately declared
 pointer. Array, brace and nonliteral pointer cases remain separate.
+
+
+### Local static arrays of const-char pointers
+
+One-dimensional block-static const-char pointer arrays use the existing
+explicit-brace initializer and normal bound deduction. String addresses
+and null pointer constants are checked before emitting the static
+aggregate. The Linux pcc0 execution matches g++ across two calls after
+reassigning an element. General pointer expressions, multidimensional
+pointer arrays, dynamic initialization and external-inline sharing remain
+outside this slice.
