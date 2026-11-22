@@ -39,3 +39,32 @@ Linux x86-64: the owned archive built under the resource guard; three
 fresh GC2 subprocesses and GC0/1/3/4 negative controls passed. The ABI
 chunk suite passed eight host cases. This does not cover final remark,
 full-cycle liveness, helper abort, C extensions, or measured scaling.
+
+## One dormant in-flight task
+
+The test coordinator tracks one already-dequeued, exact gray owner
+under the graph lock. It accepts only an explicitly rooted owner and
+assigns a monotonically increasing task token. Its readiness predicate
+cannot request final remark while a task is in flight or gray credit
+is outstanding; it does not itself request remark or change the
+production finish path. A matching successful close keeps the scanner's
+already flushed child work and retires the original gray credit. A
+matching abandon publishes the still-gray owner back to the worklist.
+A stale close cannot release either task credit or identity.
+
+The owned native test uses two real stopped cuts on a worker: after the
+dequeue but before the container lock, and after it unlocks and flushes
+but before it retires the task. Normal retire and same-epoch abandon
+are both exercised. The fixture controls the current epoch and keeps
+the registered owner slot stable. This unit does not handle a thread
+dying mid-task, cross-epoch reset, coordinator restart, multiple
+in-flight tasks, or integration with the existing concurrent drain
+or stopped-world finish. It makes no throughput claim and does not
+select a second marker worker.
+
+Linux x86-64: three normal retirements and three abandons passed both
+native stop cuts. A stopped negative control temporarily sets gray
+credit to zero and still cannot request remark with a live token;
+the real count is restored before resume. No GC2 source used by
+ordinary mark or finish calls the review APIs. The prior short-list
+test and eight ABI chunk checks passed on this revision.

@@ -1,0 +1,132 @@
+/* Exercise a dormant single-claim coordinator at two real stopped cuts. */
+#include "py_internal.h"
+#include <stdio.h>
+
+extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
+extern int64_t pcc_thread_join(void *, void **);
+extern void pcc_py_gc_minor_graph_lock(void);
+extern void pcc_py_gc_minor_graph_unlock(void);
+extern int64_t pcc_gc_alloc_stage_drain_locked(void);
+extern int64_t pcc_gc_gray_count_load_acquire(void);
+extern void pcc_gc_gray_count_store_release(int64_t);
+extern void pcc_gc_set_mark_color(PyObject *, int64_t);
+extern void pcc_gc_shade_gray_atomic(PyObject *, int64_t);
+extern void pcc_gc_gray_worklist_flush(void);
+extern PyObject *pcc_gc_gray_worklist_take_locked(void);
+extern int64_t pcc_gc_trace_gc2_rooted_short_list(PyObject **, int64_t);
+extern int64_t pcc_gc2_review_claim_open_locked(PyObject **, int64_t);
+extern int64_t pcc_gc2_review_claim_may_request_remark_locked(int64_t);
+extern int64_t pcc_gc2_review_claim_close_locked(PyObject **, int64_t, int64_t, int64_t);
+extern int32_t pcc_gc_mark_active;
+extern int64_t pcc_gc_tracing_cycle_epoch;
+
+enum { MARK_WHITE = 8, MARK_GRAY = 16, MARK_BLACK = 32, COLORS = 56,
+       EPOCH = 37, BEFORE_SCAN = 1, AFTER_SCAN = 2, WAIT_US = 1000000 };
+
+typedef struct {
+    PyObject *root;
+    int phase, permit, abort;
+    int64_t token, work, closed;
+} Scan;
+
+static void parkable_gate(Scan *scan, int phase) {
+    __atomic_store_n(&scan->phase, phase, __ATOMIC_RELEASE);
+    while (__atomic_load_n(&scan->permit, __ATOMIC_ACQUIRE) < phase)
+        pcc_thread_safepoint();
+}
+
+static void *run_scan(void *arg) {
+    Scan *scan = arg;
+    if (pcc_current_thread_id() <= 0) return (void *)1;
+    parkable_gate(scan, BEFORE_SCAN);
+    scan->work = pcc_gc_trace_gc2_rooted_short_list(&scan->root, EPOCH);
+    pcc_gc_gray_worklist_flush();
+    parkable_gate(scan, AFTER_SCAN);
+    pcc_py_gc_minor_graph_lock();
+    scan->closed = pcc_gc2_review_claim_close_locked(
+        &scan->root, EPOCH, scan->token, scan->abort ? 0 : scan->work);
+    pcc_py_gc_minor_graph_unlock();
+    return NULL;
+}
+
+static int check_cut(Scan *scan, int phase, int64_t expected) {
+    int64_t deadline = pcc_runtime_monotonic_us() + WAIT_US;
+    while (__atomic_load_n(&scan->phase, __ATOMIC_ACQUIRE) < phase) {
+        if (pcc_runtime_monotonic_us() >= deadline) return 0;
+        pcc_thread_safepoint();
+    }
+    if (pcc_stop_the_world() != 0) return 0;
+    pcc_py_gc_minor_graph_lock();
+    /* This is the original owner's credit before scan, then that credit
+     * plus the strong child after flush. Even after unlocking and blocking
+     * at a safepoint, only the matching token can retire the claim. */
+    int good = pcc_gc_gray_count_load_acquire() == expected &&
+               pcc_gc2_review_claim_may_request_remark_locked(EPOCH) == 0 &&
+               pcc_gc2_review_claim_close_locked(
+                   &scan->root, EPOCH, scan->token + 1, 1) == 0 &&
+               pcc_gc2_review_claim_open_locked(&scan->root, EPOCH) == 0;
+    /* Isolate the token guard from gray credit, then immediately restore
+     * the controlled world's real count before it can resume. */
+    int64_t actual = pcc_gc_gray_count_load_acquire();
+    pcc_gc_gray_count_store_release(0);
+    good = good && pcc_gc2_review_claim_may_request_remark_locked(EPOCH) == 0;
+    pcc_gc_gray_count_store_release(actual);
+    pcc_py_gc_minor_graph_unlock();
+    if (pcc_resume_world() != 0) return 0;
+    __atomic_store_n(&scan->permit, phase, __ATOMIC_RELEASE);
+    return good;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2 || (argv[1][0] != '0' && argv[1][0] != '1') || argv[1][1])
+        return 1;
+    if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 2;
+    py_gc_disable();
+    Scan scan = {0};
+    scan.abort = argv[1][0] == '1';
+    PyObject *owner = py_list_new(1);
+    PyObject *child = py_list_new(0);
+    void *handle = pcc_gc_scheduler_root_register_handle(&scan.root);
+    if (!owner || !child || !handle) return 3;
+    pcc_gc_store_root(&scan.root, owner);
+    py_list_append(owner, child);
+
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_alloc_stage_drain_locked();
+    pcc_gc_set_mark_color(owner, MARK_WHITE);
+    pcc_gc_set_mark_color(child, MARK_WHITE);
+    __atomic_store_n(&pcc_gc_tracing_cycle_epoch, EPOCH, __ATOMIC_RELEASE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    int ready = pcc_gc2_review_claim_may_request_remark_locked(EPOCH) == 1;
+    pcc_gc_shade_gray_atomic(owner, 0);
+    pcc_gc_gray_worklist_flush();
+    PyObject *dequeued = pcc_gc_gray_worklist_take_locked();
+    scan.token = pcc_gc2_review_claim_open_locked(&scan.root, EPOCH);
+    pcc_py_gc_minor_graph_unlock();
+    if (!ready || dequeued != owner || scan.token <= 0) return 4;
+
+    void *thread = NULL, *result = NULL;
+    if (pcc_thread_start(&thread, run_scan, &scan) != 0 || !thread) return 5;
+    if (!check_cut(&scan, BEFORE_SCAN, 1) || !check_cut(&scan, AFTER_SCAN, 2))
+        return 6;
+    if (pcc_thread_join(thread, &result) != 0 || result) return 7;
+    int64_t credit = pcc_gc_gray_count_load_acquire();
+    int32_t owner_color = py_header_flags_load(py_header(owner)) & COLORS;
+    if (scan.work != 1 || scan.closed != 1 || credit != (scan.abort ? 2 : 1) ||
+        owner_color != (scan.abort ? MARK_GRAY : MARK_BLACK))
+        return 8;
+    pcc_py_gc_minor_graph_lock();
+    PyObject *a = pcc_gc_gray_worklist_take_locked();
+    PyObject *b = pcc_gc_gray_worklist_take_locked();
+    PyObject *extra = pcc_gc_gray_worklist_take_locked();
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+    int tokens = scan.abort ? ((a == owner && b == child) || (a == child && b == owner))
+                            : (a == child && b == NULL);
+    if (!tokens || extra || scan.root != owner) return 9;
+    pcc_gc_store_root(&scan.root, NULL);
+    pcc_gc_scheduler_root_unregister_handle(handle);
+    printf("GC2_CLAIM_GAP_OK abort=%d cuts=2 remaining=%lld\n",
+           scan.abort, (long long)credit);
+    return 0;
+}

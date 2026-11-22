@@ -108,6 +108,7 @@ pcc_gc_shade_gray_atomic = extern(
 pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
 pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
+pcc_gc_gray_worklist_note = extern("pcc_gc_gray_worklist_note", (c_ptr,), c_void)
 pcc_gc_gray_worklist_take_locked = extern(
     "pcc_gc_gray_worklist_take_locked", (), c_ptr
 )
@@ -232,6 +233,91 @@ def pcc_gc_trace_stack_drain_work(budget: i64, work_left) -> i64:
                 else:
                     store_i64(work_left, 0, remaining - work)
     return processed
+
+
+# Review only. One pending task, protected by the graph lock. The
+# coordinator supplies a stable traced owner slot until close; this
+# raw identity is not an additional root.
+define_global_i64("pcc_gc2_review_claim_sequence", 0)
+define_global_i64("pcc_gc2_review_claim_token", 0)
+define_global_i64("pcc_gc2_review_claim_epoch", 0)
+define_global_null_ptr_array("pcc_gc2_review_claim_owner", 1)
+
+
+@c_abi_export("pcc_gc2_review_claim_open_locked")
+def pcc_gc2_review_claim_open_locked(owner_slot, epoch: i64) -> i64:
+    # Call only after dequeuing this exact owner. A rejection leaves
+    # ownership/gray credit with the caller's ordinary scanner.
+    if (
+        pcc_py_gc_minor_graph_lock_depth() == 0 or ptr_is_null(owner_slot) != 0
+        or epoch <= 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2
+        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+        or load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0
+        or atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0
+        or atomic_load_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire") != epoch
+        or load_i64(global_addr("pcc_gc2_review_claim_token"), 0) != 0
+    ):
+        return 0
+    owner = load_ptr(owner_slot, 0)
+    if (
+        ptr_is_null(owner) != 0 or is_tagged_int(owner) != 0
+        or pcc_gc_object_is_known_no_lock(owner) == 0
+        or load_i32(owner, abi_constant("object.header.type_tag_offset")) != abi_constant("object.type.list")
+        or (atomic_load_i32(owner, abi_constant("object.header.flags_offset"), "acquire") & 16) == 0
+    ):
+        return 0
+    sequence: i64 = load_i64(global_addr("pcc_gc2_review_claim_sequence"), 0)
+    if sequence == 9223372036854775807:
+        return 0
+    token: i64 = sequence + 1
+    store_i64(global_addr("pcc_gc2_review_claim_sequence"), 0, token)
+    store_i64(global_addr("pcc_gc2_review_claim_epoch"), 0, epoch)
+    global_store_ptr("pcc_gc2_review_claim_owner", owner)
+    store_i64(global_addr("pcc_gc2_review_claim_token"), 0, token)
+    return token
+
+
+@c_abi_export("pcc_gc2_review_claim_may_request_remark_locked")
+def pcc_gc2_review_claim_may_request_remark_locked(epoch: i64) -> i64:
+    if (
+        pcc_py_gc_minor_graph_lock_depth() == 0
+        or epoch <= 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2
+        or atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0
+        or atomic_load_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire") != epoch
+        or load_i64(global_addr("pcc_gc2_review_claim_token"), 0) != 0
+        or pcc_gc_gray_count_load_acquire() != 0
+    ):
+        return 0
+    return 1
+
+
+@c_abi_export("pcc_gc2_review_claim_close_locked")
+def pcc_gc2_review_claim_close_locked(owner_slot, epoch: i64, token: i64, scanned: i64) -> i64:
+    # Child tokens are flushed by the scanning thread before a successful
+    # close. A failed scan returns the still-gray owner to ordinary work.
+    if (
+        pcc_py_gc_minor_graph_lock_depth() == 0 or ptr_is_null(owner_slot) != 0
+        or token <= 0 or epoch <= 0
+        or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2
+        or load_i64(global_addr("pcc_gc2_review_claim_token"), 0) != token
+        or load_i64(global_addr("pcc_gc2_review_claim_epoch"), 0) != epoch
+        or ptr_eq(load_ptr(owner_slot, 0), global_load_ptr("pcc_gc2_review_claim_owner")) == 0
+        or atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == 0
+        or atomic_load_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire") != epoch
+    ):
+        return 0
+    owner = load_ptr(owner_slot, 0)
+    if (atomic_load_i32(owner, abi_constant("object.header.flags_offset"), "acquire") & 16) != 0:
+        if scanned > 0:
+            pcc_gc_set_mark_color(owner, 32)
+            pcc_gc_gray_count_decrement_acq_rel()
+        else:
+            pcc_gc_gray_worklist_note(owner)
+            pcc_gc_gray_worklist_flush()
+    global_store_ptr("pcc_gc2_review_claim_owner", null())
+    store_i64(global_addr("pcc_gc2_review_claim_epoch"), 0, 0)
+    store_i64(global_addr("pcc_gc2_review_claim_token"), 0, 0)
+    return 1
 
 
 _GC2_REVIEW_LIST_LIMIT = 32
