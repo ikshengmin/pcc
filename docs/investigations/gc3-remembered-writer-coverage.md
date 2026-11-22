@@ -152,6 +152,22 @@ creations and explicit collections, leaves an untreated sibling intact
 and rejects an unsupported target. It does not measure nursery promotion.
 Test mode does not change runtime dispatch.
 
+### Promotion publication contract
+
+The existing `pcc_gc_generational_promote_young_if_known` starts with a
+known-object check and can attempt `pcc_gc_generational_oldify_copy`.
+Neither is sufficient for indexless nonmoving nursery objects. The
+proposed operation validates young provenance and reserves the old
+record and needed card, then publishes in place under one transaction
+before dropping young admission. On lack of metadata, the weakref or
+raw export must not publish its target. A card overflow likewise leaves
+the object young and requests a safe major instead of sweeping it.
+A repeat request for an already-promoted object is inert. A self-edge
+does not create a remembered edge after in-place promotion.
+
+Four new serial tests exercise these cases (19 focused host checks).
+They do not supply a native promotion implementation, lock proof or A/B.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

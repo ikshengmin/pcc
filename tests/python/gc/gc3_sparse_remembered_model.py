@@ -44,10 +44,25 @@ class Model:
         else:
             self.dirty[card] = None
 
-    def promote(self, owner, card):
-        # Apply the same remembered update to current edges, not just future
-        # writes: promotion itself creates an old-to-young relationship.
-        self.add_old(owner, card, self.young.pop(owner))
+    def promote(self, owner, card, *, metadata_available=True):
+        # An already promoted target does not need a second record or card.
+        if owner in self.cards.get(card, {}):
+            assert owner not in self.young
+            return True
+        if not metadata_available:
+            return False
+        children = self.young[owner]
+        needs_card = any(child in self.young and child != owner for child in children)
+        if needs_card and card not in self.dirty:
+            if self.queue_capacity is not None and len(self.dirty) >= self.queue_capacity:
+                self.major_required = True
+                return False
+            self.dirty[card] = None
+        # The real stopped-world/no-park transaction must publish old
+        # provenance and remembered edges before clearing the young bit.
+        self.cards.setdefault(card, {})[owner] = children
+        del self.young[owner]
+        return True
 
     def minor(self, roots):
         if self.major_required:

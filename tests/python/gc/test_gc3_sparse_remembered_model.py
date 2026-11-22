@@ -60,7 +60,7 @@ def test_promotion_seeds_existing_edges_and_preserves_the_old_owner():
     model = Model()
     model.add_young("parent", ("child",))
     model.add_young("child")
-    model.promote("parent", "promoted-card")
+    assert model.promote("parent", "promoted-card")
     assert model.minor(()).live_young == {"child"}
     assert model.minor(()).cards == ("promoted-card",)
     assert model.cards["promoted-card"]["parent"] == ("child",)
@@ -76,3 +76,40 @@ def test_queue_failure_forces_major_without_sweeping_young():
     model.store_old("card2", "second", ("b",))
     assert model.minor(()).major_required
     assert set(model.young) == {"a", "b"}
+
+
+def test_repeat_promotion_does_not_reallocate_or_duplicate_card():
+    model = Model(queue_capacity=1)
+    parent, child = object(), object()
+    model.add_young(parent, (child,))
+    model.add_young(child)
+    assert model.promote(parent, "card")
+    assert model.promote(parent, "card", metadata_available=False)
+    assert tuple(model.cards["card"]) == (parent,)
+    assert model.minor(()).live_young == {child}
+    assert model.minor(()).cards == ("card",)
+
+
+@pytest.mark.parametrize("failed", ("metadata", "card"))
+def test_failed_promotion_does_not_expose_unindexed_old_object(failed):
+    model = Model(queue_capacity=0 if failed == "card" else 1)
+    model.add_young("parent", ("child",))
+    model.add_young("child")
+    assert not model.promote("parent", "card", metadata_available=failed != "metadata")
+    assert model.cards == {} and model.dirty == {}
+    assert model.full_reachable_young(("parent",)) == {"parent", "child"}
+    work = model.minor(("parent",))
+    if failed == "card":
+        assert work.major_required
+    else:
+        assert work.live_young == {"parent", "child"}
+    assert set(model.young) == {"parent", "child"}
+
+
+def test_a_promoted_owner_with_only_a_self_edge_does_not_dirty_old_heap():
+    model = Model(queue_capacity=0)
+    model.add_young("parent", ("parent",))
+    assert model.promote("parent", "card")
+    assert model.cards["card"]["parent"] == ("parent",)
+    assert not model.minor(("parent",)).major_required
+    assert model.dirty == {}
