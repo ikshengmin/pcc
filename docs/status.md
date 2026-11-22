@@ -340,7 +340,11 @@ in the relevant section or issue and removes the entry.
    routes GC2 through the nonmoving same-stop callback handoff. Linux:
    192 focused native assertions, five-GC rendezvous lifecycle, and public
    GC2 at 257 candidates with CPython order and no full callback recheck.
-   Next: verify and route a revalidated cohort from an earlier mark stop. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit 7569122](https://github.com/ikshengmin/pcc/commit/7569122898726b841370ba0f19d6ae619305e0dd)
+   uses the still-dead sealed cohort after the necessary previous-stop
+   refresh. GC1–3 match CPython after intervening live publication, with
+   one rather than three full rechecks; Linux 198 focused assertions passed.
+   Next: run the real background mark to automatic callback-sweep handoff. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -394,7 +398,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:43 UTC), #9 review only: stale-epoch handoff, CPython order after refresh and live publication between stops.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
