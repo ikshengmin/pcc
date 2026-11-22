@@ -223,9 +223,11 @@ in the relevant section or issue and removes the entry.
    A new runtime-index list witness left one GC0 owner on each of two
    successful paths; the shared native `py_list_getitem` provenance now
    fixes both and covers computed indices (21 native cases across five
-   modes and CPython, 29 IR checks). Keep #7 open. Next inspect an actual
-   homogeneous native tuple getter and capture a concrete alias/release
-   witness instead of inferring ownership from the return type; #4 waits.
+   modes and CPython, 29 IR checks). At a direct native
+   `tuple[int, int]` return the same accessor rule now consumes the
+   `py_tuple_getitem` result once. Linux pcc0 passed 24 native cases across
+   GC0–4 against CPython and 36 IR checks. Keep #7 open: next check an
+   actual typed native dict lookup and key-cleanup witness; #4 waits.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -246,7 +248,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 7 homogeneous native tuple indexed result ownership: Codex, Linux x86-64, 2026-11-22 11:37 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -87,3 +87,17 @@ accessor file passed 21 cases across all five GC modes and CPython,
 and 29 adjacent ownership IR checks passed. Negative detached and
 positive alias cases reached GC0 `free(0)`. No Mac/pcc1 run, no
 general tuple/dict or arbitrary return-annotation claim.
+
+## Homogeneous native tuple indices
+
+The actual linked callee for `tuple[int, int]` calls `py_tuple_getitem`.
+Its success path retains the selected element before returning it.
+The runtime-index alias and negative detached-owner cases each matched
+CPython across GC0–4 but left one GC0 `decref(1)` before the fix.
+With the shared accessor provenance, each instead reaches `free(0)`;
+the detached boxed value remains intact after releasing the tuple and
+calling `gc.collect()`. An out-of-range index still raises `IndexError`.
+The scoped Linux pcc0 matrix passed 24 native cases on all five modes
+against CPython and 36 IR controls. A heterogeneous tuple deliberately
+does not acquire the homogeneous rule. No dict, machine-int or foreign
+ABI conclusion, macOS/pcc1 run or throughput claim.

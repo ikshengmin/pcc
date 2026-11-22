@@ -588,19 +588,23 @@ def probe(owner: Holder) -> bool:
 
 
 @pytest.mark.parametrize("index", ("0", "1", "-1", "1 + 0", "index", "index - 1"))
-def test_exact_list_subscript_return_handoff_follows_the_owning_getitem(index):
+@pytest.mark.parametrize(("receiver", "getter"), (
+    ("list[int]", "py_list_getitem"),
+    ("tuple[int, int]", "py_tuple_getitem"),
+))
+def test_exact_indexed_subscript_return_handoff_follows_the_owning_getitem(index, receiver, getter):
     params = ", index: int" if "index" in index else ""
     args = ", index" if "index" in index else ""
     text = _emit(f"""
-def read(owner: list[int]{params}) -> int:
+def read(owner: {receiver}{params}) -> int:
     return owner[{index}]
 
-def probe(owner: list[int]{params}) -> bool:
+def probe(owner: {receiver}{params}) -> bool:
     result: object = read(owner{args})
     return bool(result)
 """, strict=True)
     callee = _body(text, "read")
-    producer = re.search(r"(%[^ ]+) = call ptr [^\n]*@py_list_getitem\(", callee)
+    producer = re.search(r"(%[^ ]+) = call ptr [^\n]*?@" + getter + r"\(", callee)
     assert producer is not None
     assert re.search(
         r"@pcc_gc_store_return_root\(ptr [^,]+, ptr " + re.escape(producer[1]) + r"\)",
@@ -610,6 +614,19 @@ def probe(owner: list[int]{params}) -> bool:
     caller = _body(text)
     assert "@user_bridge_handoff_read(" in caller
     assert "result.local.borrowed.retain" not in caller
+
+
+def test_heterogeneous_tuple_does_not_get_the_homogeneous_handoff():
+    text = _emit("""
+def read(owner: tuple[int, object]) -> int:
+    return owner[0]
+
+def probe(owner: tuple[int, object]) -> bool:
+    result: object = read(owner)
+    return bool(result)
+""", strict=True)
+    assert "@py_tuple_getitem(" in _body(text, "read")
+    assert "result.local.borrowed.retain" in _body(text)
 
 
 def test_dynamic_formal_conversion_consumes_the_real_owned_result():

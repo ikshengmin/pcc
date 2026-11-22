@@ -71,6 +71,21 @@ CASES.update({
         'except IndexError:\n        pass\n    else:\n        raise AssertionError("expected IndexError")'),
 })
 
+TUPLE_INDEX = """
+def returned(owner: tuple[int, int], index: int) -> int:
+    return owner[index]
+"""
+CASES.update({
+    "tuple-index-runtime": (TUPLE_INDEX,
+        "owner: tuple[int, int] = (0, n)\n    result: object = returned(owner, two - 1)\n    assert result is n"),
+    "tuple-index-detached": (TUPLE_INDEX,
+        "owner: tuple[int, int] = (0, n)\n    n = 0\n    result: object = returned(owner, 1 - two)\n    "
+        "owner = (0, 0)\n    gc.collect()\n    assert result == 9223372036854775808"),
+    "tuple-index-error": (TUPLE_INDEX,
+        'owner: tuple[int, int] = (0, n)\n    try:\n        result: object = returned(owner, two)\n    '
+        'except IndexError:\n        pass\n    else:\n        raise AssertionError("expected IndexError")'),
+})
+
 DYNAMIC = """
 def returned(value: object) -> int:
     return int(value)
@@ -145,6 +160,8 @@ def test_native_accessor_baseline(
         assert any("user_program_returned" in name for name in call_paths["exercise"]), call_paths
         if shape.startswith("runtime-index-"):
             assert "py_list_getitem" in call_paths["returned"], call_paths
+        if shape.startswith("tuple-index-"):
+            assert "py_tuple_getitem" in call_paths["returned"], call_paths
         (tmp_path / "callee-calls.json").write_text(json.dumps(call_paths) + "\n")
         return tuple(matches)
 

@@ -61,7 +61,7 @@ from pcc.frontends.python.codegen.return_lowering import (
     boxed_int_direct_forward_has_owner,
     boxed_int_formal_conversion_has_owner,
     boxed_int_instance_field_has_owner,
-    boxed_int_native_list_getitem_has_owner,
+    boxed_int_native_indexed_getitem_has_owner,
     boxed_int_literal_parse_has_owner,
     boxed_int_mixed_return_uses_owner_slot,
 )
@@ -117,7 +117,7 @@ def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
         return True
     if boxed_int_instance_field_has_owner(host, fd, fn, value):
         return True
-    if boxed_int_native_list_getitem_has_owner(host, fd, fn, value):
+    if boxed_int_native_indexed_getitem_has_owner(host, fd, fn, value):
         return True
     if isinstance(value, Call):
         return (boxed_int_literal_parse_has_owner(host, fd, value)

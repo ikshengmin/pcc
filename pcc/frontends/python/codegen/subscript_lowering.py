@@ -18,9 +18,14 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
-def native_list_getitem_returns_new(receiver: Type, index: Type) -> bool:
-    """The exact indexed list route selects the owning py_list_getitem ABI."""
-    return isinstance(receiver, ListType) and isinstance(index, (IntType, BoolType))
+def native_indexed_getitem_runtime(receiver: Type, index: Type) -> str | None:
+    """Select the native NEW-reference ABI for indexed list/tuple reads."""
+    if isinstance(index, (IntType, BoolType)):
+        if isinstance(receiver, ListType):
+            return "py_list_getitem"
+        if isinstance(receiver, TupleType):
+            return "py_tuple_getitem"
+    return None
 
 
 def _same_type_kind(a: Type, b: Type) -> bool:
@@ -305,27 +310,20 @@ class SubscriptLoweringMixin:
         span = getattr(expr, "span", None)
         elem_ty: Optional[Type] = None
         key_obj: Optional[ir.Value] = None
-        if isinstance(obj_ty, ListType):
-            if not native_list_getitem_returns_new(obj_ty, expr.idx.ty):
+        if isinstance(obj_ty, (ListType, TupleType)):
+            getter = native_indexed_getitem_runtime(obj_ty, expr.idx.ty)
+            if getter is None:
                 # Slices and __index__ instances use the object subscript.
                 return None
             idx = self._emit_index_expr_as_i64(expr.idx)
+            category = "list" if isinstance(obj_ty, ListType) else "tuple"
             got = self.builder.call(
-                self.runtime["py_list_getitem"],
-                [obj, idx],
-                name=self._fresh("subscript.list.getitem"),
+                self.runtime[getter], [obj, idx],
+                name=self._fresh("subscript." + category + ".getitem"),
             )
-            elem_ty = obj_ty.elem
-        elif isinstance(obj_ty, TupleType):
-            if not isinstance(expr.idx.ty, (IntType, BoolType)):
-                return None
-            idx = self._emit_index_expr_as_i64(expr.idx)
-            got = self.builder.call(
-                self.runtime["py_tuple_getitem"],
-                [obj, idx],
-                name=self._fresh("subscript.tuple.getitem"),
-            )
-            if obj_ty.elems:
+            if isinstance(obj_ty, ListType):
+                elem_ty = obj_ty.elem
+            elif obj_ty.elems:
                 first = obj_ty.elems[0]
                 if all(_same_type_kind(item, first) for item in obj_ty.elems):
                     elem_ty = first

@@ -26,13 +26,14 @@ from pcc.frontends.python.py_ast import (
     StrLit,
     StrType,
     Subscript,
+    TupleType,
     UnaryOp,
 )
 from pcc.frontends.python.codegen import marshal
 from pcc.frontends.python.codegen.builtin_exceptions import BUILTIN_EXC_TAG
 from pcc.frontends.python.codegen.cpy_import_state import live_import_global_slot
 from pcc.frontends.python.codegen.str_default_cells import funcdef_defined_here
-from pcc.frontends.python.codegen.subscript_lowering import native_list_getitem_returns_new
+from pcc.frontends.python.codegen.subscript_lowering import native_indexed_getitem_runtime
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
 
@@ -114,12 +115,12 @@ def boxed_int_instance_field_has_owner(host, fd, fn, value) -> bool:
     )
 
 
-def boxed_int_native_list_getitem_has_owner(host, fd, fn, value) -> bool:
+def boxed_int_native_indexed_getitem_has_owner(host, fd, fn, value) -> bool:
     """Use the native owning accessor protocol, not the index's spelling."""
     if (not isinstance(value, Subscript) or not _exact_int_repr(value.ty)
             or not isinstance(value.obj, Name)
             or not _exact_int_repr(value.idx.ty)
-            or not native_list_getitem_returns_new(value.obj.ty, value.idx.ty)
+            or native_indexed_getitem_runtime(value.obj.ty, value.idx.ty) is None
             or fd.is_method or fd.name in host._hoisted_qualnames
             or not funcdef_defined_here(host, fd)):
         return False
@@ -135,12 +136,13 @@ def boxed_int_native_list_getitem_has_owner(host, fd, fn, value) -> bool:
         if formal.name != value.obj.ident:
             continue
         ty = formal.annotation
-        return (
-            isinstance(ty, ListType) and _exact_int_repr(ty.elem)
-            and ty == value.obj.ty
-            and live_import_global_slot(host, formal.name) is None
-            and isinstance(params[i], ir.PointerType)
-        )
+        if (ty != value.obj.ty or live_import_global_slot(host, formal.name) is not None
+                or not isinstance(params[i], ir.PointerType)):
+            return False
+        if isinstance(ty, ListType):
+            return _exact_int_repr(ty.elem)
+        if isinstance(ty, TupleType):
+            return bool(ty.elems) and all(_exact_int_repr(member) for member in ty.elems)
     return False
 
 
