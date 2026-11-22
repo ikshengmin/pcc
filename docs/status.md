@@ -225,16 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   prove exclusive scalar slice ownership and nil/producer return flow
-   over the actual cache-size source group at
-   `internal/cpu/datacache_x86.go:15:23`. An unchanged isolated Go loop
-   now executes through the optional Linux x86-64 GC0 owner/length entry.
-   Default lowering is unchanged. See the
+   bind the proved actual CPU owners, length reads and forwarded returns
+   to the regular Go checker in a deliberately source-only lane. The
+   actual first stop remains `internal/cpu/datacache_x86.go:15:23`;
+   isolated Linux GC0 native loop evidence is not acceptance of this
+   package or default Go slice lowering. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go original CPU scalar-slice owner flow: Codex, Linux x86-64, 2026-11-22 04:46 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

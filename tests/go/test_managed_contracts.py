@@ -420,3 +420,104 @@ def test_opt_in_scalar_source_loop_rejects_other_ownership_and_bounds(change):
             (("loop.go", source),), function_name="Build",
             target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
         )
+
+
+def test_pinned_cpu_cache_sizes_producers_have_exclusive_source_owners():
+    import hashlib
+    import json
+    from pathlib import Path
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import scalar_slice_owner_group
+
+    root = Path(__file__).with_name("upstream") / "go1.27.3"
+    selection = json.loads((root / "pcc-linux-amd64-math-bits-normal-plan.json").read_text())
+    entries = selection["packages"]["internal/cpu"]["files"]["go"]
+    path = root / "src/internal/cpu/datacache_x86.go"
+    assert hashlib.sha256(path.read_bytes()).hexdigest() == "bbd50f64070d9497f062de27710a17d1aead867054d7dd9143bf063cdcd4fbea"
+    units = []
+    for name in entries:
+        source = (path.parent / name).read_bytes()
+        assert [len(source), hashlib.sha256(source).hexdigest()] == selection["files"]["src/internal/cpu/" + name]
+        units.append((name, source.decode()))
+    units = tuple(units)
+    proof = scalar_slice_owner_group(parse_package(units, require_main=False))
+    assert set(proof) == {"DataCacheSizes", "getDataCacheSizesIntel", "getDataCacheSizesAMD"}
+    hub = proof["DataCacheSizes"]
+    assert hub.owner is None and hub.nil_returns == 2
+    assert hub.forwarded_returns == ("getDataCacheSizesIntel", "getDataCacheSizesAMD")
+    intel, amd = proof["getDataCacheSizesIntel"], proof["getDataCacheSizesAMD"]
+    assert (intel.owner, intel.appends, intel.length_reads, intel.owned_returns, intel.nil_returns) == (
+        "caches", 1, 1, 1, 1)
+    assert (amd.owner, amd.appends, amd.owned_returns, amd.nil_returns) == ("caches", 3, 3, 1)
+
+
+@pytest.mark.parametrize("extra", [
+    "a := s; _ = a",
+    "sink(s)",
+    "_ = &s",
+    "for s := uint32(0); s < 1; s++ {}",
+    "var len uint32; _ = len",
+    "append(s, x)",
+    "s = append(s, s...)",
+    "s = nil",
+    "goto tail; tail:",
+    "defer sink(s)",
+])
+def test_scalar_slice_owner_proof_rejects_hidden_aliases_and_writes(extra):
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import scalar_slice_owner_group
+
+    program = ("package example; func F(x uintptr) []uintptr { "
+               "var s []uintptr; " + extra + "; return s }")
+    assert scalar_slice_owner_group(parse_package((("probe.go", program),), require_main=False)) is None
+
+
+def test_pinned_scalar_slice_owner_proof_rejects_forward_cycles_and_alias_imports():
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.slice_proof import scalar_slice_owner_group
+
+    for source in (
+        "package sample; func A() []uintptr { return B() }; func B() []uintptr { return A() }",
+        'package sample; import len "unsafe"; func F() []uintptr { return nil }',
+    ):
+        assert scalar_slice_owner_group(
+            parse_package((("owners.go", source),), require_main=False)
+        ) is None
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+@pytest.mark.xdist_group(name="go-reference")
+def test_unchanged_x86_cpu_cache_result_survives_official_go_collection(tmp_path):
+    from pathlib import Path
+    from tests.go.owned_execution import compile_reference_packages
+
+    root = Path(__file__).with_name("upstream") / "go1.27.3/src/internal/cpu"
+    originals = tuple((name, (root / name).read_text()) for name in ("datacache_x86.go", "cpu_x86.s"))
+    active = '''package main
+import ("cpu_probe"; "os"; "runtime")
+func main() {
+    first := cpu.DataCacheSizes()
+    runtime.GC()
+    second := cpu.DataCacheSizes()
+    if len(first) != len(second) || (first == nil) != (second == nil) {
+        panic("inconsistent cache shape")
+    }
+    for i := range first {
+        if first[i] != second[i] { panic("inconsistent cache size") }
+    }
+    os.Stdout.Write([]byte("cpu-source-ok"))
+}
+'''
+    packages = {
+        "main": (("main.go", active),),
+        "cpu_probe": (*originals, ("native.go", "package cpu\n"
+                                  "func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)\n")),
+    }
+    reference = compile_reference_packages(packages, tmp_path / "reference",
+                                           compiler=os.environ["PCC_GO_REFERENCE"],
+                                           cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    selected = reference.parent / "gopath/src/cpu_probe"
+    for name, _ in originals:
+        assert (selected / name).read_bytes() == (root / name).read_bytes()
+    assert run(reference) == Execution(0, b"cpu-source-ok", b"")

@@ -634,3 +634,16 @@ drops any owned prefix on failure before publishing outputs. Forty-six
 adjacent and eight native checks passed. The isolated source shape
 does not yet prove the conditional/loop paths or producer forwarding
 of the actual CPU package.
+
+The exact four Linux-amd64 CPU source files now have a source-only
+ownership census. The dispatcher has two nil returns and two direct
+producer forwards; Intel owns one zero-value local, appends from the
+CPUID loop, checks one length and returns that owner; AMD uses one
+owner, three append sites and three owned returns. The proof rejects
+aliasing, address taking, shadowing, forwarding cycles and unknown
+owner use. Normal scalar/control checking and actual package
+lowering have not been bypassed. Eighty-one adjacent checks passed.
+The exact upstream cache-size file and CPUID assembly ran unchanged
+in an official Go 1.27.3 reference harness across collection; a
+separate PCC/Go static backing native control passed. The next step
+is to attach these proved roles to the ordinary source checker.

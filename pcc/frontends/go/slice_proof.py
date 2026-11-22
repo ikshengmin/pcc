@@ -326,3 +326,144 @@ def closed_scalar_append_loop(program, function_name):
             or not _name(arguments[1].args[0], index)):
         return None
     return ScalarAppendLoopProof(fn.token)
+
+
+@dataclass(frozen=True)
+class ScalarSliceOwnerProof:
+    """Source ownership census, not executable or type-checking acceptance."""
+    owner: str | None
+    appends: int
+    length_reads: int
+    owned_returns: int
+    nil_returns: int
+    forwarded_returns: tuple[str, ...]
+
+
+def scalar_slice_owner_group(program):
+    """Classify exclusive []uintptr locals and direct return forwarding.
+
+    Other scalar expressions are not accepted or typed here. A slice owner
+    may be created only as a function-scope zero value, replaced only via
+    its own single-element append, and observed only by len or return.
+    Borrowing, indexing, aliases, nested functions and unknown exits
+    fail closed. The ordinary checker still owns scalar/control semantics.
+    """
+    builtins = {"append", "len", "nil", "uintptr"}
+    # The selected packages only need blank imports here. A named import
+    # must have its resolved package scope checked before proving builtins.
+    if _package_names(program) & builtins or any(i.alias != "_" for i in program.imports):
+        return None
+    selected = [fn for fn in program.functions if _slice_of(fn.result, "uintptr")]
+    if not selected:
+        return None
+    candidates = {fn.token.text: fn for fn in selected}
+    if (len(candidates) != len(selected) or
+            any(sum(f.token.text == name for f in program.functions) != 1 for name in candidates)):
+        return None
+    protected = builtins | set(candidates)
+    if any(link.local in protected for link in program.linknames):
+        return None
+    result = {}
+    for name, fn in candidates.items():
+        if (name in {"_", "init", "main"} or fn.receiver is not None or fn.variadic
+                or fn.declaration_only or fn.type_parameters
+                or any(item is not None for item in fn.result_names)
+                or any(not isinstance(dtype, str) or (token is not None and token.text in protected)
+                       for token, dtype in fn.params)):
+            return None
+        locals_ = [stmt for stmt in fn.body if stmt.kind == "var" and isinstance(stmt.type, SliceSyntax)]
+        if len(locals_) > 1:
+            return None
+        declaration = locals_[0] if locals_ else None
+        owner = None
+        if declaration is not None:
+            if (not _slice_of(declaration.type, "uintptr") or len(declaration.names) != 1
+                    or declaration.exprs):
+                return None
+            owner = declaration.names[0].text
+            if (owner in protected or owner == "_" or
+                    any(token is not None and token.text == owner for token, _ in fn.params)):
+                return None
+        counts = [0, 0, 0, 0]  # append, len, owned return, nil return
+        forwards = []
+
+        def scalar(expr, active):
+            if expr.kind == "func_literal":
+                return False
+            if owner is not None and _builtin_call(expr, "len") and len(expr.args) == 1:
+                if _name(expr.args[0], owner):
+                    if not active:
+                        return False
+                    counts[1] += 1
+                    return True
+            if expr.kind == "name" and (expr.value in candidates or expr.value == "append"
+                                         or (owner is not None and expr.value == owner)):
+                return False
+            return all(scalar(child, active) for child in _expression_children(expr))
+
+        def statement(stmt, active):
+            if stmt.kind not in {
+                "var", "const", ":=", "=", "++", "--", "if", "for", "switch", "case",
+                "block", "break", "continue", "return", "expression", "empty",
+            } or stmt.label is not None:
+                return False
+            if stmt.kind in {"var", "const", ":="} and (
+                isinstance(stmt.type, SliceSyntax) or
+                any(token.text in protected or token.text == owner for token in stmt.names)
+            ):
+                return False
+            if stmt.kind == "return":
+                if len(stmt.exprs) != 1:
+                    return False
+                expr = stmt.exprs[0]
+                if _name(expr, "nil"):
+                    counts[3] += 1
+                    return True
+                if owner is not None and _name(expr, owner):
+                    counts[2] += 1
+                    return active
+                if expr.kind == "call" and expr.value in candidates and _builtin_call(expr, expr.value):
+                    if len(expr.args) != len(candidates[expr.value].params):
+                        return False
+                    forwards.append(expr.value)
+                    return all(scalar(arg, active) for arg in expr.args)
+                return False
+            if (owner is not None and stmt.kind == "=" and len(stmt.targets) == 1
+                    and _name(stmt.targets[0], owner)):
+                if (not active or len(stmt.exprs) != 1 or not _builtin_call(stmt.exprs[0], "append")):
+                    return False
+                args = stmt.exprs[0].args
+                if len(args) != 2 or not _name(args[0], owner) or not scalar(args[1], active):
+                    return False
+                counts[0] += 1
+                return True
+            return (all(scalar(expr, active) for expr in (*stmt.targets, *stmt.exprs)) and
+                    all(statement(child, active) for child in (
+                        *([stmt.init] if stmt.init is not None else []),
+                        *stmt.body, *(stmt.otherwise or []), *stmt.cases,
+                        *([stmt.post] if stmt.post is not None else []))))
+
+        active = False
+        for stmt in fn.body:
+            if stmt is declaration:
+                active = True
+            elif not statement(stmt, active):
+                return None
+        if not (counts[2] or counts[3] or forwards):
+            return None
+        result[name] = ScalarSliceOwnerProof(owner, *counts, tuple(forwards))
+
+    def acyclic(name, visiting, complete):
+        if name in visiting:
+            return False
+        if name in complete:
+            return True
+        visiting.add(name)
+        if not all(acyclic(child, visiting, complete) for child in result[name].forwarded_returns):
+            return False
+        visiting.remove(name)
+        complete.add(name)
+        return True
+
+    complete = set()
+    return result if all(acyclic(name, set(), complete) for name in result) else None
