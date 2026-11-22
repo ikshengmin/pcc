@@ -310,8 +310,10 @@ in the relevant section or issue and removes the entry.
    Capture and address mapping now share an opened, SHA-verified ELF,
    even if the pathname changes (26 focused checks). Real kernel loss
    and scheduling counters now reject an overrun/incomplete run (32
-   focused checks). Next qualify a directly owned fixed child cohort,
-   not a single task extrapolated to four workers. The native GC1 scheduling baseline verifies
+   focused checks). A fixed owned four-task cohort now verifies separate
+   kernel PID/TID streams, actual run counters and expected membership
+   (33 checks). Next calibrate instruction-site attribution on owned
+   code before interpreting any workload percentage. The native GC1 scheduling baseline verifies
    one CMS startup on each GC1–4 and none on GC0, with a rooted object
    surviving two explicit collections. A separate native GC1 workload
    reached an automatic mark commit and sweep without explicit collection
@@ -432,7 +434,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC0 Linux verify full fixed owned task cohort sampling: Codex, Linux x86-64, 2026-11-22 11:17 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

@@ -19,7 +19,7 @@ import subprocess
 import sys
 import threading
 import time
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 
 # Linux UAPI: linux/perf_event.h and the architecture syscall tables.
@@ -284,27 +284,18 @@ def _verify_marker_eof(pipe) -> None:
         raise ValueError("owned child left an output pipe open") from exc
 
 
-def capture_cooperative_child(argv, *, env: dict, _pass_fds=()) -> list[TaskSample]:
-    """Sample the directly spawned, single-task helper between READY and DONE.
-
-    Internal test/benchmark transport, for an owned executable with the
-    bounded protocol only. No shell, external PID or inherited events.
-    """
+@contextmanager
+def _owned_child(argv, env, pass_fds):
     if sys.platform != "linux":
         raise OSError("child task-clock capture requires Linux")
     with subprocess.Popen(argv, env=env, stdin=subprocess.PIPE,
                           stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                          bufsize=0, pass_fds=_pass_fds) as child:
+                          bufsize=0, pass_fds=pass_fds) as child:
         try:
             _receive_marker(child.stdout, b"READY\n", 3)
             if child.poll() is not None:
                 raise ValueError("owned child exited before sampling")
-            with _task_ring(child.pid, 500_000) as (fd, mapping):
-                with _enabled(fd):
-                    child.stdin.write(b"G")
-                    child.stdin.close()
-                    _receive_marker(child.stdout, b"DONE\n", 3)
-                samples, _, _ = _read_capture(fd, mapping)
+            yield child
             if child.wait(timeout=3) != 0:
                 raise ValueError("owned child returned a failure")
             _verify_marker_eof(child.stdout)
@@ -313,9 +304,69 @@ def capture_cooperative_child(argv, *, env: dict, _pass_fds=()) -> list[TaskSamp
             if child.poll() is None:
                 child.kill()
                 child.wait(timeout=3)
+
+
+def capture_cooperative_child(argv, *, env: dict, _pass_fds=()) -> list[TaskSample]:
+    """Sample the directly spawned, single-task helper between READY and DONE."""
+    with _owned_child(argv, env, _pass_fds) as child:
+        with _task_ring(child.pid, 500_000) as (fd, mapping):
+            with _enabled(fd):
+                child.stdin.write(b"G")
+                child.stdin.close()
+                _receive_marker(child.stdout, b"DONE\n", 3)
+            samples, _, _ = _read_capture(fd, mapping)
     _verify_task(samples, child.pid, child.pid)
     return samples
 
+
+@dataclass(frozen=True)
+class TaskCapture:
+    tid: int
+    clock_ns: int
+    running_ns: int
+    samples: tuple[TaskSample, ...]
+
+
+def _owned_task_ids(child) -> tuple[int, ...]:
+    if child.poll() is not None:
+        raise ValueError("owned cohort exited before release")
+    with os.scandir(f"/proc/{child.pid}/task") as entries:
+        result = tuple(sorted(int(entry.name) for entry in entries if entry.name.isdecimal()))
+    if child.pid not in result:
+        raise ValueError("owned cohort has no leader")
+    return result
+
+
+def capture_cooperative_cohort(argv, *, env: dict, expected_tasks: int) -> list[TaskCapture]:
+    """Qualify a bounded owned child with a fixed, fully busy task cohort.
+
+    The child announces READY only after forming the pool, and leaves all
+    members alive after DONE until an R acknowledgement. This protocol
+    intentionally does not approximate a dynamic or arbitrary process.
+    """
+    if type(expected_tasks) is not int or not 1 <= expected_tasks <= 16:
+        raise ValueError("expected-tasks must be between 1 and 16")
+    with _owned_child(argv, env, ()) as child:
+        tids = _owned_task_ids(child)
+        if len(tids) != expected_tasks:
+            raise ValueError(f"expected {expected_tasks} owned tasks, saw {len(tids)}")
+        receipts = []
+        with ExitStack() as rings:
+            sessions = [(tid, *rings.enter_context(_task_ring(tid, 500_000))) for tid in tids]
+            with ExitStack() as enabled:
+                for _, fd, _ in sessions:
+                    enabled.enter_context(_enabled(fd))
+                child.stdin.write(b"G")
+                _receive_marker(child.stdout, b"DONE\n", 3)
+            if tids != _owned_task_ids(child):
+                raise ValueError("owned cohort changed during capture")
+            for tid, fd, mapping in sessions:
+                samples, clock_ns, running_ns = _read_capture(fd, mapping)
+                _verify_task(samples, child.pid, tid)
+                receipts.append(TaskCapture(tid, clock_ns, running_ns, tuple(samples)))
+        child.stdin.write(b"R")
+        child.stdin.close()
+    return receipts
 
 
 @dataclass(frozen=True)

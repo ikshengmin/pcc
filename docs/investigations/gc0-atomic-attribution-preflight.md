@@ -85,3 +85,13 @@ capture stayed loss-free. All 32 focused nodes passed. This qualifies
 transport, not an unbiased instruction/CPU-share estimate. Next
 qualify a fixed and directly owned child thread cohort before assuming
 one sampled task represents four workers.
+
+The fixed-cohort native control creates one leader and three PCC
+workers before READY, holds all four through DONE, and receives a
+release acknowledgment only after capture. The Linux tool checks the
+owned task set at both boundaries, verifies every kernel PID/TID, and
+keeps a separate counter and stream for each. The owned four-task
+trial and a wrong-count rejection both passed; 33 focused nodes
+passed in all. This is a cooperative fixed pool and not a claim that
+an arbitrary dynamic workload cannot spawn a transient task. Next
+calibrate instruction-site attribution in an owned native control.

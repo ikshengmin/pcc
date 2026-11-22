@@ -228,3 +228,25 @@ def test_kernel_reports_loss_even_without_room_for_lost_record():
                 assert time.monotonic_ns() < wall, "bounded CPU fixture did not finish"
         with pytest.raises(ValueError, match="kernel counted [1-9][0-9]* lost perf samples"):
             RING._read_capture(fd, mapping)
+
+
+@pytest.mark.integration
+def test_owned_native_four_task_cohort_emits_four_distinct_sample_streams(tmp_path, explicit_owned_runtime):
+    from tests.owned_c_execution import compile_owned_c_with_runtime
+
+    if sys.platform != "linux":
+        with pytest.raises(OSError, match="requires Linux"):
+            RING.capture_cooperative_cohort((), env={}, expected_tasks=4)
+        return
+    source = Path(__file__).with_name("fixtures") / "pcc_perf_linux_cohort.c"
+    binary = tmp_path / "task_clock_cohort"
+    compile_owned_c_with_runtime(source, binary, runtime_archive=explicit_owned_runtime)
+    clean_env = {"PATH": "/nonexistent", "PCC_GC_BACKEND": "0"}
+    receipts = RING.capture_cooperative_cohort([str(binary)], env=clean_env, expected_tasks=4)
+    assert len(receipts) == 4
+    assert len({task.tid for task in receipts}) == 4
+    assert all(task.clock_ns > 0 and task.running_ns > 0 and task.samples for task in receipts)
+    assert all({sample.tid for sample in task.samples} == {task.tid} for task in receipts)
+    assert len({sample.pid for task in receipts for sample in task.samples}) == 1
+    with pytest.raises(ValueError, match="expected 3 owned tasks, saw 4"):
+        RING.capture_cooperative_cohort([str(binary)], env=clean_env, expected_tasks=3)
