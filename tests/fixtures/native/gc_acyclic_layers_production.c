@@ -23,7 +23,7 @@ extern int64_t pcc_thread_join(void *, void **);
 enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, HOLD, ROOTS };
 static PyObject *roots[ROOTS];
 static void *nodes[3];
-static int rescue, withdrawn, mixed, error;
+static int rescue, withdrawn, mixed, silent, finalizer_only, error;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 
@@ -76,12 +76,14 @@ static void *seal_on_departing_thread(void *unused) {
     if (!a_cls || !b_cls) { error = 9; return NULL; }
     pcc_gc_store_root(&roots[CLASS_A], (PyObject *)a_cls);
     pcc_gc_store_root(&roots[CLASS_B], (PyObject *)b_cls);
-    py_class_add_method(a_cls, "__del__", (PyObject *)(uintptr_t)finish_a);
-    py_class_add_method(b_cls, "__del__", (PyObject *)(uintptr_t)finish_b);
+    if (!silent) {
+        py_class_add_method(a_cls, "__del__", (PyObject *)(uintptr_t)finish_a);
+        py_class_add_method(b_cls, "__del__", (PyObject *)(uintptr_t)finish_b);
+    }
     PyObject *a = py_instance_new(a_cls);
     PyObject *b = py_instance_new(b_cls);
-    PyObject *callback = py_func_new((void *)weak_event, NULL);
-    if (!a || !b || !callback) { error = 10; return NULL; }
+    PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
+    if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
     if (rescue == 3) {
         PyObject *holder = py_list_new(0);
         if (!holder) { error = 14; return NULL; }
@@ -102,11 +104,19 @@ static void *seal_on_departing_thread(void *unused) {
     }
     if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
     else if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
-    PyObject *wa = py_weakref_new(a, callback);
-    PyObject *wb = py_weakref_new(b, callback);
-    if (!wa || !wb) { error = 11; return NULL; }
-    pcc_gc_store_root(&roots[WEAK_A], wa);
-    pcc_gc_store_root(&roots[WEAK_B], wb);
+    if (silent == 2) {
+        PyClassObject *other = py_class_new("InactiveFinalizer", NULL, 0, NULL, 0);
+        if (!other) { error = 17; return NULL; }
+        pcc_gc_store_root(&roots[CLASS_TAIL], (PyObject *)other);
+        py_class_add_method(other, "__del__", (PyObject *)(uintptr_t)finish_tail);
+    }
+    if (!silent && !finalizer_only) {
+        PyObject *wa = py_weakref_new(a, callback);
+        PyObject *wb = py_weakref_new(b, callback);
+        if (!wa || !wb) { error = 11; return NULL; }
+        pcc_gc_store_root(&roots[WEAK_A], wa);
+        pcc_gc_store_root(&roots[WEAK_B], wb);
+    }
     pcc_gc_unpin(a);
     pcc_gc_unpin(b);
     pcc_py_gc_minor_graph_lock();
@@ -126,6 +136,9 @@ static void *seal_on_departing_thread(void *unused) {
 
 int main(int argc, char **argv) {
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
+    silent = argc > 1 && strcmp(argv[1], "silent") == 0;
+    if (argc > 1 && strcmp(argv[1], "silent-live-del") == 0) silent = 2;
+    finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
@@ -155,10 +168,21 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
     pcc_py_gc_minor_graph_unlock();
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
-    pcc_gc_tracing_sweep_unreachable(mixed == 2 ? 3 : 2);
+    int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
+    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 ? 3 : 2);
+    int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 22;
+    if (silent || finalizer_only) {
+        printf("legacy=%lld reclaimed=%lld callbacks=%d recheck=%lld\n",
+               (long long)pass0, (long long)reclaimed, event_count, (long long)full);
+        if (finalizer_only) {
+            if (event_count != 2 || events[0] != 1 || events[1] != 3) return 18;
+            puts("a-del b-del");
+        }
+        return error;
+    }
     PyObject *b = py_weakref_call(roots[WEAK_B]);
     if (rescue == 2 && (raw != b || raw == py_None || raw == NULL)) error = 13;
     note(b == py_None ? 5 : 6);

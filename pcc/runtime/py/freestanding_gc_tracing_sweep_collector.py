@@ -1256,6 +1256,23 @@ def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
            != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
     ):
         return null()
+    if (ptr_is_null(global_load_ptr("py_weakref_head")) != 0
+            and ptr_is_null(global_load_ptr("py_weakref_late_head")) != 0):
+        # Without weakrefs a graph cannot affect callback order unless an
+        # actual candidate can finalize. In the common no-__del__ process
+        # only a suspended generator needs the pending-finalizer query.
+        class_finalizers: i64 = load_i32(global_addr("pcc_class_del_defined_count"), 0)
+        pos: i64 = 0
+        while pos < count:
+            node = load_ptr(nodes, pos * 8)
+            if pcc_gc_object_node_is_active(node) != 0:
+                obj = load_ptr(node, 0)
+                if (class_finalizers != 0
+                        or load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen")):
+                    if pcc_gc_tracing_is_sweep_candidate(obj) != 0 and py_user_del_pending(obj) != 0:
+                        return pcc_gc_callback_layers_build(nodes, count, stop_epoch)
+            pos += 1
+        return null()
     return pcc_gc_callback_layers_build(nodes, count, stop_epoch)
 
 

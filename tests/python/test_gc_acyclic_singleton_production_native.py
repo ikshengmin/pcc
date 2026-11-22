@@ -88,3 +88,31 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
     assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
     assert actual.stderr == ("full=2\n" if arm in ("mixed", "mixed-tail") else
                              "full=1\n" if arm in ("withdrawn", "holder") else "full=0\n")
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("arm", ("silent", "silent-live-del"))
+def test_acyclic_sweep_without_observers_keeps_legacy_path(_layered_sweep, backend, arm):
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), arm], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    # PASS0 calls is counted only by the legacy path on this sealed cohort.
+    # Test the actual route and reclamation, not a source-name assertion.
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        0, "legacy=1 reclaimed=2 callbacks=0 recheck=0\n", "",
+    )
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+def test_acyclic_sweep_with_only_finalizers_keeps_layer_order(_layered_sweep, backend):
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), "finalizer-only"], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        0, "legacy=0 reclaimed=2 callbacks=2 recheck=0\na-del b-del\n", "",
+    )
