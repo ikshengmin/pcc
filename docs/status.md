@@ -349,10 +349,12 @@ in the relevant section or issue and removes the entry.
    4 other-backend rejection controls, and 8 ABI checks passed on Linux.
    It is not selected by ordinary marking. Stock Linux now also shows
    that list-scan credit and its token are visible at the stopped cut
-   only if the scan holds the no-park container lock. Next verify the
-   full claim across the gap between dequeue and lock, then across
-   unlock and retire or abort, before enabling workers. This branch is
-   not part of the pacer A/B.
+   only if the scan holds the no-park container lock. The
+   [single-task review](https://github.com/ikshengmin/pcc/blob/135633c3a6fa1e00a4ea51175c32d89551776c35/docs/investigations/gc2-exact-list-worker-review.md)
+   passed both stopped gaps for normal retirement and abandon (3+3 Linux
+   native runs); the token itself blocked remark even at simulated zero
+   credit. Next qualify stopped cross-epoch reset and stale-worker return.
+   The review remains disconnected from ordinary mark/finish and the pacer A/B.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -364,7 +366,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 tracked exact-list claim across parkable gaps on review: Codex, Linux x86-64, 2026-11-22 09:48 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
