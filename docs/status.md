@@ -254,9 +254,11 @@ in the relevant section or issue and removes the entry.
    publication witness and a public native identity control. The promotion
    model keeps the source young on metadata/card failure. Native GC3
    recognized an exact allocator-published cell without a tracing index
-   but did not expose it through the record-backed span lookup. Next:
-   define the nursery-owned span cursor and generation/reuse identity
-   without activating the nursery. Real promotion and handoff are untested.
+   but did not expose it through the record-backed span lookup. A serial
+   cursor model now separates the published tail from a pending reservation,
+   an in-place old cell, and a reused span. Next: implement a standalone
+   owned native cursor probe with epoch validation; keep it out of production
+   dispatch. Real promotion and concurrent handoff are untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -268,7 +270,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 nursery published-span cursor model: Codex, Linux x86-64, 2026-11-22 07:21 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

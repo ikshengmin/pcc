@@ -184,7 +184,18 @@ record array exists, so it cannot be used as a record-free nursery
 iterator. A nursery must separately enumerate its published slab bounds
 or bitmap. Its cursor must distinguish generations when a slab is reused;
 address identity alone in this baseline only describes the currently
-allocated object. There is no production runtime or performance change.
+allocated object.
+
+The proposed serial model freezes a publication tail and carries a slab
+epoch in its cursor. A later publish cannot extend the frozen slice;
+an unpublished reservation and an interior address are rejected. Iteration
+skips dead and promoted cells, but a promoted cell still prevents bulk
+reset while live, preserving its address. Reuse advances the epoch, and
+a stale cursor reports an error rather than masquerading as exhaustion.
+Four modeled cases plus adjacent tests passed (18 total). A real iterator
+must use bounded word bitmaps, acquire/release publication, and a safe
+handoff, not the model's unbounded integers. There is no runtime or
+performance change.
 
 ## Collector-entry root baseline
 
