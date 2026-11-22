@@ -191,7 +191,11 @@ in the relevant section or issue and removes the entry.
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; Next: rule 13 regression
    [#10](https://github.com/ikshengmin/pcc/issues/10) on the Linux Go ordinary
-   lane, then #9 (GC1–4 weak
+   lane. The [review fix](https://github.com/ikshengmin/pcc/commit/de41d64165f5c3faff421dad4a09caad579a1196)
+   passed 132 focused ordinary checks and six owned Linux index cases.
+   Broader Go validation with the pinned oracle is pending because the
+   Linux memory preflight refused the second run; no limit was relaxed.
+   Finish validation before landing it, then #9 (GC1–4 weak
    callbacks and finalizers run too early under acyclic resurrection; filed
    by Claude on 2026-11-22 from the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
@@ -263,7 +267,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Fix checkpoint regression 10 in Go diagnostics and string indexing: Codex, Linux x86-64, 2026-11-22 15:02 UTC, area frontend-go
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
