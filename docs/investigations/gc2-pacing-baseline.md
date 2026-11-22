@@ -74,3 +74,15 @@ arm's sealed percentage. Stock arms need no new runtime symbol.
 The exact tool probe ran against the Linux review archive and reported
 100 / -1 / -1; the pcc_perf source command suite passed 74 tests. No
 gateway arm or performance A/B ran in this Linux workspace.
+
+For a merge-gate comparison, add `--latency-receipts` to the five-pair
+`ab` command. It asks each owned handler for the timed request samples,
+checks the expected request count, computes p99 on the host, and keeps
+each pair's QPS, runtime maximum collection STW and process peak RSS in
+`run_receipts` in the ledger (including a duplicate control arm, if
+used). CPU and RSS include sample serialization; elapsed QPS and p99
+are from the timed request window. Maximum STW is a runtime counter,
+not an end-to-end request pause. Linux wait4 RSS is normalized from KiB
+and macOS RSS is already bytes. Missing measurements fail receipt mode.
+The pcc_perf focused suite passed 79 checks, including a real local
+wait4 child; no gateway A/B or macOS execution was performed.

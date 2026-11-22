@@ -67,6 +67,7 @@ import bisect
 import collections
 import hashlib
 import json
+import math
 import os
 import re
 import shutil
@@ -89,6 +90,7 @@ COLLECTORS = (0, 1, 2, 3, 4)
 WORKERS = (1, 4)
 # PCC_GC_COUNTER indexes the handler program reports.
 STW_SUM_US = 120
+STW_MAX_US = 121
 SWEEP_PHASE_US = (133, 137, 141)
 LOCK_WAIT_COUNT = (146, 149, 152, 155)
 LOCK_WAIT_US = (147, 150, 153, 156)
@@ -481,6 +483,24 @@ def binary_of(name: str, program: str = "native_stats") -> Path:
 
 # ---- runs ----------------------------------------------------------------
 
+def _rss_bytes(value: int, platform: str) -> int | None:
+    if platform.startswith("linux"):
+        return value * 1024
+    if platform == "darwin":
+        return value
+    return None
+
+
+def _handler_p99_ms(data: dict) -> float:
+    samples = data.get("latencies_ms")
+    count = data["requests"]
+    if (not isinstance(samples, list) or count <= 0 or len(samples) != count
+            or any(type(value) not in (int, float) or value < 0 or not math.isfinite(value)
+                   for value in samples)):
+        raise SystemExit("handler latency receipt missing or does not match timed requests")
+    return sorted(samples)[(99 * count + 99) // 100 - 1]
+
+
 def _wait_with_usage(self, *args, **kwargs):
     """Popen._try_wait replacement that keeps the child's resource usage."""
     try:
@@ -489,6 +509,7 @@ def _wait_with_usage(self, *args, **kwargs):
         return self.pid, 0
     if pid == self.pid:
         self._pcc_usage = usage.ru_utime + usage.ru_stime
+        self._pcc_peak_rss_bytes = _rss_bytes(usage.ru_maxrss, sys.platform)
     return pid, status
 
 
@@ -497,11 +518,12 @@ class MeasuredPopen(subprocess.Popen):
 
 
 def run_once(binary: Path, collector: int, workers: int, rounds: int,
-             concurrency: int = 100) -> dict:
+             concurrency: int = 100, *, latency_receipts: bool = False) -> dict:
     """One handler run: requests per second, the processor time of one
     request and the counters it reports."""
+    data_mode = "--samples" if latency_receipts else "--summary"
     process = MeasuredPopen(
-        [str(binary), str(concurrency), "0", str(rounds), "--summary", str(workers)],
+        [str(binary), str(concurrency), "0", str(rounds), data_mode, str(workers)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
         env=_sealed_runtime_env(binary, collector),
     )
@@ -517,11 +539,20 @@ def run_once(binary: Path, collector: int, workers: int, rounds: int,
     data = json.loads(stdout)
     counters = {int(key): value for key, value in data.get("gc", {}).items()}
     executed = data["requests"] + data.get("warmup_requests", 0)
+    max_stw_us = counters.get(STW_MAX_US)
+    peak_rss_bytes = getattr(process, "_pcc_peak_rss_bytes", None)
+    if latency_receipts and (data["requests"] != concurrency * rounds
+                             or type(max_stw_us) is not int or max_stw_us < 0
+                             or type(peak_rss_bytes) is not int or peak_rss_bytes <= 0):
+        raise SystemExit("handler receipt missing required request count, maximum STW, or peak RSS")
     return {
         "qps": data["requests"] / (data["finished_at"] - data["started_at"]),
         "requests": data["requests"],
         "cpu_us": 1e6 * getattr(process, "_pcc_usage", 0.0) / executed,
         "stw_ms": counters.get(STW_SUM_US, 0) / 1000.0,
+        "max_stw_us": max_stw_us,
+        "peak_rss_bytes": peak_rss_bytes,
+        "latency_p99_ms": _handler_p99_ms(data) if latency_receipts else None,
         "sweep_ms": sum(counters.get(index, 0) for index in SWEEP_PHASE_US) / 1000.0,
         "lock_waits": sum(counters.get(index, 0) for index in LOCK_WAIT_COUNT),
         "lock_wait_ms": sum(counters.get(index, 0) for index in LOCK_WAIT_US) / 1000.0,
@@ -553,6 +584,15 @@ def summarize_pairs(first: list[dict], second: list[dict],
         "lock_waits_a": median(first, "lock_waits"),
         "lock_waits_b": median(second, "lock_waits"),
     }
+    metrics = ("qps", "max_stw_us", "peak_rss_bytes", "latency_p99_ms")
+    if any("max_stw_us" in run for run in first + second):
+        sources = (("a", first), ("b", second))
+        if control is not None:
+            sources += (("control", control),)
+        row["run_receipts"] = {
+            label: [{key: run.get(key) for key in metrics} for run in runs]
+            for label, runs in sources
+        }
     if control is not None:
         row["control_ratios"] = ratios(control)
         row["control_change_percent"] = (
@@ -610,7 +650,7 @@ def apply_control(rows: list[dict], collector: int | None = None,
 
 
 def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
-            control_arm: str | None = None) -> list[dict]:
+            control_arm: str | None = None, *, latency_receipts: bool = False) -> list[dict]:
     arms = [(a, binary_of(a)), (b, binary_of(b))]
     if control_arm is not None:
         arms.append((control_arm, binary_of(control_arm)))
@@ -619,6 +659,7 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
         for name, binary in arms
     } if 2 in collectors else {}
     runs: dict[tuple, list[dict]] = {}
+    receipt_flags = {"latency_receipts": True} if latency_receipts else {}
     for index in range(pairs):
         for collector in collectors:
             for count in workers:
@@ -627,7 +668,7 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
                 shift = index % len(arms)
                 for name, binary in arms[shift:] + arms[:shift]:
                     runs.setdefault((collector, count, name), []).append(
-                        run_once(binary, collector, count, rounds))
+                        run_once(binary, collector, count, rounds, **receipt_flags))
     results = []
     for collector in collectors:
         for count in workers:
@@ -637,6 +678,9 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
             row.update({"gc": collector, "workers": count, "a": a, "b": b,
                         "requests": rounds * 100, "time": time.time(),
                         "load": os.getloadavg()[0]})
+            if latency_receipts:
+                row["latency_receipts"] = True
+                row["rss_scope"] = "process"
             if collector == 2 and any(mode is not None for mode in pacer_modes.values()):
                 row["gc2_pacer_percent_by_arm"] = pacer_modes
             results.append(row)
@@ -1185,6 +1229,8 @@ def main(argv: list[str] | None = None) -> int:
     ab.add_argument("--gc", type=_numbers, default=COLLECTORS)
     ab.add_argument("--workers", type=_numbers, default=WORKERS)
     ab.add_argument("--rounds", type=int, default=100)
+    ab.add_argument("--latency-receipts", action="store_true",
+                    help="record timed request p99 in each pair (CPU/RSS include output formatting)")
     control = ab.add_mutually_exclusive_group()
     control.add_argument("--control", type=int, default=None, metavar="GC",
                          help="a measured collector the change cannot reach; "
@@ -1284,8 +1330,9 @@ def main(argv: list[str] | None = None) -> int:
         if args.control is not None and args.control not in args.gc:
             parser.error(f"--control {args.control} is not among the measured collectors")
         with performance_lock():
+            flags = {"latency_receipts": True} if args.latency_receipts else {}
             rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds,
-                           control_arm=args.control_arm)
+                           control_arm=args.control_arm, **flags)
         apply_control(rows, collector=args.control)
         print_comparison(rows)
         append_ledger(rows)

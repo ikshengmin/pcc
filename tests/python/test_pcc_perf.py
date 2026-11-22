@@ -102,6 +102,8 @@ def test_a_measured_child_reports_its_own_processor_time():
     assert process.returncode == 0
     # A fraction of a second of work, and nothing like the parent's total.
     assert 0.0 < process._pcc_usage < 30.0
+    if sys.platform.startswith("linux") or sys.platform == "darwin":
+        assert process._pcc_peak_rss_bytes > 0
 
 
 def test_load_note_says_when_a_rate_cannot_be_trusted(monkeypatch):
@@ -669,3 +671,47 @@ def test_comparison_records_sealed_mode_only_on_gc2_rows(tmp_path, monkeypatch):
     rows = PERF.compare("base", "candidate", 1, (0, 2), (1,), 10)
     assert "gc2_pacer_percent_by_arm" not in rows[0]
     assert rows[1]["gc2_pacer_percent_by_arm"] == {"base": None, "candidate": 100}
+
+
+def test_handler_receipts_keep_peak_pause_memory_and_p99_per_pair(tmp_path, monkeypatch):
+    process_args = []
+    payload = {
+        "requests": 100, "started_at": 1.0, "finished_at": 2.0, "gc": {"120": 81, "121": 42},
+        "latencies_ms": list(reversed(range(100))),
+    }
+
+    class Process:
+        _pcc_usage = 0.05
+        _pcc_peak_rss_bytes = 4096
+        returncode = 0
+
+        def __init__(self, argv, **kwargs):
+            process_args.append(argv)
+
+        def communicate(self, timeout):
+            return json.dumps(payload), ""
+
+    monkeypatch.setattr(PERF, "MeasuredPopen", Process)
+    results = PERF.run_once(tmp_path / "native_stats", 2, 4, 1, latency_receipts=True)
+    assert process_args[0][-2:] == ["--samples", "4"]
+    assert results["latency_p99_ms"] == 98
+    assert PERF._rss_bytes(2, "linux") == 2048
+    assert PERF._rss_bytes(2048, "darwin") == 2048
+    assert PERF._rss_bytes(2, "freebsd") is None
+    second = dict(results, max_stw_us=55, peak_rss_bytes=12288, latency_p99_ms=102)
+    receipt = PERF.summarize_pairs([results, second], [second, results], [results, results])
+    assert receipt["run_receipts"]["a"] == [
+        {"qps": 100, "max_stw_us": 42, "peak_rss_bytes": 4096, "latency_p99_ms": 98},
+        {"qps": 100, "max_stw_us": 55, "peak_rss_bytes": 12288, "latency_p99_ms": 102},
+    ]
+    assert receipt["run_receipts"]["b"] == list(reversed(receipt["run_receipts"]["a"]))
+    assert len(receipt["run_receipts"]["control"]) == 2
+    payload["gc"].pop("121")
+    with pytest.raises(SystemExit, match="missing required"):
+        PERF.run_once(tmp_path / "native_stats", 2, 4, 1, latency_receipts=True)
+
+
+@pytest.mark.parametrize("samples", [[], [float("nan")], [-1], [True]])
+def test_handler_p99_refuses_invalid_timed_sample_sets(samples):
+    with pytest.raises(SystemExit, match="latency receipt missing"):
+        PERF._handler_p99_ms({"requests": 1, "latencies_ms": samples})

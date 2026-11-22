@@ -327,10 +327,10 @@ in the relevant section or issue and removes the entry.
    runtime attestation and binary identity, and records the mode in the
    GC2 comparison ledger. The byte-identical tool is available on review
    [`20428077`](https://github.com/ikshengmin/pcc/commit/20428077c8f1d9c3c0fe8dc4e4d8b26a401e85f6).
-   Next: add per-run maximum pause and peak RSS/tail-latency receipts to the
-   A/B tool, which currently records total stopped time, before treating
-   the GC1/GC2 macOS commands as the merge gate. No master runtime or
-   pacer A/B change.
+   pcc_perf A/B now supports per-run maximum STW, process peak RSS, and
+   timed p99 through `--latency-receipts`. Next: copy the qualified
+   collector-neutral tool to both review branches and provide the exact
+   macOS gates. No master runtime or pacer A/B change.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -342,7 +342,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Record per-pair pause RSS and tail latency in pcc_perf: Codex, Linux x86-64, 2026-11-22 09:21 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
