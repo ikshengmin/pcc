@@ -283,6 +283,10 @@ in the relevant section or issue and removes the entry.
    verifies an actual GC-capable native extension field written via the
    shared barrier and visited by Py_VISIT (107 focused Linux checks).
    Arbitrary raw native assignments remain outside this evidence.
+   [Review commit a35b791](https://github.com/ikshengmin/pcc/commit/a35b791e73097c70e87c3c2333c2092d9cc9ec85)
+   bounds the layered stack copy to candidate address ranges and gives any
+   full oracle a fresh unfiltered snapshot. Linux: 109 focused checks;
+   64-candidate chain time fell 27%/31% for GC1/3 (7/7 pairs each).
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -339,7 +343,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 18:19 UTC), #9 review branch only: bound the stopped raw-word snapshot to actual candidate address bounds; preserve complete fallback and native caller/parked-thread roots; measure and push if validated.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
