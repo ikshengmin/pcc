@@ -393,9 +393,12 @@ in the relevant section or issue and removes the entry.
    [resurrection follow-up](https://github.com/ikshengmin/pcc/blob/625c3b595cc1e46757c6e03ddf9a9fcf6d9673ce/docs/investigations/gc2-exact-list-worker-review.md#automatic-lifecycle-smoke-on-the-measured-runtime)
    preserves the nested graph through resurrection and fires a second
    weakref without repeating finalization (six native runs; CPython
-   semantic control). Next qualify the raw symbol and stock model
-   contracts on the review branch. Master runtime and the separate
-   pacer A/B branch are unchanged.
+   semantic control). The [review raw ABI and model checks](https://github.com/ikshengmin/pcc/blob/a0d32db686fffc68fb916cacb1a67dc4f07045b0/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
+   qualify exact imports/owners and the disabled scheduler: 108 focused
+   Linux checks and two owned integration nodes passed. Ten host-Clang
+   lanes remain unqualified in this workspace. Next run foreign-handle
+   controls with the bridge flag present in all other backends.
+   Master runtime and the separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -407,7 +410,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 exact-list review host closure and stock scheduler model compatibility: Codex, Linux x86-64, 2026-11-22 10:49 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
