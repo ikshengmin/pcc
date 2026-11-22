@@ -466,9 +466,13 @@ in the relevant section or issue and removes the entry.
    retains live dirty cards and drops cleared/retired ones. Fifteen Linux
    runs at 64/256/1024 unrelated old lists visited exactly two dirty owners
    and zero clean old per cut; incomplete input/frontier is rejected.
-   Next GC3: connect rooted young closure and actual bounded reclaim
-   before enabling bump admission. The sparse cut alone is not a minor
-   or sealed-handler performance gate.
+   [GC3 closed young review 7d745c3](https://github.com/ikshengmin/pcc/commit/7d745c310ada9f7c1ff6bda713d5f41004b31b22)
+   closes a real explicit-root and dirty-edge cohort. Five Linux runs
+   each preserved four young cells and retired one, rejecting four
+   incomplete cuts. No automatic caller, real caller root discovery,
+   bump or slab rewind. Next GC3: capture the real caller and mapped
+   roots before entering the young transaction; prove raw scratch
+   does not keep a dead cell. Then test admitted allocation and reuse.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -690,7 +694,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:39 UTC), connect review GC3 stopped young closure to explicit roots and the sparse frontier, and exercise bounded reclamation only on a closed owned cohort; allocation remains inert.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
