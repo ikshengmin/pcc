@@ -59,7 +59,7 @@ from pcc.frontends.python.codegen.builtin_exceptions import (
 from pcc.frontends.python.codegen.errors import L1CodegenError
 from pcc.frontends.python.codegen.return_lowering import (
     boxed_int_direct_forward_has_owner,
-    boxed_int_formal_string_parse_has_owner,
+    boxed_int_formal_conversion_has_owner,
     boxed_int_instance_field_has_owner,
     boxed_int_list_literal_has_owner,
     boxed_int_literal_parse_has_owner,
@@ -100,8 +100,8 @@ def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
 
     Binary returns, unary plus and a proven mixed conditional use registered
     output slots in return_lowering. The exact negation/invert kernels and the
-    builtin parser for a string literal or a proved string formal return new
-    owners. An output annotation or a callable named `int` is not that proof.
+    builtin conversion for a string literal, string formal or dynamic formal
+    returns one owner. An output annotation or the name `int` is not that proof.
     """
     ty = fd.return_ty
     if (not isinstance(ty, IntType) or ty.name != "int"
@@ -121,7 +121,7 @@ def _direct_boxed_int_returns_owned(host, fd, fn) -> bool:
         return True
     if isinstance(value, Call):
         return (boxed_int_literal_parse_has_owner(host, fd, value)
-                or boxed_int_formal_string_parse_has_owner(host, fd, value)
+                or boxed_int_formal_conversion_has_owner(host, fd, value)
                 or boxed_int_direct_forward_has_owner(host, fd, value))
     if isinstance(value, BinOp):
         if value.op not in ("+", "-") or not isinstance(value.lhs, Name):

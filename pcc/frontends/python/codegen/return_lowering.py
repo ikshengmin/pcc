@@ -39,12 +39,11 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 _CSTR = ir.IntType(8).as_pointer()
 
 
-def _boxed_int_string_parser_is_builtin(host, fd, value) -> bool:
-    """Prove selection of the owning native string parser."""
+def _boxed_int_conversion_is_builtin(host, fd, value) -> bool:
+    """Prove that a one-argument conversion can select the native builtin."""
     return (
         isinstance(value.ty, IntType) and value.ty.name == "int"
         and len(value.args) == 1
-        and isinstance(value.args[0].ty, StrType)
         and not fd.is_method and fd.name not in host._hoisted_qualnames
         and not any(arg.name == "int" for arg in fd.args)
         and host._call_is_int_builtin(value)
@@ -57,13 +56,14 @@ def _boxed_int_string_parser_is_builtin(host, fd, value) -> bool:
 
 
 def boxed_int_literal_parse_has_owner(host, fd, value) -> bool:
-    return (_boxed_int_string_parser_is_builtin(host, fd, value)
-            and isinstance(value.args[0], StrLit))
+    return (_boxed_int_conversion_is_builtin(host, fd, value)
+            and isinstance(value.args[0], StrLit)
+            and isinstance(value.args[0].ty, StrType))
 
 
-def boxed_int_formal_string_parse_has_owner(host, fd, value) -> bool:
-    """A direct single-return callee parses its own typed string parameter."""
-    if not _boxed_int_string_parser_is_builtin(host, fd, value):
+def boxed_int_formal_conversion_has_owner(host, fd, value) -> bool:
+    """Match the native string or dynamic object producer, not int(identity)."""
+    if not _boxed_int_conversion_is_builtin(host, fd, value):
         return False
     operand = value.args[0]
     if not isinstance(operand, Name) or len(fd.args) != 1:
@@ -72,7 +72,7 @@ def boxed_int_formal_string_parse_has_owner(host, fd, value) -> bool:
     return (
         formal.kind in ("pos", "pos_only") and not formal.has_default
         and formal.name == operand.ident
-        and isinstance(formal.annotation, StrType)
+        and isinstance(formal.annotation, (StrType, DynType))
         and formal.annotation == operand.ty
     )
 

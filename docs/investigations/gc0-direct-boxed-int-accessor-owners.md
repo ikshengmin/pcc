@@ -51,3 +51,19 @@ such as `1 + 0` remain outside the proof; no dynamic index, tuple, dict,
 cross-module or foreign ABI conclusion follows. The native matrix was
 28 cases, 52.04 s and 711,073,792 B peak process-tree RSS; 26 related IR
 controls passed. The previous archive guard and reproduction command apply.
+
+## Dynamic single-argument conversion
+
+On claim `3dd6a0e3`, linked input selected `py_obj_as_int_object_args` for
+`return int(value)` with a sole `value: object` formal. A string yielding
+a large int and an existing heap-int alias each left one GC0 `decref(1)`.
+The invalid string and `None` raised `ValueError` and `TypeError`
+without a residual. The candidate now consumes that one returned owner.
+Native callback variants also collect inside `__int__` and `__index__`
+before returning; retain/release and both exceptions are checked.
+
+The unchanged guards admitted 17 accessor/conversion cases in 34.18 s
+(566,546,432 B tree RSS) and 21 adjacent return cases in 65.63 s
+(619,249,664 B). Each case compares pcc0 on five collectors to CPython.
+There were also 27 adjacent IR controls, including the actual conversion
+helper, its lease acquire/release and its error path. No Mac or pcc1.

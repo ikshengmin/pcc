@@ -172,14 +172,15 @@ in the relevant section or issue and removes the entry.
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #7, audit a direct
-   `int(value)` return with a dynamic formal and actual object-conversion
-   runtime helper before extending the typed-string proof. The known field,
-   literal-list and typed-string cases release the GC0 heap int. The checked
-   ordinary forwarding path now handles two layers ending at a proven
-   owner. The three new production cases release; the invalid parser still
-   raises. Linux pcc0: 32 native cases on GC0–4 against CPython and 26 IR
-   controls. No macOS or pcc1 run.
+   reproduction and acceptance. Platform: any; Next: keep #7 open for
+   a new concrete native ownership witness outside the tested forms; do
+   not widen on annotations alone. The direct dynamic `int(value)` now
+   transfers the actual conversion result. String and heap-int alias
+   release, invalid inputs still raise, and both user conversion callbacks
+   can collect before returning. Linux pcc0: 38 native cases on GC0–4
+   matched CPython, and 27 IR controls passed. No macOS or pcc1 run.
+   With no new reported ownership witness and #4 intentionally waiting,
+   take the next eligible work-order item.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -200,7 +201,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #7 dynamic int conversion: Codex, Linux x86-64, 2026-11-22 00:35 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -54,6 +54,30 @@ for name, index in (("positive", 1), ("negative", -1)):
         suffix = "-detached" if detached else ""
         CASES[f"nonzero-{name}{suffix}"] = declaration, action
 
+DYNAMIC = """
+def returned(value: object) -> int:
+    return int(value)
+"""
+CASES.update({
+    "dynamic-string": (DYNAMIC, 'result: object = returned("9223372036854775808")\n    assert result == n and result is not n'),
+    "dynamic-alias": (DYNAMIC, "result: object = returned(n)\n    assert result is n"),
+    "dynamic-invalid": (DYNAMIC, 'try:\n        result: object = returned("not-an-integer")\n    except ValueError:\n        pass\n    else:\n        raise AssertionError("expected ValueError")'),
+    "dynamic-type-error": (DYNAMIC, 'try:\n        result: object = returned(None)\n    except TypeError:\n        pass\n    else:\n        raise AssertionError("expected TypeError")'),
+})
+
+for method in ("__int__", "__index__"):
+    provider = (
+        "class Convertible:\n"
+        f"    def {method}(self) -> int:\n"
+        "        gc.collect()\n"
+        "        return int(\"9223372036854775808\")\n"
+    )
+    CASES[f"dynamic-callback-{method}"] = (
+        provider + DYNAMIC,
+        "result: object = returned(Convertible())\n"
+        "    assert result == n and result is not n",
+    )
+
 MARKER = "DIRECT_BOXED_INT_ACCESSOR_OK"
 
 

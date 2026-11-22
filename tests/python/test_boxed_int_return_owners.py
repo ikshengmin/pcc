@@ -610,3 +610,22 @@ def probe(owner: list[int]) -> bool:
     caller = _body(text)
     assert "@user_bridge_handoff_read(" in caller
     assert ("result.local.borrowed.retain" not in caller) == proven
+
+
+def test_dynamic_formal_conversion_consumes_the_real_owned_result():
+    text = _emit("""
+def convert(value: object) -> int:
+    return int(value)
+
+def probe(value: object) -> bool:
+    result: object = convert(value)
+    return result is value
+""", strict=True)
+    callee = _body(text, "convert")
+    assert "@py_obj_as_int_object_args(" in callee
+    assert "@pcc_gc_foreign_lease_acquire(" in callee
+    assert "@pcc_gc_foreign_lease_release(" in callee
+    assert "@py_err_occurred(" in callee
+    caller = _body(text)
+    assert "@user_bridge_handoff_convert(" in caller
+    assert "result.local.borrowed.retain" not in caller
