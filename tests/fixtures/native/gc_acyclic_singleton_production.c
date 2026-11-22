@@ -24,12 +24,60 @@ static PyObject *roots[3];
 enum { CLASS_ROOT, WATCH, HOLD };
 static void *candidate_node;
 static int rescue, error;
-static int events[3], n;
-enum { DEL_LIVE = 1, DEL_DEAD, WEAK_DEAD, WEAK_LIVE, STILL_LIVE, NOW_DEAD };
+enum { NO_WORKER, DROP, HOLD_ACROSS_STOP, PUBLISH, PUBLISH_CLEAR };
+static int thread_case, worker_go, worker_ready, worker_observed, worker_check_again;
+static int scrub_finished_reader_frames;
+static int events[5], n;
+enum { DEL_LIVE = 1, DEL_DEAD, WEAK_DEAD, WEAK_LIVE, STILL_LIVE, NOW_DEAD,
+       READ_LIVE, READ_DEAD, REREAD_LIVE, REREAD_DEAD };
 
 static void record(int value) {
-    if (n < 3) events[n++] = value;
+    if (n < (int)(sizeof(events) / sizeof(events[0]))) events[n++] = value;
     else error = 30;
+}
+
+static void wait_for(int *flag) {
+    while (!__atomic_load_n(flag, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+}
+
+static void drop_resolution(void) {
+    PyObject *target = py_weakref_call(roots[WATCH]);
+    record(target != NULL && target != py_None ? READ_LIVE : READ_DEAD);
+    if (thread_case == PUBLISH || thread_case == PUBLISH_CLEAR)
+        pcc_gc_store_root(&roots[HOLD], target);
+    if (thread_case == PUBLISH_CLEAR)
+        pcc_gc_store_root(&roots[HOLD], NULL);
+    if (target != NULL) py_decref(target);
+}
+
+static void scrub_finished_reader(void) {
+    // This is an explicit raw-C stack control, not runtime policy:
+    // unwound frames still contain address-looking words conservatively.
+    enum { SCRUB_WORDS = 4096 };
+    volatile uintptr_t dead_stack[SCRUB_WORDS];
+    for (int i = 0; i < SCRUB_WORDS; i++) dead_stack[i] = 0;
+}
+
+static void *weak_reader(void *unused) {
+    (void)unused;
+    if (pcc_current_thread_id() <= 0) return NULL;
+    __atomic_store_n(&worker_ready, 1, __ATOMIC_RELEASE);
+    wait_for(&worker_go);
+    PyObject *volatile held = NULL;
+    if (thread_case == HOLD_ACROSS_STOP) {
+        held = py_weakref_call(roots[WATCH]);
+        record(held != NULL && held != py_None ? READ_LIVE : READ_DEAD);
+    } else {
+        drop_resolution();
+        if (scrub_finished_reader_frames) scrub_finished_reader();
+    }
+    __atomic_store_n(&worker_observed, 1, __ATOMIC_RELEASE);
+    wait_for(&worker_check_again);
+    PyObject *second = py_weakref_call(roots[WATCH]);
+    record(second != NULL && second != py_None ? REREAD_LIVE : REREAD_DEAD);
+    if (second != NULL) py_decref(second);
+    if (held != NULL) py_decref(held);
+    return NULL;
 }
 
 static PyObject *subject_del(PyObject *self) {
@@ -38,6 +86,10 @@ static PyObject *subject_del(PyObject *self) {
     record(target == self ? DEL_LIVE : DEL_DEAD);
     if (target != NULL) py_decref(target);
     if (rescue) pcc_gc_store_root(&roots[HOLD], self);
+    if (thread_case != NO_WORKER) {
+        __atomic_store_n(&worker_go, 1, __ATOMIC_RELEASE);
+        wait_for(&worker_observed);
+    }
     return py_int_from_i64(0);
 }
 
@@ -79,12 +131,21 @@ static void *prepare(void *unused) {
 
 int main(int argc, char **argv) {
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
+    if (argc > 1 && strcmp(argv[1], "thread-drop") == 0) thread_case = DROP;
+    if (argc > 1 && strcmp(argv[1], "thread-publish") == 0) thread_case = PUBLISH;
+    if (argc > 1 && strcmp(argv[1], "thread-publish-clear") == 0) thread_case = PUBLISH_CLEAR;
+    scrub_finished_reader_frames = argc > 3 && strcmp(argv[3], "scrub-reader") == 0;
+    if (argc > 1 && strcmp(argv[1], "thread-hold") == 0) thread_case = HOLD_ACROSS_STOP;
     if (pcc_current_thread_id() <= 0) return 19;
     pcc_gc_cms_stop_worker();
     for (int i = 0; i < 3; i++) pcc_gc_scheduler_root_register(&roots[i]);
     void *thread = NULL;
     if (pcc_thread_start(&thread, prepare, NULL) || pcc_thread_join(thread, NULL)) return 20;
     if (error) return error;
+    if (thread_case != NO_WORKER) {
+        if (pcc_thread_start(&thread, weak_reader, NULL)) return 23;
+        wait_for(&worker_ready);
+    }
     if (pcc_stop_the_world() != 0) return 21;
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
@@ -100,7 +161,12 @@ int main(int argc, char **argv) {
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 22;
     record(py_weakref_call(roots[WATCH]) == py_None ? NOW_DEAD : STILL_LIVE);
-    const char *names[] = {"invalid", "del:1", "del:0", "weak:1", "weak:0", "live:1", "live:0"};
+    if (thread_case != NO_WORKER) {
+        __atomic_store_n(&worker_check_again, 1, __ATOMIC_RELEASE);
+        if (pcc_thread_join(thread, NULL)) return 24;
+    }
+    const char *names[] = {"invalid", "del:1", "del:0", "weak:1", "weak:0", "live:1", "live:0",
+                           "thread:1", "thread:0", "after:1", "after:0"};
     for (int i = 0; i < n; i++) printf("%s%s", names[events[i]], i + 1 == n ? "\n" : " ");
     // The standalone CPython oracle has no implementation counters. Send
     // the exact bounded/fallback route separately from its event stream.

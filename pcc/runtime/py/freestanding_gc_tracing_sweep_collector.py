@@ -63,15 +63,20 @@ pcc_gc_object_is_known_no_lock = extern(
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
-pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
 pcc_gc_gray_registered_roots = extern("pcc_gc_gray_registered_roots", (), c_void)
 pcc_gc_callback_singleton_conservative_root = extern(
-    "pcc_gc_callback_singleton_conservative_root", (c_ptr,), c_int64
+    "pcc_gc_callback_singleton_conservative_root", (c_ptr, c_ptr), c_int64
 )
+pcc_gc_callback_root_cut_release = extern("pcc_gc_callback_root_cut_release", (c_ptr,), c_void)
+pcc_gc_conservative_capture_thread_words = extern(
+    "pcc_gc_conservative_capture_thread_words", (c_ptr,), c_void
+)
+pcc_gc_seed_roots_with_stop_cut = extern("pcc_gc_seed_roots_with_stop_cut", (c_ptr,), c_void)
 pcc_gc_gray_count_load_acquire = extern("pcc_gc_gray_count_load_acquire", (), c_int64)
 pcc_gc_gray_count_store_release = extern("pcc_gc_gray_count_store_release", (c_int64,), c_void)
 pcc_gc_gray_worklist_clear_stopped = extern("pcc_gc_gray_worklist_clear_stopped", (), c_void)
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+pcc_gc_page_mark_assign = extern("pcc_gc_page_mark_assign", (c_ptr, c_int64), c_void)
 
 pcc_gc_mark_root_gray_if_known = extern(
     "pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void
@@ -344,6 +349,11 @@ def pcc_gc_tracing_finalize_unpinned(obj) -> None:
 
 @c_abi_export("pcc_gc_tracing_recheck_reachability_after_finalizers")
 def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
+    _recheck_reachability_after_window(null())
+
+
+@c_abi_export("pcc_gc_tracing_recheck_reachability_with_stop_cut")
+def _recheck_reachability_after_window(context) -> None:
     # Refresh the candidate verdict from current roots.  This is also used
     # before PASS-0; keep the exported name for the existing runtime ABI.
     # After PASS-0, PEP 442 requires the same refresh to rescue resurrection
@@ -351,7 +361,7 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
     cleared_candidates: i64 = 0
-    pcc_gc_seed_roots()
+    pcc_gc_seed_roots_with_stop_cut(context)
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
         # This sweep owns a fixed disposal set. A finalizer can allocate an
         # object outside it, then leave that object temporarily unreachable.
@@ -975,8 +985,11 @@ def pcc_gc_tracing_dispatch_classified_head(
 _CALLBACK_SWEEP_CANDIDATE = 1024
 _CALLBACK_FRESH_ALLOCATION = 16384
 _CALLBACK_MARK_WINDOW = 2
+_CALLBACK_WHITE = 8
 _CALLBACK_GRAY = 16
 _CALLBACK_BLACK = 32
+# Data pointer, count and capacity, as in the conservative root-cut owner.
+_CALLBACK_ROOT_CUT_BYTES = 24
 
 
 @c_abi_export("pcc_gc_review_acyclic_singleton")
@@ -1014,7 +1027,7 @@ def _review_acyclic_singleton(stop_epoch: i64, backend: i64):
 
 
 @c_abi_export("pcc_gc_review_remark_singleton_after_window")
-def _review_remark_singleton_after_window(node) -> None:
+def _review_remark_singleton_after_window(node, context) -> i64:
     """Only the singleton can be rescued. Never seed/scan the survivor heap.
 
     Treat an insertion shade without a current root as ambiguous: a callback
@@ -1023,23 +1036,55 @@ def _review_remark_singleton_after_window(node) -> None:
     full oracle for that unresolved case.
     """
     prior_gray: i64 = pcc_gc_gray_count_load_acquire()
-    conservative: i64 = pcc_gc_callback_singleton_conservative_root(node)
-    pcc_gc_gray_registered_roots()
+    conservative: i64 = pcc_gc_callback_singleton_conservative_root(node, context)
     obj = load_ptr(node, 0)
-    flags: i64 = load_i32(obj, abi_constant("object.header.flags_offset"))
-    now_gray: i64 = pcc_gc_gray_count_load_acquire()
+    offset: i64 = abi_constant("object.header.flags_offset")
     explicit: i64 = pcc_gc_object_node_is_address_pinned(node, obj)
+    flags: i64 = load_i32(obj, offset)
+    if prior_gray > 1 or (prior_gray == 1 and (flags & _CALLBACK_GRAY) == 0):
+        atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+        return 0
+
+    # A gray token from the insertion barrier does not say whether a
+    # published edge still exists. Revisit the actual registered roots with
+    # this one colour reset to distinguish a current owned cross-thread
+    # root from a transient store. The world is stopped and there is no
+    # other gray work, so this discards no peer's tracing credit.
+    if prior_gray == 1:
+        pcc_gc_gray_worklist_clear_stopped()
+        pcc_gc_gray_count_store_release(0)
+        pcc_gc_set_mark_color(obj, _CALLBACK_WHITE)
+        pcc_gc_page_mark_assign(obj, 0)
+    pcc_gc_gray_registered_roots()
+
+    flags = load_i32(obj, offset)
+    now_gray: i64 = pcc_gc_gray_count_load_acquire()
+    declared: i64 = 1 if explicit != 0 or (flags & _CALLBACK_GRAY) != 0 else 0
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
-    if prior_gray != 0 or now_gray > 1:
-        # The same stopped-world oracle also resets the old mark worklist.
-        pcc_gc_tracing_recheck_reachability_after_finalizers()
-        return
-    if conservative != 0 or explicit != 0 or (flags & _CALLBACK_GRAY) != 0:
+    if now_gray > 1 or (prior_gray != 0 and declared == 0):
+        # An old-heap publication has not been ruled out. The stopped
+        # fallback resets the queue and performs the full reachability scan.
+        return 0
+    if conservative != 0 or declared != 0:
         pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
-        flags = load_i32(obj, abi_constant("object.header.flags_offset"))
-        store_i32(obj, abi_constant("object.header.flags_offset"), flags & ~_CALLBACK_SWEEP_CANDIDATE)
+        flags = load_i32(obj, offset)
+        store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
     pcc_gc_gray_worklist_clear_stopped()
     pcc_gc_gray_count_store_release(0)
+    return 1
+
+
+@c_abi_export("pcc_gc_review_remark_singleton_at_stop")
+def _review_remark_singleton_at_stop(node) -> None:
+    # Take one root cut before the collector loads a raw candidate pointer.
+    # A fail-closed full recheck must not take a second snapshot of frames
+    # newly polluted by the failed fast attempt. The world has not resumed
+    # between capture and either decision.
+    context = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
+    pcc_gc_conservative_capture_thread_words(context)
+    if _review_remark_singleton_after_window(node, context) == 0:
+        _recheck_reachability_after_window(context)
+    pcc_gc_callback_root_cut_release(context)
 
 
 @c_abi_export("pcc_gc_review_sweep_acyclic_singleton")
@@ -1053,11 +1098,11 @@ def _review_sweep_acyclic_singleton(node, budget: i64, backend: i64) -> i64:
     # but its weakrefs have not been cleared yet.
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
     _sweep_finalizers(1, backend, finalizers, listed, nodes, count, commit)
-    _review_remark_singleton_after_window(node)
+    _review_remark_singleton_at_stop(node)
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
     weak_callbacks: i64 = _sweep_weak_callbacks(1)
     if weak_callbacks != 0:
-        _review_remark_singleton_after_window(node)
+        _review_remark_singleton_at_stop(node)
     else:
         atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     py_weakref_clear_tracing_candidates()

@@ -25,19 +25,28 @@ def _singleton_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("terminal", "rescue"))
+@pytest.mark.parametrize("arm", (
+    "terminal", "rescue", "thread-hold", "thread-drop", "thread-publish", "thread-publish-clear",
+))
 def test_acyclic_singleton_production_sweep_matches_cpython(_singleton_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_singleton_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
     assert expected.returncode == 0 and expected.stderr == ""
-    assert expected.stdout == ("del:1 live:1\n" if arm == "rescue" else "del:1 weak:1 live:0\n")
+    assert expected.stdout == {
+        "terminal": "del:1 weak:1 live:0\n",
+        "rescue": "del:1 live:1\n",
+        "thread-hold": "del:1 thread:1 live:1 after:1\n",
+        "thread-drop": "del:1 thread:1 weak:1 live:0 after:0\n",
+        "thread-publish": "del:1 thread:1 live:1 after:1\n",
+        "thread-publish-clear": "del:1 thread:1 weak:1 live:0 after:0\n",
+    }[arm]
     actual = run_process_group_timeout(
-        [str(_singleton_sweep), arm, "route"], timeout=15,
+        [str(_singleton_sweep), arm, "route", "scrub-reader"], timeout=15,
         env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                  PCC_GC_DEBT_THRESHOLD="1099511627776"),
     )
     assert (actual.returncode, actual.stdout) == (0, expected.stdout)
     # A stopped candidate-only remark must not masquerade as one that passed
-    # by falling back globally. Publication with unresolved attribution uses
-    # the fail-closed oracle for now.
-    assert actual.stderr == ("full=1\n" if arm == "rescue" else "full=0\n")
+    # by falling back globally. A write and deletion may leave the same shade
+    # as a publication; unlike a current root it still needs the full oracle.
+    assert actual.stderr == ("full=1\n" if arm == "thread-publish-clear" else "full=0\n")

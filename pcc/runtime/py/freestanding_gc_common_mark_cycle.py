@@ -331,21 +331,33 @@ def pcc_gc_trace_referents(obj) -> None:
     pcc_gc_visit_object_slots(obj, pcc_gc_trace_slot, null())
 
 
-@c_abi_export("pcc_gc_seed_roots")
-def pcc_gc_seed_roots() -> None:
+pcc_gc_scan_captured_thread_roots = extern(
+    "pcc_gc_scan_captured_thread_roots", (c_ptr, c_int64), c_int64
+)
+
+
+@c_abi_export("pcc_gc_seed_roots_with_stop_cut")
+def pcc_gc_seed_roots_with_stop_cut(context) -> None:
     explicit_collect: i64 = load_i32(
         global_addr("pcc_gc_explicit_collect_active"),
         0,
     )
     pcc_gc_prepare_object_list_mark(explicit_collect)
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        if pcc_gc_gray_conservative_and_listed_pinned_roots() != 0:
+        listed: i64 = (pcc_gc_gray_conservative_and_listed_pinned_roots()
+                       if ptr_is_null(context) != 0 else pcc_gc_scan_captured_thread_roots(context, 2))
+        if listed != 0:
             # Its walk shaded the listed pinned objects as well.
             pcc_gc_gray_registered_roots()
             return
     else:
         pcc_gc_gray_refcount_external_roots()
     pcc_gc_gray_current_roots()
+
+
+@c_abi_export("pcc_gc_seed_roots")
+def pcc_gc_seed_roots() -> None:
+    pcc_gc_seed_roots_with_stop_cut(null())
 
 
 @c_abi_export("pcc_gc_drain_all_gray_unlocked")

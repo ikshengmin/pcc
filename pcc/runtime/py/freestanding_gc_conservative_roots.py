@@ -467,18 +467,21 @@ def _extent_has_paged_word(pages, words, count: i64, base, size: i64) -> i64:
 
 @c_abi_export("pcc_gc_scan_conservative_thread_roots")
 def _scan_thread_roots(mark: i64) -> i64:
+    context = stack_alloc(_WORDS_CONTEXT_BYTES)
+    _capture_thread_words(context)
+    listed_in_walk: i64 = _scan_captured_thread_roots(context, mark)
+    free(load_ptr(context, _WORDS_DATA))
+    return listed_in_walk
+
+
+@c_abi_export("pcc_gc_scan_captured_thread_roots")
+def _scan_captured_thread_roots(context, mark: i64) -> i64:
     active = global_load_ptr("pcc_gc_backend3_step_pin_snapshot")
     if ptr_is_null(active) == 0:
         # A nested mark may discover roots acquired since the outer step's
         # snapshot. Keep its remainder nonmoving rather than trust that cut.
         store_i64(active, _WORDS_CAPACITY, -1)
-    context = stack_alloc(_WORDS_CONTEXT_BYTES)
-    _capture_thread_words(context)
-    words = load_ptr(context, _WORDS_DATA)
-    count: i64 = load_i64(context, _WORDS_COUNT)
-    listed_in_walk: i64 = _pin_snapshot_owners(words, count, mark)
-    free(words)
-    return listed_in_walk
+    return _pin_snapshot_owners(load_ptr(context, _WORDS_DATA), load_i64(context, _WORDS_COUNT), mark)
 
 
 @c_abi_export("pcc_gc_conservative_capture_thread_words")
@@ -515,14 +518,8 @@ def _capture_thread_words(context) -> None:
 
 
 @c_abi_export("pcc_gc_callback_singleton_conservative_root")
-def pcc_gc_callback_singleton_conservative_root(node) -> i64:
-    """Look for one candidate in the stopped stack cut, without a heap walk.
-
-    Capture BEFORE loading its managed address into this frame. The caller
-    holds the stopped world and passes the allocator's unmanaged node.
-    """
-    context = stack_alloc(_WORDS_CONTEXT_BYTES)
-    _capture_thread_words(context)
+def pcc_gc_callback_singleton_conservative_root(node, context) -> i64:
+    """Look for one candidate in the caller's stopped stack cut."""
     words = load_ptr(context, _WORDS_DATA)
     count: i64 = load_i64(context, _WORDS_COUNT)
     obj = load_ptr(node, 0)
@@ -533,8 +530,12 @@ def pcc_gc_callback_singleton_conservative_root(node) -> i64:
         while rooted == 0 and ptr_is_null(span) == 0:
             rooted = _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16))
             span = load_ptr(span, 40)
-    free(words)
     return rooted
+
+
+@c_abi_export("pcc_gc_callback_root_cut_release")
+def pcc_gc_callback_root_cut_release(context) -> None:
+    free(load_ptr(context, _WORDS_DATA))
 
 
 @c_abi_export("pcc_gc_conservative_step_pin_begin")
