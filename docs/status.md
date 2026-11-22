@@ -315,8 +315,11 @@ in the relevant section or issue and removes the entry.
    allocates raw shade scratch from the sealed cohort before callbacks.
    Public Linux GC1/3 at 256 observed nodes / 257 candidates match CPython;
    112 focused assertions and 180 callback reruns passed. No scaling claim.
-   Next: reduce repeated stopped candidate walks; audit actual pin writers
-   and preserve conservative, foreign and fail-closed root behavior. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Rejected stopped pin-batch micro-optimization: 112 native assertions
+   passed, but two paired Linux screens did not repeat a result beyond
+   duplicate-parent noise. No runtime changes from this trial were pushed.
+   Next: use the exact prior gray queue for sparse callback publications,
+   preserving conservative/foreign pins and the full fallback. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -370,7 +373,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 19:44 UTC), #9 review branch only: narrow the repeated stopped candidate pin walk with complete pin-writer coverage and conservative fallback; validate raw peer roots and native scale.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
