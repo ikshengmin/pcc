@@ -24,7 +24,9 @@ rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "i
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
-peer_mode = sys.argv[1] in ("peer-hold", "peer-depart")
+same_layer_peer = sys.argv[1] in ("peer-hold", "peer-depart")
+peer_new = sys.argv[1] == "peer-new"
+peer_mode = same_layer_peer or peer_new
 peer_request = threading.Event()
 peer_read = threading.Event()
 peer_done = threading.Event()
@@ -34,6 +36,8 @@ def weakref_peer():
     peer_request.wait()
     borrowed = weak_b()
     assert borrowed is not None
+    if peer_new:
+        late_refs.append(weakref.ref(borrowed, lambda _: events.append("b-new")))
     peer_read.set()
     if sys.argv[1] == "peer-hold":
         peer_done.wait()
@@ -47,7 +51,7 @@ class A:
         if peer_mode:
             peer_request.set()
             peer_read.wait()
-            if sys.argv[1] == "peer-depart":
+            if sys.argv[1] != "peer-hold":
                 peer.join()
         if late_new:
             late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
@@ -93,14 +97,14 @@ if sys.argv[1] in ("mixed-tail", "pin"):
     b.tail = Tail()
 if mixed:
     b.child = b
-elif not rescue and not peer_mode:
+elif not rescue and not same_layer_peer:
     a.child = b
 weak_a = weakref.ref(a, lambda _: events.append("a-weak"))
 weak_b = weakref.ref(b, lambda _: events.append("b-weak"))
 if peer_mode:
     peer = threading.Thread(target=weakref_peer)
     peer.start()
-if rescue or peer_mode:
+if rescue or same_layer_peer:
     del a
     del b
 else:

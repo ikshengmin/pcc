@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart", "peer-new"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -98,6 +98,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "caller-old-holder": "a-del a-weak b-live\n",
         "peer-hold": "a-del a-weak b-live\n",
         "peer-depart": "a-del a-weak b-del b-weak b-dead\n",
+        "peer-new": "a-del a-weak b-del b-new b-weak b-dead\n",
     }[arm]
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,
@@ -122,7 +123,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
     else:
         assert actual.stdout == expected.stdout, actual.stderr
     rechecks = 2 if arm in ("mixed", "mixed-tail") else 1 if arm in ("withdrawn", "holder", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder") else 0
-    scans = {"late-new": 3, "worker": 2}.get(arm, 1)
+    scans = {"late-new": 3, "peer-new": 3}.get(arm, 1)
     assert actual.stderr == f"full={rechecks} scans={scans}\n"
 
 

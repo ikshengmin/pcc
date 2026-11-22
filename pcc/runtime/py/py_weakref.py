@@ -74,7 +74,6 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
-pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_gc_backend0_is_weak_candidate = extern(
     "pcc_gc_backend0_is_weak_candidate", (c_ptr,), c_int64
 )
@@ -910,10 +909,14 @@ def py_weakref_layer_snapshot_create(plan, layers: int):
     wr = global_load_ptr("py_weakref_head")
     if ptr_is_null(wr) != 0:
         return null()
-    # There cannot be a mutator parked halfway through a weak-list change
-    # which started before the snapshot was armed. Threads that join during
-    # a callback see the armed bit before changing their first weakref link.
-    if pcc_thread_live_count() != 1:
+    # This borrow is built and consumed only by the stopped-world owner.
+    # _link_main, _link_late and _unlink invalidate before their first
+    # write and cannot poll/allocate between that check and the final
+    # write. A parked peer therefore cannot resume inside a mutation that
+    # checked the old, unarmed state. A peer that starts changing the
+    # list during a callback invalidates before the next stopped read.
+    if (pcc_thread_owns_stopped_world() == 0
+            or atomic_load_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, "acquire") != 0):
         return null()
     snapshot = calloc(1, _WEAK_GROUP_START + layers * _WEAK_GROUP_BYTES)
     if ptr_is_null(snapshot) != 0:

@@ -4,6 +4,7 @@ From the repository root, provide the verified source-matched runtime as
 PCC_RUNTIME_ARCHIVE and a fresh output directory. Use the guarded command in
 the issue 9 investigation; this is not a pcc_perf acceptance benchmark.
 """
+import argparse
 import itertools
 import json
 import os
@@ -11,13 +12,19 @@ from pathlib import Path
 import random
 import re
 import statistics
-import sys
 
 from tests.owned_c_execution import compile_owned_c_with_runtime
 from tests.owned_runtime_c_fixture import admitted_runtime
 from tests.python.process_timeout import run_process_group_timeout
 
-out = Path(sys.argv[1]).resolve()
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument("out", type=Path)
+parser.add_argument("--compile-only", action="store_true",
+                    help="link the probe with the owned runtime for the current source tree")
+parser.add_argument("--weak-peer-base-binary", type=Path,
+                    help="same probe linked in the exact review parent checkout")
+args = parser.parse_args()
+out = args.out.resolve()
 out.mkdir(parents=True, exist_ok=True)
 repo = Path.cwd()
 binary = out / "sweep_scale"
@@ -26,6 +33,40 @@ compile_owned_c_with_runtime(
     runtime_archive=admitted_runtime(),
     cpp_args=("-I", str(repo / "pcc/runtime/src")),
 )
+if args.compile_only:
+    raise SystemExit(0)
+if args.weak_peer_base_binary is not None:
+    base = args.weak_peer_base_binary.resolve(strict=True)
+    cases = list(itertools.product((1, 3), (16, 64), (0, 4096, 16384)))
+    records = {case: [] for case in cases}
+    rng = random.Random(9070924)
+    for trial in range(5):
+        rng.shuffle(cases)
+        for i, (gc, n, weak) in enumerate(cases):
+            arms = [("base", base), ("candidate", binary)]
+            if (trial + i) % 2:
+                arms.reverse()
+            times = {}
+            for arm, executable in arms:
+                scans = 0 if weak == 0 else n if arm == "base" else 1
+                expected = f"weak={weak} scans={scans} n={n} live=0 del={n} reclaimed={n} full=0 windows={n} "
+                run = run_process_group_timeout(
+                    [str(executable), str(n), "0", str(weak)], timeout=12,
+                    env=dict(os.environ, PCC_GC_BACKEND=str(gc),
+                             PCC_GC_DEBT_THRESHOLD="1099511627776"),
+                )
+                us = re.fullmatch(r"us=(\d+)\n", run.stdout.removeprefix(expected))
+                assert run.returncode == 0 and not run.stderr and us is not None, (gc, arm, run)
+                times[arm] = int(us.group(1))
+            records[gc, n, weak].append(times)
+    for (gc, n, weak), pairs in sorted(records.items()):
+        print(json.dumps({
+            "gc": gc, "n": n, "weak": weak, "pairs_us": pairs,
+            "wins": sum(p["candidate"] < p["base"] for p in pairs),
+            "median_ratio": statistics.median(p["candidate"] / p["base"] for p in pairs),
+        }), flush=True)
+    raise SystemExit(0)
+
 grid = list(itertools.product((1, 3), (4, 16, 64), (0, 4096, 16384)))
 cells = {cell: [] for cell in grid}
 rng = random.Random(9070922)

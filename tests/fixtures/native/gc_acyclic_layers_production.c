@@ -78,7 +78,7 @@ static PyObject *finish_a(PyObject *self) {
         if (status < 0) error = 37;
         // Withdrawal exits the registered thread before the callback closes;
         // the next root cut must not contain its retired raw stack words.
-        if (peer_mode == 2 && pcc_thread_join(peer_thread, NULL)) error = 38;
+        if (peer_mode != 1 && pcc_thread_join(peer_thread, NULL)) error = 38;
     }
     if (late_new) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
@@ -204,7 +204,7 @@ static void *seal_on_departing_thread(void *unused) {
         py_instance_set_field((PyInstanceObject *)a, 0, tail);
         pcc_gc_unpin(tail);
     } else if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
-    else if (!rescue && !peer_mode) py_instance_set_field((PyInstanceObject *)a, 0, b);
+    else if (!rescue && (peer_mode == 0 || peer_mode == 3)) py_instance_set_field((PyInstanceObject *)a, 0, b);
     if (silent == 2) {
         PyClassObject *other = py_class_new("InactiveFinalizer", NULL, 0, NULL, 0);
         if (!other) { error = 17; return NULL; }
@@ -254,6 +254,12 @@ static void *weakref_peer(void *unused) {
     // A raw C activation, not a registered root slot or a barrier store.
     PyObject *volatile borrowed = py_weakref_call(roots[WEAK_B]);
     int good = borrowed && borrowed != py_None;
+    if (good && peer_mode == 3) {
+        PyObject *callback = py_func_new((void *)weak_event, NULL);
+        PyObject *ref = callback ? py_weakref_new(borrowed, callback) : NULL;
+        if (!ref) good = 0;
+        else pcc_gc_store_root(&roots[WEAK_NEW], ref);
+    }
     __atomic_store_n(&peer_read, good ? 1 : -1, __ATOMIC_RELEASE);
     if (peer_mode == 1) {
         while (!__atomic_load_n(&worker_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
@@ -271,6 +277,7 @@ int main(int argc, char **argv) {
     idle_worker = argc > 1 && strcmp(argv[1], "worker") == 0;
     if (argc > 1 && strcmp(argv[1], "peer-hold") == 0) peer_mode = 1;
     if (argc > 1 && strcmp(argv[1], "peer-depart") == 0) peer_mode = 2;
+    if (argc > 1 && strcmp(argv[1], "peer-new") == 0) peer_mode = 3;
     silent = argc > 1 && strcmp(argv[1], "silent") == 0;
     if (argc > 1 && strcmp(argv[1], "silent-live-del") == 0) silent = 2;
     finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;

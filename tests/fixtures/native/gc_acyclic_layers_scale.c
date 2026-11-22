@@ -11,6 +11,7 @@ extern void pcc_gc_tracing_candidates_seal(int64_t);
 extern int64_t pcc_gc_tracing_sweep_unreachable(int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern int64_t pcc_gc_tracing_finish_commits, pcc_gc_tracing_finish_stop_epoch;
+extern int64_t pcc_gc_metric_layer_weak_registry_scans;
 extern int64_t pcc_platform_monotonic_us(void);
 extern void pcc_gc_cms_stop_worker(void);
 extern void pcc_gc_begin_explicit_tracing_collect(void);
@@ -21,7 +22,8 @@ extern int64_t pcc_thread_join(void *, void **);
 enum { MAX_CANDIDATES = 64, CLASS_ROOT = 0, OLD_ROOT = 1, ROOTS = 2 };
 static void *nodes[MAX_CANDIDATES];
 static PyObject *roots[ROOTS];
-static int candidates, old_count, finalized, setup_error;
+static int candidates, old_count, weak_count, finalized, setup_error;
+static int peer_ready, peer_done;
 
 static int parse_int(const char *arg) {
     int result = 0;
@@ -47,7 +49,7 @@ static void *make_graph(void *argument) {
     if (!cls) { setup_error = 6; return NULL; }
     pcc_gc_store_root(&roots[CLASS_ROOT], (PyObject *)cls);
     py_class_add_method(cls, "__del__", (PyObject *)(uintptr_t)finalize_item);
-    PyObject *unrelated = py_list_new(old_count);
+    PyObject *unrelated = py_list_new(old_count + weak_count + (weak_count > 0));
     if (!unrelated) { setup_error = 7; return NULL; }
     pcc_gc_store_root(&roots[OLD_ROOT], unrelated);
     for (int i = 0; i < old_count; ++i) {
@@ -55,6 +57,16 @@ static void *make_graph(void *argument) {
         if (!live) { setup_error = 8; return NULL; }
         py_list_append(unrelated, live);
         pcc_gc_unpin(live);
+    }
+    if (weak_count > 0) {
+        PyObject *target = py_instance_new(cls);
+        if (!target) { setup_error = 18; return NULL; }
+        py_list_append(unrelated, target);
+        for (int i = 0; i < weak_count; ++i) {
+            PyObject *ref = py_weakref_new(target, NULL);
+            if (!ref) { setup_error = 19; return NULL; }
+            py_list_append(unrelated, ref);
+        }
     }
     PyObject *previous = NULL;
     for (int i = 0; i < candidates; ++i) {
@@ -74,17 +86,34 @@ static void *make_graph(void *argument) {
     return NULL;
 }
 
+static void *idle_peer(void *unused) {
+    (void)unused;
+    int status = pcc_current_thread_id() > 0 ? 1 : -1;
+    __atomic_store_n(&peer_ready, status, __ATOMIC_RELEASE);
+    if (status > 0)
+        while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    return NULL;
+}
+
 int main(int argc, char **argv) {
-    if (argc != 3) return 11;
+    if (argc < 3 || argc > 4) return 11;
     candidates = parse_int(argv[1]);
     old_count = parse_int(argv[2]);
-    if (candidates < 2 || candidates > MAX_CANDIDATES || old_count < 0 || old_count > 65536) return 12;
+    if (argc == 4) weak_count = parse_int(argv[3]);
+    if (candidates < 2 || candidates > MAX_CANDIDATES || old_count < 0 || old_count > 65536
+        || weak_count < 0 || weak_count > 65536) return 12;
     if (pcc_current_thread_id() <= 0) return 13;
     pcc_gc_cms_stop_worker();
     for (int i = 0; i < ROOTS; ++i) pcc_gc_scheduler_root_register(&roots[i]);
     void *thread = NULL;
     if (pcc_thread_start(&thread, make_graph, NULL) || pcc_thread_join(thread, NULL)) return 14;
     if (setup_error) return setup_error;
+    if (argc == 4) {
+        if (pcc_thread_start(&thread, idle_peer, NULL)) return 20;
+        int ready;
+        while (!(ready = __atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
+        if (ready < 0) return 21;
+    }
     if (pcc_stop_the_world() != 0) return 15;
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
@@ -96,6 +125,7 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_finish_stop_epoch = epoch;
     pcc_py_gc_minor_graph_unlock();
     int64_t full_before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
+    int64_t scans_before = pcc_gc_metric_layer_weak_registry_scans;
     int64_t start = pcc_platform_monotonic_us();
     int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(candidates);
     int64_t elapsed = pcc_platform_monotonic_us() - start;
@@ -103,6 +133,12 @@ int main(int argc, char **argv) {
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - full_before;
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 16;
+    if (argc == 4) {
+        __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
+        if (pcc_thread_join(thread, NULL)) return 22;
+        printf("weak=%d scans=%lld ", weak_count,
+               (long long)(pcc_gc_metric_layer_weak_registry_scans - scans_before));
+    }
     printf("n=%d live=%d del=%d reclaimed=%lld full=%lld windows=%lld us=%lld\n",
            candidates, old_count, finalized, (long long)reclaimed, (long long)full,
            (long long)stops, (long long)elapsed);

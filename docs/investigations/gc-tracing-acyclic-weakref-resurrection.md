@@ -570,3 +570,37 @@ keep exact CPython event ordering. The native arm also checks the
 agreed layer barrier, with both finalizers before either weak callback.
 This is not evidence that arbitrary user effects allow batching in one
 running-world interval.
+
+### Weak registry traversal with a parked peer
+
+On the review path the stopped owner may borrow the weak registry even
+when other mutators are registered. `_link_main`, `_link_late` and
+`_unlink` invalidate before their first list change and do not park,
+allocate or call another function after the active check (verified in
+the owned Linux object). A peer cannot therefore be frozen halfway
+through a mutation that missed the active snapshot. A scope cannot
+borrow on top of an already armed scope. The existing invalidation
+remains permanent for the sweep; no borrowed references are used after
+a peer creates a weakref during an open finalizer. The peer-linked
+callback uses the legacy scan and matches CPython's newest-first order
+on GC1/3, while an unchanged peer case uses one scan instead of two.
+
+Five alternating same-input pairs per cell on Linux used the same native
+probe linked against separately verified owned archives for the exact
+parent and this candidate. With 64 candidates, a parked peer and 16,384
+unrelated live weakrefs, scan count fell from 64 to 1, paired median time
+fell 47% on GC1 and 56% on GC3, and both won 5/5. With no weak registry
+both arms used zero scans; timing did not show consistent benefit.
+The remaining single global traversal is visible: cost still rises
+with unrelated live weakrefs, so this does not qualify heap independence
+or the formal no-observer `pcc_perf` gate. Darwin was not run.
+
+Reproduce by copying only this probe and its driver into the parent
+checkout, linking its source-matched archive with
+`measure_gc_acyclic_layers_scale.py <base-output> --compile-only`, then
+in the candidate checkout using its own archive and
+`measure_gc_acyclic_layers_scale.py <output> --weak-peer-base-binary <base-output>/sweep_scale`.
+Use the same repository guards as the chain probe. The focused C-native
+and weakref-model run had 168 passing checks. Two additional first-weakref
+language compiler variants were not qualified: pcc0 was refused by the
+host memory worker admission check and the pcc1 artifact was unavailable.
