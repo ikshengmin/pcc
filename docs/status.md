@@ -233,7 +233,7 @@ in the relevant section or issue and removes the entry.
    statement at `testing/benchmark.go:238:2`.
 
    Claims:
-   - none
+   - Go math/bits exact Linux dependency selection: Codex, Linux x86-64, 2026-11-22 01:42 UTC, area frontend-go
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
