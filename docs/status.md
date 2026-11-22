@@ -199,8 +199,16 @@ in the relevant section or issue and removes the entry.
    fixture. No master runtime change. The
    [Linux HTTP observation](investigations/gc-tracing-acyclic-weakref-resurrection.md#http-callback-observation)
    saw no weakref/finalizer log events in six legs and 160 completed marks;
-   exact per-sweep counters remain unmeasured. Next: topological layers,
-   cross-thread weakref and the other admission checks.
+   exact per-sweep counters remain unmeasured.
+   [Review commit 07b5ebb](https://github.com/ikshengmin/pcc/commit/07b5ebb918413e4672dc4168b32297b7f15762ac)
+   uses one stopped root cut for bounded remark and fallback. Linux pcc0
+   passed 49 focused tests; actual registration avoids a full recheck and
+   withdrawn publication uses one fallback without creating a collector
+   self-root. A raw C thread's unwound stack can still contain the referent:
+   the dropped-reader control explicitly clears that residue, so it does
+   not qualify arbitrary raw stack lifetimes. Next: compute all acyclic
+   layers once and verify actual production dispatch including sibling
+   rescue; keep the cross-thread parity gate open.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
@@ -253,8 +261,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Route cross-thread weakref ownership through issue 9 production remark: Codex, Linux x86-64, 2026-11-22 16:10 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
