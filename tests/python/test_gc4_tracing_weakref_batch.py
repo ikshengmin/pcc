@@ -69,7 +69,12 @@ def test_all_targets_are_cleared_before_callbacks_and_unreachable_refs_are_silen
     namespace = {
         # Every ref has a callback: none moves to the late list.
         "global_load_ptr": lambda name: refs[0] if name == "py_weakref_head" else 0,
-        "global_addr": lambda name: 0x50000,
+        # These are distinct runtime globals, not aliases of the late
+        # window count; the model exercises the legacy moving path.
+        "global_addr": lambda name: {
+            "pcc_gc_backend_selected": 0x50008,
+            "pcc_gc_nonmoving_count_free": 0x50010,
+        }.get(name, 0x50000),
         "store_i32": lambda base, offset, value: words.__setitem__(base + offset, value),
         "load_ptr": lambda base, offset: words[base + offset],
         "load_i64": lambda base, offset: words[base + offset],

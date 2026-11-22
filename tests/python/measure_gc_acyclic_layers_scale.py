@@ -21,8 +21,11 @@ parser = argparse.ArgumentParser(description=__doc__)
 parser.add_argument("out", type=Path)
 parser.add_argument("--compile-only", action="store_true",
                     help="link the probe with the owned runtime for the current source tree")
-parser.add_argument("--weak-peer-base-binary", type=Path,
-                    help="same probe linked in the exact review parent checkout")
+pairing = parser.add_mutually_exclusive_group()
+pairing.add_argument("--weak-peer-base-binary", type=Path,
+                     help="same probe linked before the parked-peer snapshot")
+pairing.add_argument("--target-base-binary", type=Path,
+                     help="same probe linked before the target-local directory")
 args = parser.parse_args()
 out = args.out.resolve()
 out.mkdir(parents=True, exist_ok=True)
@@ -35,23 +38,53 @@ compile_owned_c_with_runtime(
 )
 if args.compile_only:
     raise SystemExit(0)
-if args.weak_peer_base_binary is not None:
-    base = args.weak_peer_base_binary.resolve(strict=True)
-    cases = list(itertools.product((1, 3), (16, 64), (0, 4096, 16384)))
+base_binary = args.target_base_binary or args.weak_peer_base_binary
+target_mode = args.target_base_binary is not None
+if base_binary is not None:
+    base = base_binary.resolve(strict=True)
+    sizes = (4, 16, 64) if target_mode else (16, 64)
+    cases = list(itertools.product((1, 3), sizes, (0, 4096, 16384)))
     records = {case: [] for case in cases}
     rng = random.Random(9070924)
+    controls = []
     for trial in range(5):
+        if target_mode:
+            control_pair = []
+            control_slots = (0, len(cases))
+        else:
+            control_slots = ()
         rng.shuffle(cases)
-        for i, (gc, n, weak) in enumerate(cases):
+        for i in range(len(cases) + 1):
+            if i in control_slots:
+                # The exact identical parent arm brackets each trial.
+                # It exposes host drift without changing collector or input.
+                probe = run_process_group_timeout(
+                    [str(base), "64", "0", "0", "1"], timeout=12,
+                    env=dict(os.environ, PCC_GC_BACKEND="1",
+                             PCC_GC_DEBT_THRESHOLD="1099511627776"),
+                )
+                prefix = "weak=0 scans=1 n=64 live=0 del=64 reclaimed=64 full=0 windows=64 "
+                us = re.fullmatch(r"us=(\d+)\n", probe.stdout.removeprefix(prefix))
+                assert probe.returncode == 0 and not probe.stderr and us is not None, probe
+                control_pair.append(int(us.group(1)))
+            if i == len(cases):
+                break
+            gc, n, weak = cases[i]
             arms = [("base", base), ("candidate", binary)]
             if (trial + i) % 2:
                 arms.reverse()
             times = {}
             for arm, executable in arms:
-                scans = 0 if weak == 0 else n if arm == "base" else 1
+                if target_mode:
+                    scans = 1 if arm == "base" else 0
+                else:
+                    scans = 0 if weak == 0 else n if arm == "base" else 1
                 expected = f"weak={weak} scans={scans} n={n} live=0 del={n} reclaimed={n} full=0 windows={n} "
+                command = [str(executable), str(n), "0", str(weak)]
+                if target_mode:
+                    command.append("1")  # one rooted weakref for each dying candidate
                 run = run_process_group_timeout(
-                    [str(executable), str(n), "0", str(weak)], timeout=12,
+                    command, timeout=12,
                     env=dict(os.environ, PCC_GC_BACKEND=str(gc),
                              PCC_GC_DEBT_THRESHOLD="1099511627776"),
                 )
@@ -59,6 +92,14 @@ if args.weak_peer_base_binary is not None:
                 assert run.returncode == 0 and not run.stderr and us is not None, (gc, arm, run)
                 times[arm] = int(us.group(1))
             records[gc, n, weak].append(times)
+        if target_mode:
+            controls.append(control_pair)
+    if target_mode:
+        print(json.dumps({
+            "control": "identical parent GC1, n64, no unrelated weakrefs",
+            "pairs_us": controls,
+            "median_ratio": statistics.median(b / a for a, b in controls),
+        }), flush=True)
     for (gc, n, weak), pairs in sorted(records.items()):
         print(json.dumps({
             "gc": gc, "n": n, "weak": weak, "pairs_us": pairs,

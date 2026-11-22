@@ -123,8 +123,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
     else:
         assert actual.stdout == expected.stdout, actual.stderr
     rechecks = 2 if arm in ("mixed", "mixed-tail") else 1 if arm in ("withdrawn", "holder", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder") else 0
-    scans = {"late-new": 3, "peer-new": 3}.get(arm, 1)
-    assert actual.stderr == f"full={rechecks} scans={scans}\n"
+    assert actual.stderr == f"full={rechecks} scans=0\n"
 
 
 @pytest.mark.integration

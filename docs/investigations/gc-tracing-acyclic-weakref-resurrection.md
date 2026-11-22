@@ -604,3 +604,45 @@ Use the same repository guards as the chain probe. The focused C-native
 and weakref-model run had 168 passing checks. Two additional first-weakref
 language compiler variants were not qualified: pcc0 was refused by the
 host memory worker admission check and the pcc1 artifact was unavailable.
+
+### Exact weakref target directory
+
+Nonmoving GC1/3 on the review branch keep a non-owning, newest-first weakref
+directory by target alongside the legacy main and late lists. A reverse
+index supports constant-time unlink from the target chain without changing
+the C-visible weakref object. Only registered main-list refs enter the
+directory. Its mutations share the recursive no-park graph lock; a consumer
+reads it only when owning the stopped world. Terminal nulling and weakref
+deallocation detach the raw entry before the address can be reused.
+An allocation failure or unexpected retarget disables the directory and
+retires its raw metadata without touching either legacy list. Neither
+GC0/2/4 nor moving configurations use the directory.
+
+The first Linux screen removed the layer scans but not the dependence:
+PASS1 and final deallocation still invalidated every dead object against
+both global lists. The final review slice skips that work only if the
+stopped exact target query misses and the legacy late list is empty.
+A matching ref, a nonempty late list, a running world or an unavailable
+directory still takes the old invalidation path. This preserves the old
+callback boundary; no write journal or same-layer batching was added.
+
+Guarded native scaling used actual rooted, callback-free weakrefs to each
+dying node as well as 0, 4,096 or 16,384 unrelated live weakrefs, a parked
+peer, and sizes 4/16/64. Every dying node finalized, was reclaimed, and had
+its weakref cleared. Five alternating pairs per cell compared exact
+source/receipt-matched arms. A duplicate parent control bracketed each
+trial (median +3.9%). At 64 nodes and 16,384 unrelated refs, GC1 went
+13,004 → 2,301 µs and GC3 13,260 → 1,974 µs (paired reductions 82%/87%,
+each 5/5); the whole-registry layer scan count was 1 → 0. Without unrelated
+refs, GC1 was mixed (3/5) and GC3 4/5. With 4,096 unrelated refs both won
+5/5 at size 64. This is a bounded internal sweep measurement, not proof
+for callback-bearing scaling, arbitrary cohorts or `pcc_perf` HTTP.
+Native focused replay passed 74 final-archive assertions and the model/
+ABI run passed 62, including retirement under injected allocation failure.
+One full combined test rerun hit the Linux tree guard; the scoped replay
+was run without weakening the guard. Darwin was not run.
+
+To reproduce, link this probe in the exact parent checkout using the
+source-matched archive and `--compile-only`; run the candidate checkout
+with `--target-base-binary <parent-output>/sweep_scale`. The driver
+alternates the arms and prints the duplicate-control samples.

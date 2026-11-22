@@ -19,10 +19,10 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { MAX_CANDIDATES = 64, CLASS_ROOT = 0, OLD_ROOT = 1, ROOTS = 2 };
+enum { MAX_CANDIDATES = 64, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
 static void *nodes[MAX_CANDIDATES];
 static PyObject *roots[ROOTS];
-static int candidates, old_count, weak_count, finalized, setup_error;
+static int candidates, old_count, weak_count, observe_candidates, finalized, setup_error;
 static int peer_ready, peer_done;
 
 static int parse_int(const char *arg) {
@@ -68,10 +68,20 @@ static void *make_graph(void *argument) {
             py_list_append(unrelated, ref);
         }
     }
+    if (observe_candidates) {
+        PyObject *observed = py_list_new(candidates);
+        if (!observed) { setup_error = 23; return NULL; }
+        pcc_gc_store_root(&roots[CANDIDATE_WEAKS], observed);
+    }
     PyObject *previous = NULL;
     for (int i = 0; i < candidates; ++i) {
         PyObject *item = py_instance_new(cls);
         if (!item) { setup_error = 9; return NULL; }
+        if (observe_candidates) {
+            PyObject *ref = py_weakref_new(item, NULL);
+            if (!ref) { setup_error = 24; return NULL; }
+            py_list_append(roots[CANDIDATE_WEAKS], ref);
+        }
         if (previous) py_instance_set_field((PyInstanceObject *)previous, 0, item);
         pcc_gc_unpin(item);
         pcc_py_gc_minor_graph_lock();
@@ -96,10 +106,13 @@ static void *idle_peer(void *unused) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3 || argc > 4) return 11;
+    if (argc < 3 || argc > 5) return 11;
     candidates = parse_int(argv[1]);
     old_count = parse_int(argv[2]);
-    if (argc == 4) weak_count = parse_int(argv[3]);
+    const int with_peer = argc >= 4;
+    if (with_peer) weak_count = parse_int(argv[3]);
+    if (argc == 5) observe_candidates = parse_int(argv[4]);
+    if (observe_candidates < 0 || observe_candidates > 1) return 25;
     if (candidates < 2 || candidates > MAX_CANDIDATES || old_count < 0 || old_count > 65536
         || weak_count < 0 || weak_count > 65536) return 12;
     if (pcc_current_thread_id() <= 0) return 13;
@@ -108,7 +121,7 @@ int main(int argc, char **argv) {
     void *thread = NULL;
     if (pcc_thread_start(&thread, make_graph, NULL) || pcc_thread_join(thread, NULL)) return 14;
     if (setup_error) return setup_error;
-    if (argc == 4) {
+    if (with_peer) {
         if (pcc_thread_start(&thread, idle_peer, NULL)) return 20;
         int ready;
         while (!(ready = __atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
@@ -133,7 +146,7 @@ int main(int argc, char **argv) {
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - full_before;
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 16;
-    if (argc == 4) {
+    if (with_peer) {
         __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
         if (pcc_thread_join(thread, NULL)) return 22;
         printf("weak=%d scans=%lld ", weak_count,
@@ -142,6 +155,12 @@ int main(int argc, char **argv) {
     printf("n=%d live=%d del=%d reclaimed=%lld full=%lld windows=%lld us=%lld\n",
            candidates, old_count, finalized, (long long)reclaimed, (long long)full,
            (long long)stops, (long long)elapsed);
+    if (observe_candidates) {
+        for (int i = 0; i < candidates; ++i) {
+            PyObject *ref = py_list_get(roots[CANDIDATE_WEAKS], i);
+            if (!ref || py_weakref_call(ref) != py_None) return 26;
+        }
+    }
     if (setup_error) return setup_error;
     return finalized == candidates && reclaimed == candidates && full == 0 ? 0 : 17;
 }

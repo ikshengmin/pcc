@@ -21,7 +21,10 @@ SOURCE = Path(__file__).resolve().parents[2] / "pcc/runtime/py/py_weakref.py"
 class WeakBatch:
     def __init__(self, backend=0):
         self.backend = backend
-        self.words = {}
+        self.words = {
+            0xE018: backend,  # frozen collector
+            0xE020: 0,  # this legacy-list model is not the nonmoving directory
+        }
         # py_weakref_head and an open weak window's py_weakref_late_head.
         self.heads = {"py_weakref_head": 0, "py_weakref_late_head": 0}
         self.none = 0xF000
@@ -124,6 +127,8 @@ class WeakBatch:
             "pcc_weakref_late_windows": 0xE000,
             "pcc_weakref_layer_snapshot_active": 0xE008,
             "pcc_weakref_layer_snapshot_dirty": 0xE010,
+            "pcc_gc_backend_selected": 0xE018,
+            "pcc_gc_nonmoving_count_free": 0xE020,
         }[name]
 
     @property
@@ -530,3 +535,49 @@ def test_gc0_silent_clear_requires_stopped_world_before_any_mutation():
         model.ns["py_weakref_clear_gc0_candidates"]()
     assert model.words == before
     assert model.calls == model.events == model.allocated == []
+
+
+def test_target_directory_oom_retires_only_raw_records_and_keeps_legacy_links():
+    """Execute the production failure path with an already indexed weakref."""
+    model = WeakBatch(backend=1)
+    model.words[0xE020] = 1
+    target = model.allocate_object(64, abi.PY_TYPE_LIST, 0)
+    old = model.ref(target)
+    old_entry = model.malloc(32)
+    targets = model.malloc(16)
+    reverse = model.malloc(16)
+    model.store(old_entry, 0, old)
+    model.store(old_entry, 8, target)
+    model.store(targets, 0, target)
+    model.store(targets, 8, old_entry)
+    model.store(reverse, 0, old)
+    model.store(reverse, 8, old_entry)
+    addresses = {
+        "pcc_weak_target_dir_disabled": 0xE028,
+        "pcc_weak_reverse_cap": 0xE030,
+        "pcc_weak_target_slots": 0xE038,
+        "pcc_weak_target_cap": 0xE040,
+    }
+    model.words[0xE030] = 1
+    model.heads["pcc_weak_target_slots"] = targets
+    model.heads["pcc_weak_reverse_slots"] = reverse
+    model.ns["global_addr"] = (
+        lambda name: addresses[name] if name in addresses else model.window_addr(name)
+    )
+    model.ns["pcc_gc_index_py_find"] = lambda _, cap, key, tagged: old_entry if key == target else 0
+    locks = []
+    model.ns["pcc_py_gc_minor_graph_lock"] = lambda: locks.append("locked")
+    model.ns["pcc_py_gc_minor_graph_unlock"] = lambda: locks.pop()
+    model.fail_at = model.malloc_calls + 1
+
+    new = model.ns["py_weakref_new"](target, 0)
+
+    assert model.words[0xE028] == 1
+    assert set(model.raw_freed) == {old_entry, targets, reverse}
+    assert model.heads["pcc_weak_target_slots"] == model.heads["pcc_weak_reverse_slots"] == 0
+    assert model.head == new and model.load(new, 40) == old and model.load(old, 32) == new
+    assert model.load(new, 16) == model.load(old, 16) == target
+    assert not locks
+    model.decref(new)
+    assert model.head == old and model.load(old, 32) == 0
+    assert model.managed_freed == [new]
