@@ -398,7 +398,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: none.
+   Claims: pccDot (2026-11-22 20:49 UTC), #9 review only: exercise the real CMS marker and automatic application-gate callback handoff on Linux GC1–3.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
