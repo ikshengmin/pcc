@@ -296,3 +296,15 @@ reference was held in each phase. After the last Py_DECREF, explicit
 collection releases the payload exactly once. The same owned ELF
 passed three times per mode on Linux. This is not whole NumPy or
 third-party extension acceptance and does not change the runtime.
+
+The resurrection case uses an unreachable cyclic instance whose
+finalizer roots itself. Under automatic GC2, the old weakref clears
+first; the rescued instance retains self identity and a nested
+list/payload graph. A separate thread verifies and drops the only
+resurrected owner, and a new weakref fires when the cycle finally
+dies, without a second finalizer invocation. Six source-matched Linux
+owned processes (three on, three off) passed and the enabled cases
+read positive shortcut visits. The CPython control explicitly drives
+its collector at the two semantic checkpoints; it is not an
+automatic-cadence comparison. Neither owned resurrection arm calls
+`gc.collect()`. The already sealed performance source is unchanged.
