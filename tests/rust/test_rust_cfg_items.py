@@ -145,16 +145,70 @@ def test_actual_conditional_items_keep_active_dependency_and_other_item_boundari
         compile_rust(source, rustc_check=checked)
 
 
+DISABLED_MACRO_FN = '#[cfg(feature="std")]fn omitted(){unimplemented!();}'
+DISABLED_UNKNOWN_MACRO_FN = '#[cfg(feature="std")]fn omitted(){pcc_absent!();}'
+
+
+def assert_inactive_macro_function(source, result, metadata):
+    item, = result.conditional_items
+    assert not item.enabled
+    assert source[slice(*item.source_span)] == metadata
+    assert item.tokens and any(token.text == 'omitted' for token in item.tokens)
+    assert set(result.symbols) == {'answer'}
+    assert 'omitted' not in result.ir_text
+    assert result.emit_object().startswith(b'\x7fELF')
+    return item
+
+
+def test_owned_disabled_builtin_macro_body_keeps_only_inactive_metadata():
+    from pcc.frontends.rust.configuration import CfgOptions, OwnedRustConfiguration
+
+    source = DISABLED_MACRO_FN + BODY
+    parser = Parser(source, configuration=OwnedRustConfiguration(TARGET, 2021, CfgOptions()))
+    assert [fn.token.text for fn in parser.parse()] == ['answer']
+    assert not parser.macro_expansions
+    result = compile_rust(source, cfg=CfgOptions(), target_triple=TARGET)
+    item = assert_inactive_macro_function(source, result, DISABLED_MACRO_FN)
+    assert item.item[0].token.text == 'omitted'
+    assert any(token.text == 'unimplemented' for token in item.tokens)
+    assert not result.externally_checked
+
+
+def test_owned_disabled_unknown_macro_body_leaves_only_balanced_tokens():
+    from pcc.frontends.rust.configuration import CfgOptions
+
+    source = DISABLED_UNKNOWN_MACRO_FN + BODY
+    result = compile_rust(source, cfg=CfgOptions(), target_triple=TARGET)
+    item = assert_inactive_macro_function(source, result, DISABLED_UNKNOWN_MACRO_FN)
+    assert not item.item
+    assert any(token.text == 'pcc_absent' for token in item.tokens)
+    with pytest.raises(RustError, match='macro'):
+        compile_rust(source, cfg=CfgOptions(cfg=('feature="std"',)), target_triple=TARGET)
+
+
+@pytest.mark.integration
+@pytest.mark.xdist_group(name="rust-native-reference")
+@pytest.mark.pcc_gate(platforms=("linux",), machines=("x86_64", "amd64"))
+def test_owned_inactive_macro_functions_do_not_change_native_answer(tmp_path, monkeypatch):
+    from pcc.frontends.rust.configuration import CfgOptions
+    from tests.rust.str_execution import run_owned_u64_function
+
+    source = DISABLED_MACRO_FN + DISABLED_UNKNOWN_MACRO_FN.replace('omitted', 'other') + BODY
+    assert run_owned_u64_function(source, 'answer', tmp_path, monkeypatch, cfg=CfgOptions()) == 0xfedcba9876543210
+
+
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=ACTUAL_UNAVAILABLE)
-def test_actual_disabled_item_with_a_macro_body_is_skipped(tmp_path):
-    # Former boundary row: rustc never expands a disabled item's macros.
-    source = '#[cfg(feature="std")]fn omitted(){unimplemented!();}' + BODY
+def test_actual_disabled_item_with_a_macro_body_is_skipped(tmp_path, monkeypatch):
+    source = DISABLED_MACRO_FN + BODY
     checked = certify(source, tmp_path / 'actual-check')
-    result = compile_rust(source, rustc_check=checked)
-    item, = result.conditional_items
-    assert not item.enabled and item.item == () and result.externally_checked
+    with monkeypatch.context() as guard:
+        guard.setattr(subprocess, 'Popen', lambda *a, **k: pytest.fail('external tool in owned item configuration'))
+        result = compile_rust(source, rustc_check=checked, target_triple=TARGET)
+        item = assert_inactive_macro_function(source, result, DISABLED_MACRO_FN)
+    assert any(token.text == 'unimplemented' for token in item.tokens)
+    assert result.externally_checked
 
 
 @pytest.mark.integration

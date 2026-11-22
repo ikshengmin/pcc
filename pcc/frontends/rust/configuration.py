@@ -310,7 +310,12 @@ class ConfiguredBlockStatement:
 
 @dataclass(frozen=True)
 class ConfiguredItem:
-    """Retained original syntax; only enabled items enter name/IR owners."""
+    """Retained original syntax; only enabled items enter name/IR owners.
+
+    An inactive item parsed by PCC may still retain its AST in this metadata.
+    A checker-admitted inactive item handled by the token-tree fallback has no
+    AST. Neither representation registers a declaration for Sema or lowering.
+    """
     attributes: tuple[ConfiguredItemAttribute, ...]
     item: object
     tokens: tuple
