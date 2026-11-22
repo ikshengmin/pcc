@@ -160,3 +160,10 @@ original line of interest, `<-b.signal` at `247:2`. The scoped suite
 passed 202 checks. Official Go executed a nested send/receive control and
 rejected the scalar send. PCC still does not execute channels or the
 upstream test program.
+
+Unary receive now preserves the original `<-b.signal` at `247:2`;
+assignment and comma-ok retain the receive expression without claiming
+receive semantics. The diagnostic union's next stop is `make(chan bool)`
+at `754:20`. The scoped suite passed 206 checks. Official Go executed a
+receive control exercising discard, comma-ok and unary precedence, and
+rejected the three scalar receive forms. No upstream test was run.

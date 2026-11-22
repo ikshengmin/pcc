@@ -2116,6 +2116,11 @@ class Analyzer:
             return
         for arg in expr.args:
             self.expression(arg)
+        if kind == "receive":
+            channel = expr.args[0]
+            self.expression(channel)
+            # Like send, no successfully typed operand can be a channel yet.
+            raise GoDiagnostic(channel.token, "cannot receive from a non-channel value")
         if kind == "unary":
             arg = expr.args[0]
             if expr.value == "&":

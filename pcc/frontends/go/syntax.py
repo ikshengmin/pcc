@@ -1210,6 +1210,8 @@ class GoParser:
         if token.kind in ("+", "-", "!", "^", "&", "*"):
             self.index += 1
             left = Expr("unary", token, token.kind, [self.expression(6)])
+        elif self.accept("<-"):
+            left = Expr("receive", token, args=[self.expression(6)])
         elif self.accept("("):
             previous, self.named_literals = self.named_literals, True
             left = self.expression()

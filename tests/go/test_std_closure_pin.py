@@ -77,11 +77,11 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # The union passes the nested channel send and stops at the following
-    # receive expression. This is not a platform build selection.
-    with pytest.raises(GoDiagnostic, match=r"^benchmark\.go:247:2: Go: unsupported expression token '<-'$") as caught:
+    # The union parses both communications and stops at make's channel type
+    # operand. This is not a platform build selection.
+    with pytest.raises(GoDiagnostic, match=r"^benchmark\.go:754:20: Go: unsupported expression token 'chan'$") as caught:
         compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 247, 2)
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 754, 20)
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
 
 
