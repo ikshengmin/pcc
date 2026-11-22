@@ -565,3 +565,23 @@ def test_scalar_slice_probe_still_checks_append_element_and_forbids_unproved_use
             analyze_source_instances({"main": SourceInstance("main", (("owners.go", code),), {})},
                                      main_instance="main", target_triple=target,
                                      prove_scalar_slice_owners=True)
+
+
+def test_opt_in_copied_stack_bytes_require_valid_span_and_publish_after_copy():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    fn = runtime.copy_stack_bytes_function(48)
+    assert fn is runtime.copy_stack_bytes_function(48)
+    assert fn is not runtime.copy_stack_bytes_function(8)
+    text = str(module)
+    assert "icmp ugt i64" in text and ", 48" in text
+    copy = text.split("byte_copy_nonempty:", 1)[1].split("byte_copy_publish:", 1)[0]
+    assert "@memcpy" in copy
+    assert "store ptr" in text.split("byte_copy_publish:", 1)[1]
+    for bad in (-1, 4097, False):
+        with pytest.raises(ManagedContractError, match="bounded stack byte capacity"):
+            runtime.copy_stack_bytes_function(bad)

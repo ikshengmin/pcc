@@ -774,3 +774,13 @@ original Name trimming loops and stops at `string(data)` in
 `internal/cpu/cpu_x86.go:269:9`. Fifty-eight adjacent and seven
 native/reference controls passed. Returning a raw view into the
 temporary backing is still forbidden.
+
+A separately qualified opt-in Linux x86-64 GC0 helper now copies a
+bounded live stack byte span into a distinct managed owner and publishes
+only after success. A real caller overwrote the original stack buffer
+and returned; the new result survived collection and matched official
+Go's six raw bytes, including NUL and invalid UTF-8. Null nonempty and
+over-capacity inputs reject without changing the output; zero-length
+copy does not touch the source. Eighty-nine adjacent and nine native
+tests passed. This qualifies the helper, not the original Name code or
+the ordinary Go string return ABI.

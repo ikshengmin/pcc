@@ -301,6 +301,37 @@ def test_identical_go_slice_building_loop_executes_with_owned_result(tmp_path, m
     assert run(reference) == Execution(0, observed, b"")
 
 
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: (
+    bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and bool(os.environ.get("PCC_GO_REFERENCE"))
+    and bool(os.environ.get("PCC_GO_REFERENCE_CACHE"))
+    and sys.platform == "linux" and platform.machine() == "x86_64"
+))
+@pytest.mark.xdist_group(name="go-reference")
+def test_go_copied_stack_bytes_survive_frame_and_match_raw_reference(tmp_path, monkeypatch):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+    from tests.go.owned_execution import Execution, compile_reference, run
+
+    module = ir.Module()
+    module.triple = TARGET
+    copy = ScalarSliceRuntime(module, gc_backend=0).copy_stack_bytes_function(48)
+    fn = ir.Function(module, copy.function_type, "copy_string_bytes")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    builder.ret(builder.call(copy, list(fn.args)))
+    adapter = tmp_path / "go_copy_string_bytes.o"
+    adapter.write_bytes(emit_owned_object(str(module), TARGET))
+    observed = _run_managed_fixture(tmp_path, monkeypatch, "owned_string_byte_copy.c",
+                                    extra_object=adapter, expected_gc0_stdout=b"A\x00\xff\xc3\xa9Z")
+    original = ROOT / "tests/go/fixtures/managed_string_byte_copy.go"
+    reference = compile_reference(((original.name, original.read_text()),), tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    assert (reference.parent / original.name).read_bytes() == original.read_bytes()
+    assert run(reference) == Execution(0, observed, b"")
+
+
 def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=(),
                          expected_gc0_stdout=b""):
     from pcc.driver.project import TranslationUnit

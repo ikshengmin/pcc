@@ -2,7 +2,7 @@
 from dataclasses import dataclass, field, replace
 
 from pcc.frontends.go.branches import walk
-from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan
+from pcc.frontends.go.managed_objects import MAX_BOUNDED_BYTE_OWNER, FixedByteExtent, byte_backing_plan
 from pcc.frontends.go.syntax import PointerSyntax, SliceSyntax, StructSyntax, TypeName
 
 
@@ -257,7 +257,7 @@ def bounded_byte_caller_from_source(program, request):
         if len(args) != 3 or args[0].kind != "type" or not _slice_of(args[0].value, "uint8"):
             return None
         length, capacity = (_literal_dimension(arg) for arg in args[1:])
-        if length is None or capacity is None or not 0 <= length <= capacity <= 4096:
+        if length is None or capacity is None or not 0 <= length <= capacity <= MAX_BOUNDED_BYTE_OWNER:
             return None
         extent = FixedByteExtent(length, capacity, byte_backing_plan())
         return byte_span_caller_proof(program, request.function, request.local, extent)

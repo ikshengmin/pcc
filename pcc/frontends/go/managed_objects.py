@@ -17,6 +17,7 @@ from .records import DefinedType, StructType, underlying
 from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, SliceType, is_error_interface, is_string
 
 
+MAX_BOUNDED_BYTE_OWNER = 4096
 BYTE_BACKING = ManagedTypeIdentity('go', ('runtime-plan',), 'byte-backing')
 _SCALAR_SLICE_BACKINGS = {
     "uint8": BYTE_BACKING,

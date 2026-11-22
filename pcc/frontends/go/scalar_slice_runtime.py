@@ -6,7 +6,7 @@ payload. The default Go compiler and default runtime build never select it.
 """
 from pcc.ir.compat import ir
 from pcc.support.managed_objects import ManagedContractError, pointer_map
-from .managed_objects import scalar_slice_backing_plan
+from .managed_objects import MAX_BOUNDED_BYTE_OWNER, scalar_slice_backing_plan
 
 
 # Existing pcc_shared_managed.h status, not a Go panic or error value.
@@ -27,6 +27,7 @@ class ScalarSliceRuntime:
         self.full_appends = {}
         self.in_capacity_appends = {}
         self.state_appends = {}
+        self.byte_copies = {}
 
     def descriptor(self, element):
         layout = scalar_slice_backing_plan(element).layout
@@ -338,6 +339,67 @@ class ScalarSliceRuntime:
         builder.position_at_end(invalid)
         builder.ret(ir.Constant(i32, _BAD_LAYOUT))
         self.state_appends[element] = fn
+        return fn
+
+    def copy_stack_bytes_function(self, maximum):
+        """Copy a proved live stack byte view into a new owning result.
+
+        The caller must keep the original stack view live and at least length
+        bytes long. Success exposes only the new owner, never a derived stack
+        pointer. An empty copy may use a null input; it does not call memcpy.
+        """
+        if type(maximum) is not int or not 0 <= maximum <= MAX_BOUNDED_BYTE_OWNER:
+            raise ManagedContractError("invalid bounded stack byte capacity")
+        if maximum in self.byte_copies:
+            return self.byte_copies[maximum]
+        pointer = ir.IntType(8).as_pointer()
+        i32, i64 = ir.IntType(32), ir.IntType(64)
+        handle_out = pointer.as_pointer()
+        self._matching_function("pcc_rt_managed_alloc", ir.FunctionType(i32, [pointer, i64, handle_out]))
+        definitions = {
+            "pcc_rt_managed_data": ir.FunctionType(pointer, [pointer]),
+            "memcpy": ir.FunctionType(pointer, [pointer, pointer, i64]),
+        }
+        bindings = {name: self._matching_function(name, signature) for name, signature in definitions.items()}
+        for name, signature in definitions.items():
+            if bindings[name] is None:
+                bindings[name] = ir.Function(self.module, signature, name)
+        fn = ir.Function(self.module, ir.FunctionType(i32, [pointer, i64, handle_out]),
+                         "__pcc_go_copy_stack_bytes_" + str(maximum))
+        fn.linkage = "internal"
+        source, length, output = fn.args
+        builder = ir.IRBuilder(fn.append_basic_block("entry"))
+        invalid = fn.append_basic_block("byte_copy_invalid")
+        allocate = fn.append_basic_block("byte_copy_allocate")
+        ready = fn.append_basic_block("byte_copy_ready")
+        copy = fn.append_basic_block("byte_copy_nonempty")
+        publish = fn.append_basic_block("byte_copy_publish")
+        done = fn.append_basic_block("byte_copy_done")
+        zero = ir.Constant(i64, 0)
+        nonempty = builder.icmp_unsigned("!=", length, zero)
+        missing_source = builder.and_(nonempty, builder.icmp_unsigned("==", source, ir.Constant(pointer, None)))
+        missing_output = builder.icmp_unsigned("==", output, ir.Constant(handle_out, None))
+        exceeds = builder.icmp_unsigned(">", length, ir.Constant(i64, maximum))
+        builder.cbranch(builder.or_(exceeds, builder.or_(missing_source, missing_output)), invalid, allocate)
+        builder.position_at_end(invalid)
+        builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+        builder.position_at_end(allocate)
+        temporary = builder.alloca(pointer)
+        status = self.allocate(builder, "uint8", length, temporary)
+        builder.cbranch(builder.icmp_unsigned("==", status, ir.Constant(i32, 0)), ready, done)
+        builder.position_at_end(ready)
+        owner = builder.load(temporary)
+        builder.cbranch(nonempty, copy, publish)
+        builder.position_at_end(copy)
+        data = builder.call(bindings["pcc_rt_managed_data"], [owner])
+        builder.call(bindings["memcpy"], [data, source, length])
+        builder.branch(publish)
+        builder.position_at_end(publish)
+        builder.store(owner, output)
+        builder.branch(done)
+        builder.position_at_end(done)
+        builder.ret(status)
+        self.byte_copies[maximum] = fn
         return fn
 
 

@@ -271,6 +271,8 @@
         "tests/go/test_managed_contracts.py::test_opt_in_scalar_source_loop_returns_nil_or_an_owned_result",
         "tests/go/test_managed_contracts.py::test_opt_in_scalar_source_loop_rejects_other_ownership_and_bounds",
         "tests/runtime_shared/test_managed_owned.py::test_identical_go_slice_building_loop_executes_with_owned_result",
+        "tests/go/test_managed_contracts.py::test_opt_in_copied_stack_bytes_require_valid_span_and_publish_after_copy",
+        "tests/runtime_shared/test_managed_owned.py::test_go_copied_stack_bytes_survive_frame_and_match_raw_reference",
         "tests/go/test_managed_contracts.py::test_pinned_cpu_cache_sizes_producers_have_exclusive_source_owners",
         "tests/go/test_managed_contracts.py::test_scalar_slice_owner_proof_rejects_hidden_aliases_and_writes",
         "tests/go/test_managed_contracts.py::test_pinned_scalar_slice_owner_proof_rejects_forward_cycles_and_alias_imports",
@@ -332,6 +334,8 @@
             "tests/go/test_managed_contracts.py::test_opt_in_scalar_source_loop_returns_nil_or_an_owned_result",
             "tests/go/test_managed_contracts.py::test_opt_in_scalar_source_loop_rejects_other_ownership_and_bounds",
             "tests/runtime_shared/test_managed_owned.py::test_identical_go_slice_building_loop_executes_with_owned_result",
+            "tests/go/test_managed_contracts.py::test_opt_in_copied_stack_bytes_require_valid_span_and_publish_after_copy",
+            "tests/runtime_shared/test_managed_owned.py::test_go_copied_stack_bytes_survive_frame_and_match_raw_reference",
             "tests/go/test_managed_contracts.py::test_pinned_cpu_cache_sizes_producers_have_exclusive_source_owners",
             "tests/go/test_managed_contracts.py::test_scalar_slice_owner_proof_rejects_hidden_aliases_and_writes",
             "tests/go/test_managed_contracts.py::test_pinned_scalar_slice_owner_proof_rejects_forward_cycles_and_alias_imports",
@@ -368,15 +372,15 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "88fe486393ec8cdf78a018adef6eb8f616d55bb9ad5f34a83cbaf4622c0bef2a"
+            "sha256": "52a588c69c41e17c767dd0d7a1742398053464d561f40eeb3024b2150a3df02b"
           },
           {
             "path": "pcc/frontends/go/scalar_slice_runtime.py",
-            "sha256": "1ba452fd61b20f4c465502742a62b82a3cd10935e5460ef4cd736fa2b52eef95"
+            "sha256": "63af1b1bcb00ae41aa93e72d9090e5fdc29bab8b58c092d88d69c0da1554bc13"
           },
           {
             "path": "pcc/frontends/go/slice_proof.py",
-            "sha256": "57620d7c1892ea603d90188995e2e7049da0e2171153d0aa1ad908cc21a60c54"
+            "sha256": "14a312b69527be742998e4ed0279dc81abe6407b750391e31e8e4bbc6e0fb854"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -385,7 +389,7 @@
         ]
       },
       "id": "go.shared-managed-compiler-contracts",
-      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice. The explicit nil-to-first-append helper transfers an initialized backing owner without changing output on failure; its isolated GC0 source entry proves a whole one-function producer package and emits a foreign status/owned-handle ABI. The isolated full-backing growth helper allocates and copies before publishing new ownership; the original owner is unchanged. The separate in-capacity path does not allocate or replace that owner; it bounds the explicit logical length and writes through existing aliases. One explicit loop-carried handle-and-length transition chooses all three paths and only transfers or drops ownership on success. An explicit closed uint32 Go loop now consumes that transition and has unchanged-source native/reference evidence; its foreign boundary returns status, owned handle and length. The exact selected CPU cache-size functions have a source-only owner and forwarding census, and an opt-in source checker admits only their proved slice signatures. Synthetic proofs exercise normal typing of append, len, nil and direct result forwarding. The selected package reaches its named blank padding type before checking these bodies; no native acceptance. The original x86 option builder has a bounded global-record slice prefix and static field sources, not linked export or runtime storage acceptance. An exact source-only request now retains its nominal slice declaration, with no native symbol. The source-only first two index ranges check direct bool/string field places using their unmodified iteration index; whole-record escapes and native storage remain unadmitted. The copied-element range preserves scalar fields and static nonnil bool pointee facts only for immediate dereference; it does not materialize the record or its pointer separately. The exact initializer and bounded append sites now type-check their scalar labels and static field addresses without allocating or emitting the catalog. This is not native Go slice return or general package lowering.",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice. The explicit nil-to-first-append helper transfers an initialized backing owner without changing output on failure; its isolated GC0 source entry proves a whole one-function producer package and emits a foreign status/owned-handle ABI. The isolated full-backing growth helper allocates and copies before publishing new ownership; the original owner is unchanged. The separate in-capacity path does not allocate or replace that owner; it bounds the explicit logical length and writes through existing aliases. One explicit loop-carried handle-and-length transition chooses all three paths and only transfers or drops ownership on success. An explicit closed uint32 Go loop now consumes that transition and has unchanged-source native/reference evidence; its foreign boundary returns status, owned handle and length. The exact selected CPU cache-size functions have a source-only owner and forwarding census, and an opt-in source checker admits only their proved slice signatures. Synthetic proofs exercise normal typing of append, len, nil and direct result forwarding. The selected package reaches its named blank padding type before checking these bodies; no native acceptance. The original x86 option builder has a bounded global-record slice prefix and static field sources, not linked export or runtime storage acceptance. An exact source-only request now retains its nominal slice declaration, with no native symbol. The source-only first two index ranges check direct bool/string field places using their unmodified iteration index; whole-record escapes and native storage remain unadmitted. The copied-element range preserves scalar fields and static nonnil bool pointee facts only for immediate dereference; it does not materialize the record or its pointer separately. The exact initializer and bounded append sites now type-check their scalar labels and static field addresses without allocating or emitting the catalog. A separately qualified GC0 helper copies a bounded live stack byte view into a new immutable-result owner. It is not native Go slice/string return or general package lowering.",
       "evidence": []
     },
     {
@@ -1928,7 +1932,7 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "88fe486393ec8cdf78a018adef6eb8f616d55bb9ad5f34a83cbaf4622c0bef2a"
+            "sha256": "52a588c69c41e17c767dd0d7a1742398053464d561f40eeb3024b2150a3df02b"
           },
           {
             "path": "pcc/frontends/go/strings.py",
@@ -2635,7 +2639,7 @@
           },
           {
             "path": "pcc/frontends/go/managed_objects.py",
-            "sha256": "88fe486393ec8cdf78a018adef6eb8f616d55bb9ad5f34a83cbaf4622c0bef2a"
+            "sha256": "52a588c69c41e17c767dd0d7a1742398053464d561f40eeb3024b2150a3df02b"
           },
           {
             "path": "pcc/support/managed_objects.py",
