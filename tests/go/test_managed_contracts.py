@@ -131,6 +131,30 @@ def test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage
         value_plan(SliceType(ERROR_TYPE))
 
 
+def test_escaping_uintptr_slice_keeps_scalar_payload_separate_from_owner_root():
+    from pcc.frontends.go.managed_objects import scalar_slice_backing_plan
+    from pcc.support.managed_objects import allocation_extent
+
+    view = value_plan(SliceType("uintptr"))
+    backing = scalar_slice_backing_plan("uintptr")
+    assert view.identity != type_identity(SliceType("uint8"))
+    owner, = view.layout.references
+    assert owner.role == "owned" and owner.target == backing.identity
+    assert [slot.kind for slot in view.layout.scalars] == [
+        "element-offset", "element-length", "element-capacity",
+    ]
+    assert allocation_extent(backing.layout, 3) == 24
+    payload = pointer_map(backing.layout, pointer_size=8)
+    assert payload.owned == () and payload.element.owned == () and payload.element_stride == 8
+    assert "object_abi" in unmet_requirements(backing) and "rooted_lifetime" in unmet_requirements(view)
+    assert "go-owned-slice-result-transfer" in unmet_requirements(view)
+    with pytest.raises(ManagedContractError, match="overflows"):
+        allocation_extent(backing.layout, (1 << 63) // 8)
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime") as caught:
+        compile_go("package main;func sizes()[]uintptr{return nil};func main(){}")
+    assert caught.value.managed_plan == view
+
+
 def test_actual_static_string_lowering_consumes_common_span_and_retains_immutable_abi(monkeypatch):
     from pcc.frontends.go import lowering
     seen = []

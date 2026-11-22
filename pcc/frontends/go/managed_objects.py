@@ -18,6 +18,15 @@ from .types import ArrayType, ERROR_TYPE, INTEGER_TYPES, PointerType, SliceType,
 
 
 BYTE_BACKING = ManagedTypeIdentity('go', ('runtime-plan',), 'byte-backing')
+_SCALAR_SLICE_BACKINGS = {
+    "uint8": BYTE_BACKING,
+    "uintptr": ManagedTypeIdentity('go', ('runtime-plan',), 'uintptr-backing'),
+}
+
+
+def _scalar_slice_backing(dtype):
+    if isinstance(dtype, SliceType) and type(dtype.element) is str:
+        return _SCALAR_SLICE_BACKINGS.get(dtype.element)
 
 
 @dataclass(frozen=True)
@@ -45,7 +54,7 @@ def type_identity(dtype):
     if isinstance(dtype, ArrayType):
         return ManagedTypeIdentity('go', ('structural',), 'array',
                                    declaration=(dtype.count, type_identity(dtype.element)))
-    if isinstance(dtype, SliceType) and dtype.element == 'uint8':
+    if _scalar_slice_backing(dtype) is not None:
         return ManagedTypeIdentity('go', ('structural',), 'slice',
                                    declaration=(type_identity(dtype.element),))
     if isinstance(dtype, StructType):
@@ -88,14 +97,15 @@ def value_plan(dtype):
                      ScalarFieldPlan(('length',), 'byte-length')),
             references=(ReferenceEdgePlan(('backing-owner',)),))
         requirements += ('go-string-owner-and-span-lowering',)
-    elif isinstance(base, SliceType) and base.element == 'uint8':
+    elif (slice_owner := _scalar_slice_backing(base)) is not None:
         layout = ManagedLayoutPlan(identity,
-            scalars=(ScalarFieldPlan(('offset',), 'byte-offset'),
+            scalars=(ScalarFieldPlan(('offset',), 'byte-offset' if base.element == 'uint8' else 'element-offset'),
                      ScalarFieldPlan(('length',), 'element-length'),
                      ScalarFieldPlan(('capacity',), 'element-capacity')),
-            references=(ReferenceEdgePlan(('backing-owner',), BYTE_BACKING),))
+            references=(ReferenceEdgePlan(('backing-owner',), slice_owner),))
         requirements += ('go-slice-bounds-and-capacity', 'go-slice-backing-growth-and-aliases',
-                         'go-slice-owner-and-span-lowering')
+                         'go-slice-owner-and-span-lowering', 'go-owned-slice-result-transfer',
+                         'go-distinguish-nil-and-non-nil-empty-slices')
     elif is_error_interface(dtype):
         layout = ManagedLayoutPlan(identity,
             scalars=(ScalarFieldPlan(('dynamic-type-and-method-table',), 'immutable-metadata'),),
@@ -112,10 +122,20 @@ def value_plan(dtype):
 
 def byte_backing_plan():
     """Scalar byte payload only; the backing allocation/trace ABI is unresolved."""
-    byte = value_plan('uint8').layout
-    layout = ManagedLayoutPlan(BYTE_BACKING, element=byte, element_stride=1)
-    return ManagedValuePlan(BYTE_BACKING, 'unresolved', layout,
-                            ('go-byte-backing-allocation-and-extent',))
+    return scalar_slice_backing_plan("uint8")
+
+
+def scalar_slice_backing_plan(element):
+    """Exact repeated scalar payload only, not a runtime header or object."""
+    if type(element) is not str or element not in _SCALAR_SLICE_BACKINGS:
+        raise ManagedContractError("Go scalar slice backing requires a qualified scalar element")
+    identity = _SCALAR_SLICE_BACKINGS[element]
+    scalar = value_plan(element).layout
+    # Zero is the fixed prefix of the payload, not the size of a GC header.
+    layout = ManagedLayoutPlan(identity, fixed_size=0, alignment=scalar.alignment,
+                              element=scalar, element_stride=scalar.fixed_size)
+    return ManagedValuePlan(identity, 'unresolved', layout,
+                            ('go-scalar-slice-backing-header-and-allocation',))
 
 
 def static_string_plan(data):

@@ -225,16 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   trace the real escaping `[]uintptr` in
-   `internal/cpu/datacache_x86.go:15:23` and the shared scalar-slice
-   allocator/root obligations. The selected byte helper now has
-   checked source metadata; unproved calls and escaping strings remain
-   rejected. See the
+   bind the escaping `[]uintptr` in
+   `internal/cpu/datacache_x86.go:15:23` to a shared runtime backing
+   lifetime. The checked compiler plan distinguishes the rooted owner
+   from scalar payload; no executable allocation or return ABI exists.
+   The selected byte helper remains source-only. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go escaping scalar slice storage ownership: Codex, Linux x86-64, 2026-11-22 04:00 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -528,3 +528,16 @@ real selected graph advances to the allocating `DataCacheSizes() []uintptr`
 at `internal/cpu/datacache_x86.go:15:23`; that result genuinely escapes,
 so the fixed local byte plan cannot apply. The scoped suite passed
 146 checks and five native byte/variadic differentials.
+
+The escaping scalar slice now has a source-only plan: a rooted owner,
+offset, length and capacity; checked pointer-free uintptr payload extent;
+and explicit nil versus allocated-empty and return ownership requirements.
+This does not choose a descriptor, register a runtime object or lower a
+return. The original x86 cache-size function and CPUID assembly built
+unchanged in the pinned Go toolchain. On this Linux host the harness
+observed three sizes and non-nil backing after a collection; that result
+is host-specific, not a fixed output requirement. The Intel path appends
+in a CPUID-dependent loop. Eighty-four focused checks and one independent
+native static-string differential passed. Next: qualify the real runtime
+backing lifetime, then growth and ownership transfer; do not reuse the
+function-local byte stack array.

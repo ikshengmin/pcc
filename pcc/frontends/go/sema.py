@@ -21,7 +21,7 @@ from pcc.frontends.go.interface_methods import (
 from pcc.frontends.go.interface_values import (
     boxed_interface_plan, interface_storage_plan, nil_interface_plan, transferred_interface_plan,
 )
-from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan
+from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan, value_plan
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
     ArraySyntax, ChannelSyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
@@ -944,8 +944,11 @@ class Analyzer:
                                 'channel types require shared-runtime storage and scheduling support')
         if isinstance(dtype, SliceSyntax):
             if not signature:
-                raise UnsupportedGo(dtype.token, 'go.unsupported.slice-storage',
-                                    "slice types require shared-runtime backing storage support")
+                failure = UnsupportedGo(dtype.token, 'go.unsupported.slice-storage',
+                                        "slice types require shared-runtime backing storage support")
+                if dtype.element in ("uint8", "uintptr"):
+                    failure.managed_plan = value_plan(SliceType(dtype.element))
+                raise failure
             return SliceType(self.resolve_type(dtype.element, signature=True))
         if isinstance(dtype, PointerSyntax):
             # Distinguish valid pointer recursion from invalid recursive value
