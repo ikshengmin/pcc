@@ -127,3 +127,68 @@ def test_capture_requires_native_execution():
     with pytest.raises(Exception):
         unsafe.capture_gc_registers(None)
     assert "capture_gc_registers" in unsafe.__all__
+
+
+def linux_x86_sentinel_trampoline():
+    registers = ("rbx", "rbp", "r12", "r13", "r14", "r15")
+    lines = [
+        ".intel_syntax noprefix", ".text", ".globl _start", ".type _start, @function", "_start:",
+        "  and rsp, -16", "  call main", "  mov edi, eax", "  mov eax, 60", "  syscall",
+        ".globl capture_sentinels", ".type capture_sentinels, @function", "capture_sentinels:",
+    ]
+    for reg in registers:
+        lines.append(f"  push {reg}")
+    lines.append("  sub rsp, 8")
+    for index, reg in enumerate(registers):
+        lines.append(f"  mov {reg}, {257 + index}")
+    lines.extend(("  call capture_roots", "  add rsp, 8"))
+    for reg in reversed(registers):
+        lines.append(f"  pop {reg}")
+    lines.append("  ret")
+    return "\n".join(lines) + "\n"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: platform.system() == "Linux" and platform.machine() == "x86_64")
+@pytest.mark.parametrize("registers", ("0", "1"))
+def test_linux_x86_capture_executes_with_live_callee_registers(tmp_path, monkeypatch, registers):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", registers)
+    target = TARGETS[2]
+    library = parse_relocatable(emit_owned_object(capture_ir(tmp_path, target), target))
+    driver = parse_relocatable(emit_owned_object(_c_ir('''
+extern void *capture_sentinels(void *);
+void *memcpy(void *destination, const void *source, unsigned long count) {
+    volatile unsigned char *dst = destination;
+    const volatile unsigned char *src = source;
+    for (unsigned long i = 0; i < count; ++i) dst[i] = src[i];
+    return destination;
+}
+int main(void) {
+    long words[1026];
+    for (int i = 0; i < 1026; ++i) words[i] = -37;
+    long stack = (long)capture_sentinels(words + 1);
+    if (words[0] != -37 || words[1025] != -37 || words[17] <= 0
+        || words[17] > 4096 || (words[17] & 7) != 0) return 1;
+    if (stack == 0 || (stack & 7) != 0 || stack >= (long)words) return 2;
+    if (words[9] != stack) return 3;
+    for (int j = 10; j <= 16; ++j) if (words[j] != 0) return 4;
+    for (int i = 0; i < 6; ++i) {
+        int found = 0;
+        for (int j = 1; j < 17; ++j) if (words[j] == 257 + i) found = 1;
+        for (int j = 18; j < 18 + words[17] / 8; ++j)
+            if (words[j] == 257 + i) found = 1;
+        if (!found) return 5 + i;
+    }
+    return 0;
+}
+''', target), target))
+    program = tmp_path / "capture-linux"
+    startup = assemble_file(linux_x86_sentinel_trampoline())
+    program.write_bytes(link_static_executable([startup, library, driver], entry="_start"))
+    program.chmod(0o755)
+    result = subprocess.run([str(program)], capture_output=True, timeout=15,
+                            env=dict(os.environ, PATH="/nonexistent"))
+    assert (result.returncode, result.stdout, result.stderr) == (0, b"", b"")

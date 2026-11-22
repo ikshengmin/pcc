@@ -56,9 +56,14 @@ source/test preimage, GC3 case `[order0-0-3]` again refused forwarding
 installation before reaching the scan. This is not a result of the new
 tests. No native collector or performance gate was run in this round.
 
-`tests/python/test_gc_machine_root_capture.py` has a live-register
-trampoline on Darwin arm64; the Linux x86-64 cases check emitted instructions,
-not live register retention. Adapt the trampoline for the next Linux slice.
+The Linux x86-64 live-register test now links an ELF using PCC-owned objects
+and executes the same capture intrinsic as the runtime. Six caller
+callee-saved register sentinels must appear in the captured registers or the
+copied stack (where the compiler may save them). Both register-allocation
+settings passed, checking the SP and buffer canaries. Four emitted-object
+targets and the host-only intrinsic guard also passed. No production
+collection, callback-acquired root, or macOS execution was tested here.
+
 Include a positive root first acquired by a callback or reentrant
 collection; it cannot be inferred from the outermost saved SP. In the later
 scaling gate, report old index visits and payload-span enumeration
