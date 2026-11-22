@@ -328,9 +328,13 @@ in the relevant section or issue and removes the entry.
    GC2 comparison ledger. The byte-identical tool is available on review
    [`20428077`](https://github.com/ikshengmin/pcc/commit/20428077c8f1d9c3c0fe8dc4e4d8b26a401e85f6).
    pcc_perf A/B now supports per-run maximum STW, process peak RSS, and
-   timed p99 through `--latency-receipts`. Next: copy the qualified
-   collector-neutral tool to both review branches and provide the exact
-   macOS gates. No master runtime or pacer A/B change.
+   timed p99 through `--latency-receipts`. The qualified
+   collector-neutral tool is now on both review branches, with exact
+   [GC1](https://github.com/ikshengmin/pcc/blob/00f9fe1a3fa5f201bdbf129eb0becf4b2ac1d66f/docs/investigations/gc1-mutator-review-candidate.md)
+   and [GC2](https://github.com/ikshengmin/pcc/blob/3881de679be11087bdef747955d8bd357d21196c/docs/investigations/gc2-pacer-review-candidate.md)
+   macOS comparison commands. While waiting for those runs, next fix the
+   existing 51-entry runtime ABI chunk regression seen during GC2 checks;
+   preserve the flat signature order. No master runtime or A/B change.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -342,7 +346,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Qualify latency receipts on both GC review branches: Codex, Linux x86-64, 2026-11-22 09:24 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
