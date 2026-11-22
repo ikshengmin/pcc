@@ -623,3 +623,14 @@ allocation failure preserved handle, length and contents. The nine
 words matched Go 1.27.3. Thirty-eight adjacent and seven native checks
 passed. This control drives the helper from a foreign observer; proving
 and lowering the original Go loop remains a separate source step.
+
+The explicit opt-in entry now also lowers a proved zero-origin uint32
+loop from unchanged Go source. The checked lexical owner is the only
+slice local, its only write is the builtin append, and its only escape
+is the result. The native Linux x86-64 GC0 observer consumed a nil
+result at zero and live length-bearing handles for one and ten values;
+after collection all fourteen words matched Go 1.27.3. The entry
+drops any owned prefix on failure before publishing outputs. Forty-six
+adjacent and eight native checks passed. The isolated source shape
+does not yet prove the conditional/loop paths or producer forwarding
+of the actual CPU package.

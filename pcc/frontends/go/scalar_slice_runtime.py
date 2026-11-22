@@ -367,3 +367,69 @@ def compile_scalar_first_append_entry(units, *, function_name, target_triple, gc
     builder = ir.IRBuilder(fn.append_basic_block("entry"))
     builder.ret(builder.call(helper, list(fn.args)))
     return module, symbol
+
+
+def compile_scalar_append_loop_entry(units, *, function_name, target_triple, gc_backend):
+    """Opt-in foreign status/owner/length result for one proved Go loop."""
+    from .diagnostics import UnsupportedGo
+    from .lowering import function_symbol
+    from .packages import parse_package
+    from .slice_proof import closed_scalar_append_loop
+
+    program = parse_package(units, require_main=False)
+    proof = closed_scalar_append_loop(program, function_name)
+    if proof is None:
+        token = (program.functions[0].token if len(program.functions) == 1 else program.token)
+        raise UnsupportedGo(token, "go.unsupported.slice-storage",
+                            "scalar append loop requires a zero-origin uint32 loop and sole nil slice owner")
+
+    module = ir.Module(name="go_scalar_append_loop")
+    module.triple = target_triple
+    runtime = ScalarSliceRuntime(module, gc_backend=gc_backend)
+    append = runtime.append_owned_state_function("uintptr")
+    drop = module.globals["pcc_rt_managed_drop"]
+    pointer = ir.IntType(8).as_pointer()
+    i32, i64 = ir.IntType(32), ir.IntType(64)
+    handle_out, length_out = pointer.as_pointer(), i64.as_pointer()
+    symbol = function_symbol(proof.token.text)
+    fn = ir.Function(module, ir.FunctionType(i32, [i32, handle_out, length_out]), symbol)
+    count, owner_out, size_out = fn.args
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    init = fn.append_basic_block("scalar_loop_init")
+    header = fn.append_basic_block("scalar_loop_header")
+    body = fn.append_basic_block("scalar_loop_append")
+    next_index = fn.append_basic_block("scalar_loop_next")
+    failed = fn.append_basic_block("scalar_loop_failed")
+    publish = fn.append_basic_block("scalar_loop_publish")
+    invalid = fn.append_basic_block("scalar_loop_invalid")
+    overlap = builder.icmp_unsigned("==", owner_out, builder.bitcast(size_out, handle_out))
+    missing = builder.or_(builder.icmp_unsigned("==", owner_out, ir.Constant(handle_out, None)),
+                          builder.icmp_unsigned("==", size_out, ir.Constant(length_out, None)))
+    builder.cbranch(builder.or_(overlap, missing), invalid, init)
+    builder.position_at_end(init)
+    owner = builder.alloca(pointer)
+    size = builder.alloca(i64)
+    builder.store(ir.Constant(pointer, None), owner)
+    builder.store(ir.Constant(i64, 0), size)
+    builder.branch(header)
+    builder.position_at_end(header)
+    index = builder.phi(i32)
+    index.add_incoming(ir.Constant(i32, 0), init)
+    builder.cbranch(builder.icmp_unsigned("<", index, count), body, publish)
+    builder.position_at_end(body)
+    value = builder.zext(index, i64)
+    status = builder.call(append, [owner, size, value])
+    builder.cbranch(builder.icmp_unsigned("==", status, ir.Constant(i32, 0)), next_index, failed)
+    builder.position_at_end(next_index)
+    index.add_incoming(builder.add(index, ir.Constant(i32, 1)), next_index)
+    builder.branch(header)
+    builder.position_at_end(failed)
+    builder.call(drop, [builder.load(owner)])
+    builder.ret(status)
+    builder.position_at_end(publish)
+    builder.store(builder.load(owner), owner_out)
+    builder.store(builder.load(size), size_out)
+    builder.ret(ir.Constant(i32, 0))
+    builder.position_at_end(invalid)
+    builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+    return module, symbol

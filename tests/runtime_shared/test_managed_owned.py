@@ -268,6 +268,39 @@ def test_go_scalar_loop_state_transitions_are_failure_atomic_and_match_go(tmp_pa
     assert run(reference) == Execution(0, observed, b"")
 
 
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: (
+    bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and bool(os.environ.get("PCC_GO_REFERENCE"))
+    and bool(os.environ.get("PCC_GO_REFERENCE_CACHE"))
+    and sys.platform == "linux" and platform.machine() == "x86_64"
+))
+@pytest.mark.xdist_group(name="go-reference")
+def test_identical_go_slice_building_loop_executes_with_owned_result(tmp_path, monkeypatch):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_append_loop_entry
+    from tests.go.owned_execution import Execution, compile_reference, run
+
+    fixtures = ROOT / "tests/go/fixtures"
+    producer = fixtures / "managed_slice_loop_producer.go"
+    observer = fixtures / "managed_slice_loop_observer.go"
+    source = (producer.name, producer.read_text())
+    module, symbol = compile_scalar_append_loop_entry((source,), function_name="build",
+                                                     target_triple=TARGET, gc_backend=0)
+    adapter = tmp_path / "go_slice_loop.o"
+    adapter.write_bytes(emit_owned_object(str(module), TARGET))
+    expected = b"".join(word.to_bytes(8, "little") for n in (0, 1, 10) for word in (n, *range(n)))
+    observed = _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_source_loop.c",
+                                    extra_object=adapter, expected_gc0_stdout=expected,
+                                    cpp_args=["-Dscalar_slice_source_loop=" + symbol])
+    originals = (source, (observer.name, observer.read_text()))
+    reference = compile_reference(originals, tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    for original in (producer, observer):
+        assert (reference.parent / original.name).read_bytes() == original.read_bytes()
+    assert run(reference) == Execution(0, observed, b"")
+
+
 def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=(),
                          expected_gc0_stdout=b""):
     from pcc.driver.project import TranslationUnit

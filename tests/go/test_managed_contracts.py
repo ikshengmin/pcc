@@ -380,3 +380,43 @@ def test_opt_in_append_owned_state_preserves_slots_until_success():
     assert publish.index("store ptr") < publish.index("store i64") < publish.index("@pcc_rt_managed_drop")
     with pytest.raises(ManagedContractError, match="qualified scalar"):
         runtime.append_owned_state_function("bool")
+
+
+def test_opt_in_scalar_source_loop_returns_nil_or_an_owned_result():
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_append_loop_entry
+    source = ("package main; func Build(n uint32) []uintptr { "
+              "var dst []uintptr; for i := uint32(0); i < n; i++ { "
+              "dst = append(dst, uintptr(i)) }; return dst }")
+    module, symbol = compile_scalar_append_loop_entry(
+        (("loop.go", source),), function_name="Build",
+        target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
+    )
+    text = str(module).split("define i32 @" + symbol, 1)[1]
+    assert "phi i32" in text and "icmp ult i32" in text
+    assert "@__pcc_go_scalar_append_owned_uintptr" in text
+    assert "zext i32" in text
+    fail = text.split("scalar_loop_failed:", 1)[1].split("scalar_loop_publish:", 1)[0]
+    assert "@pcc_rt_managed_drop" in fail and "store" not in fail
+    with pytest.raises(GoDiagnostic, match="slice types require shared-runtime"):
+        compile_go(source + "; func main(){}")
+
+
+@pytest.mark.parametrize("change", [
+    ("i < n", "i <= n"),
+    ("i++", "i--"),
+    ("uintptr(i)", "uintptr(n)"),
+    ("var dst []uintptr", "var dst []uintptr = nil"),
+    ("return dst", "return nil"),
+    ("n uint32", "uint32 uint32"),
+    ("i := uint32(0)", "i := uint32(1)"),
+])
+def test_opt_in_scalar_source_loop_rejects_other_ownership_and_bounds(change):
+    from pcc.frontends.go.scalar_slice_runtime import compile_scalar_append_loop_entry
+    source = ("package main; func Build(n uint32) []uintptr { "
+              "var dst []uintptr; for i := uint32(0); i < n; i++ { "
+              "dst = append(dst, uintptr(i)) }; return dst }").replace(*change)
+    with pytest.raises(GoDiagnostic):
+        compile_scalar_append_loop_entry(
+            (("loop.go", source),), function_name="Build",
+            target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
+        )

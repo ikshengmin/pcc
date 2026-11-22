@@ -237,13 +237,7 @@ class ScalarFirstAppendProof:
     token: object
 
 
-def closed_scalar_first_append(program, function_name):
-    """Prove the complete contents of an isolated producer package.
-
-    No other declarations, imports, shadowing, calls, state or spread can
-    hide behind the opt-in entry. The uninitialized local is necessarily nil;
-    its only observation is append and its only escape is the returned value.
-    """
+def _closed_scalar_function(program, function_name, body_count):
     if (program.imports or program.types or program.constants or program.variables
             or program.linknames or len(program.functions) != 1):
         return None
@@ -251,8 +245,21 @@ def closed_scalar_first_append(program, function_name):
     if (fn.token.text != function_name or function_name in {"_", "init", "append"}
             or program.token.text != "main" or function_name == "main"
             or fn.receiver is not None or fn.declaration_only or fn.type_parameters
-            or fn.variadic or len(fn.params) != 1 or len(fn.body) != 2
+            or fn.variadic or len(fn.params) != 1 or len(fn.body) != body_count
             or any(name is not None for name in fn.result_names)):
+        return None
+    return fn
+
+
+def closed_scalar_first_append(program, function_name):
+    """Prove the complete contents of an isolated producer package.
+
+    No other declarations, imports, shadowing, calls, state or spread can
+    hide behind the opt-in entry. The uninitialized local is necessarily nil;
+    its only observation is append and its only escape is the returned value.
+    """
+    fn = _closed_scalar_function(program, function_name, 2)
+    if fn is None:
         return None
     parameter, element = fn.params[0]
     if (type(element) is not str or element not in {"uint8", "uintptr"}
@@ -272,3 +279,50 @@ def closed_scalar_first_append(program, function_name):
             or not _name(arguments[0], local) or not _name(arguments[1], parameter.text)):
         return None
     return ScalarFirstAppendProof(element, fn.token)
+
+@dataclass(frozen=True)
+class ScalarAppendLoopProof:
+    """Loop with one zero-offset owner and an unsigned scalar counter."""
+    token: object
+
+
+def closed_scalar_append_loop(program, function_name):
+    """Prove a zero-origin uint32 loop returning its sole slice owner."""
+    fn = _closed_scalar_function(program, function_name, 3)
+    if fn is None:
+        return None
+    parameter, bound_type = fn.params[0]
+    if parameter is None or bound_type != "uint32" or not _slice_of(fn.result, "uintptr"):
+        return None
+    protected = {"_", "append", "uint32", "uintptr"}
+    if protected & {parameter.text, fn.token.text}:
+        return None
+    declaration, loop, returned = fn.body
+    if (declaration.kind != "var" or len(declaration.names) != 1 or declaration.exprs
+            or not _slice_of(declaration.type, "uintptr") or loop.kind != "for"
+            or loop.init is None or loop.post is None or len(loop.exprs) != 1
+            or len(loop.body) != 1 or returned.kind != "return" or len(returned.exprs) != 1):
+        return None
+    local = declaration.names[0].text
+    init, condition, step = loop.init, loop.exprs[0], loop.post
+    if (init.kind != ":=" or len(init.names) != 1 or len(init.exprs) != 1
+            or not _builtin_call(init.exprs[0], "uint32") or len(init.exprs[0].args) != 1
+            or _literal_dimension(init.exprs[0].args[0]) != 0
+            or condition.kind != "binary" or condition.value != "<" or len(condition.args) != 2
+            or step.kind != "++" or len(step.targets) != 1):
+        return None
+    index = init.names[0].text
+    if (protected & {local, index} or len({parameter.text, local, index}) != 3
+            or not _name(condition.args[0], index) or not _name(condition.args[1], parameter.text)
+            or not _name(step.targets[0], index) or not _name(returned.exprs[0], local)):
+        return None
+    update = loop.body[0]
+    if (update.kind != "=" or len(update.targets) != 1 or not _name(update.targets[0], local)
+            or len(update.exprs) != 1 or not _builtin_call(update.exprs[0], "append")):
+        return None
+    arguments = update.exprs[0].args
+    if (len(arguments) != 2 or not _name(arguments[0], local)
+            or not _builtin_call(arguments[1], "uintptr") or len(arguments[1].args) != 1
+            or not _name(arguments[1].args[0], index)):
+        return None
+    return ScalarAppendLoopProof(fn.token)
