@@ -457,9 +457,13 @@ in the relevant section or issue and removes the entry.
    carries the actual old receiver through ordinary direct and planned
    stores, verified with real off-object list and inline tuple slots on
    Linux; roots are ownerless and the bounded observer flags overflow.
-   No real minor reads the buffer. Next GC3: close the locked list first
-   store and tuple private builders, leave foreign paths out, then prove
-   admitted share and n/4n/16n zero clean-old visits on the sealed arm.
+   No real minor reads the buffer. [GC3 review b2a6508](https://github.com/ikshengmin/pcc/commit/b2a65080db00de0a7c0a2f8cba86b95467c0548f)
+   covers native locked list first stores into spare storage and a new
+   backing array: exact parent fails, five backend lanes and 18 host
+   models pass fixed. Ordinary tuple construction already passes the
+   owner; exclude the raw dictionary materializer and foreign paths.
+   Next GC3: persistent sparse cards and a real bounded minor on review,
+   then n/4n/16n zero clean-old visits and sealed-handler admitted share.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -681,7 +685,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:23 UTC), route GC3 fast list first-store and private tuple publication with explicit owner under the existing enclosing transaction; use source-matched native writer controls.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
