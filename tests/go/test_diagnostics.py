@@ -89,6 +89,7 @@ CASES = [
     ('local-type-declarations', original('func F[T any](){type L struct{}}')),
     ('map-storage', original('type T struct{Values map[string]float64}')),
     ('goroutines', original('func f(){}', 'go f()')),
+    ('channel-storage', original(body='_ = make(chan bool)')),
 ]
 
 

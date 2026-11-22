@@ -167,3 +167,11 @@ receive semantics. The diagnostic union's next stop is `make(chan bool)`
 at `754:20`. The scoped suite passed 206 checks. Official Go executed a
 receive control exercising discard, comma-ok and unary precedence, and
 rejected the three scalar receive forms. No upstream test was run.
+
+The channel operand now parses at `benchmark.go:754:20`. Channel
+directions remain distinct from receiving a converted channel value,
+and explicit `make(chan T, n)` checks the buffer size before the owned
+storage boundary. The diagnostic union now stops at the original
+`select` in `testing/testing.go:2747:4`. The focused suite passed 225
+checks; official Linux/amd64 Go ran the directional channel control and
+rejected all five invalid arguments. PCC never created a channel.

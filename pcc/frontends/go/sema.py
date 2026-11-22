@@ -23,8 +23,9 @@ from pcc.frontends.go.interface_values import (
 )
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
-    ArraySyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax, InterfaceSyntax, MapSyntax,
-    PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration, TypeInstantiationSyntax, TypeName,
+    ArraySyntax, ChannelSyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
+    InterfaceSyntax, MapSyntax, PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration,
+    TypeInstantiationSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
     DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, StructType,
@@ -892,6 +893,14 @@ class Analyzer:
                 self.pointer_type_depth -= 1
             raise UnsupportedGo(dtype.token, 'go.unsupported.map-storage',
                                 'map types require shared-runtime storage support')
+        if isinstance(dtype, ChannelSyntax):
+            self.pointer_type_depth += 1
+            try:
+                self.resolve_type(dtype.element, signature=True)
+            finally:
+                self.pointer_type_depth -= 1
+            raise UnsupportedGo(dtype.token, 'go.unsupported.channel-storage',
+                                'channel types require shared-runtime storage and scheduling support')
         if isinstance(dtype, SliceSyntax):
             if not signature:
                 raise UnsupportedGo(dtype.token, 'go.unsupported.slice-storage',
@@ -2021,9 +2030,10 @@ class Analyzer:
             if (name == "make" and name not in owner.functions and name not in owner.types
                     and name not in self.type_bindings
                     and expr.args and expr.args[0].kind == "type"
-                    and isinstance(expr.args[0].value, MapSyntax)):
+                    and isinstance(expr.args[0].value, (MapSyntax, ChannelSyntax))):
+                make_form = "make(map)" if isinstance(expr.args[0].value, MapSyntax) else "make(chan)"
                 if len(expr.args) > 2 or expr.spread is not None:
-                    raise GoDiagnostic(expr.token, "make(map) requires a type and at most one size")
+                    raise GoDiagnostic(expr.token, f"{make_form} requires a type and at most one size")
                 if len(expr.args) == 2:
                     size = expr.args[1]
                     self.expression(size)
@@ -2033,11 +2043,11 @@ class Analyzer:
                         and is_float(size.type) and value is not None
                     )
                     if not (is_integer(size.type) or untyped_real_constant):
-                        raise GoDiagnostic(size.token, "make(map) size must be an integer")
+                        raise GoDiagnostic(size.token, f"{make_form} size must be an integer")
                     if value is not None and not (0 <= value <= integer_bounds("int")[1]
                                                    and value == int(value)):
-                        raise GoDiagnostic(size.token, "make(map) size must be a nonnegative int")
-                self.resolve_type(expr.args[0].value)  # Map storage rejects before lowering.
+                        raise GoDiagnostic(size.token, f"{make_form} size must be a nonnegative int")
+                self.resolve_type(expr.args[0].value)  # Storage rejects before lowering.
             if name in ("min", "max"):
                 self.minmax(expr)
                 return

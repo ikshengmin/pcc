@@ -279,6 +279,14 @@ class MapSyntax:
 
 
 @dataclass
+class ChannelSyntax:
+    token: Token
+    direction: str
+    element: object
+    arrow: Token | None = None
+
+
+@dataclass
 class StructSyntax:
     token: Token
     fields: list
@@ -531,6 +539,14 @@ class GoParser:
             key = self.datatype()
             self.take("]")
             return MapSyntax(token, key, self.datatype())
+        if not signature and self.current.kind in ("chan", "<-"):
+            token = self.current
+            if self.accept("<-"):
+                self.take("chan")
+                return ChannelSyntax(token, "receive", self.datatype(), token)
+            self.take("chan")
+            arrow = self.take("<-") if self.at("<-") else None
+            return ChannelSyntax(token, "send" if arrow else "both", self.datatype(), arrow)
         if signature and self.current.kind in ("map", "chan", "<-"):
             token = self.current
             self.constraint_type()
@@ -1211,7 +1227,24 @@ class GoParser:
             self.index += 1
             left = Expr("unary", token, token.kind, [self.expression(6)])
         elif self.accept("<-"):
-            left = Expr("receive", token, args=[self.expression(6)])
+            operand = self.expression(6)
+            if operand.kind == "type" and not operand.parenthesized and isinstance(operand.value, ChannelSyntax):
+                # A type operand receives the arrow; a completed conversion
+                # is a value, so <-chan T(x) instead receives from that value.
+                dtype, arrow = operand.value, token
+                while isinstance(dtype, ChannelSyntax):
+                    if dtype.direction == "receive":
+                        self.fail(dtype.token, "expected chan after '<-'")
+                    displaced = dtype.arrow
+                    dtype.token, dtype.direction, dtype.arrow = arrow, "receive", arrow
+                    if displaced is None:
+                        break
+                    dtype, arrow = dtype.element, displaced
+                else:
+                    self.fail(arrow, "expected channel type after '<-'")
+                left = Expr("type", token, operand.value)
+            else:
+                left = Expr("receive", token, args=[operand])
         elif self.accept("("):
             previous, self.named_literals = self.named_literals, True
             left = self.expression()
@@ -1229,6 +1262,8 @@ class GoParser:
                 left = Expr("func_literal", token, FunctionLiteral(signature, body))
             else:
                 left = Expr("type", token, signature)
+        elif self.at("chan"):
+            left = Expr("type", token, self.datatype())
         elif self.at("[") or self.at("struct") or self.at("interface") or self.at("map"):
             dtype = self.datatype(literal=True)
             left = self.composite_literal(token, dtype) if self.at("{") else Expr("type", token, dtype)
