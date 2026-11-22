@@ -301,8 +301,10 @@ in the relevant section or issue and removes the entry.
    found its indexless child through the real strong-slot visitor.
    Next GC3 runtime slice: see review question above. Production promotion
    and nursery activation are still untested. The GC0 atomic CPU-share
-   measurement is blocked on a validated profiling arm/backend; no
-   percentage was reported. The native GC1 scheduling baseline verifies
+   measurement lacks a sealed gateway arm; no percentage was reported.
+   Linux `pcc_perf profile-preflight` now gets real task-clock instruction
+   samples for its own thread. Next qualify one owned child and verify
+   address mapping before measuring GC0. The native GC1 scheduling baseline verifies
    one CMS startup on each GC1–4 and none on GC0, with a rooted object
    surviving two explicit collections. A separate native GC1 workload
    reached an automatic mark commit and sweep without explicit collection
@@ -423,7 +425,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC0 Linux task CPU sample transport preflight: Codex, Linux x86-64, 2026-11-22 11:02 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

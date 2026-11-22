@@ -24,6 +24,7 @@
     layout A [B]        cache-line audit (scripts/pcc_hot_layout.py)
     pause prepare      make an opt-in tracing GC source overlay
     pause report       verify exclusive GC phase counters from a native log
+    profile-preflight  test Linux kernel sample transport on this tool's thread
 
 Arms, the object cache and the ledger live outside the repository, under
 PCC_PERF_HOME (default ~/.cache/pcc/perf). An arm is a sealed copy of the
@@ -1219,6 +1220,9 @@ def main(argv: list[str] | None = None) -> int:
                           "(Linux: positive reserve against host MemAvailable, not cgroup headroom; "
                           "Darwin: reclaimable memory, disk and swap checks)")
 
+    probe = commands.add_parser("profile-preflight")
+    probe.add_argument("--cpu-ms", type=int, default=80)
+
     child = commands.add_parser("_build")
     child.add_argument("arm", type=Path)
 
@@ -1296,6 +1300,17 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("file", type=Path)
 
     args = parser.parse_args(argv)
+    if args.command == "profile-preflight":
+        if sys.platform != "linux":
+            raise SystemExit("profile-preflight requires Linux")
+        sys.path.insert(0, str(REPO_ROOT))
+        from scripts.pcc_perf_linux import task_clock_preflight
+
+        try:
+            print(json.dumps(task_clock_preflight(args.cpu_ms), sort_keys=True))
+        except (OSError, ValueError) as exc:
+            raise SystemExit(f"Linux task-clock preflight: {exc}") from exc
+        return 0
     if args.command == "arm":
         if args.gc2_pacer_percent is None:
             sealed = seal(args.name, tuple(args.with_paths))

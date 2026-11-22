@@ -26,3 +26,21 @@ uv run python scripts/pcc_perf.py top gc0-atomic-9ef916de --gc 0 --workers 4 --s
 These are function-localization runs, not five-pair A/B results; final
 attribution also needs instruction-level evidence for atomic sites,
 including inlined sites, with the total busy CPU denominator.
+
+## Linux task-clock sample transport
+
+`uv run python scripts/pcc_perf.py profile-preflight --cpu-ms 60` opens
+a bounded user-mode task-clock event on the tool's own thread. It
+disables the non-inherited event before decoding the mapped ring and
+reports only the count of samples and distinct instruction addresses.
+It does not attach to a workload or infer a CPU ratio. It uses the
+[Linux perf ring buffer contract](https://www.kernel.org/doc/html/latest/userspace-api/perf_ring_buffer.html)
+and refuses malformed metadata, invalid records and explicit loss.
+
+Linux x86-64 exercised the real command at 40/60/100 ms, returning
+46/72/109 user-mode samples with positive, verified thread identity.
+Ninety focused controls passed, including a record that crosses the
+ring boundary and broken/lost-record rejection. Linux arm64 is not
+yet executed. Next prove samples on a single owned child, then map
+those addresses to the sealed executable. Workload coverage and the
+gateway arm remain separate prerequisites for GC0 atomic CPU share.
