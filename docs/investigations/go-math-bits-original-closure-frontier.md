@@ -657,3 +657,15 @@ original graph, explicitly enabling the probe advances past the cache-size
 signatures to `internal/cpu/cpu.go:24:2`, the blank X86 field of named type
 `CacheLinePad` (a record containing only byte padding). This is before the
 actual cache-size bodies are checked; no test IR or native binary was emitted.
+
+A blank field may now be a named record made entirely of nonempty
+byte-array padding or nested blank-only padding records. Its real
+storage remains in the record layout, while positional evaluation
+and equality keep the existing blank-field rules. Linux native PCC
+and official Go agreed on both standalone padding originals; 106
+adjacent checks passed. The same 133-instance opt-in source probe
+advances to `internal/cpu/cpu.go:207:13` at `var options []option`.
+That global is filled by a bounded builder whose Feature pointers
+refer to package bool fields; unlike the scalar cache-size slice it
+needs record backing and initialization provenance. No native
+package build or upstream tests ran.

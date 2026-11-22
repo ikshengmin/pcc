@@ -344,6 +344,35 @@ def bool_pointer_field_metadata(dtype):
     return isinstance(pointer, PointerType) and underlying(pointer.element) == "bool"
 
 
+
+def fixed_blank_padding(dtype):
+    """Only nonempty byte arrays and pure blank-field record trees."""
+    # Nominal records may share subtrees. Memoize by node identity so a
+    # repeated child never multiplies the traversal, and reject unresolved or
+    # cyclic layouts rather than inferring that they contain no references.
+    checked, active = {}, set()
+
+    def visit(value):
+        base = underlying(value)
+        if isinstance(base, ArrayType):
+            return base.element == "uint8" and base.count > 0
+        if not isinstance(base, StructType) or not base.fields:
+            return False
+        key = id(base)
+        if key in checked:
+            return checked[key]
+        if key in active:
+            return False
+        active.add(key)
+        result = all(field.name == "_" and not field.embedded and visit(field.type)
+                     for field in base.fields)
+        active.remove(key)
+        checked[key] = result
+        return result
+
+    return visit(dtype)
+
+
 def require_value_type(dtype, token, *, declaration=False):
     """Separate complete semantic metadata from currently admitted storage.
 
@@ -1011,9 +1040,9 @@ class Analyzer:
             for index, (token, field_type) in enumerate(dtype.fields):
                 blank = token.text == "_"
                 if blank:
-                    if not isinstance(field_type, ArraySyntax):
+                    if not isinstance(field_type, (ArraySyntax, TypeName)):
                         raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields',
-                                            "only fixed byte-array blank padding is implemented")
+                                            "blank fields require fixed byte-array or named blank-record padding")
                 else:
                     if token.text in names:
                         raise GoDiagnostic(token, "duplicate struct field " + token.text)
@@ -1031,10 +1060,9 @@ class Analyzer:
                     raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
                                         "embedded pointer fields require lifetime storage and receiver adjustment")
                 field_type = self.resolve_type(field_type, signature=signature)
-                if blank and (not isinstance(field_type, ArrayType) or field_type.element != "uint8"
-                              or field_type.count == 0):
+                if blank and not fixed_blank_padding(field_type):
                     raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields',
-                                        "only nonempty fixed byte-array blank padding is implemented")
+                                        "blank padding requires nonempty fixed byte arrays or pure blank records")
                 if embedded and (not isinstance(field_type, DefinedType)
                                  or not isinstance(underlying(field_type), StructType)):
                     raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
