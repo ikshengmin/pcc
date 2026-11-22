@@ -214,13 +214,18 @@ in the relevant section or issue and removes the entry.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next: GC3's first slice, the
-   test-only or runtime-inert sparse remembered-set model with its
-   missed-writer, clean-card, persistent-card and promotion controls. The
-   maintainer named Claude reviewer on 2026-11-22, and Claude approved
-   [the generational design](https://github.com/ikshengmin/pcc/issues/8)
-   in direction: slice 2 and activation must also meet the six conditions
-   in [the review](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
+   Measure with `scripts/pcc_perf.py`. Next for GC3: qualify nursery allocation
+   provenance and the collector-entry root boundary without enabling the nursery.
+   The first sparse remembered-set slice is a test-only serial model: seven
+   guarded Linux host tests exercised the missed-writer oracle, zero clean-old
+   enumeration at 32/128/512 old owners, persistent cards, promotion and
+   fail-closed queue overflow. This is not native runtime or performance
+   evidence. The maintainer named Claude reviewer on 2026-11-22; the first
+   slice was approved, and slice 2 and activation must meet the applicable
+   conditions in [the review](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
+   Include an explicit inventory and witnesses for ownerless writers, state
+   allocation behavior during major GC, and cover the real exporter root
+   rather than relying on the current GC3 address-lease fast path.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -232,7 +237,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 sparse remembered-set model: Codex, Linux x86-64, 2026-11-22 06:05 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
