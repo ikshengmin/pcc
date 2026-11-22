@@ -77,11 +77,12 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # The union preserves both interface and concrete channel results and
-    # reaches a type switch. This is not a platform build selection.
-    with pytest.raises(UnsupportedGo, match=r"^context\.go:752:17: Go: type switches require interface dynamic types") as caught:
+    # The union parses the type switch in context and first stops during
+    # package admission on errors.Join's unsafe import. Not target selection.
+    with pytest.raises(UnsupportedGo, match=r"^join\.go:8:2: Go: package unsafe operations") as caught:
         compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('context.go', 752, 17)
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('join.go', 8, 2)
+    assert caught.value.code == "go.unsupported.unsafe-operations"
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
 
 

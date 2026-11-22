@@ -1258,6 +1258,19 @@ class Analyzer:
 
     def statement(self, statement):
         kind = statement.kind
+        if kind == "type_switch":
+            selector = statement.exprs[0]
+            self.scopes.append({})
+            try:
+                if statement.init is not None:
+                    self.statement(statement.init)
+                self.expression(selector)
+                if interface_type(selector.type) is None:
+                    raise GoDiagnostic(selector.token, "type switch operand is not an interface")
+            finally:
+                self.scopes.pop()
+            raise UnsupportedGo(statement.token, 'go.unsupported.interface-types',
+                                "type switches require interface dynamic dispatch and case-local binding")
         if kind == "select":
             raise UnsupportedGo(statement.token, 'go.unsupported.select',
                                 "select scheduling and channel readiness are not implemented")

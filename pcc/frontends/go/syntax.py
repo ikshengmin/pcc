@@ -427,6 +427,7 @@ class GoParser:
         self.index = 0
         self.application_depth = 0
         self.named_literals = True
+        self.type_switch_guards = None
         self.take("package")
         package = self.take("name")
         if require_main and package.text != "main":
@@ -1065,30 +1066,53 @@ class GoParser:
             return Stmt("fallthrough", token)
         if self.accept("switch"):
             previous_literals, self.named_literals = self.named_literals, False
-            init, selector = None, None
+            previous_guards, self.type_switch_guards = self.type_switch_guards, []
+            init, selector, names, kind = None, None, [], "switch"
             if not self.at("{"):
-                first = None if self.at(";") else self.simple()
+                head = None if self.at(";") else self.simple()
                 if self.accept(";"):
-                    init = first
-                    selector = None if self.at("{") else self.expression()
-                elif first is not None and first.kind == "expression":
-                    selector = first.exprs[0]
-                else:
+                    init = head
+                    head = None if self.at("{") else self.simple()
+                guards = self.type_switch_guards
+                if guards:
+                    guard = guards[0]
+                    if (len(guards) != 1 or head is None or head.kind not in ("expression", ":=")
+                            or len(head.exprs) != 1 or head.exprs[0] is not guard or guard.parenthesized
+                            or (head.kind == ":=" and (len(head.names) != 1 or head.names[0].text == "_"))):
+                        self.fail(guard.token, "invalid type switch guard")
+                    kind, selector, names = "type_switch", guard.args[0], head.names
+                elif head is not None and head.kind == "expression":
+                    selector = head.exprs[0]
+                elif head is not None:
                     self.fail(token, "switch requires a single expression or initialization clause")
             self.named_literals = previous_literals
+            self.type_switch_guards = previous_guards
             self.take("{")
-            cases = []
+            cases, has_default = [], False
             while not self.accept("}"):
                 label = self.current
                 if self.accept("case"):
-                    expressions = self.expression_list()
+                    if kind == "type_switch":
+                        expressions = [self.type_case()]
+                        while self.accept(","):
+                            expressions.append(self.type_case())
+                    else:
+                        expressions = self.expression_list()
                 elif self.accept("default"):
+                    if has_default and kind == "type_switch":
+                        self.fail(label, "type switch has multiple defaults")
+                    has_default = True
                     expressions = []
                 else:
-                    self.fail(label, "expected case or default in expression switch")
+                    self.fail(label, "expected case or default in switch")
                 self.take(":")
-                cases.append(Stmt(label.kind, label, exprs=expressions, body=self.clause_body()))
-            return Stmt("switch", token, exprs=[] if selector is None else [selector], init=init, cases=cases)
+                body = self.clause_body()
+                if kind == "type_switch":
+                    for child in body:
+                        if child.kind == "fallthrough":
+                            self.fail(child.token, "cannot fallthrough in type switch")
+                cases.append(Stmt(label.kind, label, exprs=expressions, body=body))
+            return Stmt(kind, token, exprs=[] if selector is None else [selector], names=names, init=init, cases=cases)
         if self.accept("select"):
             self.take("{")
             cases, has_default = [], False
@@ -1219,6 +1243,10 @@ class GoParser:
             self.end_statement()
         return body
 
+    def type_case(self):
+        token = self.current
+        return Expr("type", token, self.datatype())
+
     def expression_list(self, terminator=None):
         result = [self.expression()]
         while self.accept(","):
@@ -1317,8 +1345,13 @@ class GoParser:
                     # https://go.dev/ref/spec#Type_assertions: PrimaryExpr "." "(" Type ")".
                     open_token = self.take("(")
                     if self.at("type"):
-                        self.unsupported(self.current, 'go.unsupported.interface-types',
-                                         "type switches require interface dynamic types, which are not implemented")
+                        marker = self.take("type")
+                        if self.type_switch_guards is None:
+                            self.fail(marker, ".(type) is only permitted in a type switch guard")
+                        self.take(")")
+                        left = Expr("type_switch_guard", marker, args=[left])
+                        self.type_switch_guards.append(left)
+                        continue
                     target = self.datatype()
                     self.take(")")
                     left = Expr("type_assert", open_token, target, [left])

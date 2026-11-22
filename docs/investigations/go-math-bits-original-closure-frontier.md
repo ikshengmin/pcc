@@ -191,3 +191,13 @@ still rejects before IR. The diagnostic union first stops at
 `context/context.go:752:17`, its type switch. The scoped suite passed
 180 checks and the interface/channel reference control ran with
 official Linux/amd64 Go.
+
+The original type switch in `context/context.go:752:17` now retains
+the initializer, guard binding and case types without evaluating dynamic
+dispatch. The pinned union's first stop is now import admission in
+`errors/join.go:8:2` (`unsafe`), not a parser diagnostic. That original
+uses `unsafe.String(&b[0], len(b))` on appended byte storage; suppressing
+the slot or import check would not supply the required owned lifetime.
+Scoped checks: 254 focused and 15 unchanged Linux PCC branch
+executions; official Go executed the type-switch control and rejected
+seven invalid forms. Whole-project owned target assembly remains open.

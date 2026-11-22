@@ -5,8 +5,8 @@ https://go.dev/ref/spec#Type_assertions
 too). The checker requires x to be of interface type: a non-interface
 operand and an undefined asserted type are ordinary errors at the positions
 gc reports. A dynamic type check needs interface values, which remain the
-explicit go.unsupported.interface-types boundary; `x.(type)` (type
-switches) stays inside the same boundary at parse time. math/bits'
+explicit go.unsupported.interface-types boundary; parsed type switches
+also remain behind that boundary before IR. math/bits'
 bits_test.go asserts `err.(runtime.Error)` at 1038. Original sources; each
 verdict and position was compared with a local development go1.23.6.
 """
@@ -39,7 +39,7 @@ def test_assertions_on_interface_values_stay_explicit(source):
 
 
 def test_type_switches_stay_inside_the_interface_boundary():
-    with pytest.raises(UnsupportedGo, match='type switches') as caught:
+    with pytest.raises(UnsupportedGo, match='general interface values') as caught:
         compile_go('package main\nfunc f(x any) { switch x.(type) {} }\nfunc main() {}\n', 'gap.go')
     assert caught.value.code == 'go.unsupported.interface-types'
 
