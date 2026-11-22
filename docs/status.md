@@ -462,8 +462,13 @@ in the relevant section or issue and removes the entry.
    backing array: exact parent fails, five backend lanes and 18 host
    models pass fixed. Ordinary tuple construction already passes the
    owner; exclude the raw dictionary materializer and foreign paths.
-   Next GC3: persistent sparse cards and a real bounded minor on review,
-   then n/4n/16n zero clean-old visits and sealed-handler admitted share.
+   [GC3 sparse cut bbcfa4a](https://github.com/ikshengmin/pcc/commit/bbcfa4a77da42432d1a884df4c6524573fc4a212)
+   retains live dirty cards and drops cleared/retired ones. Fifteen Linux
+   runs at 64/256/1024 unrelated old lists visited exactly two dirty owners
+   and zero clean old per cut; incomplete input/frontier is rejected.
+   Next GC3: connect rooted young closure and actual bounded reclaim
+   before enabling bump admission. The sparse cut alone is not a minor
+   or sealed-handler performance gate.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -685,7 +690,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:32 UTC), GC3 stopped sparse card consumer: carry live old-to-young cards between cuts, refuse incomplete coverage and prove native zero-clean-old visits without enabling unproved allocation routes.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
