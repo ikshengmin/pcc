@@ -30,6 +30,8 @@ static PyObject *roots[ROOTS];
 static void *nodes[3];
 static int rescue, withdrawn, mixed, silent, finalizer_only, late_new, idle_worker, error;
 static int worker_started, worker_done;
+static int peer_mode, peer_request, peer_read, peer_live_after;
+static void *peer_thread;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 static int ext_edge_visits;
@@ -69,6 +71,15 @@ static PyObject *weak_event(PyObject *captures, PyObject *args);
 static PyObject *finish_a(PyObject *self) {
     (void)self;
     note(1);
+    if (peer_mode) {
+        __atomic_store_n(&peer_request, 1, __ATOMIC_RELEASE);
+        int status;
+        while (!(status = __atomic_load_n(&peer_read, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
+        if (status < 0) error = 37;
+        // Withdrawal exits the registered thread before the callback closes;
+        // the next root cut must not contain its retired raw stack words.
+        if (peer_mode == 2 && pcc_thread_join(peer_thread, NULL)) error = 38;
+    }
     if (late_new) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
         PyObject *callback = py_func_new((void *)weak_event, NULL);
@@ -193,7 +204,7 @@ static void *seal_on_departing_thread(void *unused) {
         py_instance_set_field((PyInstanceObject *)a, 0, tail);
         pcc_gc_unpin(tail);
     } else if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
-    else if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
+    else if (!rescue && !peer_mode) py_instance_set_field((PyInstanceObject *)a, 0, b);
     if (silent == 2) {
         PyClassObject *other = py_class_new("InactiveFinalizer", NULL, 0, NULL, 0);
         if (!other) { error = 17; return NULL; }
@@ -213,7 +224,7 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *items[] = {a, b, tail};
     for (int i = 0; i < (want_tail || bulk ? 3 : 2); ++i) {
         PyObject *obj = items[i];
-        int index = rescue || i >= 2 ? i : 1-i;
+        int index = rescue || peer_mode || i >= 2 ? i : 1-i;
         nodes[index] = pcc_gc_object_index_find(obj);
         if (!nodes[index]) error = 12;
         pcc_gc_set_mark_color(obj, PY_FLAG_GC_WHITE);
@@ -232,10 +243,34 @@ static void *parked_observer(void *unused) {
     return NULL;
 }
 
+static void *weakref_peer(void *unused) {
+    (void)unused;
+    if (pcc_current_thread_id() <= 0) {
+        __atomic_store_n(&worker_started, -1, __ATOMIC_RELEASE);
+        return NULL;
+    }
+    __atomic_store_n(&worker_started, 1, __ATOMIC_RELEASE);
+    while (!__atomic_load_n(&peer_request, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    // A raw C activation, not a registered root slot or a barrier store.
+    PyObject *volatile borrowed = py_weakref_call(roots[WEAK_B]);
+    int good = borrowed && borrowed != py_None;
+    __atomic_store_n(&peer_read, good ? 1 : -1, __ATOMIC_RELEASE);
+    if (peer_mode == 1) {
+        while (!__atomic_load_n(&worker_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+        PyObject *after = py_weakref_call(roots[WEAK_B]);
+        peer_live_after = good && after == borrowed;
+        if (after) py_decref(after);
+    }
+    if (borrowed) py_decref(borrowed);
+    return NULL;
+}
+
 int main(int argc, char **argv) {
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
     late_new = argc > 1 && strcmp(argv[1], "late-new") == 0;
     idle_worker = argc > 1 && strcmp(argv[1], "worker") == 0;
+    if (argc > 1 && strcmp(argv[1], "peer-hold") == 0) peer_mode = 1;
+    if (argc > 1 && strcmp(argv[1], "peer-depart") == 0) peer_mode = 2;
     silent = argc > 1 && strcmp(argv[1], "silent") == 0;
     if (argc > 1 && strcmp(argv[1], "silent-live-del") == 0) silent = 2;
     finalizer_only = argc > 1 && strcmp(argv[1], "finalizer-only") == 0;
@@ -275,6 +310,12 @@ int main(int argc, char **argv) {
         if (pcc_thread_start(&thread, parked_observer, NULL)) return 25;
         while (!__atomic_load_n(&worker_started, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
     }
+    if (peer_mode) {
+        if (pcc_thread_start(&peer_thread, weakref_peer, NULL)) return 39;
+        int started;
+        while (!(started = __atomic_load_n(&worker_started, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
+        if (started < 0) return 40;
+    }
     if (pcc_stop_the_world() != 0) return 21;
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
@@ -298,6 +339,10 @@ int main(int argc, char **argv) {
     if (idle_worker) {
         __atomic_store_n(&worker_done, 1, __ATOMIC_RELEASE);
         if (pcc_thread_join(thread, NULL)) return 26;
+    }
+    if (peer_mode == 1) {
+        __atomic_store_n(&worker_done, 1, __ATOMIC_RELEASE);
+        if (pcc_thread_join(peer_thread, NULL) || !peer_live_after) return 41;
     }
     if (silent || finalizer_only) {
         printf("legacy=%lld reclaimed=%lld callbacks=%d recheck=%lld\n",

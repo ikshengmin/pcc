@@ -545,3 +545,28 @@ exactly 64 candidates without fallback in those cells, using one window
 per finalizer. At four candidates wins were mixed in some cells. This
 isolates the cut cost; it is neither the pcc_perf no-observer A/B nor
 proof of linear scaling or safe same-layer batching.
+
+### Same-layer peer weak-reference observation
+
+Two independent candidates enter the same topological layer. During A's
+finalizer a preexisting pthread dereferences B's weakref and keeps the
+result solely in a volatile C stack slot (no registered root, store or
+pin). GC1/3 capture the parked peer's word and do not finalize B; the
+peer reads it again after the world resumes. This agrees exactly with
+the CPython retained-reference oracle, with zero full rechecks.
+
+In the `peer-depart` arm the peer drops B and terminates before the next
+stop; both implementations report B dead and invoke each finalizer and
+weak callback once. The CPython script explicitly drops A before B,
+yielding `a-del a-weak b-del b-weak b-dead`. The sealed tracing cohort
+has both independent objects dead together and yields
+`a-del b-del b-weak a-weak b-dead` (zero full rechecks). CPython's B
+reference is held until the script's second release, so the total order
+is not an equivalent ownership boundary. The maintainer approved the
+proposed rule on 2026-11-22 (reply: “可以”): for independent siblings in
+the same layer compare event counts, each object's finalizer-before-
+weak-callback order and the final verdict; where there is a dependency
+keep exact CPython event ordering. The native arm also checks the
+agreed layer barrier, with both finalizers before either weak callback.
+This is not evidence that arbitrary user effects allow batching in one
+running-world interval.

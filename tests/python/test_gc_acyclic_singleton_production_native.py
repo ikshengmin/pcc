@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -96,13 +96,31 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "capi-attr": "a-del a-weak b-live\n",
         "extension-field": "a-del a-weak b-live\n",
         "caller-old-holder": "a-del a-weak b-live\n",
+        "peer-hold": "a-del a-weak b-live\n",
+        "peer-depart": "a-del a-weak b-del b-weak b-dead\n",
     }[arm]
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,
         env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                  PCC_GC_DEBT_THRESHOLD="1099511627776"),
     )
-    assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
+    assert actual.returncode == 0, actual.stderr
+    if arm == "peer-depart":
+        # The maintainer approved independent sibling order within one
+        # layer: compare exactly which events occur and each object's
+        # ordering, not CPython's explicit A-before-B reference release.
+        for trace in (expected.stdout, actual.stdout):
+            *events, verdict = trace.split()
+            assert verdict == "b-dead"
+            assert sorted(events) == ["a-del", "a-weak", "b-del", "b-weak"]
+            assert events.index("a-del") < events.index("a-weak")
+            assert events.index("b-del") < events.index("b-weak")
+        events = actual.stdout.split()
+        assert max(events.index("a-del"), events.index("b-del")) < min(
+            events.index("a-weak"), events.index("b-weak")
+        )
+    else:
+        assert actual.stdout == expected.stdout, actual.stderr
     rechecks = 2 if arm in ("mixed", "mixed-tail") else 1 if arm in ("withdrawn", "holder", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder") else 0
     scans = {"late-new": 3, "worker": 2}.get(arm, 1)
     assert actual.stderr == f"full={rechecks} scans={scans}\n"

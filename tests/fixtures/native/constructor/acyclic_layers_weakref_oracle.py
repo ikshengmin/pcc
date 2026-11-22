@@ -1,6 +1,7 @@
 """Reference order for chain disposal and revival of a same-layer sibling."""
 import gc
 import sys
+import threading
 import weakref
 
 events = []
@@ -23,12 +24,31 @@ rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "i
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
+peer_mode = sys.argv[1] in ("peer-hold", "peer-depart")
+peer_request = threading.Event()
+peer_read = threading.Event()
+peer_done = threading.Event()
+
+
+def weakref_peer():
+    peer_request.wait()
+    borrowed = weak_b()
+    assert borrowed is not None
+    peer_read.set()
+    if sys.argv[1] == "peer-hold":
+        peer_done.wait()
+        assert weak_b() is borrowed
 
 
 class A:
     def __del__(self):
         global held
         events.append("a-del")
+        if peer_mode:
+            peer_request.set()
+            peer_read.wait()
+            if sys.argv[1] == "peer-depart":
+                peer.join()
         if late_new:
             late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
         if indirect:
@@ -73,11 +93,14 @@ if sys.argv[1] in ("mixed-tail", "pin"):
     b.tail = Tail()
 if mixed:
     b.child = b
-elif not rescue:
+elif not rescue and not peer_mode:
     a.child = b
 weak_a = weakref.ref(a, lambda _: events.append("a-weak"))
 weak_b = weakref.ref(b, lambda _: events.append("b-weak"))
-if rescue:
+if peer_mode:
+    peer = threading.Thread(target=weakref_peer)
+    peer.start()
+if rescue or peer_mode:
     del a
     del b
 else:
@@ -87,3 +110,7 @@ if mixed:
     gc.collect()
 events.append("b-dead" if weak_b() is None else "b-live")
 print(" ".join(events))
+
+if sys.argv[1] == "peer-hold":
+    peer_done.set()
+    peer.join()
