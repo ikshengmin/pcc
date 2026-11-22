@@ -10,6 +10,8 @@ extern PyObject *py_class_new(const char *, void *, int32_t, const char **, int3
 extern PyObject *py_instance_new(void *);
 extern void py_class_add_method(PyObject *, const char *, void *);
 extern void py_instance_set_field(PyObject *, int32_t, PyObject *);
+extern int64_t pcc_gc_tracing_callback_store_instance_field(
+    PyObject *, int32_t, PyObject *, PyObject **);
 extern PyObject *py_instance_get_field(PyObject *, int32_t);
 extern int64_t pcc_gc_tracing_classify_callback_cohort(
     PyObject *const *, int64_t, int64_t, int64_t, int64_t *);
@@ -30,6 +32,8 @@ enum { PARENT_FINALIZER, CHILD_FINALIZER };
 enum { FIRST_PARENT = 1, SECOND_CHILD = 2, THIRD_WEAK = 3 };
 
 static PyObject *restored, *live_heap, *outside_owner;
+static PyObject *captured_owner;
+static int64_t use_captured_owner;
 static int64_t use_old_owner, use_new_owner, owner_in_journal, journal_incomplete;
 /* The two candidate identities stand in for collector metadata, not roots.
  * Never load those raw pointers into a live recheck frame. */
@@ -53,7 +57,20 @@ static PyObject *parent_del(PyObject *self) {
     parent_calls++;
     parent_position = ++sequence;
     observe_callback_boundary();
-    if (should_rescue && (use_old_owner || use_new_owner)) {
+    if (should_rescue && use_captured_owner) {
+        if (pcc_gc_tracing_callback_store_instance_field(
+                outside_owner, -1, self, &captured_owner) || captured_owner
+            || !pcc_gc_tracing_callback_store_instance_field(
+                outside_owner, ONLY_FIELD, self, &captured_owner)
+            || captured_owner != outside_owner
+            || !pcc_gc_tracing_callback_store_instance_field(
+                outside_owner, ONLY_FIELD, self, &captured_owner)
+            || captured_owner != outside_owner
+            || pcc_gc_tracing_callback_store_instance_field(
+                self, ONLY_FIELD, self, &captured_owner)
+            || py_instance_get_field(self, ONLY_FIELD) != candidate_child)
+            callback_errors++;
+    } else if (should_rescue && (use_old_owner || use_new_owner)) {
         if (use_new_owner) outside_owner = py_list_new(1);
         if (!outside_owner) {
             callback_errors++;
@@ -189,7 +206,9 @@ enum { REFRESH_MASK = 0, REFRESH_VISITS = 1, REFRESH_WORDS = 2 };
 static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left, int64_t with_journal,
                            int64_t *mask_out, int64_t *visits_out) {
     PyObject *cohort[] = {candidate_parent, candidate_child};
-    PyObject *seeds[] = {restored, with_journal && owner_in_journal ? outside_owner : NULL};
+    PyObject *owner = use_captured_owner ? captured_owner :
+        (owner_in_journal ? outside_owner : NULL);
+    PyObject *seeds[] = {restored, with_journal ? owner : NULL};
     int64_t result[REFRESH_WORDS] = {-1, -1};
     int64_t complete = with_journal && journal_incomplete ? 0 : 1;
     if (!pcc_gc_tracing_refresh_callback_cohort(cohort, 2, seeds, 2, sealed_epoch,
@@ -212,7 +231,11 @@ static int check_first_verdict(void) {
         return 0;
     }
     if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped) return 0;
-    if (use_old_owner || use_new_owner) {
+    if (use_captured_owner) {
+        if (restored || captured_owner != outside_owner
+            || py_instance_get_field(outside_owner, ONLY_FIELD) != candidate_parent)
+            return 0;
+    } else if (use_old_owner || use_new_owner) {
         if (restored || !owner_in_journal || py_list_get(outside_owner, 0) != candidate_parent)
             return 0;
     } else if (should_rescue ? restored != candidate_parent : restored != NULL) return 0;
@@ -227,17 +250,23 @@ int main(int argc, char **argv) {
     should_rescue = argv[1][0] == 'r';
     reentry = argc == 3 && argv[2][0] == 'n';
     int64_t heap_size = argc == 4 ? atoi(argv[3]) : 0;
+    use_captured_owner = argc == 4 && argv[2][0] == 'c';
     use_old_owner = argc == 4 && argv[2][0] == 'j';
     use_new_owner = argc == 4 && (argv[2][0] == 'a' || argv[2][0] == 'f');
-    journal_incomplete = argc == 4 && argv[2][0] == 'f';
-    int trial_bounded = (argc == 4 && argv[2][0] == 'b') || use_old_owner || use_new_owner;
+    journal_incomplete = use_captured_owner || (argc == 4 && argv[2][0] == 'f');
+    int trial_bounded = (argc == 4 && argv[2][0] == 'b') || use_old_owner || use_new_owner || use_captured_owner;
     if (argc == 4 && (!should_rescue || heap_size <= 0 || heap_size > 2048)) return 1;
     py_gc_disable();
     if (!make_graph() || (heap_size && !make_fixed_live_graph(heap_size))) return 2;
     pcc_gc_scheduler_root_register(&restored);
     pcc_gc_scheduler_root_register(&child_watch);
-    if (use_old_owner) {
-        outside_owner = py_list_new(1);
+    if (use_old_owner || use_captured_owner) {
+        if (use_captured_owner) {
+            const char *fields[] = {"stored"};
+            PyObject *owner_class = py_class_new("ReferenceWriter", NULL, 0, fields, 1);
+            if (!owner_class) return 2;
+            outside_owner = py_instance_new(owner_class);
+        } else outside_owner = py_list_new(1);
         if (!outside_owner) return 2;
         pcc_gc_scheduler_root_register(&outside_owner);
     }
@@ -260,7 +289,7 @@ int main(int argc, char **argv) {
             || bounded_recheck(stopped - 1, REFERENCE_SLOT_BUDGET, 1,
                                &bounded_mask, &bounded_visits)
             || bounded_mask != -1 || bounded_visits != -1) return 15;
-        if (use_old_owner || use_new_owner) {
+        if (use_old_owner || use_new_owner || use_captured_owner) {
             int64_t missed = -1, missed_visits = -1;
             if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 0, &missed, &missed_visits)
                 || missed || missed_visits) return 16;
@@ -302,7 +331,7 @@ int main(int argc, char **argv) {
     pcc_gc_store_root(&child_watch, NULL);
     pcc_gc_scheduler_root_unregister(&child_watch);
     pcc_gc_scheduler_root_unregister(&restored);
-    if (use_old_owner) {
+    if (use_old_owner || use_captured_owner) {
         pcc_gc_store_root(&outside_owner, NULL);
         pcc_gc_scheduler_root_unregister(&outside_owner);
     }
@@ -313,7 +342,8 @@ int main(int argc, char **argv) {
         printf("recheck %lld %lld %lld %lld\n",
                (long long)calls, (long long)visits, (long long)saved, (long long)elapsed);
     }
-    if (journal_incomplete) puts("fallback full");
+    if (use_captured_owner) puts("captured owner; fallback full");
+    else if (journal_incomplete) puts("fallback full");
     else if (trial_bounded)
         printf("bounded %lld %lld\n", (long long)bounded_mask, (long long)bounded_visits);
     puts("GC_ACYCLIC_FINALIZER_RESCUE_OK");

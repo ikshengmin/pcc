@@ -34,7 +34,8 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
     # An incomplete journal must reach the full oracle, not return false dead.
     for backend in (1, 2, 3):
         for source, expected in (("bounded", "bounded 3 2"), ("journal", "bounded 3 3"),
-                                 ("allocated", "bounded 3 3"), ("fallback", "fallback full")):
+                                 ("allocated", "bounded 3 3"), ("fallback", "fallback full"),
+                                 ("captured", "captured owner; fallback full")):
             visits = []
             for size in (128, 512, 2048):
                 result = _record_execution(

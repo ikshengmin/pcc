@@ -195,8 +195,11 @@ in the relevant section or issue and removes the entry.
    a bounded refresh with explicit root and store records. No production
    caller and no GC4 admission. The inert runtime refresh now takes
    explicit roots and recorded owners and reports only the rescued
-   cohort. Next #9: connect an authoritative callback-window owner
-   record; today's fixture passes coverage explicitly, not production.
+   cohort. The reference arm records an instance field's actual writer
+   through the normal store transaction and falls back to the full recheck
+   for incomplete coverage; ordinary setters are unchanged. Next #9:
+   exercise the full-recheck reference coordinator on mixed cyclic/acyclic
+   cohorts before considering any bounded policy for production.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -235,7 +238,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 capture callback-window barrier owners in the dormant arm: Codex, Linux x86-64, 2026-11-22 14:03 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

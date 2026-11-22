@@ -355,3 +355,16 @@ the report, and never changes collector flags. Three Linux native tests
 passed with a fresh matched archive. The coverage claim still comes
 from the test driver; a production caller must enumerate real callback
 writes and new owners before this path can be enabled.
+
+The `rescue captured <size>` native reference lane exercises an opt-in
+runtime entry for writing a real instance field during the resumed
+callback. It records the independently live instance only after the
+normal locked field transaction. An invalid field or a second distinct
+owner is refused without a write; repeating the first owner is allowed.
+The ordinary setter and its barrier do not call this entry. The recorded
+owner is not a root and the lane cannot assert complete coverage:
+bounded refresh refuses without changing its output, and the full
+stopped-world recheck rescues both objects. The other reference lanes
+still distinguish direct root, old-list publication and newly allocated
+owner. No automatic tracking of ordinary stores, new owners or other
+threads is claimed by the captured lane.
