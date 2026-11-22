@@ -332,8 +332,11 @@ in the relevant section or issue and removes the entry.
    separates callback owner readiness from peer resume. Four-peer Linux
    chain time fell 23–29% (three 5/5 series); five-GC native lifecycle
    checks passed. One-peer, HTTP and macOS remain unqualified.
-   Next: test notifying the owner only when its readiness predicate
-   becomes true, keeping departure/exited and normal resume invariants. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit 685f228](https://github.com/ikshengmin/pcc/commit/685f2281ff4866ffd25b0db4d2ed51495ecd991b)
+   only signals the private condition when the stop owner can proceed.
+   Five-GC lifecycle and 112 native assertions passed; 256-node four-peer
+   GC3 was 21.7% faster (7/7), narrowly outside control. GC1 remains noisy.
+   Next: verify the #9 public GC2 mark-to-sweep handoff against CPython. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -387,7 +390,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:31 UTC), #9 review only: verify only-ready owner notification under park/exited/unregister and repeated real multi-peer callback A/B.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
