@@ -308,3 +308,101 @@ func main(){
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
     got, want = run(owned), run(reference)
     assert got == want and got.returncode == 0 and len(got.stdout) == 40 and got.stderr == b""
+
+
+def test_copy_rejects_the_same_owner_before_emitting():
+    from pcc.frontends.go.slice_lowering import allocate_fixed_byte_span, copy_fixed_byte_view, fixed_byte_view
+
+    module = ir.Module()
+    fn = ir.Function(module, ir.FunctionType(ir.VoidType(), ()), name="probe")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    failure = fn.append_basic_block("failure")
+    span = allocate_fixed_byte_span(builder, FixedByteExtent(0, 4, byte_backing_plan()))
+    before = str(module)
+    with pytest.raises(ValueError, match="distinct"):
+        copy_fixed_byte_view(builder, fixed_byte_view(builder, span), span, failure)
+    assert str(module) == before
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_copied_bytes_survive_source_overwrite_and_short_capacity_is_unwritten(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from pcc.frontends.go.slice_lowering import (
+        allocate_fixed_byte_span, append_fixed_byte_words, copy_fixed_byte_view, fixed_byte_view, slice_fixed_bytes,
+    )
+
+    module = ir.Module()
+    module.triple = DEFAULT_TARGET
+    i8, i32, i64 = ir.IntType(8), ir.IntType(32), ir.IntType(64)
+    fn = ir.Function(module, ir.FunctionType(i64, (ir.ArrayType(i8, 3).as_pointer(), i64)), name="probe")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    failure = fn.append_basic_block("bounds_failure")
+    empty = allocate_fixed_byte_span(builder, FixedByteExtent(0, 8, byte_backing_plan()))
+    output = allocate_fixed_byte_span(builder, FixedByteExtent(0, 3, byte_backing_plan()))
+    summary = ByteAppendSummary((0, 8, 16, 24))
+    span = append_fixed_byte_words(builder, empty, summary, (
+        ir.Constant(i32, 0x42412020), ir.Constant(i32, 0x11110043),
+    ))
+    view = slice_fixed_bytes(builder, fixed_byte_view(builder, span), ir.Constant(i64, 2), fn.args[1], failure)
+    copied = copy_fixed_byte_view(builder, view, output, failure)
+    assert copied.span.storage is output.storage and copied.span.storage is not span.storage
+    append_fixed_byte_words(builder, empty, summary, (ir.Constant(i32, 0),) * 2)
+    builder.store(builder.load(output.storage), fn.args[0])
+    builder.ret(copied.length)
+    builder.position_at_end(failure)
+    builder.store(builder.load(output.storage), fn.args[0])
+    builder.ret(ir.Constant(i64, -1))
+    start = """.intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 32
+  mov QWORD PTR [rsp + 8], 0
+  mov QWORD PTR [rsp + 24], 0
+  lea rdi, [rsp + 8]
+  mov esi, 5
+  call probe
+  mov QWORD PTR [rsp], rax
+  lea rdi, [rsp + 24]
+  mov esi, 6
+  call probe
+  mov QWORD PTR [rsp + 16], rax
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 32
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        body = parse_relocatable(emit_owned_object(str(module), DEFAULT_TARGET))
+        image = link_static_executable([assemble_file(start), body], entry="_start")
+    owned = tmp_path / "owned"
+    owned.write_bytes(image)
+    owned.chmod(0o700)
+    source = """package main
+import ("encoding/binary";"os")
+func main(){
+  var raw [32]byte
+  for i,high:=range [2]int{5,6} {
+    b:=[8]byte{' ',' ','A','B','C',0,17,17}
+    if high-2>3 { binary.LittleEndian.PutUint64(raw[i*16:],^uint64(0)); continue }
+    s:=string(b[2:high])
+    for k:=range b { b[k]=0 }
+    binary.LittleEndian.PutUint64(raw[i*16:],uint64(len(s)))
+    copy(raw[i*16+8:],s)
+  }
+  if n,e:=os.Stdout.Write(raw[:]); n!=32||e!=nil { panic("write") }
+}
+"""
+    reference = compile_reference((("control.go", source),), tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    expected = struct.pack("<q", 3) + b"ABC" + bytes(5) + struct.pack("<q", -1) + bytes(8)
+    assert run(owned) == run(reference) == Execution(0, expected, b"")

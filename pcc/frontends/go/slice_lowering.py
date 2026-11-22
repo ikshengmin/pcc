@@ -125,3 +125,35 @@ def scan_fixed_byte_prefix(builder, view, delimiter, failure, *, while_equal):
     index.add_incoming(next_index, increment)
     builder.position_at_end(done)
     return index
+
+
+def copy_fixed_byte_view(builder, source, destination, failure):
+    """Copy to a distinct, preallocated owner, never return the source pointer."""
+    _check_view_operands(builder, source, failure)
+    if (not isinstance(destination, FixedStackByteSpan) or destination.function is not builder.function
+            or destination.storage is source.span.storage or destination.extent.length != 0):
+        raise ValueError("fixed byte copy requires a distinct empty backing in the same function")
+    i8, i32, i64 = ir.IntType(8), ir.IntType(32), ir.IntType(64)
+    if getattr(destination.storage.type, "pointee", None) != ir.ArrayType(i8, destination.extent.capacity):
+        raise ValueError("fixed byte copy destination does not match its capacity")
+    capacity = ir.Constant(i64, destination.extent.capacity)
+    _after_bounds_check(builder, builder.icmp_unsigned("<=", source.length, capacity), failure)
+    before = builder.block
+    loop = builder.function.append_basic_block("fixed_byte.copy")
+    read = builder.function.append_basic_block("fixed_byte.copy_read")
+    done = builder.function.append_basic_block("fixed_byte.copy_done")
+    builder.branch(loop)
+    builder.position_at_end(loop)
+    index = builder.phi(i64)
+    index.add_incoming(ir.Constant(i64, 0), before)
+    builder.cbranch(builder.icmp_unsigned("<", index, source.length), read, done)
+    builder.position_at_end(read)
+    byte = read_fixed_byte(builder, source, index, failure)
+    slot = builder.gep(destination.storage, (ir.Constant(i32, 0), index), inbounds=True)
+    builder.store(byte, slot)
+    following = builder.add(index, ir.Constant(i64, 1))
+    backedge = builder.block
+    builder.branch(loop)
+    index.add_incoming(following, backedge)
+    builder.position_at_end(done)
+    return FixedByteView(destination, ir.Constant(i64, 0), source.length)

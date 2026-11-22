@@ -511,3 +511,12 @@ cases (spaces, NUL, absent delimiter, high bytes and empty result).
 The native observation folds the remaining bytes and length to a
 scalar; it does not return a pointer or claim a string copy.
 Twenty-five scoped and three native differential checks passed.
+
+The owned copy primitive now requires a different preallocated backing
+and checks capacity before the first store. In the native differential,
+overwriting the source after copying leaves the destination unchanged;
+an undersized destination remains zero, and copying to the source
+rejects before emission. Twenty-six checks and four native differentials
+passed. This uses an isolated function-local destination, not an
+escaping Go string or heap-backed slice. The counted copy contract is
+available for a future owned runtime allocation.
