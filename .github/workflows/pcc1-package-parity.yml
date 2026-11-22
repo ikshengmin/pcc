@@ -726,6 +726,7 @@ jobs:
           test -x "$goroot/bin/go"
           echo "PCC_GO_MATH_BITS_REFERENCE=$goroot/bin/go" >> "$GITHUB_ENV"
           echo "PCC_GO_MATH_BITS_GOROOT=$goroot" >> "$GITHUB_ENV"
+          echo "PCC_GO_MATH_BITS_SOURCE_ROOT=$goroot" >> "$GITHUB_ENV"
       - name: Bind actual available reference tools and Rust target sysroot
         run: uv run --frozen --no-sync python scripts/ci_validation_tools.py --domain "${{ matrix.domain }}" --out "$RUNNER_TEMP/reference-tools"
       - name: Complete ordinary, integration or external-reference partition

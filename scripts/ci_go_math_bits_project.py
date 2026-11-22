@@ -37,6 +37,7 @@ REVISION = "2aae1000ea1d4b28923b96db28acf4e3b99d6aff"
 PACKAGE = "math/bits"
 PACKAGE_DIR = "src/math/bits"
 RELEASE = "go1.27.3"
+SOURCE_ROOT_ENV = "PCC_GO_MATH_BITS_SOURCE_ROOT"
 # Official go list -deps -test -json math/bits, linux/amd64/v1, cgo off.
 # Hash of the portable JSON-lines selection, NOT a hash of package contents.
 REFERENCE_BUILD_IDS_SHA256 = "220a909f4e633dcfdb0eb92c31d74ad4425bb87eb48538d9e600cfb45d804b54"
@@ -51,6 +52,9 @@ ADMISSION_MAIN = 'package main;import "math/bits";func main(){_=bits.LeadingZero
 DRIVERS = (
     "scripts/ci_go_math_bits_project.py", "scripts/ci_source_frontier_support.py",
     "scripts/go_package_test_entry.py",
+    "scripts/go_std_closure.py",
+    "tests/go/upstream/go1.27.3/pcc-linux-amd64-math-bits-normal-plan.json",
+    "tests/go/upstream/go1.27.3/pcc-linux-amd64-profiling-source-pin.json",
     "scripts/cpython_conformance/run.py", "scripts/ci_validation_run.py",
     "scripts/run_process_tree_sample.py", "scripts/platform_process_watchdog.py",
 )
@@ -135,7 +139,28 @@ def owned_compilation():
         yield
 
 
-def run_owned(report, files, directory):
+def verify_owned_normal_sources(root, files):
+    from pcc.frontends.go.source_plan import load_go_source_plan
+    from scripts.go_std_closure import load_linux_normal_plan
+
+    raw, digest = load_linux_normal_plan()
+    plan = load_go_source_plan(root, raw, expected_sha256=digest)
+    normal_paths = tuple(f"{PACKAGE_DIR}/{name}" for name in NORMAL)
+    if (plan.release != RELEASE or PACKAGE not in plan.packages
+            or plan.packages[PACKAGE].go != normal_paths
+            or any(plan.original_files[path] != files[path] for path in normal_paths)):
+        raise ValueError("verified Go plan disagrees with unchanged math/bits normal originals")
+    return {
+        "status": "SOURCES_VERIFIED", "claim": "normal-package original bytes only",
+        "target": plan.target, "plan_sha256": plan.lock_sha256, "roots": list(plan.roots),
+        "packages": len(plan.packages), "files": len(plan.original_files),
+        "source_bytes": sum(map(len, plan.original_files.values())),
+        "unresolved": [{"package": name, "owner": owner, "files": list(paths)}
+                       for name, owner, paths in plan.unresolved(plan.packages)],
+    }
+
+
+def run_owned(report, files, directory, *, source_root=None):
     row = report["owned"]
     row["package_frontend"] = {"status": "RUNNING"}
     save(directory / "frontier.json", report)
@@ -191,6 +216,23 @@ def run_owned(report, files, directory):
     # Keep missing target-specific sources visible to the real compiler.
     packages = {"main": (("_testmain.go", generated),), PACKAGE: units(NORMAL + INTERNAL_TEST),
                 PACKAGE + "_test": units(EXTERNAL_TEST)}
+    if source_root is not None:
+        # This pinned recipe has ordinary import paths only. Never replace a
+        # locked normal package with its test augmentation or conflate test
+        # variants before a test-specific source/ABI binding exists.
+        try:
+            with owned_compilation():
+                closure = verify_owned_normal_sources(source_root, files)
+        except (ValueError, OSError) as error:
+            closure = {"status": "BLOCKED", "diagnostic": str(error)}
+        row["dependency_closure"] = closure
+        row["test_build"] = {
+            "status": "BLOCKED", "phase": "normal source preflight, no test variant admission",
+            "source_packages": list(packages),
+            "diagnostic": closure.get("diagnostic", "test variants and owned runtime/assembly owners are not bound"),
+        }
+        save(directory / "frontier.json", report)
+        return
     try:
         with owned_compilation():
             module = compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
@@ -506,7 +548,7 @@ def run_worker(directory):
     materialize_snapshot(snapshot, files)
     report["source_integrity"] = {"status": "PASS", "scope": "preflight", "package_inventory_complete": True}
     save(receipt, report)
-    run_owned(report, files, directory)
+    run_owned(report, files, directory, source_root=os.environ.get(SOURCE_ROOT_ENV))
     if report["owned"]["test_entry"]["status"] == "PASS":
         registrations = report["owned"]["test_entry"]["registrations"]
         if registrations["tests"] + registrations["examples"] != lock["test_entry"]["tests_and_examples"]:

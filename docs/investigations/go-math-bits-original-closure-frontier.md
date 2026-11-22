@@ -244,3 +244,15 @@ owners, 15 runtime/intrinsic owners and five generated layout headers
 into the owned compiler and does not run the upstream tests. Next attach
 it as explicit source-only input to the owned project path, preserving
 the separate test variants and native owner checks.
+
+The owned project preflight now verifies that exact snapshot using
+`PCC_GO_MATH_BITS_SOURCE_ROOT`, independently of the reference tool
+settings. It compares the normal `math/bits` bytes against the original
+project lock and does not treat the internally augmented test package
+as a replacement for a normal locked package. A missing or altered
+explicit source root fails closed. Linux validation copied only the 914
+locked files into a tree without `bin` or `pkg/tool`: source status
+`SOURCES_VERIFIED`, production frontend and generated-entry checks passed,
+test build `BLOCKED`, test execution `UNRUN`. The scoped suite passed
+88 checks and the CI environment wiring test passed. GitHub Actions
+was not run for this change.

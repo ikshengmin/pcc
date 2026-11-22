@@ -96,6 +96,54 @@ def test_owned_original_test_entry_and_actual_project_build_attempt(tmp_path):
     assert (tmp_path / "admission-main.go").read_text() == project.ADMISSION_MAIN
 
 
+def test_owned_source_root_uses_verified_bytes_without_admitting_runtime_or_tests(tmp_path, monkeypatch):
+    from scripts import go_std_closure
+    from tests.go.test_locked_source_plan import raw, tiny, write
+
+    _, files = project.load_inputs()
+    root = tmp_path / "source-only"
+    recipe = tiny(root, assembly=True, name="os")
+    recipe["packages"]["os"]["imports"] = ["math/bits"]
+    recipe["packages"]["math/bits"] = {"imports": [], "files": {
+        "go": list(project.NORMAL), "asm": [], "header": [],
+    }}
+    for name in project.NORMAL:
+        path = f"{project.PACKAGE_DIR}/{name}"
+        write(root, path, files[path])
+        recipe["files"][path] = [len(files[path]), sha256(files[path])]
+    lock = raw(recipe)
+    monkeypatch.setattr(go_std_closure, "load_linux_normal_plan", lambda: (lock, sha256(lock)))
+    report = project.initial_report()
+    output = tmp_path / "output"
+    output.mkdir()
+    project.run_owned(report, files, output, source_root=root)
+
+    own = report["owned"]
+    closure = own["dependency_closure"]
+    assert closure["status"] == "SOURCES_VERIFIED"
+    assert closure["unresolved"] == [
+        {"package": "os", "owner": "Go assembly/ABI owner", "files": ["src/os/entry.s"]},
+        {"package": "os", "owner": "PCC-generated layout header", "files": ["go_asm.h"]},
+    ]
+    assert own["test_entry"]["status"] == "PASS" and own["test_build"]["status"] == "BLOCKED"
+    assert "test variants" in own["test_build"]["diagnostic"]
+    assert not (root / "bin").exists()
+    assert not (output / "package-tests.ll").exists()
+    assert report["complete_build_closure"] is report["project_accepted"] is False
+
+
+def test_changed_explicit_owned_source_root_does_not_fall_back(tmp_path):
+    _, files = project.load_inputs()
+    report = project.initial_report()
+    output = tmp_path / "output"
+    output.mkdir()
+    project.run_owned(report, files, output, source_root=tmp_path / "missing")
+    own = report["owned"]
+    assert own["dependency_closure"]["status"] == own["test_build"]["status"] == "BLOCKED"
+    assert "import source unavailable: os" not in own["test_build"]["diagnostic"]
+    assert not (output / "package-tests.ll").exists()
+
+
 def test_no_implicit_reference_or_old_ci_tool_fallback(tmp_path, monkeypatch):
     monkeypatch.delenv("PCC_GO_MATH_BITS_REFERENCE", raising=False)
     monkeypatch.delenv("PCC_GO_MATH_BITS_GOROOT", raising=False)

@@ -1601,6 +1601,7 @@ def test_go_ci_installs_pinned_reference_and_binds_whole_package_before_attestat
     assert 'goroot="$(go env GOROOT)"' in bind and 'test -x "$goroot/bin/go"' in bind
     assert 'PCC_GO_MATH_BITS_REFERENCE=$goroot/bin/go' in bind
     assert 'PCC_GO_MATH_BITS_GOROOT=$goroot' in bind
+    assert 'PCC_GO_MATH_BITS_SOURCE_ROOT=$goroot' in bind
     assert job.index('actions/setup-go@v6') < job.index('scripts/ci_validation_tools.py') < job.index('scripts/ci_validation_run.py')
     assert 'continue-on-error:' not in job
 
