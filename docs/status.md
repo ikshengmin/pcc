@@ -289,8 +289,11 @@ in the relevant section or issue and removes the entry.
    Next GC3 runtime slice: see review question above. Production promotion
    and nursery activation are still untested. The GC0 atomic CPU-share
    measurement is blocked on a validated profiling arm/backend; no
-   percentage was reported. The next ready unit is GC1 mutator-stepped
-   marking, starting with a native scheduling/lifetime control.
+   percentage was reported. The native GC1 scheduling baseline verifies
+   one CMS startup on each GC1–4 and none on GC0, with a rooted object
+   surviving two explicit collections. Next: prototype paired GC1
+   marker-start admission and debt-driven mutator stepping without changing
+   GC2–4, and validate the automatic (not explicit) progress path.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -302,7 +305,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC1 native mutator and marker scheduling baseline: Codex, Linux x86-64, 2026-11-22 08:19 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
