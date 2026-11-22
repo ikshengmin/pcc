@@ -312,8 +312,11 @@ in the relevant section or issue and removes the entry.
    remain off master pending measured maximum pause and the unchanged
    GC0 A/B control, below. GC2 now has a native stock arithmetic
    control for live-byte threshold, minimum/override, step budget and
-   debt discharge. Next: measure real GC2 assist and stop telemetry with
-   one versus four allocating mutators before proposing a pacer change.
+   debt discharge. A stock GC2 native harness now records assist/mark/
+   stop counters for 48,000 list allocations split across one or four
+   mutators. Next: qualify a separate GC2 heap-goal/assist policy as an
+   isolated candidate; do not change the other collectors or infer an A/B
+   result from the diagnostic.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -325,7 +328,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 native one versus four mutator assist telemetry: Codex, Linux x86-64, 2026-11-22 08:58 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

@@ -12,7 +12,27 @@ GC disabled, supplies fixed last-mark and allocation snapshots, and calls
 the production routines for threshold, budget, and payment. It covers
 minimum threshold, a growing live-set target, fractional rounding,
 positive override, budget minimum and no-credit zero work. No new
-pacer was installed. Next collect real worker/assist counters and maximum
-stop with identical allocation shapes at one and four mutators. Do not
-confuse fixture arithmetic or an unpaired telemetry run with a throughput
-or GC2 performance result.
+pacer was installed. The following native diagnostic uses one frozen input and reports raw
+counters, not a throughput or latency comparison.
+
+## Actual one- and four-mutator workload
+
+The owned Linux pcc0 harness allocates exactly 48,000 temporary lists per
+process, partitioned over one or four actual registered threads. All four
+existing roots survive in both cases. Threshold override: 131,072 bytes.
+Each of three fresh processes per worker count uses the ordinary automatic
+collection gate, with no explicit gc.collect call.
+
+| Mutators | Assists | CMS traces | STW events | Max STW (microseconds) |
+|---|---|---|---|---|
+| 1 | 0 / 0 / 0 | 65 / 46 / 48 | 13 / 9 / 10 | 739 / 706 / 828 |
+| 4 | 0 / 0 / 1 | 22664 / 23744 / 21852 | 1 / 2 / 1 | 738 / 6199 / 2789 |
+
+All processes observed one CMS startup and an automatic candidate sweep.
+A first attempt that required a sweep before join sometimes found none at
+four mutators even though the CMS worker had traced objects. The harness now
+records workload STWs separately and permits a bounded 500 ms ordinary
+post-join poll to receive a pending automatic sweep. The final runs needed
+no post-join sweep to meet the criterion. These scheduler-dependent rows do
+not qualify the assist mechanism under heavy pressure or indicate a
+scaling/latency gain. No pacer or runtime behavior changed.
