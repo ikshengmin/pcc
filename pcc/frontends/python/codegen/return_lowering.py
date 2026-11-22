@@ -10,9 +10,11 @@ from pcc.ir.compat import ir
 from pcc.frontends.python.builtin_function_values import builtin_function_value_name_exists
 
 from pcc.frontends.python.py_ast import (
+    Attr,
     BinOp,
     BoolType,
     Call,
+    ClassType,
     DynType,
     IfExpr,
     IntLit,
@@ -75,6 +77,38 @@ def boxed_int_formal_string_parse_has_owner(host, fd, value) -> bool:
 
 def _exact_int_repr(ty) -> bool:
     return isinstance(ty, IntType) and ty.name == "int" and ty.width == 64 and ty.signed
+
+
+def boxed_int_instance_field_has_owner(host, fd, fn, value) -> bool:
+    """Match the known native field path for the callee's sole receiver formal."""
+    if (not isinstance(value, Attr) or not _exact_int_repr(value.ty)
+            or not isinstance(value.obj, Name) or len(fd.args) != 1
+            or fd.is_method or fd.name in host._hoisted_qualnames
+            or not funcdef_defined_here(host, fd)
+            or value.obj.ident == "self" or value.name.startswith("_")):
+        return False
+    arg = fd.args[0]
+    ty = arg.annotation
+    if (arg.name != value.obj.ident or arg.kind not in ("pos", "pos_only")
+            or arg.has_default or not isinstance(ty, ClassType) or ty != value.obj.ty
+            or ty.valueclass or ty.module != host.ast_module.name
+            or host._resolve_class_alias(ty.name) != ty.name
+            or live_import_global_slot(host, arg.name) is not None):
+        return False
+    params = fn.function_type.args
+    if len(params) != 1 or not isinstance(params[0], ir.PointerType):
+        return False
+    # For a local class and a public, directly declared field, the exact-int
+    # emitter resolves this same slot, performs the null/error check and
+    # records py_instance_get_field's NEW reference.
+    info = host.class_lowering.classes.get(ty.name)
+    return (
+        info is not None and info.owning_module in (None, ty.module)
+        and not ty.bases and value.name in info.field_names
+        and any(name == value.name and field_ty == value.ty
+                for name, field_ty in ty.fields)
+        and host.class_lowering.lookup_field_index(info, value.name) is not None
+    )
 
 
 def _direct_unary_boxed_int_def(host, fd, fn) -> bool:

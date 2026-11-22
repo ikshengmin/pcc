@@ -173,13 +173,13 @@ in the relevant section or issue and removes the entry.
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; Next: #7, prove and fix the
-   exact instance-field getter return, with the live alias and detached owner
-   witnesses from the [six-case audit](investigations/gc0-direct-boxed-int-accessor-owners.md).
-   Direct unshadowed `int(text)` of a sole typed string formal now consumes
-   the parser's returned owner, not a redundant retain. The valid result
-   frees and invalid input raises `ValueError`. Linux pcc0: 23 tests matched
-   CPython across GC0–4; 21 related IR controls passed. The field and list
-   cases still leave one owner; do not widen to unknown accessors.
+   exact typed-list subscript return with the same alias and overwritten
+   owner witnesses from the [six-case audit](investigations/gc0-direct-boxed-int-accessor-owners.md).
+   A proven local instance-field getter now shares the owning direct return
+   handoff with the unshadowed sole typed-string parser. Both field cases
+   release the GC0 heap integer. Linux pcc0: 23 tests compared with CPython
+   on GC0–4 and 22 IR controls passed. List cases still leave one owner;
+   unknown and foreign accessors are not qualified.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -204,7 +204,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #7 exact field getter return: Codex, Linux x86-64, 2026-11-22 00:13 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

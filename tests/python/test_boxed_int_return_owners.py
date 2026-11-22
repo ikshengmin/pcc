@@ -516,3 +516,29 @@ def probe(n: int) -> bool:
 """, strict=True)
     assert "return.int.forwarded" not in _body(text, "wrap")
     assert "value.local.borrowed.retain" in _body(text)
+
+
+def test_exact_field_return_consumes_the_getter_owner_and_checks_null():
+    text = _emit("""
+class Holder:
+    def __init__(self, n: int):
+        self.value = n
+
+def read(owner: Holder) -> int:
+    return owner.value
+
+def probe(owner: Holder) -> bool:
+    result: object = read(owner)
+    return bool(result)
+""", strict=True)
+    callee = _body(text, "read")
+    producer = re.search(r"(%[^ ]+) = call ptr [^\n]*@py_instance_get_field\(", callee)
+    assert producer is not None
+    assert re.search(
+        r"@pcc_gc_store_return_root\(ptr [^,]+, ptr " + re.escape(producer[1]) + r"\)",
+        callee,
+    )
+    assert "@py_err_occurred(" in callee
+    caller = _body(text)
+    assert "@user_bridge_handoff_read(" in caller
+    assert "result.local.borrowed.retain" not in caller
