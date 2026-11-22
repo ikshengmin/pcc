@@ -321,3 +321,25 @@ def test_opt_in_closed_first_append_rejects_unproved_source_before_emitting(prod
             (("producer.go", "package main;" + producer),), function_name="F",
             target_triple="x86_64-unknown-linux-gnu", gc_backend=0,
         )
+
+
+def test_opt_in_full_scalar_growth_copies_after_allocation_before_publishing():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    grow = runtime.full_append_function("uintptr")
+    assert grow is runtime.full_append_function("uintptr")
+    assert grow.linkage == "internal"
+    text = str(module)
+    before_alloc, rest = text.split("scalar_grow_allocate:", 1)
+    assert "@pcc_rt_managed_descriptor" in before_alloc
+    assert "@pcc_rt_managed_element_count" in before_alloc
+    ready, done = rest.split("scalar_grow_ready:", 1)[1].split("scalar_grow_done:", 1)
+    assert (ready.index("@pcc_rt_managed_data") < ready.index("@memcpy") <
+            ready.index("store i64") < ready.index("store ptr"))
+    assert "ret i32" in done
+    with pytest.raises(ManagedContractError, match="qualified scalar"):
+        runtime.full_append_function("int")

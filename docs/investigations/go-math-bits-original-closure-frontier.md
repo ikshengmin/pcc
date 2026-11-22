@@ -589,3 +589,15 @@ after collection; the driver is still a foreign status/handle observer.
 Thirty-five adjacent and four native checks passed. This is not a native
 Go result ABI, general package admission, or the actual CPU producer,
 which also needs growth from non-nil and loop-carried ownership.
+
+A full zero-offset scalar backing can now grow through the optional
+Linux x86-64 GC0 ABI. It validates the descriptor, checks extent, then
+allocates before reloading the old payload and copying the occupied
+elements. It publishes only the new handle after append; the old
+handle and its aliases still own their original backing. The two native
+views remained independent after real collection and cross-mutation.
+Five raw words matched the unchanged Go 1.27.3 growth control. The
+bounded native process also observed real allocation failure leaving
+its old owner and output untouched. Thirty-six adjacent and five native
+checks passed. Geometric capacity may differ from Go's implementation;
+only the full base view, logical contents and ownership are qualified.

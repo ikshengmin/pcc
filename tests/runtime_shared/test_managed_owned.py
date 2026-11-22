@@ -151,6 +151,45 @@ def test_go_scalar_first_append_returns_a_live_owner_and_matches_go(tmp_path, mo
     assert run(reference) == Execution(0, observed, b"")
 
 
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: (
+    bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and bool(os.environ.get("PCC_GO_REFERENCE"))
+    and bool(os.environ.get("PCC_GO_REFERENCE_CACHE"))
+    and sys.platform == "linux" and platform.machine() == "x86_64"
+))
+@pytest.mark.xdist_group(name="go-reference")
+def test_go_scalar_full_growth_preserves_both_owners_and_matches_go(tmp_path, monkeypatch):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+    from tests.go.owned_execution import Execution, compile_reference, run
+
+    module = ir.Module()
+    module.triple = TARGET
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    pointer = ir.IntType(8).as_pointer()
+    i64 = ir.IntType(64)
+    seed = ir.Function(module, ir.FunctionType(ir.IntType(32), [i64, pointer.as_pointer()]),
+                       "scalar_slice_seed")
+    builder = ir.IRBuilder(seed.append_basic_block("entry"))
+    builder.ret(runtime.allocate(builder, "uintptr", *seed.args))
+    append = runtime.full_append_function("uintptr")
+    grow = ir.Function(module, append.function_type, "scalar_slice_grow")
+    builder = ir.IRBuilder(grow.append_basic_block("entry"))
+    builder.ret(builder.call(append, list(grow.args)))
+    adapter = tmp_path / "go_full_append.o"
+    adapter.write_bytes(emit_owned_object(str(module), TARGET))
+    expected = b"".join(x.to_bytes(8, "little") for x in (3, 11, 7, 5, (1 << 64) - 1))
+    observed = _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_grow.c",
+                                    extra_object=adapter, expected_gc0_stdout=expected)
+    original = ROOT / "tests/go/fixtures/managed_slice_growth.go"
+    reference = compile_reference(((original.name, original.read_text()),), tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    assert (reference.parent / original.name).read_bytes() == original.read_bytes()
+    assert run(reference) == Execution(0, observed, b"")
+
+
 def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=(),
                          expected_gc0_stdout=b""):
     from pcc.driver.project import TranslationUnit

@@ -10,6 +10,7 @@ from .managed_objects import scalar_slice_backing_plan
 
 
 # Existing pcc_shared_managed.h status, not a Go panic or error value.
+_OVERFLOW = 2
 _BAD_LAYOUT = 3
 
 
@@ -23,6 +24,7 @@ class ScalarSliceRuntime:
         self.module = module
         self.descriptors = {}
         self.first_appends = {}
+        self.full_appends = {}
 
     def descriptor(self, element):
         layout = scalar_slice_backing_plan(element).layout
@@ -110,6 +112,89 @@ class ScalarSliceRuntime:
         builder.position_at_end(done)
         builder.ret(status)
         self.first_appends[element] = fn
+        return fn
+
+    def full_append_function(self, element):
+        """Grow only a base view whose logical length equals its allocation.
+
+        The caller keeps the source handle alive and passes a separate output
+        slot. Success returns a newly owned backing; the old owner and its
+        aliases remain unchanged. Logical result length is old count + 1,
+        irrespective of spare capacity. No source payload address is held
+        across the managed allocation.
+        """
+        layout = scalar_slice_backing_plan(element).layout
+        if element in self.full_appends:
+            return self.full_appends[element]
+        pointer = ir.IntType(8).as_pointer()
+        handle_out = pointer.as_pointer()
+        i32 = ir.IntType(32)
+        i64 = ir.IntType(64)
+        stride = layout.element_stride
+        word = ir.IntType(8 * stride)
+        self._matching_function("pcc_rt_managed_alloc", ir.FunctionType(i32, [pointer, i64, handle_out]))
+        externals = {
+            "pcc_rt_managed_descriptor": ir.FunctionType(pointer, [pointer]),
+            "pcc_rt_managed_element_count": ir.FunctionType(i64, [pointer]),
+            "pcc_rt_managed_data": ir.FunctionType(pointer, [pointer]),
+            "memcpy": ir.FunctionType(pointer, [pointer, pointer, i64]),
+        }
+        bindings = {name: self._matching_function(name, signature) for name, signature in externals.items()}
+        for name, signature in externals.items():
+            if bindings[name] is None:
+                bindings[name] = ir.Function(self.module, signature, name)
+        descriptor = self.descriptor(element)
+        fn = ir.Function(self.module, ir.FunctionType(i32, [pointer, word, handle_out]),
+                         "__pcc_go_scalar_append_full_" + element)
+        fn.linkage = "internal"
+        source, value, output = fn.args
+        builder = ir.IRBuilder(fn.append_basic_block("entry"))
+        classify = fn.append_basic_block("scalar_grow_classify")
+        count_block = fn.append_basic_block("scalar_grow_count")
+        invalid = fn.append_basic_block("scalar_grow_invalid")
+        overflow = fn.append_basic_block("scalar_grow_overflow")
+        allocate = fn.append_basic_block("scalar_grow_allocate")
+        ready = fn.append_basic_block("scalar_grow_ready")
+        done = fn.append_basic_block("scalar_grow_done")
+        bad = builder.or_(builder.icmp_unsigned("==", source, ir.Constant(pointer, None)),
+                          builder.icmp_unsigned("==", output, ir.Constant(handle_out, None)))
+        builder.cbranch(bad, invalid, classify)
+        builder.position_at_end(classify)
+        identity = builder.call(bindings["pcc_rt_managed_descriptor"], [source])
+        matches = builder.icmp_unsigned("==", identity, builder.bitcast(descriptor, pointer))
+        builder.cbranch(matches, count_block, invalid)
+        builder.position_at_end(invalid)
+        builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+        builder.position_at_end(count_block)
+        count = builder.call(bindings["pcc_rt_managed_element_count"], [source])
+        # This bounds compiler-side scalar indexing and multiplication. The
+        # allocator separately checks descriptor/header alignment overhead.
+        maximum = ((1 << 63) - 1) // stride
+        builder.cbranch(builder.icmp_unsigned("<", count, ir.Constant(i64, maximum)), allocate, overflow)
+        builder.position_at_end(overflow)
+        builder.ret(ir.Constant(i32, _OVERFLOW))
+        builder.position_at_end(allocate)
+        next_length = builder.add(count, ir.Constant(i64, 1))
+        can_double = builder.icmp_unsigned("<=", count, ir.Constant(i64, maximum // 2))
+        nonempty = builder.icmp_unsigned("!=", count, ir.Constant(i64, 0))
+        capacity = builder.select(builder.and_(can_double, nonempty),
+                                  builder.mul(count, ir.Constant(i64, 2)), next_length)
+        temporary = builder.alloca(pointer)
+        status = self.allocate(builder, element, capacity, temporary)
+        builder.cbranch(builder.icmp_unsigned("==", status, ir.Constant(i32, 0)), ready, done)
+        builder.position_at_end(ready)
+        owner = builder.load(temporary)
+        payload = builder.call(bindings["pcc_rt_managed_data"], [owner])
+        old_payload = builder.call(bindings["pcc_rt_managed_data"], [source])
+        size = builder.mul(count, ir.Constant(i64, stride))
+        builder.call(bindings["memcpy"], [payload, old_payload, size])
+        slot = builder.gep(builder.bitcast(payload, word.as_pointer()), [count])
+        builder.store(value, slot)
+        builder.store(owner, output)
+        builder.branch(done)
+        builder.position_at_end(done)
+        builder.ret(status)
+        self.full_appends[element] = fn
         return fn
 
 
