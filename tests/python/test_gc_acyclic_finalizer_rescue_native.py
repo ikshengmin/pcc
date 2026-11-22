@@ -19,10 +19,12 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
     )
     for backend in (1, 2, 3):
         for arm in ("rescue", "no-rescue"):
-            result = _record_execution(
-                tmp_path, f"gc{backend}-{arm}", [str(binary), arm],
-                dict(os.environ, PCC_GC_BACKEND=str(backend)),
-            )
-            assert (result["returncode"], result["stdout"], result["stderr"]) == (
-                0, "GC_ACYCLIC_FINALIZER_RESCUE_OK\n", "",
-            ), (backend, arm, result)
+            for extra in ((), ("nested",)):
+                lane = f"gc{backend}-{arm}" + ("-nested" if extra else "")
+                result = _record_execution(
+                    tmp_path, lane, [str(binary), arm, *extra],
+                    dict(os.environ, PCC_GC_BACKEND=str(backend)),
+                )
+                assert (result["returncode"], result["stdout"], result["stderr"]) == (
+                    0, "GC_ACYCLIC_FINALIZER_RESCUE_OK\n", "",
+                ), (lane, result)

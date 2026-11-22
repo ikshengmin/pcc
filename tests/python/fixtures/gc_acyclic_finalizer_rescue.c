@@ -27,13 +27,23 @@ static PyObject *restored;
 static PyObject *candidate_parent, *candidate_child;
 static PyObject *child_watch;
 static int64_t parent_calls, child_calls, weak_calls, ran_while_stopped;
-static int64_t should_rescue;
+static int64_t should_rescue, reentry, nested_calls, callback_errors;
+static PyObject *pending_error;
 static int64_t sequence, parent_position, child_position, weak_position;
+
+static void observe_callback_boundary(void) {
+    if (pcc_thread_world_stop_epoch_held() >= 0) ran_while_stopped++;
+    if (py_err_occurred()) callback_errors++;
+    if (reentry) {
+        nested_calls++;
+        if (py_gc_collect() != 0 || py_err_occurred()) callback_errors++;
+    }
+}
 
 static PyObject *parent_del(PyObject *self) {
     parent_calls++;
     parent_position = ++sequence;
-    if (pcc_thread_world_stop_epoch_held() >= 0) ran_while_stopped++;
+    observe_callback_boundary();
     if (should_rescue) pcc_gc_store_root(&restored, self);
     return py_int_from_i64(0);
 }
@@ -42,14 +52,15 @@ static PyObject *child_del(PyObject *self) {
     (void)self;
     child_calls++;
     child_position = ++sequence;
-    if (pcc_thread_world_stop_epoch_held() >= 0) ran_while_stopped++;
+    observe_callback_boundary();
     return py_int_from_i64(0);
 }
 
 static PyObject *child_weak_callback(void) {
     weak_calls++;
     weak_position = ++sequence;
-    if (pcc_thread_world_stop_epoch_held() >= 0) ran_while_stopped++;
+    observe_callback_boundary();
+    if (py_weakref_call(child_watch) != py_None) callback_errors++;
     return py_int_from_i64(0);
 }
 
@@ -130,12 +141,18 @@ static int settle_child_weakref(void) {
 
 int main(int argc, char **argv) {
     int64_t backend = pcc_gc_backend();
-    if (argc != 2 || backend < 1 || backend > 3) return 1;
+    if ((argc != 2 && argc != 3) || backend < 1 || backend > 3) return 1;
     should_rescue = argv[1][0] == 'r';
+    reentry = argc == 3 && argv[2][0] == 'n';
     py_gc_disable();
     if (!make_graph()) return 2;
     pcc_gc_scheduler_root_register(&restored);
     pcc_gc_scheduler_root_register(&child_watch);
+    if (reentry) {
+        pending_error = py_exc_new(PY_EXC_VALUEERROR, "outer acyclic callback error");
+        if (!pending_error) return 3;
+        py_raise_owned(pending_error);
+    }
     if (pcc_stop_the_world() != 0) return 3;
     pcc_py_gc_minor_graph_lock();
     mark_candidate(candidate_parent);
@@ -164,7 +181,12 @@ int main(int argc, char **argv) {
         /* The same terminal path is idempotent; there is no second callback. */
         if (!settle_child_weakref() || weak_calls != 1) return 11;
     }
-    if (pcc_resume_world() != 0) return 12;
+    if (callback_errors || (
+        reentry && (nested_calls != (should_rescue ? 1 : 3)
+                   || py_current_exception() != pending_error)))
+        return 12;
+    if (reentry) py_clear_exception();
+    if (pcc_resume_world() != 0) return 13;
     pcc_gc_store_root(&restored, NULL);
     pcc_gc_store_root(&child_watch, NULL);
     pcc_gc_scheduler_root_unregister(&child_watch);

@@ -259,3 +259,14 @@ the original weakref live. The linked Linux pcc0 program passed all
 six GC1–3 combinations ten times each. This fixture owns exactly one
 parent-to-child edge, does not generalize layout retirement or handle
 a reentrant weak callback yet, and is not called by shipped sweep.
+
+The reference arm's nested mode enters with a pending outer exception.
+Each real finalizer and weak callback sees clear callback TLS, and its
+nested `gc.collect()` returns without reentering the outer sweep. The
+weak callback itself observes its weakref already cleared. On return,
+the exact original exception is again pending. The 12 Linux GC1–3
+control and nested combinations pass; each of the six nested
+combinations additionally passes ten executions of the same artifact.
+The tested root remains registered across the callback; this evidence
+does not extend to a callback mutating arbitrary weakref links or
+qualify GC4's window.
