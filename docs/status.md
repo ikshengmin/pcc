@@ -283,8 +283,10 @@ in the relevant section or issue and removes the entry.
    tuple results, both child identities, and no output on fast-path refusal.
    The native sorted writer covers insertion, reverse merge and a
    non-plain comparison that refuses after the copy without publishing.
-   Next GC3 writer witness: the inline generator-frame store, separate
-   from the covered raw list-backed frame.
+   Linux native GC0–4 now confirms only GC0 allocates inline generator
+   frames; GC3 takes the list path and shades its child. A live frame
+   prevents switching collectors. Next: verify grouped frame transfers
+   at the heap-slot-to-caller-root boundary.
    The dictionary transaction witness identifies the commit point after both
    slots succeed; rollback publishes no edge. Linux native GC3 also
    exercised the raw generator frame's set, replace and clear. Native heap
@@ -455,7 +457,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 inline generator frame native writer witness: Codex, Linux x86-64, 2026-11-22 11:52 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

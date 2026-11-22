@@ -214,6 +214,49 @@ static int check_private_sorted_publication(int large, int refused) {
     return 0;
 }
 
+static int check_inline_factory_dispatch(int64_t backend) {
+    PyObject *frame = py_gen_inline_frame_new(2);
+    PyObject *child = py_list_new(0);
+    PyObject *control = py_list_new(0);
+    if (!frame || !child || !control || py_gen_frame_len(frame) != 2)
+        return fail("inline factory result");
+    int64_t inline_frame = (
+        py_header_flags_load(py_header(frame)) & PY_FLAG_GEN_INLINE_FRAME
+    ) != 0;
+    if (backend == 0) {
+        if (py_obj_type_tag(frame) != PY_TYPE_GEN || !inline_frame)
+            return fail("GC0 did not use its inline layout");
+    } else if (py_obj_type_tag(frame) != PY_TYPE_LIST || inline_frame) {
+        return fail("count-free factory published an inline generator");
+    }
+    int64_t different = backend == 0 ? 3 : 0;
+    if (pcc_gc_set_backend(different) == 0 || pcc_gc_backend() != backend)
+        return fail("collector changed with a live frame");
+
+    if (backend == 3) {
+        pcc_py_gc_minor_graph_lock();
+        pcc_gc_set_mark_color(frame, PY_FLAG_GC_BLACK);
+        pcc_gc_set_mark_color(child, PY_FLAG_GC_WHITE);
+        pcc_gc_set_mark_color(control, PY_FLAG_GC_WHITE);
+        __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+        pcc_py_gc_minor_graph_unlock();
+    }
+    py_gen_frame_set(frame, 0, child);
+    if (py_gen_frame_get(frame, 0) != child) return fail("inline factory store identity");
+    if (backend == 3) {
+        if (((PyListObject *)frame)->items[0] != child || color(child) != PY_FLAG_GC_GRAY
+            || pcc_gc_page_mark_test(child) != 1 || color(control) != PY_FLAG_GC_WHITE
+            || pcc_gc_page_mark_test(control) != 0)
+            return fail("GC3 fallback store not shaded");
+    }
+    if (py_gen_frame_take(frame, 0) != child || py_gen_frame_get(frame, 0) != NULL)
+        return fail("inline factory take did not clear");
+    if (backend == 3)
+        __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC_INLINE_FACTORY_DISPATCH_OK");
+    return 0;
+}
+
 static PyObject *registered_root;
 
 static int check_managed_and_root_stores(void) {
@@ -253,8 +296,10 @@ static int check_managed_and_root_stores(void) {
 }
 
 int main(int argc, char **argv) {
-    if (pcc_gc_backend() != 3) return fail("backend");
+    int64_t backend = pcc_gc_backend();
     py_gc_disable();
+    if (argc == 2 && argv[1][0] == 'l') return check_inline_factory_dispatch(backend);
+    if (backend != 3) return fail("backend");
     if (argc == 2 && argv[1][0] == 'd') return check_dictionary_first_store();
     if (argc == 2 && argv[1][0] == 'm') return check_dictionary_private_materialization();
     if (argc == 2 && argv[1][0] == 'i') return check_private_sorted_publication(0, 0);

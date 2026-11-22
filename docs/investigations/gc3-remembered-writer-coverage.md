@@ -408,3 +408,20 @@ above. The raw merge scratch is not an old owning container: it holds
 a transient permutation while the original children remain rooted in
 the output array. No nursery/minor, production code change, macOS,
 pcc1 or throughput claim.
+
+## Inline generator factory dispatch is not a second GC3 heap writer
+
+The owned fixture calls `py_gen_inline_frame_new` in separate GC0–4
+processes. GC0 creates the inline generator layout; GC1–4 create an
+ordinary list-backed frame. In every case a different backend is
+refused after the frame's managed allocation, and get/set/take
+preserve identity and clear the taken slot. With a fixture-held active
+mark, GC3's real list fallback shades the stored white child in the
+header and page bitmap without shading an unrelated object. The
+defensive inline traced accessor was not manufactured or declared
+reachable on GC3; changing factory or backend-freeze policy would
+reopen that part of the writer inventory.
+
+Thirteen native Linux pcc0 cases pass using the same focused archive
+command above, five of them the per-backend layout test. No performance,
+GC3 minor, pcc1 or macOS run.
