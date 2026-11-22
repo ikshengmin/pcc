@@ -453,10 +453,13 @@ in the relevant section or issue and removes the entry.
    [GC3 census 39e1b8b](https://github.com/ikshengmin/pcc/commit/39e1b8bbfeec1b98af5afac92dac64fe1db7e1e0):
    tuples and lists account for 53.5–55.2% of logged allocations in two
    sequential single-carrier gateway controls. This is not sealed handler
-   throughput or an admitted share. Next GC3: on review make the ordinary
-   list/tuple owning stores carry the owner (flip the old ownerless test
-   in the same unit), keep unproved or foreign paths out, then demonstrate
-   an admitted share and n/4n/16n zero clean-old visits on the sealed arm.
+   throughput or an admitted share. [GC3 review d47a368](https://github.com/ikshengmin/pcc/commit/d47a368ecd5ac5e0534a6d642d76b2a74481af89)
+   carries the actual old receiver through ordinary direct and planned
+   stores, verified with real off-object list and inline tuple slots on
+   Linux; roots are ownerless and the bounded observer flags overflow.
+   No real minor reads the buffer. Next GC3: close the locked list first
+   store and tuple private builders, leave foreign paths out, then prove
+   admitted share and n/4n/16n zero clean-old visits on the sealed arm.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -678,7 +681,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:13 UTC), GC3 review ordinary list/tuple owning store owner transport: replace the existing ownerless assertions with real route checks. No nursery or other backend activation until its gate.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
