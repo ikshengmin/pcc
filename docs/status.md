@@ -245,6 +245,16 @@ in the relevant section or issue and removes the entry.
    unrelated live lists completed with no full recheck. All used one
    callback stop per candidate. The 16→64 step with no extra heap took
    5.8×/4.5× for 4× the candidates. Linear scaling is not qualified.
+   [Review commit 3d2bc28](https://github.com/ikshengmin/pcc/commit/3d2bc2870422a438049f3576629c6448a03376e8)
+   rejects a raw root cut outside all known candidate extents and retires
+   the candidates reached from actual roots during draining, avoiding a
+   second vector walk. Linux: 79 focused checks passed. The new pinned
+   candidate descendant check failed on the parent and passed fixed in
+   GC1/3; an interior pointer in the caller still rescues its owner.
+   Seven native A/B pairs at 64 candidates without extra heap gave
+   39%/18% lower median paired GC1/3 time (7/7 and 5/7 wins).
+   Explicit-pin visits and per-callback stops remain. No general scale
+   or official A/B qualification and no master runtime change.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -301,8 +311,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Avoid repeated extent lookups on empty issue 9 root cuts: Codex, Linux x86-64, 2026-11-22 17:51 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
