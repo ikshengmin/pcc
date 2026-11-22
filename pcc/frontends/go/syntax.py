@@ -577,6 +577,21 @@ class GoParser:
             self.take("{")
             fields, tags, embedded = [], [], []
             while not self.at("}"):
+                if self.at("*"):
+                    pointer = self.take("*")
+                    name = self.current
+                    if not self.at("name"):
+                        self.take("name")
+                    base = self.datatype(signature=signature)
+                    if isinstance(base, TypeInstantiationSyntax):
+                        name = base.base.token
+                    elif isinstance(base, TypeName):
+                        name = base.token
+                    fields.append((name, PointerSyntax(pointer, base)))
+                    tags.append(self.accept("string"))
+                    embedded.append(True)
+                    self.end_statement()
+                    continue
                 names = [self.take("name")]
                 while self.accept(","):
                     names.append(self.take("name"))

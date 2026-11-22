@@ -957,8 +957,18 @@ class Analyzer:
                     raise GoDiagnostic(token, "duplicate struct field " + token.text)
                 names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
-                field_type = self.resolve_type(field_type, signature=signature)
                 embedded = bool(dtype.embedded and dtype.embedded[index])
+                if embedded and isinstance(field_type, PointerSyntax):
+                    target = self.resolve_type(field_type, signature=True).element
+                    if isinstance(target, DefinedType) and target.underlying is None:
+                        declaration = self.declarations_by_identity.get(target)
+                        if declaration is not None and not declaration.resolving:
+                            self.complete_named_identity(target)
+                    if interface_type(target) is not None or isinstance(underlying(target), PointerType):
+                        raise GoDiagnostic(token, "embedded field cannot point to an interface or pointer type")
+                    raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
+                                        "embedded pointer fields require lifetime storage and receiver adjustment")
+                field_type = self.resolve_type(field_type, signature=signature)
                 if embedded and (not isinstance(field_type, DefinedType)
                                  or not isinstance(underlying(field_type), StructType)):
                     raise UnsupportedGo(token, 'go.unsupported.embedded-fields',

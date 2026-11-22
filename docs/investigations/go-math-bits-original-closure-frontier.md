@@ -279,3 +279,12 @@ tree it reached `os [math/bits.test]` and stopped at the unchanged
 blocker, separate from the `errors.Join` diagnostic union. Ninety
 scoped checks passed. No native assembly, runtime owner or project
 test was admitted.
+
+Embedded pointer fields now preserve their name, type and tag, including
+qualified instantiated types, while rejecting storage and promoted
+receivers before IR. The exact original `*File` at `os/file.go:201:2`
+parses; the same source-only run now stops at `os/file_unix.go:229:49`,
+the bodyless declaration of the runtime-owned `sigpipe`. Scoped
+evidence: 116 checks, an unchanged named-value native differential,
+and official Go's valid embedded-pointer and invalid interface/pointer
+cases. No Go pointer-bearing record was executed by PCC.

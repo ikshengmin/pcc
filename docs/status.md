@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   preserve the embedded `*File` at `os/file.go:201:2` in the real
-   test-bound `os` package. PCC now follows that exact variant from its
-   generated main; this is a source parse blocker, not missing files.
-   Runtime and native assembly ownership remain separate blockers. See the
+   preserve the bodyless `func sigpipe()` at `os/file_unix.go:229:49`
+   without emitting a no-op function or importing a host runtime symbol.
+   The exact bound `os` instance now parses past its original `*File` field;
+   pointer storage and native owners remain unimplemented. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go embedded pointer fields in selected os: Codex, Linux x86-64, 2026-11-22 02:33 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
