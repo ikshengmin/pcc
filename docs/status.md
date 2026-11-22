@@ -365,8 +365,11 @@ in the relevant section or issue and removes the entry.
    [forced fallback probe](https://github.com/ikshengmin/pcc/blob/57402250070a8eccddcb8d37067a8a606d2afe27/docs/investigations/gc2-exact-list-worker-review.md)
    passed 18 Linux cases: 32 slots shortcut, 33 ordinary fallback, tuple
    bypass; each path debited one owner and published one child.
-   Next exercise a latched gray-worklist allocation fallback with
-   stock cursor and bridge contention before expanding the candidate.
+   The [contended-owner regression](https://github.com/ikshengmin/pcc/blob/3cc6e9c9b9083c00440e233a47456bf9e8642f47/docs/investigations/gc2-exact-list-worker-review.md)
+   forced the fallback cursor and bridge onto one owner: both previously
+   returned a debt credit; only the real retiring path now earns it.
+   Five focused Linux native suites passed. Next see whether the cursor
+   can skip a reserved owner without losing progress or blocking finish.
    Master runtime and the pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -379,7 +382,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 contested bridge and fallback cursor single debt credit: Codex, Linux x86-64, 2026-11-22 10:13 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
