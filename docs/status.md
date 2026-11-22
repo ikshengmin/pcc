@@ -216,15 +216,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   isolate and validate the direct recursive member-effect component
-   before trying to qualify TinyXML2's open virtual edges. A late-defined
-   direct nonvirtual member leaf is now checked at TU end and executes;
-   missing/unknown bodies fail before emission. Original TinyXML2
-   remains at `1199:9`; see the
+   determine the exact dynamic-target and translation-unit ownership
+   contract for TinyXML2's open virtual destruction, using the
    [destructor graph](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
+   Recursive direct member effects now execute in the bounded case, but
+   the unchanged project is still stopped at `1199:9`; do not reuse
+   the static destructor's effect certificate for an unproved override.
 
    Claims:
-   - bounded direct recursive member effects: Codex, Linux x86-64, 2026-11-22 01:20 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -523,7 +523,7 @@ or a qualification of TinyXML2's full virtual destruction graph.
 
 For explicit destruction only, a same-class direct nonvirtual member can
 have a pending effect obligation checked at the end of its translation
-unit. The canonical member must have an actual call-free bound body.
-Absent or effectful bodies fail before object emission. This preserves
-the existing automatic D1 cleanup proof and does not admit recursion or
-open virtual effects.
+unit. Every reachable canonical member must have a bound body and a complete
+set of exact recognized direct member calls. Revisited identities permit
+self and mutual recursion, not unbound bodies or unknown outgoing calls.
+This preserves automatic D1 cleanup and does not admit open virtual effects.

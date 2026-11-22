@@ -259,24 +259,36 @@ def _closed_destruction_body(body, cleanup_destructors, direct_helpers):
     return True
 
 
-def record_direct_member_effect(parser, call, selected):
-    observer = parser.lifetimes.direct_destructor_helpers
-    if observer is None or observer[0] is not parser.current_function:
-        return
-    owner = getattr(observer[0], "class_owner", None)
-    if (owner is not None and getattr(selected, "class_owner", None) is owner
+def _direct_member_effect_edge(caller, selected):
+    owner = getattr(caller, "class_owner", None)
+    return (owner is not None and getattr(selected, "class_owner", None) is owner
             and not getattr(selected, "method_virtual", False)
             and not getattr(selected, "constructor", False)
             and not getattr(selected, "destructor", False)
             and not selected.variadic and selected.template_origin is None
-            and not selected.template_parameters and not parser.unevaluated_depth):
+            and not selected.template_parameters)
+
+
+def record_direct_member_effect(parser, call, selected):
+    if parser.unevaluated_depth or not _direct_member_effect_edge(parser.current_function, selected):
+        return
+    observer = parser.lifetimes.direct_destructor_helpers
+    if observer is not None and observer[0] is parser.current_function:
         observer[2][call] = selected
+    member_graph = parser.direct_destruction_member_graph
+    if member_graph is not None and member_graph[0] is parser.current_function:
+        member_graph[1][call] = selected
+
+
+def bind_direct_member_effects(symbol, body, edges):
+    """Retain exact calls only if the entire emitted body has no unknown edge."""
+    if _closed_destruction_body(body, {}, edges):
+        symbol.direct_destruction_member_edges = tuple(edges.values())
 
 
 def queue_explicit_destruction_members(parser, destructor, coord):
     members = getattr(destructor, "explicit_destruction_member_candidates", ())
-    if not members or any(getattr(member, "closed_destructor_member_leaf", None) is False
-                          for member in members):
+    if not members:
         return False
     parser.pending_explicit_destruction_members.append((members, coord))
     return True
@@ -285,9 +297,20 @@ def queue_explicit_destruction_members(parser, destructor, coord):
 def resolve_explicit_destruction_members(parser):
     """No projection leaves the TU unless all recorded member bodies are proved."""
     for members, coord in parser.pending_explicit_destruction_members:
-        if not all(getattr(member, "closed_destructor_member_leaf", False) for member in members):
-            raise CppDiagnostic("cpp.unsupported.placement-constructor-effects",
-                                "explicit destruction requires bound direct member leaf bodies", coord)
+        pending = list(members)
+        visited = set()
+        while pending:
+            member = pending.pop()
+            if member in visited:
+                continue
+            edges = getattr(member, "direct_destruction_member_edges", None)
+            if edges is None:
+                raise CppDiagnostic("cpp.unsupported.placement-constructor-effects",
+                                    "explicit destruction requires a bound direct member effect graph", coord)
+            # A repeated identity covers a recursive edge, not an unknown
+            # call. Every reachable selected body still has to be bound.
+            visited.add(member)
+            pending.extend(edges)
 
 
 def complete_body(parser, definition, symbol, scope, this, coord, bind_body):

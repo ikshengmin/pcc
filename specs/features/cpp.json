@@ -4523,6 +4523,40 @@
           }
         ]
       }
+    },
+    {
+      "id": "cpp.explicit-destruction-direct-recursive-member-effects",
+      "title": "Bound direct nonvirtual member recursion during explicit destruction",
+      "chapter_ids": [
+        "class.dtor",
+        "expr.call",
+        "basic.link"
+      ],
+      "scope": "A same-class direct nonvirtual recursive component is accepted for explicit destruction only when every reachable exact selected member has a bound TU body with no unknown call. Self and mutual cycles retain their runtime semantics, not a termination proof. Missing, escaping and open virtual effects stay outside this slice.",
+      "tests": [
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_recursive_direct_member_component_matches_cpp17",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_recursive_member_component_keeps_outgoing_unknown_edges_gated"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:9ba7d9732453a5be6c2305a38e7df78170bf694bac12a9c7e552fbe98d30b524",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "0ee10b81c5b69da0aa5aef849e0e1475b8238ba27bc8bb90bc355f4b85f2fb5b"
+          },
+          {
+            "path": "pcc/frontends/cpp/members.py",
+            "sha256": "ad09f550a6b9e569e536b816c2e64f7e2c6083178c440cadee85c5af4496d165"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "ed4ba6f6494dc154643f225f68999faa412e12232799f9b45676c0927a8685af"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {

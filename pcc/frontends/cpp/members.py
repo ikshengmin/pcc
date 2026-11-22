@@ -231,7 +231,8 @@ def call_member(parser, group, object_expression, arguments, coord, address_avai
         from pcc.frontends.cpp.virtual_functions import callee
         function = callee(selected, c_ast.ID(name, coord), coord)
     call = c_ast.FuncCall(function, c_ast.ExprList(converted, coord), coord)
-    if parser.lifetimes.direct_destructor_helpers is not None:
+    if (parser.lifetimes.direct_destructor_helpers is not None
+            or parser.direct_destruction_member_graph is not None):
         from pcc.frontends.cpp.destructors import record_direct_member_effect
         record_direct_member_effect(parser, call, selected)
     # [expr.call]: postfix-expression (including object) precedes every

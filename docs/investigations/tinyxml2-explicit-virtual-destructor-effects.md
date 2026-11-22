@@ -65,3 +65,15 @@ bound body calls an unresolved function still fail before object emission.
 This deliberately does not certify generated automatic cleanup, recursive
 members or open virtual final overriders. Five integration witnesses and
 153 adjacent tests passed. Unchanged TinyXML2 still stops at `1199:9`.
+
+
+## Closed direct recursive component
+
+A same-class direct nonvirtual call cycle is now checked as an identity
+graph at TU end. A repeated body avoids repeated work, not proof
+obligations: every reachable selected member must have a bound body whose
+calls are all represented. Both self-recursive and mutually recursive
+native controls match g++ 14.2. A missing member or external outgoing
+call still rejects. Seven guarded integration nodes and 155 adjacent
+checks passed. This is not a termination proof. The unchanged TinyXML2
+still has an open-virtual effect diagnostic at `1199:9`.

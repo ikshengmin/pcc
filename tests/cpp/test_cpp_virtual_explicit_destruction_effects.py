@@ -110,4 +110,40 @@ def test_pending_member_effects_never_leave_the_tu_unproved(body):
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp((("no-proof.cpp", late_member_source(body)),))
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
-    assert "bound direct member leaf bodies" in error.value.message
+    assert "bound direct member effect graph" in error.value.message
+
+
+def recursive_member_source(body):
+    return (
+        PREFIX
+        + "struct O{O(int*p):out(p){} int*out;~O();void left(int n);void right(int n);};"
+          "O::~O(){left(2);} void dispose(O*p){p->~O();}"
+        + body
+        + "int cpp_test_entry(){long long raw[16];int result=0;"
+          "O*p=new(raw)O(&result);dispose(p);return result;}"
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("members", [
+    "void O::left(int n){if(n>0)left(n-1);else *out=42;}",
+    "void O::left(int n){if(n>0)right(n-1);else *out=42;}"
+    "void O::right(int n){left(n);}",
+], ids=("self", "mutual"))
+def test_recursive_direct_member_component_matches_cpp17(tmp_path, members):
+    units = (("recursive.cpp", recursive_member_source(members)),)
+    binary = tmp_path / "owned"
+    write_host_executable(compile_host_cpp(units), binary)
+    reference = compile_reference_with_new(units, tmp_path / "reference")
+    assert_exact(run_executable(binary), EXPECTED)
+    assert_exact(run_executable(reference), EXPECTED)
+
+
+@pytest.mark.parametrize("members", [
+    "void O::left(int n){if(n>0)left(n-1);else right(n);}",
+    "void unknown(int*);void O::left(int n){if(n>0)left(n-1);else unknown(out);}",
+])
+def test_recursive_member_component_keeps_outgoing_unknown_edges_gated(members):
+    with pytest.raises(CppDiagnostic) as error:
+        compile_host_cpp((("unproved-recursion.cpp", recursive_member_source(members)),))
+    assert error.value.code == "cpp.unsupported.placement-constructor-effects"

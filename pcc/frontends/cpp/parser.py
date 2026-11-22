@@ -181,6 +181,7 @@ class CppParser:
         self.namespace_objects = []
         self.pending_construction_proofs = {}
         self.pending_explicit_destruction_members = []
+        self.direct_destruction_member_graph = None
         self.language_linkage = None
         tokens = self._tokenize(text, filename)
         self.projection_names = {token.value for token in tokens if token.kind == "ID"}
@@ -1521,6 +1522,15 @@ class CppParser:
         previous_constructed_returns = getattr(self, 'class_result_constructed_returns', None)
         self.class_result_constructed_returns = []
         result_plan = getattr(symbol, 'class_result_abi', None)
+        previous_member_graph = self.direct_destruction_member_graph
+        member_graph = None
+        if (member_owner is not None and result_plan is None and not symbol.variadic
+                and not getattr(symbol, "method_virtual", False)
+                and not getattr(symbol, "constructor", False)
+                and not getattr(symbol, "destructor", False)
+                and symbol.template_origin is None and not symbol.template_parameters):
+            member_graph = (symbol, {})
+        self.direct_destruction_member_graph = member_graph
         self.class_result_projection = ((result_plan, symbol.class_result_hidden_name)
                                         if result_plan is not None else None)
         symbol.parameter_symbols = parameter_symbols
@@ -1537,6 +1547,7 @@ class CppParser:
             self.scope = parent
             self.return_type = previous_return_type
             self.current_function = previous_function
+            self.direct_destruction_member_graph = previous_member_graph
             self.class_result_projection = previous_class_result
             self.class_result_constructed_returns = previous_constructed_returns
             if effect_proof is not None:
@@ -1553,13 +1564,9 @@ class CppParser:
                 and result_plan is None):
             from pcc.frontends.cpp.constructors import call_free_body
             symbol.closed_destructor_leaf_helper = call_free_body(body)
-        elif (member_owner is not None and result_plan is None and not symbol.variadic
-              and not getattr(symbol, "method_virtual", False)
-              and not getattr(symbol, "constructor", False)
-              and not getattr(symbol, "destructor", False)
-              and symbol.template_origin is None and not symbol.template_parameters):
-            from pcc.frontends.cpp.constructors import call_free_body
-            symbol.closed_destructor_member_leaf = call_free_body(body)
+        elif member_graph is not None:
+            from pcc.frontends.cpp.destructors import bind_direct_member_effects
+            bind_direct_member_effects(symbol, body, member_graph[1])
         if self.variadic_virtual_obligations is not None and symbol.variadic:
             self.variadic_virtual_obligations.bound(symbol, function)
         return function
