@@ -1,15 +1,20 @@
 """Constant-initialized block statics, N4659 [basic.start.static], [stmt.dcl].
 
-Only integral/enum constants, explicit-brace arrays and zero initialization
-are admitted. The shared C declaration owner supplies persistent internal
+Only integral/enum constants, ordinary string addresses for const-char
+pointers, explicit-brace arrays and scalar zero initialization are admitted.
+The shared C declaration owner supplies persistent internal
 storage, not a runtime guard. Dynamic initialization, destruction, inline/ODR
 sharing and switch-body declaration hoisting stay gated.
 """
 
+from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.constants import KNOWN, converted_fact
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.objects import static_value
 from pcc.frontends.cpp.sema import Symbol
-from pcc.frontends.cpp.types import ConstType, ReferenceType, array_type, is_enum_type
+from pcc.frontends.cpp.types import (
+    ConstType, PointerType, ReferenceType, array_type, is_enum_type, qualify_const, unqualified,
+)
 
 
 def declare(parser, *, for_init=False):
@@ -38,7 +43,8 @@ def declare(parser, *, for_init=False):
     if isinstance(dtype, ReferenceType):
         raise CppDiagnostic('cpp.unsupported.references',
                             'static reference initialization is not implemented', name.coord)
-    if not (parser.types.integral(dtype) or is_enum_type(dtype)):
+    string_pointer = unqualified(dtype) == PointerType(qualify_const("char"))
+    if not (parser.types.integral(dtype) or is_enum_type(dtype) or string_pointer):
         raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
                             'local statics currently require integral or enum objects', name.coord)
     parser._check_object_type(dtype, name.coord)
@@ -55,16 +61,25 @@ def declare(parser, *, for_init=False):
                                 'local static list initialization is not implemented', name.coord)
         expression = parser._expression()
         parser._require_value(expression)
-        parser._convert(expression, dtype, name.coord)
-        proof = converted_fact(parser._constant_fact(expression), dtype, parser.types, name.coord)
-        if proof.status != KNOWN:
-            raise CppDiagnostic('cpp.unsupported.dynamic-initialization',
-                                'a local static initializer requires a modeled target constant', name.coord)
-        initializer = parser._enum_constant_expression(dtype, proof.value, name.coord).node
+        if string_pointer:
+            if not isinstance(expression.node, c_ast.Constant) or expression.node.type != "string":
+                raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
+                                    'a local static const-char pointer requires an ordinary string literal', name.coord)
+            initializer, _ = static_value(parser, expression, dtype, name.coord)
+        else:
+            parser._convert(expression, dtype, name.coord)
+            proof = converted_fact(parser._constant_fact(expression), dtype, parser.types, name.coord)
+            if proof.status != KNOWN:
+                raise CppDiagnostic('cpp.unsupported.dynamic-initialization',
+                                    'a local static initializer requires a modeled target constant', name.coord)
+            initializer = parser._enum_constant_expression(dtype, proof.value, name.coord).node
     elif parser._peek().value in ('{', '('):
         raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
                             'local statics currently require an equals initializer', name.coord)
     else:
+        if string_pointer:
+            raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
+                                'a local static const-char pointer requires an ordinary string literal', name.coord)
         if isinstance(dtype, ConstType):
             raise CppDiagnostic('cpp.const-initializer', 'const objects require an initializer', name.coord)
         initializer = parser._enum_constant_expression(dtype, 0, name.coord).node

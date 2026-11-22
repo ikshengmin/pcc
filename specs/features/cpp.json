@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the function-local static pointer initializer; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the function-local static array of const-char pointers; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -460,6 +460,11 @@
       "id": "dcl.array",
       "title": "Arrays",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.array"
+    },
+    {
+      "id": "stmt.dcl",
+      "title": "Declaration statement",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/stmt.dcl"
     }
   ],
   "features": [
@@ -4379,6 +4384,37 @@
           {
             "path": "pcc/frontends/cpp/parser.py",
             "sha256": "2af4b4897d47ac18202443c135643de1e0b1289d65fa02938ddfcee0c998ba0d"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.local-static-const-char-pointer",
+      "title": "Local static const-char pointer initialized by an ordinary string literal",
+      "chapter_ids": [
+        "stmt.dcl",
+        "basic.start.static",
+        "conv.array"
+      ],
+      "scope": "A non-template, non-external-inline block static pointer to const char initialized with an ordinary string literal in an equals initializer persists in internal storage. Pointer assignments change that object across invocations, without runtime initializer functions. Braces, nonliteral pointer initializers, arrays and pcc1 stay outside this scope.",
+      "tests": [
+        "tests/cpp/test_cpp_local_static_string_pointer.py::test_local_static_pointer_has_no_runtime_initializer_function",
+        "tests/cpp/test_cpp_local_static_string_pointer.py::test_local_static_pointer_persists_against_explicit_cpp17",
+        "tests/cpp/test_cpp_local_static_string_pointer.py::test_local_static_pointer_does_not_expand_to_other_initializers"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:3875798ab8cca77cbb494ab091afde80009311cdf70ee2e9f5b6e6b0b50584da",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/local_statics.py",
+            "sha256": "9851772594c0006d21ee193d48ece80eda229b748326cc6c9af5976f227a2967"
+          },
+          {
+            "path": "pcc/frontends/cpp/objects.py",
+            "sha256": "875fcbec235a6a387e9452ab3342b0340593fd012d27472aa09f3f0c2430ea8c"
           }
         ]
       }
