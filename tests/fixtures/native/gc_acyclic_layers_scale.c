@@ -20,7 +20,7 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { MAX_PEERS = 4, MAX_CANDIDATES = 256, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
+enum { MAX_PEERS = 4, MAX_CANDIDATES = 4096, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
 static void *nodes[MAX_CANDIDATES];
 /* Identities for comparisons only, not registered roots or C locals across
  * collection. The departing setup thread owns the last strong variables. */

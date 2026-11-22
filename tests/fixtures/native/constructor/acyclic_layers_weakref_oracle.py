@@ -20,8 +20,8 @@ field_holder = FieldHolder()
 late_refs = []
 late_new = sys.argv[1] == "late-new"
 indirect = sys.argv[1] in ("holder", "capi-list", "caller-old-holder")
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder")
-withdrawn = sys.argv[1] == "withdrawn"
+rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "pin-reassert", "pin-transfer", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder")
+withdrawn = sys.argv[1] in ("withdrawn", "pin-withdraw")
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
 same_layer_peer = sys.argv[1] in ("peer-hold", "peer-depart")
@@ -93,7 +93,7 @@ if sys.argv[1] == "dict-update":
     a.child = {7: b}
 elif sys.argv[1] in ("list-slice", "set-update"):
     a.child = [b]
-if sys.argv[1] in ("mixed-tail", "pin"):
+if sys.argv[1] in ("mixed-tail", "pin", "pin-reassert", "pin-transfer"):
     b.tail = Tail()
 if mixed:
     b.child = b

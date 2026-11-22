@@ -892,7 +892,7 @@ def _bound_clear_root(slots, pins, offset: int) -> None:
         if prior >= 0:
             pcc_gc_unpin(value)
             if prior != 0:
-                atomic_rmw_i32("or", value, 12, 64, "relaxed")
+                pcc_gc_reassert_pin(value)
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -1018,7 +1018,7 @@ def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
         _bound_clear_root(slots, pins, 80)
     result = load_ptr(slots, 0)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
@@ -2131,12 +2131,12 @@ def _object_new_accepts_excess(cls) -> bool:
     if _ptr_can_have_header(inherited):
         pcc_gc_unpin(inherited)
         if inherited_pin != 0:
-            atomic_rmw_i32("or", inherited, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(inherited)
     py_decref(inherited)
     if _ptr_can_have_header(current):
         pcc_gc_unpin(current)
         if current_pin != 0:
-            atomic_rmw_i32("or", current, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(current)
     py_decref(current)
     if same == 0:
         return False
@@ -2223,13 +2223,13 @@ def _object_new_cache_fill(root, result_slot) -> None:
             pcc_gc_store_root(result_slot, descriptor)
             pcc_gc_unpin(descriptor)
             if prior_pin != 0:
-                atomic_rmw_i32("or", descriptor, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+                pcc_gc_reassert_pin(descriptor)
             py_decref(descriptor)
         pcc_gc_unpin(key)
         py_decref(key)
     pcc_gc_unpin(attrs)
     if prior_attrs_pin != 0:
-        atomic_rmw_i32("or", attrs, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+        pcc_gc_reassert_pin(attrs)
     if ptr_is_null(load_ptr(result_slot, 0)) != 0:
         _class_require_result(null(), cstr("object.__new__"), cstr("object allocator callable allocation failed"))
 
@@ -3038,7 +3038,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
         if ptr_eq(value, result) != 0 or load_i64(pins, cleanup_index * C_POINTER_SIZE) != 0:
             # Balance this input's pin lease, but preserve the original bit
             # or the independent result lease. No moving window under lock.
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
         cleanup_index = cleanup_index + 1
     pcc_py_gc_minor_graph_unlock()
     cleanup_index = 0
@@ -6927,6 +6927,7 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 

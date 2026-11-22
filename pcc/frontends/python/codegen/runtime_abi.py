@@ -1831,6 +1831,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_auto_step_pending',
         'pcc_gc_last_alloc_bytes',
         'pcc_gc_mark_active',
+        'pcc_gc_callback_candidate_pin_dirty',
         'pcc_gc_metric_load',
         'pcc_gc_metric_pause_hist0',
         'pcc_gc_metric_pause_hist1',

@@ -79,6 +79,7 @@ access             = extern("pcc_platform_access", (c_ptr, c_int64), c_int64)
 getenv             = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 memcmp_c           = extern("memcmp", (c_ptr, c_ptr, c_int64), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
@@ -154,7 +155,7 @@ def _path_clear_root_prefix(slots, pins, count: int) -> None:
             prior_pin: int = load_i64(pins, offset)
             pcc_gc_unpin(value)
             if prior_pin:
-                atomic_rmw_i32("or", value, 12, 64, "relaxed")
+                pcc_gc_reassert_pin(value)
         pcc_gc_store_root(ptr_add(slots, offset), null())
 
 

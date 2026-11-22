@@ -20,6 +20,8 @@ extern int PyDict_SetItem(PyObject *, PyObject *, PyObject *);
 extern int PyList_Append(PyObject *, PyObject *);
 extern int PyObject_SetAttrString(PyObject *, const char *, PyObject *);
 extern void pcc_gc_cms_stop_worker(void);
+extern void pcc_gc_reassert_pin(PyObject *);
+extern int64_t pcc_gc_metric_pin_balance(void);
 extern void pcc_gc_begin_explicit_tracing_collect(void);
 extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
@@ -35,7 +37,7 @@ static void *nodes[WIDE_MAX];
 static PyObject *wide_low;
 static int wide_size;
 static int rescue, withdrawn, mixed, silent, finalizer_only, late_new, idle_worker, error;
-static int worker_started, worker_done;
+static int worker_started, worker_done, pin_withdraw;
 static int peer_mode, peer_request, peer_read, peer_live_after;
 static void *peer_thread;
 static PyObject *volatile *caller_hold;
@@ -100,7 +102,18 @@ static PyObject *finish_a(PyObject *self) {
         if (!target || target == py_None) error = 6;
         else if (rescue == 2) *caller_hold = target;
         else if (rescue == 5) *caller_hold = (PyObject *)((char *)target + 1);
+        else if (pin_withdraw) {
+            pcc_gc_pin(target);
+            pcc_gc_unpin(target);
+        }
         else if (rescue == 4) pcc_gc_pin(target);
+        else if (rescue == 19) pcc_gc_reassert_pin(target);
+        else if (rescue == 20) {
+            int64_t balance = pcc_gc_metric_pin_balance();
+            pcc_gc_unpin(roots[HOLD]);
+            pcc_gc_pin(target);
+            if (pcc_gc_metric_pin_balance() != balance) error = 49;
+        }
         else if (rescue == 6 || rescue == 8) py_dict_set(roots[HOLD], py_int_from_i64(7), target);
         else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
         else if (rescue == 9) py_list_set(roots[HOLD], 0, target);
@@ -165,7 +178,7 @@ static void *seal_on_departing_thread(void *unused) {
     const char *fields[] = {"child", "tail"};
     if (pcc_current_thread_id() <= 0) { error = 8; return NULL; }
     PyClassObject *a_cls = py_class_new("LayerA", NULL, 0, fields, 1);
-    int want_tail = mixed == 2 || rescue == 4;
+    int want_tail = mixed == 2 || rescue == 4 || rescue == 19 || rescue == 20;
     int bulk = rescue >= 11 && rescue <= 13;
     PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, want_tail ? 2 : 1);
     if (!a_cls || !b_cls) { error = 9; return NULL; }
@@ -185,6 +198,7 @@ static void *seal_on_departing_thread(void *unused) {
                            rescue == 7 || rescue == 16 ? py_instance_new(a_cls) :
                            rescue == 17 ? new_extension_holder() : py_set_new();
         if (!holder) { error = 14; return NULL; }
+        if (rescue == 20) pcc_gc_pin(holder);
         if (rescue == 18) *caller_hold = holder;
         else pcc_gc_store_root(&roots[HOLD], holder);
         if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
@@ -342,6 +356,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
     if (argc > 1 && strcmp(argv[1], "pin") == 0) rescue = 4;
+    if (argc > 1 && strcmp(argv[1], "pin-reassert") == 0) rescue = 19;
+    if (argc > 1 && strcmp(argv[1], "pin-transfer") == 0) rescue = 20;
     if (argc > 1 && strcmp(argv[1], "dict-holder") == 0) rescue = 6;
     if (argc > 1 && strcmp(argv[1], "field-holder") == 0) rescue = 7;
     if (argc > 1 && strcmp(argv[1], "dict-replace") == 0) rescue = 8;
@@ -356,7 +372,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "extension-field") == 0) rescue = 17;
     if (argc > 1 && strcmp(argv[1], "caller-old-holder") == 0) rescue = 18;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
-    withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
+    pin_withdraw = argc > 1 && strcmp(argv[1], "pin-withdraw") == 0;
+    withdrawn = pin_withdraw || (argc > 1 && strcmp(argv[1], "withdrawn") == 0);
     if (argc > 2 && (strcmp(argv[1], "wide-keep") == 0 || strcmp(argv[1], "wide-drop") == 0)) {
         if (strcmp(argv[2], "63") == 0) wide_size = WIDE_FIRST_EDGE;
         else if (strcmp(argv[2], "64") == 0) wide_size = WIDE_FIRST_WORD;
@@ -397,7 +414,8 @@ int main(int argc, char **argv) {
     pcc_py_gc_minor_graph_lock();
     pcc_gc_tracing_candidates_reset();
     int candidate_count = wide_size ? wide_size :
-        (mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13) ? 3 : 2);
+        (mixed == 2 || rescue == 4 || rescue == 19 || rescue == 20 ||
+         (rescue >= 11 && rescue <= 13) ? 3 : 2);
     for (int i = 0; i < candidate_count; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);

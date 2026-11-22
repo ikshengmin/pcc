@@ -88,6 +88,7 @@ pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_eve
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_object_id = extern("pcc_gc_object_id", (c_ptr,), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
@@ -693,6 +694,6 @@ def py_user_del_dispatch(o) -> None:
         py_tls_exc_set(saved_exc)
         pcc_gc_unpin(saved_exc)
         if saved_exc_pin != 0:
-            atomic_rmw_i32("or", saved_exc, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     _finalizer_owner_leave(finalizer_owner, finalizer_lease, flags & 524288)

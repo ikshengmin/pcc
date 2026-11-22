@@ -1160,6 +1160,7 @@ def _review_layer_finalizer(node, window) -> i64:
     obj = load_ptr(node, 0)
     if pcc_gc_tracing_is_sweep_candidate(obj) == 0 or py_user_del_pending(obj) == 0:
         return 0
+    atomic_store_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, 0, "relaxed")
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
     _user_code_window_open(window)
     if load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen"):
@@ -1211,18 +1212,20 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut, suspected, shade_b
     raw_possible: i64 = pcc_gc_callback_cut_may_hit(
         cut, pcc_gc_callback_layers_hull_low(plan), pcc_gc_callback_layers_hull_high(plan),
     )
-    pos = 0
-    while pos < count:
-        node = load_ptr(nodes, pos * 8)
-        obj = load_ptr(node, 0)
-        # The ordinary candidate predicate excludes pins. Here a newly
-        # pinned candidate is itself a root, and its children must survive.
-        if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
-            if (pcc_gc_object_node_is_address_pinned(node, obj) != 0
-                    or (raw_possible != 0
-                        and pcc_gc_callback_singleton_conservative_root(node, cut) != 0)):
-                pcc_gc_mark_root_gray_if_known(obj)
-        pos += 1
+    pin_dirty: i64 = atomic_load_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, "acquire")
+    if pin_dirty != 0 or raw_possible != 0:
+        pos = 0
+        while pos < count:
+            node = load_ptr(nodes, pos * 8)
+            obj = load_ptr(node, 0)
+            # The ordinary candidate predicate excludes pins. Here a newly
+            # pinned candidate is itself a root, and its children must survive.
+            if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                if (pcc_gc_object_node_is_address_pinned(node, obj) != 0
+                        or (raw_possible != 0
+                            and pcc_gc_callback_singleton_conservative_root(node, cut) != 0)):
+                    pcc_gc_mark_root_gray_if_known(obj)
+            pos += 1
     pcc_gc_gray_registered_roots()
     while pcc_gc_gray_count_load_acquire() != 0:
         pcc_gc_gray_worklist_flush()
@@ -1357,6 +1360,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
         if weak < 0:
             pcc_platform_abort()
         if weak > 0:
+            atomic_store_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, 0, "relaxed")
             atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
             _user_code_window_open(window)
             py_weakref_run_queued_callbacks(pending, 0)

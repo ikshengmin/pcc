@@ -66,6 +66,7 @@ py_gen_send = extern("py_gen_send", (c_ptr, c_ptr), c_ptr)
 py_gen_throw = extern("py_gen_throw", (c_ptr, c_ptr), c_ptr)
 py_gen_close = extern("py_gen_close", (c_ptr,), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -475,7 +476,7 @@ def _coroutine_slot_drop(slots, pins, offset: int) -> None:
     if prior >= 0 and ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         pcc_gc_unpin(value)
         if prior != 0:
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
     pcc_gc_store_root(slot, null())
 
 
@@ -506,10 +507,10 @@ def _coroutine_finish(slots, pins):
         if error_prior >= 0:
             pcc_gc_unpin(error)
             if error_prior != 0:
-                atomic_rmw_i32("or", error, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+                pcc_gc_reassert_pin(error)
     result = load_ptr(slots, _CORO_RESULT)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(load_ptr(pins, _CORO_BORROWED_FRAME))
     if pcc_gc_foreign_lease_release(ptr_add(slots, _CORO_RESULT), load_i64(pins, _CORO_LEASES_BASE + _CORO_RESULT)) != 0:

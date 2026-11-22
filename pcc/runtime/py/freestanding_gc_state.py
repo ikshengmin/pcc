@@ -16,6 +16,11 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+# A layered callback stop may skip the pin walk only if the current window
+# installed no candidate pin through the shared root-owner protocol.
+define_global_i32("pcc_gc_callback_candidate_pin_dirty", 0)
+
+
 # Backend-0 cycle collector and public gc-module policy.
 define_global_i32("py_gc_enabled", 1)
 # CPython 3.15: gc.get_threshold() == (2000, 10, 10).

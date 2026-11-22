@@ -57,6 +57,7 @@ from pcc.unsafe import (
 
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
@@ -275,7 +276,7 @@ def _write_user_exception_heading(exc) -> None:
         py_tls_exc_set(saved_exc)
         pcc_gc_unpin(saved_exc)
         if saved_exc_pin != 0:
-            atomic_rmw_i32("or", saved_exc, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     if ptr_is_null(msg) == 0:
         if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR
@@ -561,7 +562,7 @@ def _tb_append_user_exc_heading(b, exc) -> None:
         py_tls_exc_set(saved_exc)
         pcc_gc_unpin(saved_exc)
         if saved_exc_pin != 0:
-            atomic_rmw_i32("or", saved_exc, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     if ptr_is_null(msg) == 0:
         if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR

@@ -145,6 +145,7 @@ floor_c = extern("floor", (c_double,), c_double)
 fmod_c = extern("fmod", (c_double, c_double), c_double)
 pcc_numeric_float_from_bits = extern("pcc_numeric_float_from_bits", (c_int64,), c_double)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -1214,13 +1215,13 @@ def py_obj_divmod(a, b) -> c_ptr:
         value = load_ptr(slots, index * C_POINTER_SIZE)
         pcc_gc_unpin(value)
         if load_i64(pins, index * C_POINTER_SIZE) != 0 and _ptr_can_have_header(value) != 0:
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
         pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
     pcc_gc_scheduler_root_unregister_handle(right_handle)
     pcc_gc_scheduler_root_unregister_handle(left_handle)
     result = load_ptr(slots, 16)
     if _ptr_can_have_header(result) != 0:
-        atomic_rmw_i32("or", result, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_scheduler_root_unregister_handle(result_handle)
     return pcc_gc_take_pinned_slot(ptr_add(slots, 16), prior_result_pin)
 

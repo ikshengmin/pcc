@@ -66,7 +66,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 2, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart", "peer-new"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder", "mixed", "mixed-tail", "mixed-rescue", "late-new", "worker", "pin", "pin-reassert", "pin-transfer", "pin-withdraw", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder", "peer-hold", "peer-depart", "peer-new"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -83,6 +83,9 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "late-new": "a-del a-weak b-del b-new b-weak b-dead\n",
         "worker": "a-del a-weak b-del b-weak b-dead\n",
         "pin": "a-del a-weak b-live\n",
+        "pin-reassert": "a-del a-weak b-live\n",
+        "pin-transfer": "a-del a-weak b-live\n",
+        "pin-withdraw": "a-del a-weak b-del b-weak b-dead\n",
         "interior": "a-del a-weak b-live\n",
         "dict-holder": "a-del a-weak b-live\n",
         "field-holder": "a-del a-weak b-live\n",
@@ -220,14 +223,14 @@ def _layered_cpy_owner(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 2, 3))
-@pytest.mark.parametrize("arm", ("keep", "withdraw"))
+@pytest.mark.parametrize("arm", ("keep", "withdraw", "transfer"))
 def test_layered_sweep_checks_independent_cpy_owner(_layered_cpy_owner, backend, arm):
     actual = run_process_group_timeout(
         [str(_layered_cpy_owner), arm], timeout=15,
         env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                  PCC_GC_DEBT_THRESHOLD="1099511627776"),
     )
-    expected = ("del=1 released=0 reclaimed=1 usable=1 full=0\n" if arm == "keep"
+    expected = ("del=1 released=0 reclaimed=1 usable=1 full=0\n" if arm in ("keep", "transfer")
                 else "del=1 released=1 reclaimed=2 usable=0 full=1\n")
     assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected, "")
 

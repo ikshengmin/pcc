@@ -833,3 +833,55 @@ weak callback in that order. There were 198 focused native assertions
 across GC1–3, including the six new earlier-stop cases. These are
 production sweep-entry fixtures, not asynchronous scheduling or
 HTTP/macOS qualification.
+
+### Skip the pin walk only when the stopped window had no candidate pin
+
+A quiet 4,096-node chain opened 8,192 callback windows. The previous
+code examined all 4,096 candidates after each one: 33,554,432 checks.
+The walk accounted for 75–77% of elapsed time. The observed native raw
+cuts did not hit the candidate hull; 16,384 unrelated live objects did
+not account for the slope. At 1,024 and 4,096 nodes the parent took
+roughly 34 and 376–395 ms respectively in the initial Linux screen.
+
+At plan admission a pinned object cannot be a sweep candidate. Each
+review callback window clears a private pin-change bit while the world
+is stopped. The nonparking Boolean-pin setter and all prior-pin
+restorations share one publisher; indexed temporary leases and explicit
+CpyHandle owners publish through the same predicate when they add a
+claim. The publisher inspects the flags already observed by the owner
+operation. A balanced transfer is therefore noticed even when every
+telemetry total is unchanged. Retirement entries, immutable literal
+pins and the current stopped thread snapshots retain their old
+semantics. The stopped remark skips the candidate walk only when both
+the pin-change bit and the raw-root hull test are clear. It does not
+skip the stack capture, registered-root marking, Dijkstra drain or the
+full fallback. GC4 does not enter this route.
+
+On Linux pcc0 with a freshly verified 205-member runtime, 210 focused
+assertions and the five-GC callback-stop lifecycle passed. New native
+controls transfer a Boolean pin with no balance change, reassert an
+unregistered pin, withdraw a temporary pin, and transfer a genuine
+indexed C owner with no lease-count change. The Boolean and C roots
+keep their managed targets, including the pinned object's dependent
+child; withdrawn pins do not keep a target.
+
+With five alternating pairs and duplicate-parent controls, the
+4,096-node serial case dropped to 71–76 ms from 365–399 ms, 5/5 in each
+GC1/2/3 cell with and without 16,384 unrelated live objects (79–82%
+paired elapsed reduction, outside every control in those six cells).
+Candidate growth from 1,024 to 4,096 averaged about 4.2× across those
+fixtures, not the parent's roughly 11×. Four-peer n=1,024 cases did not
+clear their controls. Ordinary pin/unpin loops in all five GCs had
+small, inconclusive median differences on repeat; neither that probe
+nor the chain establishes the no-observer HTTP gate. This is not
+macOS, performance on unscreened root-heavy shapes, or merge approval.
+
+To reproduce the wide native shape, compile this same fixture at both
+revisions with `measure_gc_acyclic_layers_scale.py <out> --compile-only`
+and exact source-approved archives. Alternate its binaries at
+`sweep_scale 4096 16384 0 2 0`, setting `PCC_GC_BACKEND` to each of
+1, 2, and 3 and `PCC_GC_DEBT_THRESHOLD=1099511627776` in both arms.
+Repeat at n=256/1,024 and unrelated counts 0/16,384; keep the pinned
+CPU set, same callback outputs, and duplicate-parent pairs. This test
+uses a sealed cohort; it times the actual sweep but does not stand in
+for native HTTP.

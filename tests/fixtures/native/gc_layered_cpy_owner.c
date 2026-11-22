@@ -7,6 +7,7 @@
 
 extern void Py_INCREF(PyObject *);
 extern void Py_DECREF(PyObject *);
+extern int64_t pcc_gc_foreign_lease_active;
 extern void *pcc_gc_object_index_find(PyObject *);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern void pcc_gc_tracing_candidates_reset(void);
@@ -21,9 +22,9 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-static int token, error, finalizers, releases, keep;
+static int token, other_token, error, finalizers, releases, keep, transfer;
 static void *nodes[2];
-static PyObject *class_root;
+static PyObject *class_root, *other_handle;
 static PyObject *held_by_c; /* Deliberately never a registered managed root. */
 
 static void release_foreign(void *payload) {
@@ -35,7 +36,10 @@ static PyObject *finalize(PyObject *self) {
     ++finalizers;
     PyObject *handle = py_instance_get_field((PyInstanceObject *)self, 0);
     if (!handle || py_cpy_handle_get(handle) != &token) { error = 7; return py_None; }
+    int64_t before = __atomic_load_n(&pcc_gc_foreign_lease_active, __ATOMIC_ACQUIRE);
+    if (transfer) Py_DECREF(other_handle);
     Py_INCREF(handle);
+    if (transfer && __atomic_load_n(&pcc_gc_foreign_lease_active, __ATOMIC_ACQUIRE) != before) error = 17;
     if (keep) held_by_c = handle;
     else Py_DECREF(handle);
     py_decref(handle);
@@ -50,6 +54,12 @@ static void *prepare(void *unused) {
     if (!cls) { error = 9; return NULL; }
     pcc_gc_store_root(&class_root, (PyObject *)cls);
     py_class_add_method(cls, "__del__", (PyObject *)(uintptr_t)finalize);
+    if (transfer) {
+        PyObject *other = py_cpy_handle_new(&other_token);
+        if (!other) { error = 18; return NULL; }
+        pcc_gc_store_root(&other_handle, other);
+        Py_INCREF(other);
+    }
     PyObject *a = py_instance_new(cls);
     PyObject *handle = py_cpy_handle_new(&token);
     if (!a || !handle) { error = 10; return NULL; }
@@ -72,11 +82,13 @@ static void *prepare(void *unused) {
 
 int main(int argc, char **argv) {
     if (argc != 2) return 12;
-    keep = strcmp(argv[1], "keep") == 0;
+    transfer = strcmp(argv[1], "transfer") == 0;
+    keep = transfer || strcmp(argv[1], "keep") == 0;
     if (pcc_current_thread_id() <= 0) return 13;
     pcc_gc_cms_stop_worker();
     py_cpy_handle_set_release_fn(release_foreign);
     pcc_gc_scheduler_root_register(&class_root);
+    pcc_gc_scheduler_root_register(&other_handle);
     void *thread = NULL;
     if (pcc_thread_start(&thread, prepare, NULL) || pcc_thread_join(thread, NULL)) return 14;
     if (error) return error;
