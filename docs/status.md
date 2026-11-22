@@ -160,6 +160,12 @@ in the relevant section or issue and removes the entry.
   dispatch from an authenticated checkout; no need to wait for CI before
   focused rounds outside stopped areas.
 
+- Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
+  Agent recommendation: use the same allocator and root protocol on GC0–4;
+  do not implement another source-shape admission or promote the GC0-only envelope.
+  Open review points: descriptor/header extent, complete write-path coverage,
+  and allocation/caller-result root transfer.
+
 - TinyXML2 open virtual destruction: earlier project-only proof
   recommendation withdrawn. Agent recommendation: infer C++ destructor
   exception specifications from declarations and subobjects, enforce
@@ -224,19 +230,17 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   draft the general shared Go/Java managed backing design before more
-   Go collection code: shared allocator/header/descriptor, slice growth,
-   string copy/ownership, and five-collector qualification. Agent
-   recommendation: freeze new package/source-shape admissions; keep
-   existing probes only as historical regression inputs, not acceptance.
-   Linux checked signed shifts are independent of that prototype. The
-   opt-in original source probe now reaches `internal/bytealg/bytealg.go:9:2`
-   but no original dependency-closure native executable exists. See the
+   review the proposed [shared Go/Java managed storage](design/go-shared-managed-storage.md)
+   before implementation. Agent recommendation: freeze new source-shape
+   admissions; do not qualify on the GC0-only prototype. Existing probes
+   are not native upstream acceptance. The opt-in source probe reached
+   `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
+   See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go shared managed storage design review: Codex, Linux x86-64, 2026-11-22 05:48 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
