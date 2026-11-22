@@ -132,6 +132,26 @@ The baseline cache control passed alongside both release orders (three
 native nodes). This neither guarantees immediate reclamation nor qualifies
 raw addresses from nursery storage. The runtime is unchanged.
 
+### First weak reference is an event, not a type exclusion
+
+The source witness exercises the current `py_weakref_new` body in four
+paths: unsupported target, allocation failure, normal chain, and late
+finalizer/callback chain. Unsupported targets do not resolve or allocate.
+A failed weakref allocation never publishes a referent. A successful
+allocation writes the weak target before linking either chain. A future
+GC3 in-place promotion needs the resolved, still-rooted target, after
+admission and before that first publication. Since weakref allocation
+may park, the implementation must reload/validate the rooted target
+when it resumes; it cannot carry raw nursery state blindly across
+allocation. Repeated weak references to a now-old target need no new
+promotion. If promotion fails, leave the weak reference unpublished;
+never change weak-target reachability into a strong edge.
+
+The public control observes referent identity through two weakref
+creations and explicit collections, leaves an untreated sibling intact
+and rejects an unsupported target. It does not measure nursery promotion.
+Test mode does not change runtime dispatch.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

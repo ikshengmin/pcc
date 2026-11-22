@@ -250,9 +250,10 @@ in the relevant section or issue and removes the entry.
    the dormant helper directly, separately from the public-entry controls.
    The distinct `PyObject_GetBuffer` pin/release path passed Linux native
    shared-export tests in both release orders. Exporter admission still
-   waits for promotion/exclusion review. Next: qualify GC3 weakref creation
-   as a promotion boundary without changing weakref behavior.
-   Real nursery handoff is untested.
+   waits for promotion/exclusion review. Weakref creation now has a source
+   publication witness and a public native identity control. Next: prove
+   promotion preparation and remembered-edge publication for nonmoving young
+   objects without enabling the nursery. Real nursery handoff is untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -264,7 +265,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 first weakref promotion boundary: Codex, Linux x86-64, 2026-11-22 07:15 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
