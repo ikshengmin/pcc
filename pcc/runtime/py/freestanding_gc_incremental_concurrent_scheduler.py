@@ -816,8 +816,6 @@ def _gc2_review_list_bridge(owner_slot, epoch: i64, token: i64) -> i64:
     pcc_py_gc_minor_graph_lock()
     if work == 0:
         # A shape miss must not be requeued back to the same shortcut.
-        # If an ordinary fallback walker already traced it, it is black:
-        # the close cannot debit its credit twice.
         owner = load_ptr(owner_slot, 0)
         if (atomic_load_i32(owner, abi_constant("object.header.flags_offset"), "acquire") & 16) != 0:
             pcc_gc_trace_referents_work(owner)
@@ -832,7 +830,9 @@ def _gc2_review_list_bridge(owner_slot, epoch: i64, token: i64) -> i64:
     closed: i64 = pcc_gc2_review_claim_close_locked(owner_slot, epoch, token, 1)
     pcc_py_gc_minor_graph_unlock()
     pcc_thread_no_park_exit()
-    return closed
+    # The fallback cursor can finish this owner while our graph lock is
+    # released. Closing the token alone does not pay allocation debt.
+    return 1 if closed == 2 else 0
 
 
 @c_abi_export("pcc_gc_tracing_step_cycle")

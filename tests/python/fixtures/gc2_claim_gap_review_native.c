@@ -145,7 +145,7 @@ int main(int argc, char **argv) {
     if (pcc_thread_join(thread, &result) != 0 || result) return 7;
     int64_t credit = pcc_gc_gray_count_load_acquire();
     int32_t owner_color = py_header_flags_load(py_header(owner)) & COLORS;
-    if (scan.work != 1 || scan.closed != (scan.mode != 2) ||
+    if (scan.work != 1 || scan.closed != (2 - scan.mode) ||
         credit != (scan.mode == 1 ? 2 : 1) ||
         owner_color != (scan.mode == 0 ? MARK_BLACK : MARK_GRAY))
         return 8;

@@ -138,3 +138,30 @@ blacken the original owner, debit its credit once, and enqueue exactly
 one child, even with repeated incoming slots. Three fresh processes per
 combination passed on Linux; no automatic finish or speed claim is
 added by this controlled single slice.
+
+## Contested owner: retirement is not task closure
+
+A second controlled native probe forces the runtime's fallback latch
+(not an injected malloc failure). One thread holds the owner's list
+lock while the alternate marker dequeues that owner and drops the graph
+lock. A third thread takes the graph and runs the real ordinary fallback
+cursor on the same object before the alternate can retire it. Only then
+does the test release the list lock. In the original bridge both calls
+returned one completed owner even though its gray credit went down only
+once and the child was queued once. Both callers can spend returned
+progress against shared allocation debt, so that is a real double
+credit, not a memory-liveness failure.
+
+The close operation now distinguishes matching closure without gray
+debit from actual retirement. The bridge returns completed work only
+for the latter. It does not infer the debit from a separate color read:
+a concurrent producer can re-shade a black object between observations.
+Both paths may still visit the object in this forced interleave; this
+change does not claim to eliminate that duplicate scanning cost.
+
+The previous owned archive failed with `ordinary=1 alternate=1` and
+the new archive passed all three fresh processes with
+`ordinary=1 alternate=0`, still one child token and one remaining
+gray credit. Four other focused native suites (automatic finish,
+forced width, stopped claim gaps, short-list supported layout) also
+passed using the exact rebuilt archive.

@@ -296,6 +296,7 @@ def pcc_gc2_review_claim_may_request_remark_locked(epoch: i64) -> i64:
 def pcc_gc2_review_claim_close_locked(owner_slot, epoch: i64, token: i64, scanned: i64) -> i64:
     # Child tokens are flushed by the scanning thread before a successful
     # close. A failed scan returns the still-gray owner to ordinary work.
+    # 0: mismatched claim, 1: closed without debit, 2: closed and debited.
     if (
         pcc_py_gc_minor_graph_lock_depth() == 0 or ptr_is_null(owner_slot) != 0
         or token <= 0 or epoch <= 0
@@ -308,15 +309,17 @@ def pcc_gc2_review_claim_close_locked(owner_slot, epoch: i64, token: i64, scanne
     ):
         return 0
     owner = load_ptr(owner_slot, 0)
+    result: i64 = 1
     if (atomic_load_i32(owner, abi_constant("object.header.flags_offset"), "acquire") & 16) != 0:
         if scanned > 0:
             pcc_gc_set_mark_color(owner, 32)
             pcc_gc_gray_count_decrement_acq_rel()
+            result = 2
         else:
             pcc_gc_gray_worklist_note(owner)
             pcc_gc_gray_worklist_flush()
     _gc2_review_claim_clear_locked()
-    return 1
+    return result
 
 
 @c_abi_export("pcc_gc2_review_claim_clear_locked")
