@@ -233,7 +233,7 @@ in the relevant section or issue and removes the entry.
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go CPUID selected assembly ABI frontier: Codex, Linux x86-64, 2026-11-22 03:05 UTC, area frontend-go
+   - Go CPUID selected assembly ABI frontier: Codex, Linux x86-64, 2026-11-22 03:05 UTC, area backend
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
