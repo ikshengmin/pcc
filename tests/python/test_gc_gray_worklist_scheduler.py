@@ -847,3 +847,33 @@ def test_paused_cms_clears_request_but_explicit_mutator_walks_until_reenabled(ba
     assert memory.step(2) == 1
     assert memory.gray == 0 and not memory.node_next_reads(before)
     assert memory.completions == [(17, backend)]
+
+
+@pytest.mark.parametrize("backend", [1, 2, 3, 4])
+@pytest.mark.parametrize("enabled", [False, True])
+def test_gc2_gray_backlog_can_justify_bounded_assist_below_byte_debt(
+    backend, enabled,
+):
+    memory = _SchedulerMemory(backend)
+    memory.install_pacing()
+    memory.set_scalar(ENABLED, int(enabled))
+    first, second = memory.leaf("first"), memory.leaf("second")
+    with memory.as_thread("producer"):
+        memory.shade(first)
+        memory.shade(second)
+        memory.call("flush")
+
+    # One allocation ticket buys at most one trace unit here. The shared
+    # debt is below today's four-threshold admission, even with published
+    # gray objects ready to run. No other backend should consult the backlog.
+    memory.namespace["pcc_gc_cms_publish_alloc"](64, 1)
+    if backend == 2 and enabled:
+        assert memory.gray == 1 and memory.scalar(DEBT) == 0
+        assert memory.load(first, 12, 4) & 56 == BLACK
+        assert memory.load(second, 12, 4) & 56 == GRAY
+        assert memory.scalar("pcc_gc_cms_mutator_assists") == 1
+    else:
+        assert memory.gray == 2 and memory.scalar(DEBT) == 64
+        assert memory.scalar("pcc_gc_cms_mutator_assists") == 0
+    assert not memory.completions
+    assert memory.scalar("pcc_gc_cms_sweep_pending") == 0

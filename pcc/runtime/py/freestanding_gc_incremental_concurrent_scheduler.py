@@ -1334,29 +1334,45 @@ def _cms_publish_alloc(bytes: i64, pushes: i64) -> None:
     previous: i64 = atomic_rmw_i64("add", global_addr("pcc_gc_debt_bytes"), 0, bytes, "acq_rel")
     debt: i64 = previous + bytes
     # An assist is automatic collection too: none while gc.disable() or
-    # threshold0 == 0 holds. Only a marking cycle has one, so most
-    # allocations skip the threshold's arithmetic.
-    if (
-        load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-        and debt >= pcc_gc_tracing_debt_threshold() * 4
-        and load_i32(global_addr("py_gc_enabled"), 0) != 0
-        and load_i32(global_addr("py_gc_threshold0"), 0) > 0
+    # threshold0 == 0 holds. Admission to a new cycle remains byte-based.
+    active: i64 = load_i32(global_addr("pcc_gc_mark_active"), 0)
+    if active == 0:
+        return
+    threshold: i64 = pcc_gc_tracing_debt_threshold()
+    budget: i64 = 0
+    if unsigned_div_i64(debt, 4) >= threshold:
+        budget = pcc_gc_tracing_budget_from_debt()
+    elif (
+        active == 1
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2
+        and pcc_gc_gray_count_load_acquire() > unsigned_div_i64(threshold, 64)
     ):
-        atomic_rmw_i32("add", global_addr("pcc_gc_cms_mutator_assists"), 0, 1, "relaxed")
-        budget: i64 = pcc_gc_tracing_budget_from_debt()
-        if budget > 512:
-            budget = 512
-        commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
-        processed: i64 = pcc_gc_tracing_step_cycle(budget)
-        pcc_gc_tracing_discharge_debt(processed)
-        if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) != commits:
-            # As on the collector thread: the next application gate sweeps it.
-            atomic_store_i32(
-                global_addr("pcc_gc_cms_sweep_pending"), 0, 1, "release"
-            )
-            atomic_store_i32(
-                global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
-            )
+        # A background slice may pay the byte ledger while published work
+        # still grows. A GC2 allocation ticket then buys only its own
+        # bounded assist, not a new cycle or a synchronous full drain.
+        budget = unsigned_div_i64(bytes, 64)
+        if budget == 0:
+            budget = 1
+    if (
+        budget == 0
+        or load_i32(global_addr("py_gc_enabled"), 0) == 0
+        or load_i32(global_addr("py_gc_threshold0"), 0) <= 0
+    ):
+        return
+    atomic_rmw_i32("add", global_addr("pcc_gc_cms_mutator_assists"), 0, 1, "relaxed")
+    if budget > 512:
+        budget = 512
+    commits: i64 = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    processed: i64 = pcc_gc_tracing_step_cycle(budget)
+    pcc_gc_tracing_discharge_debt(processed)
+    if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) != commits:
+        # As on the collector thread: the next application gate sweeps it.
+        atomic_store_i32(
+            global_addr("pcc_gc_cms_sweep_pending"), 0, 1, "release"
+        )
+        atomic_store_i32(
+            global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
+        )
 
 
 @c_abi_export("pcc_gc_note_alloc")

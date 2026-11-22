@@ -325,3 +325,54 @@ Executable SHA-256: stock
 `58ea650afa64601dbc736b055b84220e268be1e47b93748fe33e50905c1da86c`;
 candidate
 `7a07dde3e4cb9f93c2b81d837ffebbe9b10a667258e040a4ba5ffccc2b8414c5`.
+
+### GC2 assist when paid byte debt hides gray backlog
+
+This review candidate keeps cycle admission and normal assist budget
+byte-based. During GC2 marking only, a published allocation ticket may
+instead buy a bounded assist if the outstanding gray count exceeds the
+current debt threshold expressed in 64-byte trace units. The real queue
+consumer still checks membership and can wait for an unpublished tail.
+The candidate does not change collection ownership, roots, write
+barriers, finish claims or the budget's 512-unit cap.
+
+In the earlier 120,000-list stock screen, three w4 runs had no committed
+mark, 43,349–61,164 gray credits, both shared queue states nonempty and
+zero published byte debt or assists. The default step multiplier
+(10,000) can discharge 6,400 bytes per trace even while gray work grows.
+A fixed-stock control at step multiplier 100 increased remaining byte
+debt, but four of five w4 runs still had no committed mark; changing that
+setting alone is not a proposed fix.
+
+In a Linux x86-64 pcc0/self component screen, both arms ran the same
+48,000-list native telemetry workload with the same gates and
+`PCC_GC_DEBT_THRESHOLD=131072`. Five alternating pairs per series used
+an unchanged duplicate-stock pair. Neither series is a timed HTTP test.
+On w1, no extra assist ran and time was 2.6% lower, inside control drift.
+On w4 the two series observed:
+
+| Series | In-load mark completion in stock / candidate legs | Median paired time change | Median paired RSS change |
+|---|---:|---:|---:|
+| First five | 0/5 → 3/5 | −28.2% (control drift up to 167%) | −40.0% (control drift up to 135%) |
+| Independent five | 2/5 → 5/5 | −15.9% (control drift up to 43%) | −44.0% (control drift up to 25%) |
+
+The candidate's peak RSS was lower in nine of ten w4 pairs. Maximum
+stop timing was noisy. Treat the change as a progress candidate for
+review, not a throughput win. macOS, the unmodified handler, C512,
+pcc1 and the merge gate for #9 are unqualified.
+
+The threaded native component also runs the same held producer on
+stock and candidate with the CMS worker stopped. The high-debt and
+hidden-tail controls pass on GC1/2. With two real public gray objects and
+one 64-byte ticket, stock GC1/2 and candidate GC1 leave both gray;
+candidate GC2 traces exactly one, still has one gray object, and does not
+claim or finish the cycle. The fixture publishes the setup allocation
+debt before staging the shared ledger and flushes each measured ticket
+explicitly instead of mistaking a TLS-local allocation for publication.
+
+Focused check after sealing a source-matched threaded archive:
+
+```sh
+PCC_RUNTIME_ARCHIVE=<matched archive> uv run pytest -x -m integration \
+  tests/python/test_gc_mutator_gray_queue_native.py
+```

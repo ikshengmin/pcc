@@ -40,6 +40,7 @@ extern int64_t pcc_gc_cms_stop_worker(void);
 extern int64_t pcc_gc_is_cms_worker(void);
 extern int64_t pcc_gc_incremental_concurrent_step(int64_t);
 extern void pcc_gc_cms_note_alloc(int64_t);
+extern void pcc_gc_cms_note_alloc_flush(void);
 extern int64_t pcc_gc_tracing_debt_threshold(void);
 extern void pcc_gc_prepare_object_list_mark(int64_t);
 extern int64_t pcc_gc_object_is_known_no_lock(PyObject *);
@@ -123,7 +124,7 @@ static int cycle_unchanged(int64_t epoch, int64_t commits, void *cursor) {
 }
 
 int main(int argc, char **argv) {
-    CHECK(argc == 2, 1);
+    CHECK(argc == 2 || argc == 3, 1);
     int backend = argv[1][0] - '0';
     CHECK((backend == 1 || backend == 2) && pcc_gc_backend() == backend, 2);
     CHECK(pcc_threads_enabled() == 1 && pcc_gc_is_cms_worker() == 0, 3);
@@ -139,6 +140,8 @@ int main(int argc, char **argv) {
     CHECK(pcc_gc_pointer_is_managed(objects[0]) == 1
           && pcc_gc_pointer_is_managed(objects[1]) == 1, 8);
     CHECK(pcc_gc_stepmul == 100, 9);
+    /* Publish setup's private debt before replacing the shared ledger. */
+    pcc_gc_cms_note_alloc_flush();
 
     CHECK(pcc_stop_the_world() == 0, 10);
     pcc_py_gc_minor_graph_lock();
@@ -189,6 +192,7 @@ int main(int argc, char **argv) {
                          __ATOMIC_ACQUIRE) == 1, 23);
     int32_t assists = pcc_gc_cms_mutator_assists;
     pcc_gc_cms_note_alloc(7);
+    pcc_gc_cms_note_alloc_flush();
     CHECK(pcc_gc_cms_mutator_assists == assists + 1, 24);
     CHECK(__atomic_load_n(&pcc_gc_debt_bytes, __ATOMIC_ACQUIRE) == 4103
           && pcc_gc_gray_count_load_acquire() == 2
@@ -203,11 +207,30 @@ int main(int argc, char **argv) {
           && published() != 0
           && __atomic_load_n(&pcc_gc_gray_worklist_flush_requested,
                              __ATOMIC_ACQUIRE) == 1, 28);
-    CHECK(pcc_gc_incremental_concurrent_step(1) == 1, 29);
-    CHECK(color(objects[0]) == BLACK && color(objects[1]) == GRAY
-          && pcc_gc_gray_count_load_acquire() == 1, 30);
-    CHECK(__atomic_load_n(&pcc_gc_debt_bytes, __ATOMIC_ACQUIRE) == 4039
-          && cycle_unchanged(epoch, commits, cursor), 31);
+    int backlog = argc == 3 && argv[2][0] == '1';
+    if (argc == 3) {
+        __atomic_store_n(&pcc_gc_debt_bytes, 0, __ATOMIC_RELEASE);
+        pcc_gc_debt_threshold_override = 64;
+        assists = pcc_gc_cms_mutator_assists;
+        pcc_gc_cms_note_alloc(64);
+        pcc_gc_cms_note_alloc_flush();
+        CHECK(pcc_gc_cms_mutator_assists == assists + backlog, 60);
+        CHECK(pcc_gc_gray_count_load_acquire() == 2 - backlog, 61);
+        CHECK(color(objects[0]) == (backlog ? BLACK : GRAY)
+              && color(objects[1]) == GRAY, 62);
+        CHECK(__atomic_load_n(&pcc_gc_debt_bytes, __ATOMIC_ACQUIRE)
+              == (backlog ? 0 : 64), 63);
+        if (!backlog) CHECK(pcc_gc_incremental_concurrent_step(1) == 1, 29);
+        CHECK(color(objects[0]) == BLACK && color(objects[1]) == GRAY
+              && pcc_gc_gray_count_load_acquire() == 1, 30);
+        CHECK(cycle_unchanged(epoch, commits, cursor), 31);
+    } else {
+        CHECK(pcc_gc_incremental_concurrent_step(1) == 1, 29);
+        CHECK(color(objects[0]) == BLACK && color(objects[1]) == GRAY
+              && pcc_gc_gray_count_load_acquire() == 1, 30);
+        CHECK(__atomic_load_n(&pcc_gc_debt_bytes, __ATOMIC_ACQUIRE) == 4039
+              && cycle_unchanged(epoch, commits, cursor), 31);
+    }
     CHECK(__atomic_load_n(&pcc_gc_gray_worklist_flush_requested,
                          __ATOMIC_ACQUIRE) == 0
           && __atomic_load_n(&exited, __ATOMIC_ACQUIRE) == 0
@@ -229,8 +252,11 @@ int main(int argc, char **argv) {
     pcc_gc_trace_cursor = 0;
     pcc_py_gc_minor_graph_unlock();
     CHECK(pcc_resume_world() == 0, 36);
-    printf("MUTATOR_GRAY_OK gc=%d hidden=2 wait=0 assist_debt=4103 traced=1 remaining=1\n",
-           backend);
+    if (argc == 3)
+        printf("GRAY_BACKLOG_OK gc=%d assist=%d remaining=1\n", backend, backlog);
+    else
+        printf("MUTATOR_GRAY_OK gc=%d hidden=2 wait=0 assist_debt=4103 traced=1 remaining=1\n",
+               backend);
     return 0;
 }
 '''
@@ -301,4 +327,15 @@ def test_mutator_waits_for_managed_gray_tail_then_traces_published_object(
         assert (stdout, stderr) == (
             f"MUTATOR_GRAY_OK gc={backend} hidden=2 wait=0 assist_debt=4103 traced=1 remaining=1\n",
             "",
+        ), backend
+        assist = int(backend == 2)
+        stdout, stderr = _guarded_run(
+            tmp_path, f"gc{backend}-backlog", [str(binary), str(backend), str(assist)],
+            timeout=60,
+            env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_THREADS="1",
+                     PCC_REFCOUNT_KIND="atomic", PCC_GC_DEBT_THRESHOLD="1073741824",
+                     PCC_GC_STEP_MUL="100"),
+        )
+        assert (stdout, stderr) == (
+            f"GRAY_BACKLOG_OK gc={backend} assist={assist} remaining=1\n", "",
         ), backend
