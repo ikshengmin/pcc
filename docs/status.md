@@ -314,9 +314,11 @@ in the relevant section or issue and removes the entry.
    control for live-byte threshold, minimum/override, step budget and
    debt discharge. A stock GC2 native harness now records assist/mark/
    stop counters for 48,000 list allocations split across one or four
-   mutators. Next: qualify a separate GC2 heap-goal/assist policy as an
-   isolated candidate; do not change the other collectors or infer an A/B
-   result from the diagnostic.
+   mutators. An isolated model now separates live heap goal, start
+   headroom and capped assist-during-mark. Next: build a strictly opt-in
+   GC2 review candidate using the sealed target and a heap-progress
+   counter independent of work debt; require a pressure workload that
+   actually enters assist. No pacer A/B yet.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -328,7 +330,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 separate heap goal and assist policy contract: Codex, Linux x86-64, 2026-11-22 09:01 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

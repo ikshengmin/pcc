@@ -36,3 +36,27 @@ post-join poll to receive a pending automatic sweep. The final runs needed
 no post-join sweep to meet the criterion. These scheduler-dependent rows do
 not qualify the assist mechanism under heavy pressure or indicate a
 scaling/latency gain. No pacer or runtime behavior changed.
+
+## Isolated heap-goal and assist policy
+
+The [Go GC guide](https://go.dev/doc/gc-guide#GOGC) separates the total
+heap goal from work done during marking. The current Go goal includes GC
+roots in the growth allowance; this first PCC candidate deliberately uses
+only the last marked live heap, because a reliable separate root-size input
+is not yet part of this scheduler. It is not a port of Go's adaptive pacer.
+
+The model uses a goal of live plus the larger of 4 MiB or the configured
+percentage of live, with checked/saturating arithmetic. It starts before
+the goal by reserving one quarter of growth as marking headroom. Assist
+requires an active mark and a nonempty allocation batch, scales with the
+batch and pressure from trigger to goal, reaches 2× the batch-derived
+work at the goal, and caps a single assist at 512 work units. The floor,
+headroom fraction and scale are test parameters, not measured choices.
+An explicit threshold override must keep the existing diagnostic path.
+
+Seven host cases cover the policy, including saturation and zero work
+when inactive. Next, a review-only implementation needs separate
+decision inputs for heap progress and remaining mark debt: subtracting
+mark-work credit must never move the heap backward. An assist-pressure
+harness must demonstrate actual assist calls and progress, not just
+an arithmetic change. Dedicated-worker scaling and A/B are separate.
