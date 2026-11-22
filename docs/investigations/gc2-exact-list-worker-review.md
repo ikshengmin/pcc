@@ -270,3 +270,18 @@ archive. It returned `on=2, off=0, gc0=0`. Linux did not build the
 gateway arms or run A/B: the gateway package is absent and the host
 cannot provide the default 6 GiB tree cap plus 8 GiB reserve. No
 resource limit was reduced and no Mac execution is claimed here.
+
+## Automatic lifecycle smoke on the measured runtime
+
+A separately compiled lifecycle program creates a cyclic target on a
+thread that exits, retains its weakref, and drives actual automatic
+GC2 after disable/enable. It keeps a different short list reachable.
+The same binary, with the selector off and on, delivered the weak
+callback before the finalizer once, invalidated the target weakref,
+and kept the unrelated list and its value alive. The on variant reads
+a positive actual shortcut visit counter, not just the mode bit.
+Both the ordinary and a PCC weak-callback `gc.collect()` reentry
+case passed three times per mode (12 Linux owned runs). The ordinary
+isolated reference uses CPython and passed. CPython reentry semantics,
+C-extension ownership, and resurrection are not established here.
+The sealed performance revision's runtime source is unchanged.
