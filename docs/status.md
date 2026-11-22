@@ -206,9 +206,19 @@ in the relevant section or issue and removes the entry.
    withdrawn publication uses one fallback without creating a collector
    self-root. A raw C thread's unwound stack can still contain the referent:
    the dropped-reader control explicitly clears that residue, so it does
-   not qualify arbitrary raw stack lifetimes. Next: compute all acyclic
-   layers once and verify actual production dispatch including sibling
-   rescue; keep the cross-thread parity gate open.
+   not qualify arbitrary raw stack lifetimes.
+   [Review commit 1e1c90f](https://github.com/ikshengmin/pcc/commit/1e1c90f606631c1767dd99de3b064907af2a7f07)
+   routes up to 64 sealed acyclic candidates through the real GC1/3
+   layered sweep. Linux pcc0: 55 focused checks passed, including six
+   native CPython comparisons (chain, registered sibling rescue, suspended
+   caller-slot sibling rescue). The owner cut excludes collector scratch,
+   not the live caller stack or parked mutator snapshots. Legacy root
+   regression lane: 111 passed; three GC3 forwarding-model failures
+   reproduced on the review parent. No master runtime change.
+   Next: batch safe finalizer windows within a layer without missing a
+   sibling rescue; remove repeated candidate/weakref-list walks before
+   scale tests. Mixed cyclic graphs, arbitrary raw stack lifetimes,
+   HTTP exact timings and no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
@@ -261,8 +271,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Build issue 9 acyclic topology once for actual layered sweep: Codex, Linux x86-64, 2026-11-22 16:24 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
