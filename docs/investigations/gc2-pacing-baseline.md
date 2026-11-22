@@ -121,3 +121,16 @@ producer tails and in-flight claims as well as the visible queue before
 final remark. Adding callers to the current mark slice does not create
 parallel scans for its lock-held paths. No pool size, speedup, or
 collector selection follows from this probe.
+
+The test-only claim model describes the next candidate's linearization
+points: reserve credit before making work visible; transfer credit to
+an in-flight claim on dequeue; reserve child credit before retiring the
+parent. A token includes the epoch and a per-claim serial, including when
+the same worker retries the same object. A failed scan requeues the
+owner. An empty visible queue cannot request final remark while there
+are unpublished reservations or in-flight claims. Zero outstanding
+credit only requests stopped-world remark, which must check for late
+roots and work again before sweep. Four model cases cover both completion
+orders, capacity, duplicate shading, late work, retry and stale results.
+The model does not establish memory ordering, object stability, lock
+ordering, or runtime performance.

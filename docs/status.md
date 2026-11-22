@@ -337,10 +337,11 @@ in the relevant section or issue and removes the entry.
    signatures retain their exact flattened order and definitions.
    No master runtime or A/B change. Stock GC2's focused native
    ownership probe exercises one real gray list: a second registered
-   thread cannot process it until the graph owner unlocks. The next GC2
-   worker slice is to model whole-owner claims and mark termination
-   with unpublished and in-flight work; do not enable another worker
-   against the current shared scratch or CMS lifecycle.
+   thread cannot process it until the graph owner unlocks. A test-only
+   model now covers bounded whole-owner claims and refuses final remark
+   with unpublished or in-flight work. Next GC2 worker slice: identify
+   a safe out-of-lock scan of one exact built-in owner with stable
+   container slots, cancellation and no runtime opt-in by default.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -352,7 +353,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 whole-owner claim and mark termination model: Codex, Linux x86-64, 2026-11-22 09:33 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
