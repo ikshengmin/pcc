@@ -16,9 +16,9 @@ extern int64_t pcc_gc_tracing_classify_callback_cohort(
 extern int64_t pcc_gc_tracing_dispatch_callback_head(PyObject *, int64_t, int64_t);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
-typedef void (*SlotVisitor)(PyObject **, int64_t, void *);
-extern int64_t pcc_gc_visit_object_slots_slice(
-    PyObject *, int64_t, int64_t, SlotVisitor, void *, void *);
+extern int64_t pcc_gc_tracing_refresh_callback_cohort(
+    PyObject *const *, int64_t, PyObject *const *, int64_t,
+    int64_t, int64_t, int64_t, int64_t *);
 extern void pcc_gc_tracing_user_code_window_open(void *);
 extern void pcc_gc_tracing_user_code_window_close(void *);
 extern void pcc_gc_tracing_recheck_reachability_after_finalizers(void);
@@ -183,69 +183,23 @@ static int settle_child_weakref(void) {
     return py_weakref_call(child_watch) == py_None;
 }
 
-enum { ROLE_VALUE = 1, ROLE_TYPE = 2, ROLE_WEAK = 3 };
-enum { REACHED_PARENT = 1, REACHED_CHILD = 2, BOTH_REACHED = 3 };
-enum { VISITOR_BATCH = 4, VISITOR_CURSOR = 0, VISITOR_VISITS = 1, VISITOR_WORDS = 2 };
-enum { VISITOR_END = -1, REFERENCE_SLOT_BUDGET = 32 };
-
-struct Trial {
-    int64_t found;
-    int64_t unsupported;
-};
-
-static void seed_child_from_slot(PyObject **slot, int64_t role, void *context) {
-    struct Trial *trial = context;
-    if (role == ROLE_WEAK) return;
-    if (role != ROLE_VALUE && role != ROLE_TYPE) {
-        trial->unsupported = 1;
-        return;
-    }
-    if (*slot == candidate_parent) trial->found |= REACHED_PARENT;
-    if (*slot == candidate_child) trial->found |= REACHED_CHILD;
-}
-
-/* The bounded arm knows this callback's one participating root and its
- * exact explicit owner journal. There is no production store hook here. */
-static int inspect_owner_slots(PyObject *owner, int64_t *slots_left, struct Trial *trial) {
-    int64_t cursor = 0;
-    do {
-        if (!*slots_left) return 0;
-        int64_t state[VISITOR_WORDS] = {0, 0};
-        int64_t limit = *slots_left < VISITOR_BATCH ? *slots_left : VISITOR_BATCH;
-        if (!pcc_gc_visit_object_slots_slice(owner, cursor, limit,
-                         seed_child_from_slot, trial, state)
-            || trial->unsupported || state[VISITOR_VISITS] < 0
-            || state[VISITOR_VISITS] > limit
-            || (state[VISITOR_CURSOR] != VISITOR_END && state[VISITOR_CURSOR] <= cursor))
-            return 0;
-        *slots_left -= state[VISITOR_VISITS];
-        cursor = state[VISITOR_CURSOR];
-    } while (cursor != VISITOR_END);
-    return 1;
-}
+enum { BOTH_REACHED = 3, REFERENCE_SLOT_BUDGET = 32 };
+enum { REFRESH_MASK = 0, REFRESH_VISITS = 1, REFRESH_WORDS = 2 };
 
 static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left, int64_t with_journal,
                            int64_t *mask_out, int64_t *visits_out) {
-    if (sealed_epoch < 0 || pcc_thread_world_stop_epoch_held() != sealed_epoch) return 0;
-    struct Trial trial = {0, 0};
-    if (restored == candidate_parent) trial.found = REACHED_PARENT;
-    else if (restored != NULL) return 0;
-    int64_t examined = 0, seen = 0;
-    if (with_journal && journal_incomplete) return 0;
-    if (with_journal && owner_in_journal) {
-        if (!inspect_owner_slots(outside_owner, &slots_left, &trial)) return 0;
-        examined++;
+    PyObject *cohort[] = {candidate_parent, candidate_child};
+    PyObject *seeds[] = {restored, with_journal && owner_in_journal ? outside_owner : NULL};
+    int64_t result[REFRESH_WORDS] = {-1, -1};
+    int64_t complete = with_journal && journal_incomplete ? 0 : 1;
+    if (!pcc_gc_tracing_refresh_callback_cohort(cohort, 2, seeds, 2, sealed_epoch,
+                                                 slots_left, complete, result)) {
+        if (result[REFRESH_MASK] != -1 || result[REFRESH_VISITS] != -1)
+            callback_errors++;
+        return 0;
     }
-    while (seen != trial.found) {
-        int64_t next = (trial.found & ~seen) & REACHED_PARENT ? REACHED_PARENT : REACHED_CHILD;
-        PyObject *owner = next == REACHED_PARENT ? candidate_parent : candidate_child;
-        if (!inspect_owner_slots(owner, &slots_left, &trial)) return 0;
-        seen |= next;
-        examined++;
-    }
-    if (pcc_thread_world_stop_epoch_held() != sealed_epoch) return 0;
-    *mask_out = trial.found;
-    *visits_out = examined;
+    *mask_out = result[REFRESH_MASK];
+    *visits_out = result[REFRESH_VISITS];
     return 1;
 }
 

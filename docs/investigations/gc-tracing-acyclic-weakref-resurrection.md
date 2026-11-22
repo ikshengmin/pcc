@@ -345,3 +345,13 @@ passed with an exact Linux pcc0 archive. There is no production caller
 and no new collection-time instruction on existing paths. The
 runtime still needs an authoritative complete cohort and root/store
 coverage before default use.
+
+The stopped bounded refresh now runs through the inert freestanding
+entry `pcc_gc_tracing_refresh_callback_cohort`. The owned driver supplies
+its callback root or journaled owner and compares the resulting bitmap
+with full stopped recheck. The entry validates the stopped cohort and
+epoch, rejects incomplete coverage or exhausted work before writing
+the report, and never changes collector flags. Three Linux native tests
+passed with a fresh matched archive. The coverage claim still comes
+from the test driver; a production caller must enumerate real callback
+writes and new owners before this path can be enabled.

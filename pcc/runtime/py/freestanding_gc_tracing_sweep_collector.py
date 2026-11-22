@@ -57,6 +57,9 @@ pcc_py_gc_minor_graph_lock_contended = extern(
 pcc_py_gc_minor_graph_lock_yield = extern(
     "pcc_py_gc_minor_graph_lock_yield", (), c_void
 )
+pcc_gc_object_is_known_no_lock = extern(
+    "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
+)
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
@@ -684,18 +687,14 @@ def _callback_cohort_edge(slot, role: i64, scratch) -> None:
         index += 1
 
 
-@c_abi_export("pcc_gc_tracing_classify_callback_cohort")
-def pcc_gc_tracing_classify_callback_cohort(
-    cohort, count: i64, stop_epoch: i64, slots_left: i64, verdicts
-) -> i64:
-    """Classify a small supplied graph; refuse without touching verdicts."""
+@c_abi_export("pcc_gc_tracing_callback_cohort_valid")
+def _callback_cohort_valid(cohort, count: i64, stop_epoch: i64) -> i64:
     backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
     if (
         backend < 1 or backend > 3 or stop_epoch < 0
         or pcc_thread_world_stop_epoch_held() != stop_epoch
         or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
-        or ptr_is_null(cohort) != 0 or ptr_is_null(verdicts) != 0
-        or count <= 0 or count > _ACYCLIC_MAX_COHORT or slots_left < 0
+        or ptr_is_null(cohort) != 0 or count <= 0 or count > _ACYCLIC_MAX_COHORT
     ):
         return 0
     owner: i64 = 0
@@ -709,12 +708,25 @@ def pcc_gc_tracing_classify_callback_cohort(
                 return 0
             earlier += 1
         owner += 1
+    return 1
+
+
+@c_abi_export("pcc_gc_tracing_classify_callback_cohort")
+def pcc_gc_tracing_classify_callback_cohort(
+    cohort, count: i64, stop_epoch: i64, slots_left: i64, verdicts
+) -> i64:
+    """Classify a small supplied graph; refuse without touching verdicts."""
+    if (
+        slots_left < 0 or ptr_is_null(verdicts) != 0
+        or _callback_cohort_valid(cohort, count, stop_epoch) == 0
+    ):
+        return 0
     scratch = stack_alloc(_ACYCLIC_SCRATCH_BYTES)
     memset(scratch, 0, _ACYCLIC_SCRATCH_BYTES)
     store_ptr(scratch, _ACYCLIC_COHORT_PTR, cohort)
     store_i64(scratch, _ACYCLIC_COUNT, count)
     state = stack_alloc(_ACYCLIC_SCAN_BYTES)
-    owner = 0
+    owner: i64 = 0
     while owner < count:
         store_i64(scratch, _ACYCLIC_OWNER, owner)
         cursor: i64 = 0
@@ -773,6 +785,127 @@ def pcc_gc_tracing_classify_callback_cohort(
             verdict = _ACYCLIC_HEAD
         store_i64(verdicts, index * _ACYCLIC_WORD, verdict)
         index += 1
+    return 1
+
+
+_CALLBACK_REFRESH_PENDING: i64 = 1
+_CALLBACK_REFRESH_SEEN: i64 = 2
+_CALLBACK_REFRESH_SWEEP_FLAG = 1024
+
+
+@c_abi_export("pcc_gc_tracing_callback_refresh_edge")
+def _callback_refresh_edge(slot, role: i64, scratch) -> None:
+    if role == _ACYCLIC_ROLE_DERIVED:
+        return
+    if role != _ACYCLIC_ROLE_VALUE and role != _ACYCLIC_ROLE_TYPE:
+        store_i64(scratch, _ACYCLIC_UNSUPPORTED, 1)
+        return
+    value = load_ptr(slot, 0)
+    cohort = load_ptr(scratch, _ACYCLIC_COHORT_PTR)
+    count: i64 = load_i64(scratch, _ACYCLIC_COUNT)
+    index: i64 = 0
+    while index < count:
+        if ptr_eq(value, load_ptr(cohort, index * _ACYCLIC_WORD)) != 0:
+            offset: i64 = _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD
+            if load_i64(scratch, offset) == 0:
+                store_i64(scratch, offset, _CALLBACK_REFRESH_PENDING)
+            return
+        index += 1
+
+
+@c_abi_export("pcc_gc_tracing_callback_refresh_owner")
+def _callback_refresh_owner(owner, scratch, slots_left: i64) -> i64:
+    cursor: i64 = 0
+    state = stack_alloc(_ACYCLIC_SCAN_BYTES)
+    while cursor >= 0:
+        if slots_left <= 0:
+            return -1
+        limit: i64 = slots_left if slots_left < _ACYCLIC_SCAN_LIMIT else _ACYCLIC_SCAN_LIMIT
+        handled: i64 = pcc_gc_visit_object_slots_slice(
+            owner, cursor, limit, _callback_refresh_edge, scratch, state,
+        )
+        examined: i64 = load_i64(state, _ACYCLIC_SCAN_EXAMINED)
+        next_cursor: i64 = load_i64(state, _ACYCLIC_SCAN_NEXT)
+        if (
+            handled == 0 or load_i64(scratch, _ACYCLIC_UNSUPPORTED) != 0
+            or examined < 0 or examined > limit
+            or (next_cursor != -1 and next_cursor <= cursor)
+        ):
+            return -1
+        slots_left -= examined
+        cursor = next_cursor
+    return slots_left
+
+
+@c_abi_export("pcc_gc_tracing_refresh_callback_cohort")
+def pcc_gc_tracing_refresh_callback_cohort(
+    cohort, count: i64, roots_and_owners, seeds: i64,
+    stop_epoch: i64, slots_left: i64, coverage_complete: i64, result
+) -> i64:
+    """Report a bounded rescue bitmap; all raw inputs must come from this stop.
+
+    The caller proves completeness of roots, writes and new owners before
+    passing coverage_complete. This makes no changes to object flags.
+    """
+    if (
+        coverage_complete != 1 or ptr_is_null(result) != 0
+        or seeds < 0 or seeds > _ACYCLIC_MAX_COHORT or slots_left < 0
+        or (seeds > 0 and ptr_is_null(roots_and_owners) != 0)
+        or _callback_cohort_valid(cohort, count, stop_epoch) == 0
+    ):
+        return 0
+    scratch = stack_alloc(_ACYCLIC_SCRATCH_BYTES)
+    memset(scratch, 0, _ACYCLIC_SCRATCH_BYTES)
+    store_ptr(scratch, _ACYCLIC_COHORT_PTR, cohort)
+    store_i64(scratch, _ACYCLIC_COUNT, count)
+    index: i64 = 0
+    visited: i64 = 0
+    cursor: i64 = 0
+    while cursor < seeds:
+        seed = load_ptr(roots_and_owners, cursor * _ACYCLIC_WORD)
+        if ptr_is_null(seed) == 0:
+            index = 0
+            while index < count and ptr_eq(seed, load_ptr(cohort, index * _ACYCLIC_WORD)) == 0:
+                index += 1
+            if index < count:
+                store_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD, _CALLBACK_REFRESH_PENDING)
+            else:
+                if (
+                    is_tagged_int(seed) != 0 or pcc_gc_object_is_known_no_lock(seed) == 0
+                    or (load_i32(seed, abi_constant("object.header.flags_offset"))
+                        & _CALLBACK_REFRESH_SWEEP_FLAG) != 0
+                ):
+                    return 0
+                slots_left = _callback_refresh_owner(seed, scratch, slots_left)
+                if slots_left < 0:
+                    return 0
+                visited += 1
+        cursor += 1
+    while True:
+        index = 0
+        while index < count:
+            if load_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD) == _CALLBACK_REFRESH_PENDING:
+                break
+            index += 1
+        if index == count:
+            break
+        store_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD, _CALLBACK_REFRESH_SEEN)
+        slots_left = _callback_refresh_owner(load_ptr(cohort, index * _ACYCLIC_WORD), scratch, slots_left)
+        if slots_left < 0:
+            return 0
+        visited += 1
+    if pcc_thread_world_stop_epoch_held() != stop_epoch:
+        return 0
+    bits: i64 = 0
+    mask: i64 = 1
+    index = 0
+    while index < count:
+        if load_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD) == _CALLBACK_REFRESH_SEEN:
+            bits = bits | mask
+        mask = mask << 1
+        index += 1
+    store_i64(result, 0, bits)
+    store_i64(result, _ACYCLIC_WORD, visited)
     return 1
 
 
