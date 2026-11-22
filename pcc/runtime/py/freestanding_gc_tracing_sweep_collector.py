@@ -1148,10 +1148,13 @@ pcc_gc_gray_worklist_take_locked = extern("pcc_gc_gray_worklist_take_locked", ()
 pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
 
-# Temporary review cap on candidate scans at the stop, not a qualification
-# of large chains. The real nested release/reacquire and weakref order can
-# be observed here before sparse mutable-extent roots and weak indexes land.
-_REVIEW_LAYER_LIMIT = 64
+# Bound the remaining per-window candidate walk on the review branch.
+# A 64-user-object public collection can include 129 candidate records
+# (including runtime instance storage), so admit more than one mask word.
+_REVIEW_SHADE_WORD_BITS = 64
+_REVIEW_SHADE_WORD_BYTES = 8
+_REVIEW_SHADE_BYTES = 32
+_REVIEW_LAYER_LIMIT = 256
 
 
 @c_abi_export("pcc_gc_review_layer_finalizer")
@@ -1173,30 +1176,35 @@ def _review_layer_finalizer(node, window) -> i64:
 def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
     # Peel off the write-barrier evidence before looking at actual roots.
     # It can contain a transient store or publication into an old owner.
-    # A sealed vector of at most 64 candidates lets us keep an unmanaged bit
-    # per prior shade without maintaining a mutation journal.
+    # Keep an unmanaged bit per prior shade without a mutation journal.
+    # Word indices and shift counts are independent across the sealed batch.
     prior: i64 = pcc_gc_gray_count_load_acquire()
-    suspected: i64 = 0
+    suspected = stack_alloc(_REVIEW_SHADE_BYTES)
     seen: i64 = 0
     pos: i64 = 0
     offset: i64 = abi_constant("object.header.flags_offset")
-    if prior > count:
+    if prior > count or count > _REVIEW_LAYER_LIMIT:
         return 0
     if prior != 0:
+        memset(suspected, 0, _REVIEW_SHADE_BYTES)
         while pos < count:
             obj = load_ptr(load_ptr(nodes, pos * 8), 0)
             flags: i64 = load_i32(obj, offset)
             if (flags & _CALLBACK_GRAY) != 0:
                 if (flags & _CALLBACK_SWEEP_CANDIDATE) == 0:
                     return 0
-                suspected = suspected | (1 << pos)
+                word: i64 = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+                bit: i64 = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+                store_i64(suspected, word, load_i64(suspected, word) | bit)
                 seen += 1
             pos += 1
         if seen != prior:
             return 0
         pos = 0
         while pos < count:
-            if (suspected & (1 << pos)) != 0:
+            word = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+            bit = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+            if (load_i64(suspected, word) & bit) != 0:
                 obj = load_ptr(load_ptr(nodes, pos * 8), 0)
                 pcc_gc_set_mark_color(obj, _CALLBACK_WHITE)
                 pcc_gc_page_mark_assign(obj, 0)
@@ -1232,10 +1240,12 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
             flags: i64 = load_i32(obj, offset)
             store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
             pcc_gc_gray_count_decrement_acq_rel()
-    if suspected != 0:
+    if prior != 0:
         pos = 0
         while pos < count:
-            if (suspected & (1 << pos)) != 0:
+            word = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+            bit = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+            if (load_i64(suspected, word) & bit) != 0:
                 obj = load_ptr(load_ptr(nodes, pos * 8), 0)
                 if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
                     # Some observed store is not explained by current

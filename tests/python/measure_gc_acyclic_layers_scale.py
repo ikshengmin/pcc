@@ -12,9 +12,8 @@ from pathlib import Path
 import random
 import re
 import statistics
+import sys
 
-from tests.owned_c_execution import compile_owned_c_with_runtime
-from tests.owned_runtime_c_fixture import admitted_runtime
 from tests.python.process_timeout import run_process_group_timeout
 
 parser = argparse.ArgumentParser(description=__doc__)
@@ -26,18 +25,74 @@ pairing.add_argument("--weak-peer-base-binary", type=Path,
                      help="same probe linked before the parked-peer snapshot")
 pairing.add_argument("--target-base-binary", type=Path,
                      help="same probe linked before the target-local directory")
+pairing.add_argument("--callback-grid", action="store_true",
+                     help="check and separately time sealed and public callback chains")
+parser.add_argument("--callback-binary", type=Path,
+                    help="reuse a verified binary from this exact callback-grid source")
 args = parser.parse_args()
+if args.callback_binary is not None and (not args.callback_grid or args.compile_only):
+    parser.error("--callback-binary is only valid with --callback-grid")
 out = args.out.resolve()
 out.mkdir(parents=True, exist_ok=True)
 repo = Path.cwd()
-binary = out / "sweep_scale"
-compile_owned_c_with_runtime(
-    repo / "tests/fixtures/native/gc_acyclic_layers_scale.c", binary,
-    runtime_archive=admitted_runtime(),
-    cpp_args=("-I", str(repo / "pcc/runtime/src")),
-)
+if args.callback_binary is not None:
+    binary = args.callback_binary.resolve(strict=True)
+else:
+    from tests.owned_c_execution import compile_owned_c_with_runtime
+    from tests.owned_runtime_c_fixture import admitted_runtime
+
+    binary = out / "sweep_scale"
+    compile_owned_c_with_runtime(
+        repo / "tests/fixtures/native/gc_acyclic_layers_scale.c", binary,
+        runtime_archive=admitted_runtime(),
+        cpp_args=("-I", str(repo / "pcc/runtime/src")),
+    )
 if args.compile_only:
     raise SystemExit(0)
+if args.callback_grid:
+    oracle = repo / "tests/fixtures/native/constructor/acyclic_layers_scale_oracle.py"
+    sizes = (4, 16, 64)
+    expected = {}
+    for n in sizes:
+        reference = run_process_group_timeout([sys.executable, str(oracle), str(n)], timeout=12)
+        assert reference.returncode == 0 and not reference.stderr, reference
+        expected[n] = reference.stdout.strip()
+    cases = [
+        (gc, n, live, weak, public)
+        for gc, n, (live, weak), public in itertools.product(
+            (1, 3), sizes, ((0, 0), (16384, 0), (0, 16384)), (False, True)
+        )
+    ]
+    times = {key: [] for key in cases}
+    rng = random.Random(9070925)
+    for _ in range(5):
+        rng.shuffle(cases)
+        for gc, n, live, weak, public in cases:
+            result = run_process_group_timeout(
+                [str(binary), str(n), str(live), str(weak), "2", str(int(public))],
+                timeout=12, env=dict(os.environ, PCC_GC_BACKEND=str(gc),
+                                     PCC_GC_DEBT_THRESHOLD="1099511627776"),
+            )
+            pattern = (
+                rf"weak={weak} scans=0 n={n} live={live} del={n} reclaimed=(\d+)"
+                rf" full=0 windows={-1 if public else 2 * n} us=(\d+)\n"
+                rf"events={expected[n]} callbacks={n} public={int(public)}\n"
+            )
+            match = re.fullmatch(pattern, result.stdout)
+            assert result.returncode == 0 and not result.stderr and match is not None, (
+                gc, n, live, weak, public, result
+            )
+            reclaimed, us = map(int, match.groups())
+            assert reclaimed >= n if public else reclaimed == n
+            times[gc, n, live, weak, public].append(us)
+    for key, samples in sorted(times.items()):
+        gc, n, live, weak, public = key
+        print(json.dumps({
+            "gc": gc, "n": n, "live": live, "weak": weak, "public": public,
+            "us": samples, "median_us": statistics.median(samples),
+        }), flush=True)
+    raise SystemExit(0)
+
 base_binary = args.target_base_binary or args.weak_peer_base_binary
 target_mode = args.target_base_binary is not None
 if base_binary is not None:

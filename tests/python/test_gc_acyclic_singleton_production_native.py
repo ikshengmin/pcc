@@ -1,5 +1,6 @@
 """CPython event oracle versus the actual sealed-candidate production sweep."""
 import os
+import re
 from pathlib import Path
 import sys
 
@@ -128,6 +129,25 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("count", (63, 64, 65))
+@pytest.mark.parametrize("keep", (True, False), ids=("keep", "drop"))
+def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, backend, count, keep):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
+    expected = run_process_group_timeout(
+        [sys.executable, str(oracle), "rescue" if keep else "withdrawn"], timeout=15,
+    )
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), "wide-keep" if keep else "wide-drop", str(count)], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
+    assert actual.stderr == f"full={int(not keep)} scans=0\n"
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
 @pytest.mark.parametrize("arm", ("silent", "silent-live-del"))
 def test_acyclic_sweep_without_observers_keeps_legacy_path(_layered_sweep, backend, arm):
     actual = run_process_group_timeout(
@@ -177,3 +197,37 @@ def test_layered_sweep_checks_independent_cpy_owner(_layered_cpy_owner, backend,
     expected = ("del=1 released=0 reclaimed=1 usable=1 full=0\n" if arm == "keep"
                 else "del=1 released=1 reclaimed=2 usable=0 full=1\n")
     assert (actual.returncode, actual.stdout, actual.stderr) == (0, expected, "")
+
+
+
+@pytest.fixture(scope="module")
+def _callback_scale_sweep(tmp_path_factory):
+    binary = tmp_path_factory.mktemp("gc_callback_scale_production") / "sweep"
+    compile_owned_c_with_runtime(
+        ROOT / "tests/fixtures/native/gc_acyclic_layers_scale.c", binary,
+        runtime_archive=admitted_runtime(),
+        cpp_args=("-I", str(ROOT / "pcc/runtime/src")),
+    )
+    return binary
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 3))
+@pytest.mark.parametrize("count", (4, 16, 64))
+@pytest.mark.parametrize("public", (False, True), ids=("sealed", "public"))
+def test_callback_chain_scale_matches_cpython(_callback_scale_sweep, backend, count, public):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_scale_oracle.py"
+    expected = run_process_group_timeout([sys.executable, str(oracle), str(count)], timeout=15)
+    actual = run_process_group_timeout(
+        [str(_callback_scale_sweep), str(count), "0", "0", "2", str(int(public))], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert actual.returncode == 0 and not actual.stderr, actual
+    assert re.fullmatch(
+        rf"weak=0 scans=0 n={count} live=0 del={count} reclaimed=\d+ full=0"
+        rf" windows={-1 if public else 2 * count} us=\d+\n"
+        rf"events={expected.stdout.strip()} callbacks={count} public={int(public)}\n",
+        actual.stdout,
+    ), actual

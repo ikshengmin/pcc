@@ -646,3 +646,39 @@ To reproduce, link this probe in the exact parent checkout using the
 source-matched archive and `--compile-only`; run the candidate checkout
 with `--target-base-binary <parent-output>/sweep_scale`. The driver
 alternates the arms and prints the duplicate-control samples.
+
+### Callback-bearing chain at the public collection boundary
+
+The sealed sweep fixture can now keep one real callback-bearing weakref
+per dying node and compare both finalizer and callback identities with
+the alternating sequence of a CPython chain. The public variant constructs
+the same graph on a departing registered thread and calls `pcc_gc_collect(0)`
+once; it does not label, note or seal candidates by hand. Both variants
+check that all weakrefs are cleared and all callbacks finish before return.
+This does not use weak-container emptiness as a proxy for callback delivery.
+
+The previous review runtime passed the sealed 64-node chain, but the
+public path found 129 reclaimable managed objects and exceeded the
+64-candidate cutoff. GC1 and GC3 both fell back and delivered all weak
+callbacks before the finalizers. The bounded review path now uses four
+64-bit prior-shade words and admits up to 256 candidate records. This retains
+the exact stopped-root check and ambiguous-write fallback; it does not
+merge stop windows. Native tests straddle 63/64/65 candidates, publish at a
+low slot and independently keep or withdraw a root in the last slot, and
+verify that the high slot cannot alias a low bit. All 68 focused assertions
+passed, including 12 boundary cases.
+
+The guarded callback grid (`measure_gc_acyclic_layers_scale.py <output>
+--callback-grid`) passed 180 fresh GC1/3 native runs: 4/16/64 nodes, each
+with zero unrelated records, 16,384 unrelated live lists, or 16,384
+unrelated live weakrefs; five repeats at both collection boundaries.
+Every case matched the dependent CPython event sequence, used zero
+global layer scans/full remark fallbacks, and completed before returning.
+The sealed 64-node sweep took 3.4–4.0 ms on GC1 and 3.6–3.9 ms on GC3
+across the three heap shapes. Public collection includes its initial
+mark: at 64 nodes it was 4.0/4.2 ms without unrelated records, 17.4/19.4
+ms with unrelated lists, and 19.0/18.3 ms with unrelated weakrefs
+(GC1/3 respectively). These are separate timings, not interchangeable
+or the official HTTP/no-observer A/B. The sealed 16→64 increase on
+GC1 without unrelated records was about 4.7×, so a strict linear bound
+is not yet proven. Cohorts above 256 and Darwin remain unqualified.

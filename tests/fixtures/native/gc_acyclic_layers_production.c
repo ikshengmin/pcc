@@ -25,9 +25,12 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, ROOTS };
+enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, WIDE_LOW, ROOTS };
 static PyObject *roots[ROOTS];
-static void *nodes[3];
+enum { WIDE_MIN = 63, WIDE_MAX = 65 };
+static void *nodes[WIDE_MAX];
+static PyObject *wide_low;
+static int wide_size;
 static int rescue, withdrawn, mixed, silent, finalizer_only, late_new, idle_worker, error;
 static int worker_started, worker_done;
 static int peer_mode, peer_request, peer_read, peer_live_after;
@@ -88,6 +91,7 @@ static PyObject *finish_a(PyObject *self) {
         else pcc_gc_store_root(&roots[WEAK_NEW], ref);
         if (target) py_decref(target);
     }
+    if (wide_low) pcc_gc_store_root(&roots[WIDE_LOW], wide_low);
     if (rescue || withdrawn) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
         if (!target || target == py_None) error = 6;
@@ -232,6 +236,28 @@ static void *seal_on_departing_thread(void *unused) {
         __atomic_fetch_or(&py_header(obj)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
     }
     pcc_py_gc_minor_graph_unlock();
+    if (wide_size) {
+        // The last slot straddles bit positions 62, 63 and 64 between
+        // cases. Publish a different low-slot candidate in the same
+        // callback, so a modulo-64 alias cannot stand in for either bit.
+        int b_slot = rescue ? 1 : 0;
+        int a_slot = rescue ? 0 : 1;
+        nodes[wide_size - 1] = nodes[b_slot];
+        for (int i = 0; i < wide_size - 1; ++i) {
+            if (i == a_slot) continue;
+            PyObject *obj = py_list_new(0);
+            if (!obj) { error = 42; return NULL; }
+            pcc_gc_unpin(obj);
+            pcc_py_gc_minor_graph_lock();
+            nodes[i] = pcc_gc_object_index_find(obj);
+            pcc_gc_set_mark_color(obj, PY_FLAG_GC_WHITE);
+            __atomic_fetch_and(&py_header(obj)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
+            __atomic_fetch_or(&py_header(obj)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
+            pcc_py_gc_minor_graph_unlock();
+            if (!nodes[i]) { error = 43; return NULL; }
+            if (i == b_slot) wide_low = obj;
+        }
+    }
     return NULL;
 }
 
@@ -299,6 +325,14 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "caller-old-holder") == 0) rescue = 18;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
+    if (argc > 2 && (strcmp(argv[1], "wide-keep") == 0 || strcmp(argv[1], "wide-drop") == 0)) {
+        if (strcmp(argv[2], "63") == 0) wide_size = WIDE_MIN;
+        else if (strcmp(argv[2], "64") == 0) wide_size = WIDE_MAX - 1;
+        else if (strcmp(argv[2], "65") == 0) wide_size = WIDE_MAX;
+        else return 44;
+        rescue = strcmp(argv[1], "wide-keep") == 0;
+        withdrawn = !rescue;
+    }
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
     if (argc > 1 && strcmp(argv[1], "mixed-tail") == 0) mixed = 2;
     if (argc > 1 && strcmp(argv[1], "mixed-rescue") == 0) { mixed = 1; rescue = 1; }
@@ -327,9 +361,9 @@ int main(int argc, char **argv) {
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
     pcc_gc_tracing_candidates_reset();
-    pcc_gc_tracing_candidates_note(nodes[0]);
-    pcc_gc_tracing_candidates_note(nodes[1]);
-    if (mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13)) pcc_gc_tracing_candidates_note(nodes[2]);
+    int candidate_count = wide_size ? wide_size :
+        (mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13) ? 3 : 2);
+    for (int i = 0; i < candidate_count; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
@@ -337,7 +371,7 @@ int main(int argc, char **argv) {
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
-    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 || (rescue >= 11 && rescue <= 13) ? 3 : 2);
+    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(candidate_count);
     int64_t scans = pcc_gc_metric_layer_weak_registry_scans - scans_start;
     int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;

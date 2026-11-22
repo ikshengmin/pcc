@@ -21,6 +21,12 @@ extern int64_t pcc_thread_join(void *, void **);
 
 enum { MAX_CANDIDATES = 64, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
 static void *nodes[MAX_CANDIDATES];
+/* Identities for comparisons only, not registered roots or C locals across
+ * collection. The departing setup thread owns the last strong variables. */
+static PyObject *expected_targets[MAX_CANDIDATES];
+static PyObject *expected_refs[MAX_CANDIDATES];
+static char events[MAX_CANDIDATES * 2];
+static int event_count, weak_callbacks, public_collect;
 static PyObject *roots[ROOTS];
 static int candidates, old_count, weak_count, observe_candidates, finalized, setup_error;
 static int peer_ready, peer_done;
@@ -35,9 +41,25 @@ static int parse_int(const char *arg) {
 }
 
 static PyObject *finalize_item(PyObject *self) {
-    (void)self;
     if (pcc_thread_world_stop_epoch_held() >= 0) setup_error = 4;
+    if (observe_candidates == 2) {
+        if (event_count < MAX_CANDIDATES * 2) events[event_count++] = 'D';
+        if (finalized >= candidates || expected_targets[finalized] != self ||
+            weak_callbacks != finalized) setup_error = 27;
+    }
     ++finalized;
+    return py_int_from_i64(0);
+}
+
+static PyObject *weak_event(PyObject *captures, PyObject *args) {
+    (void)captures;
+    PyObject *ref = py_tuple_get(args, 0);
+    if (event_count < MAX_CANDIDATES * 2) events[event_count++] = 'W';
+    if (weak_callbacks >= candidates || expected_refs[weak_callbacks] != ref ||
+        finalized != weak_callbacks + 1 || pcc_thread_world_stop_epoch_held() >= 0)
+        setup_error = 28;
+    ++weak_callbacks;
+    if (ref) py_decref(ref);
     return py_int_from_i64(0);
 }
 
@@ -73,24 +95,32 @@ static void *make_graph(void *argument) {
         if (!observed) { setup_error = 23; return NULL; }
         pcc_gc_store_root(&roots[CANDIDATE_WEAKS], observed);
     }
+    PyObject *on_weak = observe_candidates == 2 ? py_func_new((void *)weak_event, NULL) : NULL;
+    if (observe_candidates == 2 && !on_weak) { setup_error = 29; return NULL; }
     PyObject *previous = NULL;
     for (int i = 0; i < candidates; ++i) {
         PyObject *item = py_instance_new(cls);
         if (!item) { setup_error = 9; return NULL; }
         if (observe_candidates) {
-            PyObject *ref = py_weakref_new(item, NULL);
+            PyObject *ref = py_weakref_new(item, on_weak);
             if (!ref) { setup_error = 24; return NULL; }
             py_list_append(roots[CANDIDATE_WEAKS], ref);
+            if (observe_candidates == 2) {
+                expected_refs[i] = ref;
+                expected_targets[i] = item;
+            }
         }
         if (previous) py_instance_set_field((PyInstanceObject *)previous, 0, item);
         pcc_gc_unpin(item);
-        pcc_py_gc_minor_graph_lock();
-        nodes[candidates-1-i] = pcc_gc_object_index_find(item);
-        pcc_gc_set_mark_color(item, PY_FLAG_GC_WHITE);
-        __atomic_fetch_and(&py_header(item)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
-        __atomic_fetch_or(&py_header(item)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
-        pcc_py_gc_minor_graph_unlock();
-        if (!nodes[candidates-1-i]) { setup_error = 10; return NULL; }
+        if (!public_collect) {
+            pcc_py_gc_minor_graph_lock();
+            nodes[candidates-1-i] = pcc_gc_object_index_find(item);
+            pcc_gc_set_mark_color(item, PY_FLAG_GC_WHITE);
+            __atomic_fetch_and(&py_header(item)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
+            __atomic_fetch_or(&py_header(item)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
+            pcc_py_gc_minor_graph_unlock();
+            if (!nodes[candidates-1-i]) { setup_error = 10; return NULL; }
+        }
         previous = item;
     }
     return NULL;
@@ -106,13 +136,16 @@ static void *idle_peer(void *unused) {
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3 || argc > 5) return 11;
+    if (argc < 3 || argc > 6) return 11;
     candidates = parse_int(argv[1]);
     old_count = parse_int(argv[2]);
     const int with_peer = argc >= 4;
     if (with_peer) weak_count = parse_int(argv[3]);
-    if (argc == 5) observe_candidates = parse_int(argv[4]);
-    if (observe_candidates < 0 || observe_candidates > 1) return 25;
+    if (argc >= 5) observe_candidates = parse_int(argv[4]);
+    if (argc == 6) public_collect = parse_int(argv[5]);
+    if (observe_candidates < 0 || observe_candidates > 2 ||
+        public_collect < 0 || public_collect > 1 ||
+        (public_collect && observe_candidates != 2)) return 25;
     if (candidates < 2 || candidates > MAX_CANDIDATES || old_count < 0 || old_count > 65536
         || weak_count < 0 || weak_count > 65536) return 12;
     if (pcc_current_thread_id() <= 0) return 13;
@@ -127,25 +160,32 @@ int main(int argc, char **argv) {
         while (!(ready = __atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
         if (ready < 0) return 21;
     }
-    if (pcc_stop_the_world() != 0) return 15;
-    pcc_gc_begin_explicit_tracing_collect();
-    pcc_py_gc_minor_graph_lock();
-    pcc_gc_tracing_candidates_reset();
-    for (int i = 0; i < candidates; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
-    pcc_gc_tracing_finish_commits = 1;
-    pcc_gc_tracing_candidates_seal(1);
-    int64_t epoch = pcc_thread_world_stop_epoch_held();
-    pcc_gc_tracing_finish_stop_epoch = epoch;
-    pcc_py_gc_minor_graph_unlock();
     int64_t full_before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_before = pcc_gc_metric_layer_weak_registry_scans;
-    int64_t start = pcc_platform_monotonic_us();
-    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(candidates);
-    int64_t elapsed = pcc_platform_monotonic_us() - start;
-    int64_t stops = pcc_thread_world_stop_epoch_held() - epoch;
+    int64_t elapsed, reclaimed, stops = -1;
+    if (public_collect) {
+        int64_t start = pcc_platform_monotonic_us();
+        reclaimed = pcc_gc_collect(0);
+        elapsed = pcc_platform_monotonic_us() - start;
+    } else {
+        if (pcc_stop_the_world() != 0) return 15;
+        pcc_gc_begin_explicit_tracing_collect();
+        pcc_py_gc_minor_graph_lock();
+        pcc_gc_tracing_candidates_reset();
+        for (int i = 0; i < candidates; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
+        pcc_gc_tracing_finish_commits = 1;
+        pcc_gc_tracing_candidates_seal(1);
+        int64_t epoch = pcc_thread_world_stop_epoch_held();
+        pcc_gc_tracing_finish_stop_epoch = epoch;
+        pcc_py_gc_minor_graph_unlock();
+        int64_t start = pcc_platform_monotonic_us();
+        reclaimed = pcc_gc_tracing_sweep_unreachable(candidates);
+        elapsed = pcc_platform_monotonic_us() - start;
+        stops = pcc_thread_world_stop_epoch_held() - epoch;
+        pcc_gc_end_explicit_tracing_collect();
+        if (pcc_resume_world() != 0) return 16;
+    }
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - full_before;
-    pcc_gc_end_explicit_tracing_collect();
-    if (pcc_resume_world() != 0) return 16;
     if (with_peer) {
         __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
         if (pcc_thread_join(thread, NULL)) return 22;
@@ -161,6 +201,12 @@ int main(int argc, char **argv) {
             if (!ref || py_weakref_call(ref) != py_None) return 26;
         }
     }
+    if (observe_candidates == 2) {
+        printf("events=%.*s callbacks=%d public=%d\n", event_count, events,
+               weak_callbacks, public_collect);
+        if (weak_callbacks != candidates) return 30;
+    }
     if (setup_error) return setup_error;
-    return finalized == candidates && reclaimed == candidates && full == 0 ? 0 : 17;
+    return finalized == candidates && full == 0 &&
+           (public_collect ? reclaimed >= 0 : reclaimed == candidates) ? 0 : 17;
 }
