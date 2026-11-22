@@ -1045,6 +1045,9 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.language-linkage",
                                     "language linkage specifications are not implemented", storage.coord)
         storage_specifiers = [] if storage is None else [storage]
+        constexpr = None
+        if template_parameters and member_definition is None:
+            constexpr = self._accept("constexpr")
         # [class.access]/6: a member's access context includes its return
         # type, before the qualified declarator identifies the class. Resolve
         # names normally now, but check those exact declaration identities only
@@ -1123,7 +1126,7 @@ class CppParser:
         variadic = []
         default_arguments = []
         def parameter_clause():
-            if template_parameters and member_owner is not None:
+            if template_parameters and (member_owner is not None or constexpr is not None):
                 from pcc.frontends.cpp.member_template_calls import signature_operation
                 return signature_operation(self, self._parameter_clause, params, parameter_symbols,
                                            variadic, check_lowering=False, defaults=default_arguments)
@@ -1141,6 +1144,13 @@ class CppParser:
                 from pcc.frontends.cpp.member_template_calls import signature_operation
                 name, result_type = signature_operation(self, self._apply_declarator, declarator,
                                                         result_type, function=True, member=True)
+            elif constexpr is not None:
+                from pcc.frontends.cpp.member_template_calls import signature_operation
+                name, result_type = signature_operation(
+                    self, self._apply_declarator, declarator, result_type, function=is_function,
+                    member=member_owner is not None,
+                    namespace_function=namespace_owner is not None and is_function,
+                )
             else:
                 name, result_type = self._apply_declarator(declarator, result_type, function=is_function,
                                                            member=member_owner is not None,
@@ -1178,6 +1188,9 @@ class CppParser:
                                 "named namespace inline currently requires an unqualified function definition",
                                 name.coord)
         if not is_function:
+            if constexpr is not None:
+                raise CppDiagnostic("cpp.unsupported.constexpr-templates",
+                                    "constexpr variable template semantics are not implemented", constexpr.coord)
             if inline_specifiers:
                 code = ("cpp.unsupported.inline-declarations" if storage is not None
                         and storage.value == "static" else "cpp.invalid-inline-specifier")
@@ -1251,15 +1264,30 @@ class CppParser:
                 raise CppDiagnostic("cpp.unsupported.class-reference-values", "class-reference template bodies require separate semantics", name.coord)
         if definition or member_owner is not None or template_parameters:
             for dtype in (result_type,) + tuple(t for _, t in params):
-                if template_parameters and member_owner is not None:
+                if template_parameters and (member_owner is not None or constexpr is not None):
                     from pcc.frontends.cpp.member_template_calls import signature_operation
                     signature_operation(self, self._check_value_type, dtype, name)
                 else:
                     self._check_value_type(dtype, name)
         exception_specification = declarator.chunks[0].exception_specification
+        if constexpr is not None:
+            # [dcl.constexpr]/1: the declaration carries a constexpr (and
+            # therefore inline) contract, not an available definition or a
+            # constant-expression evaluator. Admit only the declaration
+            # shape needed by [new.syn], retaining its noexcept type.
+            template_type = template_parameters[0]
+            if (self._peek().value != ";" or member_owner is not None
+                    or namespace_owner is not None or storage is not None
+                    or noreturn or variadic or exception_specification is not True
+                    or len(template_parameters) != 1 or not isinstance(template_type, TypeParameter)
+                    or result_type != PointerType(template_type)
+                    or len(params) != 1 or params[0][1] != result_type):
+                raise CppDiagnostic("cpp.unsupported.constexpr-templates",
+                                    "only a declaration of noexcept T*(T*) is implemented", constexpr.coord)
         validate_declaration(self, name, result_type, tuple(t for _, t in params),
                              bool(exception_specification), definition, member_owner, storage, template_parameters, bool(variadic))
-        if (exception_specification is not None or noreturn) and (definition or member_owner is not None or template_parameters):
+        if ((exception_specification is not None or noreturn) and constexpr is None
+                and (definition or member_owner is not None or template_parameters)):
             raise CppDiagnostic("cpp.unsupported.exceptions", "function contract definitions/members/templates require additional semantics", name.coord)
         if (definition or member_owner is not None or template_parameters) and any(
                 contains_function(t) for t in (result_type,) + tuple(t for _, t in params)):
@@ -1293,6 +1321,7 @@ class CppParser:
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.explicit_inline = bool(inline_specifiers)
+        new_symbol.constexpr = constexpr is not None
         new_symbol.deleted_template = deleted_template
         new_symbol.variadic = bool(variadic)
         new_symbol.nonthrowing = bool(exception_specification)

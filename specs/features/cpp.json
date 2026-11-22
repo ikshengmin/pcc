@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged TinyXML2 frontier is the in-class StrPair constructor and external-inline ODR; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the static inline TIXML_VSCPRINTF declaration; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -425,6 +425,16 @@
       "id": "dcl.fct.def.delete",
       "title": "11.4.3 Deleted definitions",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.fct.def.delete"
+    },
+    {
+      "id": "dcl.constexpr",
+      "title": "The constexpr specifier",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.constexpr"
+    },
+    {
+      "id": "new.syn",
+      "title": "Header <new> synopsis",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/new.syn"
     }
   ],
   "features": [
@@ -4232,11 +4242,72 @@
       ],
       "diagnostics": [],
       "evidence": []
+    },
+    {
+      "id": "cpp.constexpr-noexcept-template-declarations",
+      "title": "Declaration-only constexpr noexcept pointer function templates",
+      "chapter_ids": [
+        "dcl.constexpr",
+        "except.spec",
+        "temp",
+        "new.syn"
+      ],
+      "scope": "An unqualified non-member declaration of one type parameter, with T*(T*), constexpr and nonthrowing noexcept, retains its canonical declaration without emitting a definition. The unchanged owned <new> can be included in a Linux pcc0 executable. No constexpr evaluation, definition, instantiation, exception enforcement, native pcc1 or full TinyXML2 acceptance.",
+      "tests": [
+        "tests/cpp/test_cpp_placement_new.py::test_constexpr_template_pointer_declaration_preserves_the_contract",
+        "tests/cpp/test_cpp_placement_new.py::test_full_new_header_keeps_original_declaration_contracts",
+        "tests/cpp/test_cpp_placement_new.py::test_compile_and_execute_with_unchanged_owned_new_header"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:b40190313a23884dac95cb60446bb2d560e5ae28433a48066d9699b1696a8bdb",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/include/new",
+            "sha256": "196672df4f51b015cfb6319e37393a4643124312c998109df38d39da1ddfd791"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "dc5338a975d40913f8166f54143d066b731c0bee8875afc84be83d8294778856"
+          },
+          {
+            "path": "pcc/frontends/cpp/sema.py",
+            "sha256": "084b4fb5ae48076c6a0ed738b3fc2828774b85978a2d961b08cc4bc8d042fb21"
+          }
+        ]
+      }
+    },
+    {
+      "id": "cpp.constexpr-template-boundary",
+      "title": "Remaining constexpr function and variable template boundary",
+      "chapter_ids": [
+        "dcl.constexpr",
+        "temp"
+      ],
+      "scope": "Constexpr template syntax outside the exact declaration-only noexcept T*(T*) form remains unimplemented.",
+      "status": "explicitly_unimplemented",
+      "tests": [
+        "tests/cpp/test_cpp_placement_new.py::test_constexpr_template_declaration_does_not_admit_unsupported_uses"
+      ],
+      "diagnostics": [
+        "cpp.unsupported.constexpr-templates"
+      ],
+      "evidence": []
     }
   ],
   "diagnostics": {
     "inventory_complete": true,
     "codes": [
+      {
+        "code": "cpp.unsupported.constexpr-templates",
+        "feature_id": "cpp.constexpr-template-boundary",
+        "source": {
+          "path": "pcc/frontends/cpp/parser.py",
+          "sha256": "dc5338a975d40913f8166f54143d066b731c0bee8875afc84be83d8294778856"
+        }
+      },
       {
         "code": "cpp.unsupported.aggregate-brace-elision",
         "feature_id": "cpp.aggregate-brace-elision",

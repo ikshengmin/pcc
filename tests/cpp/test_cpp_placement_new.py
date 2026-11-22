@@ -233,15 +233,14 @@ def test_allocation_declarations_cannot_acquire_intrinsic_semantics_by_spelling_
 FULL_HEADER_ORIGINAL = '#include <new>\nint main(){return 42;}\n'
 
 
-def test_full_new_header_keeps_real_unsupported_syntax_visible():
+def test_full_new_header_keeps_original_declaration_contracts():
     text = preprocess_cpp(FULL_HEADER_ORIGINAL)
     compact = ''.join(text.split())
     assert 'structnothrow_t{explicitnothrow_t()=default;};' in compact
     assert 'conststd::nothrow_t&' in compact
     assert 'constexprT*launder' in compact
     parser = CppParser()
-    with pytest.raises(CppDiagnostic) as error:
-        parser.parse(text)
+    parser.parse(text)
     # The original class object declaration was bound, not skipped or defined.
     assert 'externconstnothrow_tnothrow;' in compact
     nothrow, = [obj for obj in parser.namespace_objects if obj.name == 'nothrow']
@@ -249,17 +248,11 @@ def test_full_new_header_keeps_real_unsupported_syntax_visible():
     assert not nothrow.internal_linkage and not nothrow.defined
     assert not nothrow.initialization_complete
     assert nothrow.object_declaration.storage == ['extern'] and nothrow.object_declaration.init is None
-    # The unchanged header still fails: constexpr template declarations are
-    # not implemented. Keep the full following declaration and exact location.
-    assert error.value.code == 'cpp.unsupported.syntax'
-    assert error.value.message == "C++ feature not implemented at 'constexpr' (expected an implemented arithmetic type)"
-    assert Path(error.value.coord.file).name == 'new'
-    assert (error.value.coord.line, error.value.coord.column) == (21, 19)
-    position = parser.cursor.position
-    assert [token.value for token in parser.cursor.tokens[position - 5:position + 10]] == [
-        'template', '<', 'class', 'T', '>', 'constexpr', 'T', '*', 'launder',
-        '(', 'T', '*', ')', 'noexcept', ';',
-    ]
+    std = parser.scope.lookup("std").namespace_scope
+    launder, = std.lookup("launder").overloads
+    assert launder.constexpr and launder.nonthrowing and not launder.defined
+    assert launder.dtype == PointerType(launder.template_parameters[0])
+    assert launder.parameters == (launder.dtype,)
 
 
 def test_extern_reserved_declaration_keeps_external_cpp_identity():
@@ -275,6 +268,20 @@ def test_real_new_header_original_is_valid_for_explicit_external_reference(tmp_p
     binary = compile_reference_with_new((('real-new-header.cpp', FULL_HEADER_ORIGINAL),),
                                         tmp_path / 'reference', observer=False, force_header=False)
     record_execution(binary, Execution(42, b'', b''))
+
+
+@pytest.mark.integration
+def test_compile_and_execute_with_unchanged_owned_new_header(tmp_path):
+    source = '#include <new>\nint cpp_test_entry(){return 42;}\n'
+    filename = 'owned-new-header.cpp'
+    host = compile_host_cpp(((filename, preprocess_cpp(source)),))
+    owned = tmp_path / 'owned'
+    write_host_executable(host, owned)
+    reference = compile_reference_with_new(((filename, source),),
+                                           tmp_path / 'reference')
+    expected = Execution(42, struct.pack('<i', 42), b'')
+    record_execution(owned, expected)
+    record_execution(reference, expected)
 
 
 @pytest.mark.integration
@@ -302,3 +309,34 @@ def test_preserved_variadic_placement_original_is_ambiguous_in_cpp17(tmp_path):
     },indent=2)+'\n')
     assert result.returncode!=0
     assert b'ambiguous' in result.stderr
+
+
+def test_constexpr_template_pointer_declaration_preserves_the_contract():
+    # N4659 [dcl.constexpr]/1 and [except.spec]: preserve both specifiers
+    # on the canonical template, without instantiating a missing body.
+    parser = CppParser()
+    ast = parser.parse(
+        "namespace holder { template<class T> constexpr T* inspect(T*) noexcept; "
+        "template<typename U> constexpr U* inspect(U*) noexcept; }"
+    )
+    namespace = parser.scope.lookup("holder").namespace_scope
+    overloads = namespace.lookup("inspect").overloads
+    assert len(overloads) == 1
+    symbol = overloads[0]
+    assert symbol.constexpr and symbol.nonthrowing and not symbol.defined
+    assert not ast.ext
+
+
+
+@pytest.mark.parametrize(("source", "code"), (
+    ("template<class T> constexpr T* check(T*) noexcept;"
+     "template<class T> T* check(T*);", "cpp.unsupported.pointer-templates"),
+    ("template<class T> constexpr T* check(T* p) noexcept { return p; }",
+     "cpp.unsupported.constexpr-templates"),
+    ("template<class T> constexpr T* check(T*) noexcept;"
+     "int f(){ int x=1; return *check(&x); }", "cpp.unsupported.pointer-templates"),
+))
+def test_constexpr_template_declaration_does_not_admit_unsupported_uses(source, code):
+    with pytest.raises(CppDiagnostic) as error:
+        CppParser().parse(source)
+    assert error.value.code == code

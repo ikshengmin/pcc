@@ -28,6 +28,7 @@ class Symbol:
         self.dtype = dtype
         self.parameters = parameters
         self.variadic = False
+        self.constexpr = False
         self.nonthrowing = False
         self.noreturn = False
         self.overloads = []
@@ -489,6 +490,8 @@ class Scope:
 
     @staticmethod
     def _check_function_contract(previous, symbol):
+        if previous.constexpr != symbol.constexpr:
+            raise CppDiagnostic("cpp.conflicting-constexpr", "function declarations must agree on constexpr", symbol.coord)
         if previous.nonthrowing != symbol.nonthrowing:
             raise CppDiagnostic("cpp.conflicting-exception-specification", "function declarations have different exception specifications", symbol.coord)
         if symbol.noreturn and not previous.noreturn:
@@ -686,6 +689,8 @@ def resolve_overload(group, arguments, types, coord, null_constants=None, lvalue
                 candidate.template_origin = origin
                 candidate.template_arguments = bindings
                 candidate.explicit_template_arguments = explicit_arguments
+                candidate.constexpr = origin.constexpr
+                candidate.nonthrowing = origin.nonthrowing
                 # A specialization belongs to its declaration's namespace,
                 # not the scope importing or calling the template. In
                 # particular, unnamed-namespace instances remain TU-local.

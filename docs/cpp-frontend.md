@@ -451,3 +451,14 @@ definitions, grouped qualified declarators and overload sets spread across
 multiple inline namespace owners remain explicit boundaries. No local test
 execution or whole-project acceptance is claimed by these source additions.
 Rules: N4659 [namespace.memdef]/2, [namespace.qual]/7 and [basic.lookup.qual]/3.
+
+
+### Declaration-only constexpr templates in the owned <new>
+
+The C++17 [dcl.constexpr], [except.spec], [temp] and [new.syn] declaration
+subset preserves the canonical `constexpr` and nonthrowing function
+contract for a single-type-parameter, declaration-only `T*(T*)`. It
+does not emit or supply a `std::launder` body. Invocation, definitions
+and constant evaluation remain explicitly gated. A Linux pcc0 program
+including the unchanged header matches the separately compiled g++
+reference; this is not native pcc1 or TinyXML2 project acceptance.

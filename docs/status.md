@@ -216,14 +216,14 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   preserve and parse the owned `<new>` declaration
-   `template<class T> constexpr T* launder(T*) noexcept;` without weakening
-   its contract; then rerun the unchanged TinyXML2 host node. Current Linux
-   pcc0 stops at owned `<new>:21:19` (`cpp.unsupported.syntax` at
-   `constexpr`), before linking. Unchanged g++ 14.2 reference runs passed.
+   handle the first observed TinyXML2 blocker at `tinyxml2.cpp:94:9`,
+   file-scope `static inline TIXML_VSCPRINTF`, respecting TU-local linkage.
+   The prior owned `<new>` constexpr/noexcept template declaration now
+   parses without weakening the header; the unchanged host project fails
+   later, before link.
 
    Claims:
-   - constexpr template declaration in owned <new>: Codex, Linux x86-64, 2026-11-22 00:44 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
