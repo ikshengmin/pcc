@@ -324,8 +324,10 @@ in the relevant section or issue and removes the entry.
    Linux guarded phase probe at 256 callbacks per kind: world reopen/
    reacquire ~52%, stopped stack cut ~24%, candidate matching ~7–8%.
    Exact observed order retained; measurement instrumentation not shipped.
-   Next: filter frozen callback stack words before the per-word visitor,
-   preserving unchanged unfiltered fallback and exact root checks. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Early stack word filter trial passed 112 native checks plus bounds/ABI;
+   aggregate change 0–3% within duplicate-parent noise. Not shipped.
+   Next: measure duplicated stop-owner snapshot cost and certify the
+   lazy-capture boundary before attempting a transition optimization. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -379,7 +381,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:08 UTC), #9 review only: move bounded callback stack filtering before visitor dispatch; retain exact root/fallback semantics and compare matched native arms.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
