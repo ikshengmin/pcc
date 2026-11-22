@@ -26,6 +26,15 @@ oracle sees the young object, whereas the hypothetical sparse minor without the
 owner barrier does not. It does not run a dictionary insertion in a native
 nursery or demonstrate a failure of today's collector.
 
+The Linux pcc0 native control holds the major mark open, puts a new heap
+string key and list value into an old dictionary, and checks both page bits
+and the stored identity. A subsequent replacement shades its value, while
+an unwritten list stays white. Calling the real first-store helper separately
+on a detached slot admits the pointer and shades the value: success does not
+identify an owning container. Paired with the source test this validates the
+existing major shade, not minor remembered cards or partial-insert rollback.
+Mac and pcc1 were not executed.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

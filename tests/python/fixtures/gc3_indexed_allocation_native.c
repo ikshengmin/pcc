@@ -11,6 +11,7 @@ extern void pcc_py_gc_minor_graph_lock(void);
 extern void pcc_py_gc_minor_graph_unlock(void);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern int64_t pcc_gc_page_mark_test(PyObject *);
+extern int64_t pcc_gc_try_init_ptr_locked(PyObject **, PyObject **);
 
 static int32_t color(PyObject *object) {
     return py_header_flags_load(py_header(object)) & PY_FLAG_GC_COLOR_MASK;
@@ -21,9 +22,50 @@ static int fail(const char *where) {
     return 1;
 }
 
-int main(void) {
+static int check_dictionary_first_store(void) {
+    PyObject *dict = py_dict_new_presized(8);
+    PyObject *key = py_str_new("gc3-first-store-key", sizeof("gc3-first-store-key") - 1);
+    PyObject *value = py_list_new(0);
+    PyObject *replacement = py_list_new(0);
+    PyObject *control = py_list_new(0);
+    PyObject *detached = py_list_new(0);
+    PyObject *result = 0;
+    if (!dict || !key || !value || !replacement || !control || !detached)
+        return fail("dictionary test allocation");
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_set_mark_color(dict, PY_FLAG_GC_BLACK);
+    pcc_gc_set_mark_color(key, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(value, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(replacement, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(control, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(detached, PY_FLAG_GC_WHITE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    int64_t accepted = pcc_gc_try_init_ptr_locked(&result, &detached);
+    pcc_py_gc_minor_graph_unlock();
+    if (!accepted || result != detached || color(detached) != PY_FLAG_GC_GRAY)
+        return fail("ownerless initializer");
+
+    py_dict_set(dict, key, value);
+    if (color(key) != PY_FLAG_GC_GRAY || color(value) != PY_FLAG_GC_GRAY)
+        return fail("dictionary first-store colors");
+    if (pcc_gc_page_mark_test(key) != 1 || pcc_gc_page_mark_test(value) != 1)
+        return fail("dictionary first-store page marks");
+    if (py_dict_get(dict, key) != value) return fail("dictionary first-store identity");
+    py_dict_set(dict, key, replacement);
+    if (color(replacement) != PY_FLAG_GC_GRAY || py_dict_get(dict, key) != replacement)
+        return fail("dictionary replace");
+    if (color(control) != PY_FLAG_GC_WHITE || pcc_gc_page_mark_test(control) != 0)
+        return fail("unwritten dictionary control");
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC3_DICT_FIRST_STORE_OK");
+    return 0;
+}
+
+int main(int argc, char **argv) {
+    (void)argv;
     if (pcc_gc_backend() != 3) return fail("backend");
     py_gc_disable();
+    if (argc == 2) return check_dictionary_first_store();
     PyObject *child_growth = py_list_new(0);
     PyObject *child_spare = py_list_new(0);
     PyObject *unwritten = py_list_new(0);
