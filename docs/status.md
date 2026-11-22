@@ -260,6 +260,11 @@ in the relevant section or issue and removes the entry.
    dictionary insertion and instance field writes preserve a sibling
    through one same-cut fallback and match CPython, as did old list
    append. This is not a complete shared-store audit.
+   [Review commit badf3e9](https://github.com/ikshengmin/pcc/commit/badf3e913355c87bdc48eff6093dffb0bcb23495)
+   adds old dictionary/list replacements and set insertion. Linux 89
+   focused checks passed; all six covered native old-owner writers now
+   match CPython, each with the expected ambiguous-publication fallback.
+   Bulk writes and external native writers are not covered.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -316,8 +321,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Verify issue 9 replacement and set insertion write paths: Codex, Linux x86-64, 2026-11-22 18:02 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
