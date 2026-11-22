@@ -192,3 +192,39 @@ def test_sealed_capture_rejects_in_place_content_drift(tmp_path, monkeypatch):
     monkeypatch.setattr(RING, "capture_cooperative_child", mutate)
     with pytest.raises(ValueError, match="changed during capture"):
         RING.capture_sealed_cooperative_child(binary, digest, env={})
+
+
+@pytest.mark.parametrize(("counters", "reason"), (
+    ((1, 2, 2, 9), "lost perf samples"),
+    ((1, 2, 1, 0), "full enabled time"),
+    ((0, 2, 2, 0), "full enabled time"),
+    ((1, 0, 0, 0), "full enabled time"),
+))
+def test_perf_read_counters_reject_loss_or_incomplete_scheduling(counters, reason):
+    with pytest.raises(ValueError, match=reason):
+        RING._decode_event_read(struct.pack("=QQQQ", *counters))
+
+
+def test_perf_read_counters_accept_exact_scheduling_not_a_short_read():
+    full = struct.pack("=QQQQ", 3, 4, 4, 0)
+    assert RING._decode_event_read(full) == (3, 4)
+    with pytest.raises(ValueError, match="truncated perf"):
+        RING._decode_event_read(full[:-1])
+
+
+@pytest.mark.integration
+def test_kernel_reports_loss_even_without_room_for_lost_record():
+    if sys.platform != "linux":
+        return
+    import time
+
+    # 32 bytes/sample, one data page. Keep the scope to one owned
+    # thread and one bounded CPU burst; never change host sampling policy.
+    with RING._task_ring(0, 100_000, data_pages=1) as (fd, mapping):
+        wall = time.monotonic_ns() + 3_000_000_000
+        started = time.thread_time_ns()
+        with RING._enabled(fd):
+            while time.thread_time_ns() - started < 250_000_000:
+                assert time.monotonic_ns() < wall, "bounded CPU fixture did not finish"
+        with pytest.raises(ValueError, match="kernel counted [1-9][0-9]* lost perf samples"):
+            RING._read_capture(fd, mapping)

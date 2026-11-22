@@ -75,3 +75,13 @@ both normally and after replacing its original path, and checked a
 drifted file with a negative control. All 26 focused nodes passed.
 Next obtain explicit kernel loss and scheduling counters for the same
 sample stream. No atomic classification or workload share is claimed.
+
+The capture now verifies the kernel's explicit `PERF_FORMAT_LOST`
+count with the event disabled, as well as nonzero clock and equal
+enabled/running time. A full ring may have no room to carry its own
+lost-record event; a bounded Linux burst forced a real one-page
+overflow and the kernel count rejected it. The normal owned binary
+capture stayed loss-free. All 32 focused nodes passed. This qualifies
+transport, not an unbiased instruction/CPU-share estimate. Next
+qualify a fixed and directly owned child thread cohort before assuming
+one sampled task represents four workers.

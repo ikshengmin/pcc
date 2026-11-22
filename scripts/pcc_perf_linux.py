@@ -30,6 +30,10 @@ PERF_ATTR_SIZE_VER0 = 64
 PERF_SAMPLE_IP = 1 << 0
 PERF_SAMPLE_TID = 1 << 1
 PERF_SAMPLE_PERIOD = 1 << 8
+PERF_FORMAT_TOTAL_TIME_ENABLED = 1 << 0
+PERF_FORMAT_TOTAL_TIME_RUNNING = 1 << 1
+PERF_FORMAT_LOST = 1 << 4
+EVENT_READ = struct.Struct("=QQQQ")
 PERF_ATTR_DISABLED = 1 << 0
 PERF_ATTR_EXCLUDE_KERNEL = 1 << 5
 PERF_ATTR_EXCLUDE_HV = 1 << 6
@@ -169,7 +173,8 @@ def _open_task(tid: int, period_ns: int) -> int:
     struct.pack_into(
         "=IIQQQQQ", attr, 0, PERF_TYPE_SOFTWARE, len(attr),
         PERF_COUNT_SW_CPU_CLOCK, period_ns,
-        PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_PERIOD, 0,
+        PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_PERIOD,
+        PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING | PERF_FORMAT_LOST,
         PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HV,
     )
     payload = (ctypes.c_char * len(attr)).from_buffer(attr)
@@ -186,10 +191,10 @@ def _open_task(tid: int, period_ns: int) -> int:
 
 
 @contextmanager
-def _task_ring(tid: int, period_ns: int):
+def _task_ring(tid: int, period_ns: int, data_pages: int = RING_PAGES):
     fd = _open_task(tid, period_ns)
     try:
-        size = os.sysconf("SC_PAGE_SIZE") * (1 + RING_PAGES)
+        size = os.sysconf("SC_PAGE_SIZE") * (1 + data_pages)
         with mmap.mmap(fd, size, flags=mmap.MAP_SHARED,
                        prot=mmap.PROT_READ | mmap.PROT_WRITE) as mapping:
             yield fd, mapping
@@ -204,6 +209,24 @@ def _enabled(fd: int):
         yield
     finally:
         fcntl.ioctl(fd, PERF_EVENT_IOC_DISABLE)
+
+
+def _decode_event_read(data: bytes) -> tuple[int, int]:
+    if len(data) != EVENT_READ.size:
+        raise ValueError("truncated perf read counters")
+    value, enabled, running, lost = EVENT_READ.unpack(data)
+    if lost:
+        raise ValueError(f"kernel counted {lost} lost perf samples")
+    if not value or not enabled or running != enabled:
+        raise ValueError("perf event did not run for its full enabled time")
+    return value, running
+
+
+def _read_capture(fd: int, mapping) -> tuple[list[TaskSample], int, int]:
+    # Even if a full ring cannot enqueue PERF_RECORD_LOST, the explicit
+    # kernel lost counter must be zero. Never normalize a multiplexed run.
+    clock_ns, running_ns = _decode_event_read(os.read(fd, EVENT_READ.size))
+    return _read_frozen_ring(mapping), clock_ns, running_ns
 
 
 def _verify_task(samples: list[TaskSample], pid: int, tid: int) -> None:
@@ -224,10 +247,11 @@ def task_clock_preflight(cpu_ms: int = 80) -> dict:
             while time.thread_time_ns() - start < cpu_ms * 1_000_000:
                 if time.monotonic_ns() >= deadline:
                     raise ValueError("task-clock preflight exceeded wall limit")
-        samples = _read_frozen_ring(mapping)
+        samples, clock_ns, running_ns = _read_capture(fd, mapping)
     _verify_task(samples, os.getpid(), threading.get_native_id())
     return {"scope": "calling-thread-user-cpu-only", "period_ns": period_ns,
-            "samples": len(samples), "distinct_ips": len({s.ip for s in samples})}
+            "samples": len(samples), "distinct_ips": len({s.ip for s in samples}),
+            "kernel_lost": 0, "clock_ns": clock_ns, "running_ns": running_ns}
 
 
 def _receive_marker(pipe, marker: bytes, timeout: float) -> None:
@@ -280,7 +304,7 @@ def capture_cooperative_child(argv, *, env: dict, _pass_fds=()) -> list[TaskSamp
                     child.stdin.write(b"G")
                     child.stdin.close()
                     _receive_marker(child.stdout, b"DONE\n", 3)
-                samples = _read_frozen_ring(mapping)
+                samples, _, _ = _read_capture(fd, mapping)
             if child.wait(timeout=3) != 0:
                 raise ValueError("owned child returned a failure")
             _verify_marker_eof(child.stdout)
