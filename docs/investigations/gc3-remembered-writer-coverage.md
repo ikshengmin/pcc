@@ -483,3 +483,41 @@ same-address payload surviving two explicit collections. The list
 fixture also rejects a running world, interior address, active mark,
 pending sweep, and occupied card. Tests compare the owner, record,
 header and child identities. No Mac, native-pcc1 or performance claim.
+
+### First nursery admission target: measure real allocations
+
+A single-carrier Linux GC3 gateway run counted successful allocations for
+sequential loopback GET `/` with `Connection: close`. The stock pcc0/self
+ELF (SHA-256 `58ea650afa64601dbc736b055b84220e268be1e47b93748fe33e50905c1da86c`)
+used the stock runtime and
+[pcc-gateway b149048](https://github.com/ikshengmin/pcc-gateway/commit/b1490486a993c9528dcbfeecf499daba18ae0ef1).
+All four runs returned empty 200s and drained cleanly. Capture each fresh
+process with `PCC_GC_BACKEND=3 PCC_LOG=alloc PCC_LOG_FORMAT=json` and a
+separate `PCC_LOG_FILE`. Read the delta between fresh processes:
+
+```sh
+python scripts/pcc_perf.py alloc-census run-129.jsonl --startup run-1.jsonl --operations 128
+python scripts/pcc_perf.py alloc-census run-65.jsonl --startup run-33.jsonl --operations 32
+```
+
+| Extra requests | Logged allocations | Tuple | List | Tuple + list |
+|---|---:|---:|---:|---:|
+| 128 | 56,843 | 20,205 | 10,212 | 53.5% |
+| 32 | 14,929 | 5,704 | 2,541 | 55.2% |
+
+These are balanced request/object records by exact size, not a lifetime
+sample; dropping both records is still possible. The logger runs on the
+real handler, but this simple gateway workload is neither the sealed
+`benchmarks/handler/native_stats.py` arm nor C512. Do not use it for timings
+or assume that an admitted subset accounts for the full type-level share.
+
+Target tuple and list rather than another leaf-only prototype. Tuples
+need builder initialization, replacement via `py_tuple_set_item` and the
+public C setter, including paths that currently publish private tuple
+slots directly. Lists need append/owned-slot transfer, replace/clear,
+extend/insert, slice and backing-array publication under the correct
+owner; ordinary C setters and append must either use those stores or
+promote before exposure. Keep raw buffer exports and managed Go/Java
+stores excluded until their ownership boundaries are validated. A first
+review arm must report the actual admitted fraction on its sealed
+handler, not the gross upper bound in this table.

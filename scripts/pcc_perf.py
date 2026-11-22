@@ -25,6 +25,8 @@
     pause prepare      make an opt-in tracing GC source overlay
     pause report       verify exclusive GC phase counters from a native log
     profile-preflight  test Linux kernel sample transport on this tool's thread
+    alloc-census       count successful managed allocations by exact tag and size
+                       from PCC_LOG=alloc/PCC_LOG_FORMAT=json (not a timed run)
 
 Arms, the object cache and the ledger live outside the repository, under
 PCC_PERF_HOME (default ~/.cache/pcc/perf). An arm is a sealed copy of the
@@ -1196,6 +1198,65 @@ def _numbers(text: str) -> tuple[int, ...]:
     return tuple(int(part) for part in text.split(",") if part)
 
 
+def _allocation_log_counts(path: Path) -> collections.Counter:
+    requests: collections.Counter = collections.Counter()
+    successes: collections.Counter = collections.Counter()
+    with path.open(encoding="utf-8") as stream:
+        for number, line in enumerate(stream, 1):
+            try:
+                row = json.loads(line)
+            except ValueError as exc:
+                raise ValueError(f"{path}:{number}: invalid JSON log record") from exc
+            if not isinstance(row, dict) or row.get("schema") != "pcc.diagnostics.runtime_log.v1":
+                raise ValueError(f"{path}:{number}: unrecognized runtime log schema")
+            if row.get("category") != "alloc":
+                continue
+            size, tag = row.get("value0"), row.get("value1")
+            event = row.get("event")
+            if (type(size) is not int or size < 16 or type(tag) is not int or tag < 0
+                    or event not in ("alloc_request", "alloc_object")):
+                raise ValueError(f"{path}:{number}: invalid allocation record")
+            (requests if event == "alloc_request" else successes)[(tag, size)] += 1
+    if not successes or requests != successes:
+        raise ValueError(f"{path}: missing or unbalanced allocation request/object records")
+    return successes
+
+
+def allocation_census(log: Path, startup: Path | None = None,
+                      operations: int | None = None) -> dict:
+    """Summarize observed managed allocations; matching pairs can still be dropped.
+
+    Use the same source, environment and worker count for the optional fresh
+    startup control. This is not allocator RSS, allocation lifetime or timing.
+    """
+    if operations is not None and operations <= 0:
+        raise ValueError("operations must be positive")
+    counts = _allocation_log_counts(log)
+    if startup is not None:
+        counts.subtract(_allocation_log_counts(startup))
+        if any(value < 0 for value in counts.values()):
+            raise ValueError("startup control exceeds the workload for an exact tag/size")
+    total = counts.total()
+    sizes: dict[int, dict[int, int]] = {}
+    allocations: collections.Counter = collections.Counter()
+    payload: collections.Counter = collections.Counter()
+    for (tag, size), count in sorted(counts.items()):
+        if count == 0:
+            continue
+        sizes.setdefault(tag, {})[size] = count
+        allocations[tag] += count
+        payload[tag] += size * count
+    rows = [
+        dict(tag=tag, allocations=allocations[tag], payload_bytes=payload[tag],
+             share=allocations[tag] / total, sizes=sizes[tag])
+        for tag in sorted(allocations, key=lambda tag: (-allocations[tag], tag))
+    ]
+    result = dict(allocations=total, payload_bytes=payload.total(), types=rows)
+    if operations is not None:
+        result["allocations_per_operation"] = total / operations
+    return result
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     commands = parser.add_subparsers(dest="command", required=True)
@@ -1219,6 +1280,11 @@ def main(argv: list[str] | None = None) -> int:
                      help="bytes to leave available beyond --max-tree-rss before building "
                           "(Linux: positive reserve against host MemAvailable, not cgroup headroom; "
                           "Darwin: reclaimable memory, disk and swap checks)")
+
+    census = commands.add_parser("alloc-census", help="count managed allocation log records")
+    census.add_argument("log", type=Path)
+    census.add_argument("--startup", type=Path, help="matched startup/control allocation log")
+    census.add_argument("--operations", type=int, help="workload operation count after subtraction")
 
     probe = commands.add_parser("profile-preflight")
     probe.add_argument("--cpu-ms", type=int, default=80)
@@ -1302,6 +1368,13 @@ def main(argv: list[str] | None = None) -> int:
     report.add_argument("file", type=Path)
 
     args = parser.parse_args(argv)
+    if args.command == "alloc-census":
+        try:
+            result = allocation_census(args.log, args.startup, args.operations)
+        except (ValueError, OSError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(result, sort_keys=True))
+        return 0
     if args.command == "profile-preflight":
         if sys.platform != "linux":
             raise SystemExit("profile-preflight requires Linux")

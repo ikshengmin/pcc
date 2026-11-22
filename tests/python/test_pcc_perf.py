@@ -715,3 +715,47 @@ def test_handler_receipts_keep_peak_pause_memory_and_p99_per_pair(tmp_path, monk
 def test_handler_p99_refuses_invalid_timed_sample_sets(samples):
     with pytest.raises(SystemExit, match="latency receipt missing"):
         PERF._handler_p99_ms({"requests": 1, "latencies_ms": samples})
+
+
+def _allocation_event(event, tag, size):
+    return json.dumps({
+        "schema": "pcc.diagnostics.runtime_log.v1", "category": "alloc",
+        "event": event, "value0": size, "value1": tag,
+    })
+
+
+def test_allocation_census_subtracts_startup_by_exact_size_and_tag(tmp_path, capsys):
+    startup, workload = tmp_path / "startup.jsonl", tmp_path / "workload.jsonl"
+    pair = lambda tag, size: [_allocation_event("alloc_request", tag, size),
+                              _allocation_event("alloc_object", tag, size)]
+    baseline = pair(6, 48) + pair(5, 24)
+    startup.write_text("\n".join(baseline) + "\n")
+    workload.write_text("\n".join(baseline + pair(5, 32) * 3 + pair(6, 40)) + "\n")
+    assert PERF.main(["alloc-census", str(workload), "--startup", str(startup),
+                      "--operations", "2"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["allocations"] == 4
+    assert report["payload_bytes"] == 136
+    assert report["allocations_per_operation"] == 2.0
+    assert report["types"] == [
+        {"tag": 5, "allocations": 3, "payload_bytes": 96, "share": 0.75,
+         "sizes": {"32": 3}},
+        {"tag": 6, "allocations": 1, "payload_bytes": 40, "share": 0.25,
+         "sizes": {"40": 1}},
+    ]
+
+
+@pytest.mark.parametrize("fault", ["malformed", "unpaired", "shrinking"])
+def test_allocation_census_rejects_partial_or_unmatched_controls(tmp_path, fault):
+    startup, workload = tmp_path / "startup.jsonl", tmp_path / "workload.jsonl"
+    pair = [_allocation_event("alloc_request", 6, 48),
+            _allocation_event("alloc_object", 6, 48)]
+    startup.write_text("\n".join(pair) + "\n")
+    if fault == "malformed":
+        workload.write_text('{"schema":')
+    elif fault == "unpaired":
+        workload.write_text(pair[0] + "\n")
+    else:
+        workload.write_text("\n".join([s.replace('"value1": 6', '"value1": 7') for s in pair]) + "\n")
+    with pytest.raises(ValueError):
+        PERF.allocation_census(workload, startup)
