@@ -350,8 +350,12 @@ in the relevant section or issue and removes the entry.
    #9 large-chain gate is red: native Linux GC1–3 at 1024→4096 nodes
    takes ~34→376–395 ms; 33,554,432 candidate root/pin checks account
    for 75–77%, with no raw hull hits. 16,384 unrelated live objects do not
-   explain it. Keep master unchanged. Next: replace the repeated candidate
-   pin walk without weakening raw, explicit, foreign or extension roots. Arbitrary raw stack lifetimes, HTTP exact timings and
+   explain it. [Review 01f62d94](https://github.com/ikshengmin/pcc/commit/01f62d944e3c4fb63e36f61702090536a0f9d279)
+   makes the exact pin-owner publication guard that walk; Linux 210 focused
+   native assertions and five-GC lifecycle passed. At 4096 nodes the serial
+   cases fell from 365–399 ms to 71–76 ms, all six cells 5/5 beyond control.
+   Next: isolate wide cohorts with a peer retaining a real raw interior root.
+   Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -405,7 +409,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:59 UTC), #9 review only: prove complete pin acquisition and restoration coverage for sparse callback-window candidate root checks; qualify a guarded runtime candidate only with native controls.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
