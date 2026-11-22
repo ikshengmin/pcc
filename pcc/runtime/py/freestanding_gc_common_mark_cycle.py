@@ -98,6 +98,7 @@ pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
 py_incref = extern("py_incref", (c_ptr,), c_void)
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_thread_world_stop_epoch_held = extern(
     "pcc_thread_world_stop_epoch_held", (), c_int64
 )
@@ -314,9 +315,32 @@ def pcc_gc2_review_claim_close_locked(owner_slot, epoch: i64, token: i64, scanne
         else:
             pcc_gc_gray_worklist_note(owner)
             pcc_gc_gray_worklist_flush()
+    _gc2_review_claim_clear_locked()
+    return 1
+
+
+@c_abi_export("pcc_gc2_review_claim_clear_locked")
+def _gc2_review_claim_clear_locked() -> None:
     global_store_ptr("pcc_gc2_review_claim_owner", null())
     store_i64(global_addr("pcc_gc2_review_claim_epoch"), 0, 0)
     store_i64(global_addr("pcc_gc2_review_claim_token"), 0, 0)
+
+
+@c_abi_export("pcc_gc2_review_claim_discard_stale_stopped_locked")
+def pcc_gc2_review_claim_discard_stale_stopped_locked(epoch: i64, token: i64) -> i64:
+    """Reclaim the review slot, not old heap or gray credit, after reset."""
+    if (
+        pcc_py_gc_minor_graph_lock_depth() == 0 or pcc_thread_owns_stopped_world() == 0
+        or epoch <= 0 or token <= 0
+        or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 2
+        or load_i64(global_addr("pcc_gc2_review_claim_token"), 0) != token
+        or load_i64(global_addr("pcc_gc2_review_claim_epoch"), 0) != epoch
+        or atomic_load_i64(global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire") <= epoch
+    ):
+        return 0
+    # STOP holds every existing scan. The coordinator still owns the input
+    # root; the stale worker's return cannot release the new epoch's task.
+    _gc2_review_claim_clear_locked()
     return 1
 
 

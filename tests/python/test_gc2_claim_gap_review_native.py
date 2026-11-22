@@ -18,11 +18,11 @@ def test_gc2_claim_survives_parkable_gaps(tmp_path, explicit_owned_runtime):
     )
     env = dict(os.environ, PCC_GC_BACKEND="2")
     for repeat in range(3):
-        for abort in (0, 1):
+        for mode in (0, 1, 2):
             result = _record_execution(
-                tmp_path, f"claim-gap-{abort}-{repeat}", [str(binary), str(abort)], env,
+                tmp_path, f"claim-gap-{mode}-{repeat}", [str(binary), str(mode)], env,
             )
             assert (result["returncode"], result["stderr"]) == (0, ""), result
             assert result["stdout"] == (
-                f"GC2_CLAIM_GAP_OK abort={abort} cuts=2 remaining={abort + 1}\n"
+                f"GC2_CLAIM_GAP_OK mode={mode} cuts=2 remaining={2 if mode == 1 else 1}\n"
             ), result

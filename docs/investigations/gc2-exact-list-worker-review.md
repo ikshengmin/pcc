@@ -56,7 +56,7 @@ The owned native test uses two real stopped cuts on a worker: after the
 dequeue but before the container lock, and after it unlocks and flushes
 but before it retires the task. Normal retire and same-epoch abandon
 are both exercised. The fixture controls the current epoch and keeps
-the registered owner slot stable. This unit does not handle a thread
+the registered owner slot stable. This initial unit does not handle a thread
 dying mid-task, cross-epoch reset, coordinator restart, multiple
 in-flight tasks, or integration with the existing concurrent drain
 or stopped-world finish. It makes no throughput claim and does not
@@ -68,3 +68,24 @@ credit to zero and still cannot request remark with a live token;
 the real count is restored before resume. No GC2 source used by
 ordinary mark or finish calls the review APIs. The prior short-list
 test and eight ABI chunk checks passed on this revision.
+
+## Stopped cross-epoch reclamation of a review slot
+
+Only the stopped-world owner holding the graph lock may discard a
+matched claim from an older epoch. This clears the review slot without
+touching the new cycle's credit or tokens; it cannot discard a current
+claim. The owner slot remains rooted until the original worker returns.
+After the old helper has published child work and parked, the native
+fixture advances the actual epoch under a stopped world, clears the
+old worklist, and reclaims the review slot. The new cycle claims the
+same list with a different token. The prior worker's real late return
+cannot retire it or mutate its credit. Old epoch coloring and roots in
+the fixture are limited to the isolated test graph; the ordinary
+scheduler does not call this helper.
+
+Linux x86-64: three fresh processes per path (retire, same-epoch
+abandon, cross-epoch reset), the prior short-list checks, and eight
+ABI tests passed. The reset fixture uses the real page-bitmap rotation
+and worklist clear; changing only header color would leave the old
+bitmap bit set and suppress re-shading. No ordinary scheduler, macOS,
+or A/B ran.

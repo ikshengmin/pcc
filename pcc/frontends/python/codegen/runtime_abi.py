@@ -3210,6 +3210,7 @@ def _cross_object_signatures_part_12():
     "pcc_gc2_review_claim_open_locked": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc2_review_claim_may_request_remark_locked": (("c_int64",), "c_int64"),
     "pcc_gc2_review_claim_close_locked": (("c_ptr", "c_int64", "c_int64", "c_int64"), "c_int64"),
+    "pcc_gc2_review_claim_discard_stale_stopped_locked": (("c_int64", "c_int64"), "c_int64"),
     "pcc_gc_gray_worklist_note": (("c_ptr",), "c_void"),
     "pcc_gc_gray_worklist_flush": ((), "c_void"),
     "pcc_gc_gray_worklist_take_locked": ((), "c_ptr"),
