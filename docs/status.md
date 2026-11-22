@@ -293,8 +293,12 @@ in the relevant section or issue and removes the entry.
    Maintainer clarification, 2026-11-22 (“可以”): check event counts and
    per-object ordering for independent same-layer siblings; keep exact
    CPython order for dependencies. No batching safety claim.
-   Next: remove repeated candidate/weakref scans while preserving parked
-   sibling roots, then reassess safe batching and independent-heap scale. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit 2471dbf](https://github.com/ikshengmin/pcc/commit/2471dbf0af11a0daf2617fd9fa637948e37b517e)
+   reuses weakref groups with parked peers, with fallback on mutation.
+   At 64 candidates and 16,384 unrelated live weakrefs, Linux scans fell
+   from 64 to 1 and paired medians fell 47%/56% on GC1/3 (5/5 each).
+   Next: remove dependence on unrelated weakrefs on the candidate path,
+   then reassess safe batching and independent-heap scale. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -348,7 +352,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 18:30 UTC), #9 review branch only: remove repeated weak-registry scans with a parked peer if the link/unlink invalidation and stop contract checks out; start with native peer mutation and stable controls.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
