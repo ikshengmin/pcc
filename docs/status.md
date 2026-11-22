@@ -303,16 +303,20 @@ in the relevant section or issue and removes the entry.
    checks. In the n64 callback-free probe with 16,384 unrelated refs,
    GC1/3 fell from ~13 ms to ~2 ms (5/5 pairs each). No HTTP/Mac gate claim.
    [Review commit d239b5c](https://github.com/ikshengmin/pcc/commit/d239b5c4d5d800da323bca4c7a52ed823c6261f5)
-   fixes the 64-user-node public collection ordering failure (129 actual
-   candidates): four shade words, 256-record review bound. Linux 180
+   fixes the 64-user-node public collection ordering failure (65 candidates,
+   129 reclaimed managed objects): four shade words, 256-record review bound. Linux 180
    callback-bearing runs and 68 assertions passed, with sealed and public
    timing separated. Larger cohorts, strict scaling, Mac and HTTP unqualified.
    [Review commit a2b1e44](https://github.com/ikshengmin/pcc/commit/a2b1e44f397812bfc4e11b32aaf6951412949a65)
    keeps a provably unobservable batch out of the graph despite unrelated
    live weakrefs. Linux: 80 focused native assertions, six models and 180
    callback-bearing reruns; no zero-overhead or Mac acceptance claim.
-   Next: remove the fixed review shade-mask/candidate limit instead of
-   merely raising it; check real public collections above 256 records. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit a54db49](https://github.com/ikshengmin/pcc/commit/a54db49f3013d02d4aecb990817e83af4fad614b)
+   allocates raw shade scratch from the sealed cohort before callbacks.
+   Public Linux GC1/3 at 256 observed nodes / 257 candidates match CPython;
+   112 focused assertions and 180 callback reruns passed. No scaling claim.
+   Next: reduce repeated stopped candidate walks; audit actual pin writers
+   and preserve conservative, foreign and fail-closed root behavior. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -366,7 +370,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 19:38 UTC), #9 review branch only: replace fixed shade-mask/candidate cap with cohort-sized raw storage before callbacks and prove real public collection above 256 records.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
