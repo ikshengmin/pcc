@@ -1158,11 +1158,39 @@ def _review_layer_finalizer(node, window) -> i64:
 
 @c_abi_export("pcc_gc_review_collect_layer_roots")
 def _review_collect_layer_roots(nodes, count: i64, cut) -> i64:
-    # An insertion shade can come from a surviving heap owner or a dead
-    # temporary. Until attribution is exact, ask the existing full oracle.
-    if pcc_gc_gray_count_load_acquire() != 0:
-        return 0
+    # Peel off the write-barrier evidence before looking at actual roots.
+    # It can contain a transient store or publication into an old owner.
+    # A sealed vector of at most 64 candidates lets us keep an unmanaged bit
+    # per prior shade without maintaining a mutation journal.
+    prior: i64 = pcc_gc_gray_count_load_acquire()
+    suspected: i64 = 0
+    seen: i64 = 0
     pos: i64 = 0
+    offset: i64 = abi_constant("object.header.flags_offset")
+    if prior > count:
+        return 0
+    if prior != 0:
+        while pos < count:
+            obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+            flags: i64 = load_i32(obj, offset)
+            if (flags & _CALLBACK_GRAY) != 0:
+                if (flags & _CALLBACK_SWEEP_CANDIDATE) == 0:
+                    return 0
+                suspected = suspected | (1 << pos)
+                seen += 1
+            pos += 1
+        if seen != prior:
+            return 0
+        pos = 0
+        while pos < count:
+            if (suspected & (1 << pos)) != 0:
+                obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+                pcc_gc_set_mark_color(obj, _CALLBACK_WHITE)
+                pcc_gc_page_mark_assign(obj, 0)
+            pos += 1
+        pcc_gc_gray_worklist_clear_stopped()
+        pcc_gc_gray_count_store_release(0)
+    pos = 0
     while pos < count:
         node = load_ptr(nodes, pos * 8)
         obj = load_ptr(node, 0)
@@ -1181,10 +1209,20 @@ def _review_collect_layer_roots(nodes, count: i64, cut) -> i64:
             pcc_gc_trace_referents(obj)
             pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
             pcc_gc_gray_count_decrement_acq_rel()
+    if suspected != 0:
+        pos = 0
+        while pos < count:
+            if (suspected & (1 << pos)) != 0:
+                obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+                if pcc_gc_object_is_white(obj, load_i32(obj, offset)) != 0:
+                    # Some observed store is not explained by current
+                    # candidate/root reachability: do not lose a live edge
+                    # from an old owner, or keep a cleared edge as a root.
+                    return 0
+            pos += 1
     pos = 0
     while pos < count:
         obj = load_ptr(load_ptr(nodes, pos * 8), 0)
-        offset: i64 = abi_constant("object.header.flags_offset")
         flags: i64 = load_i32(obj, offset)
         if (flags & _CALLBACK_SWEEP_CANDIDATE) != 0 and pcc_gc_object_is_white(obj, flags) == 0:
             store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)

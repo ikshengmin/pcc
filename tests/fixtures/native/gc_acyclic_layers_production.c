@@ -6,6 +6,8 @@
 
 extern void *pcc_gc_object_index_find(PyObject *);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
+extern PyObject *py_list_new(int64_t);
+extern void py_list_append(PyObject *, PyObject *);
 extern void pcc_gc_tracing_candidates_reset(void);
 extern void pcc_gc_tracing_candidates_note(void *);
 extern void pcc_gc_tracing_candidates_seal(int64_t);
@@ -21,7 +23,7 @@ extern int64_t pcc_thread_join(void *, void **);
 enum { CLASS_A, CLASS_B, WEAK_A, WEAK_B, HOLD, ROOTS };
 static PyObject *roots[ROOTS];
 static void *nodes[2];
-static int rescue, error;
+static int rescue, withdrawn, error;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 
@@ -32,11 +34,15 @@ static void note(int event) {
 static PyObject *finish_a(PyObject *self) {
     (void)self;
     note(1);
-    if (rescue) {
+    if (rescue || withdrawn) {
         PyObject *target = py_weakref_call(roots[WEAK_B]);
         if (!target || target == py_None) error = 6;
         else if (rescue == 2) *caller_hold = target;
-        else pcc_gc_store_root(&roots[HOLD], target);
+        else if (rescue == 3) py_list_append(roots[HOLD], target);
+        else {
+            pcc_gc_store_root(&roots[HOLD], target);
+            if (withdrawn) pcc_gc_store_root(&roots[HOLD], NULL);
+        }
         if (target) py_decref(target);
     }
     return py_int_from_i64(0);
@@ -71,6 +77,13 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *b = py_instance_new(b_cls);
     PyObject *callback = py_func_new((void *)weak_event, NULL);
     if (!a || !b || !callback) { error = 10; return NULL; }
+    if (rescue == 3) {
+        PyObject *holder = py_list_new(0);
+        if (!holder) { error = 14; return NULL; }
+        pcc_gc_store_root(&roots[HOLD], holder);
+        pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
+        __atomic_fetch_and(&py_header(holder)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
+    }
     if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
     PyObject *wa = py_weakref_new(a, callback);
     PyObject *wb = py_weakref_new(b, callback);
@@ -96,6 +109,8 @@ static void *seal_on_departing_thread(void *unused) {
 int main(int argc, char **argv) {
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
+    if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
+    withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     // Unregistered storage in the suspended owner’s caller frame. This slot
     // starts empty; the callback creates a new root through a saved address.
     PyObject *volatile raw = NULL;

@@ -4,15 +4,22 @@ import weakref
 
 events = []
 held = None
-rescue = sys.argv[1] != "chain"
+holder = []
+indirect = sys.argv[1] == 'holder'
+rescue = sys.argv[1] in ("rescue", "caller", "holder")
+withdrawn = sys.argv[1] == "withdrawn"
 
 
 class A:
     def __del__(self):
         global held
         events.append("a-del")
-        if rescue:
+        if indirect:
+            holder.append(weak_b())
+        elif rescue or withdrawn:
             held = weak_b()
+            if withdrawn:
+                held = None
 
 
 class B:

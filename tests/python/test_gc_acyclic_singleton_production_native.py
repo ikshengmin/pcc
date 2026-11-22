@@ -65,7 +65,7 @@ def _layered_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("arm", ("chain", "rescue", "caller"))
+@pytest.mark.parametrize("arm", ("chain", "rescue", "caller", "withdrawn", "holder"))
 def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backend, arm):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
     expected = run_process_group_timeout([sys.executable, str(oracle), arm], timeout=15)
@@ -74,6 +74,8 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
         "chain": "a-del a-weak b-del b-weak b-dead\n",
         "rescue": "a-del a-weak b-live\n",
         "caller": "a-del a-weak b-live\n",
+        "withdrawn": "a-del a-weak b-del b-weak b-dead\n",
+        "holder": "a-del a-weak b-live\n",
     }[arm]
     actual = run_process_group_timeout(
         [str(_layered_sweep), arm], timeout=15,
@@ -81,4 +83,4 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
                  PCC_GC_DEBT_THRESHOLD="1099511627776"),
     )
     assert (actual.returncode, actual.stdout) == (0, expected.stdout), actual.stderr
-    assert actual.stderr == ("full=1\n" if arm == "rescue" else "full=0\n")
+    assert actual.stderr == ("full=1\n" if arm in ("withdrawn", "holder") else "full=0\n")
