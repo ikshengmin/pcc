@@ -188,3 +188,20 @@ values. The new source-matched Linux binary passed 3 forced interleaves
 per value, and the automatic liveness harness passed 18 executions
 (1/4 allocating mutators, modes 0/1/2, three repeats). The other three
 owned probe nodes passed; no wall-time comparison was attempted.
+
+## Concurrent depth-first stack respects the reservation
+
+The cursor-only preimage still followed another owner's strong edge to
+the reserved list via the legacy graph-owned trace stack. With the held
+list/graph interleave, the ordinary worker retired two objects and the
+bridge zero. The running-world, budgeted trace stack now ignores a
+snapshot of the same reserved owner in mode 2. It drops only the
+duplicate stack hint, not the task, its gray credit, or its children.
+The stopped-world drain is unchanged.
+
+A two-owner graph with a strong edge to the reserved list now reports
+one ordinary and one alternate retirement, with exactly one gray child
+and one visible token. Both modes and the direct-cursor and depth-first
+shapes passed three times each (12 fresh processes). The automatic
+one/four-mutator harness and three other focused Linux native suites also
+passed. This does not enable another CMS worker or establish a speedup.

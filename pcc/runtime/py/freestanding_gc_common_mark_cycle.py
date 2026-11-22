@@ -213,6 +213,12 @@ def pcc_gc_trace_stack_drain_work(budget: i64, work_left) -> i64:
     entries. The caller must discard all leftovers with trace_stack_end before
     unlocking. Gray/count state and the object list remain the fallback.
     """
+    reserved_owner = null()
+    if (
+        load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2
+        and atomic_load_i32(global_addr("pcc_gc2_review_list_bridge_enabled"), 0, "acquire") == 2
+    ):
+        reserved_owner = global_load_ptr("pcc_gc2_review_claim_owner")
     processed: i64 = 0
     while processed < budget and load_i64(work_left, 0) > 0:
         count: i64 = load_i64(global_addr("pcc_gc_trace_stack_count"), 0)
@@ -221,6 +227,10 @@ def pcc_gc_trace_stack_drain_work(budget: i64, work_left) -> i64:
         count = count - 1
         store_i64(global_addr("pcc_gc_trace_stack_count"), 0, count)
         obj = load_ptr(global_addr("pcc_gc_trace_stack"), count * 8)
+        if ptr_eq(obj, reserved_owner) != 0:
+            # Another owner may have pushed an edge to the reserved task.
+            # The stack is only a hint; its outstanding work is still gray.
+            continue
         flags: i64 = load_i32(obj, 12)
         if (flags & 16) != 0 and (flags & 524288) == 0:
             if pcc_capi_is_cext_type_tag(load_i32(obj, 8)) == 0:

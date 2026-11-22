@@ -19,10 +19,13 @@ def test_gc2_contested_owner_retires_once(tmp_path, explicit_owned_runtime):
     env = dict(os.environ, PCC_GC_BACKEND="2")
     for repeat in range(3):
         for mode in (1, 2):
-            result = _record_execution(
-                tmp_path, f"contested-{mode}-{repeat}", [str(binary), str(mode)], env,
-            )
-            assert (result["returncode"], result["stderr"]) == (0, ""), result
-            assert result["stdout"] == (
-                f"GC2_CONTESTED_BRIDGE_OK mode={mode} ordinary={2 - mode} alternate={mode - 1} gray=1\n"
-            ), result
+            for depth_first in (0, 1):
+                result = _record_execution(
+                    tmp_path, f"contested-{mode}-{depth_first}-{repeat}",
+                    [str(binary), str(mode), str(depth_first)], env,
+                )
+                assert (result["returncode"], result["stderr"]) == (0, ""), result
+                assert result["stdout"] == (
+                    f"GC2_CONTESTED_BRIDGE_OK mode={mode} depth_first={depth_first} "
+                    f"ordinary={depth_first + 2 - mode} alternate={mode - 1} gray=1\n"
+                ), result
