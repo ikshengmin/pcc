@@ -396,8 +396,10 @@ in the relevant section or issue and removes the entry.
    semantic control). The [review raw ABI and model checks](https://github.com/ikshengmin/pcc/blob/a0d32db686fffc68fb916cacb1a67dc4f07045b0/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
    qualify exact imports/owners and the disabled scheduler: 108 focused
    Linux checks and two owned integration nodes passed. Ten host-Clang
-   lanes remain unqualified in this workspace. Next run foreign-handle
-   controls with the bridge flag present in all other backends.
+   lanes remain unqualified in this workspace. The [other-backend C hold controls](https://github.com/ikshengmin/pcc/blob/862875c01cf91a390210edd8a6891912d4bebc0e/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
+   passed with the flag present and absent on GC0/1/3/4, alongside the
+   existing all-five pcc0 ownership cases (eight nodes). Next classify
+   the candidate's truncated profiling stacks before any Mac analysis.
    Master runtime and the separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -410,7 +412,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 bridge environment isolation for other collectors C ownership: Codex, Linux x86-64, 2026-11-22 10:55 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
