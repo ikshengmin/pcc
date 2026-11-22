@@ -35,6 +35,18 @@ identify an owning container. Paired with the source test this validates the
 existing major shade, not minor remembered cards or partial-insert rollback.
 Mac and pcc1 were not executed.
 
+The transaction witness runs the current `_dict_set_gc0_locked` body on a
+GC3 host fixture with a forced refusal of its second initializer. This
+leaves the entry, index bucket and item count unpublished. On success both
+slots and the index are committed under the table lock, with the dictionary
+owner still available. An observer at that commit point feeds the exact
+owner and both values to the test-only remembered model, retaining both
+values through two minors. An owner-aware barrier belongs in the
+transaction, not its value-only initializer or the unlock/growth path.
+An implementation must establish that a stopped collector cannot see the
+committed fields without their card. This does not install or time that
+barrier. The focused source/model and adjoining dict tests passed 28 cases.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the

@@ -66,3 +66,54 @@ def test_gc3_dict_admission_and_fast_init_discard_remembered_owner():
     # The major shade receives only the value. It cannot remember the card.
     assert model.full_reachable_young((1000,)) == {2000}
     assert model.minor((1000,)).live_young == set()
+
+
+def test_gc3_dict_pair_publication_has_one_owner_boundary_and_no_rollback_edge():
+    from tests.python.test_dict_gc0_locked_get_set import Heap, SET_NAMES, _entry, _functions
+
+    heap = Heap()
+    heap.flags.update({
+        "pcc_gc_backend_selected": 3,
+        "pcc_gc_nonmoving_count_free": 1,
+        "pcc_gc_refcount_atomic": 0,
+    })
+    key, rejected, value = heap.obj(), heap.obj(), heap.obj()
+    owner = heap.dict([])
+    heap.rejected.add(rejected)
+    indices = heap.load(owner, abi.PYDICTOBJECT_INDICES_OFFSET)
+    target_index = 5 * 8  # Heap.probe uses bucket 5 for an absent key.
+    heap.store(indices, target_index, -1)
+    model = Model()
+    model.add_old(owner, "dictionary")
+    for young in (key, value, rejected):
+        model.add_young(young)
+    publications = []
+    dictionary = _functions(heap, SET_NAMES)
+
+    def observe_commit(address, offset, incoming):
+        heap.store(address, offset, incoming)
+        if (address, offset) != (owner, abi.PYDICTOBJECT_ITEM_COUNT_OFFSET):
+            return
+        assert heap.locked()
+        assert incoming == 1
+        assert heap.load(owner, abi.PYDICTOBJECT_ENTRIES_USED_OFFSET) == 1
+        assert heap.load(indices, target_index) == 0
+        edges = _entry(heap, owner, 0)
+        assert edges == (key, value)
+        publications.append((owner, edges))
+        # Hypothetical remembered write; the current source has no such hook.
+        model.store_old("dictionary", owner, edges)
+
+    dictionary["store_i64"] = observe_commit
+    set_fast = dictionary["_dict_set_gc0_locked"]
+    assert set_fast(owner, key, rejected, 2) == 0
+    assert _entry(heap, owner, 0) == (0, 0)
+    assert heap.load(owner, abi.PYDICTOBJECT_ITEM_COUNT_OFFSET) == 0
+    assert heap.load(indices, target_index) == -1
+    assert publications == [] and model.dirty == {}
+
+    assert set_fast(owner, key, value, 2) == 1
+    assert publications == [(owner, (key, value))]
+    assert model.full_reachable_young((owner,)) == {key, value}
+    assert model.minor((owner,)).live_young == {key, value}
+    assert model.minor(()).live_young == {key, value}
