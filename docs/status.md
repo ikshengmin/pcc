@@ -202,7 +202,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - none
+   - #7 native return accessor audit: Codex, Linux x86-64, 2026-11-22 00:01 UTC, area runtime-codegen
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
