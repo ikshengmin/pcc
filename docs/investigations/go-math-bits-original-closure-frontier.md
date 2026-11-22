@@ -103,6 +103,12 @@ the five selected `fmt`, ten `testing` and one
 gate hasn't assembled the exact target graph; it doesn't mean that
 `os` source is absent from the repository. Supplying the whole union would
 add unrelated platform/experiment files without filling the real gaps.
-Next expose this exact gap proof through the existing receipt entry, then
-require real materialization and owned runtime/ABI handling before claiming
-project acceptance.
+The reference runner records this evidence in
+`external_reference.dependency_graph.locked_source_gaps`, retaining the
+missing paths and separating the compiler-owned and other roles. A
+selected file with changed locked bytes is distinguished from a missing
+file. This metadata does not change owned admission or qualify the gate.
+The scoped Go reference/closure suite passed 56 checks, and the helper
+reproduced the counts above from the official capture. Next classify
+those 62 other inputs before any source materialization or runtime/ABI
+substitution.

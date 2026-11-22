@@ -124,3 +124,44 @@ def test_previous_benchmark_bound_executes_when_proven_and_stays_closed_otherwis
     native = tmp_path / 'known-bound'
     write_artifact(artifact, native)
     assert run(native) == Execution(0, (42).to_bytes(8, 'little'), b'')
+
+
+def test_reference_gap_receipt_separates_missing_runtime_and_changed_vendored_bytes():
+    from scripts.go_std_closure import target_selection_gaps
+
+    lock = {
+        "roots": ["os", "fmt"],
+        "owned_excluded": ["runtime", "runtime/...", "internal/runtime/...", "unsafe"],
+        "files": [
+            {"path": "src/os/file.go", "sha256": "os-hash"},
+            {"path": "src/os/file_darwin.go", "sha256": "darwin"},
+            {"path": "src/fmt/print.go", "sha256": "locked-fmt"},
+        ],
+    }
+    selected = {
+        "src/math/bits/bits_test.go": project.sha256(b"original"),
+        "src/os/file.go": "os-hash",
+        "src/fmt/print.go": "different-fmt",
+        "src/internal/runtime/maps/map.go": "runtime-go",
+        "src/internal/runtime/sys/abi_amd64.s": "runtime-assembly",
+        "src/internal/runtimeX/other.go": "not-runtime",
+    }
+    receipt = target_selection_gaps(selected, {"src/math/bits/bits_test.go": b"original"}, lock)
+    assert receipt["status"] == "LOCKED_BYTES_DIFFER"
+    assert receipt["selected_files"] == 6 and receipt["matching_files"] == 2
+    assert receipt["changed_locked_files"] == ["src/fmt/print.go"]
+    assert receipt["union_not_selected"] == 1
+    assert receipt["missing_by_role"] == {
+        "compiler_owned": {"go": 1, "assembly": 1},
+        "other": {"go": 1},
+    }
+    assert receipt["roots"]["os"] == {"selected_go": 1, "matched_go": 1}
+
+
+def test_reference_gap_receipt_refuses_inconsistent_original_lock_overlap():
+    from scripts.go_std_closure import target_selection_gaps
+
+    path = "src/math/bits/bits.go"
+    lock = {"files": [{"path": path, "sha256": "not-original"}], "owned_excluded": [], "roots": []}
+    with pytest.raises(ValueError, match="disagrees with pinned original"):
+        target_selection_gaps({path: "selected"}, {path: b"original"}, lock)

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections import Counter
 from pathlib import Path
 import re
 
@@ -58,3 +59,45 @@ def load_std_closure(directory=FIXTURE):
     if sum(len(units) for units in packages.values()) != len(by_path):
         raise ValueError("std closure package inventory differs from its files")
     return lock, packages
+
+
+def target_selection_gaps(selected, original_files, lock):
+    """Compare validated official target hashes to unchanged fixture locks.
+
+    Evidence only. Neither a selected source nor a complete byte match
+    establishes owned runtime handling, successful compilation, or a test run.
+    """
+    union = {entry["path"]: entry["sha256"] for entry in lock["files"]}
+    originals = {path: hashlib.sha256(data).hexdigest() for path, data in original_files.items()}
+    for path in sorted(union.keys() & originals.keys()):
+        if union[path] != originals[path]:
+            raise ValueError("std closure disagrees with pinned original: " + path)
+    locked = {**union, **originals}
+    matching = {path for path, digest in selected.items() if locked.get(path) == digest}
+    changed = sorted((selected.keys() & locked.keys()) - matching)
+    missing = sorted(selected.keys() - locked.keys())
+    missing_roles = {"compiler_owned": Counter(), "other": Counter()}
+    excluded = lock["owned_excluded"]
+    for path in missing:
+        package = path.removeprefix("src/").rsplit("/", 1)[0]
+        owned = any(package == prefix or prefix.endswith("/...") and package.startswith(prefix[:-3])
+                    for prefix in excluded)
+        role = {".go": "go", ".s": "assembly", ".h": "header"}.get(Path(path).suffix, "other")
+        missing_roles["compiler_owned" if owned else "other"][role] += 1
+    roots = {}
+    for root in lock["roots"]:
+        path_prefix = "src/" + root + "/"
+        files = {path for path in selected if path.startswith(path_prefix)
+                 and "/" not in path[len(path_prefix):] and path.endswith(".go")}
+        roots[root] = {"selected_go": len(files), "matched_go": len(files & matching)}
+    return {
+        "status": "LOCKED_BYTES_DIFFER" if changed else "INCOMPLETE" if missing else "BYTES_MATCH",
+        "selected_files": len(selected),
+        "matching_files": len(matching),
+        "missing_files": missing,
+        "changed_locked_files": changed,
+        "union_not_selected": len(union.keys() - selected.keys()),
+        "missing_by_role": {owner: dict(sorted(roles.items())) for owner, roles in missing_roles.items()},
+        "roots": roots,
+        "scope": "reference source metadata only; not an owned build or test execution",
+    }

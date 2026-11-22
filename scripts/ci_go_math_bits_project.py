@@ -445,6 +445,9 @@ def _run_reference(report, lock, files, directory, go, goroot, tools_before):
     rows = decode_graph((directory / "reference-dependencies.stdout").read_bytes())
     before_ids = reference_build_ids(rows, goroot, Path(environment["GOCACHE"]))
     before = validate_graph(rows, goroot)
+    from scripts.go_std_closure import load_std_closure, target_selection_gaps
+    std_lock, _ = load_std_closure()
+    row["dependency_graph"]["locked_source_gaps"] = target_selection_gaps(before, files, std_lock)
     if report["owned"]["test_entry"]["status"] == "PASS":
         row["test_entry_comparison"] = reference_test_entry(
             rows, Path(environment["GOCACHE"]), directory / "owned-testmain.go", report["owned"]["test_entry"]["sha256"])
