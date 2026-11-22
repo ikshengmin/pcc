@@ -694,7 +694,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - pccDot (2026-11-22 23:50 UTC), GC3 narrow caller-root adapter from the existing stopped snapshot/mapped-root cut: add real retention and stale collector scratch controls before nursery activation.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
