@@ -31,6 +31,7 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_CONTINUATION,
     PY_TYPE_COROUTINE,
     PY_TYPE_CPY_HANDLE,
+    PY_TYPE_CEXT_TAG_BASE,
     PY_TYPE_DICT,
     PY_TYPE_ELLIPSIS,
     PY_TYPE_NOTIMPLEMENTED,
@@ -56,10 +57,16 @@ from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_VIRTUAL_THREAD,
     PY_TYPE_VTHREAD_CHANNEL,
     PY_TYPE_WEAKREF,
+    PYLISTOBJECT_CAPACITY_OFFSET,
+    PYLISTOBJECT_ITEMS_OFFSET,
+    PYLISTOBJECT_LENGTH_OFFSET,
+    PYTUPLEOBJECT_LEN_OFFSET,
 )
 from pcc.unsafe import (
     cstr,
     define_global_i32,
+    free,
+    function_addr,
     atomic_cas_i64,
     atomic_load_i32,
     atomic_load_i64,
@@ -72,6 +79,7 @@ from pcc.unsafe import (
     global_store_ptr,
     is_tagged_int,
     load_ptr,
+    logical_shift_right_i64,
     load_i32,
     load_i64,
     malloc,
@@ -3033,3 +3041,213 @@ def pcc_gc_release_known(o) -> None:
     store_i64(prepared, 32, new_rc)
     store_i64(prepared, 40, 1)
     _py_decref_finish(prepared)
+
+
+# Test-invoked bounded nursery experiment. The caller owns the entire
+# allocation cohort, exact sorted cell vector and both work arrays. No
+# normal allocation, thread root, or GC dispatcher calls this procedure.
+pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
+pcc_allocator_object_retire_live = extern("pcc_allocator_object_retire_live", (c_ptr,), c_int64)
+pcc_gc_visit_object_slots = extern(
+    "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc3_review_scan_owner_cards_stopped = extern(
+    "pcc_gc3_review_scan_owner_cards_stopped", (c_ptr, c_ptr), c_int64
+)
+
+_CLOSED_YOUNG_COUNT = 0
+_CLOSED_YOUNG_CELLS = 8
+_CLOSED_YOUNG_MARKS = 16
+_CLOSED_YOUNG_QUEUE = 24
+_CLOSED_YOUNG_ENQUEUED = 32
+_CLOSED_YOUNG_INVALID = 40
+_CLOSED_YOUNG_FLAGS = 128
+_CLOSED_YOUNG_LIMIT = 65536
+_CLOSED_YOUNG_SLOT_LIMIT = 64
+_CLOSED_YOUNG_STRONG_ROLE = 1
+
+# The raw sparse frontier layout from freestanding_gc_barrier_dispatcher.
+_CLOSED_FRONTIER_CAPACITY = 0
+_CLOSED_FRONTIER_COUNT = 8
+_CLOSED_FRONTIER_FAILED = 32
+_CLOSED_FRONTIER_ITEMS = 40
+
+
+def _gc3_closed_young_add(cut, value) -> None:
+    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+        return
+    bits: int = ptr_to_int(value)
+    cells = load_ptr(cut, _CLOSED_YOUNG_CELLS)
+    lo: int = 0
+    hi: int = load_i64(cut, _CLOSED_YOUNG_COUNT)
+    while lo < hi:
+        mid: int = logical_shift_right_i64(lo + hi, 1)
+        address: int = ptr_to_int(load_ptr(cells, mid * 8))
+        if address < bits:
+            lo = mid + 1
+        elif address > bits:
+            hi = mid
+        else:
+            marks = load_ptr(cut, _CLOSED_YOUNG_MARKS)
+            if load_i64(marks, mid * 8) == 0:
+                store_i64(marks, mid * 8, 1)
+                next_slot: int = load_i64(cut, _CLOSED_YOUNG_ENQUEUED)
+                store_i64(load_ptr(cut, _CLOSED_YOUNG_QUEUE), next_slot * 8, mid)
+                store_i64(cut, _CLOSED_YOUNG_ENQUEUED, next_slot + 1)
+            return
+    # Old and immediate roots do not expand the young cut. A genuine young
+    # cell outside the explicit cohort means the proof is incomplete.
+    if (pcc_gc_granule_is_object_start(value) == 1
+            and (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & _CLOSED_YOUNG_FLAGS) != 0):
+        store_i64(cut, _CLOSED_YOUNG_INVALID, 1)
+
+
+@c_abi_export("pcc_gc3_review_closed_young_slot")
+def pcc_gc3_review_closed_young_slot(slot, role: int, cut) -> None:
+    if role == _CLOSED_YOUNG_STRONG_ROLE:
+        _gc3_closed_young_add(cut, load_ptr(slot, 0))
+
+
+@c_abi_export("pcc_gc3_review_validate_reclaim_slot")
+def pcc_gc3_review_validate_reclaim_slot(slot, role: int, cut) -> None:
+    # This bounded experiment does not own extension or compatibility
+    # reference accounting, or an opaque address that may name either.
+    if role != _CLOSED_YOUNG_STRONG_ROLE:
+        return
+    child = load_ptr(slot, 0)
+    if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
+        return
+    if pcc_gc_granule_is_object_start(child) != 1:
+        store_i64(cut, _CLOSED_YOUNG_INVALID, 1)
+        return
+    tag: int = load_i32(child, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+    if tag == PY_TYPE_CPY_HANDLE or tag >= PY_TYPE_CEXT_TAG_BASE:
+        store_i64(cut, _CLOSED_YOUNG_INVALID, 1)
+
+
+@c_abi_export("pcc_gc3_review_collect_closed_young_stopped")
+def pcc_gc3_review_collect_closed_young_stopped(
+    cut, roots, root_count: int, cards, frontier
+) -> int:
+    """Reclaim only an explicitly owned young cohort with complete roots.
+
+    This review entry does not discover caller/stack/foreign roots. Tests
+    provide all roots, including the stopped sparse-card frontier. Neither
+    indexed/leased objects nor unproved constructors belong in this cohort.
+    Each admitted exact built-in list/tuple owns only its ordinary storage;
+    retirement invokes no user code or refcount operations.
+    """
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(cut) != 0 or ptr_is_null(frontier) != 0
+            or root_count < 0 or root_count > _CLOSED_YOUNG_LIMIT
+            or (root_count > 0 and ptr_is_null(roots) != 0)):
+        return -1
+    # Suppress compiler entry/backedge polls while the verified stopped cut
+    # walks its raw arrays. The public wrapper does not discover roots.
+    pcc_thread_no_park_enter()
+    result: int = _gc3_collect_closed_young_in_cut(cut, roots, root_count, cards, frontier)
+    pcc_thread_no_park_exit()
+    return result
+
+
+def _gc3_collect_closed_young_in_cut(cut, roots, root_count: int, cards, frontier) -> int:
+    if (atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") != 0
+            or atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0):
+        return -1
+    # Build the dirty frontier inside this same cut. A caller cannot accidentally
+    # reuse yesterday's successful frontier after the card buffer overflows.
+    if pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) < 0:
+        return -1
+    frontier_count: int = load_i64(frontier, _CLOSED_FRONTIER_COUNT)
+    if (load_i64(frontier, _CLOSED_FRONTIER_FAILED) != 0
+            or frontier_count < 0 or frontier_count > _CLOSED_YOUNG_LIMIT
+            or frontier_count > load_i64(frontier, _CLOSED_FRONTIER_CAPACITY)):
+        return -1
+    count: int = load_i64(cut, _CLOSED_YOUNG_COUNT)
+    cells = load_ptr(cut, _CLOSED_YOUNG_CELLS)
+    marks = load_ptr(cut, _CLOSED_YOUNG_MARKS)
+    queue = load_ptr(cut, _CLOSED_YOUNG_QUEUE)
+    if (count < 0 or count > _CLOSED_YOUNG_LIMIT
+            or ptr_is_null(cells) != 0 or ptr_is_null(marks) != 0 or ptr_is_null(queue) != 0
+            or ptr_eq(cells, marks) != 0 or ptr_eq(cells, queue) != 0 or ptr_eq(marks, queue) != 0):
+        return -1
+
+    previous: int = 0
+    index: int = 0
+    while index < count:
+        obj = load_ptr(cells, index * 8)
+        bits: int = ptr_to_int(obj)
+        if bits <= previous or pcc_gc_granule_is_object_start(obj) != 1:
+            return -1
+        if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) != _CLOSED_YOUNG_FLAGS
+                or pcc_gc_object_index_seen_stable(obj) != 0):
+            return -1
+        previous = bits
+        tag: int = load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET)
+        if tag == PY_TYPE_LIST:
+            length: int = load_i64(obj, PYLISTOBJECT_LENGTH_OFFSET)
+            capacity: int = load_i64(obj, PYLISTOBJECT_CAPACITY_OFFSET)
+            if (length < 0 or length > capacity or capacity > _CLOSED_YOUNG_SLOT_LIMIT
+                    or (capacity > 0 and ptr_is_null(load_ptr(obj, PYLISTOBJECT_ITEMS_OFFSET)) != 0)):
+                return -1
+        elif tag == PY_TYPE_TUPLE:
+            length = load_i64(obj, PYTUPLEOBJECT_LEN_OFFSET)
+            if length < 0 or length > _CLOSED_YOUNG_SLOT_LIMIT:
+                return -1
+        else:
+            return -1
+        store_i64(marks, index * 8, 0)
+        index = index + 1
+
+    store_i64(cut, _CLOSED_YOUNG_ENQUEUED, 0)
+    store_i64(cut, _CLOSED_YOUNG_INVALID, 0)
+    index = 0
+    while index < root_count:
+        _gc3_closed_young_add(cut, load_ptr(roots, index * 8))
+        index = index + 1
+    index = 0
+    while index < frontier_count:
+        _gc3_closed_young_add(cut, load_ptr(frontier, _CLOSED_FRONTIER_ITEMS + index * 8))
+        index = index + 1
+    visitor = function_addr("pcc_gc3_review_closed_young_slot")
+    index = 0
+    while index < load_i64(cut, _CLOSED_YOUNG_ENQUEUED):
+        if load_i64(cut, _CLOSED_YOUNG_INVALID) != 0:
+            return -1
+        obj = load_ptr(cells, load_i64(queue, index * 8) * 8)
+        if pcc_gc_visit_object_slots(obj, visitor, cut) == 0:
+            return -1
+        index = index + 1
+    if load_i64(cut, _CLOSED_YOUNG_INVALID) != 0:
+        return -1
+
+    validator = function_addr("pcc_gc3_review_validate_reclaim_slot")
+    index = 0
+    while index < count:
+        if load_i64(marks, index * 8) == 0:
+            obj = load_ptr(cells, index * 8)
+            if (pcc_gc_visit_object_slots(obj, validator, cut) == 0
+                    or load_i64(cut, _CLOSED_YOUNG_INVALID) != 0):
+                return -1
+        index = index + 1
+
+    reclaimed: int = 0
+    index = 0
+    while index < count:
+        if load_i64(marks, index * 8) == 0:
+            obj = load_ptr(cells, index * 8)
+            items = null()
+            if load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_LIST:
+                items = load_ptr(obj, PYLISTOBJECT_ITEMS_OFFSET)
+            if pcc_allocator_object_retire_live(obj) != 1:
+                # Validation and retirement share one stopped world.
+                pcc_platform_abort()
+                return -1
+            free(items)
+            free(obj)
+            reclaimed = reclaimed + 1
+        index = index + 1
+    return reclaimed

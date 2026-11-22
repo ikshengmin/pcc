@@ -580,3 +580,26 @@ cards. Frontier exhaustion, an invalid retired token and a non-stopped
 call were separate controls. Medians for the 128-cut batch were 22/23/24
 microseconds; one 1,024-list result took 906 microseconds. These are
 counts for the dirty scanner, not a qualified pause or complete minor.
+
+### Reclaim an explicitly closed young cohort
+
+On review only, a stopped transaction now produces its sparse frontier in
+the same cut, combines it with caller-supplied explicit roots, and closes
+the real strong slots of a sorted exact young cohort. The bounded mark
+and index queue deduplicate cycles. Membership is binary lookup in this
+review vector, not an old-heap scan. Before any reclamation it refuses
+uncovered young roots, an incomplete card frontier and opaque or
+compatibility-owned edges in a dead cell. Only fixture-owned index-
+free exact built-in list/tuple cells are admitted. Retirement clears
+actual allocator provenance and releases cell storage and an owned list
+backing without running user code.
+
+Five Linux x86-64 pcc0/self processes each kept four real young cells
+from a direct rooted cycle and an old dirty edge, retired one real
+unreachable cell, and rejected four incomplete/unsafe cuts without
+reclaiming it. Emitted native closure calls no managed allocation,
+raise or refcount release; compiler polls inside the raw-array walk
+are protected by one no-park lease. The prototype does not discover
+caller stack, mapped, foreign or scheduler roots and is not called by
+an ordinary collector. It uses per-cell retirement, not slab rewind
+or a performance claim.
