@@ -197,9 +197,12 @@ in the relevant section or issue and removes the entry.
    explicit roots and recorded owners and reports only the rescued
    cohort. The reference arm records an instance field's actual writer
    through the normal store transaction and falls back to the full recheck
-   for incomplete coverage; ordinary setters are unchanged. Next #9:
-   exercise the full-recheck reference coordinator on mixed cyclic/acyclic
-   cohorts before considering any bounded policy for production.
+   for incomplete coverage; ordinary setters are unchanged. The inert
+   mixed-graph arm binds the selected head to a fresh stopped cohort,
+   preserving the cyclic leaf's early callback and the acyclic child's
+   rescue or terminal order. Next #9: match the portable event constraints
+   against CPython, including same-target weakref order, before choosing a
+   default sweep policy.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -238,7 +241,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 run the dormant full-recheck coordinator against mixed candidate graphs: Codex, Linux x86-64, 2026-11-22 14:09 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -938,6 +938,28 @@ def pcc_gc_tracing_dispatch_callback_head(target, verdict: i64, stop_epoch: i64)
     return 1
 
 
+@c_abi_export("pcc_gc_tracing_dispatch_classified_head")
+def pcc_gc_tracing_dispatch_classified_head(
+    cohort, count: i64, index: i64, stop_epoch: i64, slots_left: i64
+) -> i64:
+    """Bind dispatch to a current complete cohort instead of a loose verdict.
+
+    The stopped caller supplies unmanaged immutable cohort storage. Return
+    before reseeding roots: the selected pointer must not be on the active
+    dispatch stack during the full recheck. No production caller uses this arm.
+    """
+    if index < 0 or index >= count:
+        return 0
+    verdicts = stack_alloc(_ACYCLIC_MAX_COHORT * _ACYCLIC_WORD)
+    if pcc_gc_tracing_classify_callback_cohort(cohort, count, stop_epoch, slots_left, verdicts) == 0:
+        return 0
+    verdict: i64 = load_i64(verdicts, index * _ACYCLIC_WORD)
+    if verdict != _ACYCLIC_HEAD:
+        return 0
+    target = load_ptr(cohort, index * _ACYCLIC_WORD)
+    return pcc_gc_tracing_dispatch_callback_head(target, verdict, stop_epoch)
+
+
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
 def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     if budget <= 0:

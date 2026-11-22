@@ -368,3 +368,16 @@ stopped-world recheck rescues both objects. The other reference lanes
 still distinguish direct root, old-list publication and newly allocated
 owner. No automatic tracking of ordinary stores, new owners or other
 threads is claimed by the captured lane.
+
+The `mixed` reference lanes put an independent acyclic parent and child
+next to a self-cyclic owner and its acyclic leaf. The runtime binds
+dispatch to classification of the exact stopped cohort, not a verdict
+supplied by the caller. That entry refuses both the acyclic dependent
+and the cycle-retained leaf; the fixture explicitly settles the cyclic
+leaf's weakref before its finalizer. The old epoch cannot dispatch a
+head after that window. A full stopped recheck precedes classification
+and dispatch of the fresh acyclic head. A second full recheck observes
+its resurrection or allows the fixture to settle the terminal child.
+These are per-cohort invariants; no portable total order between
+independent cohorts is claimed. The real sweep still has no caller of
+the reference entry.
