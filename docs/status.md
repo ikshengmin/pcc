@@ -172,13 +172,14 @@ in the relevant section or issue and removes the entry.
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #7, fix the proven
-   typed-string direct return first and turn its valid-input audit into a
-   release regression, retaining the invalid-input control. The
-   [six-case audit](investigations/gc0-direct-boxed-int-accessor-owners.md)
-   executed on Linux pcc0: all matched CPython across GC0–4, but the four
-   field/list cases and valid typed-string case each left one GC0 owner.
-   Do not broaden to unknown attribute/subscript producers.
+   reproduction and acceptance. Platform: any; Next: #7, prove and fix the
+   exact instance-field getter return, with the live alias and detached owner
+   witnesses from the [six-case audit](investigations/gc0-direct-boxed-int-accessor-owners.md).
+   Direct unshadowed `int(text)` of a sole typed string formal now consumes
+   the parser's returned owner, not a redundant retain. The valid result
+   frees and invalid input raises `ValueError`. Linux pcc0: 23 tests matched
+   CPython across GC0–4; 21 related IR controls passed. The field and list
+   cases still leave one owner; do not widen to unknown accessors.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -203,7 +204,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #7 typed-string direct return: Codex, Linux x86-64, 2026-11-22 00:07 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

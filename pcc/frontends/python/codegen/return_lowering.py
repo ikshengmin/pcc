@@ -35,11 +35,11 @@ from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG
 _CSTR = ir.IntType(8).as_pointer()
 
 
-def boxed_int_literal_parse_has_owner(host, fd, value) -> bool:
-    """Prove the actual builtin parser, not a typed or shadowed conversion."""
+def _boxed_int_string_parser_is_builtin(host, fd, value) -> bool:
+    """Prove selection of the owning native string parser."""
     return (
         isinstance(value.ty, IntType) and value.ty.name == "int"
-        and len(value.args) == 1 and isinstance(value.args[0], StrLit)
+        and len(value.args) == 1
         and isinstance(value.args[0].ty, StrType)
         and not fd.is_method and fd.name not in host._hoisted_qualnames
         and not any(arg.name == "int" for arg in fd.args)
@@ -49,6 +49,27 @@ def boxed_int_literal_parse_has_owner(host, fd, value) -> bool:
         and live_import_global_slot(host, "int") is None
         and not getattr(host, "_native_extension_star_module_env", {})
         and not getattr(host, "_cpy_star_module_env", {})
+    )
+
+
+def boxed_int_literal_parse_has_owner(host, fd, value) -> bool:
+    return (_boxed_int_string_parser_is_builtin(host, fd, value)
+            and isinstance(value.args[0], StrLit))
+
+
+def boxed_int_formal_string_parse_has_owner(host, fd, value) -> bool:
+    """A direct single-return callee parses its own typed string parameter."""
+    if not _boxed_int_string_parser_is_builtin(host, fd, value):
+        return False
+    operand = value.args[0]
+    if not isinstance(operand, Name) or len(fd.args) != 1:
+        return False
+    formal = fd.args[0]
+    return (
+        formal.kind in ("pos", "pos_only") and not formal.has_default
+        and formal.name == operand.ident
+        and isinstance(formal.annotation, StrType)
+        and formal.annotation == operand.ty
     )
 
 

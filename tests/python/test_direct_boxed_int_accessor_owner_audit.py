@@ -114,4 +114,6 @@ def test_native_accessor_baseline(
         if record["category"] == "refcount" and record["value1"] == PY_TYPE_INT:
             terminal[record["ptr"]] = (record["event"], record["value0"])
     assert terminal, "missing actual heap-int provenance"
+    if shape in {"parse", "invalid"}:
+        assert set(terminal.values()) == {("free", 0)}, terminal
     (tmp_path / "heap-int-terminal.json").write_text(json.dumps(terminal) + "\n")

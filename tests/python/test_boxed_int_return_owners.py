@@ -329,11 +329,14 @@ def probe(n: int, flag: bool) -> int:
         ("", "int", '"9223372036854775808"', "parse(callback)", False),
         ("def int(text: str) -> int:\n    return 17\n", '',
          '"9223372036854775808"', "parse()", False),
-        ("", "text: str", "text", "parse(text)", False),
+        ("", "text: str", "text", "parse(text)", True),
+        ("", "text: str, int", "text", "parse(text, callback)", False),
+        ("", "text: str, unused: str", "text", "parse(text, text)", False),
     ),
-    ids=("builtin-literal", "formal-shadow", "module-shadow", "typed-input"),
+    ids=("builtin-literal", "formal-shadow", "module-shadow", "typed-input",
+         "typed-formal-shadow", "extra-formal"),
 )
-def test_direct_string_int_owner_requires_the_unshadowed_builtin_literal(
+def test_direct_string_int_owner_requires_the_proven_unshadowed_builtin(
     prefix, formals, value, call, proven,
 ):
     text = _emit(prefix + f"""\
