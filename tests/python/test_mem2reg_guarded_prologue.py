@@ -131,8 +131,8 @@ def test_default_frontend_promotes_slots_after_the_activation_guard(tmp_path):
     assert " = phi i64 " in body
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="owned Darwin arm64 emitter execution")
+# owned Darwin arm64 emitter execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_guard_success_failure_and_loop_paths_execute_before_and_after(tmp_path):
     from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_asm
 

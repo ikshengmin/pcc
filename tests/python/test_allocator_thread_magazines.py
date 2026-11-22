@@ -55,10 +55,8 @@ def test_object_magazines_preserve_accounting_remote_free_and_thread_exit(
         ), repeat
 
 
-@pytest.mark.skipif(
-    sys.platform != "darwin" and not sys.platform.startswith("linux"),
-    reason="the existing freestanding-libc link-map gate targets Darwin/ELF",
-)
+# the existing freestanding-libc link-map gate targets Darwin/ELF
+@pytest.mark.pcc_gate(probe=lambda: sys.platform == "darwin" or sys.platform.startswith("linux"))
 def test_standalone_c_object_allocation_does_not_import_thread_kernel(
     tmp_path, pcc_runtime_archive, monkeypatch,
 ):

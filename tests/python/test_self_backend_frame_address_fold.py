@@ -132,8 +132,8 @@ def test_unmodelled_writeback_invalidates_the_frame():
         assert "  sub x15, x29, #400" in out
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 frame-address execution")
+# native Darwin arm64 frame-address execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_folded_frame_reads_local_above_temporary_call_stack(tmp_path):
     from pcc.backend.macho_exec import link_executable
     from pcc.backend.native_object import decode_native_object

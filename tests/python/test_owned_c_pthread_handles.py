@@ -6,7 +6,8 @@ import pytest
 from tests.owned_c_execution import compile_and_run_owned_c
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="Darwin pthread ABI regression")
+# Darwin pthread ABI regression
+@pytest.mark.pcc_gate(platforms=("darwin",))
 def test_native_pthread_handles_join_every_created_worker():
     result = compile_and_run_owned_c(r'''
 #include <pthread.h>

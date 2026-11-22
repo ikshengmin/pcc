@@ -80,8 +80,8 @@ def sentinel_trampoline():
     return "\n".join(lines) + "\n"
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("indexed", (False, True))
 @pytest.mark.parametrize("registers", ("0", "1"))
 def test_capture_executes_with_live_callee_registers_and_buffer_canaries(

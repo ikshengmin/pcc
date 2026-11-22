@@ -404,9 +404,9 @@ def _check_return_pcs(data):
 
 @pytest.mark.parametrize("name", HELPERS)
 @pytest.mark.parametrize("marked", (False, True, "walked"))
+# Native execution targets Darwin AArch64.
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_gc_short_paths_execute_fast_and_cold_states(tmp_path, name, marked):
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        pytest.skip("native execution targets Darwin AArch64")
     client, support = _fixture(name, marked)
     data = emit_owned_object(client, TARGET)
     _check_return_pcs(data)

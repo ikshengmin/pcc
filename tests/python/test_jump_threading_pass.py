@@ -497,8 +497,8 @@ def test_inlined_predicate_loses_its_boolean_materialization():
     assert "zext i1" not in main
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("passes", [
     ["inline-defined-wide", "instsimplify", "instcombine", "dce"],
     ["inline-defined-wide", "jump-thread", "instsimplify", "instcombine", "dce"],

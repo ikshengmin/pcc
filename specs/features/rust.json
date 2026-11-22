@@ -2450,6 +2450,7 @@
       "scope": "Qualification missing, not implementation missing: string literals (escapes, raw strings, UTF-8) and env! are `&'static str` values: Copy data stored once as private readonly UTF-8 bytes (an empty string still points at a byte) with a private (pointer, length) descriptor, passed and returned as the scalar pair rustc returns in the first two integer registers. The exact type `&'static str` (and `&str` in a const item) is admitted without a checked source because literals are its only source and no borrow of a local can produce one; locals, parameters, returns, tuples, arrays, struct fields and const items may hold it. `&str` with an elided or named lifetime, `&mut str` and borrows keep the checked-source boundary; `==`, `len`, casts and string patterns, which need core, remain explicit gaps. The static_str fixture and the unchanged uv-version root run natively on arm64 Darwin through PCC's own compiler, arm64 assembler and Mach-O linker (local Mac evidence), printing the same bytes as local rustc 1.92.0 builds; the x86-64 Linux path of the same tests is unrun in this change. No schema2 evidence row is migrated.",
       "tests": [
         "tests/rust/test_rust_static_str.py",
+        "tests/rust/test_uv_source_frontier.py::test_uv_version_compiles_for_both_owned_targets@rust-native-reference",
         "tests/rust/test_uv_source_frontier.py::test_uv_version_compiles_and_runs_natively@rust-native-reference"
       ],
       "diagnostics": [],

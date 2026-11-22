@@ -203,8 +203,8 @@ def test_contended_program_emits_the_weaker_exclusive_forms():
         assert needle in body, needle
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_weaker_exclusive_forms_stay_atomic_across_threads(tmp_path):
     data = emit_owned_object(_contended_program(), "arm64-apple-darwin")
     executable = tmp_path / "contended-atomics"

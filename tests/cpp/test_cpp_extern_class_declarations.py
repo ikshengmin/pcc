@@ -188,10 +188,11 @@ def test_inline_tls_dependent_and_block_objects_keep_existing_boundary(source, c
 
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source', VALID, ids=[row[0] for row in VALID])
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_identical_positive_source_real_gcc17(tmp_path, name, source):
     compiler = shutil.which('g++')
     if compiler is None:
-        pytest.skip('G++ reference unavailable; no replacement')
+        pytest.fail('G++ reference unavailable; no replacement')
     path = tmp_path / (name+'.cpp')
     path.write_bytes(source.encode())
     result = subprocess.run([compiler, '-std=c++17', '-pedantic-errors', '-fsyntax-only', str(path)],
@@ -212,10 +213,11 @@ def test_original_tag_separate_tu_needs_no_definition_or_constructor(owned_only)
 
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source,code', INVALID, ids=[row[0] for row in INVALID])
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_identical_conflicting_redeclaration_real_gcc17(tmp_path, name, source, code):
     compiler = shutil.which('g++')
     if compiler is None:
-        pytest.skip('G++ reference unavailable; no replacement')
+        pytest.fail('G++ reference unavailable; no replacement')
     path = tmp_path / (name+'.cpp')
     path.write_bytes(source.encode())
     result = subprocess.run([compiler, '-std=c++17', '-pedantic-errors', '-fsyntax-only', str(path)],
@@ -229,10 +231,11 @@ def test_identical_conflicting_redeclaration_real_gcc17(tmp_path, name, source, 
 @pytest.mark.parametrize('name,source,use',
                          [(name, source, use) for (name, source), use in zip(VALID[:4], ADDRESS_USES)],
                          ids=[row[0] for row in VALID[:4]])
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_identical_odr_address_probe_real_gcc17(tmp_path, name, source, use):
     compiler = shutil.which('g++')
     if compiler is None:
-        pytest.skip('G++ reference unavailable; no replacement')
+        pytest.fail('G++ reference unavailable; no replacement')
     text = source + use
     path = tmp_path / (name+'-address.cpp')
     path.write_bytes(text.encode())

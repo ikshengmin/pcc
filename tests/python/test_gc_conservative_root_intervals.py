@@ -410,8 +410,8 @@ int main(void) {
 '''
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_owned_interval_index_executes_full_build_scan_and_disposal(tmp_path, monkeypatch):
     from pcc.backend.macho_exec import link_executable
     from pcc.backend.owned_object_emit import emit_owned_object

@@ -71,8 +71,8 @@ def test_permuted_or_replaced_inputs_retain_protected_tail_frame(arguments, monk
     assert "  b _callee" in emitted
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="owned Darwin arm64 execution")
+# owned Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("registers", ("0", "1"))
 @pytest.mark.parametrize("optimize", (False, True))
 def test_forwarding_fast_and_slow_paths_execute(tmp_path, monkeypatch, registers, optimize):

@@ -160,10 +160,6 @@ in the relevant section or issue and removes the entry.
   boundary under the pcc1 ownership contract (item 5; open point in the
   [local-model architecture](design/pcc-local-model-architecture.md)). The
   owned device runtime already relies on it.
-- Whether to schedule the existing failure of
-  `tests/test_no_skip_doctrine.py::test_no_executed_skip_mechanism_anywhere`,
-  which reports `unittest.SkipTest` in
-  `scripts/cpython_conformance/support/__init__.py`.
 
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),

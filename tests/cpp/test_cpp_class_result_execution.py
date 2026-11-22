@@ -10,10 +10,9 @@ import pytest
 from tests.cpp.sizeof_execution import execute_row_pair
 
 FIXTURES = Path(__file__).with_name('fixtures') / 'class_result_sysv'
-pytestmark = [pytest.mark.integration, pytest.mark.skipif(
-    not sys.platform.startswith('linux') or platform.machine() not in ('x86_64', 'amd64'),
-    reason='physical transport under test is SysV x86-64 ELF',
-)]
+# The physical transport under test is SysV x86-64 ELF.
+pytestmark = [pytest.mark.integration,
+              pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))]
 
 
 def units(*names):

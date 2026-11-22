@@ -77,8 +77,8 @@ entry:
 ''' + "\n".join(statements) + "\n}\n"
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("width", (8, 16, 32, 64))
 @pytest.mark.parametrize("callee_saved", ("0", "1"))
 def test_atomic_values_survive_calls_branches_and_register_pressure(tmp_path, monkeypatch, width, callee_saved):

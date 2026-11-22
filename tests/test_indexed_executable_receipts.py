@@ -16,6 +16,7 @@ from scripts import ci_native_object_regressions as gate
 from tests.python import indexed_receipt_support as indexed
 from tests.python import owned_regression_support as support
 from tests.test_ci_native_object_regressions import _elf_image_fixture, _program_ir
+from tests.host_capabilities import can_create_symlinks
 
 
 TOKEN = "1234567890abcdef" * 2
@@ -656,7 +657,8 @@ def test_first_failure_rejects_untrusted_fields_at_shell(tmp_path, key, value):
     assert "first_recorded_failure" not in evidence
 
 
-@pytest.mark.parametrize("mutation", ("missing-key", "legacy", "truncated", "oversize", "duplicate", "list", "utf8", "missing", "directory", "symlink"))
+@pytest.mark.parametrize("mutation", ("missing-key", "legacy", "truncated", "oversize", "duplicate", "list", "utf8", "missing", "directory",
+                                      pytest.param("symlink", marks=pytest.mark.pcc_gate(probe=can_create_symlinks))))
 def test_first_failure_rejects_invalid_marker_files(tmp_path, mutation):
     args, failure = _first_failure_inputs(tmp_path)
     path = args[0] / "indexed-capture-failed"
@@ -673,7 +675,7 @@ def test_first_failure_rejects_invalid_marker_files(tmp_path, mutation):
             try:
                 path.symlink_to(target)
             except (OSError, NotImplementedError):
-                pytest.skip("symlinks unavailable")
+                pytest.fail("symlinks unavailable")
     else:
         raw = json.dumps(failure).encode()
         path.write_bytes({"legacy": b"indexed capture failed\n", "truncated": raw[:-1],
@@ -794,7 +796,8 @@ def test_first_failure_marker_exact_byte_limit(tmp_path, size, accepted):
 
 
 @pytest.mark.parametrize("name", ("invocation.json", "module_0.claim.json"))
-@pytest.mark.parametrize("mutation", ("malformed", "oversize", "directory", "symlink"))
+@pytest.mark.parametrize("mutation", ("malformed", "oversize", "directory",
+                                      pytest.param("symlink", marks=pytest.mark.pcc_gate(probe=can_create_symlinks))))
 def test_first_failure_rejects_invalid_identity_files(tmp_path, name, mutation):
     args, _ = _first_failure_inputs(tmp_path)
     path = args[0] / name
@@ -807,7 +810,7 @@ def test_first_failure_rejects_invalid_identity_files(tmp_path, name, mutation):
         try:
             path.symlink_to(target)
         except (OSError, NotImplementedError):
-            pytest.skip("symlinks unavailable")
+            pytest.fail("symlinks unavailable")
     elif mutation == "oversize":
         with path.open("wb") as stream:
             stream.truncate(indexed.LIMIT + 1)

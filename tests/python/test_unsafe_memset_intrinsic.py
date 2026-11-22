@@ -118,8 +118,8 @@ extern long read_order(void);
     return text
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("indexed", (False, True))
 @pytest.mark.parametrize("registers", ("0", "1"))
 def test_memset_return_order_bytes_and_unaligned_boundaries_execute(tmp_path, monkeypatch, indexed, registers):

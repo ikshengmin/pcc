@@ -20,9 +20,9 @@ def test_literal_spelled_ssa_names_keep_their_reference_namespace(name, quoted):
     assert not is_local_value_ref(decode_value_token(name))
 
 
+# Native execution targets Darwin AArch64.
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_native_null_named_condition_preserves_both_edges(tmp_path):
-    if platform.system() != "Darwin" or platform.machine() != "arm64":
-        pytest.skip("native execution targets Darwin AArch64")
     from pcc.backend.macho_exec import link_executable
     from pcc.backend.owned_object_emit import emit_owned_object
 

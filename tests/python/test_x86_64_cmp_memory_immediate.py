@@ -72,7 +72,7 @@ def test_unproven_forms_remain_rejected(instruction):
 @pytest.fixture
 def gnu_as():
     if not sys.platform.startswith('linux') or platform.machine().lower() not in ('x86_64','amd64'):
-        pytest.skip('fixed Linux x86-64 observer')
+        pytest.fail('fixed Linux x86-64 observer')
     assembler = shutil.which('as')
     assert assembler, 'GNU as is required for the Linux x86-64 differential'
     version = subprocess.run([assembler,'--version'],capture_output=True,check=True,timeout=10)
@@ -106,6 +106,7 @@ DIFFERENTIAL = [x[0] for x in ORIGINAL] + [
 
 
 @pytest.mark.parametrize('instruction', DIFFERENTIAL)
+@pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
 def test_identical_original_instruction_against_gnu_as(instruction,tmp_path,gnu_as):
     source = '.intel_syntax noprefix\n.text\n.globl probe\nprobe:\n  '+instruction+'\n'
     asm,obj=tmp_path/'probe.s',tmp_path/'probe.o'

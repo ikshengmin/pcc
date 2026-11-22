@@ -85,8 +85,8 @@ def test_special_frames_keep_separate_adjustments(count, extra, dynamic):
     )
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 frame execution")
+# native Darwin arm64 frame execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_frame_boundaries_restore_all_registers_on_return_and_tail_call(tmp_path, monkeypatch):
     from pcc.backend.macho_exec import link_executable
     from pcc.backend.native_object import decode_native_object
@@ -165,8 +165,8 @@ def test_target_pairing_preserves_every_callee_slot(extra, count):
         assert len(lines) == count - paired
 
 
-@pytest.mark.skipif(platform.machine().lower() not in ("arm64", "aarch64"),
-                    reason="executes AArch64 callee saves")
+# executes AArch64 callee saves
+@pytest.mark.pcc_gate(machines=("arm64", "aarch64"))
 def test_paired_saves_execute_recursive_and_register_pressure_calls():
     result = compile_and_run_owned_c(r'''
         #include <stdio.h>

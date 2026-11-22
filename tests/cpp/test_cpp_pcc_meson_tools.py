@@ -84,7 +84,7 @@ def test_a_real_c_object_links_to_owned_cpp_archive_and_runs(tmp_path, monkeypat
     from pcc.frontends.python.pipeline_targets import host_target_triple
     from pcc.tools.meson_cc import run
     if host_target_triple() != "x86_64-unknown-linux-gnu":
-        pytest.skip("PCC Meson C/C++ provider is currently native Linux x86-64 only")
+        pytest.fail("PCC Meson C/C++ provider is currently native Linux x86-64 only")
     from tests.owned_runtime_c_fixture import admitted_runtime
     archive = admitted_runtime()
     monkeypatch.setenv("PCC_RUNTIME_ARCHIVE", str(archive))

@@ -284,9 +284,21 @@ _start:
     assert originals() == (a, b)
 
 
+def _audited_rustc_is_1_91_1():
+    # The receipt names the installed release; another release is not this
+    # reference and deselects the test instead of skipping it.
+    if not os.environ.get('PCC_RUSTC_INSTALL_RECEIPT'):
+        return False
+    from tests.rust.test_rust_certified_references import toolchain
+    version = toolchain().verbose_version.splitlines()
+    return ('release: 1.91.1' in version
+            and 'commit-hash: ed61e7d7e242494fb7057f2657300d9e77bb4fcb' in version)
+
+
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
 @pytest.mark.pcc_gate(unavailable=NATIVE or actual_check_prerequisite())
+@pytest.mark.pcc_gate(probe=_audited_rustc_is_1_91_1)
 def test_same_glob_and_extern_sources_against_the_audited_rustc_1_91_1(tmp_path):
     from tests.rust.rustc_reference_host import run_reference
     from tests.rust.test_rust_certified_references import toolchain
@@ -295,7 +307,7 @@ def test_same_glob_and_extern_sources_against_the_audited_rustc_1_91_1(tmp_path)
     version = audited.verbose_version.splitlines()
     if ('release: 1.91.1' not in version
             or 'commit-hash: ed61e7d7e242494fb7057f2657300d9e77bb4fcb' not in version):
-        pytest.skip('needs the audited original Rust 1.91.1 toolchain, not another release')
+        pytest.fail('needs the audited original Rust 1.91.1 toolchain, not another release')
     rustc = audited.root / 'bin/rustc'
     assert sha256(rustc.read_bytes()).hexdigest() == audited.compiler_sha256
     env = _reference_environment(os.environ, None, windows=False)

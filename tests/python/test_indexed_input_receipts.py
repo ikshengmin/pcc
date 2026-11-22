@@ -14,6 +14,7 @@ from pcc.backend.self_backend_indexed_codec import (
 )
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.backend.self_backend_parse import parse_self_backend_module
+from tests.host_capabilities import can_create_symlinks
 
 
 TARGET = "x86_64-unknown-linux-gnu"
@@ -437,12 +438,13 @@ def test_fixed_publication_reservation_rejects_concurrent_writer(tmp_path, monke
     assert json.loads(path.read_text()) == {"writer": 1}
 
 
+@pytest.mark.pcc_gate(probe=can_create_symlinks)
 def test_metadata_rejects_dangling_final_symlink(tmp_path):
     path = tmp_path / "receipt.json"
     try:
         path.symlink_to(tmp_path / "missing")
     except (OSError, NotImplementedError):
-        pytest.skip("host cannot create test symlinks")
+        pytest.fail("host cannot create test symlinks")
     with pytest.raises(ValueError, match="already exists"):
         receipts._write_json(str(path), {"writer": 1})
     assert path.is_symlink()
@@ -890,6 +892,7 @@ def test_first_failure_never_repairs_existing_marker(tmp_path, monkeypatch, prio
     assert marker.read_bytes() == prior
 
 
+@pytest.mark.pcc_gate(probe=can_create_symlinks)
 def test_first_failure_does_not_follow_marker_symlink(tmp_path, monkeypatch):
     dump, _sources, _names, _contexts = setup(tmp_path, monkeypatch)
     destination = tmp_path / "private"
@@ -898,7 +901,7 @@ def test_first_failure_does_not_follow_marker_symlink(tmp_path, monkeypatch):
     try:
         marker.symlink_to(destination)
     except OSError:
-        pytest.skip("host cannot create symlinks")
+        pytest.fail("host cannot create symlinks")
     receipts._poison(receipts._failure_state("invocation"), ValueError("later"))
     assert marker.is_symlink() and destination.read_bytes() == b"unchanged"
 
@@ -1359,6 +1362,7 @@ def test_capture_global_flags_cannot_hide_oversize_values(
 
 
 @pytest.mark.parametrize("target_exists", [False, True])
+@pytest.mark.pcc_gate(probe=can_create_symlinks)
 def test_metadata_rejects_final_symlink_before_inventory(tmp_path, monkeypatch, target_exists):
     path = tmp_path / "receipt.json"
     target = tmp_path / "destination"
@@ -1367,7 +1371,7 @@ def test_metadata_rejects_final_symlink_before_inventory(tmp_path, monkeypatch, 
     try:
         path.symlink_to(target)
     except (OSError, NotImplementedError):
-        pytest.skip("host cannot create test symlinks")
+        pytest.fail("host cannot create test symlinks")
 
     def forbidden(directory):
         raise AssertionError("occupied final destination reached inventory")

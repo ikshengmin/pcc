@@ -516,7 +516,8 @@ def test_producer_snapshot_and_live_tool_map_include_identical_sampler_identity(
     ).hexdigest()
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX compile-window sampler contract")
+# POSIX compile-window sampler contract
+@pytest.mark.pcc_gate(probe=lambda: os.name != "nt")
 def test_frozen_producer_sampler_imports_without_repository_or_site_paths(tmp_path):
     ab = _load("run_pcc_compile_ab")
     stage1 = _load("run_pcc_stage1_build")
@@ -535,7 +536,8 @@ def test_frozen_producer_sampler_imports_without_repository_or_site_paths(tmp_pa
     assert "--preserve-worker-budget" in result.stdout
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX compile-window sampler contract")
+# POSIX compile-window sampler contract
+@pytest.mark.pcc_gate(probe=lambda: os.name != "nt")
 @pytest.mark.parametrize("entry", ["bootstrap.py", "run_process_tree_sample.py"])
 def test_frozen_source_support_imports_from_its_own_closure(tmp_path, entry):
     ab = _load("run_pcc_compile_ab")

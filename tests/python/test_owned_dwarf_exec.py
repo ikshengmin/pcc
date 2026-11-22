@@ -19,11 +19,12 @@ from pcc.backend.macho_exec import link_executable, link_prepared_executable
 from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
 from pcc.backend.self_backend_parse import parse_self_backend_module
 from tests.python.test_macho_windowed_parity import _budget, _write_pcos
-from tests.python.test_owned_dwarf import _dump
+from tests.python.test_owned_dwarf import NEEDS_DWARFDUMP, NEEDS_LLDB, _dump
 from tests.python.test_owned_source_debug_info import program
 
-pytestmark = pytest.mark.skipif(sys.platform != 'darwin' or platform.machine() != 'arm64',
-                                reason='native Darwin arm64 debugger acceptance')
+# Native Darwin arm64 debugger acceptance; every test reads its image with dwarfdump.
+pytestmark = [pytest.mark.pcc_gate(platforms=('darwin',), machines=('arm64',)),
+              NEEDS_DWARFDUMP]
 
 
 def _units(tmp_path, *, bss=False):
@@ -97,10 +98,11 @@ def test_windowed_prepared_debug_executable_matches_normal_and_runs(tmp_path, st
             host.close_staged_source_rows(pending.pop())
 
 
+@NEEDS_LLDB
 def test_lldb_hits_source_breakpoint_steps_and_unwinds_real_owned_executable(tmp_path):
     debugger = shutil.which('lldb')
     if debugger is None:
-        pytest.skip('LLDB unavailable')
+        pytest.fail('LLDB unavailable')
     path = _run_image(tmp_path, link_executable(_units(tmp_path)))
     result = subprocess.run([
         debugger, '-b', '-o', 'settings set target.disable-aslr false',
@@ -118,6 +120,7 @@ def test_lldb_hits_source_breakpoint_steps_and_unwinds_real_owned_executable(tmp
     assert 'exited with status = 42' in result.stdout
 
 
+@NEEDS_LLDB
 def test_real_python_source_runs_on_five_collectors_and_hits_native_breakpoint(
     tmp_path, monkeypatch, pcc_runtime_archive,
 ):
@@ -125,7 +128,7 @@ def test_real_python_source_runs_on_five_collectors_and_hits_native_breakpoint(
     from pcc.frontends.python.pipeline import compile_python
     debugger = shutil.which('lldb')
     if debugger is None:
-        pytest.skip('LLDB unavailable')
+        pytest.fail('LLDB unavailable')
     source = tmp_path / 'debuggee.py'
     text = 'def add(a, b):\n    total = a + b\n    return total\n\nprint(add(3, 4))\n'
     source.write_text(text)

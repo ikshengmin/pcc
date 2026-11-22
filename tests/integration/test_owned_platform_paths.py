@@ -11,7 +11,8 @@ import pytest
 
 from tests.integration.test_owned_platform_native import compile_run, native_compiler
 
-pytestmark = [pytest.mark.integration, pytest.mark.skipif(os.name != "nt", reason="Windows path ABI")]
+# Windows path ABI.
+pytestmark = [pytest.mark.integration, pytest.mark.pcc_gate(platforms=("win32",))]
 
 
 def test_native_windows_component_paths(native_compiler, tmp_path):

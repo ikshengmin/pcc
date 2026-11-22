@@ -6868,8 +6868,8 @@ loop:
     assert lines[-1] == "  add sp, sp, #16"
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_aarch64_float_cycle_after_ready_copies_keeps_direct_records(tmp_path):
     """An edge whose integer copies are ready before its floating-point swap.
 

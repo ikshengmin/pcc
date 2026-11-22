@@ -60,13 +60,13 @@ NON_TYPE_BOUNDARY = (
 
 def _host():
     if sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'):
-        pytest.skip('Linux x86_64 only')
+        pytest.fail('Linux x86_64 only')
 
 
 def _compiler():
     compiler = shutil.which('g++')
     if compiler is None:
-        pytest.skip('actual G++ unavailable; no substitute')
+        pytest.fail('actual G++ unavailable; no substitute')
     return compiler
 
 
@@ -105,6 +105,8 @@ def test_non_type_collision_keeps_explicit_unsupported():
 
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source', POSITIVE, ids=[r[0] for r in POSITIVE])
+@pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_identical_source_owned_and_gcc17_return42(tmp_path, monkeypatch, name, source):
     _host()
     compiler = _compiler()
@@ -137,6 +139,8 @@ def test_identical_source_owned_and_gcc17_return42(tmp_path, monkeypatch, name, 
 
 @pytest.mark.integration
 @pytest.mark.parametrize('name,source,code', INVALID, ids=[r[0] for r in INVALID])
+@pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_same_invalid_source_gcc17_rejects(tmp_path, name, source, code):
     _host()
     path = tmp_path / (name + '.cpp')
@@ -151,6 +155,8 @@ def test_same_invalid_source_gcc17_rejects(tmp_path, name, source, code):
 
 
 @pytest.mark.integration
+@pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))
+@pytest.mark.pcc_gate(probe=lambda: shutil.which('g++') is not None)
 def test_non_type_collision_is_not_a_semantic_negative(tmp_path):
     _host()
     units = (('non_type.cpp', NON_TYPE_BOUNDARY),)

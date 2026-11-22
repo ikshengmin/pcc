@@ -66,7 +66,8 @@ def reference_compiler():
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(reference_compiler() is None, reason="no reference C compiler")
+# no reference C compiler
+@pytest.mark.pcc_gate(probe=lambda: reference_compiler() is not None)
 @pytest.mark.parametrize("name", PROGRAMS)
 def test_empty_template_asm_matches_the_reference_compiler(name, tmp_path):
     unit = tmp_path / "original.c"

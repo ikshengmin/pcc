@@ -246,7 +246,8 @@ def _run(binary, backend):
                           env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="native Darwin execution")
+# native Darwin execution
+@pytest.mark.pcc_gate(platforms=("darwin",))
 def test_method_calls_match_cpython_on_every_collector(tmp_path, pcc_runtime_archive):
     source, binary = _compile(tmp_path, "method_vector_call", SEMANTIC_PROGRAM, pcc_runtime_archive)
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
@@ -257,7 +258,8 @@ def test_method_calls_match_cpython_on_every_collector(tmp_path, pcc_runtime_arc
         assert (run.returncode, run.stdout, run.stderr) == (0, expected.stdout, ""), backend
 
 
-@pytest.mark.skipif(sys.platform != "darwin", reason="native Darwin execution")
+# native Darwin execution
+@pytest.mark.pcc_gate(platforms=("darwin",))
 def test_vector_method_call_allocates_no_argument_tuple(tmp_path, pcc_runtime_archive):
     _source, binary = _compile(tmp_path, "method_vector_allocations", ALLOCATION_PROGRAM,
                                pcc_runtime_archive)

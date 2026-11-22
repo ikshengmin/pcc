@@ -66,7 +66,8 @@ def test_cached_roots_still_probe_the_filesystem(monkeypatch, tmp_path):
     assert str(site) in after
 
 
-@pytest.mark.skipif(os.name == "nt", reason="Windows forbids U+001F in directory names")
+# Windows forbids U+001F in directory names
+@pytest.mark.pcc_gate(probe=lambda: os.name != "nt")
 def test_resolver_switches_between_environments_with_the_same_flat_key(monkeypatch, tmp_path):
     project = tmp_path / "project"
     project.mkdir()

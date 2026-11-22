@@ -131,8 +131,8 @@ def test_tls_address_rejects_non_tls_or_non_global_operands(target, operand):
         emit_owned_object(text, target)
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("indexed", (False, True))
 @pytest.mark.parametrize("registers", ("0", "1"))
 def test_tls_address_values_survive_calls_and_remain_thread_local(tmp_path, monkeypatch, indexed, registers):

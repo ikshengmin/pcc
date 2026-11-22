@@ -39,8 +39,8 @@ int main(void) {
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="the existing reporter IR harness selects Darwin arm64")
+# the existing reporter IR harness selects Darwin arm64
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_status_reporter_releases_constructor_owner_native(tmp_path, pcc_runtime_archive):
     from pcc.backend.owned_object_emit import emit_owned_object
     from pcc.frontends.python.pipeline import _run_self_link_command
