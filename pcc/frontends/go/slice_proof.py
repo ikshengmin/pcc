@@ -665,3 +665,50 @@ def static_catalog_index_places(statement, slot, fields):
         if not all(expression(expr) for expr in (*node.exprs, *node.targets)):
             return None
     return tuple(places)
+
+
+def static_catalog_copied_fields(statement, slot, scalar_fields, feature):
+    """The copied record is readable only by scalar fields or immediate *Feature."""
+    if (statement.kind != "range" or not statement.range_declaration
+            or len(statement.targets) != 2 or len(statement.names) != 2
+            or not _name(statement.targets[0], "_") or statement.targets[1].kind != "name"
+            or statement.targets[1].value in {"_", slot, "print", "println"}):
+        return None
+    token = statement.names[1]
+    records = []
+
+    def selector(expr):
+        return expr.kind == "selector" and len(expr.args) == 1 and _name(expr.args[0], token.text)
+
+    def expression(expr):
+        if _name(expr, token.text) or _name(expr, slot) or expr.kind == "func_literal":
+            return False
+        if selector(expr):
+            if expr.value not in scalar_fields:
+                return False
+            records.append((expr, False))
+            return True
+        if expr.kind == "unary" and expr.value == "*" and len(expr.args) == 1:
+            pointer = expr.args[0]
+            if selector(pointer) and pointer.value == feature:
+                records.append((pointer, True))
+                return True
+        if expr.kind == "unary" and expr.value == "&" and _mentions(expr, token.text):
+            return False
+        if expr.kind == "call":
+            if not (_builtin_call(expr, "print") or _builtin_call(expr, "println")):
+                return False
+            return all(expression(arg) for arg in expr.args)
+        return all(expression(child) for child in _expression_children(expr))
+
+    for node in walk(statement.body):
+        if node.kind not in {"var", "const", ":=", "=", "++", "--", "if", "block", "break",
+                             "continue", "return", "expression", "empty"}:
+            return None
+        if any(item.text in {slot, token.text, "print", "println"} for item in node.names):
+            return None
+        if any(selector(target) for target in node.targets):
+            return None
+        if not all(expression(expr) for expr in (*node.exprs, *node.targets)):
+            return None
+    return token, tuple(records)

@@ -71,6 +71,7 @@ class Symbol:
     # The owned runtime object a //go:linkname directive bound, if any.
     linkname: object = None
     static_option_catalog_proof: object = None
+    static_catalog_copy: object = None
 
 
 def integer_literal(expr):
@@ -450,7 +451,9 @@ def validate_value_types(program, *, source_only=False):
             # Marked only at a specific borrow consumer, not on general loads.
             borrow_span(expr)
         elif expr.kind != "type" and not (
-                source_only and expr.kind in {"static_catalog_range", "static_catalog_index"}):
+                source_only and expr.kind in {
+                    "static_catalog_range", "static_catalog_index", "static_catalog_copy_value",
+                }):
             storage(expr.type, expr.token)
         for child in expr.args:
             expression(child)
@@ -459,7 +462,8 @@ def validate_value_types(program, *, source_only=False):
 
     def statement(stmt):
         for symbol in stmt.symbols:
-            if not (source_only and symbol.package_variable and symbol.static_option_catalog_proof is not None):
+            if not (source_only and (symbol.static_catalog_copy is not None
+                                     or symbol.package_variable and symbol.static_option_catalog_proof is not None)):
                 storage(symbol.type, symbol.token)
         for expr in stmt.exprs + stmt.targets:
             expression(expr)
@@ -483,7 +487,7 @@ def validate_value_types(program, *, source_only=False):
         for symbol in function.locals + function.result_symbols:
             if symbol.variadic_formal:
                 require_variadic_element(symbol.type, symbol.token)
-            else:
+            elif not (source_only and symbol.static_catalog_copy is not None):
                 storage(symbol.type, symbol.token)
         for expr in function.temporaries:
             expression(expr)
@@ -542,6 +546,9 @@ class Analyzer:
         self.scalar_slice_owners = {}
         self.static_option_catalogs = {}
         self.static_catalog_places = {}
+        self.static_catalog_copy_token = None
+        self.static_catalog_copy_catalog = None
+        self.static_catalog_copy_fields = {}
         if static_option_catalogs and not source_only:
             raise ValueError("static option catalog metadata is source-only")
         if static_option_catalogs:
@@ -1237,7 +1244,7 @@ class Analyzer:
         uncaught panic reports Error() of the runtime object, the fixed text
         of runtime/panic.go, so no interface value is materialized.
         """
-        if symbol.static_option_catalog_proof is not None:
+        if symbol.static_option_catalog_proof is not None or symbol.static_catalog_copy is not None:
             raise UnsupportedGo(expr.token, 'go.unsupported.slice-storage',
                                 "proved global record slice needs owned initialization and consumer storage")
         if getattr(symbol, 'linkname', None) is None:
@@ -1325,7 +1332,8 @@ class Analyzer:
         return self.source_only and proof is not None and proof.owner == name
 
     def declare(self, token, dtype, constant=None):
-        if not (dtype == SliceType("uintptr") and self.scalar_owner_local(token.text)):
+        catalog = self.static_catalog_copy_catalog if token is self.static_catalog_copy_token else None
+        if not (dtype == SliceType("uintptr") and self.scalar_owner_local(token.text)) and catalog is None:
             require_value_type(dtype, token)
         self.check_name(token, local_value=True)
         if len(self.scopes) == 1 and token.text in self.type_bindings:
@@ -1333,7 +1341,8 @@ class Analyzer:
         if token.text != "_" and token.text in self.scopes[-1]:
             raise GoDiagnostic(token, "redeclaration in this block: " + token.text)
         symbol = Symbol(token, dtype, constant=constant, depth=len(self.scopes),
-                        iteration_binding=self.iteration_binding or self.branches.reentered(token))
+                        iteration_binding=self.iteration_binding or self.branches.reentered(token),
+                        static_catalog_copy=catalog)
         if token.text != "_":
             self.scopes[-1][token.text] = symbol
         if constant is None:
@@ -1651,9 +1660,9 @@ class Analyzer:
             ranged = statement.exprs[0]
             # Resolve the range expression before declaring the iteration
             # variables: `for a := range a` reads the enclosing a.
-            catalog, places = None, None
+            catalog, places, copied = None, None, None
             if ranged.kind == "name" and ranged.token.text in self.static_option_catalogs:
-                from pcc.frontends.go.slice_proof import static_catalog_index_places
+                from pcc.frontends.go.slice_proof import static_catalog_copied_fields, static_catalog_index_places
 
                 symbol = self.lookup(ranged.token)
                 if symbol.static_option_catalog_proof is not None:
@@ -1661,7 +1670,10 @@ class Analyzer:
                     fields = {field.name for field in record.fields
                               if not field.embedded and field.type in ("bool", "string")}
                     places = static_catalog_index_places(statement, ranged.token.text, fields)
-                    if places is not None:
+                    feature = [field.name for field in record.fields if field.type == PointerType("bool")]
+                    if places is None and len(feature) == 1:
+                        copied = static_catalog_copied_fields(statement, ranged.token.text, fields, feature[0])
+                    if places is not None or copied is not None:
                         catalog = symbol
                         ranged.kind, ranged.type, ranged.symbol = "static_catalog_range", symbol.type, symbol
             if catalog is None:
@@ -1703,7 +1715,7 @@ class Analyzer:
                 value_types = ("int", array_type.element)
             elif catalog is not None:
                 statement.evaluate_range = True
-                value_types = ("int",)
+                value_types = ("int",) if copied is None else ("int", dtype.element)
             elif isinstance(dtype, SliceType):
                 borrow_span(ranged)
                 if len(statement.targets) > 2:
@@ -1727,17 +1739,29 @@ class Analyzer:
                 statement.init = Stmt(":=" if statement.range_declaration else "=", statement.token,
                                       exprs=values, names=statement.names, targets=statement.targets)
                 self.iteration_binding = True
-                self.statement(statement.init)
-                self.iteration_binding = False
+                if copied is not None:
+                    values[1].kind = "static_catalog_copy_value"
+                    self.static_catalog_copy_token, self.static_catalog_copy_catalog = copied[0], catalog
+                try:
+                    self.statement(statement.init)
+                finally:
+                    self.static_catalog_copy_token = self.static_catalog_copy_catalog = None
+                    self.iteration_binding = False
             self.loop_depth += 1
             self.break_depth += 1
             previous_places = self.static_catalog_places
+            previous_fields = self.static_catalog_copy_fields
             if places is not None:
                 self.static_catalog_places = {**previous_places, **{id(place): catalog for place in places}}
+            if copied is not None:
+                self.static_catalog_copy_fields = {
+                    **previous_fields, **{id(field): is_pointer for field, is_pointer in copied[1]},
+                }
             try:
                 self.statements(statement.body)
             finally:
                 self.static_catalog_places = previous_places
+                self.static_catalog_copy_fields = previous_fields
             self.break_depth -= 1
             self.loop_depth -= 1
             self.scopes.pop()
@@ -2080,6 +2104,26 @@ class Analyzer:
             return
         if kind == "selector":
             base = expr.args[0]
+            if id(expr) in self.static_catalog_copy_fields:
+                symbol = self.lookup(base.token)
+                catalog = symbol.static_catalog_copy
+                if catalog is None:
+                    raise GoDiagnostic(base.token, "catalog copy no longer names its range binding")
+                symbol.used = True
+                record = underlying(symbol.type)
+                index, field = next((i, field) for i, field in enumerate(record.fields)
+                                    if field.name == expr.value)
+                expr.type, expr.symbol, expr.indices = field.type, symbol, [index]
+                if self.static_catalog_copy_fields[id(expr)]:
+                    names = tuple(dict.fromkeys(owner for owner, _ in catalog.static_option_catalog_proof.feature_fields))
+                    expr.kind = "static_catalog_feature"
+                    expr.catalog_pointees = tuple(self.globals[name] for name in names)
+                else:
+                    expr.kind = "static_catalog_scalar"
+                # The proved pointer fact comes from the package field source,
+                # never from an address into the copied record's local frame.
+                expr.args = []
+                return
             bindings = self.imports.get(expr.token.filename, {})
             local = base.kind == "name" and (any(base.value in scope for scope in self.scopes) or base.value in self.type_bindings)
             if base.kind == "name" and base.value in bindings and not local:

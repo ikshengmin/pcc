@@ -251,7 +251,9 @@ func main() {}
 
 def test_static_catalog_index_range_checks_scalar_fields_before_storage_stop():
     from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.pointer_flow import validate_pointer_flow
     from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.syntax import Program
     from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
 
     request = StaticOptionCatalogRequest("catalog", "build", "hardware")
@@ -269,6 +271,7 @@ def test_static_catalog_index_range_checks_scalar_fields_before_storage_stop():
     assert lhs.type == "string" and lhs.args[0].kind == "static_catalog_index"
     write = condition.body[0].targets[0]
     assert write.type == "bool" and write.addressable and write.args[0].kind == "static_catalog_index"
+    validate_pointer_flow(Program(checker.program.token, [checker.functions["use"]], []))
 
 
 @pytest.mark.parametrize("replacement", [
@@ -292,4 +295,61 @@ def test_static_catalog_index_range_rejects_aliases_and_changed_indices(replacem
                         ))
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
         analyzer.analyze()
+    assert caught.value.line == 7
+
+
+CATALOG_COPY_SOURCE = CATALOG_RANGE_SOURCE.replace(
+    """    for i := range catalog {
+        if catalog[i].Label == key { catalog[i].Enabled = true }
+    }""",
+    """    for _, item := range catalog {
+        if item.Enabled && !*item.Flag { print(item.Label) }
+        *item.Flag = item.Enabled
+    }""",
+)
+
+
+def test_static_catalog_copy_preserves_pointee_proof_without_materializing_record():
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.pointer_flow import validate_pointer_flow
+    from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+    from pcc.frontends.go.syntax import Program
+
+    units = (("catalog_copy.go", CATALOG_COPY_SOURCE),)
+    proof = StaticOptionCatalogRequest("catalog", "build", "hardware")
+    checker = Analyzer(parse_package(units, require_main=True), source_only=True,
+                       static_option_catalogs=(proof,))
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
+        checker.analyze()
+    assert caught.value.line == 13
+    consumer = checker.functions["use"]
+    loop = consumer.body[0]
+    assert loop.init.symbols[1].static_catalog_copy is checker.globals["catalog"]
+    target = loop.body[1].targets[0]
+    assert target.kind == "dereference"
+    address = target.args[0]
+    assert address.kind == "static_catalog_feature"
+    assert address.catalog_pointees == (checker.globals["Flags"],)
+    validate_pointer_flow(Program(checker.program.token, [consumer], []))
+
+
+@pytest.mark.parametrize("bad", [
+    "_ = item",
+    "_ = item.Flag",
+    "item.Flag = nil",
+    "_ = &item.Enabled",
+    "*item.Flag = true; item = Item{}",
+    "touch(item)",
+])
+def test_static_catalog_copy_proof_never_allows_pointer_or_record_escape(bad):
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+
+    text = CATALOG_COPY_SOURCE.replace("*item.Flag = item.Enabled", bad)
+    checker = Analyzer(parse_package((("catalog_copy.go", text),), require_main=True), source_only=True,
+                       static_option_catalogs=(StaticOptionCatalogRequest("catalog", "build", "hardware"),))
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
+        checker.analyze()
     assert caught.value.line == 7

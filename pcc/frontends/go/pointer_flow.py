@@ -288,6 +288,10 @@ class PointerFlow:
         if expr.kind == 'field':
             fact = static_scalar_field_fact(expr)
             return fact if fact is not None else self.address(expr.args[0], state, check, saved)
+        if expr.kind == 'static_catalog_index':
+            base, index = expr.args
+            self.evaluate(index, state, check, saved)
+            return PointerFact(NONNULL, frozenset({StaticLifetime(base.symbol)}))
         if expr.kind == 'index':
             base, index = expr.args
             if base.addressable:
@@ -310,6 +314,8 @@ class PointerFlow:
         kind = expr.kind
         if kind == 'nil':
             return NULL
+        if kind == 'static_catalog_feature':
+            return PointerFact(NONNULL, frozenset(StaticLifetime(symbol) for symbol in expr.catalog_pointees))
         if kind == 'address':
             return self.address(expr.args[0], state, check, saved)
         if kind == 'dereference':

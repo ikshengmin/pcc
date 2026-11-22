@@ -712,3 +712,14 @@ type-check. The exact source probe stops at the copied-element range
 in `internal/cpu/cpu.go:273:20`, which also needs the Feature pointee
 origin. Sixty-nine adjacent plus 35 existing native/reference checks
 passed; the catalog itself is still not emitted.
+
+The copied-element catalog range now checks its scalar reads and its
+immediate Feature dereferences. Pointer-flow validation retains the
+proved package bool owners rather than inventing an address in the
+copy's local frame. Pointer extraction, copied record escape, field
+replacement and taking an address in the copy all remain unadmitted.
+The earlier indexed places also survive pointer-flow validation.
+The exact source-instance probe advances to dynamic string byte
+indexing in `internal/cpu/cpu.go:293:8`. One hundred twenty-nine
+adjacent and 57 existing native/reference tests passed. The catalog,
+its global initialization and whole upstream execution remain unbuilt.

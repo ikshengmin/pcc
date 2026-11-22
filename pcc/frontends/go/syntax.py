@@ -345,6 +345,7 @@ class Expr:
     variadic_use: bool = False
     variadic_mode: str | None = None
     pack_count: int = 0
+    catalog_pointees: tuple = ()
 
 
 @dataclass
