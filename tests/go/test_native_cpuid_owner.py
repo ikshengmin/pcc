@@ -42,6 +42,13 @@ def test_xgetbv_binding_stays_tied_to_original_guarded_declaration_and_body():
         emit_locked_xgetbv(declarations.replace(b"if X86.HasOSXSAVE", b"if true"), body, target=DEFAULT_TARGET)
 
 
+def test_goamd64_level_owner_requires_the_selected_build_level_not_host_features():
+    from pcc.frontends.go.native_cpu import emit_locked_goamd64_level
+
+    with pytest.raises(GoSourcePlanError, match="GOAMD64"):
+        emit_locked_goamd64_level(SOURCE.read_bytes(), ASSEMBLY.read_bytes(), target=DEFAULT_TARGET, level="v2")
+
+
 def test_source_instance_accepts_exact_owned_signature_only():
     from pcc.frontends.go import UnsupportedGo
     from pcc.frontends.go.native_cpu import source_cpuid_binding
@@ -226,3 +233,47 @@ func main() {
     got, want = run(owned), run(reference)
     assert got == want and got.returncode == 0 and len(got.stdout) == 16 and got.stderr == b""
     (tmp_path / "executed-xgetbv.txt").write_text(str(got.stdout[8]) + "\n")
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_goamd64_v1_owner_matches_original_four_byte_result(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from pcc.frontends.go.native_cpu import emit_locked_goamd64_level
+
+    symbol = function_symbol("getGOAMD64level", "internal/cpu")
+    start = f""".intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 16
+  call {symbol}
+  mov DWORD PTR [rsp], eax
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 4
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        obj = emit_locked_goamd64_level(SOURCE.read_bytes(), ASSEMBLY.read_bytes(), target=DEFAULT_TARGET, level="v1")
+        image = link_static_executable([assemble_file(start), obj], entry="_start")
+    owned = tmp_path / "owned"
+    owned.write_bytes(image)
+    owned.chmod(0o700)
+    reference = _original_asm_control(tmp_path, """package main
+import ("os"; "encoding/binary")
+func getGOAMD64level() int32
+func main() {
+  var raw [4]byte
+  binary.LittleEndian.PutUint32(raw[:],uint32(getGOAMD64level()))
+  if n,err:=os.Stdout.Write(raw[:]); n!=len(raw)||err!=nil { panic("write") }
+}
+""")
+    got, want = run(owned), run(reference)
+    assert got == want and got.returncode == 0 and got.stdout == b"\x01\x00\x00\x00" and got.stderr == b""

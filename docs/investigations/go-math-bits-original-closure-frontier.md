@@ -440,3 +440,15 @@ branch marker) on Linux. The original source guard cannot be edited
 under this owner. The real graph advances to `getGOAMD64level`,
 `cpu_x86.go:18:6`. Seventy-one scoped checks and two raw native
 assembly comparisons passed, without linking the original package.
+
+The immutable source plan now retains its checked GOAMD64 selection.
+The third native CPU symbol uses the pinned v1 preprocessor branch
+and rejects a different requested setting; it does not query the host.
+Its four native output bytes match official Go assembling the same
+original under GOAMD64=v1. Sixty-two scoped and three original-assembly
+native comparisons passed. The real graph verifies all three objects
+and now stops in `appendBytes(b []byte, args ...uint32) []byte`
+(`cpu_x86.go:272:20`). `Name` reserves 48 bytes, performs three
+16-byte appends and returns a string conversion; slice aliasing,
+capacity, return lifetime and string ownership remain separate from
+the assembly objects.

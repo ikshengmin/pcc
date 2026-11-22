@@ -99,6 +99,7 @@ class LockedGoSourcePlan:
     """Immutable snapshot from load_go_source_plan. No tool paths or file handles."""
     release: str
     target: str
+    goamd64: str
     lock_sha256: str
     roots: tuple
     packages: object
@@ -108,9 +109,9 @@ class LockedGoSourcePlan:
         raise TypeError('use load_go_source_plan with original release bytes and a trusted digest')
 
     @classmethod
-    def _snapshot(cls, release, expected, roots, packages, files):
+    def _snapshot(cls, release, goamd64, expected, roots, packages, files):
         value=object.__new__(cls)
-        for name,field in (('release',release),('target',TARGET['triple']),('lock_sha256',expected),
+        for name,field in (('release',release),('target',TARGET['triple']),('goamd64',goamd64),('lock_sha256',expected),
                            ('roots',tuple(roots)),('packages',MappingProxyType(packages)),
                            ('original_files',MappingProxyType(files)),('_validated',_VERIFIED_SOURCE)):
             object.__setattr__(value,name,field)
@@ -257,4 +258,4 @@ def load_go_source_plan(directory, lock_bytes, *, expected_sha256):
         os.close(rootfd)
     if not original['VERSION'].splitlines() or original['VERSION'].splitlines()[0]!=data['release'].encode():
         _bad('original VERSION does not match locked Go release')
-    return LockedGoSourcePlan._snapshot(data['release'],expected_sha256,roots,tree,original)
+    return LockedGoSourcePlan._snapshot(data['release'],data['target']['goamd64'],expected_sha256,roots,tree,original)

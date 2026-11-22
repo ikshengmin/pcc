@@ -85,18 +85,38 @@ def emit_locked_xgetbv(declarations, assembly, *, target):
 """)
 
 
-def source_cpuid_binding(declarations, assembly, *, target):
-    """Prove the source has a real owned object, without linking it."""
-    data = emit_relocatable(emit_locked_cpuid(declarations, assembly, target=target))
-    return NativeFunctionBinding(function_symbol("cpuid", CPUID_PACKAGE), target,
-                                 ("uint32",) * 2, ("uint32",) * 4,
+def emit_locked_goamd64_level(declarations, assembly, *, target, level):
+    """Emit the build-selected branch, never a host-detected CPU setting."""
+    _verify_cpu_source(declarations, assembly, target, "GOAMD64")
+    if level != "v1":
+        raise GoSourcePlanError("Go GOAMD64 native owner requires the verified v1 build setting")
+    name = function_symbol("getGOAMD64level", CPUID_PACKAGE)
+    return assemble_file(f""".intel_syntax noprefix
+.text
+.globl {name}
+.type {name}, @function
+{name}:
+    mov eax, 1
+    ret
+.size {name}, .-{name}
+""")
+
+
+def _source_binding(name, obj, target, parameters, results):
+    data = emit_relocatable(obj)
+    return NativeFunctionBinding(function_symbol(name, CPUID_PACKAGE), target, parameters, results,
                                  hashlib.sha256(data).hexdigest())
 
 
+def source_cpuid_binding(declarations, assembly, *, target):
+    """Prove the source has a real owned object, without linking it."""
+    return _source_binding("cpuid", emit_locked_cpuid(declarations, assembly, target=target), target,
+                           ("uint32",) * 2, ("uint32",) * 4)
+
+
 def source_xgetbv_binding(declarations, assembly, *, target):
-    data = emit_relocatable(emit_locked_xgetbv(declarations, assembly, target=target))
-    return NativeFunctionBinding(function_symbol("xgetbv", CPUID_PACKAGE), target,
-                                 (), ("uint32",) * 2, hashlib.sha256(data).hexdigest())
+    return _source_binding("xgetbv", emit_locked_xgetbv(declarations, assembly, target=target), target,
+                           (), ("uint32",) * 2)
 
 
 def cpu_bindings_from_plan(plan):
@@ -107,5 +127,7 @@ def cpu_bindings_from_plan(plan):
     if source not in package.go or assembly not in package.assembly:
         raise GoSourcePlanError("Go CPUID declaration or body is absent from the locked selection")
     originals = (plan.original_files[source], plan.original_files[assembly])
+    level = emit_locked_goamd64_level(*originals, target=plan.target, level=plan.goamd64)
     return {"cpuid": source_cpuid_binding(*originals, target=plan.target),
-            "xgetbv": source_xgetbv_binding(*originals, target=plan.target)}
+            "xgetbv": source_xgetbv_binding(*originals, target=plan.target),
+            "getGOAMD64level": _source_binding("getGOAMD64level", level, plan.target, (), ("int32",))}

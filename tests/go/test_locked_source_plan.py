@@ -52,6 +52,7 @@ def test_public_compiler_keeps_explicit_supply_and_default_no_host_fallback(monk
     with pytest.raises(GoSourcePlanError,match='original.*checksum|manifest checksum'):
         load_go_source_plan(tmp_path,raw(recipe),expected_sha256='0'*64)
     p=load(tmp_path,recipe)
+    assert p.goamd64 == 'v1'
     with pytest.raises(GoSourcePlanError,match='replaces locked'):
         compile_go_packages({**MAIN,ROOT:[('other.go','package input')]},standard_library=p)
     with pytest.raises(GoSourcePlanError,match='target'):
