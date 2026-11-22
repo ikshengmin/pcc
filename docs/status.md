@@ -359,7 +359,12 @@ in the relevant section or issue and removes the entry.
    native assertions passed. The six 4096-node raw-root cells fell from
    941–1032 to 269–346 ms (5/5 beyond controls), still review-only.
    Next: once exact Mac/HTTP qualification returns, review the #9 gate;
-   meanwhile measure the Linux GC2 four-worker gray-work owners (no merge).
+   meanwhile GC2 Linux task-clock attribution (120,000 list allocations,
+   five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
+   allocator-lock owners, versus 3% in the explicit gray queue. Three of
+   five w4 legs finish no marks under load; w1 finishes in all five.
+   Next: attribute those allocator PCs to spin, refill, or release before
+   designing a fix; the synthetic result does not replace HTTP profiling.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -414,7 +419,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 21:45 UTC), Linux GC2 w4 gray-work owners: guarded native profile and attribution/ceiling before choosing a design, no performance candidate merge while #9 waits.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
