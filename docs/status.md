@@ -353,8 +353,12 @@ in the relevant section or issue and removes the entry.
    [single-task review](https://github.com/ikshengmin/pcc/blob/135633c3a6fa1e00a4ea51175c32d89551776c35/docs/investigations/gc2-exact-list-worker-review.md)
    passed both stopped gaps for normal retirement and abandon (3+3 Linux
    native runs); the token itself blocked remark even at simulated zero
-   credit. Next qualify stopped cross-epoch reset and stale-worker return.
-   The review remains disconnected from ordinary mark/finish and the pacer A/B.
+   credit. The [stopped epoch-reset follow-up](https://github.com/ikshengmin/pcc/blob/f564e16e73c7e684a79a1981a106a9cd57226081/docs/investigations/gc2-exact-list-worker-review.md)
+   also passed three native runs of a late old worker returning after the
+   new epoch had claimed the same list, using real bitmap rotation.
+   Next verify a gated bridge to the actual mark and finish path in
+   review, including unsupported-work fallback; ordinary stock and the
+   pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -366,7 +370,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 stopped epoch reset and stale worker rejection on review: Codex, Linux x86-64, 2026-11-22 09:55 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
