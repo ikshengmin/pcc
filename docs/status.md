@@ -278,7 +278,11 @@ in the relevant section or issue and removes the entry.
    finalizer. With an unregistered C owner the exact payload remains usable
    without full recheck; withdrawing that owner in the callback triggers
    one fallback and releases the payload exactly once. Linux 105 focused
-   checks passed. Tracked extension fields and non-API writers remain open.
+   checks passed.
+   [Review commit 210ac7b](https://github.com/ikshengmin/pcc/commit/210ac7b74252927071fff1907988efce915dd8ff)
+   verifies an actual GC-capable native extension field written via the
+   shared barrier and visited by Py_VISIT (107 focused Linux checks).
+   Arbitrary raw native assignments remain outside this evidence.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -335,7 +339,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 18:16 UTC), #9 review branch only: verify a tracked native C extension with Py_VISIT and an owner-aware candidate field write in a real callback; bounded Linux tests, push, then release.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
