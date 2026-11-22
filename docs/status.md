@@ -370,7 +370,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: none.
+   Claims: pccDot (2026-11-22 19:44 UTC), #9 review branch only: narrow the repeated stopped candidate pin walk with complete pin-writer coverage and conservative fallback; validate raw peer roots and native scale.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
