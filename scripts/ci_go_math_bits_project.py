@@ -268,6 +268,7 @@ def parse_first_bound_test_dependency(bindings, plan, project_files, generated):
 
 
 def analyze_bound_test_instances(bindings, plan, project_files, generated):
+    from pcc.frontends.go.native_cpu import CPUID_PACKAGE, cpuid_binding_from_plan
     from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
     from pcc.frontends.go.source_plan import runtime_owner
     from pcc.frontends.go.syntax import GoDiagnostic
@@ -275,17 +276,25 @@ def analyze_bound_test_instances(bindings, plan, project_files, generated):
     root = PACKAGE + ".test"
     suffix = " [" + root + "]"
     instances = {}
+    native_objects = {}
     for key, row in bindings.items():
         logical = "main" if key == root else key.removesuffix(suffix)
         units = () if runtime_owner(logical) else bound_test_units(
             key, row["sources"], plan, project_files, generated)
-        instances[key] = SourceInstance(logical, units, row["imports"])
+        owners = {}
+        if key == CPUID_PACKAGE:
+            owner = cpuid_binding_from_plan(plan)
+            owners["cpuid"] = owner
+            native_objects[key] = {"cpuid": {"symbol": owner.symbol, "object_sha256": owner.object_sha256}}
+        instances[key] = SourceInstance(logical, units, row["imports"], owners)
     try:
         result = analyze_source_instances(instances, main_instance=root, target_triple=plan.target)
     except GoDiagnostic as error:
         return {"status": "BLOCKED", "diagnostic": str(error), "filename": error.filename,
-                "line": error.line, "column": error.column, "code": error.code}
+                "line": error.line, "column": error.column, "code": error.code,
+                "verified_native_objects": native_objects}
     return {"status": "SOURCE_ANALYSIS_ONLY", "analyzed_instances": sorted(result),
+            "verified_native_objects": native_objects,
             "unbound_linkname_exports": {key: item.linkname_exports for key, item in result.items()
                                          if item.linkname_exports},
             "claim": "declared imports only; no runtime ABI or native-code admission"}

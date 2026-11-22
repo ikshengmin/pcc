@@ -11,11 +11,12 @@ OWNED_PACKAGES holds the part that is implemented, as original PCC source;
 every other exported name of that package is go.unsupported.owned-runtime-surface.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from pcc.frontends.go.diagnostics import UnsupportedGo
 from pcc.frontends.go.generics import GenericSession
 from pcc.frontends.go.lowering import Lowerer
+from pcc.frontends.go.records import NativeFunctionBinding
 from pcc.frontends.go.sema import Analyzer, PREDECLARED, validate_value_types
 from pcc.frontends.go.syntax import GoDiagnostic, GoParser, Program
 from pcc.frontends.go.types import supported_target
@@ -51,6 +52,7 @@ class SourceInstance:
     logical: str
     units: tuple
     imports: dict
+    native_functions: dict = field(default_factory=dict)
 
 
 def parse_package(units, *, require_main):
@@ -109,6 +111,9 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
                 raise UnsupportedGo(import_token, "go.unsupported.owned-runtime-surface",
                                     "original source is supplied but PCC runtime/intrinsic owner is unavailable: "
                                     + instance.logical)
+            if any(type(owner) is not NativeFunctionBinding or owner.target != target_triple
+                   for owner in instance.native_functions.values()):
+                raise ValueError("owned Go native source binding is invalid for the target: " + path)
             units = instance.units
             owned = False
         elif owned:
@@ -166,7 +171,8 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
             file_imports[key] = ImportBinding(imported.token, alias, dependency)
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
                             package_path=None if path == main_package else path, generics=generics,
-                            source_only=instances is not None)
+                            source_only=instances is not None,
+                            native_functions=instance.native_functions if instances is not None else None)
         if owned:
             analyzer.owned_surface = frozenset(
                 [dtype.token.text for dtype in program.types] + [function.token.text for function in program.functions]

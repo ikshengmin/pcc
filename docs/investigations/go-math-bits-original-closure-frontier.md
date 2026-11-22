@@ -410,3 +410,13 @@ changes and a wrong target reject. Fifty-nine scoped checks and the
 native differential passed. This is not an automatic Go linker
 provider and does not admit `xgetbv`, `getGOAMD64level` or the
 whole-package tests.
+
+Exact source-instance analysis now verifies the selected owned CPUID
+object, target, symbol and typed signature. A mismatched declaration
+and another bodyless function still fail closed. The real source-only
+report verified object SHA-256
+`9622ab5281faa5b1f2536bc2e7d3e8b0b295371f9219b656d21a677a873d2bc4`
+and advanced to the separate `xgetbv` at `cpu_x86.go:15:6`.
+Validation: 156 scoped checks and the unchanged original CPUID assembly
+differential. The project graph still emits no IR or test binary; the
+CPUID object's link was only the isolated control.

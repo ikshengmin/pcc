@@ -28,7 +28,7 @@ from pcc.frontends.go.syntax import (
     TypeInstantiationSyntax, TypeName,
 )
 from pcc.frontends.go.records import (
-    DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, StructType,
+    DefinedType, Field, InterfaceMethod, InterfaceType, MethodSignature, NativeFunctionBinding, StructType,
     underlying, is_named, same_underlying,
 )
 from pcc.frontends.go.types import (
@@ -487,7 +487,7 @@ def validate_containment_cycles(declarations):
 
 class Analyzer:
     def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None,
-                 source_only=False):
+                 source_only=False, native_functions=None):
         self.program = program
         self.imports = imports or {}
         self.dot_imports = {}
@@ -496,6 +496,8 @@ class Analyzer:
         self.generics = generics if generics is not None else GenericSession()
         self.source_only = source_only
         self.linkname_exports = {}
+        self.native_functions = native_functions or {}
+        self.bound_native_functions = {}
         self.type_bindings = {}
         self.abstract_function = False
         self.functions = {}
@@ -590,9 +592,12 @@ class Analyzer:
             for symbol in declaration.symbols:
                 self.resolve_constant(symbol)
         for function in self.program.functions:
+            owner = None
             if function.declaration_only:
-                raise UnsupportedGo(function.token, 'go.unsupported.external-function-owner',
-                                    "bodyless function requires an owned implementation and ABI binding")
+                owner = self.native_functions.get(function.token.text) if self.source_only else None
+                if type(owner) is not NativeFunctionBinding or function.receiver is not None:
+                    raise UnsupportedGo(function.token, 'go.unsupported.external-function-owner',
+                                        "bodyless function requires an owned implementation and ABI binding")
             if function.receiver is not None:
                 token, raw = function.receiver
                 receiver_base = raw.element if isinstance(raw, PointerSyntax) else raw
@@ -609,6 +614,13 @@ class Analyzer:
             function.params = [(token, self.resolve_type(dtype, signature=(function.variadic and i == len(function.params)-1)))
                                for i, (token, dtype) in enumerate(function.params)]
             function.result = self.resolve_type(function.result)
+            if owner is not None:
+                if (owner.symbol != function.abi_symbol
+                        or owner.parameters != tuple(dtype for _, dtype in function.params)
+                        or owner.results != tuple(result_types(function.result)) or function.variadic):
+                    raise UnsupportedGo(function.token, 'go.unsupported.external-function-owner',
+                                        "owned native signature or symbol differs from checked source")
+                self.bound_native_functions[function.token.text] = owner
             if any(isinstance(underlying(dtype), PointerType)
                    for dtype in result_types(function.result)):
                 raise UnsupportedGo(function.token, 'go.unsupported.pointer-signatures',
@@ -662,7 +674,8 @@ class Analyzer:
             if main.params or main.result != "void" or main.type_parameters:
                 raise GoDiagnostic(main.token, "main must have no parameters and no result")
         for function in self.program.functions:
-            self.analyze_function(function)
+            if not function.declaration_only:
+                self.analyze_function(function)
         for file_imports in self.imports.values():
             for binding in file_imports.values():
                 if not binding.used:

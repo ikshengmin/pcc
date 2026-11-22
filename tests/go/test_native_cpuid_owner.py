@@ -31,6 +31,34 @@ def test_cpuid_owner_rejects_other_sources_or_targets(fault):
         emit_locked_cpuid(source, assembly, target=target)
 
 
+def test_source_instance_accepts_exact_owned_signature_only():
+    from pcc.frontends.go import UnsupportedGo
+    from pcc.frontends.go.native_cpu import source_cpuid_binding
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+
+    owner = source_cpuid_binding(SOURCE.read_bytes(), ASSEMBLY.read_bytes(), target=DEFAULT_TARGET)
+    caller = 'package main;import _ "internal/cpu";func main(){}'
+    declaration = "package cpu;func cpuid(eax,ecx uint32)(a,b,c,d uint32)"
+    graph = {
+        "main": SourceInstance("main", (("main.go", caller),), {"internal/cpu": "internal/cpu"}),
+        "internal/cpu": SourceInstance("internal/cpu", (("cpu.go", declaration),), {}, {"cpuid": owner}),
+    }
+    admitted = analyze_source_instances(graph, main_instance="main", target_triple=DEFAULT_TARGET)
+    assert admitted["internal/cpu"].bound_native_functions == {"cpuid": owner}
+    assert owner.symbol == function_symbol("cpuid", "internal/cpu") and len(owner.object_sha256) == 64
+    graph["internal/cpu"] = SourceInstance(
+        "internal/cpu", (("cpu.go", declaration.replace("uint32", "uint64", 1)),), {}, {"cpuid": owner},
+    )
+    with pytest.raises(UnsupportedGo, match="owned native signature or symbol differs"):
+        analyze_source_instances(graph, main_instance="main", target_triple=DEFAULT_TARGET)
+    graph["internal/cpu"] = SourceInstance(
+        "internal/cpu", (("cpu.go", declaration + ";func xgetbv()(uint32,uint32)"),), {}, {"cpuid": owner},
+    )
+    with pytest.raises(UnsupportedGo, match="bodyless function requires an owned implementation") as caught:
+        analyze_source_instances(graph, main_instance="main", target_triple=DEFAULT_TARGET)
+    assert caught.value.code == "go.unsupported.external-function-owner"
+
+
 @pytest.mark.integration
 @pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
 def test_pcc_call_and_owned_adapter_match_original_go_asm_result_bytes(tmp_path, monkeypatch):

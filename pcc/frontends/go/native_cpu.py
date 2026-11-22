@@ -6,8 +6,10 @@ package compiler must still authorize a native owner before consuming it.
 """
 import hashlib
 
+from pcc.backend.elf_x86_64 import emit_relocatable
 from pcc.backend.x86_64_asm_driver import assemble_file
 from pcc.frontends.go.lowering import function_symbol
+from pcc.frontends.go.records import NativeFunctionBinding
 from pcc.frontends.go.source_plan import GoSourcePlanError, TRIPLE
 
 
@@ -47,3 +49,21 @@ def emit_locked_cpuid(declarations, assembly, *, target):
     ret
 .size {name}, .-{name}
 """)
+
+
+def source_cpuid_binding(declarations, assembly, *, target):
+    """Prove the source has a real owned object, without linking it."""
+    data = emit_relocatable(emit_locked_cpuid(declarations, assembly, target=target))
+    return NativeFunctionBinding(function_symbol("cpuid", CPUID_PACKAGE), target,
+                                 ("uint32",) * 2, ("uint32",) * 4,
+                                 hashlib.sha256(data).hexdigest())
+
+
+def cpuid_binding_from_plan(plan):
+    """Use exactly the files selected for the normal package in the plan."""
+    package = plan.packages[CPUID_PACKAGE]
+    source = "src/internal/cpu/cpu_x86.go"
+    assembly = "src/internal/cpu/cpu_x86.s"
+    if source not in package.go or assembly not in package.assembly:
+        raise GoSourcePlanError("Go CPUID declaration or body is absent from the locked selection")
+    return source_cpuid_binding(plan.original_files[source], plan.original_files[assembly], target=plan.target)

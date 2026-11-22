@@ -47,6 +47,16 @@ class MethodSignature:
 
 
 @dataclass(frozen=True)
+class NativeFunctionBinding:
+    """Source-probe ABI facts for a separately produced owned object."""
+    symbol: str
+    target: str
+    parameters: tuple
+    results: tuple
+    object_sha256: str
+
+
+@dataclass(frozen=True)
 class InterfaceMethod:
     name: str
     package: str
