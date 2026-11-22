@@ -1,4 +1,4 @@
-"""Reproduce the Go 1.27.3 linux-amd64/v1 default-build standard sources of bytes and regexp.
+"""Pin Go 1.27.3 Linux-amd64/v1 normal standard package sources.
 
 Offline maintenance, NOT a compiler path. Pass the official binary distribution
 tarball and an output file. The official go command
@@ -6,6 +6,8 @@ only selects the target graph; all selected bytes, support headers and the
 tool itself come from a fresh extraction of the same checked archive, never
 an independently mutable installation. No downloaded or produced
 archive/object is used by PCC. Generated go_asm.h is a pending PCC obligation.
+The default roots are bytes and regexp (Go Enry); --root selects an explicit
+normal package list, not test build instances.
 """
 from __future__ import annotations
 
@@ -47,7 +49,13 @@ def selected_rows(data):
         result[name]=row
     return result
 
-def generate(archive):
+def generate(archive, *, roots=ROOTS):
+    roots = tuple(roots)
+    if (not roots or len(set(roots)) != len(roots)
+            or any(not re.fullmatch(r"[A-Za-z0-9_][A-Za-z0-9_./-]*", name)
+                   or name in ('all', 'std', 'cmd') or '...' in name
+                   or any(part in ("", ".", "..") for part in name.split("/")) for name in roots)):
+        raise ValueError('normal Go package roots must be unique standard import paths')
     # Check and extract the *same* bounded immutable bytes. Checking only the
     # files go list already selected would not detect an omitted candidate in
     # another installation. No source tree, backend, or tool from that
@@ -61,10 +69,10 @@ def generate(archive):
     with tempfile.TemporaryDirectory(prefix='pcc-go-release-') as tmp:
         with tarfile.open(fileobj=io.BytesIO(raw),mode='r:gz') as original:
             original.extractall(tmp,filter='data')
-        return _select(Path(tmp)/'go')
+        return _select(Path(tmp)/'go', roots=roots)
 
 
-def _select(root):
+def _select(root, *, roots=ROOTS):
     root=root.resolve(strict=True); tool=root/'bin/go'
     if digest_file(tool)!=GO_SHA:
         raise ValueError('wrong official Go package selector')
@@ -73,10 +81,10 @@ def _select(root):
                  GOROOT=str(root),GOOS='linux',GOARCH='amd64',GOAMD64='v1',CGO_ENABLED='0',
                  GOENV='off',GOWORK='off',GO111MODULE='off',GOTOOLCHAIN='local',GOPROXY='off',
                  GOSUMDB='off',GOFLAGS='',GOEXPERIMENT='')
-        proc=subprocess.run([str(tool),'list','-deps','-json',*ROOTS],check=True,
+        proc=subprocess.run([str(tool),'list','-deps','-json',*roots],check=True,
                             env=env,cwd=tmp,capture_output=True,timeout=45)
     rows=selected_rows(proc.stdout.decode())
-    if not set(ROOTS)<=rows.keys() or any(n not in rows for r in rows.values() for n in r.get('Imports',())):
+    if not set(roots)<=rows.keys() or any(n not in rows for r in rows.values() for n in r.get('Imports',())):
         raise ValueError('incomplete selected import graph')
     files={};pkgs={};needed={}
     def add(path):
@@ -128,12 +136,13 @@ def _select(root):
             'distribution_sha256':ARCHIVE_SHA,'selector_sha256':GO_SHA,
             'target':{'triple':TRIPLE,'goos':'linux','goarch':'amd64','goamd64':'v1','cgo':False,
                       'build_tags':[],'goexperiment':''},
-            'roots':list(ROOTS),'packages':pkgs,'assembly_includes':needed,'files':dict(sorted(files.items()))}
+            'roots':list(roots),'packages':pkgs,'assembly_includes':needed,'files':dict(sorted(files.items()))}
 
 def main():
     p=argparse.ArgumentParser(description=__doc__);p.add_argument('archive',type=Path)
     p.add_argument('output',type=Path)
-    opts=p.parse_args();v=generate(opts.archive)
+    p.add_argument('--root', action='append', help='repeat for each normal package root')
+    opts=p.parse_args();v=generate(opts.archive, roots=tuple(opts.root) if opts.root else ROOTS)
     opts.output.write_text(json.dumps(v,sort_keys=True,indent=2)+'\n',encoding='utf-8')
 
 if __name__=='__main__':main()

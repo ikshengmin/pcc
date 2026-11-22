@@ -183,3 +183,34 @@ def test_linux_profiling_source_pin_checks_selected_bytes_without_granting_admis
         verify_linux_profiling_selection({**selected, path: "0" * 64}, project.REFERENCE_BUILD_IDS_SHA256)
     with pytest.raises(ValueError, match="profiling selection identity differs"):
         verify_linux_profiling_selection({**selected, path: digest}, "0" * 64)
+
+
+def test_linux_normal_plan_keeps_test_instances_out_of_the_original_source_recipe(tmp_path):
+    import json
+
+    from pcc.frontends.go.source_plan import TARGET
+    from scripts.go_std_closure import LINUX_NORMAL_PLAN, load_linux_normal_plan
+
+    raw, digest = load_linux_normal_plan()
+    assert project.sha256(raw) == digest
+    data = json.loads(raw)
+    assert data["target"] == TARGET
+    assert data["roots"] == ["os", "fmt", "testing", "testing/internal/testdeps"]
+    assert len(data["packages"]) == 130 and len(data["files"]) == 914
+    assert data["packages"]["math/bits"]["files"]["go"] == list(project.NORMAL)
+    assert not any(" [math/bits" in key for key in data["packages"])
+    assert "math/bits.test" not in data["packages"] and "math/bits_test" not in data["packages"]
+    assert not any(name.endswith("_test.go") for name in data["files"])
+    assert data["packages"]["runtime"]["files"]["asm"]
+    assert data["assembly_includes"]
+    (tmp_path / LINUX_NORMAL_PLAN).write_bytes(raw + b" ")
+    with pytest.raises(ValueError, match="plan SHA256 mismatch"):
+        load_linux_normal_plan(tmp_path)
+
+
+@pytest.mark.parametrize("roots", (("os", "os"), ("-json",), ("testing/...",), ("std",), ("os/../fmt",)))
+def test_selector_rejects_nonliteral_root_recipes_before_opening_the_archive(tmp_path, roots):
+    from scripts.pin_go_enry_linux_stdlib import generate
+
+    with pytest.raises(ValueError, match="roots must be unique standard import paths"):
+        generate(tmp_path / "not-opened.tar.gz", roots=roots)

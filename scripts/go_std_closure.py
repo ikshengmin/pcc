@@ -26,6 +26,8 @@ MAX_FILES = 1024
 MAX_TOTAL_BYTES = 8 * 1024 * 1024
 LINUX_PROFILING_PIN = "pcc-linux-amd64-profiling-source-pin.json"
 LINUX_PROFILING_PIN_SHA256 = "e062454ef84b7beae0fd0a7f5d786cf5ff69fbb8ac01e3388616e537d5e754d9"
+LINUX_NORMAL_PLAN = "pcc-linux-amd64-math-bits-normal-plan.json"
+LINUX_NORMAL_PLAN_SHA256 = "ba5d2ffe7b3e92c70aaa2ec9f0462a0fa749852fa75fd2c78fcbb0449dbabb3c"
 
 
 def load_std_closure(directory=FIXTURE):
@@ -122,3 +124,11 @@ def verify_linux_profiling_selection(selected, build_ids_sha256):
         if selected.get(path) != entry["sha256"]:
             raise ValueError("Linux profiling source differs: " + path)
     return len(pin["files"])
+
+
+def load_linux_normal_plan(directory=FIXTURE):
+    """Return the pinned recipe and its identity, not an admitted dependency."""
+    raw = (Path(directory) / LINUX_NORMAL_PLAN).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != LINUX_NORMAL_PLAN_SHA256:
+        raise ValueError("Linux Go normal-package plan SHA256 mismatch")
+    return raw, LINUX_NORMAL_PLAN_SHA256

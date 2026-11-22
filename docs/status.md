@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   verify whether the existing `LockedGoSourcePlan` can express the
-   selected normal dependency roots for `math/bits`, separately from
-   test variants. On the diagnostic union, the first admission boundary is
-   still `errors/join.go:8:2`; the logical byte backing is not an ABI. See the
+   let the Go math/bits project runner read the locked normal-package
+   plan from an explicit source-only GOROOT without accepting test
+   variants or missing runtime/assembly owners. The Linux/amd64 recipe
+   now pins the 130 normal packages separately from original tests. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go normal source-plan target closure: Codex, Linux x86-64, 2026-11-22 02:20 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

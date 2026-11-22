@@ -220,3 +220,27 @@ target packages (used by the Go Enry probe). Its schema has one row per
 import path, while the reference test graph has build instances. Next
 verify their normal roots separately rather than flattening test
 variants or substituting upstream objects.
+
+## Exact normal-package source plan
+
+```sh
+python scripts/pin_go_enry_linux_stdlib.py go1.27.3.linux-amd64.tar.gz normal-plan.json \
+  --root os --root fmt --root testing --root testing/internal/testdeps
+```
+
+This writes a byte-identical copy of the checked-in
+`pcc-linux-amd64-math-bits-normal-plan.json`. The original default
+Go Enry recipe also regenerates byte-for-byte. The existing source plan
+loader verified 130 packages and 914 physical originals (7,880,883
+bytes including support headers/license/version). The recipe has 908
+normal package files: 853 Go, 49 assembly and six headers. All 908
+matched the package-test selection, whose four additional files are the
+original `math/bits` internal/external test sources; its generated main
+and build variants are not folded into this plan.
+
+The verified plan still reports unresolved owners: 25 package assembly
+owners, 15 runtime/intrinsic owners and five generated layout headers
+(categories overlap). It does not load code from the external toolchain
+into the owned compiler and does not run the upstream tests. Next attach
+it as explicit source-only input to the owned project path, preserving
+the separate test variants and native owner checks.
