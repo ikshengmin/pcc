@@ -445,11 +445,14 @@ in the relevant section or issue and removes the entry.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next for GC3: the dormant, test-invoked
-   runtime entry that Claude approved on #8 on 2026-11-22
-   ([answer](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7078942435)):
-   no production caller, no new witnesses of current production behavior,
-   and then a measurable review-branch candidate.
+   Measure with `scripts/pcc_perf.py`. [GC3 review e955661](https://github.com/ikshengmin/pcc/commit/e955661bb8674c4ea425b70ed6b12762821a70f5)
+   wires the test-invoked stopped promotion approved on #8: exact slab
+   provenance, record and card preflight, in-place no-park commit.
+   Linux: eight native cases, including two subsequent GC3 collections;
+   20 existing emitted bodies unchanged. No production caller or nursery.
+   Next GC3: measurable GC3-only review candidate, anchored to the real
+   handler allocation census, with exact writer/root coverage and
+   n/4n/16n zero clean-old visits; no widening before that result.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -530,8 +533,7 @@ in the relevant section or issue and removes the entry.
    it out of the stopped major walk; retry reused the mapping, and commit
    exposed exactly one entry. A Linux native promoted-owner probe also
    found its indexless child through the real strong-slot visitor.
-   Next GC3 runtime slice: see review question above. Production promotion
-   and nursery activation are still untested. The GC0 atomic CPU-share
+   GC3 production promotion and nursery activation are still untested. The GC0 atomic CPU-share
    measurement lacks a sealed gateway arm; no percentage was reported.
    Linux `pcc_perf profile-preflight` now gets real task-clock instruction
    samples for its own thread and the Linux probe now captures a directly
@@ -672,7 +674,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 22:56 UTC), GC3 test-invoked dormant integration per #8 reviewer approval: connect native published cell provenance and prepared old record/card to one stopped no-park promotion entry; no production caller.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
