@@ -368,8 +368,11 @@ in the relevant section or issue and removes the entry.
    The [contended-owner regression](https://github.com/ikshengmin/pcc/blob/3cc6e9c9b9083c00440e233a47456bf9e8642f47/docs/investigations/gc2-exact-list-worker-review.md)
    forced the fallback cursor and bridge onto one owner: both previously
    returned a debt credit; only the real retiring path now earns it.
-   Five focused Linux native suites passed. Next see whether the cursor
-   can skip a reserved owner without losing progress or blocking finish.
+   Five focused Linux native suites passed. The
+   [reserved cursor mode](https://github.com/ikshengmin/pcc/blob/04d395b0c4eba8ed616338df5093412640fb5c54/docs/investigations/gc2-exact-list-worker-review.md)
+   also skips the outstanding owner without scanning: six forced native
+   interleaves and 18 automatic runs passed. Next check the parallel
+   depth-first-stack path when another owner points back to a claim.
    Master runtime and the pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
@@ -382,7 +385,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 reserved owner skip in ordinary marked cursor review: Codex, Linux x86-64, 2026-11-22 10:21 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
