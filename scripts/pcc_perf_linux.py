@@ -44,6 +44,17 @@ RECORD_HEADER = struct.Struct("=IHH")
 SAMPLE = struct.Struct("=QIIQ")
 RING_PAGES = 32
 
+# This preflight intentionally understands only native static ELF64 ET_EXEC.
+ELF_HEADER = struct.Struct("<16sHHIQQQIHHHHHH")
+ELF_PROGRAM_HEADER = struct.Struct("<IIQQQQQQ")
+ELF64_LE_VERSION_1 = b"\x7fELF\x02\x01\x01"
+ELF_ET_EXEC = 2
+ELF_MACHINES = {"x86_64": 62, "aarch64": 183}
+ELF_PT_LOAD = 1
+ELF_PT_DYNAMIC = 2
+ELF_PT_INTERP = 3
+ELF_PF_X = 1
+
 
 @dataclass(frozen=True)
 class TaskSample:
@@ -51,6 +62,63 @@ class TaskSample:
     pid: int
     tid: int
     period_ns: int
+
+
+@dataclass(frozen=True)
+class ExecutableRange:
+    address: int
+    end: int
+    file_offset: int
+
+
+@dataclass(frozen=True)
+class ExecutableImage:
+    machine: int
+    ranges: tuple[ExecutableRange, ...]
+
+    def file_offset(self, ip: int) -> int | None:
+        for text in self.ranges:
+            if text.address <= ip < text.end:
+                return text.file_offset + ip - text.address
+        return None
+
+
+def read_executable_image(data: bytes) -> ExecutableImage:
+    """Accept only a static, fixed-address image with file-backed text."""
+    if len(data) < ELF_HEADER.size:
+        raise ValueError("truncated ELF header")
+    (ident, kind, machine, version, entry, phoff, _, _, ehsize, phsize,
+     phnum, _, _, _) = ELF_HEADER.unpack_from(data)
+    if (ident[:7] != ELF64_LE_VERSION_1 or kind != ELF_ET_EXEC or version != 1
+            or machine not in ELF_MACHINES.values()):
+        raise ValueError("expected supported little-endian static ELF64 ET_EXEC")
+    if (ehsize != ELF_HEADER.size or phsize != ELF_PROGRAM_HEADER.size
+            or phnum == 0 or phnum > 1024 or phoff < ehsize or phoff + phsize * phnum > len(data)):
+        raise ValueError("invalid ELF program header table")
+    ranges = []
+    for i in range(phnum):
+        tag, flags, offset, vaddr, _, filesz, memsz, align = ELF_PROGRAM_HEADER.unpack_from(
+            data, phoff + i * phsize,
+        )
+        if tag in (ELF_PT_INTERP, ELF_PT_DYNAMIC):
+            raise ValueError("dynamic ELF is not supported by the PC preflight")
+        if tag != ELF_PT_LOAD:
+            continue
+        if (filesz > memsz or offset > len(data) or filesz > len(data) - offset
+                or vaddr + memsz > (1 << 64)):
+            raise ValueError("invalid ELF load extent")
+        if align > 1 and ((align & (align - 1)) or (vaddr - offset) % align):
+            raise ValueError("invalid ELF load alignment")
+        if (flags & ELF_PF_X) and filesz:
+            ranges.append(ExecutableRange(vaddr, vaddr + filesz, offset))
+    ranges.sort(key=lambda text: text.address)
+    if not ranges or any(next_range.address < text.end
+                         for text, next_range in zip(ranges, ranges[1:])):
+        raise ValueError("missing or overlapping executable ELF ranges")
+    image = ExecutableImage(machine, tuple(ranges))
+    if image.file_offset(entry) is None:
+        raise ValueError("ELF entry is not file-backed executable text")
+    return image
 
 
 def _read_frozen_ring(mapping) -> list[TaskSample]:

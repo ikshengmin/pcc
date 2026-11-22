@@ -55,3 +55,13 @@ arbitrary PID attachment. Fourteen focused transport/protocol checks
 passed. Next attribute the real child's PCs from its ELF sections,
 including an explicit unknown bucket rather than assuming every sample
 hit the hot function.
+
+The original owned ELF is stripped. Its sampled addresses now map
+through file-backed executable PT_LOAD ranges to exact file offsets
+without inventing a nearest function. The bounded parser admits static,
+little-endian ELF64 ET_EXEC and refuses dynamic images, overlapping or
+malformed loads, and addresses in data or zero-filled tails. Unmapped
+PCs have no attribution. Twenty-five focused checks passed, including
+kernel samples from the actual owned ELF and malformed-image controls.
+Next bind acquisition to the bytes of the selected sealed executable;
+instruction/GC boundary classification remains a later measurement.

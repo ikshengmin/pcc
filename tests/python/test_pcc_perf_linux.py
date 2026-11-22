@@ -104,3 +104,49 @@ def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_run
     samples = RING.capture_cooperative_child([str(binary)], env={"PATH": "/nonexistent"})
     assert len(samples) > 0 and len({sample.ip for sample in samples}) > 0
     assert len({(sample.pid, sample.tid) for sample in samples}) == 1
+    # Resolve addresses from the exact owned ELF, even though the linker
+    # emits no symbol table. Do not treat unmapped (e.g. vDSO) as its code.
+    blob = binary.read_bytes()
+    image = RING.read_executable_image(blob)
+    offsets = [image.file_offset(sample.ip) for sample in samples]
+    assert any(offset is not None and offset < len(blob) for offset in offsets)
+    assert image.file_offset(0) is None
+
+
+def _elf(*segments, kind=2, machine=62, entry=0x400080):
+    data = bytearray(4096)
+    struct.pack_into("<16sHHIQQQIHHHHHH", data, 0, b"\x7fELF\x02\x01\x01",
+                     kind, machine, 1, entry, 64, 0, 0, 64, 56, len(segments), 0, 0, 0)
+    for index, segment in enumerate(segments):
+        struct.pack_into("<IIQQQQQQ", data, 64 + 56 * index, *segment)
+    return bytes(data)
+
+
+_EXE_LOAD = (1, 5, 0, 0x400000, 0, 512, 768, 4096)
+
+
+def test_elf_pc_mapping_excludes_memory_tail_gaps_and_non_executable_data():
+    data_load = (1, 6, 2048, 0x401800, 0, 256, 256, 4096)
+    image = RING.read_executable_image(_elf(data_load, _EXE_LOAD))
+    assert image.file_offset(0x400080) == 0x80
+    assert image.file_offset(0x4001FF) == 511
+    for address in (0x3FFFFF, 0x400200, 0x4002FF, 0x400300, 0x401800):
+        assert image.file_offset(address) is None
+
+
+@pytest.mark.parametrize(("data", "reason"), (
+    (b"\x7fELF", "truncated"),
+    (_elf(_EXE_LOAD, kind=3), "ET_EXEC"),
+    (_elf(_EXE_LOAD, machine=243), "ET_EXEC"),
+    (_elf(_EXE_LOAD, (3, 0, 0, 0, 0, 0, 0, 0)), "dynamic ELF"),
+    (_elf(_EXE_LOAD, (2, 0, 0, 0, 0, 0, 0, 0)), "dynamic ELF"),
+    (_elf((1, 5, 4095, 0x400000, 0, 2, 2, 1)), "load extent"),
+    (_elf((1, 5, 0, 0x400000, 0, 300, 299, 1)), "load extent"),
+    (_elf((1, 5, 0, 0x400000, 0, 512, 768, 3)), "load alignment"),
+    (_elf(_EXE_LOAD, _EXE_LOAD), "overlapping"),
+    (_elf(_EXE_LOAD, entry=0x400200), "entry"),
+), ids=("short", "pie", "wrong-machine", "interpreter", "dynamic",
+        "past-file", "past-mem", "alignment", "overlap", "non-text-entry"))
+def test_elf_pc_mapping_fails_closed(data, reason):
+    with pytest.raises(ValueError, match=reason):
+        RING.read_executable_image(data)
