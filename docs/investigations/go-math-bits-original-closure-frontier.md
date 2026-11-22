@@ -335,3 +335,16 @@ source-instance walk now stops at `internal/cpu/cpu.go:212:2`, the
 integration/native checks, including same-input Linux PCC and official
 Go for the byte padding and expression ordering. No pointer-bearing
 `option` or upstream test executed.
+
+The Linux/amd64/v1 original `cpu_x86.go` is unchanged and byte-matched
+to the selected plan. AST verification finds 23 distinct
+`Feature: &X86.Has…` initializers in `doinit`, each pointing into package
+storage, not a local frame or a movable allocation. The options still
+live in a global slice created/appended in `doinit`.
+`processOptions` ranges over copies and conditionally reads/writes
+the pointee; `Initialize` invokes `doinit` and then that loop. Direct
+address/call/alias behavior for a static bool field already executes
+with PCC and matches official Go (one native comparison, two scoped
+checks). It does not justify accepting arbitrary aggregate pointers,
+global slice storage, the initialization sequence, or the bodyless
+`cpuid`/`xgetbv`/`getGOAMD64level` symbols.

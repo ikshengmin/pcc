@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   trace `internal/cpu.option.Feature *bool` at
-   `internal/cpu/cpu.go:212:2` to its original initialization and
-   lifetime boundaries. Ordinary fixed byte padding now lowers and
-   executes; pointer-bearing records and slice ABI remain blocked. See the
+   add the first checked storage proof for a scalar pointer field with a
+   static pointee, without admitting unproven aggregate pointers. All 23
+   selected x86 `option.Feature` initializers come from static `X86` fields;
+   their global slice and CPU assembly still have no owned ABI. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go cpu option static pointer provenance: Codex, Linux x86-64, 2026-11-22 02:54 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
