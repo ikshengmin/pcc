@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   pin the 22 selected Linux/amd64 original Go sources in the
-   `runtime/pprof` dependency branch as a source-only slice. Of 62 missing
-   files outside the runtime exclusion patterns, the other 40 are runtime
-   support or assembly/header inputs; none can silently be admitted. See the
+   preserve the unchanged `go` call in `testing/benchmark.go:238:2` as
+   syntax, with explicit rejection before IR until scheduling is owned.
+   The Linux/amd64 reference now verifies the bytes of 22 additional
+   original profiling-branch Go inputs, without admitting the closure. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go profiling branch original source pin: Codex, Linux x86-64, 2026-11-22 01:50 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

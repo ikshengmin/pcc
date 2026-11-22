@@ -129,3 +129,12 @@ No selected nonexcluded C source, cgo source, object or embedded asset was
 missing. Do not expand the runtime exclusion rules from this audit alone,
 compile the union as one file set, or treat the source-only pin as a complete
 build closure.
+
+The separate `pcc-linux-amd64-profiling-source-pin.json` manifest records
+the 22 original source identities (200,263 bytes in total) from the
+verified official Linux binary distribution's GOROOT. The existing
+reference runner verifies them against the exact portable selection
+identity before running official tests. Their bytes are not vendored by
+this change, so the existing fixture-gap count and owned gate remain
+unchanged. Scoped verification: 57 checks passed, and all 22 hashes
+matched the official selection capture. No project tests were run.

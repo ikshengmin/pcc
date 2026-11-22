@@ -1,0 +1,127 @@
+{
+  "schema_version": 1,
+  "version": "go1.27.3",
+  "revision": "2aae1000ea1d4b28923b96db28acf4e3b99d6aff",
+  "target": "linux/amd64/v1",
+  "cgo_enabled": false,
+  "complete_build_closure": false,
+  "reference_build_ids_sha256": "220a909f4e633dcfdb0eb92c31d74ad4425bb87eb48538d9e600cfb45d804b54",
+  "archive": {
+    "url": "https://go.dev/dl/go1.27.3.linux-amd64.tar.gz",
+    "sha256": "65efbc80fdc1fa2cd2631cad5b481777a68e8725f34e89f50fc6ac714e379b40"
+  },
+  "license": "BSD-3-Clause",
+  "license_file": "LICENSE",
+  "files": [
+    {
+      "path": "src/compress/flate/deflate.go",
+      "sha256": "5bb21769263facc2a6a2e654bb7f62e359ad4c247cc3ab52310510119e5d8814",
+      "size": 25540
+    },
+    {
+      "path": "src/compress/flate/deflatefast.go",
+      "sha256": "ca01c6426266a5e2b5154cf1123a357be37f016247f14409c97a8d744bdc6518",
+      "size": 5839
+    },
+    {
+      "path": "src/compress/flate/dict_decoder.go",
+      "sha256": "a0862076d1c99a910b8b46f81f0d55c4bc6f09ade8307a2cedfd3f69ee28310d",
+      "size": 6112
+    },
+    {
+      "path": "src/compress/flate/huffman_bit_writer.go",
+      "sha256": "ce22b308bb43d26661d79dd68b15dff0526212b3f2ff4ecaffb12f7bbed45fcc",
+      "size": 29851
+    },
+    {
+      "path": "src/compress/flate/huffman_code.go",
+      "sha256": "1098a9d935c86863d49b8fc9e81481a6ac3bca41686c4350be120ef10c68fb85",
+      "size": 11848
+    },
+    {
+      "path": "src/compress/flate/inflate.go",
+      "sha256": "28b241ba6b66cc14ac93cc17a49756cd78daaade60afb47d7cd6aed2489dc5cb",
+      "size": 20902
+    },
+    {
+      "path": "src/compress/flate/level1.go",
+      "sha256": "aeb270b53a189c2f1a971cb891d7c98b3e03d8f9edd981169c36e1a1b49eb290",
+      "size": 4937
+    },
+    {
+      "path": "src/compress/flate/level2.go",
+      "sha256": "3a89117710b3832a80e89ff1ae098d65425cebefd09702f4dd530ec7957f2d99",
+      "size": 4972
+    },
+    {
+      "path": "src/compress/flate/level3.go",
+      "sha256": "e10dec76189c92563eb8cac21659187ff3fdebc58c1eca8f4b79890eea87c935",
+      "size": 5875
+    },
+    {
+      "path": "src/compress/flate/level4.go",
+      "sha256": "4994a4be40a0912cdd374ec3b301fa551d5d6768b0e26c7baf53d42eee78dbb4",
+      "size": 5327
+    },
+    {
+      "path": "src/compress/flate/level5.go",
+      "sha256": "745661dad9d18ef228de51d0aa92f89c08884be053acb7fca6fce06231a6eb09",
+      "size": 7913
+    },
+    {
+      "path": "src/compress/flate/level6.go",
+      "sha256": "0bbd86f2ec1b856d293c5e2cf2f09bd7e82cbb4d99f5aa7a2959b719b330b26c",
+      "size": 8087
+    },
+    {
+      "path": "src/compress/flate/load_store.go",
+      "sha256": "5ecf768f2ee78d075a5161e7bf3ab946e0ae4c7dc8142e99ac66a1c0254007e9",
+      "size": 1308
+    },
+    {
+      "path": "src/compress/flate/regmask_amd64.go",
+      "sha256": "470ff9906e97252aafc87c6fb7c63c1b9dd59518220503ab6dfe851406d57330",
+      "size": 315
+    },
+    {
+      "path": "src/compress/flate/token.go",
+      "sha256": "19c2dabd2e911839dc74c9f63131eb092cdc053c4bddf6654310d6b5da70e3be",
+      "size": 10136
+    },
+    {
+      "path": "src/compress/gzip/gunzip.go",
+      "sha256": "5886344b7fd61358d430872ab735653b16a314c87dab1f0bde4d8d9db0381ec4",
+      "size": 8663
+    },
+    {
+      "path": "src/compress/gzip/gzip.go",
+      "sha256": "15564f213c583a22e79da0611c173c28ead54fa6651ad9bc7797938048e77ba0",
+      "size": 6746
+    },
+    {
+      "path": "src/hash/crc32/crc32.go",
+      "sha256": "85f9b1484d31d449fda4c70b6df4e8c78455b5384d06fecd5f7a359638de2f76",
+      "size": 7778
+    },
+    {
+      "path": "src/hash/crc32/crc32_amd64.go",
+      "sha256": "548dc603730f2b153b1568bacb155ac57568e8b474d5be371971e4f785ab2865",
+      "size": 7101
+    },
+    {
+      "path": "src/hash/crc32/crc32_generic.go",
+      "sha256": "ab955ded37b50660ad89f448fa2d6129e73cee97e4755770c0c695d666fb065d",
+      "size": 2559
+    },
+    {
+      "path": "src/hash/crc32/gen.go",
+      "sha256": "b6f5dd452079fe27e1789a41dee81b24b2b933a655fcaa4ca530be8bafb2fe63",
+      "size": 217
+    },
+    {
+      "path": "src/text/tabwriter/tabwriter.go",
+      "sha256": "202c00a1bc55b5f37a1ef66b4d9bd841fb713aa88801d881ee20f112e93591dc",
+      "size": 18237
+    }
+  ]
+}

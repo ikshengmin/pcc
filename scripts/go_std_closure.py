@@ -24,6 +24,8 @@ LOCK_SHA256 = "a689035f1adcb1b8232028aa03713725d8f78b199d59f66773c8a2b13e102ac3"
 REVISION = "2aae1000ea1d4b28923b96db28acf4e3b99d6aff"
 MAX_FILES = 1024
 MAX_TOTAL_BYTES = 8 * 1024 * 1024
+LINUX_PROFILING_PIN = "pcc-linux-amd64-profiling-source-pin.json"
+LINUX_PROFILING_PIN_SHA256 = "e062454ef84b7beae0fd0a7f5d786cf5ff69fbb8ac01e3388616e537d5e754d9"
 
 
 def load_std_closure(directory=FIXTURE):
@@ -101,3 +103,22 @@ def target_selection_gaps(selected, original_files, lock):
         "roots": roots,
         "scope": "reference source metadata only; not an owned build or test execution",
     }
+
+
+def load_linux_profiling_pin(directory=FIXTURE):
+    """Load the source identities, not buildable packages or runtime shims."""
+    raw = (Path(directory) / LINUX_PROFILING_PIN).read_bytes()
+    if hashlib.sha256(raw).hexdigest() != LINUX_PROFILING_PIN_SHA256:
+        raise ValueError("Linux profiling source pin SHA256 mismatch")
+    return json.loads(raw)
+
+
+def verify_linux_profiling_selection(selected, build_ids_sha256):
+    pin = load_linux_profiling_pin()
+    if build_ids_sha256 != pin["reference_build_ids_sha256"]:
+        raise ValueError("Linux profiling selection identity differs")
+    for entry in pin["files"]:
+        path = entry["path"]
+        if selected.get(path) != entry["sha256"]:
+            raise ValueError("Linux profiling source differs: " + path)
+    return len(pin["files"])

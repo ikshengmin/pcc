@@ -165,3 +165,20 @@ def test_reference_gap_receipt_refuses_inconsistent_original_lock_overlap():
     lock = {"files": [{"path": path, "sha256": "not-original"}], "owned_excluded": [], "roots": []}
     with pytest.raises(ValueError, match="disagrees with pinned original"):
         target_selection_gaps({path: "selected"}, {path: b"original"}, lock)
+
+
+def test_linux_profiling_source_pin_checks_selected_bytes_without_granting_admission():
+    from scripts.go_std_closure import load_linux_profiling_pin, verify_linux_profiling_selection
+
+    pin = load_linux_profiling_pin()
+    selected = {entry["path"]: entry["sha256"] for entry in pin["files"]}
+    assert len(selected) == 22
+    assert pin["complete_build_closure"] is False
+    assert verify_linux_profiling_selection(selected, project.REFERENCE_BUILD_IDS_SHA256) == 22
+    path, digest = selected.popitem()
+    with pytest.raises(ValueError, match="profiling source differs"):
+        verify_linux_profiling_selection(selected, project.REFERENCE_BUILD_IDS_SHA256)
+    with pytest.raises(ValueError, match="profiling source differs"):
+        verify_linux_profiling_selection({**selected, path: "0" * 64}, project.REFERENCE_BUILD_IDS_SHA256)
+    with pytest.raises(ValueError, match="profiling selection identity differs"):
+        verify_linux_profiling_selection({**selected, path: digest}, "0" * 64)
