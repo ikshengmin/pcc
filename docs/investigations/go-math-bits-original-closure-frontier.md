@@ -702,3 +702,13 @@ One hundred thirty-nine adjacent checks and two native nodes
 passed. The exact source probe now stops at the catalog range
 receiver in `internal/cpu/cpu.go:255:19`; neither this catalog nor
 the whole upstream package has a native build.
+
+The source-only catalog mode now accepts direct bool and string field
+places in a single-index range over the proved catalog. The index is
+the loop's unchanged int binding; the checker rejects rebinds, computed
+indexes, address taking, calls, pointer fields and whole-record
+materialization in this lane. Both original index-only ranges now
+type-check. The exact source probe stops at the copied-element range
+in `internal/cpu/cpu.go:273:20`, which also needs the Feature pointee
+origin. Sixty-nine adjacent plus 35 existing native/reference checks
+passed; the catalog itself is still not emitted.

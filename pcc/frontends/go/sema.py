@@ -449,7 +449,8 @@ def validate_value_types(program, *, source_only=False):
         if getattr(expr, 'variadic_use', False):
             # Marked only at a specific borrow consumer, not on general loads.
             borrow_span(expr)
-        elif expr.kind != "type":
+        elif expr.kind != "type" and not (
+                source_only and expr.kind in {"static_catalog_range", "static_catalog_index"}):
             storage(expr.type, expr.token)
         for child in expr.args:
             expression(child)
@@ -540,6 +541,7 @@ class Analyzer:
         self.source_only = source_only
         self.scalar_slice_owners = {}
         self.static_option_catalogs = {}
+        self.static_catalog_places = {}
         if static_option_catalogs and not source_only:
             raise ValueError("static option catalog metadata is source-only")
         if static_option_catalogs:
@@ -1649,7 +1651,21 @@ class Analyzer:
             ranged = statement.exprs[0]
             # Resolve the range expression before declaring the iteration
             # variables: `for a := range a` reads the enclosing a.
-            self.expression(ranged)
+            catalog, places = None, None
+            if ranged.kind == "name" and ranged.token.text in self.static_option_catalogs:
+                from pcc.frontends.go.slice_proof import static_catalog_index_places
+
+                symbol = self.lookup(ranged.token)
+                if symbol.static_option_catalog_proof is not None:
+                    record = underlying(symbol.type.element)
+                    fields = {field.name for field in record.fields
+                              if not field.embedded and field.type in ("bool", "string")}
+                    places = static_catalog_index_places(statement, ranged.token.text, fields)
+                    if places is not None:
+                        catalog = symbol
+                        ranged.kind, ranged.type, ranged.symbol = "static_catalog_range", symbol.type, symbol
+            if catalog is None:
+                self.expression(ranged)
             dtype = underlying(ranged.type)
             if is_integer(ranged.type):
                 if len(statement.targets) > 1:
@@ -1685,6 +1701,9 @@ class Analyzer:
                     # pointer, never a snapshot of the pointed-to array.
                     self.function.temporaries.append(ranged)
                 value_types = ("int", array_type.element)
+            elif catalog is not None:
+                statement.evaluate_range = True
+                value_types = ("int",)
             elif isinstance(dtype, SliceType):
                 borrow_span(ranged)
                 if len(statement.targets) > 2:
@@ -1712,7 +1731,13 @@ class Analyzer:
                 self.iteration_binding = False
             self.loop_depth += 1
             self.break_depth += 1
-            self.statements(statement.body)
+            previous_places = self.static_catalog_places
+            if places is not None:
+                self.static_catalog_places = {**previous_places, **{id(place): catalog for place in places}}
+            try:
+                self.statements(statement.body)
+            finally:
+                self.static_catalog_places = previous_places
             self.break_depth -= 1
             self.loop_depth -= 1
             self.scopes.pop()
@@ -1956,6 +1981,15 @@ class Analyzer:
             return
         if kind == "index":
             base, index = expr.args
+            catalog = self.static_catalog_places.get(id(expr))
+            if catalog is not None:
+                self.expression(index)
+                if index.type != "int":
+                    raise GoDiagnostic(index.token, "source catalog index must be its int range variable")
+                base.kind, base.type, base.symbol = "static_catalog_range", catalog.type, catalog
+                expr.kind, expr.type = "static_catalog_index", catalog.type.element
+                expr.addressable = True
+                return
             self.expression(base)
             self.expression(index)
             integral_constant(index)

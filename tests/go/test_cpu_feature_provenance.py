@@ -228,3 +228,68 @@ func main() {}
         analyze_source_instances({"main": SourceInstance("main", units, {}, static_option_catalogs=(request,))},
                                  main_instance="main", target_triple="x86_64-unknown-linux-gnu")
     assert caught.value.line == 3
+
+
+CATALOG_RANGE_SOURCE = """package main
+type Item struct { Label string; Flag *bool; Enabled bool }
+var catalog []Item
+var Flags struct { A bool }
+func hardware() int32 { return 1 }
+func use(key string) {
+    for i := range catalog {
+        if catalog[i].Label == key { catalog[i].Enabled = true }
+    }
+}
+func build() {
+    catalog = []Item{{Label:"a", Flag:&Flags.A}}
+    level := hardware()
+    if level < 2 { return }
+}
+func main() {}
+"""
+
+
+def test_static_catalog_index_range_checks_scalar_fields_before_storage_stop():
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+
+    request = StaticOptionCatalogRequest("catalog", "build", "hardware")
+    units = (("catalog_range.go", CATALOG_RANGE_SOURCE),)
+    checker = Analyzer(parse_package(units, require_main=True), source_only=True,
+                       static_option_catalogs=(request,))
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
+        checker.analyze()
+    assert caught.value.line == 12  # the unadmitted builder write, not the index range
+    loop = checker.functions["use"].body[0]
+    assert loop.exprs[0].kind == "static_catalog_range"
+    assert loop.init.symbols[0].type == "int"
+    condition = loop.body[0]
+    lhs = condition.exprs[0].args[0]
+    assert lhs.type == "string" and lhs.args[0].kind == "static_catalog_index"
+    write = condition.body[0].targets[0]
+    assert write.type == "bool" and write.addressable and write.args[0].kind == "static_catalog_index"
+
+
+@pytest.mark.parametrize("replacement", [
+    "i++; if catalog[i].Label == key {}",
+    "if catalog[i+1].Label == key {}",
+    "_ = catalog[i].Flag",
+    "_ = &catalog[i].Enabled",
+    "_ = catalog[i]",
+    "touch(i)",
+])
+def test_static_catalog_index_range_rejects_aliases_and_changed_indices(replacement):
+    from pcc.frontends.go.packages import parse_package
+    from pcc.frontends.go.sema import Analyzer
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+
+    source = CATALOG_RANGE_SOURCE.replace(
+        "if catalog[i].Label == key { catalog[i].Enabled = true }", replacement)
+    analyzer = Analyzer(parse_package((("catalog_range.go", source),), require_main=True),
+                        source_only=True, static_option_catalogs=(
+                            StaticOptionCatalogRequest("catalog", "build", "hardware"),
+                        ))
+    with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
+        analyzer.analyze()
+    assert caught.value.line == 7

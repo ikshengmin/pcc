@@ -629,3 +629,39 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
         return None
     exports = tuple(sorted({link.local for link in relevant}))
     return StaticOptionBuilderProof(record, len(initial.args), tuple(thresholds), tuple(field_order), exports)
+
+
+def static_catalog_index_places(statement, slot, fields):
+    """Return only direct scalar field places using an unchanged range index."""
+    if (statement.kind != "range" or not statement.range_declaration
+            or len(statement.targets) != 1 or statement.targets[0].kind != "name"
+            or statement.targets[0].value in {"_", slot}):
+        return None
+    index = statement.targets[0].value
+    places = []
+
+    def expression(expr):
+        if expr.kind in {"func_literal", "call"} or _name(expr, slot):
+            return False
+        if expr.kind == "unary" and expr.value == "&" and (_mentions(expr, slot) or _mentions(expr, index)):
+            return False
+        if expr.kind == "selector" and len(expr.args) == 1:
+            base = expr.args[0]
+            if base.kind == "index" and len(base.args) == 2 and _name(base.args[0], slot):
+                if expr.value not in fields or not _name(base.args[1], index):
+                    return False
+                places.append(base)
+                return True
+        return all(expression(child) for child in _expression_children(expr))
+
+    for node in walk(statement.body):
+        if node.kind not in {"var", "const", ":=", "=", "++", "--", "if", "block", "break",
+                             "continue", "return", "expression", "empty"}:
+            return None
+        if any(token.text in {slot, index} for token in node.names):
+            return None
+        if any(_name(target, index) or _name(target, slot) for target in node.targets):
+            return None
+        if not all(expression(expr) for expr in (*node.exprs, *node.targets)):
+            return None
+    return tuple(places)
