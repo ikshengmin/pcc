@@ -228,6 +228,79 @@ def test_peer_close_releases_both_forwarding_tasks(mode, close_side):
     run(scenario())
 
 
+async def tunnel_released(deadline):
+    for _ in range(int(deadline / 0.01)):
+        if not server.ACTIVE_CHANNEL_TASKS and not server.ACTIVE_CHANNEL_WRITERS:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("Half-closed tunnel retained after its remaining direction idled")
+
+
+@pytest.mark.parametrize("mode", ["domain", "http"])
+@pytest.mark.parametrize("eof_side", ["client", "upstream"])
+def test_idle_half_closed_tunnel_is_released(monkeypatch, mode, eof_side):
+    """One side sends EOF; the other never sends more and never closes. On the
+    t-liuhuan proxy, 60 such tunnels (client socket already CLOSED, upstream in
+    FIN_WAIT_2) held 120 of 256 descriptors after nine days, until accept() and
+    even /etc/hosts lookups failed with EMFILE. Like HAProxy's client-fin and
+    server-fin timeouts, a half-closed tunnel ends after an idle period."""
+    monkeypatch.setattr(server, "HALF_CLOSE_IDLE_TIMEOUT", 0.3, raising=False)
+
+    async def scenario():
+        async with network() as net:
+            peer = asyncio.Future()
+
+            async def target_handler(reader, writer):
+                peer.set_result((reader, writer))
+                await asyncio.Event().wait()
+
+            target = await net.listen(target_handler)
+            proxy = await net.proxy()
+            reader, writer = await tunnel(net, proxy, target, mode)
+            remote_reader, remote_writer = await peer
+            if eof_side == "client":
+                writer.write(b"request")
+                writer.write_eof()
+                assert await remote_reader.read() == b"request"
+                # The upstream holds its side open; the client must be released.
+                assert await asyncio.wait_for(reader.read(), 3) == b""
+            else:
+                remote_writer.write(b"response")
+                remote_writer.write_eof()
+                assert await reader.read() == b"response"
+                # The client holds its side open; the upstream must be released.
+                assert await asyncio.wait_for(remote_reader.read(), 3) == b""
+            await tunnel_released(3)
+    run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["domain", "http"])
+def test_half_closed_tunnel_stays_open_while_data_flows(monkeypatch, mode):
+    """The half-close deadline counts idle time, not the tunnel's age: a reply
+    streamed after the client's EOF for longer than the deadline is delivered."""
+    monkeypatch.setattr(server, "HALF_CLOSE_IDLE_TIMEOUT", 0.3, raising=False)
+    chunks = [b"chunk%02d" % index for index in range(10)]
+
+    async def scenario():
+        async with network() as net:
+            async def stream_after_eof(reader, writer):
+                assert await reader.read() == b"request"
+                for chunk in chunks:
+                    await asyncio.sleep(0.1)
+                    writer.write(chunk)
+                    await writer.drain()
+                writer.close()
+
+            target = await net.listen(stream_after_eof)
+            proxy = await net.proxy()
+            reader, writer = await tunnel(net, proxy, target, mode)
+            writer.write(b"request")
+            writer.write_eof()
+            assert await asyncio.wait_for(reader.read(), 5) == b"".join(chunks)
+            await settled()
+    run(scenario())
+
+
 def test_completed_tunnels_release_writer_registry():
     async def scenario():
         async with network() as net:

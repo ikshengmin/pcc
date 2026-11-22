@@ -12,7 +12,7 @@ concurrent HTTP/2 streams for 245 seconds.
 | Authentication | Valid and invalid credentials, rejection when no authentication method is shared |
 | Connection failures | Delayed upstream connection, DNS failure, refusal, timeout, network unreachable, permission denial, SOCKS error propagation through a chain, HTTP 403/407/502 rejection, a reset between TCP handshake and transport setup (target and upstream hop) leaving no descriptor registered to a dead transport |
 | Data integrity | Eight simultaneous 1 MiB transfers, binary payloads, two-hop HTTP/SOCKS chains, 2 MiB transfer to a slow receiver |
-| Cleanup | Either peer closing, abrupt transport abort, healthy connections surviving a peer failure, no retained writer/task registrations |
+| Cleanup | Either peer closing, abrupt transport abort, healthy connections surviving a peer failure, no retained writer/task registrations, a half-closed tunnel released once its remaining direction idles (either side's EOF) but kept while data still flows |
 | CLI | SIGINT during idle, incomplete handshake and active transfer; process exit and coroutine cleanup |
 | SOCKS5 UDP | ProxyBridge's exact UDP ASSOCIATE request, IPv4/IPv6/domain destinations, authentication, binary/empty payloads, STUN mapping stability across destinations, independent upstream replies, source-port pinning, malformed/fragmented packets, 32 simultaneous associations, control EOF/timeout/rejection, UDP API and standalone listeners |
 | TLS/HTTP2 | Certificate and hostname verification, eight multiplexed streams, an injected in-flight RST_STREAM, GOAWAY with accepted streams completing, streamed responses |

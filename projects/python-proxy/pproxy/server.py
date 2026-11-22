@@ -14,6 +14,11 @@ ALIVE_PROBE_TIMEOUT = 3
 # host, and a path that silently drops IPv6 SYNs would otherwise hold the whole
 # connection until SOCKET_TIMEOUT instead of falling back to the next address.
 HAPPY_EYEBALLS_DELAY = 0.25
+# Once one direction of a tunnel has ended and its EOF was passed on as a
+# half-close, the tunnel ends when the other direction moves no data for this
+# long, like HAProxy's client-fin/server-fin timeouts. Without a deadline a
+# peer that never closes its side holds both descriptors for good.
+HALF_CLOSE_IDLE_TIMEOUT = 60
 DUMMY = lambda s: s
 ACTIVE_CHANNEL_TASKS = []
 ACTIVE_CHANNEL_WRITERS = []
@@ -51,11 +56,38 @@ def close_active_channel_writers():
         except Exception:
             pass
 
-def link_channel_tasks(channels, writers):
+class RelayActivity:
+    """When either direction of one tunnel last relayed a chunk."""
+    __slots__ = ('last',)
+
+    def __init__(self):
+        self.last = time.monotonic()
+
+    def counting(self, stat_bytes):
+        def relayed(size):
+            self.last = time.monotonic()
+            stat_bytes(size)
+        return relayed
+
+def link_channel_tasks(channels, writers, activity=None):
+    """Run the directions of one tunnel; activity bounds a half-closed tunnel."""
     tasks = [asyncio.ensure_future(channel) for channel in channels]
     ACTIVE_CHANNEL_TASKS.extend(tasks)
     ACTIVE_CHANNEL_WRITERS.extend(writers)
+    idle_timer = None
+    def expire_if_idle():
+        nonlocal idle_timer
+        idle = time.monotonic() - activity.last
+        if idle < HALF_CLOSE_IDLE_TIMEOUT:
+            idle_timer = asyncio.get_running_loop().call_later(
+                HALF_CLOSE_IDLE_TIMEOUT - idle, expire_if_idle)
+            return
+        idle_timer = None
+        for task in tasks:
+            if not task.done():
+                task.cancel()
     def stop_peer(done_task):
+        nonlocal idle_timer
         forget_channel_task(done_task)
         half_closed = (not done_task.cancelled() and done_task.exception() is None
                        and done_task.result() is True)
@@ -63,7 +95,12 @@ def link_channel_tasks(channels, writers):
             for task in tasks:
                 if task is not done_task and not task.done():
                     task.cancel()
+        elif activity is not None and idle_timer is None:
+            expire_if_idle()
         if all(task.done() for task in tasks):
+            if idle_timer is not None:
+                idle_timer.cancel()
+                idle_timer = None
             for writer in writers:
                 writer.close()
                 try:
@@ -196,12 +233,14 @@ async def stream_handler(reader, writer, unix, lbind, protos, rserver, cipher, s
                 raise
             m = modstat(user, remote_ip, host_name)
             lchannel = lproto.http_channel if use_http else lproto.channel
+            activity = RelayActivity()
             link_channel_tasks(
                 (
-                    lproto.channel(reader_remote, writer, m(2+roption.direct), m(4+roption.direct)),
-                    lchannel(reader, writer_remote, m(roption.direct), roption.connection_change),
+                    lproto.channel(reader_remote, writer, activity.counting(m(2+roption.direct)), m(4+roption.direct)),
+                    lchannel(reader, writer_remote, activity.counting(m(roption.direct)), roption.connection_change),
                 ),
                 (writer, writer_remote),
+                activity,
             )
     except asyncio.CancelledError:
         # Handshake connections have not entered the channel registry yet.
