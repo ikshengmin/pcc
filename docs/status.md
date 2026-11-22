@@ -296,9 +296,12 @@ in the relevant section or issue and removes the entry.
    and rejected the zero-worker expectation on stock. Review candidate
    [`f8017e98`](https://github.com/ikshengmin/pcc/commit/f8017e982cc583675efe5db35e17635906d81ae3)
    made automatic progress with zero CMS workers and no allocation assists
-   in the one-mutator Linux test. Runtime changes remain off master.
-   Next: validate four real allocating mutators on that review candidate,
-   then qualify maximum pause and the unchanged GC0 A/B control.
+   in the one-mutator Linux test. Its review follow-up
+   [`5f17931`](https://github.com/ikshengmin/pcc/commit/5f1793111a53a1045ac3223764065effef4fb0d5)
+   passed with four allocating mutators in three fresh Linux processes.
+   Runtime changes remain off master. Next: automatic sweep finalizer/
+   weakref behavior through paused and reentered collections, then
+   measure maximum pause with the unchanged GC0 A/B control.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -310,7 +313,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC1 four allocating mutators on the review candidate: Codex, Linux x86-64, 2026-11-22 08:33 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
