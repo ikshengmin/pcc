@@ -376,8 +376,13 @@ in the relevant section or issue and removes the entry.
    patch was published: 48k allocations w1 five pairs inside drift; w4
    three complete pairs, no stable gain or mark recovery. Two more w4
    attempts failed memory preflight; the one complete 120k w4 pair was
-   worse. Next: bound raw allocations with reuse of already drained
-   batches; don't change the flush protocol.
+   worse. Four-slot raw reuse passed 47 queue model/ABI checks and all
+   four Linux GC1–4 native queue modes. Five matched 48k pairs per worker
+   count did not qualify it: time −4.6%/−13.4% at w1/w4 within duplicate-
+   parent drift; w4 finished no mark in 3/5 candidate vs 2/5 parent legs.
+   No runtime change. Next GC2: tune no more batch layouts without a stable
+   signal; inspect root publication and consumer progress using native
+   counters, separate from experimental per-worker gray design.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -432,7 +437,6 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 22:32 UTC), bounded drained gray-batch reuse candidate: prove sole raw buffer ownership, preserve publication/root/epoch behavior and measure with Linux native control; no master merge.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
