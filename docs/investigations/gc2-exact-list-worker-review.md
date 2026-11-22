@@ -128,3 +128,13 @@ completed one ordinary mark; one-mutator runs completed four to
 twelve. The two earlier focused native suites also passed on this
 archive. These are coverage counters, not sampled timing, a guarantee
 of progress for arbitrary programs, or measured speedup.
+
+A deterministic owned probe feeds one actual mark step a queued exact
+list of 32 slots, a 33-slot list, or a tuple. With the bridge on, the
+32-slot shape takes the shortcut exactly once, the 33-slot shape takes
+ordinary fallback exactly once, and the tuple bypasses the shortcut.
+The disabled control registers none of those events. All six combinations
+blacken the original owner, debit its credit once, and enqueue exactly
+one child, even with repeated incoming slots. Three fresh processes per
+combination passed on Linux; no automatic finish or speed claim is
+added by this controlled single slice.
