@@ -266,3 +266,25 @@ black re-graying only at a private construction root whose object has no
 initialized managed children yet. Keep ordinary root and owning stores
 unchanged and check that a genuinely white construction value still
 shades. This is not evidence that GC2 can skip all re-shading.
+
+Review branch [`02308ff`](https://github.com/ikshengmin/pcc/commit/02308ff036d18b4353ea7be7065c939456087c8c),
+parent `ca97bac`. Its only behavior change is the private empty-list
+construction root: a black value is not re-grayed, while the native
+test proves that a white private construction value, an ordinary black
+root republish, and the owning-list append each still queue an exact
+object. Ordinary root and owning writer entry points are unchanged.
+
+With the same 48,000-list binary source and fresh stock/candidate runtime
+archives, Linux x86-64 five alternating pairs at each worker count:
+w4 committed marks `[2,0,2,0,2] -> [3,3,3,4,3]`, GC2 write shades
+19,805–44,333 stock vs zero candidate, and published live bytes at
+worker join had medians 1,559,360 vs 936,160 (not RSS).
+w1 mark completions were `[11,6,10,11,7] -> [11,11,9,9,11]`.
+This is fixed-allocation liveness evidence, not throughput or a
+qualified performance A/B. The two focused GC2 tests, all eight ABI
+chunk checks, and five affected host/semantic tests passed. On stock
+and candidate the separate pcc0 list-literal integration stops
+at the same existing GC1 `global-old` finalizer assertion in both
+IR modes; it is not a passing all-five gate. Native pcc1 and Mac were
+not executed. Keep the candidate out of master pending #9 and a
+matched HTTP/latency/RSS/stop-time A/B with an independent control arm.

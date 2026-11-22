@@ -211,10 +211,13 @@ in the relevant section or issue and removes the entry.
    delayed cycle completes when allocation stops with all four workers
    still alive. A native active-mark control ties one gray token to each
    stock private empty-list construction root, separate from existing-root
-   and late owning-store shades. Next GC2: test a review-only private-root
-   candidate while keeping the two ordinary shades; see the
+   and late owning-store shades. The
+   [GC2 review candidate](https://github.com/ikshengmin/pcc/commit/02308ff036d18b4353ea7be7065c939456087c8c)
+   avoids re-graying only that private root. It completed 3–4 marks in
+   all five matched Linux four-worker allocation runs, versus 0–2 stock.
+   Next GC2: verify under matched HTTP load and macOS with an unaffected
+   control arm before any adoption; see the
    [native screen](gc-gray-worklist.md#stock-gc2-native-completion-screen).
-   No performance candidate merges before #9 is fixed.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -253,7 +256,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - GC2 validate private construction-root shading on a review branch: Codex, Linux x86-64, 2026-11-22 14:30 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
