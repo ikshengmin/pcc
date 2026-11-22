@@ -88,6 +88,7 @@ CASES = [
     ('unsafe-operations', 'package main;import "unsafe";func main(){_=unsafe.Sizeof(0)}'),
     ('local-type-declarations', original('func F[T any](){type L struct{}}')),
     ('map-storage', original('type T struct{Values map[string]float64}')),
+    ('goroutines', original('func f(){}', 'go f()')),
 ]
 
 

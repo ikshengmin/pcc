@@ -30,6 +30,7 @@ UNIMPLEMENTED_FEATURES = {
     'go.unsupported.local-type-declarations': 'go.capability.local-type-declarations',
     'go.unsupported.linkname-directives': 'go.capability.linkname-directives',
     'go.unsupported.defer': 'go.capability.defer',
+    'go.unsupported.goroutines': 'go.capability.goroutines',
     'go.unsupported.function-values': 'go.capability.function-values',
     'go.unsupported.owned-runtime-surface': 'go.capability.owned-runtime-surface',
     'go.unsupported.method-values': 'go.capability.method-values',

@@ -77,11 +77,11 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # The exact pinned union now parses named embedded/map declarations and
-    # make's explicit map type operand. It is not a platform build selection.
-    with pytest.raises(GoDiagnostic, match=r"^benchmark\.go:238:2: Go: unsupported statement 'go'$") as caught:
+    # The pinned union now enters the original go statement's nested body
+    # and stops at its channel send. This is not a platform build selection.
+    with pytest.raises(GoDiagnostic, match=r"^benchmark\.go:242:13: Go: expected semicolon or newline$") as caught:
         compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 238, 2)
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 242, 13)
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
 
 

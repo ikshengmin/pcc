@@ -1131,16 +1131,16 @@ class GoParser:
             # One declaration statement, including an empty group. Specs in
             # a group acquire their lexical names one at a time in Sema.
             return Stmt("type", token, type_declarations=self.type_declarations())
-        if self.accept("defer"):
-            # https://go.dev/ref/spec#Defer_statements: "defer" Expression,
-            # a function or method call that is not parenthesized.
+        if token.kind in ("defer", "go"):
+            self.take(token.kind)
+            # Both statements require an unparenthesized function or method call.
             start = self.current
             call = self.expression()
             if call.parenthesized:
-                self.fail(start, "expression in defer must not be parenthesized")
+                self.fail(start, f"expression in {token.kind} must not be parenthesized")
             if call.kind != "call":
-                self.fail(start, "expression in defer must be function call")
-            return Stmt("defer", token, exprs=[call])
+                self.fail(start, f"expression in {token.kind} must be function call")
+            return Stmt(token.kind, token, exprs=[call])
         if token.kind in KEYWORDS and token.kind != "func":
             # `func` starts an expression statement (a called function literal).
             self.fail(token, f"unsupported statement {token.text!r}")

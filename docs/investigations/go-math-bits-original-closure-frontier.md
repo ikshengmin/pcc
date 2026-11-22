@@ -138,3 +138,17 @@ identity before running official tests. Their bytes are not vendored by
 this change, so the existing fixture-gap count and owned gate remain
 unchanged. Scoped verification: 57 checks passed, and all 22 hashes
 matched the official selection capture. No project tests were run.
+
+## Goroutine call syntax
+
+The frontend now preserves unparenthesized calls in `go` statements;
+malformed and invalid calls are source errors, and calls the checker
+can otherwise handle stop before IR at `go.unsupported.goroutines`. A
+function literal retains its independent function-value boundary.
+The unchanged pinned diagnostic union now enters the nested function
+at `testing/benchmark.go:238:2` and stops at its channel send,
+`b.signal <- true` at `242:13`. The separate original project still
+fails target dependency admission; no goroutine, channel or upstream
+test execution by PCC is claimed. The scoped suite passed 266 checks.
+Official Go 1.27.3 built and ran the four small valid originals and
+rejected the five invalid originals; only the reference executed them.
