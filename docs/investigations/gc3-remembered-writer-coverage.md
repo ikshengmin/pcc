@@ -25,3 +25,41 @@ It observes the destination store and a value-only shade. An independent graph
 oracle sees the young object, whereas the hypothetical sparse minor without the
 owner barrier does not. It does not run a dictionary insertion in a native
 nursery or demonstrate a failure of today's collector.
+
+## Collector-entry root baseline
+
+`freestanding_gc_conservative_roots._capture_thread_words` refreshes the
+stopped owner before enumerating the snapshot.
+`freestanding_thread_kernel_pthread._thread_snapshot_roots` captures
+current registers and copies from the SP of that capture, not from a saved
+collection-entry boundary. The test runs both existing capture/refresh bodies
+with supplied machine-state fixtures. A fake object word below the entry SP
+and a current collector register enter the result; a caller stack word is
+retained. The independent entry oracle also includes a saved caller-register
+word, illustrating why just trimming the stack is insufficient. This is not
+a native register probe or a claim that the modeled register was lost in a
+specific production collection.
+
+Before activating a GC3 minor, qualify entry capture at the public and
+automatic collection boundaries, preserving the outermost capture through
+nested entries. Keep existing other-owner polling snapshots unchanged.
+Check collector temporaries that really must become roots through existing
+explicit slots/leases, including callbacks and weakref/finalizer queues.
+The native gate needs both a stale collector-only candidate that dies and
+independent caller-stack, callee-saved-register and exact-slot controls
+that survive, with a supported stack ABI. An integration pass on only one
+host does not qualify Darwin.
+
+The targeted new baseline and two zero-forwarding groups pass (51 cases).
+The wider existing forwarding fixture was not green: on the unchanged
+source/test preimage, GC3 case `[order0-0-3]` again refused forwarding
+installation before reaching the scan. This is not a result of the new
+tests. No native collector or performance gate was run in this round.
+
+`tests/python/test_gc_machine_root_capture.py` has a live-register
+trampoline on Darwin arm64; the Linux x86-64 cases check emitted instructions,
+not live register retention. Adapt the trampoline for the next Linux slice.
+Include a positive root first acquired by a callback or reentrant
+collection; it cannot be inferred from the outermost saved SP. In the later
+scaling gate, report old index visits and payload-span enumeration
+separately from stack words and clean-card visits.
