@@ -273,7 +273,12 @@ in the relevant section or issue and removes the entry.
    exercises public C `PyDict_SetItem`, `PyList_Append` and
    `PyObject_SetAttrString` during the actual callback. Linux passed 101
    checks; all three preserve the candidate with the expected fallback.
-   This does not cover independent CpyHandle owners or non-API writers.
+   [Review commit a5c9a6a](https://github.com/ikshengmin/pcc/commit/a5c9a6ab905694b7e761c6540e8724b487eb846e)
+   checks independent CpyHandle ownership acquired during a real layered
+   finalizer. With an unregistered C owner the exact payload remains usable
+   without full recheck; withdrawing that owner in the callback triggers
+   one fallback and releases the payload exactly once. Linux 105 focused
+   checks passed. Tracked extension fields and non-API writers remain open.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -330,8 +335,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Verify issue 9 CpyHandle ownership acquired in an acyclic callback: Codex, Linux x86-64, 2026-11-22 18:11 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
