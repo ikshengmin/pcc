@@ -367,3 +367,14 @@ It is not the two-argument runtime-object import currently supported
 in the restricted integer panic path. The scoped suite passed 237
 checks and the direct static-field native differential still passed.
 No pointer-bearing record or CPU feature table executed.
+
+The exact source-instance analysis now distinguishes one-argument
+local linkname declarations from two-argument imports. It retains
+source owner metadata only, requires the real declaration and
+file-local unsafe import, and normal compilation still rejects
+unbound exports. The bound walk clears the eight CPU local export
+directives and stops at the selected bodyless `cpuid` declaration
+(`internal/cpu/cpu_x86.go:12:6`). The scoped suite passed 132 checks,
+the existing runtime-error ABI subset passed ten, and an official
+one-argument local-owner control ran. No PCC object export or upstream
+assembly has been admitted.

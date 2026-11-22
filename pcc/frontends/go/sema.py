@@ -486,13 +486,16 @@ def validate_containment_cycles(declarations):
 
 
 class Analyzer:
-    def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None):
+    def __init__(self, program, *, imports=None, require_main=True, package_path=None, generics=None,
+                 source_only=False):
         self.program = program
         self.imports = imports or {}
         self.dot_imports = {}
         self.require_main = require_main
         self.package_path = package_path
         self.generics = generics if generics is not None else GenericSession()
+        self.source_only = source_only
+        self.linkname_exports = {}
         self.type_bindings = {}
         self.abstract_function = False
         self.functions = {}
@@ -1063,6 +1066,11 @@ class Analyzer:
             variable = symbol is not None and symbol.package_variable
             if not variable and directive.local not in self.functions:
                 raise GoDiagnostic(directive.token, "//go:linkname must refer to declared function or variable")
+            if directive.target is None and self.source_only:
+                # Permission to name this source-owned declaration is not an
+                # object symbol, ABI mapping, or grant to load host assembly.
+                self.linkname_exports[directive.local] = "variable" if variable else "function"
+                continue
             provided = runtime_object(directive.target)
             if not variable or provided is None:
                 raise UnsupportedGo(directive.token, 'go.unsupported.linkname-directives',

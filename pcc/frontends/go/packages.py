@@ -165,7 +165,8 @@ def _analyze_packages(packages, *, main_package, target_triple, standard_library
                 raise GoDiagnostic(imported.token, "duplicate import name " + alias)
             file_imports[key] = ImportBinding(imported.token, alias, dependency)
         analyzer = Analyzer(program, imports=imports, require_main=path == main_package,
-                            package_path=None if path == main_package else path, generics=generics)
+                            package_path=None if path == main_package else path, generics=generics,
+                            source_only=instances is not None)
         if owned:
             analyzer.owned_surface = frozenset(
                 [dtype.token.text for dtype in program.types] + [function.token.text for function in program.functions]

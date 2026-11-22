@@ -286,6 +286,8 @@ def analyze_bound_test_instances(bindings, plan, project_files, generated):
         return {"status": "BLOCKED", "diagnostic": str(error), "filename": error.filename,
                 "line": error.line, "column": error.column, "code": error.code}
     return {"status": "SOURCE_ANALYSIS_ONLY", "analyzed_instances": sorted(result),
+            "unbound_linkname_exports": {key: item.linkname_exports for key, item in result.items()
+                                         if item.linkname_exports},
             "claim": "declared imports only; no runtime ABI or native-code admission"}
 
 
