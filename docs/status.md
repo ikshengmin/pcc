@@ -225,14 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   while TinyXML2's open virtual effect-domain decision is pending, run
-   the unchanged Go math/bits local source/test-entry check and identify
-   the first current dependency blocker. Do not relabel it as full upstream
-   execution; the Java Commons Numbers original project and complete
-   CI lanes still use their own guarded execution routes.
+   Go named value-embedded field identity and its direct selector, with
+   a native reference witness. The [original math/bits checks](investigations/go-math-bits-original-closure-frontier.md)
+   still show `_testmain.go:4:2` missing the target's `os` source closure
+   and, in the separate pinned union, `testing/benchmark.go:95:2` rejects
+   the `common` embedded field. No upstream test binary or run. TinyXML2
+   open virtual effects and the Java CI-only closure remain pending.
 
    Claims:
-   - Go math/bits unchanged local source/test-entry: Codex, Linux x86-64, 2026-11-22 01:26 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
