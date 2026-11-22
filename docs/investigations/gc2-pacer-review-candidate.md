@@ -38,3 +38,26 @@ The wider runtime signature chunk check is already red on the unchanged
 master preimage: 51 ordinary runtime signatures in a tranche whose bound
 is 50. The new cross-object ABI entry's chunk and order checks pass.
 No official A/B, macOS run, or pcc1 rebuild was performed.
+
+## Real allocations, opt-in and stock in the same ELF
+
+With no debt-threshold override, the next owned native check ran two
+fresh processes for each of one/four mutators and off/on modes. Each
+allocated 240,000 temporary lists, preserved the same four registered
+roots, attested the effective mode, and reached automatic sweep. The
+ordinary gate can drain the pending mark after join; record workload
+STWs separately from that drain. No profiling read enters the timed
+allocation loops.
+
+| Mutators | Mode | Assist entries | Workload / total STW events | Max recorded STW (µs) |
+|---|---|---|---|---|
+| 1 | stock | 0 / 0 | 2/2, 2/2 | 18714 / 15075 |
+| 1 | opt-in 100 | 0 / 0 | 2/2, 2/2 | 25222 / 10537 |
+| 4 | stock | 0 / 0 | 0/1, 0/1 | 42094 / 38603 |
+| 4 | opt-in 100 | 2 / 19 | 3/3, 4/4 | 29877 / 30269 |
+
+This demonstrates unforced entry into the candidate's assist path at
+four mutators, not that every assist did work or that one arm is faster.
+At four mutators stock max includes the post-join drain and opt-in max
+does not; comparing those as a pause improvement would be invalid.
+Neither this diagnostic nor the controlled stopped assist qualifies A/B.

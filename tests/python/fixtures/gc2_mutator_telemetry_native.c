@@ -5,6 +5,7 @@
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 extern int64_t pcc_gc_telemetry(int64_t);
+extern int64_t pcc_gc2_pacer_mode(void);
 
 enum {
     MAX_WORKERS = 4, TOTAL_LISTS = 48000,
@@ -43,8 +44,10 @@ static void *allocate(void *context) {
 }
 
 int main(int argc, char **argv) {
-    if (argc != 2 || (argv[1][0] != '1' && argv[1][0] != '4') || argv[1][1])
+    if ((argc != 2 && argc != 3) || (argv[1][0] != '1' && argv[1][0] != '4') || argv[1][1])
         return 1;
+    if (argc == 3 && (argv[2][0] != 'h' || argv[2][1])) return 10;
+    int total = argc == 3 ? 240000 : TOTAL_LISTS;
     int workers = argv[1][0] - '0';
     if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 2;
     py_gc_disable();
@@ -61,7 +64,7 @@ int main(int argc, char **argv) {
     for (int i = 0; i < workers; ++i) {
         tasks[i].shared = &shared;
         tasks[i].worker = i;
-        tasks[i].count = TOTAL_LISTS / workers;
+        tasks[i].count = total / workers;
         tasks[i].completed = 0;
         if (pcc_thread_start(&threads[i], allocate, &tasks[i]) != 0 || !threads[i])
             return 4;
@@ -78,7 +81,7 @@ int main(int argc, char **argv) {
         for (int j = 0; j < i; ++j)
             if (tasks[i].id == tasks[j].id) return 6;
     }
-    if (completed != TOTAL_LISTS) return 7;
+    if (completed != total) return 7;
     int64_t work_stw = pcc_gc_telemetry(METRIC_STW_COUNT);
     /* A finite workload can exit with the CMS mark unfinished. Keep a
      * mutator at ordinary gates briefly to observe the eventual handoff.
@@ -106,8 +109,10 @@ int main(int argc, char **argv) {
         pcc_gc_scheduler_root_unregister_handle(handles[i]);
     }
     printf("GC2_MUTATOR_TELEMETRY_OK workers=%d lists=%d assists=%lld traces=%lld "
-           "sweeps=%lld work_stw=%lld stw=%lld max_stw_us=%lld\n", workers, completed,
+           "sweeps=%lld work_stw=%lld stw=%lld max_stw_us=%lld", workers, completed,
            (long long)assists, (long long)traces, (long long)sweeps,
            (long long)work_stw, (long long)stw, (long long)max_us);
+    if (argc == 3) printf(" pacer=%lld", (long long)pcc_gc2_pacer_mode());
+    puts("");
     return 0;
 }
