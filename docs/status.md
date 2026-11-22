@@ -201,9 +201,11 @@ in the relevant section or issue and removes the entry.
    routes the sealed acyclic singleton through actual sweep on GC1/3. Linux
    pcc0 passed 41 focused tests including four CPython comparisons: zero full
    rechecks for terminal death and one fallback on publication in the rescue
-   fixture. No master runtime change. Next: finish the HTTP count (diagnostic
-   runtime built; gateway compile hit the Linux memory guard), then widen to
-   topological layers, cross-thread weakref and the other admission checks.
+   fixture. No master runtime change. The
+   [Linux HTTP observation](investigations/gc-tracing-acyclic-weakref-resurrection.md#http-callback-observation)
+   saw no weakref/finalizer log events in six legs and 160 completed marks;
+   exact per-sweep counters remain unmeasured. Next: topological layers,
+   cross-thread weakref and the other admission checks.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
@@ -256,8 +258,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Measure HTTP collection callback incidence for issue 9: Codex, Linux x86-64, 2026-11-22 16:04 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -390,3 +390,36 @@ check and an unrooted third ref must not run. CPython and GC1–3
 independently produce `mixed 21 1 0` (callback IDs, one leaf finalizer,
 zero discarded-ref callbacks). This does not bound list traversal
 cost, implement late refs in the new arm, or admit GC4.
+
+## HTTP callback observation
+
+A Linux x86-64 replay reused the exact older stock gateway executable from
+[the HTTP screen](../gc-gray-worklist.md#gc2-private-root-candidate-http-screen)
+(PCC core `ca97bac`, gateway `b1490486`, binary SHA-256
+`58ea650afa64601dbc736b055b84220e268be1e47b93748fe33e50905c1da86c`).
+Each stock leg used a fresh process with `PCC_LOG=weakref,finalizer`,
+`PCC_LOG_FORMAT=json`, and its own `PCC_LOG_FILE`. A native positive
+control on `b6bd012` exercised both categories: `finalizer/call`,
+`finalizer/done`, and `weakref/callback`; the older executable also
+contains both logger categories. With the same zrk 3.0.0 client, warm
+C50 for 5 s, then replay GET / C512 for 15 s, using `--closed -t 3
+--disable-keepalive --method GET --timeout 8s --format json`. Gracefully
+drain the server and read the first value in its `gc2-http` line
+(`pcc_gc_tracing_finish_commits`). Each leg was guarded at 90 s / 400 MiB
+with the unchanged 7 GiB Linux preflight reserve.
+
+| Collector | w1 2xx / completed marks | w4 2xx / completed marks |
+| --- | ---: | ---: |
+| GC1 | 6,704 / 28 | 6,060 / 25 |
+| GC2 | 7,320 / 29 | 5,928 / 25 |
+| GC3 | 6,978 / 28 | 5,977 / 25 |
+
+All six main legs had zero client errors and drain exit 0. No weakref
+callback or finalizer log events appeared in any leg. Mark counts include
+warmup, timed load and drain; they are **not** exact counts of sweeps.
+This is an incidence screen (38,967 timed requests; 160 completed marks)
+on a particular route, not an A/B or a proof for other HTTP apps. GC4 was
+not measured. The exact per-sweep callback and post-window recheck timer
+runtime built, but the instrumented gateway did not compile within the
+available memory with the reserve held. There is no measured post-callback
+recheck-time fraction, and no claim that initial rechecks cost nothing.
