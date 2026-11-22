@@ -367,7 +367,12 @@ in the relevant section or issue and removes the entry.
    single allocator lock accounts for median 61.25% of w4 CMS+mutator user
    CPU versus 5.66% w1 (five pairs). Inline magazine lock waits and the
    direct allocator acquire hit the same lock; this is not HTTP evidence.
-   Next: distinguish allocation refill and collector release as lock holders.
+   Holder profiles locate the indirect source: raw refill is 64–83% of
+   instrumented w4 hold samples (four pairs). Three matched allocation
+   probes identify 19.7k/116.1k/115.7k gray allocations versus essentially
+   identical 1 KiB reserves, almost every publication a singleton. The
+   544-byte full batch rounds to 1 KiB. Next: compact forced gray batches
+   without changing the publication contract; Linux native A/B first.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -422,7 +427,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 22:06 UTC), GC2 allocator holder attribution: compare refill and release hold times under the same Linux workload before changing lock behavior.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
