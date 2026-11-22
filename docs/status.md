@@ -685,7 +685,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - pccDot (2026-11-22 23:32 UTC), GC3 stopped sparse card consumer: carry live old-to-young cards between cuts, refuse incomplete coverage and prove native zero-clean-old visits without enabling unproved allocation routes.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
