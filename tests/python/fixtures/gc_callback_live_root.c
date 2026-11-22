@@ -7,6 +7,7 @@ extern void *pcc_gc_scheduler_root_register_handle(TestPyObject **slot);
 extern void pcc_gc_scheduler_root_unregister_handle(void *handle);
 extern void pcc_gc_store_root(TestPyObject **slot, TestPyObject *value);
 extern long long pcc_gc_slot_is_runtime_root(TestPyObject **slot);
+extern long long pcc_thread_owns_stopped_world(void);
 
 static TestPyObject *cell;
 static void *registration;
@@ -33,4 +34,8 @@ long long test_gc_callback_root_close(void) {
     pcc_gc_scheduler_root_unregister_handle(registration);
     registration = 0;
     return cell == 0 && pcc_gc_slot_is_runtime_root(&cell) == 0;
+}
+
+long long test_gc_callback_root_world_running(void) {
+    return !pcc_thread_owns_stopped_world();
 }

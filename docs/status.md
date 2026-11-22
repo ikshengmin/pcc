@@ -229,9 +229,11 @@ in the relevant section or issue and removes the entry.
    first-store helpers; native writer coverage is still required. A
    source-mode snapshot witness also distinguishes collector-only words
    from caller entry roots. The Linux x86-64 native capture control passed
-   with callee-saved register allocation both off and on. Next, qualify a
-   callback/reentrant root acquired after the entry snapshot before changing
-   the owner scan, and decide major-cycle allocation policy before activation.
+   with callee-saved register allocation both off and on. A Linux GC3
+   finalizer now tests a root published while the outer sweep has resumed
+   the world, including nested `gc.collect()`. Next, specify the GC3
+   major-cycle allocation policy and its publication-race test before
+   adding a nursery fast path.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -243,7 +245,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 callback-acquired root control: Codex, Linux x86-64, 2026-11-22 06:18 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

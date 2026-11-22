@@ -64,7 +64,22 @@ settings passed, checking the SP and buffer canaries. Four emitted-object
 targets and the host-only intrinsic guard also passed. No production
 collection, callback-acquired root, or macOS execution was tested here.
 
-Include a positive root first acquired by a callback or reentrant
-collection; it cannot be inferred from the outermost saved SP. In the later
-scaling gate, report old index visits and payload-span enumeration
-separately from stack words and clean-card visits.
+The native GC3 callback-acquired root control allocates a referent in a
+cyclic object's finalizer, checks that the finalizer is inside the outer
+collection with the world resumed, and publishes the referent to a
+registered off-stack owner. The weakref reads it after the finalizer, after
+the outer collect returns, and after another explicit collect. The second
+mode also checks that a nested `gc.collect()` does not reenter tracing.
+The nonrecursive result matches CPython. This checks the current explicit
+owner path; it does not exclude extra conservative copies of the address,
+qualify an entry cutoff, or exercise a nursery.
+
+Reproduction with a fresh source-matched threaded archive:
+`PCC_WITH_THREADS=1 PCC_RUNTIME_ARCHIVE=<archive> uv run pytest -x -v -m
+integration tests/python/test_gc_callback_live_roots.py::test_native_gc3_finalizer_acquired_root`.
+Compare the ordinary mode using
+`tests/python/test_gc_callback_live_roots.py::test_finalizer_acquired_root_reference`.
+Linux pcc0 was executed; macOS and pcc1 were not.
+
+In the later scaling gate, report old index visits and payload-span
+enumeration separately from stack words and clean-card visits.
