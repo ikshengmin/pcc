@@ -427,7 +427,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: none.
+   Claims: pccDot (2026-11-22 22:19 UTC), compact gray-batch review trial: vary private allocation size under the existing flush request, preserve release/consume and epoch contracts, run focused native controls and paired Linux evidence; no master merge.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
