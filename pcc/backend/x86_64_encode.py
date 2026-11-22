@@ -350,7 +350,7 @@ _PC_INDEPENDENT_INSTRUCTION_MNEMONICS = frozenset((
     "mov", "add", "or", "and", "sub", "xor", "cmp", "test", "lea",
     "imul", "neg", "mul", "div", "idiv", "shl", "shr", "sar",
     "movzx", "movsx", "movsxd", "xchg", "xadd", "cmpxchg",
-    "push", "pop", "nop", "cdq", "cqo", "syscall", "mfence", "ret", "ud2",
+    "push", "pop", "nop", "cdq", "cqo", "syscall", "mfence", "cpuid", "ret", "ud2",
 ))
 
 
@@ -1377,6 +1377,7 @@ def _encode_instruction_uncached(
         "cqo": b"\x48\x99",
         "syscall": b"\x0f\x05",
         "mfence": b"\x0f\xae\xf0",
+        "cpuid": b"\x0f\xa2",
         "ret": b"\xc3",
         "ud2": b"\x0f\x0b",
     }

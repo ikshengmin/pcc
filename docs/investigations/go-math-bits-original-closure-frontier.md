@@ -378,3 +378,15 @@ directives and stops at the selected bodyless `cpuid` declaration
 the existing runtime-error ABI subset passed ten, and an official
 one-argument local-owner control ran. No PCC object export or upstream
 assembly has been admitted.
+
+The selected original `cpu_x86.s` defines `cpuid` with two uint32
+inputs at Go ABI0 offsets 0 and 4 and four outputs at offsets 8,
+12, 16, and 20. The owned x86 encoder now implements the no-operand
+CPUID byte sequence; it rejects explicit operands. A same-input ELF
+control compared all four leaf-zero results against a system-assembled
+reference and verified that its wrapper preserves caller RBX. The
+owned build ran with subprocess compilation forbidden. The adjacent
+encoder/cache suite passed 244 checks and this native control passed.
+This does not interpret the Go assembly frame or supply the bodyless
+Go declaration, XGETBV or the build-level routine. Next establish the
+actual PCC tuple result transport before binding any original symbol.

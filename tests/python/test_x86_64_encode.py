@@ -48,6 +48,71 @@ def test_memory_immediate_mov_rejects_unencodable_64bit_constant():
         encode_instruction("mov QWORD PTR [r11], 2147483648", pc=0, labels={}, section_name=".text")
 
 
+def test_cpuid_takes_no_explicit_operands():
+    bare = encode_instruction("cpuid", pc=37, labels={}, section_name=".text")
+    assert bare.code == bytes.fromhex("0fa2") and not bare.relocations
+    with pytest.raises(X86EncodeError, match="cpuid takes no operands"):
+        encode_instruction("cpuid eax", pc=0, labels={}, section_name=".text")
+
+
+@pytest.mark.integration
+@_X86_GATE
+def test_cpuid_native_owned_registers_match_system_oracle(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+
+    assembly = """.intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 16
+  mov rbx, 0x1122334455667788
+  mov r8, rsp
+  xor edi, edi
+  xor esi, esi
+  call probe
+  mov rax, 0x1122334455667788
+  cmp rbx, rax
+  jne fail
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 16
+  syscall
+  cmp rax, 16
+  jne fail
+  xor edi, edi
+  jmp exit
+fail:
+  mov edi, 1
+exit:
+  mov eax, 60
+  syscall
+probe:
+  push rbx
+  mov eax, edi
+  mov ecx, esi
+  cpuid
+  mov DWORD PTR [r8], eax
+  mov DWORD PTR [r8 + 4], ebx
+  mov DWORD PTR [r8 + 8], ecx
+  mov DWORD PTR [r8 + 12], edx
+  pop rbx
+  ret
+"""
+    owned, reference, source = (tmp_path / name for name in ("owned", "reference", "same.s"))
+    with monkeypatch.context() as denied:
+        denied.setattr(subprocess, "Popen", lambda *_a, **_kw: pytest.fail("owned path invoked a tool"))
+        owned.write_bytes(link_static_executable([assemble_file(assembly)], entry="_start"))
+    owned.chmod(0o700)
+    source.write_text(assembly, encoding="utf-8")
+    subprocess.run([_CC, "-nostdlib", "-static", "-o", str(reference), str(source)],
+                   check=True, capture_output=True, timeout=30)
+    got = subprocess.run([str(owned)], check=True, capture_output=True, timeout=5)
+    want = subprocess.run([str(reference)], check=True, capture_output=True, timeout=5)
+    assert len(got.stdout) == 16 and got.stdout == want.stdout and got.stderr == want.stderr == b""
+
+
 def _system_encoding(tmp_path: Path, instruction: str):
     asm_path = tmp_path / "oracle.s"
     obj_path = tmp_path / "oracle.o"
@@ -168,6 +233,7 @@ _EMITTER_SHAPES = (
     "jne external_target",
     "syscall",
     "mfence",
+    "cpuid",
     "ret",
     "ud2",
 )
