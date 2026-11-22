@@ -123,3 +123,18 @@ test stop at three points: reservation before publication, after handoff
 before active marking, and after commit while a finalizer window is open.
 Verify exact registered-object identity and survival, child shading, sweep
 exclusion and the reopening boundary, under the existing GC0–4 controls.
+
+Existing-path Linux pcc0 control: with the active-mark boundary deliberately
+held open, two ordinary new list allocations publish distinct, stable index
+records, black headers and set page mark bits. Appending through both backing
+storage growth and spare-capacity stores shades a pre-existing white child and
+sets its page bit. A third, unwritten white object stays unmarked. The probe
+does not start a real competing GC cycle or establish nursery handoff ordering.
+Run with a current threaded owned archive:
+`PCC_WITH_THREADS=1 PCC_RUNTIME_ARCHIVE=<archive> uv run pytest -x -v -m
+integration tests/python/test_gc3_indexed_allocation_native.py`.
+Mac and pcc1 were not executed.
+The separate native scan-budget case `[3-0]` failed at its
+`unexpected_head` fixture check, before the scan. Its code, fixture and
+runtime are unchanged by this round. Do not count it as a passing control
+or as evidence about the new indexed-allocation test.
