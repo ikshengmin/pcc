@@ -539,15 +539,15 @@ class GoParser:
             key = self.datatype()
             self.take("]")
             return MapSyntax(token, key, self.datatype())
-        if not signature and self.current.kind in ("chan", "<-"):
+        if self.current.kind in ("chan", "<-"):
             token = self.current
             if self.accept("<-"):
                 self.take("chan")
-                return ChannelSyntax(token, "receive", self.datatype(), token)
+                return ChannelSyntax(token, "receive", self.datatype(signature=signature), token)
             self.take("chan")
             arrow = self.take("<-") if self.at("<-") else None
-            return ChannelSyntax(token, "send" if arrow else "both", self.datatype(), arrow)
-        if signature and self.current.kind in ("map", "chan", "<-"):
+            return ChannelSyntax(token, "send" if arrow else "both", self.datatype(signature=signature), arrow)
+        if signature and self.at("map"):
             token = self.current
             self.constraint_type()
             self.unsupported(token, 'go.unsupported.interface-types',
@@ -982,7 +982,7 @@ class GoParser:
 
     def function_results(self):
         if not self.accept("("):
-            if self.current.kind in ("name", "[", "struct", "*", "interface", "func"):
+            if self.current.kind in ("name", "[", "struct", "*", "interface", "func", "chan", "<-"):
                 return self.datatype(), [None]
             return "void", []
         types, names, _ = self.parameter_list()

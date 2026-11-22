@@ -183,3 +183,11 @@ before IR. The first gap in this diagnostic union is now
 257 focused checks and 15 unchanged owned Linux ELF branch controls;
 official Go ran a select with send, receive, default and labeled break
 and rejected six invalid cases. No owned select was executed.
+
+Channel signatures now keep the original `Done() <-chan struct{}`
+interface result and the concrete method's identical result. Named
+parameters with a channel direction are preserved too. Channel ABI
+still rejects before IR. The diagnostic union first stops at
+`context/context.go:752:17`, its type switch. The scoped suite passed
+180 checks and the interface/channel reference control ran with
+official Linux/amd64 Go.

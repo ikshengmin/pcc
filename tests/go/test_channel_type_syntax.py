@@ -45,3 +45,22 @@ def test_invalid_channel_make_has_a_source_error(arguments, diagnostic):
     with pytest.raises(GoDiagnostic, match=diagnostic) as caught:
         compile_go(f"package main\nfunc main() {{ _ = make({arguments}) }}\n", "channel.go")
     assert not isinstance(caught.value, UnsupportedGo)
+
+
+def test_context_shape_channel_direction_is_kept_in_interface_metadata():
+    source = (
+        "package main\n"
+        "type Context interface { Done() <-chan struct{}; Notify(target chan<- bool) }\n"
+        "type Empty struct{}\n"
+        "func (Empty) Done() <-chan struct{} { return nil }\n"
+        "func New() chan bool { return nil }\n"
+        "func main() {}\n"
+    )
+    unit = GoParser().parse(source, "context_shape.go")
+    done, notify = unit.types[0].type.elements
+    assert (done.result.direction, notify.parameters[0].direction) == ("receive", "send")
+    assert done.result.element.fields == []
+    assert [fn.result.direction for fn in unit.functions[:-1]] == ["receive", "both"]
+    with pytest.raises(UnsupportedGo) as caught:
+        compile_go(source, "context_shape.go")
+    assert caught.value.code == "go.unsupported.channel-storage"
