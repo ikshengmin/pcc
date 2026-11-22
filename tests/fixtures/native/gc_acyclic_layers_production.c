@@ -51,6 +51,8 @@ static PyObject *finish_a(PyObject *self) {
         else if (rescue == 2) *caller_hold = target;
         else if (rescue == 5) *caller_hold = (PyObject *)((char *)target + 1);
         else if (rescue == 4) pcc_gc_pin(target);
+        else if (rescue == 6) py_dict_set(roots[HOLD], py_int_from_i64(7), target);
+        else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
         else if (rescue == 3) py_list_append(roots[HOLD], target);
         else {
             pcc_gc_store_root(&roots[HOLD], target);
@@ -99,8 +101,9 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *b = py_instance_new(b_cls);
     PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
-    if (rescue == 3) {
-        PyObject *holder = py_list_new(0);
+    if (rescue == 3 || rescue == 6 || rescue == 7) {
+        PyObject *holder = rescue == 3 ? py_list_new(0) :
+                           rescue == 6 ? py_dict_new() : py_instance_new(a_cls);
         if (!holder) { error = 14; return NULL; }
         pcc_gc_store_root(&roots[HOLD], holder);
         pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
@@ -167,6 +170,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
     if (argc > 1 && strcmp(argv[1], "pin") == 0) rescue = 4;
+    if (argc > 1 && strcmp(argv[1], "dict-holder") == 0) rescue = 6;
+    if (argc > 1 && strcmp(argv[1], "field-holder") == 0) rescue = 7;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;

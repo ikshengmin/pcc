@@ -462,3 +462,24 @@ recheck. These are narrow native screens, not the required five-pair
 `pcc_perf` gate. Four-candidate GC3 was not a clear win. The explicit-pin
 check still visits the bounded vector at each callback stop and the
 linear-scale gate remains open.
+
+### First confirmed old-owner store paths
+
+The native layered fixture performs each write inside the acyclic head's
+real `__del__`, to an old marked owner already held by a registered root.
+The value is an otherwise dying sibling obtained through a live weakref.
+Neither the callback's native temporary nor a direct root retains the
+sibling at the stop. On GC1 and GC3, the following writers all preserved
+the sibling, produced the same finalizer/weakref events as CPython, and
+took exactly one same-cut full fallback because the current direct roots
+could not explain the write-barrier shade:
+
+- List append through `py_list_append`.
+- Dictionary value insertion through `py_dict_set` with an integer key.
+- Native instance field assignment through `py_instance_set_field`.
+
+These are three concrete paths, not a complete barrier audit. Dictionary
+replacement, additional runtime containers and field layouts, external
+native writers, and publication not mediated by these helpers need
+separate coverage. These tests do not establish safe batching across
+concurrent weakref readers.

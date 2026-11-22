@@ -6,10 +6,18 @@ import weakref
 events = []
 held = None
 holder = []
+dict_holder = {}
+
+
+class FieldHolder:
+    pass
+
+
+field_holder = FieldHolder()
 late_refs = []
 late_new = sys.argv[1] == "late-new"
 indirect = sys.argv[1] == 'holder'
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior")
+rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder")
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
@@ -23,6 +31,10 @@ class A:
             late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
         if indirect:
             holder.append(weak_b())
+        elif sys.argv[1] == "dict-holder":
+            dict_holder[7] = weak_b()
+        elif sys.argv[1] == "field-holder":
+            field_holder.child = weak_b()
         elif rescue or withdrawn:
             held = weak_b()
             if withdrawn:
