@@ -291,8 +291,10 @@ in the relevant section or issue and removes the entry.
    unchanged generator case and a standalone
    [resurrection probe](investigations/gc-tracing-acyclic-weakref-resurrection.md)
    confirm GC1–4 clear acyclic callback weakrefs too early; GC0 and both
-   cycle controls match CPython. Next: qualify a candidate-only graph
-   distinction without changing cyclic behavior or callback ordering.
+   cycle controls match CPython. A stopped candidate-only peel matches
+   the cycle-descendant oracle in a test-only model (66,066 small graphs).
+   Next: qualify the callback boundary when a finalizer resurrects an
+   acyclic owner and its otherwise-dead child. No runtime ordering change.
    The old relocation fixture still fails before grouped take (GC3
    oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
@@ -465,7 +467,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC1 to GC4 candidate-only acyclic weakref graph oracle: Codex, Linux x86-64, 2026-11-22 12:02 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

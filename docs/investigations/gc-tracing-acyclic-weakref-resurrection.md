@@ -60,3 +60,23 @@ Run the same output with each `PCC_GC_BACKEND` value and each argument
 `plain`, `self-cycle`, `downstream`. Run the original fixture under the
 same CPython interpreter and arguments for reference. No pcc1 or macOS
 execution.
+
+## Candidate graph model
+
+`tests/python/gc/test_tracing_weakref_candidate_peel.py` compares a
+zero-internal-in-degree peel with independent transitive reachability
+from each cycle. They agree on all 66,066 directed graphs with 1–4
+vertices, including self-loops. Additional cases cover duplicate strong
+slots, non-candidate children, no eligible weak target, an incomplete
+slot row, a stale stopped epoch, and exhaustion in the middle of the
+peel. The model outputs no candidate classifications on either snapshot
+or budget failure. Nine guarded Linux tests pass.
+
+This is only a pre-callback topology model. It does not authorize using
+a stale verdict across a window when mutators run. In particular, the
+acyclic owner of a candidate child may resurrect both; processing the
+child independently because it is in the peeled region could still
+fire a weak callback or finalizer too soon. Verify that separately in an
+owned native fixture before proposing a sweep change. A production
+budget refusal must preserve the public collection contract; the model
+does not choose a runtime fallback.
