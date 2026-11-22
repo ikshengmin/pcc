@@ -18,8 +18,10 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
-def native_indexed_getitem_runtime(receiver: Type, index: Type) -> str | None:
-    """Select the native NEW-reference ABI for indexed list/tuple reads."""
+def native_owned_getitem_runtime(receiver: Type, index: Type) -> str | None:
+    """Select the typed container getter whose native ABI returns a NEW reference."""
+    if isinstance(receiver, DictType):
+        return "py_dict_getitem"
     if isinstance(index, (IntType, BoolType)):
         if isinstance(receiver, ListType):
             return "py_list_getitem"
@@ -310,11 +312,11 @@ class SubscriptLoweringMixin:
         span = getattr(expr, "span", None)
         elem_ty: Optional[Type] = None
         key_obj: Optional[ir.Value] = None
+        getter = native_owned_getitem_runtime(obj_ty, expr.idx.ty)
+        if getter is None:
+            # Slices and __index__ instances use the object subscript.
+            return None
         if isinstance(obj_ty, (ListType, TupleType)):
-            getter = native_indexed_getitem_runtime(obj_ty, expr.idx.ty)
-            if getter is None:
-                # Slices and __index__ instances use the object subscript.
-                return None
             idx = self._emit_index_expr_as_i64(expr.idx)
             category = "list" if isinstance(obj_ty, ListType) else "tuple"
             got = self.builder.call(
@@ -330,7 +332,7 @@ class SubscriptLoweringMixin:
         elif isinstance(obj_ty, DictType):
             key_obj = self._emit_subscript_key_object(expr.idx)
             got = self.builder.call(
-                self.runtime["py_dict_getitem"],
+                self.runtime[getter],
                 [obj, key_obj],
                 name=self._fresh("subscript.dict.getitem"),
             )

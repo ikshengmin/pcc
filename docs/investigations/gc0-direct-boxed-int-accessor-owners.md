@@ -101,3 +101,19 @@ The scoped Linux pcc0 matrix passed 24 native cases on all five modes
 against CPython and 36 IR controls. A heterogeneous tuple deliberately
 does not acquire the homogeneous rule. No dict, machine-int or foreign
 ABI conclusion, macOS/pcc1 run or throughput claim.
+
+## Typed native dictionary lookup
+
+The linked producer was `py_dict_getitem`; the locked fast path
+retains into its result slot, and the rooted fallback calls
+`py_incref` on the selected value. With the previous compiler both
+successful witnesses matched CPython across GC0–4, but GC0 ended the
+value's trace at `decref(1)`; the missing-key control already passed.
+The shared accessor selection now also covers typed `dict[int, int]`.
+Both witnesses reach `free(0)`. A separately boxed key exercises
+the rooted lookup and a missing key still raises `KeyError`. The
+IR pins the result during owned-key cleanup and releases that key
+on the error edge without publishing a result. Linux pcc0 passed
+28 native cases on GC0–4 against CPython and 43 IR checks.
+No arbitrary key ABI or generic return-annotation claim, Mac or
+pcc1 run, or throughput evidence.

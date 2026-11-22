@@ -591,6 +591,7 @@ def probe(owner: Holder) -> bool:
 @pytest.mark.parametrize(("receiver", "getter"), (
     ("list[int]", "py_list_getitem"),
     ("tuple[int, int]", "py_tuple_getitem"),
+    ("dict[int, int]", "py_dict_getitem"),
 ))
 def test_exact_indexed_subscript_return_handoff_follows_the_owning_getitem(index, receiver, getter):
     params = ", index: int" if "index" in index else ""
@@ -627,6 +628,41 @@ def probe(owner: tuple[int, object]) -> bool:
 """, strict=True)
     assert "@py_tuple_getitem(" in _body(text, "read")
     assert "result.local.borrowed.retain" in _body(text)
+
+
+def test_dict_getitem_consumes_owned_key_before_its_return_root():
+    text = _emit("""
+def read(owner: dict[int, int], key: int) -> int:
+    return owner[key - 1]
+
+def probe(owner: dict[int, int], key: int) -> bool:
+    result: object = read(owner, key)
+    return bool(result)
+""", strict=True)
+    callee = _body(text, "read")
+    getitem = re.search(r"(%[^ ]+) = call ptr [^\n]*?@py_dict_getitem\([^,]+, ptr (%[^)]+)\)", callee)
+    assert getitem is not None
+    result, key = map(re.escape, getitem.groups())
+    use = callee[getitem.end():]
+    targets = re.search(r"br i1 %[^,]+, label %([^,]+), label %([^\n]+)", use)
+    assert targets is not None
+    error, success = (
+        use.split("\n" + label + ":\n", 1)[1].split("\n\n", 1)[0]
+        for label in targets.groups()
+    )
+    # Both paths drop the temporary key; only the success path publishes
+    # the returned value, with the protection around the key release intact.
+    release = r"@pcc_gc_release(?:_known)?\(ptr " + key + r"\)"
+    assert re.search(release, error)
+    assert "@pcc_gc_store_return_root(" not in error
+    steps = (
+        r"@pcc_gc_pin\(ptr " + result + r"\)",
+        release,
+        r"@pcc_gc_unpin\(ptr " + result + r"\)",
+        r"@pcc_gc_store_return_root\(ptr [^,]+, ptr " + result + r"\)",
+    )
+    assert re.search(r".*?".join(steps), success, re.S)
+    assert "result.local.borrowed.retain" not in _body(text)
 
 
 def test_dynamic_formal_conversion_consumes_the_real_owned_result():

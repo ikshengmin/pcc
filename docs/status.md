@@ -226,8 +226,12 @@ in the relevant section or issue and removes the entry.
    modes and CPython, 29 IR checks). At a direct native
    `tuple[int, int]` return the same accessor rule now consumes the
    `py_tuple_getitem` result once. Linux pcc0 passed 24 native cases across
-   GC0–4 against CPython and 36 IR checks. Keep #7 open: next check an
-   actual typed native dict lookup and key-cleanup witness; #4 waits.
+   GC0–4 against CPython and 36 IR checks. The typed dictionary
+   lookup now shares the same runtime getter provenance, preserving
+   temporary-key cleanup and consuming its NEW result once (28 native
+   cases, 43 IR checks). Next for #7: inventory remaining producer
+   contracts before broadening beyond these verified routes;
+   do not add a return-annotation or project-specific shortcut. #4 waits.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -248,7 +252,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 7 native exact dict lookup boxed owner witness: Codex, Linux x86-64, 2026-11-22 11:42 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

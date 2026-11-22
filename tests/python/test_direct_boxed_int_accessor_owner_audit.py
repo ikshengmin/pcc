@@ -86,6 +86,25 @@ CASES.update({
         'except IndexError:\n        pass\n    else:\n        raise AssertionError("expected IndexError")'),
 })
 
+DICT_INDEX = """
+def returned(owner: dict[int, int], key: int) -> int:
+    return owner[key]
+"""
+CASES.update({
+    "dict-lookup-alias": (DICT_INDEX,
+        "owner: dict[int, int] = {0: 0, 1: n}\n    result: object = returned(owner, two - 1)\n    assert result is n"),
+    "dict-lookup-detached": (DICT_INDEX,
+        "owner: dict[int, int] = {0: 0, 1: n}\n    n = 0\n    result: object = returned(owner, two - 1)\n    "
+        "owner = {0: 0}\n    gc.collect()\n    assert result == 9223372036854775808"),
+    "dict-lookup-boxed-key": (DICT_INDEX,
+        'key: int = int("9223372036854775810")\n    owner: dict[int, int] = {key: n}\n    '
+        'result: object = returned(owner, key + 1 - 1)\n    assert result is n'),
+    "dict-lookup-error": (DICT_INDEX,
+        'owner: dict[int, int] = {0: 0, 1: n}\n    try:\n        result: object = returned(owner, two)\n    '
+        'except KeyError:\n        pass\n    else:\n        raise AssertionError("expected KeyError")'),
+})
+
+
 DYNAMIC = """
 def returned(value: object) -> int:
     return int(value)
@@ -162,6 +181,8 @@ def test_native_accessor_baseline(
             assert "py_list_getitem" in call_paths["returned"], call_paths
         if shape.startswith("tuple-index-"):
             assert "py_tuple_getitem" in call_paths["returned"], call_paths
+        if shape.startswith("dict-lookup-"):
+            assert "py_dict_getitem" in call_paths["returned"], call_paths
         (tmp_path / "callee-calls.json").write_text(json.dumps(call_paths) + "\n")
         return tuple(matches)
 
