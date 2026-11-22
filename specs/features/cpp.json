@@ -4485,6 +4485,44 @@
           }
         ]
       }
+    },
+    {
+      "id": "cpp.explicit-destruction-late-direct-member-leaf",
+      "title": "Late direct nonvirtual member leaf effects in explicit destruction",
+      "chapter_ids": [
+        "class.dtor",
+        "expr.call",
+        "basic.link"
+      ],
+      "scope": "An explicit destruction with a nonvirtual or final destructor can carry a same-class, direct, nonvirtual member edge to a TU-final validation. Only a selected canonical member with a call-free bound definition is accepted. Missing/effectful definitions, recursive helpers and open virtual dispatch remain gated. Not an automatic-cleanup certificate, TinyXML2 pass, or pcc1 claim.",
+      "tests": [
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_late_nonvirtual_member_leaf_effect_has_a_real_definition",
+        "tests/cpp/test_cpp_virtual_explicit_destruction_effects.py::test_pending_member_effects_never_leave_the_tu_unproved"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:62c84abb260c967bb8f0bc8639d1325707ddc806b283e0b3027715b120b52290",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/allocation.py",
+            "sha256": "f517f59037404b89b1e9f354cd365aee7609120d13ccd96a7a9fea07cc179d37"
+          },
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "2fcb9c4aebedba34a6de60b8088e2e4313670394345ada9a637495319b824f04"
+          },
+          {
+            "path": "pcc/frontends/cpp/members.py",
+            "sha256": "61f59944b7223652a34e69b5f8e1cdb598c4978341c675037f471050399c0ba4"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "d0c64953ff679cb5cd7ebe2a0deff42575fc596c661f187f3f09d27c9fd01a36"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {

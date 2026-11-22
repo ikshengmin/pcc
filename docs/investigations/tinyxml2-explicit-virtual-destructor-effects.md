@@ -53,3 +53,15 @@ than accepting a cycle or any unbound symbol. Add virtual final-overrider
 evidence only when the complete accepted dynamic domain is proved at its
 owning boundary. Do not rewrite `node->~XMLNode()` as a qualified base
 call, assume every open virtual call is local, or disable the effect gate.
+
+
+## Late direct member leaf
+
+The focused leaf case now explicitly destroys the object before the
+member definition appears in source order. Linux pcc0 checks the exact
+same-class nonvirtual selected member at TU end; the program then returns
+42 with the same streams as g++ 14.2. Absent members and helpers whose
+bound body calls an unresolved function still fail before object emission.
+This deliberately does not certify generated automatic cleanup, recursive
+members or open virtual final overriders. Five integration witnesses and
+153 adjacent tests passed. Unchanged TinyXML2 still stops at `1199:9`.

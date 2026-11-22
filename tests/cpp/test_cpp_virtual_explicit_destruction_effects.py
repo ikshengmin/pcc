@@ -82,20 +82,32 @@ def test_explicit_destructor_keeps_unproved_internal_callees_and_overrides_gated
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
 
 
+def late_member_source(member_body):
+    return (
+        PREFIX + "struct O{O(int*p):out(p){} int*out;~O();void cleanup();};"
+        "O::~O(){cleanup();} void dispose(O*p){p->~O();}"
+        + member_body +
+        "int cpp_test_entry(){long long raw[16];int result=1;"
+        "O*p=new(raw)O(&result);dispose(p);return result;}"
+    )
+
+
 @pytest.mark.integration
 def test_late_nonvirtual_member_leaf_effect_has_a_real_definition(tmp_path):
-    # The member's body follows the destructor, as Unlink follows XMLNode's
-    # destructor in TinyXML2. This independent direct edge needs resolution
-    # before tackling recursive or dynamically dispatched cleanup.
-    source = (
-        PREFIX + "struct O{O(int*p):out(p){} int*out;~O();void cleanup();};"
-        "O::~O(){cleanup();} void O::cleanup(){*out=42;}"
-        "int cpp_test_entry(){long long raw[16];int result=1;"
-        "O*p=new(raw)O(&result);p->~O();return result;}"
-    )
+    # Both the destructor definition and its call precede the helper
+    # definition. Admission depends on its exact bound TU identity.
+    source = late_member_source("void O::cleanup(){*out=42;}")
     units = (("late-member.cpp", source),)
     reference = compile_reference_with_new(units, tmp_path / "reference")
+    binary = tmp_path / "owned"
+    write_host_executable(compile_host_cpp(units), binary)
     assert_exact(run_executable(reference), EXPECTED)
+    assert_exact(run_executable(binary), EXPECTED)
+
+
+@pytest.mark.parametrize("body", ["", "void unknown(int*);void O::cleanup(){unknown(out);}"])
+def test_pending_member_effects_never_leave_the_tu_unproved(body):
     with pytest.raises(CppDiagnostic) as error:
-        compile_host_cpp(units)
+        compile_host_cpp((("no-proof.cpp", late_member_source(body)),))
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
+    assert "bound direct member leaf bodies" in error.value.message

@@ -180,6 +180,7 @@ class CppParser:
         self.function_projection_names = set()
         self.namespace_objects = []
         self.pending_construction_proofs = {}
+        self.pending_explicit_destruction_members = []
         self.language_linkage = None
         tokens = self._tokenize(text, filename)
         self.projection_names = {token.value for token in tokens if token.kind == "ID"}
@@ -206,6 +207,8 @@ class CppParser:
         instances = [item for item in instances if item is not None]
         from pcc.frontends.cpp.constructors import unbound_construction_proofs
         unbound_construction_proofs(self)
+        from pcc.frontends.cpp.destructors import resolve_explicit_destruction_members
+        resolve_explicit_destruction_members(self)
         if self.variadic_virtual_obligations is not None:
             self.variadic_virtual_obligations.finish()
         declarations = self.class_template_declarations + declarations
@@ -1550,6 +1553,13 @@ class CppParser:
                 and result_plan is None):
             from pcc.frontends.cpp.constructors import call_free_body
             symbol.closed_destructor_leaf_helper = call_free_body(body)
+        elif (member_owner is not None and result_plan is None and not symbol.variadic
+              and not getattr(symbol, "method_virtual", False)
+              and not getattr(symbol, "constructor", False)
+              and not getattr(symbol, "destructor", False)
+              and symbol.template_origin is None and not symbol.template_parameters):
+            from pcc.frontends.cpp.constructors import call_free_body
+            symbol.closed_destructor_member_leaf = call_free_body(body)
         if self.variadic_virtual_obligations is not None and symbol.variadic:
             self.variadic_virtual_obligations.bound(symbol, function)
         return function

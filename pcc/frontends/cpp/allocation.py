@@ -386,8 +386,10 @@ def explicit_destructor(parser, expression, operator):
         # trusted. Unknown user calls and declarations alone are not proofs.
         if (not getattr(destructor, 'closed_destruction_body', False)
                 and not (parser.unevaluated_depth and getattr(destructor, 'destructor_defaulted', False))):
-            raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
-                                'unknown destruction effects need exception/cleanup integration', coord)
+            from pcc.frontends.cpp.destructors import queue_explicit_destruction_members
+            if parser.unevaluated_depth or not queue_explicit_destruction_members(parser, destructor, coord):
+                raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
+                                    'unknown destruction effects need exception/cleanup integration', coord)
     saved = parser._fresh_projection_name('__pcc_cpp_destroy_')
     temporary = parser._decl(saved, PointerType(dtype), coord, address)
     pointer = _cast(parser, c_ast.ID(saved, coord), PointerType(owner), coord)

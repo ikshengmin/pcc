@@ -519,3 +519,11 @@ and the generated subobject cleanup in the complete body. No unknown,
 external, recursive or open-virtual call is covered. Linux pcc0 and g++
 agree on both native witnesses. This is not exception unwinding support
 or a qualification of TinyXML2's full virtual destruction graph.
+
+
+For explicit destruction only, a same-class direct nonvirtual member can
+have a pending effect obligation checked at the end of its translation
+unit. The canonical member must have an actual call-free bound body.
+Absent or effectful bodies fail before object emission. This preserves
+the existing automatic D1 cleanup proof and does not admit recursion or
+open virtual effects.

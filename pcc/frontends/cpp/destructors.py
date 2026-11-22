@@ -259,6 +259,37 @@ def _closed_destruction_body(body, cleanup_destructors, direct_helpers):
     return True
 
 
+def record_direct_member_effect(parser, call, selected):
+    observer = parser.lifetimes.direct_destructor_helpers
+    if observer is None or observer[0] is not parser.current_function:
+        return
+    owner = getattr(observer[0], "class_owner", None)
+    if (owner is not None and getattr(selected, "class_owner", None) is owner
+            and not getattr(selected, "method_virtual", False)
+            and not getattr(selected, "constructor", False)
+            and not getattr(selected, "destructor", False)
+            and not selected.variadic and selected.template_origin is None
+            and not selected.template_parameters and not parser.unevaluated_depth):
+        observer[2][call] = selected
+
+
+def queue_explicit_destruction_members(parser, destructor, coord):
+    members = getattr(destructor, "explicit_destruction_member_candidates", ())
+    if not members or any(getattr(member, "closed_destructor_member_leaf", None) is False
+                          for member in members):
+        return False
+    parser.pending_explicit_destruction_members.append((members, coord))
+    return True
+
+
+def resolve_explicit_destruction_members(parser):
+    """No projection leaves the TU unless all recorded member bodies are proved."""
+    for members, coord in parser.pending_explicit_destruction_members:
+        if not all(getattr(member, "closed_destructor_member_leaf", False) for member in members):
+            raise CppDiagnostic("cpp.unsupported.placement-constructor-effects",
+                                "explicit destruction requires bound direct member leaf bodies", coord)
+
+
 def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
     """One cleanup/proof owner for parsed bodies and concretely replayed Patterns."""
     selected = member_destructors(definition, scope, parser=parser)
@@ -266,8 +297,9 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
     previous_helpers = parser.lifetimes.direct_destructor_helpers
     parser.lifetimes.cleanup_destructors = {}
     direct_helpers = {}
+    member_helpers = {}
     if not getattr(symbol, "method_virtual", False) or getattr(symbol, "method_final", False):
-        parser.lifetimes.direct_destructor_helpers = (symbol, direct_helpers)
+        parser.lifetimes.direct_destructor_helpers = (symbol, direct_helpers, member_helpers)
     else:
         parser.lifetimes.direct_destructor_helpers = None
     parser.lifetimes.enter()
@@ -281,6 +313,13 @@ def complete_body(parser, definition, symbol, scope, this, coord, bind_body):
             body.block_items.insert(0, vptr_store(definition, this, coord))
         body.block_items.extend(parser.lifetimes.current_cleanup(coord))
         closed = _closed_destruction_body(body, parser.lifetimes.cleanup_destructors, direct_helpers)
+        if not closed and member_helpers:
+            candidates = dict(direct_helpers)
+            candidates.update(member_helpers)
+            if _closed_destruction_body(body, parser.lifetimes.cleanup_destructors, candidates):
+                # This is not a general D1 closure certificate. Only explicit
+                # destruction can consume it, by registering a TU obligation.
+                symbol.explicit_destruction_member_candidates = tuple(member_helpers.values())
     finally:
         parser.lifetimes.leave()
         parser.lifetimes.cleanup_destructors = previous_calls
