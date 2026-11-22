@@ -380,9 +380,14 @@ in the relevant section or issue and removes the entry.
    four Linux GC1–4 native queue modes. Five matched 48k pairs per worker
    count did not qualify it: time −4.6%/−13.4% at w1/w4 within duplicate-
    parent drift; w4 finished no mark in 3/5 candidate vs 2/5 parent legs.
-   No runtime change. Next GC2: tune no more batch layouts without a stable
-   signal; inspect root publication and consumer progress using native
-   counters, separate from experimental per-worker gray design.
+   No runtime change from reuse. [GC2 review 1b64385](https://github.com/ikshengmin/pcc/commit/1b643852ca1f06e7457bf833b3857ed486e6b949)
+   allows a capped assist from gray backlog even after byte debt has
+   been paid. In 48k-list Linux w4 screens, progress was 0/5→3/5 and
+   2/5→5/5 in-load completions; RSS fell in 9/10 pairs, while time and
+   maximum stops were unqualified. Eight held-producer native comparisons
+   preserve GC1 and the original debt path. No master runtime change.
+   Next GC2: Mac controlled handler A/B on this review, after #9 review;
+   do not call the native completion screen an HTTP gain.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -437,7 +442,6 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 22:45 UTC), distinguish GC2 in-load publication from actual mark-drain progress in a guarded Linux native control; no scheduling or barrier change without a witness.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
