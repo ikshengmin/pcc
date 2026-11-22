@@ -293,8 +293,11 @@ in the relevant section or issue and removes the entry.
    confirm GC1–4 clear acyclic callback weakrefs too early; GC0 and both
    cycle controls match CPython. A stopped candidate-only peel matches
    the cycle-descendant oracle in a test-only model (66,066 small graphs).
-   Next: qualify the callback boundary when a finalizer resurrects an
-   acyclic owner and its otherwise-dead child. No runtime ordering change.
+   The paired native owner/child probe confirms GC1–4 also finalize a
+   child rescued by an acyclic parent's finalizer; CPython and GC0
+   wait until the child's final drop. The cyclic-parent control agrees.
+   Next: test a stop/recheck boundary between dependent acyclic
+   finalizers. No runtime ordering change.
    The old relocation fixture still fails before grouped take (GC3
    oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
@@ -467,7 +470,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Tracing acyclic owner resurrection child lifetime native witness: Codex, Linux x86-64, 2026-11-22 12:04 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

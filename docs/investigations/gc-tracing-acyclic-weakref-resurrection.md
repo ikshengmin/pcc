@@ -80,3 +80,25 @@ fire a weak callback or finalizer too soon. Verify that separately in an
 owned native fixture before proposing a sweep change. A production
 budget refusal must preserve the public collection contract; the model
 does not choose a runtime fallback.
+
+## An acyclic owner's finalizer can rescue a dependent child
+
+The same linked fixture now also runs `child-first`, `parent-first`,
+and `parent-cycle`. CPython and GC0 report just `parent-finalize` after
+the first acyclic collection and the child's original weakref still
+resolves to the parent's child. The child finalizer and weak callback
+run only after the resurrected parent is dropped. GC1–4 instead report
+`child-weak, parent-finalize, child-finalize` during the first
+acyclic collection, in both allocation orders. A self-cyclic parent
+makes that same early order correct for all five and CPython. Run
+all six argument modes in each of the six processes (36 executions).
+Linux pcc0 and threaded source archive; no macOS or pcc1.
+
+The source reason is separate from the early weakref test:
+`_sweep_finalizers` queues every pending candidate into a flat list
+and dispatches them in one reopened user-code window. The only
+reachability recheck follows the *whole* list. Merely peeling the
+acyclic graph or changing the order of its entries cannot make the
+already-queued child's finalizer safe. A later design must retire
+ownership in dependency order and revalidate a child's eligibility
+after user code, preserving the existing cyclic-isolate batch.
