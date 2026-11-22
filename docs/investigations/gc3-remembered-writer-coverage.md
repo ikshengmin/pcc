@@ -83,3 +83,43 @@ Linux pcc0 was executed; macOS and pcc1 were not.
 
 In the later scaling gate, report old index visits and payload-span
 enumeration separately from stack words and clean-card visits.
+
+## Major-cycle handoff: proposed initial GC3 policy
+
+Recommendation: close admission to unindexed young slabs for the whole major
+transaction (handoff, root seeding, active mark, candidate commit and sweep).
+After the existing backend dispatch, GC3 alone checks admission; GC0–2 and GC4
+must not pay for it. Checking only `pcc_gc_mark_active` is insufficient: it
+becomes true only after a seed claim succeeds, and it clears at candidate
+commit before the sweep and its user-code windows finish.
+
+Use the same ordering as `pcc_gc_register_object_cell`: sampling admission and
+publishing the completed allocation's bounds are in a no-park region. Close
+admission in the stopped world; detach nursery cursors, drain pending
+publication and publish all existing nursery cells to the ordinary index in
+place, before the first major seed can take a snapshot. Report handoff as major
+pause work, bounded by the configured nursery budget; never hide it as a
+minor. Do not silently proceed on a partial handoff: keep admission closed
+and preflight the required metadata before starting the handoff. If it cannot
+complete, use a lossless fallback or fail in the same way as ordinary required
+GC metadata allocation. Never sweep unindexed cells as if handoff succeeded.
+
+While nursery admission is closed, allocate on the current indexed old path.
+During active mark, preserve its born-black registration and the existing
+shade barrier for stores into initialized objects. A publication staged
+before the mark is not automatically safe just because registration now
+colors it black: `freestanding_gc_alloc_stage._publish` shades allocations
+whose staging epoch predates the current mark. Keep this existing rule.
+Commit-time sweep candidates must exclude objects allocated after the verdict;
+reopen the nursery only after candidate ownership and callback windows end.
+The ABI, handle/lease roots, and collector-entry scan are unchanged.
+
+The serial admission tests cover reservation crossing the handoff, a
+born-black allocation with an edge to a pre-existing white object, and keeping
+the nursery closed through commit and sweep. Adjacent allocation staging tests
+exercise the current source implementation's same-epoch and prior-epoch paths.
+Neither is a native race test. Before activation, make a native two-mutator
+test stop at three points: reservation before publication, after handoff
+before active marking, and after commit while a finalizer window is open.
+Verify exact registered-object identity and survival, child shading, sweep
+exclusion and the reopening boundary, under the existing GC0–4 controls.

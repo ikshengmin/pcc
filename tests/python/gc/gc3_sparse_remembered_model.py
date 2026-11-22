@@ -90,3 +90,71 @@ class Model:
                 visited.add(node)
                 pending.extend(graph.get(node, ()))
         return visited.intersection(self.young)
+
+
+class MajorAdmissionModel:
+    """Serial boundaries for an inert nursery design, not a threading model."""
+
+    def __init__(self):
+        self.phase = "idle"
+        self.young = {}
+        self.old = {}
+        self.marked = set()
+        self.pending = None
+
+    def reserve(self, owner, edges=()):
+        assert self.pending is None
+        self.pending = (owner, tuple(edges), self.phase)
+
+    def publish(self):
+        owner, edges, reserved_phase = self.pending
+        assert reserved_phase == self.phase
+        self.pending = None
+        if self.phase == "idle":
+            self.young[owner] = edges
+        else:
+            # The actual implementation must shade initialized/stored edges;
+            # the normal barrier still applies even for a born-black parent.
+            self.old[owner] = ()
+            if self.phase == "mark":
+                self.marked.add(owner)
+            self.store(owner, edges)
+
+    def close_nursery(self):
+        if self.pending is not None:
+            return False  # the stopping owner waits for no-park publication
+        assert self.phase == "idle"
+        self.phase = "handoff"
+        self.old.update(self.young)
+        self.young.clear()
+        return True
+
+    def _mark(self, roots):
+        pending = list(roots)
+        while pending:
+            obj = pending.pop()
+            if obj in self.old and obj not in self.marked:
+                self.marked.add(obj)
+                pending.extend(self.old[obj])
+
+    def seed(self, roots):
+        assert self.phase == "handoff" and self.pending is None
+        self.phase = "mark"
+        self._mark(roots)
+
+    def store(self, owner, children):
+        self.old[owner] = tuple(children)
+        if self.phase == "mark" and owner in self.marked:
+            self._mark(children)
+
+    def finish_mark(self):
+        assert self.phase == "mark" and self.pending is None
+        self.phase = "sweep"
+        return frozenset(self.old.keys() - self.marked)
+
+    def finish_sweep(self, candidates):
+        assert self.phase == "sweep" and self.pending is None
+        for obj in candidates:
+            del self.old[obj]
+        self.marked.clear()
+        self.phase = "idle"
