@@ -155,6 +155,16 @@ in the relevant section or issue and removes the entry.
   dispatch from an authenticated checkout; no need to wait for CI before
   focused rounds outside stopped areas.
 
+- GC3 dormant runtime integration ([review #8](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903)):
+  the test-only slice now covers current allocator provenance, a real
+  publish/stop interleave, delayed record publication and strong-slot
+  enumeration. Review the next boundary: an opt-in runtime candidate with
+  exact per-slab provenance, old-record/card preflight and a no-park commit,
+  or require the full writer/root matrix before adding any runtime entry.
+  Recommendation: add only a dormant, test-invoked entry; no ordinary
+  dispatch change, nursery activation or buffer-exporter admission.
+  Use the GC0/GC1/GC2 ready units below while awaiting review.
+
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -266,9 +276,11 @@ in the relevant section or issue and removes the entry.
    indexless cell now gets a stable old record at its original address
    and survives two majors. Preparing its record without committing kept
    it out of the stopped major walk; retry reused the mapping, and commit
-   exposed exactly one entry. Next: test native strong-slot enumeration
-   of a promoted owner with an indexless child. Production promotion and
-   nursery activation are still untested.
+   exposed exactly one entry. A Linux native promoted-owner probe also
+   found its indexless child through the real strong-slot visitor.
+   Next GC3 runtime slice: see review question above. Until it clears,
+   take the next ready GC unit below. Production promotion and nursery
+   activation are still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -280,7 +292,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 native strong slots on a promoted owner: Codex, Linux x86-64, 2026-11-22 08:14 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

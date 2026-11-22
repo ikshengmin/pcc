@@ -248,6 +248,15 @@ future measured gate compare equal promotion counts clustered in few slabs
 versus scattered over many, and report `pcc_allocator_metadata_mapped`
 separately from peak RSS and scan/visit counts.
 
+The native owner-slot check creates a real allocator-backed list and bytes
+cell, publishes allocator provenance for both, and publishes a tracing
+record for only the list, at its original address. The stopped world's
+existing strong-slot visitor reads the exact off-object item slot and
+the indexless young child; the child still has no tracing record
+after the visit. This identifies the data available for card
+preparation without introducing a barrier, card queue or minor.
+One guarded Linux pcc0 native case passed.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the
