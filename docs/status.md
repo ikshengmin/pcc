@@ -302,8 +302,13 @@ in the relevant section or issue and removes the entry.
    terminal invalidation. 74 final native assertions and 62 model/ABI
    checks. In the n64 callback-free probe with 16,384 unrelated refs,
    GC1/3 fell from ~13 ms to ~2 ms (5/5 pairs each). No HTTP/Mac gate claim.
-   Next: run callback-bearing n/4n/16n on both the sealed sweep probe and
-   explicit native gc.collect, checking ordered deliveries against CPython. Arbitrary raw stack lifetimes, HTTP exact timings and
+   [Review commit d239b5c](https://github.com/ikshengmin/pcc/commit/d239b5c4d5d800da323bca4c7a52ed823c6261f5)
+   fixes the 64-user-node public collection ordering failure (129 actual
+   candidates): four shade words, 256-record review bound. Linux 180
+   callback-bearing runs and 68 assertions passed, with sealed and public
+   timing separated. Larger cohorts, strict scaling, Mac and HTTP unqualified.
+   Next: keep unobservable cohorts out of the review graph despite
+   unrelated live weakrefs; preserve actual observable and cyclic arms. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -357,7 +362,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 19:18 UTC), #9 review branch only: validate callback-bearing n/4n/16n dependent chains and equal CPython events on both sealed sweep and explicit native gc.collect; separate performance and admission evidence.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
