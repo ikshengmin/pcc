@@ -223,9 +223,12 @@ in the relevant section or issue and removes the entry.
    evidence. The maintainer named Claude reviewer on 2026-11-22; the first
    slice was approved, and slice 2 and activation must meet the applicable
    conditions in [the review](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
-   Include an explicit inventory and witnesses for ownerless writers, state
-   allocation behavior during major GC, and cover the real exporter root
-   rather than relying on the current GC3 address-lease fast path.
+   The [ownerless-writer audit](investigations/gc3-remembered-writer-coverage.md)
+   identifies the shared nonmoving store, generator and fast first-store
+   paths. A source/model witness executes the GC3 dictionary admission and
+   first-store helpers; native writer coverage is still required. Next,
+   qualify the collector-entry root snapshot and decide major-cycle
+   allocation policy before any activation.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -237,7 +240,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 ownerless remembered writers audit: Codex, Linux x86-64, 2026-11-22 06:08 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
