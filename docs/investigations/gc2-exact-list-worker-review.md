@@ -89,3 +89,42 @@ ABI tests passed. The reset fixture uses the real page-bitmap rotation
 and worklist clear; changing only header color would leave the old
 bitmap bit set and suppress re-shading. No ordinary scheduler, macOS,
 or A/B ran.
+
+## Default-off bridge in the automatic marker
+
+This separate review branch wires the exact-list trial at the front
+of the actual GC2 mark slice, before starting the shared trace stack.
+The default is off; an owned test sets the selector only at startup.
+No option or environment variable exposes it in user builds, no
+additional worker is created, and master does not carry the branch.
+The disabled build is a correctness control, not an untouched
+performance control.
+
+Before dropping the graph lock the marker enters a no-park region;
+it never carries the graph-owned trace stack or fallback cursor
+across unlock. One dequeued exact-list task can scan under its
+container lock and publish with the existing atomic protocol. The
+marker reacquires the graph lock and closes the task before leaving
+no-park, so a real stopped-world finish cannot bisect the handoff.
+A layout/index miss uses the ordinary visitor on the same task and
+cannot loop through the shortcut on requeue. Other tokens use the
+ordinary loop; a stock fallback walker that already blackened the
+same owner cannot cause a second gray debit. A marked but non-gray
+object is not accepted into the bridge.
+
+This first bridge returns after one trial per slice. It is a liveness
+and work-accounting prototype, not an effective parallel pool or a
+throughput candidate. Before any worker expansion, review the
+no-park/graph-lock order and finish admission, verify forced fallback
+and allocation failure, and test whether the extra polls dominate.
+
+Linux x86-64, source-matched owned ELF: twelve fresh automatic runs,
+one/four allocating mutators × test selector off/on × three. Every run
+finished marking, swept, and preserved the registered owners and their
+children. Off reported no bridge work; on reported 34–81 shortcut
+visits and 10–24 ordinary fallbacks with one mutator, and 9,630–43,661
+visits and 2–4 fallbacks with four mutators. Every four-mutator run
+completed one ordinary mark; one-mutator runs completed four to
+twelve. The two earlier focused native suites also passed on this
+archive. These are coverage counters, not sampled timing, a guarantee
+of progress for arbitrary programs, or measured speedup.

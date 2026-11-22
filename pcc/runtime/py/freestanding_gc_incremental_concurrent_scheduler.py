@@ -3,6 +3,7 @@
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    abi_constant,
     atomic_cas_i32,
     atomic_cas_i64,
     atomic_load_i32,
@@ -10,6 +11,8 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     atomic_rmw_i64,
     atomic_store_i32,
+    define_global_i32,
+    define_global_i64,
     define_thread_local_i32,
     function_addr,
     global_addr,
@@ -31,6 +34,24 @@ from pcc.unsafe import (
 
 
 __pcc_freestanding__ = True
+
+# Review branch only: enabled by an owned native probe before automatic
+# collection starts. No runtime flag, default dispatch, or new worker.
+define_global_i32("pcc_gc2_review_list_bridge_enabled", 0)
+define_global_i64("pcc_gc2_review_list_bridge_visits", 0)
+define_global_i64("pcc_gc2_review_list_bridge_fallbacks", 0)
+
+pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
+pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
+pcc_gc2_review_claim_open_locked = extern(
+    "pcc_gc2_review_claim_open_locked", (c_ptr, c_int64), c_int64
+)
+pcc_gc2_review_claim_close_locked = extern(
+    "pcc_gc2_review_claim_close_locked", (c_ptr, c_int64, c_int64, c_int64), c_int64
+)
+pcc_gc_trace_gc2_rooted_short_list = extern(
+    "pcc_gc_trace_gc2_rooted_short_list", (c_ptr, c_int64), c_int64
+)
 
 pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
 
@@ -780,6 +801,40 @@ def pcc_gc_tracing_finish_left_to_mutator() -> i64:
     return 1
 
 
+@c_abi_export("pcc_gc2_review_list_bridge")
+def _gc2_review_list_bridge(owner_slot, epoch: i64, token: i64) -> i64:
+    """Consume one graph-owned claim and return without a stale local cursor."""
+    # There is no STW cut or reclamation across this bounded handoff. The
+    # rooted input is private to this scan; its gray credit is not retired
+    # until the graph lock is back and the children have been published.
+    pcc_thread_no_park_enter()
+    atomic_store_i32(
+        global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
+    )
+    pcc_py_gc_minor_graph_unlock()
+    work: i64 = pcc_gc_trace_gc2_rooted_short_list(owner_slot, epoch)
+    pcc_py_gc_minor_graph_lock()
+    if work == 0:
+        # A shape miss must not be requeued back to the same shortcut.
+        # If an ordinary fallback walker already traced it, it is black:
+        # the close cannot debit its credit twice.
+        owner = load_ptr(owner_slot, 0)
+        if (atomic_load_i32(owner, abi_constant("object.header.flags_offset"), "acquire") & 16) != 0:
+            pcc_gc_trace_referents_work(owner)
+        atomic_rmw_i64(
+            "add", global_addr("pcc_gc2_review_list_bridge_fallbacks"), 0, 1, "relaxed"
+        )
+    else:
+        atomic_rmw_i64(
+            "add", global_addr("pcc_gc2_review_list_bridge_visits"), 0, 1, "relaxed"
+        )
+    pcc_gc_gray_worklist_flush()
+    closed: i64 = pcc_gc2_review_claim_close_locked(owner_slot, epoch, token, 1)
+    pcc_py_gc_minor_graph_unlock()
+    pcc_thread_no_park_exit()
+    return closed
+
+
 @c_abi_export("pcc_gc_tracing_step_cycle")
 def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     if remaining_budget <= 0:
@@ -972,12 +1027,35 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         node = null()
     elif ptr_is_null(node) != 0 and queue_only == 0:
         node = pcc_gc_object_walk_first()
+    review_queued = null()
+    if (
+        stopped == 0
+        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 2
+        and atomic_load_i32(global_addr("pcc_gc2_review_list_bridge_enabled"), 0, "acquire") != 0
+        and pcc_py_gc_minor_graph_lock_depth() == 1
+        and load_i64(global_addr("pcc_gc_tracing_finish_claim_epoch"), 0) == 0
+    ):
+        # Try one token only. No graph-owned trace stack or cursor is
+        # carried across unlock; rejected tokens enter the stock loop.
+        review_queued = pcc_gc_gray_worklist_take_locked()
+        if ptr_is_null(review_queued) == 0:
+            owner_slot = stack_alloc(8)
+            store_ptr(owner_slot, 0, review_queued)
+            review_epoch: i64 = atomic_load_i64(
+                global_addr("pcc_gc_tracing_cycle_epoch"), 0, "acquire"
+            )
+            review_token: i64 = pcc_gc2_review_claim_open_locked(owner_slot, review_epoch)
+            if review_token != 0:
+                return _gc2_review_list_bridge(owner_slot, review_epoch, review_token)
     scanned: i64 = 0
     pcc_gc_trace_stack_begin()
     while (local_processed < remaining_budget
            and scanned < scan_budget
            and (stopped != 0 or load_i64(work_left, 0) > 0)):
-        queued = pcc_gc_gray_worklist_take_locked()
+        queued = review_queued
+        review_queued = null()
+        if ptr_is_null(queued) != 0:
+            queued = pcc_gc_gray_worklist_take_locked()
         if ptr_is_null(queued) == 0 and publication_requested != 0:
             # Consumer progress ends this request, not a producer's TLS ack.
             # Even a stale token is finite scan work. Exhausting the queue
