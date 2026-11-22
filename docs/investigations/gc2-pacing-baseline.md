@@ -60,3 +60,17 @@ decision inputs for heap progress and remaining mark debt: subtracting
 mark-work credit must never move the heap backward. An assist-pressure
 harness must demonstrate actual assist calls and progress, not just
 an arithmetic change. Dedicated-worker scaling and A/B are separate.
+
+## Measurement identity
+
+`pcc_perf arm --gc2-pacer-percent N` seals the knob, rather than relying
+on a shell environment variable that the runner intentionally discards.
+Before any opted-in arm qualifies, it compiles a tiny program against
+the same owned runtime archive and verifies on=N, off=-1, and GC0=-1.
+Ordinary launches pass the knob only to GC2. A missing/mismatched
+attestation or changed binary rejects the arm, and GC2 results name each
+arm's sealed percentage. Stock arms need no new runtime symbol.
+
+The exact tool probe ran against the Linux review archive and reported
+100 / -1 / -1; the pcc_perf source command suite passed 74 tests. No
+gateway arm or performance A/B ran in this Linux workspace.

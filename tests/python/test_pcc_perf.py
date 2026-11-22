@@ -499,7 +499,7 @@ def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monke
     write("scripts/unfinished.py", "another session's file\n")
 
     monkeypatch.setattr(PERF, "HOME", tmp_path / "home")
-    arm = PERF.seal("probe", ("pcc/runtime",), root=repository)
+    arm = PERF.seal("probe", ("pcc/runtime",), root=repository, gc2_pacer_percent=100)
     source = arm / "source"
     assert (source / "pcc/runtime/mine.py").read_text() == "my edit\n"
     assert (source / "pcc/runtime/new.py").read_text() == "my new file\n"
@@ -509,6 +509,7 @@ def test_an_arm_takes_head_and_only_the_named_working_tree_paths(tmp_path, monke
     assert not (source / "scripts/unfinished.py").exists()
     assert not (source / "docs").exists()
     identity = json.loads((arm / "source.json").read_text())
+    assert identity["gc2_pacer_percent"] == 100
     assert identity["overlaid"] == [
         "pcc/runtime/gone.py", "pcc/runtime/mine.py", "pcc/runtime/new.py"]
     assert sorted(identity["left_out"]) == ["pcc/other.py", "scripts/unfinished.py"]
@@ -599,3 +600,72 @@ def test_profile_requires_a_fresh_successful_sampler_report(monkeypatch, tmp_pat
         assert target.read_text() == previous
     assert waited == [900]
     assert sorted(tmp_path.iterdir()) == [target]
+
+def test_gc2_pacer_environment_is_sealed_and_checks_build_attestation(tmp_path, monkeypatch):
+    monkeypatch.setattr(PERF, "HOME", tmp_path)
+    monkeypatch.setenv("PCC_GC2_PACER_PERCENT", "777")
+    arm = tmp_path / "arms/test"
+    arm.mkdir(parents=True)
+    binary = arm / "native_stats"
+    binary.write_bytes(b"owner")
+    identity = arm / "source.json"
+    report = arm / "build.json"
+    assert PERF._sealed_runtime_env(binary, 2) == {
+        "PATH": "/nonexistent", "PCC_GC_BACKEND": "2",
+    }
+    identity.write_text(json.dumps({"revision": "rev", "gc2_pacer_percent": 100}))
+    with pytest.raises(SystemExit, match="no matching GC2 pacer attestation"):
+        PERF._sealed_runtime_env(binary, 2)
+    report.write_text(json.dumps({
+        "complete": True, "revision": "rev", "gc2_pacer_percent": 100,
+        "gc2_pacer_attested": {"on": 100, "off": -1, "gc0": -1},
+        "programs": {"native_stats": {"sha256": PERF.hashlib.sha256(b"owner").hexdigest()}},
+    }))
+    assert PERF.binary_of("test") == binary
+    assert PERF._sealed_runtime_env(binary, 2)["PCC_GC2_PACER_PERCENT"] == "100"
+    for other in (0, 1, 3, 4):
+        assert "PCC_GC2_PACER_PERCENT" not in PERF._sealed_runtime_env(binary, other)
+    binary.write_bytes(b"unsealed")
+    with pytest.raises(SystemExit, match="binary does not match"):
+        PERF.binary_of("test")
+    identity.write_text(json.dumps({"revision": "rev"}))
+    with pytest.raises(SystemExit, match="no matching GC2 pacer attestation"):
+        PERF._sealed_runtime_env(binary, 2)
+
+
+def test_gc2_attestation_requires_enabled_stock_and_other_collector(tmp_path, monkeypatch):
+    (tmp_path / "programs").mkdir()
+    built = []
+    seen = []
+
+    def compiler(source, binary, **kwargs):
+        built.append((Path(source).read_text(), Path(binary), kwargs))
+
+    def run(argv, *, env, **kwargs):
+        seen.append(env)
+        raw = env.get("PCC_GC2_PACER_PERCENT", "-1")
+        return subprocess.CompletedProcess(argv, 0, f"{raw}\n", "")
+
+    monkeypatch.setattr(PERF.subprocess, "run", run)
+    assert PERF._attest_gc2_pacer(tmp_path, tmp_path / "runtime.a", 0, compiler) == {
+        "on": 0, "off": -1, "gc0": -1,
+    }
+    assert "pcc_gc2_pacer_mode" in built[0][0]
+    assert [(item["PCC_GC_BACKEND"], item.get("PCC_GC2_PACER_PERCENT"))
+            for item in seen] == [("2", "0"), ("2", None), ("0", None)]
+    monkeypatch.setattr(PERF.subprocess, "run",
+                        lambda argv, **kwargs: subprocess.CompletedProcess(argv, 0, "-1\n", ""))
+    with pytest.raises(SystemExit, match="attestation on failed"):
+        PERF._attest_gc2_pacer(tmp_path, tmp_path / "runtime.a", 100, compiler)
+
+
+def test_comparison_records_sealed_mode_only_on_gc2_rows(tmp_path, monkeypatch):
+    for name, percent in (("base", None), ("candidate", 100)):
+        arm = tmp_path / name
+        arm.mkdir()
+        (arm / "source.json").write_text(json.dumps({"gc2_pacer_percent": percent}))
+    monkeypatch.setattr(PERF, "binary_of", lambda name: tmp_path / name / "native_stats")
+    monkeypatch.setattr(PERF, "run_once", lambda *args: _run(100))
+    rows = PERF.compare("base", "candidate", 1, (0, 2), (1,), 10)
+    assert "gc2_pacer_percent_by_arm" not in rows[0]
+    assert rows[1]["gc2_pacer_percent_by_arm"] == {"base": None, "candidate": 100}

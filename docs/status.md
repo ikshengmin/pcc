@@ -323,8 +323,11 @@ in the relevant section or issue and removes the entry.
    [`48159db`](https://github.com/ikshengmin/pcc/commit/48159dbeabfe31254c9a9d3866a9a351bb01e9be)
    reached automatic sweep with and without opt-in in the same ELF, no
    threshold override, and observed real four-mutator assist entries.
-   Next: seal an explicit per-arm GC2 mode in pcc_perf so A/B cannot
-   silently benchmark stock mode. No master runtime or pacer A/B change.
+   pcc_perf now seals an explicit per-arm GC2 mode, checks an owned
+   runtime attestation and binary identity, and records the mode in the
+   GC2 comparison ledger. Next: qualify these exact tool files on the
+   GC2 review branch and hand off reproducible macOS A/B commands.
+   No master runtime or pacer A/B change.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -336,7 +339,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 sealed per-arm pacer mode for pcc_perf: Codex, Linux x86-64, 2026-11-22 09:15 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

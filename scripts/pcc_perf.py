@@ -154,10 +154,75 @@ def arm_dir(name: str) -> Path:
     return HOME / "arms" / name
 
 
-def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None) -> Path:
+def _gc2_pacer_percent(identity: dict) -> int | None:
+    value = identity.get("gc2_pacer_percent")
+    if value is not None and (type(value) is not int or not 0 <= value <= 10000):
+        raise SystemExit("GC2 pacer percent must be an integer from 0 to 10000")
+    return value
+
+
+def _pacer_env(collector: int, percent: int | None) -> dict:
+    env = {"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)}
+    if collector == 2 and percent is not None:
+        env["PCC_GC2_PACER_PERCENT"] = str(percent)
+    return env
+
+
+def _read_arm_json(path: Path) -> dict:
+    if not path.is_file():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except (OSError, ValueError) as exc:
+        raise SystemExit(f"cannot read arm receipt {path}: {exc}") from exc
+    if not isinstance(data, dict):
+        raise SystemExit(f"invalid arm receipt: {path}")
+    return data
+
+
+def _sealed_runtime_env(binary: Path, collector: int) -> dict:
+    identity = _read_arm_json(binary.parent / "source.json")
+    build_report = _read_arm_json(binary.parent / "build.json")
+    percent = _gc2_pacer_percent(identity)
+    built_percent = _gc2_pacer_percent(build_report)
+    if percent is not None or built_percent is not None:
+        if (not build_report.get("complete") or percent != built_percent
+                or identity.get("revision") != build_report.get("revision")
+                or build_report.get("gc2_pacer_attested") != {"on": percent, "off": -1, "gc0": -1}):
+            raise SystemExit(f"arm {binary.parent.name} has no matching GC2 pacer attestation")
+    return _pacer_env(collector, percent)
+
+
+def _attest_gc2_pacer(arm: Path, runtime: Path, percent: int, compiler) -> dict:
+    source = arm / "programs/gc2_pacer_attest.py"
+    binary = arm / "gc2_pacer_attest"
+    source.write_text(
+        'from pcc.extern import extern, c_int64\n'
+        'backend = extern("pcc_gc_backend", (), c_int64)\n'
+        'mode = extern("pcc_gc2_pacer_mode", (), c_int64)\n'
+        'backend()\nprint(mode())\n'
+    )
+    compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
+             runtime_archive=str(runtime))
+    observed = {}
+    for label, collector, mode, expected in (
+        ("on", 2, percent, percent), ("off", 2, None, -1), ("gc0", 0, percent, -1),
+    ):
+        run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
+                             env=_pacer_env(collector, mode))
+        if (run.returncode, run.stdout, run.stderr) != (0, f"{expected}\n", ""):
+            raise SystemExit(f"arm {arm.name}: GC2 pacer attestation {label} failed: "
+                             f"{run.returncode} {run.stdout[-200:]} {run.stderr[-200:]}")
+        observed[label] = expected
+    return observed
+
+
+def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None,
+         *, gc2_pacer_percent: int | None = None) -> Path:
     """Copy HEAD's files into the arm, then the working tree's version of
     every file under ``with_paths`` (tracked or new; a file deleted there
     is deleted in the arm). Returns the arm directory."""
+    _gc2_pacer_percent({"gc2_pacer_percent": gc2_pacer_percent})
     root = REPO_ROOT if root is None else root
     arm = arm_dir(name)
     source = arm / "source"
@@ -204,6 +269,7 @@ def seal(name: str, with_paths: tuple[str, ...] = (), root: Path | None = None) 
                 target.read_bytes()).hexdigest()
     (arm / "source.json").write_text(json.dumps({
         "revision": head, "arm": name, "with": list(with_paths),
+        "gc2_pacer_percent": gc2_pacer_percent,
         "overlaid": sorted(set(overlaid)), "left_out": dirty,
         "dirty_diff_sha256": hashlib.sha256(diff).hexdigest(),
         "dirty_diff_bytes": len(diff), "files": files,
@@ -297,8 +363,10 @@ def build_child(arm: Path) -> int:
     verify()
     started = time.monotonic()
     runtime = Path(ensure_target_runtime(str(source / "pcc/runtime"), host_target_triple()))
+    percent = _gc2_pacer_percent(identity)
     report = {
         "complete": False, "revision": identity["revision"], "runtime": str(runtime),
+        "gc2_pacer_percent": percent,
         "runtime_sha256": digest(runtime), "runtime_seconds": time.monotonic() - started,
         "programs": {}, "runs": [],
     }
@@ -316,6 +384,9 @@ def build_child(arm: Path) -> int:
         PCC_SELF_BACKEND_OBJECT_CACHE_IDENTITY="pcc-perf",
         PCC_SELF_BACKEND_OBJECT_CACHE_DIR=str(HOME / "object-cache"),
     )
+    if percent is not None:
+        report["gc2_pacer_attested"] = _attest_gc2_pacer(arm, runtime, percent, compile_python)
+        save()
     for program in PROGRAMS:
         binary = arm / program
         started = time.monotonic()
@@ -333,8 +404,7 @@ def build_child(arm: Path) -> int:
             for argv, expected in cases:
                 run = subprocess.run(
                     argv, capture_output=True, text=True, timeout=120,
-                    env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector),
-                         "BENCH_N": "31"},
+                    env=dict(_pacer_env(collector, percent), BENCH_N="31"),
                 )
                 report["runs"].append({
                     "program": program, "gc": collector, "argv": argv[1:],
@@ -400,6 +470,12 @@ def binary_of(name: str, program: str = "native_stats") -> Path:
     binary = arm_dir(name) / program
     if not binary.is_file():
         raise SystemExit(f"arm {name} has no {program}: build it with `arm {name}`")
+    env = _sealed_runtime_env(binary, 2)
+    if "PCC_GC2_PACER_PERCENT" in env:
+        report = _read_arm_json(binary.parent / "build.json")
+        recorded = report.get("programs", {}).get(program, {}).get("sha256")
+        if hashlib.sha256(binary.read_bytes()).hexdigest() != recorded:
+            raise SystemExit(f"arm {name} binary does not match its sealed build: {program}")
     return binary
 
 
@@ -427,7 +503,7 @@ def run_once(binary: Path, collector: int, workers: int, rounds: int,
     process = MeasuredPopen(
         [str(binary), str(concurrency), "0", str(rounds), "--summary", str(workers)],
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
-        env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+        env=_sealed_runtime_env(binary, collector),
     )
     try:
         stdout, stderr = process.communicate(timeout=600)
@@ -538,6 +614,10 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
     arms = [(a, binary_of(a)), (b, binary_of(b))]
     if control_arm is not None:
         arms.append((control_arm, binary_of(control_arm)))
+    pacer_modes = {
+        name: _gc2_pacer_percent(_read_arm_json(binary.parent / "source.json"))
+        for name, binary in arms
+    } if 2 in collectors else {}
     runs: dict[tuple, list[dict]] = {}
     for index in range(pairs):
         for collector in collectors:
@@ -557,6 +637,8 @@ def compare(a: str, b: str, pairs: int, collectors, workers, rounds: int,
             row.update({"gc": collector, "workers": count, "a": a, "b": b,
                         "requests": rounds * 100, "time": time.time(),
                         "load": os.getloadavg()[0]})
+            if collector == 2 and any(mode is not None for mode in pacer_modes.values()):
+                row["gc2_pacer_percent_by_arm"] = pacer_modes
             results.append(row)
     return results
 
@@ -670,7 +752,7 @@ def run_primitive(binary: Path, name: str, batch: int, milliseconds: int,
     out = subprocess.run(
         [str(binary), "prim", name, str(batch), str(milliseconds), str(workers)],
         capture_output=True, text=True, timeout=600,
-        env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+        env=_sealed_runtime_env(binary, collector),
     )
     if out.returncode != 0:
         raise SystemExit(
@@ -973,7 +1055,7 @@ def profile(name: str, collector: int, workers: int, seconds: int,
         output = Path(directory) / target.name
         process = subprocess.Popen(
             [str(binary), *argv], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env={"PATH": "/nonexistent", "PCC_GC_BACKEND": str(collector)},
+            env=_sealed_runtime_env(binary, collector),
         )
         try:
             time.sleep(0.3)
@@ -1077,6 +1159,8 @@ def main(argv: list[str] | None = None) -> int:
     arm.add_argument("name")
     arm.add_argument("--with", dest="with_paths", action="append", default=[],
                      metavar="PATH", help="take PATH from the working tree, not HEAD")
+    arm.add_argument("--gc2-pacer-percent", type=int,
+                     help="seal and verify the review runtime GC2 pacer opt-in (0–10000)")
     arm.add_argument("--timeout", type=int, default=900)
     # The handler program's largest module emits in one worker of about
     # 2.4 GiB beside a 1.1 GiB coordinator; the approved build maximum is
@@ -1167,7 +1251,11 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     if args.command == "arm":
-        sealed = seal(args.name, tuple(args.with_paths))
+        if args.gc2_pacer_percent is None:
+            sealed = seal(args.name, tuple(args.with_paths))
+        else:
+            sealed = seal(args.name, tuple(args.with_paths),
+                          gc2_pacer_percent=args.gc2_pacer_percent)
         identity = json.loads((sealed / "source.json").read_text())
         print(f"arm {args.name}: {identity['revision'][:9]} with "
               f"{len(identity['overlaid'])} working-tree files", flush=True)
