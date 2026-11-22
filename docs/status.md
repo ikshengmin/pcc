@@ -221,10 +221,16 @@ in the relevant section or issue and removes the entry.
    registered sibling rescue with zero full rechecks. Withdrawn publication
    and an indirect write through an old live list use one full recheck and
    match CPython's observable outcome.
+   [Review commit d6d79fc](https://github.com/ikshengmin/pcc/commit/d6d79fc3319a2b12cf593a47fd1fcd1d3485f846)
+   runs the original cyclic weak/finalizer ordering on the mixed graph's
+   residue, including nodes downstream of a cycle. Linux: 65 focused checks
+   passed, with native CPython comparisons for independent acyclic/cyclic
+   parts, a cyclic downstream node, and resurrection of the cycle by the
+   acyclic finalizer. Master runtime unchanged.
    Next: batch safe finalizer windows within a layer without missing a
-   sibling rescue; remove repeated candidate/weakref-list walks before
-   scale tests. Mixed cyclic graphs, arbitrary raw stack lifetimes,
-   HTTP exact timings and no-observable performance remain unqualified.
+   sibling rescue, and remove repeated candidate/weakref scans before
+   scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
+   no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
@@ -277,8 +283,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Preserve cyclic residue order in mixed issue 9 sweeps: Codex, Linux x86-64, 2026-11-22 17:22 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
