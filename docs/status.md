@@ -342,7 +342,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - Record per-pair pause RSS and tail latency in pcc_perf: Codex, Linux x86-64, 2026-11-22 09:21 UTC, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
