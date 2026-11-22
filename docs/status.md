@@ -344,8 +344,12 @@ in the relevant section or issue and removes the entry.
    while the graph was locked. Another Linux native probe verifies that
    an exact-list scan shades a repeated child once and that a later
    public append supplies the missing gray credit via the same lock.
-   Next GC2 worker slice: stage a review-only exact-list scan entry with
-   explicit owner lifetime and a fallback on unsupported layouts.
+   The independent [GC2 list review](https://github.com/ikshengmin/pcc/blob/105122d146e18836f0ed3e08c7d3aac3a684475d/docs/investigations/gc2-exact-list-worker-review.md)
+   now runs a rooted 32-slot exact-list native kernel: 3 GC2 executions,
+   4 other-backend rejection controls, and 8 ABI checks passed on Linux.
+   It is not selected by ordinary marking. Next verify claim ownership
+   and stopped-world finish against an in-flight native scan before
+   enabling any workers. This branch is not part of the pacer A/B.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -357,7 +361,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 rooted exact-list marking entry on review: Codex, Linux x86-64, 2026-11-22 09:40 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
