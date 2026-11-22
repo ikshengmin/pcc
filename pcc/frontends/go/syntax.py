@@ -578,8 +578,8 @@ class GoParser:
             self.take("{")
             fields, tags, embedded = [], [], []
             while not self.at("}"):
-                if self.at("*"):
-                    pointer = self.take("*")
+                pointer = self.accept("*")
+                if pointer or (self.at("name") and self.tokens[self.index + 1].kind == "."):
                     name = self.current
                     if not self.at("name"):
                         self.take("name")
@@ -588,7 +588,7 @@ class GoParser:
                         name = base.base.token
                     elif isinstance(base, TypeName):
                         name = base.token
-                    fields.append((name, PointerSyntax(pointer, base)))
+                    fields.append((name, PointerSyntax(pointer, base) if pointer else base))
                     tags.append(self.accept("string"))
                     embedded.append(True)
                     self.end_statement()
@@ -597,9 +597,11 @@ class GoParser:
                 while self.accept(","):
                     names.append(self.take("name"))
                 anonymous = self.at(";") or self.at("}") or self.at("string")
-                if self.at(".") or (anonymous and (len(names) != 1 or names[0].text in TYPE_NAMES)):
+                if self.at("."):
+                    self.fail(names[0], "qualified embedded field cannot be mixed with a name list")
+                if anonymous and (len(names) != 1 or names[0].text in TYPE_NAMES):
                     self.unsupported(names[0], 'go.unsupported.embedded-fields',
-                                     "only a single unqualified named value record can be embedded")
+                                     "embedding requires one supported named value record")
                 dtype = TypeName(names[0]) if anonymous else self.datatype(signature=signature)
                 tag = self.accept("string")
                 fields.extend((name, dtype) for name in names)

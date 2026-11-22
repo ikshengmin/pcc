@@ -296,3 +296,12 @@ the qualified embedding `sync.Mutex` in `os/getwd.go:14:2`. The scoped
 suite passed 208 checks. Official Go linked and ran the same form with
 an explicit assembly body and rejected a bodyless generic function.
 PCC did not invoke either the assembly implementation or a host shim.
+
+Qualified value embedding now keeps the local field name and imported
+nominal owner. The unchanged `sync.Mutex` embedding parses and the
+source-only run parsed all 45 selected files of `os [math/bits.test]`
+with 20 declared imports bound to their exact IDs. The focused suite
+passed 119 checks; two owned Linux ELF differentials matched official
+Go for local and cross-package value-record copy. The latter used a
+small original value record, not the standard mutex. The original
+project still has no admitted lock, assembly ABI, or native test binary.
