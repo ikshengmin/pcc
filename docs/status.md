@@ -223,7 +223,7 @@ in the relevant section or issue and removes the entry.
    `constexpr`), before linking. Unchanged g++ 14.2 reference runs passed.
 
    Claims:
-   - none
+   - constexpr template declaration in owned <new>: Codex, Linux x86-64, 2026-11-22 00:44 UTC, area frontend-cpp
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
