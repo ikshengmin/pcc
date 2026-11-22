@@ -264,9 +264,11 @@ in the relevant section or issue and removes the entry.
    addresses need no tracing index, and stopped incomplete cells remain
    unknown. With an explicit owner and fixture-managed age, a published
    indexless cell now gets a stable old record at its original address
-   and survives two majors. Next: verify preparation failure and
-   ownership handoff before proposing a dormant runtime entry.
-   Production promotion and nursery activation are still untested.
+   and survives two majors. Preparing its record without committing kept
+   it out of the stopped major walk; retry reused the mapping, and commit
+   exposed exactly one entry. Next: test native strong-slot enumeration
+   of a promoted owner with an indexless child. Production promotion and
+   nursery activation are still untested.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -278,7 +280,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 record preparation before promotion publication: Codex, Linux x86-64, 2026-11-22 08:12 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

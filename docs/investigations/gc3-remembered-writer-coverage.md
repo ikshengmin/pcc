@@ -232,7 +232,21 @@ record. It keeps identity and bytes through two full collections.
 This is the single-mutator baseline only. Actual promotion needs a
 preflighted record, a remembered-edge reserve and a non-parking
 publication transaction, not a direct header write from the fixture.
-Both native lifecycle cases passed under Linux pcc0.
+The preparation variant rejects an unaligned request and then prepares
+storage for the real object. A simulated refusal of the separate card
+reserve leaves the target young and rooted, absent from the tracing index
+and the stopped major walk. Retrying preparation adds no bytes to
+`pcc_allocator_metadata_mapped`; ordinary commit publishes the same
+record exactly once in the major walk. All three native lifecycle cases
+passed under Linux pcc0. This does not inject actual mmap failure or
+exercise a real remembered-queue reservation.
+
+Record preparation can still map 96 bytes per cell for a whole slab at
+the first old record, even when only one cell is promoted. Empty keys
+in those mapped spans are tested by the ordinary major iterator. For a
+future measured gate compare equal promotion counts clustered in few slabs
+versus scattered over many, and report `pcc_allocator_metadata_mapped`
+separately from peak RSS and scan/visit counts.
 
 ## Collector-entry root baseline
 

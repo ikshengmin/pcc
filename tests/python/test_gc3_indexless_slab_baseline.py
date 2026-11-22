@@ -12,7 +12,8 @@ from tests.python.owned_regression_support import _record_execution, explicit_ow
 @pytest.mark.parametrize(("arguments", "expected"), [
     ((), "GC3_INDEXLESS_SLAB_BASELINE_OK"),
     (("record",), "GC3_INDEXLESS_TO_INDEXED_BASELINE_OK"),
-], ids=["indexless", "stable-old-record"])
+    (("prepare",), "GC3_RECORD_PREPARE_RETRY_OK"),
+], ids=["indexless", "stable-old-record", "prepare-retry"])
 def test_gc3_published_cell_can_be_managed_without_a_tracing_index(
     tmp_path, explicit_owned_runtime, arguments, expected,
 ):
