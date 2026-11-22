@@ -363,8 +363,11 @@ in the relevant section or issue and removes the entry.
    five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
    allocator-lock owners, versus 3% in the explicit gray queue. Three of
    five w4 legs finish no marks under load; w1 finishes in all five.
-   Next: attribute those allocator PCs to spin, refill, or release before
-   designing a fix; the synthetic result does not replace HTTP profiling.
+   Exact Linux instruction attribution: the read/test/back-edge on the
+   single allocator lock accounts for median 61.25% of w4 CMS+mutator user
+   CPU versus 5.66% w1 (five pairs). Inline magazine lock waits and the
+   direct allocator acquire hit the same lock; this is not HTTP evidence.
+   Next: distinguish allocation refill and collector release as lock holders.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -419,7 +422,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 21:59 UTC), Linux GC2 allocator PC attribution: separate exact lock spin, refill/shard work and collector release with the same owned native workload; no production merge.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
