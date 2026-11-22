@@ -264,7 +264,12 @@ in the relevant section or issue and removes the entry.
    adds old dictionary/list replacements and set insertion. Linux 89
    focused checks passed; all six covered native old-owner writers now
    match CPython, each with the expected ambiguous-publication fallback.
-   Bulk writes and external native writers are not covered.
+   [Review commit c04f245](https://github.com/ikshengmin/pcc/commit/c04f245908531bda28baa67f97e4e66e40fb6c7b)
+   adds native dict update, list slice replacement, and set update;
+   source containers are in the sealed dead graph, so no source-building
+   store in the callback can hide a missing destination shade. Linux
+   passed 95 focused checks. Nine writer forms are now covered; external
+   native writers and additional layouts are still open.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -321,8 +326,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Verify issue 9 bulk publication without temporary source shades: Codex, Linux x86-64, 2026-11-22 18:06 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
