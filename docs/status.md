@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   emit and bind the original two-word `xgetbv` body only for its
-   verified, OSXSAVE-guarded Linux source owner. The owned encoder now
-   matches the system opcode and both guarded execution paths; it
-   does not supply the bodyless Go declaration by itself. See the
+   bind the build-selected `getGOAMD64level` at
+   `internal/cpu/cpu_x86.go:18:6` from the pinned target level, not host
+   detection. The source walk now verifies owned CPUID and guarded
+   XGETBV; the overall CPU package is not linked. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go guarded XGETBV native object and binding: Codex, Linux x86-64, 2026-11-22 03:23 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -31,6 +31,17 @@ def test_cpuid_owner_rejects_other_sources_or_targets(fault):
         emit_locked_cpuid(source, assembly, target=target)
 
 
+def test_xgetbv_binding_stays_tied_to_original_guarded_declaration_and_body():
+    from pcc.frontends.go.native_cpu import emit_locked_xgetbv, source_xgetbv_binding
+
+    declarations, body = SOURCE.read_bytes(), ASSEMBLY.read_bytes()
+    binding = source_xgetbv_binding(declarations, body, target=DEFAULT_TARGET)
+    assert binding.parameters == () and binding.results == ("uint32", "uint32")
+    assert binding.symbol == function_symbol("xgetbv", "internal/cpu")
+    with pytest.raises(GoSourcePlanError, match="XGETBV"):
+        emit_locked_xgetbv(declarations.replace(b"if X86.HasOSXSAVE", b"if true"), body, target=DEFAULT_TARGET)
+
+
 def test_source_instance_accepts_exact_owned_signature_only():
     from pcc.frontends.go import UnsupportedGo
     from pcc.frontends.go.native_cpu import source_cpuid_binding
@@ -117,10 +128,7 @@ done:
     owned = tmp_path / "owned"
     owned.write_bytes(image)
     owned.chmod(0o700)
-    original = tmp_path / "official"
-    original.mkdir()
-    (original / ASSEMBLY.name).write_bytes(ASSEMBLY.read_bytes())
-    (original / "main.go").write_text("""package main
+    reference = _original_asm_control(tmp_path, """package main
 import ("os"; "encoding/binary")
 func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
 func main() {
@@ -132,7 +140,16 @@ func main() {
   }
   if n,err:=os.Stdout.Write(raw[:]); n!=len(raw)||err!=nil { panic("write") }
 }
-""", encoding="utf-8")
+""")
+    got, want = run(owned), run(reference)
+    assert got == want and got.returncode == 0 and len(got.stdout) == 32 and got.stderr == b""
+
+
+def _original_asm_control(tmp_path, source):
+    original = tmp_path / "official"
+    original.mkdir()
+    (original / ASSEMBLY.name).write_bytes(ASSEMBLY.read_bytes())
+    (original / "main.go").write_text(source, encoding="utf-8")
     go = Path(os.environ["PCC_GO_REFERENCE"]).resolve(strict=True)
     reference = original / "reference"
     env = {"PATH": os.defpath, "GOROOT": str(go.parent.parent),
@@ -142,5 +159,70 @@ func main() {
            "GOAMD64": "v1", "GOMAXPROCS": "2"}
     subprocess.run([str(go), "build", "-p=2", "-o", str(reference), "."],
                    cwd=original, env=env, check=True, capture_output=True, timeout=35)
+    return reference
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_xgetbv_native_owner_matches_original_guarded_go_return(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from pcc.frontends.go.native_cpu import emit_locked_cpuid, emit_locked_xgetbv
+
+    cpuid, xgetbv = (function_symbol(name, "internal/cpu") for name in ("cpuid", "xgetbv"))
+    start = f""".intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 16
+  mov QWORD PTR [rsp], 0
+  mov QWORD PTR [rsp + 8], 0
+  mov edi, 1
+  xor esi, esi
+  call {cpuid}
+  mov r9d, 0x08000000
+  test edx, r9d
+  je output
+  call {xgetbv}
+  mov QWORD PTR [rsp], rax
+  mov QWORD PTR [rsp + 8], 1
+output:
+  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 16
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    declarations, body = SOURCE.read_bytes(), ASSEMBLY.read_bytes()
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        image = link_static_executable([
+            assemble_file(start),
+            emit_locked_cpuid(declarations, body, target=DEFAULT_TARGET),
+            emit_locked_xgetbv(declarations, body, target=DEFAULT_TARGET),
+        ], entry="_start")
+    owned = tmp_path / "owned"
+    owned.write_bytes(image)
+    owned.chmod(0o700)
+    reference = _original_asm_control(tmp_path, """package main
+import ("os"; "encoding/binary")
+func cpuid(eaxArg, ecxArg uint32) (eax, ebx, ecx, edx uint32)
+func xgetbv() (eax, edx uint32)
+func main() {
+  _,_,ecx,_:=cpuid(1,0)
+  var raw [16]byte
+  if ecx&(1<<27)!=0 {
+    a,d:=xgetbv()
+    binary.LittleEndian.PutUint32(raw[:], a)
+    binary.LittleEndian.PutUint32(raw[4:], d)
+    raw[8]=1
+  }
+  if n,err:=os.Stdout.Write(raw[:]); n!=len(raw)||err!=nil { panic("write") }
+}
+""")
     got, want = run(owned), run(reference)
-    assert got == want and got.returncode == 0 and len(got.stdout) == 32 and got.stderr == b""
+    assert got == want and got.returncode == 0 and len(got.stdout) == 16 and got.stderr == b""
+    (tmp_path / "executed-xgetbv.txt").write_text(str(got.stdout[8]) + "\n")

@@ -430,3 +430,13 @@ receipt. All 248 adjacent checks and three native CPUID/XGETBV controls
 passed. The original `doinit` guard is
 `if X86.HasOSXSAVE { eax, _ := xgetbv() … }`; the project still has
 no XGETBV symbol owner binding.
+
+The exact Linux XGETBV adapter is now built from the locked source pair
+and bound as a two-`uint32` result. Its generated body independently
+tests CPUID OSXSAVE before the instruction; an invalid direct call
+cannot read XCR0 without that feature. The original guarded Go assembly
+and owned object produced the same 16 bytes (including the executed
+branch marker) on Linux. The original source guard cannot be edited
+under this owner. The real graph advances to `getGOAMD64level`,
+`cpu_x86.go:18:6`. Seventy-one scoped checks and two raw native
+assembly comparisons passed, without linking the original package.

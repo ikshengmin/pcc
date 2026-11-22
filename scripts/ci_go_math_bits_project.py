@@ -268,7 +268,7 @@ def parse_first_bound_test_dependency(bindings, plan, project_files, generated):
 
 
 def analyze_bound_test_instances(bindings, plan, project_files, generated):
-    from pcc.frontends.go.native_cpu import CPUID_PACKAGE, cpuid_binding_from_plan
+    from pcc.frontends.go.native_cpu import CPUID_PACKAGE, cpu_bindings_from_plan
     from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
     from pcc.frontends.go.source_plan import runtime_owner
     from pcc.frontends.go.syntax import GoDiagnostic
@@ -283,9 +283,9 @@ def analyze_bound_test_instances(bindings, plan, project_files, generated):
             key, row["sources"], plan, project_files, generated)
         owners = {}
         if key == CPUID_PACKAGE:
-            owner = cpuid_binding_from_plan(plan)
-            owners["cpuid"] = owner
-            native_objects[key] = {"cpuid": {"symbol": owner.symbol, "object_sha256": owner.object_sha256}}
+            owners = cpu_bindings_from_plan(plan)
+            native_objects[key] = {name: {"symbol": owner.symbol, "object_sha256": owner.object_sha256}
+                                   for name, owner in owners.items()}
         instances[key] = SourceInstance(logical, units, row["imports"], owners)
     try:
         result = analyze_source_instances(instances, main_instance=root, target_triple=plan.target)
