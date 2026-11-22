@@ -523,6 +523,9 @@ class Scope:
                     raise CppDiagnostic("cpp.conflicting-language-linkage",
                                         "function redeclared with different language linkage", symbol.coord)
                 self._check_function_contract(candidate, symbol)
+                if symbol.internal_linkage and not candidate.internal_linkage:
+                    raise CppDiagnostic("cpp.conflicting-function-linkage",
+                                        "an earlier declaration gives the function external linkage", symbol.coord)
                 if not symbol.template_parameters and candidate.dtype != symbol.dtype:
                     raise CppDiagnostic("cpp.return-type-overload",
                                         "functions cannot differ only in return type", symbol.coord)
@@ -562,6 +565,8 @@ class Scope:
             symbol.c_name = symbol.name
         elif not symbol.template_parameters:
             symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path(), symbol.variadic)
+            if symbol.internal_linkage:
+                symbol.c_name = "_ZL" + symbol.c_name[2:]
         if previous is None:
             previous = Symbol(symbol.name, "function", symbol.coord)
             self.names[symbol.name] = previous
@@ -569,7 +574,7 @@ class Scope:
             previous.overloads.append(symbol)
         if symbol.owner is None:
             symbol.owner = self
-            symbol.internal_linkage = self.namespace().internal_linkage
+            symbol.internal_linkage = symbol.internal_linkage or self.namespace().internal_linkage
         if self not in symbol.declaration_scopes:
             symbol.declaration_scopes.append(self)
         if definition:

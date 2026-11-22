@@ -216,14 +216,13 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   handle the first observed TinyXML2 blocker at `tinyxml2.cpp:94:9`,
-   file-scope `static inline TIXML_VSCPRINTF`, respecting TU-local linkage.
-   The prior owned `<new>` constexpr/noexcept template declaration now
-   parses without weakening the header; the unchanged host project fails
-   later, before link.
+   handle the unchanged TinyXML2's first remaining diagnostic at
+   `tinyxml2.cpp:143:29`: the namespace `static const Entity` aggregate
+   array. File-scope `static inline` now emits TU-local function definitions;
+   Linux pcc0 advances beyond `TIXML_VSCPRINTF` but has not linked TinyXML2.
 
    Claims:
-   - file-scope static inline C++ function: Codex, Linux x86-64, 2026-11-22 00:51 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

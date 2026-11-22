@@ -462,3 +462,14 @@ does not emit or supply a `std::launder` body. Invocation, definitions
 and constant evaluation remain explicitly gated. A Linux pcc0 program
 including the unchanged header matches the separately compiled g++
 reference; this is not native pcc1 or TinyXML2 project acceptance.
+
+
+### File-scope static inline definitions
+
+An unqualified non-template file-scope function definition with the literal
+`static inline` prefix is lowered as a TU-local C function. [basic.link] and
+[dcl.inline] do not convert it to an external or weak ODR definition. A Linux
+test links two same-name functions in different TUs without merging them,
+checks their local ELF bindings, and matches the explicit g++ reference.
+Declaration-only, named-namespace and external-inline extensions are not
+admitted by this change.

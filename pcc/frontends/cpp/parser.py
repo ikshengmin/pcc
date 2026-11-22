@@ -1024,7 +1024,14 @@ class CppParser:
         named_scope = (member_definition is None and self.scope.kind == "namespace"
                        and bool(self.scope.namespace_path()) and not self.scope.internal_linkage
                        and not template_parameters and self.language_linkage is None)
-        inline_specifiers = [] if member_definition is not None or named_scope or template_parameters else None
+        file_static_inline = (
+            member_definition is None and self.scope.parent is None
+            and not template_parameters and self.language_linkage is None
+            and self._peek().value == "static"
+            and self.cursor.tokens[self.cursor.position + 1].value == "inline"
+        )
+        inline_specifiers = [] if (member_definition is not None or named_scope
+                                   or template_parameters or file_static_inline) else None
         virtual_specifier = None
         while (self._peek().value in ("extern", "static")
                or inline_specifiers is not None and self._peek().value == "inline"
@@ -1209,7 +1216,8 @@ class CppParser:
             return parse_namespace_object(self, name, result_type, storage, implicit_extern)
         if array_type(result_type) or function_type(result_type):
             raise CppDiagnostic("cpp.invalid-function-return", "a function cannot return an array or function", name.coord)
-        if member_owner is None and storage is not None and (storage.value == "static" or template_parameters):
+        if (member_owner is None and storage is not None and not file_static_inline
+                and (storage.value == "static" or template_parameters)):
             raise CppDiagnostic("cpp.unsupported.function-storage",
                                 "function storage specifiers require function linkage semantics", storage.coord)
         if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind in ("template-type", "template-value"):
@@ -1248,6 +1256,10 @@ class CppParser:
                                 and declaration_scope.kind == "namespace" and self._peek().value == "="
                                 and self.cursor.tokens[self.cursor.position + 1].value == "delete")
         definition = self._peek().value == "{" or deleted_template
+        if file_static_inline and (not definition or namespace_owner is not None
+                                   or member_owner is not None or name.value == "main"):
+            raise CppDiagnostic("cpp.unsupported.inline-declarations",
+                                "file-scope static inline requires a local function definition", name.coord)
         if inline_specifiers and template_parameters and member_owner is None:
             raise CppDiagnostic('cpp.unsupported.inline-declarations',
                                 'inline free function templates require separate ODR tracking', name.coord)
@@ -1321,6 +1333,7 @@ class CppParser:
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.explicit_inline = bool(inline_specifiers)
+        new_symbol.internal_linkage = file_static_inline
         new_symbol.constexpr = constexpr is not None
         new_symbol.deleted_template = deleted_template
         new_symbol.variadic = bool(variadic)

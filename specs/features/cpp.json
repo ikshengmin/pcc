@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the static inline TIXML_VSCPRINTF declaration; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the namespace aggregate Entity array; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -435,6 +435,16 @@
       "id": "new.syn",
       "title": "Header <new> synopsis",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/new.syn"
+    },
+    {
+      "id": "basic.link",
+      "title": "Program and linkage",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/basic.link"
+    },
+    {
+      "id": "dcl.inline",
+      "title": "The inline specifier",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/dcl.inline"
     }
   ],
   "features": [
@@ -4295,6 +4305,36 @@
         "cpp.unsupported.constexpr-templates"
       ],
       "evidence": []
+    },
+    {
+      "id": "cpp.file-static-inline-function",
+      "title": "Translation-unit-local file-scope static inline function definitions",
+      "chapter_ids": [
+        "basic.link",
+        "dcl.inline"
+      ],
+      "scope": "The exact static inline prefix admits an unqualified file-scope non-template C++ function definition, other than main. Both IR and ELF keep the symbol TU-local; two original TUs using same-name functions independently match Linux g++ in raw execution. No declaration-only, namespace, external weak-ODR or native pcc1 extension is implied.",
+      "tests": [
+        "tests/cpp/test_cpp_file_static_inline.py::test_file_static_inline_does_not_export_or_coalesce",
+        "tests/cpp/test_cpp_file_static_inline.py::test_file_static_inline_executes_against_explicit_cpp17",
+        "tests/cpp/test_cpp_file_static_inline.py::test_file_static_inline_does_not_admit_other_storage_shapes"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:a56060c0fd6968c90f521ac53f8892a8896c98ccfb9a1166537dd0cd78e2120f",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "536267b65412597f34345fe6901243dc8b1ea56f4497c2cc75fe9f14751acc89"
+          },
+          {
+            "path": "pcc/frontends/cpp/sema.py",
+            "sha256": "186d9dbd549c1e69e4f835b8e213dc3a4e455801e4e7f49536dc6e1d14f1d107"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {
