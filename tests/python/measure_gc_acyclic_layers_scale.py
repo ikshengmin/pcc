@@ -76,14 +76,14 @@ if args.callback_grid:
             pattern = (
                 rf"weak={weak} scans=0 n={n} live={live} del={n} reclaimed=(\d+)"
                 rf" full=0 windows={-1 if public else 2 * n} us=(\d+)\n"
-                rf"events={expected[n]} callbacks={n} public={int(public)}\n"
+                rf"events={expected[n]} callbacks={n} public={int(public)} cohort=(\d+)\n"
             )
             match = re.fullmatch(pattern, result.stdout)
             assert result.returncode == 0 and not result.stderr and match is not None, (
                 gc, n, live, weak, public, result
             )
-            reclaimed, us = map(int, match.groups())
-            assert reclaimed >= n if public else reclaimed == n
+            reclaimed, us, cohort = map(int, match.groups())
+            assert (reclaimed >= n and cohort >= n) if public else (reclaimed == n and cohort == n)
             times[gc, n, live, weak, public].append(us)
     for key, samples in sorted(times.items()):
         gc, n, live, weak, public = key

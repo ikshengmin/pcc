@@ -11,6 +11,7 @@ extern void pcc_gc_tracing_candidates_seal(int64_t);
 extern int64_t pcc_gc_tracing_sweep_unreachable(int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
 extern int64_t pcc_gc_tracing_finish_commits, pcc_gc_tracing_finish_stop_epoch;
+extern int64_t pcc_gc_tracing_candidate_count;
 extern int64_t pcc_gc_metric_layer_weak_registry_scans;
 extern int64_t pcc_platform_monotonic_us(void);
 extern void pcc_gc_cms_stop_worker(void);
@@ -19,7 +20,7 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { MAX_CANDIDATES = 64, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
+enum { MAX_CANDIDATES = 256, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
 static void *nodes[MAX_CANDIDATES];
 /* Identities for comparisons only, not registered roots or C locals across
  * collection. The departing setup thread owns the last strong variables. */
@@ -27,6 +28,7 @@ static PyObject *expected_targets[MAX_CANDIDATES];
 static PyObject *expected_refs[MAX_CANDIDATES];
 static char events[MAX_CANDIDATES * 2];
 static int event_count, weak_callbacks, public_collect;
+static int64_t cohort_at_first_finalizer;
 static PyObject *roots[ROOTS];
 static int candidates, old_count, weak_count, observe_candidates, finalized, setup_error;
 static int peer_ready, peer_done;
@@ -43,6 +45,8 @@ static int parse_int(const char *arg) {
 static PyObject *finalize_item(PyObject *self) {
     if (pcc_thread_world_stop_epoch_held() >= 0) setup_error = 4;
     if (observe_candidates == 2) {
+        if (finalized == 0)
+            cohort_at_first_finalizer = __atomic_load_n(&pcc_gc_tracing_candidate_count, __ATOMIC_ACQUIRE);
         if (event_count < MAX_CANDIDATES * 2) events[event_count++] = 'D';
         if (finalized >= candidates || expected_targets[finalized] != self ||
             weak_callbacks != finalized) setup_error = 27;
@@ -202,8 +206,8 @@ int main(int argc, char **argv) {
         }
     }
     if (observe_candidates == 2) {
-        printf("events=%.*s callbacks=%d public=%d\n", event_count, events,
-               weak_callbacks, public_collect);
+        printf("events=%.*s callbacks=%d public=%d cohort=%lld\n", event_count, events,
+               weak_callbacks, public_collect, (long long)cohort_at_first_finalizer);
         if (weak_callbacks != candidates) return 30;
     }
     if (setup_error) return setup_error;

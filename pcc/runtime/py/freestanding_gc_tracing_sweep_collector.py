@@ -1148,13 +1148,10 @@ pcc_gc_gray_worklist_take_locked = extern("pcc_gc_gray_worklist_take_locked", ()
 pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
 pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
 
-# Bound the remaining per-window candidate walk on the review branch.
-# A 64-user-object public collection can include 129 candidate records
-# (including runtime instance storage), so admit more than one mask word.
+# Raw probe bits are indexed by the sealed candidate vector, not the
+# runtime heap. The graph planner supplies the membership-size limit.
 _REVIEW_SHADE_WORD_BITS = 64
 _REVIEW_SHADE_WORD_BYTES = 8
-_REVIEW_SHADE_BYTES = 32
-_REVIEW_LAYER_LIMIT = 256
 
 
 @c_abi_export("pcc_gc_review_layer_finalizer")
@@ -1173,20 +1170,19 @@ def _review_layer_finalizer(node, window) -> i64:
 
 
 @c_abi_export("pcc_gc_review_collect_layer_roots")
-def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
+def _review_collect_layer_roots(plan, nodes, count: i64, cut, suspected, shade_bytes: i64) -> i64:
     # Peel off the write-barrier evidence before looking at actual roots.
     # It can contain a transient store or publication into an old owner.
     # Keep an unmanaged bit per prior shade without a mutation journal.
     # Word indices and shift counts are independent across the sealed batch.
     prior: i64 = pcc_gc_gray_count_load_acquire()
-    suspected = stack_alloc(_REVIEW_SHADE_BYTES)
     seen: i64 = 0
     pos: i64 = 0
     offset: i64 = abi_constant("object.header.flags_offset")
-    if prior > count or count > _REVIEW_LAYER_LIMIT:
+    if prior > count:
         return 0
     if prior != 0:
-        memset(suspected, 0, _REVIEW_SHADE_BYTES)
+        memset(suspected, 0, shade_bytes)
         while pos < count:
             obj = load_ptr(load_ptr(nodes, pos * 8), 0)
             flags: i64 = load_i32(obj, offset)
@@ -1258,12 +1254,13 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut) -> i64:
 
 
 @c_abi_export("pcc_gc_review_remark_layer_at_stop")
-def _review_remark_layer_at_stop(plan, nodes, count: i64, caller) -> None:
+def _review_remark_layer_at_stop(plan, nodes, count: i64, caller,
+                                 suspected, shade_bytes: i64) -> None:
     cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
     low: i64 = pcc_gc_callback_layers_hull_low(plan)
     high: i64 = pcc_gc_callback_layers_hull_high(plan)
     pcc_gc_conservative_capture_callback_words(cut, caller, low, high)
-    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut)
+    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut, suspected, shade_bytes)
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     if precise == 0:
         if low > 0 and high > low:
@@ -1278,7 +1275,7 @@ def _review_remark_layer_at_stop(plan, nodes, count: i64, caller) -> None:
 @c_abi_export("pcc_gc_review_layer_plan")
 def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
     if (
-        (backend != 1 and backend != 3) or count < 2 or count > _REVIEW_LAYER_LIMIT
+        (backend != 1 and backend != 3) or count < 2
         or ptr_is_null(nodes) != 0 or stop_epoch < 0
         or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
         or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
@@ -1337,7 +1334,8 @@ def _review_finish_cyclic_residue(caller) -> None:
 
 
 @c_abi_export("pcc_gc_review_sweep_layers")
-def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, caller) -> i64:
+def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, caller,
+                         suspected, shade_bytes: i64) -> i64:
     layer: i64 = 0
     window = stack_alloc(16)
     pending = stack_alloc(16)
@@ -1350,7 +1348,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             # A sibling may revive another sibling even through raw C roots
             # that do not shade. Settle that window before dispatching again.
             if _review_layer_finalizer(node, window) != 0:
-                _review_remark_layer_at_stop(plan, nodes, count, caller)
+                _review_remark_layer_at_stop(plan, nodes, count, caller, suspected, shade_bytes)
             pos += 1
         store_ptr(pending, 0, null())
         store_ptr(pending, 8, null())
@@ -1362,7 +1360,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             _user_code_window_open(window)
             py_weakref_run_queued_callbacks(pending, 0)
             _user_code_window_close(window)
-            _review_remark_layer_at_stop(plan, nodes, count, caller)
+            _review_remark_layer_at_stop(plan, nodes, count, caller, suspected, shade_bytes)
         layer += 1
     py_weakref_layer_snapshot_release(weak_snapshot)
     peeled: i64 = pcc_gc_callback_layers_range(plan, layers)
@@ -1399,7 +1397,19 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
         if ptr_is_null(plan) == 0:
             layers: i64 = pcc_gc_callback_layers_count(plan)
             if layers > 0:
-                return _review_sweep_layers(plan, layers, review_nodes, review_count, budget, ptr_add(frame_address(), 16))
+                # A successful plan bounded review_count before this
+                # arithmetic. Reserve scratch once, before running code.
+                # OOM leaves the original sweep available before effects.
+                shade_bytes: i64 = ((review_count + _REVIEW_SHADE_WORD_BITS - 1)
+                                    // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+                suspected = malloc(shade_bytes)
+                if ptr_is_null(suspected) == 0:
+                    reclaimed: i64 = _review_sweep_layers(
+                        plan, layers, review_nodes, review_count, budget,
+                        ptr_add(frame_address(), 16), suspected, shade_bytes,
+                    )
+                    free(suspected)
+                    return reclaimed
             pcc_gc_callback_layers_release(plan)
     # Keep phase-local object aliases out of the coordinator's live frame.
     # This is not a root filter: every phase still uses the full root scanner.

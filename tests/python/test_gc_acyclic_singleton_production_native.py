@@ -129,7 +129,7 @@ def test_acyclic_layered_production_sweep_matches_cpython(_layered_sweep, backen
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("count", (63, 64, 65))
+@pytest.mark.parametrize("count", (63, 64, 65, 255, 256, 257))
 @pytest.mark.parametrize("keep", (True, False), ids=("keep", "drop"))
 def test_layered_remark_distinguishes_roots_across_mask_word(_layered_sweep, backend, count, keep):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
@@ -228,7 +228,7 @@ def _callback_scale_sweep(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("backend", (1, 3))
-@pytest.mark.parametrize("count", (4, 16, 64))
+@pytest.mark.parametrize("count", (4, 16, 64, 128, 256))
 @pytest.mark.parametrize("public", (False, True), ids=("sealed", "public"))
 def test_callback_chain_scale_matches_cpython(_callback_scale_sweep, backend, count, public):
     oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_scale_oracle.py"
@@ -240,9 +240,17 @@ def test_callback_chain_scale_matches_cpython(_callback_scale_sweep, backend, co
     )
     assert expected.returncode == 0 and not expected.stderr
     assert actual.returncode == 0 and not actual.stderr, actual
-    assert re.fullmatch(
-        rf"weak=0 scans=0 n={count} live=0 del={count} reclaimed=\d+ full=0"
+    match = re.fullmatch(
+        rf"weak=0 scans=0 n={count} live=0 del={count} reclaimed=(\d+) full=0"
         rf" windows={-1 if public else 2 * count} us=\d+\n"
-        rf"events={expected.stdout.strip()} callbacks={count} public={int(public)}\n",
+        rf"events={expected.stdout.strip()} callbacks={count} public={int(public)} cohort=(\d+)\n",
         actual.stdout,
-    ), actual
+    )
+    assert match is not None, actual
+    reclaimed, cohort = map(int, match.groups())
+    if public:
+        assert reclaimed >= count and cohort >= count
+        if count == 256:
+            assert cohort > 256  # beyond the retired fixed review cap
+    else:
+        assert reclaimed == cohort == count

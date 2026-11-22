@@ -703,3 +703,27 @@ uses the review path and delivers twice; mixed cyclic and finalizer
 controls retain their existing behavior. All 80 focused native
 assertions, six admission-model cases, and the 180-run callback grid
 passed. No claim of zero aggregate overhead or a `pcc_perf` win yet.
+
+### Cohort-sized prior-shade workspace
+
+The layered review path no longer changes ordering at a fixed
+shade-mask width. Once the graph is admitted, it allocates a raw bitset
+sized to the sealed candidate vector, before opening any user-code
+window. Each stop reuses it and zeroes it only if there are prior shades;
+the sweep frees it on return. Allocation refusal discards the graph and
+takes the existing fallback **before** effects, not halfway through
+finalizers. This retains the graph builder's representation/resource
+limits; it is not a proof for arbitrary heap size or OOM.
+
+The fixture now measures the candidate vector separately from
+`gc.collect()`'s reclaimed count. Native public runs at 64/128/256 user
+nodes have 65/129/257 candidate records and reclaim 129/257/513 objects
+on GC1 and GC3. The old 256-record review cap delivered weak callbacks
+before the finalizers at 256 user nodes. With the new workspace, every
+object matches CPython's alternating event order, including the 257th
+candidate, without a full remark fallback. The kept/withdrawn tests
+now straddle both 63/64/65 and 255/256/257 with an independent low-word
+shade. Linux passed 112 focused native assertions and the 180-process
+4/16/64 callback grid again. The remaining candidate walk on every
+window is unchanged; strict scaling, Darwin and the HTTP gate remain
+unqualified.

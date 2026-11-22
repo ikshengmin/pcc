@@ -27,7 +27,10 @@ extern int64_t pcc_thread_join(void *, void **);
 
 enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, WIDE_LOW, ROOTS };
 static PyObject *roots[ROOTS];
-enum { WIDE_MIN = 63, WIDE_MAX = 65 };
+enum {
+    WIDE_FIRST_EDGE = 63, WIDE_FIRST_WORD = 64, WIDE_SECOND_EDGE = 65,
+    WIDE_FOURTH_EDGE = 255, WIDE_FOURTH_WORD = 256, WIDE_MAX = 257,
+};
 static void *nodes[WIDE_MAX];
 static PyObject *wide_low;
 static int wide_size;
@@ -251,9 +254,9 @@ static void *seal_on_departing_thread(void *unused) {
     }
     pcc_py_gc_minor_graph_unlock();
     if (wide_size) {
-        // The last slot straddles bit positions 62, 63 and 64 between
-        // cases. Publish a different low-slot candidate in the same
-        // callback, so a modulo-64 alias cannot stand in for either bit.
+        // The last slot straddles both a mask-word boundary and the
+        // retired four-word bound. Also shade a distinct low slot so
+        // a modulo-64 alias cannot stand in for either bit.
         int b_slot = rescue ? 1 : 0;
         int a_slot = rescue ? 0 : 1;
         nodes[wide_size - 1] = nodes[b_slot];
@@ -343,9 +346,12 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     if (argc > 2 && (strcmp(argv[1], "wide-keep") == 0 || strcmp(argv[1], "wide-drop") == 0)) {
-        if (strcmp(argv[2], "63") == 0) wide_size = WIDE_MIN;
-        else if (strcmp(argv[2], "64") == 0) wide_size = WIDE_MAX - 1;
-        else if (strcmp(argv[2], "65") == 0) wide_size = WIDE_MAX;
+        if (strcmp(argv[2], "63") == 0) wide_size = WIDE_FIRST_EDGE;
+        else if (strcmp(argv[2], "64") == 0) wide_size = WIDE_FIRST_WORD;
+        else if (strcmp(argv[2], "65") == 0) wide_size = WIDE_SECOND_EDGE;
+        else if (strcmp(argv[2], "255") == 0) wide_size = WIDE_FOURTH_EDGE;
+        else if (strcmp(argv[2], "256") == 0) wide_size = WIDE_FOURTH_WORD;
+        else if (strcmp(argv[2], "257") == 0) wide_size = WIDE_MAX;
         else return 44;
         rescue = strcmp(argv[1], "wide-keep") == 0;
         withdrawn = !rescue;
