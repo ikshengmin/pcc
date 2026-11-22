@@ -319,9 +319,12 @@ in the relevant section or issue and removes the entry.
    [`4c64bd32`](https://github.com/ikshengmin/pcc/commit/4c64bd32007ec66ff11c3438db43c3b221ba0a91)
    used actual GC2 marking with controlled occupancy: one batch assisted
    and paid down mark debt with no occupancy decrease. All default/override
-   and non-GC2 controls stayed disabled. Next: test automatic GC2 pacing
-   on real allocations with opt-in on and off, without a threshold override.
-   No runtime behavior on master changed; no pacer A/B yet.
+   and non-GC2 controls stayed disabled. Review follow-up
+   [`48159db`](https://github.com/ikshengmin/pcc/commit/48159dbeabfe31254c9a9d3866a9a351bb01e9be)
+   reached automatic sweep with and without opt-in in the same ELF, no
+   threshold override, and observed real four-mutator assist entries.
+   Next: seal an explicit per-arm GC2 mode in pcc_perf so A/B cannot
+   silently benchmark stock mode. No master runtime or pacer A/B change.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -333,7 +336,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 real-allocation opt-in and stock controls: Codex, Linux x86-64, 2026-11-22 09:12 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
