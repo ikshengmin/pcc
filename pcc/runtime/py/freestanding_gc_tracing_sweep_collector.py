@@ -17,7 +17,10 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     malloc,
+    memset,
     null,
+    ptr_add,
+    ptr_eq,
     ptr_is_null,
     stack_alloc,
     store_i32,
@@ -72,6 +75,12 @@ pcc_gc_tracing_clear_referents = extern(
 )
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_visit_object_slots_slice = extern(
+    "pcc_gc_visit_object_slots_slice", (c_ptr, c_int64, c_int64, c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_tracing_is_sweep_candidate = extern(
+    "pcc_gc_tracing_is_sweep_candidate", (c_ptr,), c_int64
 )
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
@@ -625,6 +634,139 @@ def _finalizer_targets_append(targets, obj) -> None:
         store_i64(targets, 16, grown)
     store_ptr(data, count * 8, obj)
     store_i64(targets, 8, count + 1)
+
+
+# Inert #9 reference primitive: the caller supplies a complete, nonmoving
+# stopped cohort. This only classifies slots; it never runs callbacks.
+_ACYCLIC_MAX_COHORT = 8
+_ACYCLIC_WORD = 8
+_ACYCLIC_EDGES = 0
+# Offsets follow an 8x8 i64 multiplicity matrix and two 8-word arrays.
+_ACYCLIC_INCOMING: i64 = 512
+_ACYCLIC_READY: i64 = 576
+_ACYCLIC_COHORT_PTR: i64 = 640
+_ACYCLIC_COUNT: i64 = 648
+_ACYCLIC_OWNER: i64 = 656
+_ACYCLIC_UNSUPPORTED: i64 = 664
+_ACYCLIC_SCRATCH_BYTES: i64 = 672
+_ACYCLIC_SCAN_NEXT: i64 = 0
+_ACYCLIC_SCAN_EXAMINED: i64 = 8
+_ACYCLIC_SCAN_BYTES: i64 = 16
+_ACYCLIC_SCAN_LIMIT = 4
+_ACYCLIC_ROLE_VALUE = 1
+_ACYCLIC_ROLE_TYPE = 2
+_ACYCLIC_ROLE_DERIVED = 3
+_ACYCLIC_DROPPED = 1
+_ACYCLIC_RETAINED_BY_CYCLE = 2
+
+
+@c_abi_export("pcc_gc_tracing_callback_cohort_edge")
+def _callback_cohort_edge(slot, role: i64, scratch) -> None:
+    if role == _ACYCLIC_ROLE_DERIVED:
+        return
+    if role != _ACYCLIC_ROLE_VALUE and role != _ACYCLIC_ROLE_TYPE:
+        store_i64(scratch, _ACYCLIC_UNSUPPORTED, 1)
+        return
+    value = load_ptr(slot, 0)
+    cohort = load_ptr(scratch, _ACYCLIC_COHORT_PTR)
+    count: i64 = load_i64(scratch, _ACYCLIC_COUNT)
+    owner: i64 = load_i64(scratch, _ACYCLIC_OWNER)
+    index: i64 = 0
+    while index < count:
+        if ptr_eq(value, load_ptr(cohort, index * _ACYCLIC_WORD)) != 0:
+            edge = _ACYCLIC_EDGES + (owner * _ACYCLIC_MAX_COHORT + index) * _ACYCLIC_WORD
+            incoming = _ACYCLIC_INCOMING + index * _ACYCLIC_WORD
+            store_i64(scratch, edge, load_i64(scratch, edge) + 1)
+            store_i64(scratch, incoming, load_i64(scratch, incoming) + 1)
+            return
+        index += 1
+
+
+@c_abi_export("pcc_gc_tracing_classify_callback_cohort")
+def pcc_gc_tracing_classify_callback_cohort(
+    cohort, count: i64, stop_epoch: i64, slots_left: i64, verdicts
+) -> i64:
+    """Classify a small supplied graph; refuse without touching verdicts."""
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    if (
+        backend < 1 or backend > 3 or stop_epoch < 0
+        or pcc_thread_world_stop_epoch_held() != stop_epoch
+        or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
+        or ptr_is_null(cohort) != 0 or ptr_is_null(verdicts) != 0
+        or count <= 0 or count > _ACYCLIC_MAX_COHORT or slots_left < 0
+    ):
+        return 0
+    owner: i64 = 0
+    while owner < count:
+        obj = load_ptr(cohort, owner * _ACYCLIC_WORD)
+        if pcc_gc_tracing_is_sweep_candidate(obj) == 0:
+            return 0
+        earlier: i64 = 0
+        while earlier < owner:
+            if ptr_eq(obj, load_ptr(cohort, earlier * _ACYCLIC_WORD)) != 0:
+                return 0
+            earlier += 1
+        owner += 1
+    scratch = stack_alloc(_ACYCLIC_SCRATCH_BYTES)
+    memset(scratch, 0, _ACYCLIC_SCRATCH_BYTES)
+    store_ptr(scratch, _ACYCLIC_COHORT_PTR, cohort)
+    store_i64(scratch, _ACYCLIC_COUNT, count)
+    state = stack_alloc(_ACYCLIC_SCAN_BYTES)
+    owner = 0
+    while owner < count:
+        store_i64(scratch, _ACYCLIC_OWNER, owner)
+        cursor: i64 = 0
+        while cursor >= 0:
+            if slots_left == 0:
+                return 0
+            limit: i64 = slots_left if slots_left < _ACYCLIC_SCAN_LIMIT else _ACYCLIC_SCAN_LIMIT
+            handled: i64 = pcc_gc_visit_object_slots_slice(
+                load_ptr(cohort, owner * _ACYCLIC_WORD), cursor, limit,
+                _callback_cohort_edge, scratch, state,
+            )
+            examined: i64 = load_i64(state, _ACYCLIC_SCAN_EXAMINED)
+            next_cursor: i64 = load_i64(state, _ACYCLIC_SCAN_NEXT)
+            if (
+                handled == 0 or load_i64(scratch, _ACYCLIC_UNSUPPORTED) != 0
+                or examined < 0 or examined > limit
+                or (next_cursor != -1 and next_cursor <= cursor)
+            ):
+                return 0
+            slots_left -= examined
+            cursor = next_cursor
+        owner += 1
+    queued: i64 = 0
+    index: i64 = 0
+    while index < count:
+        if load_i64(scratch, _ACYCLIC_INCOMING + index * _ACYCLIC_WORD) == 0:
+            store_i64(scratch, _ACYCLIC_READY + queued * _ACYCLIC_WORD, index)
+            queued += 1
+        index += 1
+    done: i64 = 0
+    while done < queued:
+        owner = load_i64(scratch, _ACYCLIC_READY + done * _ACYCLIC_WORD)
+        index = 0
+        while index < count:
+            edge = _ACYCLIC_EDGES + (owner * _ACYCLIC_MAX_COHORT + index) * _ACYCLIC_WORD
+            removed: i64 = load_i64(scratch, edge)
+            if removed != 0:
+                inbound = _ACYCLIC_INCOMING + index * _ACYCLIC_WORD
+                remaining: i64 = load_i64(scratch, inbound) - removed
+                store_i64(scratch, inbound, remaining)
+                if remaining == 0:
+                    store_i64(scratch, _ACYCLIC_READY + queued * _ACYCLIC_WORD, index)
+                    queued += 1
+            index += 1
+        done += 1
+    if pcc_thread_world_stop_epoch_held() != stop_epoch:
+        return 0
+    index = 0
+    while index < count:
+        remaining = load_i64(scratch, _ACYCLIC_INCOMING + index * _ACYCLIC_WORD)
+        store_i64(verdicts, index * _ACYCLIC_WORD,
+                  _ACYCLIC_RETAINED_BY_CYCLE if remaining != 0 else _ACYCLIC_DROPPED)
+        index += 1
+    return 1
 
 
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")

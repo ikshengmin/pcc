@@ -17,7 +17,7 @@ def test_native_acyclic_candidate_classifier_preserves_cycle_descendants(tmp_pat
         source, binary, runtime_archive=explicit_owned_runtime,
         cpp_args=("-I", str(repo / "pcc/runtime/src")),
     )
-    for backend in (1, 2, 3, 4):
+    for backend in range(5):
         result = _record_execution(
             tmp_path, f"gc{backend}", [str(binary)], dict(os.environ, PCC_GC_BACKEND=str(backend)),
         )

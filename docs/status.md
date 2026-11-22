@@ -202,10 +202,11 @@ in the relevant section or issue and removes the entry.
    A callback store through an older registered owner is missed without
    its journal entry; recording that owner restores parity in three
    visits. The same bounded test now covers a callback-created owner;
-   incomplete journaling refuses and uses full recheck. Next #9:
-   wire the bounded graph primitive into an inert runtime entry for
-   selected candidates, under the existing stopped-epoch checks.
-   No default path change.
+   incomplete journaling refuses and uses full recheck. The bounded
+   peel now lives in an inert freestanding runtime entry; native
+   GC1–3 invoke it explicitly, GC0/GC4 decline, and production has no
+   caller. Next #9: a test-invoked runtime handoff for the selected
+   head callback, without retaining the cohort over the resumed window.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
@@ -245,7 +246,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 inert freestanding runtime candidate peel with owned test caller: Codex, Linux x86-64, 2026-11-22 13:01 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

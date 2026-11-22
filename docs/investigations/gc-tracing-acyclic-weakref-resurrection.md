@@ -316,3 +316,17 @@ existing full recheck then protects both. This includes nine native
 points per source (three sizes and GC1–3), for 48 process executions
 including the previous lifecycle controls. No runtime allocation
 journal completeness is asserted.
+
+The classifier is now implemented in the freestanding tracing sweep
+object as `pcc_gc_tracing_classify_callback_cohort`. The native driver
+no longer contains a duplicate classifier. The entry takes a supplied
+stopped, known-candidate cohort of at most eight objects and writes
+verdicts only after a complete bounded slot walk and stop-epoch check.
+It declines GC0/GC4, active forwarding, duplicate/noncandidate or
+pinned objects, stale epoch and an exhausted budget. The owning-edge
+multiplicity matrix is local scratch; nothing is published to collector
+metadata. The normal sweep does not call the new symbol. Three owned
+Linux native tests passed with a freshly built archive, plus eight ABI
+chunking tests. This is not the shipped #9 fix: a real caller must
+establish complete cohort provenance and qualify callback handoff and
+the bounded refresh after it; GC4 remains separately gated.
