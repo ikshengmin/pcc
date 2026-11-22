@@ -390,3 +390,65 @@ func main() {}
         assert address.args[0].value == field
     with pytest.raises(UnsupportedGo, match="slice types require shared-runtime"):
         compile_go(source)
+
+
+STATIC_PROCEDURE_SOURCE = """package main
+var flags struct { A bool; B bool; Derived bool }
+var revisit func()
+func bind() {
+    revisit = func() { flags.Derived = flags.A && flags.B }
+}
+func change() {
+    revisit = func() { flags.Derived = !flags.Derived }
+}
+func main() {
+    if revisit != nil { panic("zero code pointer") }
+    bind()
+    flags.A = true
+    revisit()
+    if flags.Derived { panic("wrong conjunction") }
+    flags.B = true
+    revisit()
+    if !flags.Derived { panic("captured old package field") }
+    change()
+    revisit()
+    if flags.Derived { panic("old procedure retained") }
+}
+"""
+
+
+def test_noncapturing_package_procedure_has_code_pointer_not_environment():
+    ir = str(compile_go(STATIC_PROCEDURE_SOURCE, "static_proc.go"))
+    procedures = [line for line in ir.splitlines() if line.startswith("define internal void @")
+                  and "_static_proc_" in line]
+    assert len(procedures) == 2 and ir.count("_static_proc_") >= 4
+    assert "malloc" not in ir and "closure" not in ir
+
+
+@pytest.mark.parametrize("source", [
+    "package main;var flags struct{A bool};var p func();func main(){x:=true;p=func(){flags.A=x};_=x}",
+    "package main;var x bool;var flags struct{A bool};var p func();func main(){x:=true;p=func(){flags.A=x};_=x}",
+    "package main;var p func()int;func main(){p=func()int{return 1}}",
+    "package main;var x bool;func main(){var p func();p=func(){x=true};_=p}",
+    "package main;var p func();func helper(){};func main(){p=func(){helper()}}",
+])
+def test_static_procedure_does_not_admit_runtime_closures(source):
+    with pytest.raises(UnsupportedGo, match="captured-variable storage") as caught:
+        compile_go(source, "unproved.go")
+    assert caught.value.code == "go.unsupported.function-values"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_noncapturing_package_procedure_native_matches_official_go(tmp_path, monkeypatch):
+    originals = (("static_proc.go", STATIC_PROCEDURE_SOURCE),)
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned(originals)
+    native = tmp_path / "owned"
+    write_artifact(artifact, native)
+    reference = compile_reference(originals, tmp_path / "official",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    assert (reference.parent / "static_proc.go").read_bytes() == STATIC_PROCEDURE_SOURCE.encode()
+    assert run(native) == run(reference) == Execution(0, b"", b"")

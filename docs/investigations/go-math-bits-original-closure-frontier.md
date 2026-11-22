@@ -743,3 +743,14 @@ The exact source probe advances to the noncapturing doDerived
 function literal at `internal/cpu/cpu_x86.go:213:14`. One hundred
 four adjacent and three native/reference controls passed. This is
 not a native catalog allocation, linked X86 export, or upstream build.
+
+A zero-argument/void function literal assigned to an ordinary package
+procedure slot can now use an internal code pointer when every body
+read/write is a proved package place and no lexical capture or call is
+present. The normal checker rechecks its original body in a fresh
+activation. Linux code observes current package fields and distinct
+assignment sites, matching Go 1.27.3; 141 adjacent and 22 native or
+reference checks passed. The exact source probe now reaches the
+original CPU Name's `make([]byte,0,48)` at
+`internal/cpu/cpu_x86.go:246:10`. Native catalog storage and upstream
+test execution remain unbuilt.

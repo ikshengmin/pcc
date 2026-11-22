@@ -5,7 +5,8 @@ Untyped constants are evaluated exactly before representability checks. Heap,
 concurrency and recoverable-panic operations are explicit capability gaps.
 """
 
-from dataclasses import dataclass
+from copy import copy
+from dataclasses import dataclass, replace
 from fractions import Fraction
 import re
 import unicodedata
@@ -24,7 +25,7 @@ from pcc.frontends.go.interface_values import (
 from pcc.frontends.go.managed_objects import FixedByteExtent, byte_backing_plan, value_plan
 from pcc.frontends.go.generics import GenericSession, TypeParameter, comparable, contains_parameter
 from pcc.frontends.go.syntax import (
-    ArraySyntax, ChannelSyntax, Expr, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
+    ArraySyntax, ChannelSyntax, Expr, Function, FunctionTypeSyntax, GoDiagnostic, InterfaceMethodSyntax,
     InterfaceSyntax, MapSyntax, PointerSyntax, SliceSyntax, Stmt, StructSyntax, TypeDeclaration,
     TypeInstantiationSyntax, TypeName,
 )
@@ -575,6 +576,7 @@ class Analyzer:
         self.type_bindings = {}
         self.abstract_function = False
         self.functions = {}
+        self.static_procedures = []
         self.types = {}
         self.declarations_by_identity = {}
         self.globals = {}
@@ -765,6 +767,7 @@ class Analyzer:
         for function in self.program.functions:
             if not function.declaration_only and function.byte_append_summary is None:
                 self.analyze_function(function)
+        self.program.functions.extend(self.static_procedures)
         for file_imports in self.imports.values():
             for binding in file_imports.values():
                 if not binding.used:
@@ -1418,6 +1421,47 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "multiple-value call in single-value context")
         return expressions
 
+    def bind_static_procedure(self, target, expr):
+        """Use an ordinary code symbol for a capture-free package procedure."""
+        if (expr.kind != "func_literal" or target.kind != "name" or target.symbol is None
+                or not target.symbol.package_variable or target.symbol.linkname is not None
+                or target.type != CallableType((), "void") or self.type_bindings):
+            return
+        literal = expr.value
+        signature = literal.signature
+        if signature.parameters or signature.result != "void" or signature.variadic or not literal.body:
+            return
+        # Restrict the closed island to direct package places and boolean
+        # expressions. Never reinterpret a lexical capture as a package name.
+        def place(node):
+            while node.kind == "selector" and len(node.args) == 1:
+                node = node.args[0]
+            if node.kind != "name" or self.lexical_binding(node.value) is not None:
+                return False
+            symbol = self.globals.get(node.value)
+            return symbol is not None and symbol.package_variable and symbol.linkname is None
+
+        def value(node):
+            if node.kind == "binary" and node.value in {"&&", "||"} and len(node.args) == 2:
+                return all(value(child) for child in node.args)
+            if node.kind == "unary" and node.value == "!" and len(node.args) == 1:
+                return value(node.args[0])
+            return (node.kind == "name" and node.value in {"true", "false"}) or place(node)
+
+        if not all(stmt.kind == "=" and len(stmt.targets) == len(stmt.exprs) == 1
+                   and place(stmt.targets[0]) and value(stmt.exprs[0]) for stmt in literal.body):
+            return
+        body = Function(replace(expr.token, text="_"), [], "void", literal.body)
+        body.abi_symbol = (self.function.abi_symbol + "_static_proc_" +
+                           str(expr.token.line) + "_" + str(expr.token.column))
+        # The normal checker sees a fresh lexical activation and the original
+        # package bindings. It type-checks every read/write and boolean op.
+        nested = copy(self)
+        nested.iteration_binding = False
+        nested.analyze_function(body)
+        self.static_procedures.append(body)
+        self.function_reference(expr, body)
+
     def check_static_catalog_write(self, statement, key, site):
         from pcc.frontends.go.pointer_flow import static_scalar_field_fact
 
@@ -1495,6 +1539,8 @@ class Analyzer:
         if kind == "=":
             for target in statement.targets:
                 self.assignment_target(target, read=False)
+            if len(statement.targets) == len(statement.exprs) == 1:
+                self.bind_static_procedure(statement.targets[0], statement.exprs[0])
             values = self.values(statement.exprs)
             if len(statement.targets) != len(values):
                 raise GoDiagnostic(statement.token, "assignment count mismatch")
