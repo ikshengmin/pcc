@@ -216,13 +216,13 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   handle the copy-list initialized block-static const-char pointer at
-   `tinyxml2.cpp:716:24`. The inferred static string-pointer arrays and
-   null sentinel now compile; unchanged TinyXML2 still has no Linux PCC
-   link or execution.
+   isolate native virtual dispatch and cleanup/effect proof for the
+   unchanged TinyXML2's explicit `node->~XMLNode()` at `1199:9`. Do not
+   bypass the placement destruction effects gate. Its prior static
+   pointer copy-list declaration compiles; the project has not linked.
 
    Claims:
-   - local static C++ pointer copy-list initializer: Codex, Linux x86-64, 2026-11-22 01:05 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the braced scalar initializer of a function-local static pointer; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the explicit XMLNode destructor effect proof; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -4396,7 +4396,7 @@
         "basic.start.static",
         "conv.array"
       ],
-      "scope": "A non-template, non-external-inline block static pointer to const char initialized with an ordinary string literal in an equals initializer persists in internal storage. Pointer assignments change that object across invocations, without runtime initializer functions. Braces, nonliteral pointer initializers, arrays and pcc1 stay outside this scope.",
+      "scope": "A non-template, non-external-inline block static pointer to const char initialized with an ordinary string literal, via an equals expression or a one-element copy-list, persists in internal storage. Pointer assignments change that object across invocations without runtime initializer functions. Direct-list, nonliteral pointer initializers, arrays and pcc1 stay outside this scope.",
       "tests": [
         "tests/cpp/test_cpp_local_static_string_pointer.py::test_local_static_pointer_has_no_runtime_initializer_function",
         "tests/cpp/test_cpp_local_static_string_pointer.py::test_local_static_pointer_persists_against_explicit_cpp17",
@@ -4406,11 +4406,11 @@
       "evidence": [],
       "implementation": {
         "status": "supported",
-        "source_revision": "sha256:3875798ab8cca77cbb494ab091afde80009311cdf70ee2e9f5b6e6b0b50584da",
+        "source_revision": "sha256:89cf1d63fe0d1ae6d08225f977d8644fb0ce62cba47a8349df21d93c3b1b4244",
         "sources": [
           {
             "path": "pcc/frontends/cpp/local_statics.py",
-            "sha256": "9851772594c0006d21ee193d48ece80eda229b748326cc6c9af5976f227a2967"
+            "sha256": "1ebbc7351152cee299842033768b8beb78bbfbdcf5f2f1a409fad5f3e566ac6c"
           },
           {
             "path": "pcc/frontends/cpp/objects.py",

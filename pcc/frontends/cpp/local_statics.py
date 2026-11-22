@@ -57,9 +57,18 @@ def declare(parser, *, for_init=False):
     proof = None
     if parser._accept('='):
         if parser._peek().value == '{':
-            raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
-                                'local static list initialization is not implemented', name.coord)
-        expression = parser._expression()
+            if not string_pointer:
+                raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
+                                    'local static list initialization is not implemented', name.coord)
+            from pcc.frontends.cpp.initializers import ListInitializer, parse_initializer_list
+            initializer_list = parse_initializer_list(parser)
+            if len(initializer_list.clauses) != 1 or isinstance(initializer_list.clauses[0], ListInitializer):
+                raise CppDiagnostic('cpp.unsupported.static-initialization-analysis',
+                                    'local static const-char pointer copy-list initialization requires one literal',
+                                    initializer_list.coord)
+            expression = initializer_list.clauses[0]
+        else:
+            expression = parser._expression()
         parser._require_value(expression)
         if string_pointer:
             if not isinstance(expression.node, c_ast.Constant) or expression.node.type != "string":

@@ -20,16 +20,21 @@ PROGRAM = (
 )
 
 
-def test_local_static_pointer_has_no_runtime_initializer_function():
-    artifact = compile_host_cpp((("static-string.cpp", PROGRAM),))
+PROGRAMS = (PROGRAM, PROGRAM.replace('p="AB"', 'p={"AB"}'))
+
+
+@pytest.mark.parametrize("source", PROGRAMS, ids=("equals", "copy-list"))
+def test_local_static_pointer_has_no_runtime_initializer_function(source):
+    artifact = compile_host_cpp((("static-string.cpp", source),))
     ir = artifact.ir[0]
     assert ir.count("internal global ptr") == 2
     assert "@llvm.global_ctors" not in ir
 
 
 @pytest.mark.integration
-def test_local_static_pointer_persists_against_explicit_cpp17(tmp_path):
-    units = (("static-string.cpp", PROGRAM),)
+@pytest.mark.parametrize("source", PROGRAMS, ids=("equals", "copy-list"))
+def test_local_static_pointer_persists_against_explicit_cpp17(tmp_path, source):
+    units = (("static-string.cpp", source),)
     artifact = compile_host_cpp(units)
     owned = tmp_path / "owned"
     write_host_executable(artifact, owned)
@@ -41,7 +46,7 @@ def test_local_static_pointer_persists_against_explicit_cpp17(tmp_path):
     assert_exact(run_executable(reference), expected)
 
 
-@pytest.mark.parametrize("initializer", ["", "= text", '{ "text" }'])
+@pytest.mark.parametrize("initializer", ["", "= text", '{ "text" }', "= {}", "={text}", '={{"text"}}', '={"a","b"}'])
 def test_local_static_pointer_does_not_expand_to_other_initializers(initializer):
     with pytest.raises(CppDiagnostic) as error:
         CppParser().parse('int f(const char* text){static const char* p'

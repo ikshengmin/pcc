@@ -490,12 +490,13 @@ brace elision retain their separate boundaries.
 ### Local static const-char pointers
 
 A block-scope static const-char pointer can take an ordinary string
-literal via an equals initializer. N4659 [stmt.dcl], [basic.start.static]
+literal via an equals expression or a single-element copy-list. N4659
+[stmt.dcl], [basic.start.static]
 and [conv.array] govern persistent storage and the address initializer.
 The existing scalar pointer constant owner and the C static-storage
 projection are used without a dynamic initialization guard. A reassigned
 pointer persists between calls without changing a separately declared
-pointer. Array, brace and nonliteral pointer cases remain separate.
+pointer. Array, direct-list and nonliteral pointer cases remain separate.
 
 
 ### Local static arrays of const-char pointers
