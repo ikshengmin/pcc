@@ -93,11 +93,50 @@ static int check_generator_frame_store(void) {
     return 0;
 }
 
+static PyObject *registered_root;
+
+static int check_managed_and_root_stores(void) {
+    PyObject *owner = py_gen_frame_new(1);
+    PyObject *child = py_list_new(0);
+    PyObject *rooted = py_list_new(0);
+    if (!owner || !child || !rooted) return fail("heap and root allocation");
+    void *handle = pcc_gc_scheduler_root_register_handle(&registered_root);
+    if (!handle) return fail("root registration");
+    pcc_py_gc_minor_graph_lock();
+    pcc_gc_set_mark_color(owner, PY_FLAG_GC_BLACK);
+    pcc_gc_set_mark_color(child, PY_FLAG_GC_WHITE);
+    pcc_gc_set_mark_color(rooted, PY_FLAG_GC_WHITE);
+    __atomic_store_n(&pcc_gc_mark_active, 1, __ATOMIC_RELEASE);
+    pcc_py_gc_minor_graph_unlock();
+
+    PyObject **field = &((PyListObject *)owner)->items[0];
+    pcc_gc_store_ptr(owner, field, child);
+    if (*field != child || color(child) != PY_FLAG_GC_GRAY
+        || pcc_gc_page_mark_test(child) != 1)
+        return fail("heap store publication");
+    if (color(rooted) != PY_FLAG_GC_WHITE || pcc_gc_page_mark_test(rooted) != 0)
+        return fail("separate root still white");
+    pcc_gc_store_root(&registered_root, rooted);
+    if (registered_root != rooted || color(rooted) != PY_FLAG_GC_GRAY
+        || pcc_gc_page_mark_test(rooted) != 1)
+        return fail("root store publication");
+
+    pcc_gc_store_ptr(owner, field, NULL);
+    if (*field || registered_root != rooted) return fail("heap clear touches root");
+    pcc_gc_store_root(&registered_root, NULL);
+    if (registered_root) return fail("root clear");
+    pcc_gc_scheduler_root_unregister_handle(handle);
+    __atomic_store_n(&pcc_gc_mark_active, 0, __ATOMIC_RELEASE);
+    puts("GC3_MANAGED_AND_ROOT_STORES_OK");
+    return 0;
+}
+
 int main(int argc, char **argv) {
     if (pcc_gc_backend() != 3) return fail("backend");
     py_gc_disable();
     if (argc == 2 && argv[1][0] == 'd') return check_dictionary_first_store();
     if (argc == 2 && argv[1][0] == 'g') return check_generator_frame_store();
+    if (argc == 2 && argv[1][0] == 's') return check_managed_and_root_stores();
     if (argc != 1) return fail("mode");
     PyObject *child_growth = py_list_new(0);
     PyObject *child_spare = py_list_new(0);

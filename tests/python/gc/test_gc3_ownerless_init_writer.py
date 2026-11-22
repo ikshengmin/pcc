@@ -159,3 +159,67 @@ def test_gc3_raw_generator_frame_retains_owner_at_the_store_transaction():
             ("lock", frame), ("shade", value), ("store", items, value), ("unlock", frame),
         ]
         assert memory[items, 0] == value
+
+
+def test_gc3_generic_nonmoving_store_delegates_without_the_owner():
+    owner, field, root, young = 10, 20, 30, 40
+    flags = {
+        "pcc_gc_backend_selected": 3,
+        "pcc_gc_nonmoving_count_free": 1,
+        "pcc_gc_config_initialized": 1,
+        "pcc_gc_backend4_no_refcounts": 1,
+        "pcc_diagnostics_runtime_log_fast_state": 0,
+        "pcc_gc_refcount_provenance_probe": 0,
+    }
+    stores = []
+    bindings = {
+        "ptr_is_null": lambda pointer: pointer == 0,
+        "global_addr": lambda name: name,
+        "load_i32": lambda name, offset: flags[name],
+        "_gc0_owner_fast_path": lambda: 0,
+        "_gc_backend_fast": lambda: 3,
+        "_store_root_nonmoving_tracing": lambda *args: stores.append(args),
+    }
+    store_heap = _source_function("py_obj.py", "pcc_gc_store_ptr", bindings)
+    store_root = _source_function("py_obj.py", "pcc_gc_store_root", bindings)
+    store_heap(owner, field, young)
+    store_root(root, young)
+    assert stores == [(field, young, 3), (root, young, 3)]
+
+
+def test_gc3_root_helper_never_shades_an_unindexed_cell_even_during_major():
+    events = []
+    state = {"active": 0, "indexed": 0}
+    bindings = {
+        "ptr_is_null": lambda pointer: pointer == 0,
+        "is_tagged_int": lambda _: 0,
+        "global_addr": lambda name: name,
+        "atomic_load_i32": lambda obj, offset, order: (
+            state["active"] if obj == "pcc_gc_mark_active" else 0
+        ),
+        "pcc_thread_no_park_enter": lambda: events.append(("enter",)),
+        "pcc_thread_no_park_exit": lambda: events.append(("exit",)),
+        "pcc_gc_object_index_seen_stable": lambda obj: state["indexed"],
+        "store_ptr": lambda obj, offset, val: events.append(("store", obj, val)),
+        "pcc_gc_object_is_white": lambda obj, flags: 1,
+        "pcc_gc_shade_gray_atomic": lambda obj, allow_black: events.append(("shade", obj)),
+        "atomic_rmw_i64": lambda *args: None,
+        "pcc_gc_metric_shard": lambda: 0,
+        "PYOBJECTHEADER_FLAGS_OFFSET": abi.PYOBJECTHEADER_FLAGS_OFFSET,
+        "i64": int,
+    }
+    store = _source_function("py_obj.py", "_store_root_nonmoving_tracing", bindings)
+    args = (0x2000, 0x3000, 3)
+    raw = [("store", *args[:2])]
+    store(*args)
+    assert events == raw
+
+    events.clear()
+    state["active"] = 1
+    store(*args)
+    assert events == raw + [("enter",), ("exit",)]
+
+    events.clear()
+    state["indexed"] = 1
+    store(*args)
+    assert events == raw + [("enter",), ("shade", args[1]), ("exit",)]

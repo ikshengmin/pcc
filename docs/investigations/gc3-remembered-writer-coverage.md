@@ -57,6 +57,17 @@ that transaction, not inside the shade function. Neither witness covers
 the inline frame path, a minor, or card retirement. Linux pcc0: three
 native writer controls and three source witnesses passed; Mac not run.
 
+The shared-store witnesses execute native `pcc_gc_store_ptr` into a heap
+owner and `pcc_gc_store_root` into a separately registered scheduler slot.
+Both publish, shade an indexed white value during the controlled major, and
+clear independently. A source-dispatch witness confirms both currently
+reach `_store_root_nonmoving_tracing` with only slot/value/backend. A second
+executes that helper: idle major or unindexed value gives no shade; the
+indexed active-major control shades. The nursery path must feed a heap
+owner and perform its header-bit check independently of this legacy index
+gate. Registered roots stay root-only. Linux pcc0: four native controls;
+five source witnesses. No Mac, pcc1, performance or actual nursery run.
+
 ## Collector-entry root baseline
 
 `freestanding_gc_conservative_roots._capture_thread_words` refreshes the
