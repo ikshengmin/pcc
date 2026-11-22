@@ -160,6 +160,15 @@ in the relevant section or issue and removes the entry.
   dispatch from an authenticated checkout; no need to wait for CI before
   focused rounds outside stopped areas.
 
+- TinyXML2 open virtual destruction: choose whether the exact Linux
+  owned project link may close the dynamic effect domain, or whether this
+  waits for a general C++ exception/ABI owner. Recommendation: a
+  source-bound, project-only proof, with foreign or unlisted targets
+  failing closed and no change to separately compiled library semantics.
+  [Cross-TU evidence](investigations/tinyxml2-explicit-virtual-destructor-effects.md)
+  rules out a current-TU-only effect certificate. While this is pending,
+  take the next eligible frontend target.
+
 - Whether the operating system's Metal shader compiler is an accepted platform
   boundary under the pcc1 ownership contract (item 5; open point in the
   [local-model architecture](design/pcc-local-model-architecture.md)). The
@@ -216,15 +225,14 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   determine the exact dynamic-target and translation-unit ownership
-   contract for TinyXML2's open virtual destruction, using the
-   [destructor graph](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
-   Recursive direct member effects now execute in the bounded case, but
-   the unchanged project is still stopped at `1199:9`; do not reuse
-   the static destructor's effect certificate for an unproved override.
+   while TinyXML2's open virtual effect-domain decision is pending, run
+   the unchanged Go math/bits local source/test-entry check and identify
+   the first current dependency blocker. Do not relabel it as full upstream
+   execution; the Java Commons Numbers original project and complete
+   CI lanes still use their own guarded execution routes.
 
    Claims:
-   - open virtual destructor target contract: Codex, Linux x86-64, 2026-11-22 01:23 UTC, area frontend-cpp
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

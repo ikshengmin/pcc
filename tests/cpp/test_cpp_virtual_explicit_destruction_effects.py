@@ -147,3 +147,24 @@ def test_recursive_member_component_keeps_outgoing_unknown_edges_gated(members):
     with pytest.raises(CppDiagnostic) as error:
         compile_host_cpp((("unproved-recursion.cpp", recursive_member_source(members)),))
     assert error.value.code == "cpp.unsupported.placement-constructor-effects"
+
+
+@pytest.mark.integration
+def test_open_virtual_explicit_destructor_can_select_override_in_another_tu(tmp_path):
+    header = PREFIX + (
+        "struct Base{Base(int*p):out(p){}int*out;virtual ~Base();};"
+        "void destroy(Base*p);"
+    )
+    units = (
+        ("destroy.cpp", header + "Base::~Base(){*out=*out*10+2;}"
+                                  "void destroy(Base*p){p->~Base();}"),
+        ("caller.cpp", header + "struct Child:Base{Child(int*p):Base(p){}"
+                                 "~Child(){*out=*out*10+4;}};"
+                                 "int cpp_test_entry(){long long storage[16];int result=0;"
+                                 "Base*p=new(storage)Child(&result);destroy(p);return result;}"),
+    )
+    binary = tmp_path / "owned"
+    write_host_executable(compile_host_cpp(units), binary)
+    reference = compile_reference_with_new(units, tmp_path / "reference")
+    assert_exact(run_executable(binary), EXPECTED)
+    assert_exact(run_executable(reference), EXPECTED)

@@ -77,3 +77,21 @@ native controls match g++ 14.2. A missing member or external outgoing
 call still rejects. Seven guarded integration nodes and 155 adjacent
 checks passed. This is not a termination proof. The unchanged TinyXML2
 still has an open-virtual effect diagnostic at `1199:9`.
+
+
+## Cross-TU dynamic target boundary
+
+The call-site TU now has an executable control with no declaration of
+`Child`: it compiles `destroy(Base*)` and the base destructor.
+Another TU constructs `Child` and invokes `destroy`; the overrider in
+that other TU contributes 4 before the base contributes 2. Both owned
+Linux pcc0 and g++ 14.2 produce exit 42, stdout `2a000000` (hex), empty
+stderr. Eight guarded integration nodes passed. Checking only the
+classes visible to the current parser demonstrably misses live targets.
+
+Maintainer choice: (a) a project-only, source-bound dynamic effect domain
+checked over the exact linked inputs, with unknown targets failing
+closed; or (b) a general C++ exception and ABI owner before broadening.
+The agent recommends (a) for the original fixture, not for library or
+ordinary separately compiled ABI acceptance. Neither is implemented by
+this audit; do not change general-mode semantics or drop the current gate.
