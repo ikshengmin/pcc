@@ -503,3 +503,11 @@ the explicit checked Go control (including reversed, negative and
 end bounds); 47 scoped checks and two native differentials passed.
 This does not supply general slicing, a Go panic owner, or an escaping
 string value.
+
+The owned prefix scan now works on checked byte views with either
+comparison polarity. Removing leading spaces and stopping at NUL in
+the original two loops was compared against official Go on five
+cases (spaces, NUL, absent delimiter, high bytes and empty result).
+The native observation folds the remaining bytes and length to a
+scalar; it does not return a pointer or claim a string copy.
+Twenty-five scoped and three native differential checks passed.

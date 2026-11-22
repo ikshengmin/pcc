@@ -225,15 +225,15 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   lower the original bounded trim loops over the verified byte view
-   and check their resulting span before any string escape. Native
-   subviews and scalar reads now reject signed or out-of-range bounds
-   before accessing bytes. General slice and string ABI remain open. See the
+   verify a distinct-owner copy of the trimmed byte view before any
+   string escape. The original two trim loops now have matching native
+   bounded-scan evidence; they still have no owned escaping-string
+   allocation or whole-function admission. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go original bounded byte trim loops: Codex, Linux x86-64, 2026-11-22 03:50 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

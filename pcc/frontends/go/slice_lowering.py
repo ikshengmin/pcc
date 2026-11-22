@@ -97,3 +97,31 @@ def read_fixed_byte(builder, view, index, failure):
     offset = builder.add(view.offset, index)
     slot = builder.gep(view.span.storage, (ir.Constant(ir.IntType(32), 0), offset), inbounds=True)
     return builder.load(slot)
+
+
+def scan_fixed_byte_prefix(builder, view, delimiter, failure, *, while_equal):
+    """Return the length of the initial run satisfying a scalar comparison."""
+    _check_view_operands(builder, view, failure)
+    if type(delimiter) is not int or not 0 <= delimiter <= 255 or type(while_equal) is not bool:
+        raise ValueError("fixed byte scan requires a byte and a definite comparison")
+    i8, i64 = ir.IntType(8), ir.IntType(64)
+    before = builder.block
+    loop = builder.function.append_basic_block("fixed_byte.scan")
+    inspect = builder.function.append_basic_block("fixed_byte.scan_read")
+    increment = builder.function.append_basic_block("fixed_byte.scan_step")
+    done = builder.function.append_basic_block("fixed_byte.scan_done")
+    builder.branch(loop)
+    builder.position_at_end(loop)
+    index = builder.phi(i64)
+    index.add_incoming(ir.Constant(i64, 0), before)
+    builder.cbranch(builder.icmp_unsigned("<", index, view.length), inspect, done)
+    builder.position_at_end(inspect)
+    byte = read_fixed_byte(builder, view, index, failure)
+    keep = builder.icmp_unsigned("==" if while_equal else "!=", byte, ir.Constant(i8, delimiter))
+    builder.cbranch(keep, increment, done)
+    builder.position_at_end(increment)
+    next_index = builder.add(index, ir.Constant(i64, 1))
+    builder.branch(loop)
+    index.add_incoming(next_index, increment)
+    builder.position_at_end(done)
+    return index

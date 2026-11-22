@@ -191,3 +191,120 @@ func main() {
                                   compiler=os.environ["PCC_GO_REFERENCE"],
                                   cache=os.environ["PCC_GO_REFERENCE_CACHE"])
     assert run(owned) == run(reference) == Execution(0, struct.pack("<7q", 3, 8, -1, -1, -1, -1, -1), b"")
+
+
+def test_prefix_scan_rejects_out_of_range_byte_before_emitting():
+    from pcc.frontends.go.slice_lowering import allocate_fixed_byte_span, fixed_byte_view, scan_fixed_byte_prefix
+
+    module = ir.Module()
+    fn = ir.Function(module, ir.FunctionType(ir.VoidType(), ()), name="probe")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    failure = fn.append_basic_block("failure")
+    span = allocate_fixed_byte_span(builder, FixedByteExtent(0, 4, byte_backing_plan()))
+    view = fixed_byte_view(builder, span)
+    before = str(module)
+    with pytest.raises(ValueError, match="byte"):
+        scan_fixed_byte_prefix(builder, view, 256, failure, while_equal=True)
+    assert str(module) == before
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_original_trim_loops_match_owned_native_span_scan(tmp_path, monkeypatch):
+    from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.backend.x86_64_asm_driver import assemble_file
+    from pcc.frontends.go.slice_lowering import (
+        allocate_fixed_byte_span, append_fixed_byte_words, fixed_byte_view, read_fixed_byte,
+        scan_fixed_byte_prefix, slice_fixed_bytes,
+    )
+
+    words = ((0x42412020, 0x45440043), (0x20202020, 0x20202020), (0x11223300, 0),
+             (0x44434241, 0x48474645), (0x80202020, 0xFF00EE40))
+    module = ir.Module()
+    module.triple = DEFAULT_TARGET
+    i32, i64 = ir.IntType(32), ir.IntType(64)
+    fn = ir.Function(module, ir.FunctionType(i64, (i32, i32)), name="probe")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    failure = fn.append_basic_block("bounds_failure")
+    span = allocate_fixed_byte_span(builder, FixedByteExtent(0, 8, byte_backing_plan()))
+    span = append_fixed_byte_words(builder, span, ByteAppendSummary((0, 8, 16, 24)), fn.args)
+    original = fixed_byte_view(builder, span)
+    spaces = scan_fixed_byte_prefix(builder, original, 32, failure, while_equal=True)
+    tail = slice_fixed_bytes(builder, original, spaces, original.length, failure)
+    size = scan_fixed_byte_prefix(builder, tail, 0, failure, while_equal=False)
+    view = slice_fixed_bytes(builder, tail, ir.Constant(i64, 0), size, failure)
+    # Observe the remaining bytes as a rolling scalar value, not an escaping
+    # pointer/string. The same source control folds the original returned copy.
+    enter = builder.block
+    loop = fn.append_basic_block("observe")
+    compare = fn.append_basic_block("observe_byte")
+    done = fn.append_basic_block("observed")
+    builder.branch(loop)
+    builder.position_at_end(loop)
+    index, value = builder.phi(i64), builder.phi(i64)
+    index.add_incoming(ir.Constant(i64, 0), enter)
+    value.add_incoming(view.length, enter)
+    builder.cbranch(builder.icmp_unsigned("<", index, view.length), compare, done)
+    builder.position_at_end(compare)
+    observed = builder.zext(read_fixed_byte(builder, view, index, failure), i64)
+    next_index = builder.add(index, ir.Constant(i64, 1))
+    next_value = builder.add(builder.mul(value, ir.Constant(i64, 257)), observed)
+    step = builder.block
+    builder.branch(loop)
+    index.add_incoming(next_index, step)
+    value.add_incoming(next_value, step)
+    builder.position_at_end(done)
+    builder.ret(value)
+    builder.position_at_end(failure)
+    builder.ret(ir.Constant(i64, -1))
+
+    start = """.intel_syntax noprefix
+.text
+.globl _start
+_start:
+  sub rsp, 48
+"""
+    for n, (a, b) in enumerate(words):
+        start += f"  mov edi, {a}\n  mov esi, {b}\n  call probe\n  mov QWORD PTR [rsp + {n*8}], rax\n"
+    start += """  mov eax, 1
+  mov edi, 1
+  mov rsi, rsp
+  mov edx, 40
+  syscall
+  mov eax, 60
+  xor edi, edi
+  syscall
+"""
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        body = parse_relocatable(emit_owned_object(str(module), DEFAULT_TARGET))
+        image = link_static_executable([assemble_file(start), body], entry="_start")
+    owned = tmp_path / "owned"
+    owned.write_bytes(image)
+    owned.chmod(0o700)
+    raw = (FIXTURE / "src/internal/cpu/cpu_x86.go").read_text()
+    trim = raw[raw.index("// Trim leading spaces."):raw.index("\n}\n\nfunc appendBytes(")]
+    pairs = ",".join(f"{{{x},{y}}}" for x, y in words)
+    source = """package main
+import ("encoding/binary";"os")
+func trim(data []byte)string {
+""" + trim + """
+}
+func main(){
+  var result [40]byte
+  for i,pair:=range [5][2]uint32{""" + pairs + """} {
+    var data [8]byte
+    binary.LittleEndian.PutUint32(data[:4],pair[0]); binary.LittleEndian.PutUint32(data[4:],pair[1])
+    s:=trim(data[:]); v:=uint64(len(s))
+    for k:=0;k<len(s);k++ { v=v*257+uint64(s[k]) }
+    binary.LittleEndian.PutUint64(result[i*8:],v)
+  }
+  if n,e:=os.Stdout.Write(result[:]); n!=40||e!=nil { panic("write") }
+}
+"""
+    reference = compile_reference((("control.go", source),), tmp_path / "reference",
+                                  compiler=os.environ["PCC_GO_REFERENCE"],
+                                  cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+    got, want = run(owned), run(reference)
+    assert got == want and got.returncode == 0 and len(got.stdout) == 40 and got.stderr == b""
