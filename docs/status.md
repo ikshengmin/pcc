@@ -288,10 +288,13 @@ in the relevant section or issue and removes the entry.
    prevents switching collectors. The group helpers currently decline;
    the native regression now checks unchanged cells, GC3 active-mark
    invariants and scalar transfer into registered caller roots. A separate
-   unchanged generator integration case now reproduces a GC1 resurrection
-   disagreement with CPython: next isolate the weakref identity check
-   at `generator_root_groups.py:280`. The old relocation fixture also
-   fails before grouped take (GC3 oldification, GC4 set admission).
+   unchanged generator case and a standalone
+   [resurrection probe](investigations/gc-tracing-acyclic-weakref-resurrection.md)
+   confirm GC1–4 clear acyclic callback weakrefs too early; GC0 and both
+   cycle controls match CPython. Next: qualify a candidate-only graph
+   distinction without changing cyclic behavior or callback ordering.
+   The old relocation fixture still fails before grouped take (GC3
+   oldification, GC4 set admission).
    The dictionary transaction witness identifies the commit point after both
    slots succeed; rollback publishes no edge. Linux native GC3 also
    exercised the raw generator frame's set, replace and clear. Native heap
@@ -462,7 +465,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC1 generator resurrection weakref identity localization: Codex, Linux x86-64, 2026-11-22 11:58 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
