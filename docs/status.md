@@ -354,7 +354,12 @@ in the relevant section or issue and removes the entry.
    makes the exact pin-owner publication guard that walk; Linux 210 focused
    native assertions and five-GC lifecycle passed. At 4096 nodes the serial
    cases fell from 365–399 ms to 71–76 ms, all six cells 5/5 beyond control.
-   Next: isolate wide cohorts with a peer retaining a real raw interior root.
+   [Review b784541](https://github.com/ikshengmin/pcc/commit/b7845414cedc5d8fb435f7d448b4a90e25e0a8e9)
+   queries the sealed extent cache for a peer's interior root; 228 focused
+   native assertions passed. The six 4096-node raw-root cells fell from
+   941–1032 to 269–346 ms (5/5 beyond controls), still review-only.
+   Next: once exact Mac/HTTP qualification returns, review the #9 gate;
+   meanwhile measure the Linux GC2 four-worker gray-work owners (no merge).
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -409,7 +414,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 21:26 UTC), #9 review only: drive a wide callback chain with a real peer-held interior owner and verify/fix the exact raw-root candidate slope.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
