@@ -140,30 +140,16 @@ under each item and through Git alone.
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
 That run is a red baseline: its failures and cancelled lanes predate rule 13
-and are not regressions. Pending: none. Stopped areas: none. Since
-`7ce5cf663`, 72 commits touch the compiler or runtime, so a checkpoint is
-due now.
+and are not regressions. Pending:
+[run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775),
+dispatched by Claude from the local Mac on 2026-11-22 with
+`base_sha=7ce5cf6635b0893ceca1f06932b1127745099223` and
+`expected_sha=0f638af5bbaf8fb62b3e97d74e15d40fe3b89132`; the next untargeted
+round compares it first. Stopped areas: none.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
-
-- PCC validation checkpoint (rule 13): Linux `gh workflow run` returned
-  unauthenticated and no run was launched. Use an authenticated GitHub
-  Actions dispatch with baseline `7ce5cf6635b0893ceca1f06932b1127745099223`
-  and the current full master SHA; record its run under Pending. Recommendation:
-  dispatch from an authenticated checkout; no need to wait for CI before
-  focused rounds outside stopped areas.
-
-- GC3 dormant runtime integration ([review #8](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903)):
-  the test-only slice now covers current allocator provenance, a real
-  publish/stop interleave, delayed record publication and strong-slot
-  enumeration. Review the next boundary: an opt-in runtime candidate with
-  exact per-slab provenance, old-record/card preflight and a no-park commit,
-  or require the full writer/root matrix before adding any runtime entry.
-  Recommendation: add only a dormant, test-invoked entry; no ordinary
-  dispatch change, nursery activation or buffer-exporter admission.
-  Use the GC0/GC1/GC2 ready units below while awaiting review.
 
 - GC0 atomic reference-count CPU share: Linux has bounded user task-clock
   transport, but the owned atomic control showed exact-IP misses and the
@@ -211,9 +197,14 @@ in the relevant section or issue and removes the entry.
   `scripts/cpython_conformance/support/__init__.py`.
 
 1. **GC correctness.** Open issues
+   [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: keep #7 open for
+   reproduction and acceptance. Platform: any; Next: #9 first (GC1–4 weak
+   callbacks and finalizers run too early under acyclic resurrection; filed
+   by Claude on 2026-11-22 from the
+   [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
+   GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
    transfers the actual conversion result. String and heap-int alias
@@ -256,8 +247,11 @@ in the relevant section or issue and removes the entry.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next for GC3: qualify nursery allocation
-   provenance and the collector-entry root boundary without enabling the nursery.
+   Measure with `scripts/pcc_perf.py`. Next for GC3: the dormant, test-invoked
+   runtime entry that Claude approved on #8 on 2026-11-22
+   ([answer](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7078942435)):
+   no production caller, no new witnesses of current production behavior,
+   and then a measurable review-branch candidate.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
