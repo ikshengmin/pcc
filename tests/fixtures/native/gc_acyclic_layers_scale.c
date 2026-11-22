@@ -20,8 +20,8 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { MAX_PEERS = 4, MAX_CANDIDATES = 4096, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, ROOTS };
-static void *nodes[MAX_CANDIDATES];
+enum { MAX_PEERS = 4, MAX_CANDIDATES = 4096, CLASS_ROOT = 0, OLD_ROOT, CANDIDATE_WEAKS, RAW_CLASS, RAW_WEAK, ROOTS };
+static void *nodes[MAX_CANDIDATES + 1];
 /* Identities for comparisons only, not registered roots or C locals across
  * collection. The departing setup thread owns the last strong variables. */
 static PyObject *expected_targets[MAX_CANDIDATES];
@@ -32,6 +32,7 @@ static int64_t cohort_at_first_finalizer;
 static PyObject *roots[ROOTS];
 static int candidates, old_count, weak_count, observe_candidates, finalized, setup_error;
 static int peer_ready, peer_done, peer_failed;
+static int raw_peer, raw_read, raw_request, raw_survived;
 
 static int parse_int(const char *arg) {
     int result = 0;
@@ -44,6 +45,12 @@ static int parse_int(const char *arg) {
 
 static PyObject *finalize_item(PyObject *self) {
     if (pcc_thread_world_stop_epoch_held() >= 0) setup_error = 4;
+    if (raw_peer && finalized == 0) {
+        __atomic_store_n(&raw_request, 1, __ATOMIC_RELEASE);
+        int ready;
+        while (!(ready = __atomic_load_n(&raw_read, __ATOMIC_ACQUIRE))) pcc_thread_safepoint();
+        if (ready < 0) setup_error = 36;
+    }
     if (observe_candidates == 2) {
         if (finalized == 0)
             cohort_at_first_finalizer = __atomic_load_n(&pcc_gc_tracing_candidate_count, __ATOMIC_ACQUIRE);
@@ -127,22 +134,59 @@ static void *make_graph(void *argument) {
         }
         previous = item;
     }
+    if (raw_peer) {
+        PyClassObject *raw_cls = py_class_new("ScaleRawOwner", NULL, 0, NULL, 0);
+        if (!raw_cls) { setup_error = 37; return NULL; }
+        pcc_gc_store_root(&roots[RAW_CLASS], (PyObject *)raw_cls);
+        PyObject *owner = py_instance_new(raw_cls);
+        PyObject *watch = owner ? py_weakref_new(owner, NULL) : NULL;
+        if (!watch) { setup_error = 38; return NULL; }
+        pcc_gc_store_root(&roots[RAW_WEAK], watch);
+        pcc_gc_unpin(owner);
+        pcc_py_gc_minor_graph_lock();
+        nodes[candidates] = pcc_gc_object_index_find(owner);
+        pcc_gc_set_mark_color(owner, PY_FLAG_GC_WHITE);
+        __atomic_fetch_and(&py_header(owner)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
+        __atomic_fetch_or(&py_header(owner)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
+        pcc_py_gc_minor_graph_unlock();
+        if (!nodes[candidates]) setup_error = 39;
+    }
     return NULL;
 }
 
-static void *idle_peer(void *unused) {
-    (void)unused;
+static char *read_interior_owner(void) {
+    PyObject *owner = py_weakref_call(roots[RAW_WEAK]);
+    if (!owner || owner == py_None) return NULL;
+    char *interior = (char *)owner + 1;
+    py_decref(owner);
+    return interior;
+}
+
+static void *idle_peer(void *argument) {
+    int holds_raw = (int)(uintptr_t)argument;
+
     if (pcc_current_thread_id() <= 0) {
         __atomic_store_n(&peer_failed, 1, __ATOMIC_RELEASE);
         return NULL;
     }
     __atomic_add_fetch(&peer_ready, 1, __ATOMIC_RELEASE);
-    while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    if (holds_raw) {
+        while (!__atomic_load_n(&raw_request, __ATOMIC_ACQUIRE) &&
+               !__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+        char *volatile interior = read_interior_owner();
+        __atomic_store_n(&raw_read, interior ? 1 : -1, __ATOMIC_RELEASE);
+        while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+        PyObject *after = py_weakref_call(roots[RAW_WEAK]);
+        raw_survived = interior && after && after != py_None && (char *)after + 1 == interior;
+        if (after) py_decref(after);
+    } else {
+        while (!__atomic_load_n(&peer_done, __ATOMIC_ACQUIRE)) pcc_thread_safepoint();
+    }
     return NULL;
 }
 
 int main(int argc, char **argv) {
-    if (argc < 3 || argc > 7) return 11;
+    if (argc < 3 || argc > 8) return 11;
     candidates = parse_int(argv[1]);
     old_count = parse_int(argv[2]);
     const int with_peer = argc >= 4;
@@ -150,6 +194,9 @@ int main(int argc, char **argv) {
     if (argc >= 5) observe_candidates = parse_int(argv[4]);
     if (argc >= 6) public_collect = parse_int(argv[5]);
     int peer_count = argc >= 7 ? parse_int(argv[6]) : with_peer;
+    if (argc >= 8) raw_peer = parse_int(argv[7]);
+    if (raw_peer < 0 || raw_peer > 1 || (raw_peer && (peer_count < 1 || public_collect || observe_candidates != 2)))
+        return 40;
     if (peer_count < 0 || peer_count > MAX_PEERS) return 31;
     if (observe_candidates < 0 || observe_candidates > 2 ||
         public_collect < 0 || public_collect > 1 ||
@@ -164,7 +211,7 @@ int main(int argc, char **argv) {
     if (setup_error) return setup_error;
     void *peers[MAX_PEERS];
     for (int i = 0; i < peer_count; ++i)
-        if (pcc_thread_start(&peers[i], idle_peer, NULL)) return 20;
+        if (pcc_thread_start(&peers[i], idle_peer, (void *)(uintptr_t)(raw_peer && i == 0))) return 20;
     while (__atomic_load_n(&peer_ready, __ATOMIC_ACQUIRE) < peer_count) {
         if (__atomic_load_n(&peer_failed, __ATOMIC_ACQUIRE)) return 21;
         pcc_thread_safepoint();
@@ -181,14 +228,14 @@ int main(int argc, char **argv) {
         pcc_gc_begin_explicit_tracing_collect();
         pcc_py_gc_minor_graph_lock();
         pcc_gc_tracing_candidates_reset();
-        for (int i = 0; i < candidates; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
+        for (int i = 0; i < candidates + raw_peer; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
         pcc_gc_tracing_finish_commits = 1;
         pcc_gc_tracing_candidates_seal(1);
         int64_t epoch = pcc_thread_world_stop_epoch_held();
         pcc_gc_tracing_finish_stop_epoch = epoch;
         pcc_py_gc_minor_graph_unlock();
         int64_t start = pcc_platform_monotonic_us();
-        reclaimed = pcc_gc_tracing_sweep_unreachable(candidates);
+        reclaimed = pcc_gc_tracing_sweep_unreachable(candidates + raw_peer);
         elapsed = pcc_platform_monotonic_us() - start;
         stops = pcc_thread_world_stop_epoch_held() - epoch;
         pcc_gc_end_explicit_tracing_collect();
@@ -198,6 +245,10 @@ int main(int argc, char **argv) {
     __atomic_store_n(&peer_done, 1, __ATOMIC_RELEASE);
     for (int i = 0; i < peer_count; ++i)
         if (pcc_thread_join(peers[i], NULL)) return 22;
+    if (raw_peer) {
+        printf("raw_survived=%d\n", raw_survived);
+        if (!raw_survived) return 41;
+    }
     if (with_peer) {
         printf("weak=%d scans=%lld ", weak_count,
                (long long)(pcc_gc_metric_layer_weak_registry_scans - scans_before));

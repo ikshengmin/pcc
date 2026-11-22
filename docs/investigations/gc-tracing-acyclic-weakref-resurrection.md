@@ -885,3 +885,48 @@ Repeat at n=256/1,024 and unrelated counts 0/16,384; keep the pinned
 CPU set, same callback outputs, and duplicate-parent pairs. This test
 uses a sealed cohort; it times the actual sweep but does not stand in
 for native HTTP.
+
+### Look up a peer's interior word in the sealed cohort
+
+The disjoint-dead-chain pin guard does not cover a live raw stack word
+within the candidate hull. A real registered peer now reads a different,
+independent candidate through an ordinary weakref, holds its interior
+address at every later stopped cut, and checks the original weakref
+identity after the sweep. It does not register that address as a managed
+root or publish a heap write. The original review implementation
+preserved it, but repeated the raw-candidate walk for the entire chain.
+
+On the first relevant cut, cache the existing conservative interval
+format for the sealed nonmoving cohort. Reuse the interval sorter, and
+search the disjoint intervals with each frozen integer word. Mark only
+still-candidate objects from checked records, once per matching extent
+in the sorted cut. Do not change the node's persistent conservative pin
+bit. Allocation failure, overlapping extents, backing spans, invalid
+records and observed identity inconsistency elect the existing scan.
+The explicit pin path, registered roots and unknown-write full oracle
+are still independent. Quiet windows build no extent cache; the sweep
+releases it before retiring the candidate plan.
+
+Linux pcc0: 228 focused native assertions, including 18 raw-peer
+CPython cases (GC1–3, 16/256/1,024 nodes, one or four peers), all five
+stop lifecycles, 64 conservative-root models and eight ABI checks.
+The models also cover exclusive ends, multiple interior aliases,
+already-cleared candidates, a mismatched cached identity, overlapping
+or detached extents and allocation refusal.
+
+In five alternating one-peer pairs with duplicate-parent controls,
+the 4,096-node raw-root cases fell from 941–1,032 ms to 269–346 ms
+(66–72% paired reduction, 5/5 across all GC1–3 cells with zero or 16,384
+unrelated live objects, above each cell's control floor). From 1,024
+to 4,096 the candidate time increased 3.7–4.7× across those six cells.
+No-raw controls had no measured regression beyond their drift;
+there is no claim of HTTP or macOS qualification.
+
+Reproduce from exact base and review archives using the same
+`gc_acyclic_layers_scale.c` native fixture in both builds. At each
+backend (1/2/3), alternate `sweep_scale 4096 16384 0 2 0 1 1`.
+The extra final `1` enables the actual peer-held interior root;
+check `raw_survived=1` and the exact callbacks. Use n=256/1,024/4,096
+and unrelated counts 0/16,384, plus duplicate-parent pairs. Change
+the final argument to `0` for the no-raw control. This is a one-peer
+measurement, not four-worker HTTP throughput.

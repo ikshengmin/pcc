@@ -318,3 +318,25 @@ def test_callback_order_with_four_frozen_peers(_callback_scale_sweep, backend):
         rf"events={'DW' * count} callbacks={count} public=0 cohort={count}\n",
         result.stdout,
     ), result
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 2, 3))
+@pytest.mark.parametrize("count", (16, 256, 1024))
+@pytest.mark.parametrize("peers", (1, 4))
+def test_callback_chain_preserves_the_peers_interior_owner(_callback_scale_sweep, backend, count, peers):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_scale_oracle.py"
+    expected = run_process_group_timeout([sys.executable, str(oracle), str(count)], timeout=15)
+    actual = run_process_group_timeout(
+        [str(_callback_scale_sweep), str(count), "0", "0", "2", "0", str(peers), "1"],
+        timeout=15, env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                             PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert expected.returncode == 0 and not expected.stderr
+    assert actual.returncode == 0 and not actual.stderr, actual
+    assert re.fullmatch(
+        rf"raw_survived=1\nweak=0 scans=0 n={count} live=0 del={count} reclaimed={count}"
+        rf" full=0 windows={2 * count} us=\d+\n"
+        rf"events={expected.stdout.strip()} callbacks={count} public=0 cohort={count + 1}\n",
+        actual.stdout,
+    )

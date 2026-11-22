@@ -3336,6 +3336,7 @@ def _cross_object_signatures_part_15():
     'pcc_gc_callback_layers_hull_low': (('c_ptr',), 'c_int64'),
     'pcc_gc_callback_layers_hull_high': (('c_ptr',), 'c_int64'),
     'pcc_gc_callback_cut_may_hit': (('c_ptr', 'c_int64', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_trace_cached_extents': (('c_ptr', 'c_ptr', 'c_int64', 'c_ptr'), 'c_int64'),
     'pcc_gc_callback_layers_layer_of': (('c_ptr', 'c_ptr'), 'c_int64'),
     'py_weakref_layer_snapshot_create': (('c_ptr', 'c_int64'), 'c_ptr'),
     'py_weakref_layer_snapshot_release': (('c_ptr',), 'c_void'),

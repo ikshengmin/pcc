@@ -433,3 +433,67 @@ def test_owned_interval_index_executes_full_build_scan_and_disposal(tmp_path, mo
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
                             env=dict(os.environ, PATH="/nonexistent"))
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
+
+
+def _install_callback_extent_input(memory, extents, raw_words):
+    memory.heap(extents)
+    nodes, cut, words, cache = (0x50000, 0x60000, 0x70000, 0x90000)
+    memory.namespace["PYOBJECTHEADER_FLAGS_OFFSET"] = 12
+    for i, (base, *_tail) in enumerate(extents):
+        memory.words[nodes + i * 8] = 0x30000 + i * 128
+        memory.words[base + 12] = 1024
+    memory.words.update({cut: words, cut + 8: len(raw_words), cache: 0, cache + 8: 0})
+    for i, word in enumerate(raw_words):
+        memory.words[words + i * 8] = word
+    return cut, nodes, len(extents), cache
+
+
+def test_callback_extent_index_keeps_only_exact_current_candidate_owners():
+    memory = FrozenWordMemory([])
+    arguments = _install_callback_extent_input(
+        memory, [(1040, 16, [], True), (1000, 16, [], True), (1020, 12, [], True)],
+        [1001, 1007, 1016, 1032, 1043, 1044, 1056, 5000],
+    )
+    mark = memory.namespace["pcc_gc_callback_trace_cached_extents"]
+    actual = []
+    def shade(obj):
+        actual.append(obj)
+        memory.marked.add(obj)
+    memory.namespace["pcc_gc_mark_root_gray_if_known"] = shade
+    assert mark(*arguments) == 1
+    assert memory.marked == {1000, 1040}
+    assert actual == [1000, 1040]
+    assert len(memory.allocations) == 1
+    assert all(memory.words[0x30000 + i * 128 + 56] == 0 for i in range(3))
+    memory.marked.clear()
+    memory.words[1040 + 12] = 0
+    assert mark(*arguments) == 1
+    assert memory.marked == {1000}
+    assert len(memory.allocations) == 1
+    # The record naming a different object is not permission to mark it
+    # through an address cached for the previous owner.
+    memory.marked.clear()
+    memory.words[0x30080] = 6000
+    assert mark(*arguments) == 0
+    assert not memory.marked
+
+
+@pytest.mark.parametrize("reason", ("overlap", "span", "inactive", "oom"))
+def test_callback_extent_index_refuses_to_replace_the_extent_walk(reason):
+    memory = FrozenWordMemory([])
+    extents = [(1000, 16, [], True), (1020, 16, [], True)]
+    if reason == "overlap":
+        extents[1] = (1008, 16, [], True)
+    elif reason == "span":
+        extents[1] = (1020, 16, [(3560, 12)], True)
+    elif reason == "inactive":
+        extents[1] = (1020, 16, [], False)
+    else:
+        memory.namespace["malloc"] = lambda _size: 0
+    arguments = _install_callback_extent_input(memory, extents, [1008])
+    mark = memory.namespace["pcc_gc_callback_trace_cached_extents"]
+    assert mark(*arguments) == 0
+    assert mark(*arguments) == 0
+    assert not memory.marked
+    assert not memory.words[arguments[-1]]
+    assert len(memory.freed) == len(memory.allocations) == int(reason != "oom")

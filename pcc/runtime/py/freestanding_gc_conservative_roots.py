@@ -8,7 +8,7 @@ every possible owner. The world and graph stay stopped throughout the scan.
 """
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
-from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED
+from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED, PYOBJECTHEADER_FLAGS_OFFSET
 from pcc.unsafe import (
     free,
     function_addr,
@@ -599,6 +599,96 @@ def pcc_gc_callback_cut_may_hit(context, low: i64, high: i64) -> i64:
         return 1
     return _extent_has_word(load_ptr(context, _WORDS_DATA), load_i64(context, _WORDS_COUNT),
                             int_to_ptr(low), high - low)
+
+
+# The caller owns this cache for one sealed, nonmoving callback sweep.
+# A negative attempt keeps every later raw window on the old extent walk.
+_CALLBACK_INDEX_ENTRIES: i64 = 0
+_CALLBACK_INDEX_ATTEMPTED: i64 = 8
+_CALLBACK_INDEX_MAX_RECORDS: i64 = 16777216
+_CALLBACK_RECORD_SIZE: i64 = 8
+_CALLBACK_NODE_OWNER_SPANS: i64 = 48
+_CALLBACK_SWEEP_CANDIDATE: i64 = 1024
+
+
+@c_abi_export("pcc_gc_callback_cache_fixed_extents")
+def _cache_callback_fixed_extents(nodes, count: i64, cache):
+    store_i64(cache, _CALLBACK_INDEX_ATTEMPTED, 1)
+    if count <= 0 or count > _CALLBACK_INDEX_MAX_RECORDS:
+        return null()
+    entries = malloc(count * _INTERVAL_BYTES)
+    if ptr_is_null(entries) != 0:
+        return null()
+    i: i64 = 0
+    while i < count:
+        node = load_ptr(nodes, i * _WORD_BYTES)
+        if (pcc_gc_object_node_is_active(node) == 0
+                or ptr_is_null(load_ptr(node, _CALLBACK_NODE_OWNER_SPANS)) == 0):
+            free(entries)
+            return null()
+        obj = load_ptr(node, 0)
+        base: i64 = ptr_to_int(obj)
+        size: i64 = load_i64(node, _CALLBACK_RECORD_SIZE)
+        if base <= 0 or size <= 0 or size > 9223372036854775807 - base:
+            free(entries)
+            return null()
+        i = _append_interval(entries, i, node, obj, size)
+    pcc_gc_conservative_sort_intervals(entries, count)
+    i = 1
+    while i < count:
+        if (load_i64(entries, (i - 1) * _INTERVAL_BYTES + _INTERVAL_END)
+                > load_i64(entries, i * _INTERVAL_BYTES + _INTERVAL_START)):
+            free(entries)
+            return null()
+        i += 1
+    store_ptr(cache, _CALLBACK_INDEX_ENTRIES, entries)
+    return entries
+
+
+@c_abi_export("pcc_gc_callback_trace_cached_extents")
+def pcc_gc_callback_trace_cached_extents(cut, nodes, count: i64, cache) -> i64:
+    """Trace raw words into the same sealed cohort without recording pin bits.
+
+    Build once on the first relevant cut. A detached/ambiguous extent or an
+    allocation miss retains the original per-candidate root walk. Never
+    dereference a captured word or use it to look up an unrelated live owner.
+    """
+    entries = load_ptr(cache, _CALLBACK_INDEX_ENTRIES)
+    if ptr_is_null(entries) != 0:
+        if load_i64(cache, _CALLBACK_INDEX_ATTEMPTED) != 0:
+            return 0
+        entries = _cache_callback_fixed_extents(nodes, count, cache)
+        if ptr_is_null(entries) != 0:
+            return 0
+    words = load_ptr(cut, _WORDS_DATA)
+    nwords: i64 = load_i64(cut, _WORDS_COUNT)
+    last_extent: i64 = 0
+    i: i64 = 0
+    while i < nwords:
+        address: i64 = load_i64(words, i * _WORD_BYTES)
+        lo: i64 = 0
+        hi: i64 = count
+        while lo < hi:
+            middle: i64 = lo + (hi - lo) // 2
+            if load_i64(entries, middle * _INTERVAL_BYTES + _INTERVAL_START) <= address:
+                lo = middle + 1
+            else:
+                hi = middle
+        if lo > 0 and lo != last_extent:
+            found = ptr_add(entries, (lo - 1) * _INTERVAL_BYTES)
+            if address < load_i64(found, _INTERVAL_END):
+                # Captured words are sorted; one exact owner need only
+                # enter the root drain once even for many interior aliases.
+                last_extent = lo
+                node = load_ptr(found, _INTERVAL_OWNER)
+                if pcc_gc_object_node_is_active(node) != 0:
+                    obj = load_ptr(node, 0)
+                    if ptr_to_int(obj) != load_i64(found, _INTERVAL_START):
+                        return 0
+                    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                        pcc_gc_mark_root_gray_if_known(obj)
+        i += 1
+    return 1
 
 
 @c_abi_export("pcc_gc_callback_root_cut_release")

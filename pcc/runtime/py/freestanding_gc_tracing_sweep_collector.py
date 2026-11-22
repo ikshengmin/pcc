@@ -1137,6 +1137,9 @@ pcc_gc_callback_layers_hull_high = extern("pcc_gc_callback_layers_hull_high", (c
 pcc_gc_callback_cut_may_hit = extern(
     "pcc_gc_callback_cut_may_hit", (c_ptr, c_int64, c_int64), c_int64
 )
+pcc_gc_callback_trace_cached_extents = extern(
+    "pcc_gc_callback_trace_cached_extents", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
+)
 py_weakref_layer_snapshot_create = extern(
     "py_weakref_layer_snapshot_create", (c_ptr, c_int64), c_ptr
 )
@@ -1153,6 +1156,10 @@ pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
 # runtime heap. The graph planner supplies the membership-size limit.
 _REVIEW_SHADE_WORD_BITS = 64
 _REVIEW_SHADE_WORD_BYTES = 8
+# Native callback extent cache: array pointer followed by attempted bit.
+_REVIEW_EXTENT_CACHE_BYTES = 16
+_REVIEW_EXTENT_ARRAY = 0
+_REVIEW_EXTENT_ATTEMPTED = 8
 
 
 @c_abi_export("pcc_gc_review_layer_finalizer")
@@ -1172,7 +1179,8 @@ def _review_layer_finalizer(node, window) -> i64:
 
 
 @c_abi_export("pcc_gc_review_collect_layer_roots")
-def _review_collect_layer_roots(plan, nodes, count: i64, cut, suspected, shade_bytes: i64) -> i64:
+def _review_collect_layer_roots(plan, nodes, count: i64, cut, extent_cache,
+                                suspected, shade_bytes: i64) -> i64:
     # Peel off the write-barrier evidence before looking at actual roots.
     # It can contain a transient store or publication into an old owner.
     # Keep an unmanaged bit per prior shade without a mutation journal.
@@ -1212,6 +1220,8 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut, suspected, shade_b
     raw_possible: i64 = pcc_gc_callback_cut_may_hit(
         cut, pcc_gc_callback_layers_hull_low(plan), pcc_gc_callback_layers_hull_high(plan),
     )
+    if raw_possible != 0 and pcc_gc_callback_trace_cached_extents(cut, nodes, count, extent_cache) != 0:
+        raw_possible = 0
     pin_dirty: i64 = atomic_load_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, "acquire")
     if pin_dirty != 0 or raw_possible != 0:
         pos = 0
@@ -1258,13 +1268,13 @@ def _review_collect_layer_roots(plan, nodes, count: i64, cut, suspected, shade_b
 
 
 @c_abi_export("pcc_gc_review_remark_layer_at_stop")
-def _review_remark_layer_at_stop(plan, nodes, count: i64, caller,
+def _review_remark_layer_at_stop(plan, nodes, count: i64, caller, extent_cache,
                                  suspected, shade_bytes: i64) -> None:
     cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
     low: i64 = pcc_gc_callback_layers_hull_low(plan)
     high: i64 = pcc_gc_callback_layers_hull_high(plan)
     pcc_gc_conservative_capture_callback_words(cut, caller, low, high)
-    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut, suspected, shade_bytes)
+    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut, extent_cache, suspected, shade_bytes)
     atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
     if precise == 0:
         if low > 0 and high > low:
@@ -1343,6 +1353,10 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
     layer: i64 = 0
     window = stack_alloc(16)
     pending = stack_alloc(16)
+    # The native extent cache owns only raw entries and is built lazily.
+    extent_cache = stack_alloc(_REVIEW_EXTENT_CACHE_BYTES)
+    store_ptr(extent_cache, _REVIEW_EXTENT_ARRAY, null())
+    store_i64(extent_cache, _REVIEW_EXTENT_ATTEMPTED, 0)
     weak_snapshot = py_weakref_layer_snapshot_create(plan, layers)
     while layer < layers:
         pos: i64 = pcc_gc_callback_layers_range(plan, layer)
@@ -1352,7 +1366,7 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             # A sibling may revive another sibling even through raw C roots
             # that do not shade. Settle that window before dispatching again.
             if _review_layer_finalizer(node, window) != 0:
-                _review_remark_layer_at_stop(plan, nodes, count, caller, suspected, shade_bytes)
+                _review_remark_layer_at_stop(plan, nodes, count, caller, extent_cache, suspected, shade_bytes)
             pos += 1
         store_ptr(pending, 0, null())
         store_ptr(pending, 8, null())
@@ -1365,9 +1379,10 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             _user_code_window_open(window)
             py_weakref_run_queued_callbacks(pending, 0)
             _user_code_window_close(window)
-            _review_remark_layer_at_stop(plan, nodes, count, caller, suspected, shade_bytes)
+            _review_remark_layer_at_stop(plan, nodes, count, caller, extent_cache, suspected, shade_bytes)
         layer += 1
     py_weakref_layer_snapshot_release(weak_snapshot)
+    free(load_ptr(extent_cache, _REVIEW_EXTENT_ARRAY))
     peeled: i64 = pcc_gc_callback_layers_range(plan, layers)
     pcc_gc_callback_layers_release(plan)
     if peeled != count:
