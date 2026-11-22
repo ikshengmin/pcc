@@ -374,9 +374,12 @@ in the relevant section or issue and removes the entry.
    interleaves and 18 automatic runs passed. The
    [depth-first-stack follow-up](https://github.com/ikshengmin/pcc/blob/28a23fd7d25b8deb253e6ea3e61652fc661dd2a1/docs/investigations/gc2-exact-list-worker-review.md)
    also drops the duplicate hint when another owner points to a claim;
-   12 controlled interleaves and the automatic tests passed. Next add a
-   review-only startup selector and native attestation to make a sealed
-   measurement possible. Master runtime and the pacer A/B branch are unchanged.
+   12 controlled interleaves and the automatic tests passed. The
+   [startup selector](https://github.com/ikshengmin/pcc/blob/d658048175e19b7ea67e1a31cc45cb10bbd15c00/docs/investigations/gc2-exact-list-worker-review.md)
+   now attests the optional GC2 mode: 12 Linux scope/spelling cases, 18
+   automatic cases and 8 ABI checks passed. Next bind it to sealed
+   pcc_perf identity, build attestation and per-arm A/B receipts.
+   Master runtime and the separate pacer A/B branch are unchanged.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -388,7 +391,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 exact list review startup selector and owned attestation: Codex, Linux x86-64, 2026-11-22 10:31 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
