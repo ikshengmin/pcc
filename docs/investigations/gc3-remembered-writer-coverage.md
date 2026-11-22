@@ -118,8 +118,19 @@ host checks and exporter reference passed (65 cases); this does not turn
 the candidate into a live path. Do not admit bytes/bytearray buffer exporters
 to a nursery on the basis of these checks. First qualify promotion before
 an address escapes, the real persistent owner if one is required, and
-exactly balanced export release. The proposed nursery and GC3 runtime are
-unchanged by this round.
+exactly balanced export release.
+
+Linux native control for the explicit pin path: one binary acquires exports
+from a bytes object and a memoryview of it. The records and view owners are
+distinct but their raw payload address matches. Release direct first and
+view first are separate processes. The original address is read through two
+real full collections; the remaining record and exporter header pin survive
+the first release. The last release zeros the public descriptor, empties
+the C export list and clears its explicit pin. The broad address-pin query
+can still report a stopped-world conservative pin; it does not prove a leak.
+The baseline cache control passed alongside both release orders (three
+native nodes). This neither guarantees immediate reclamation nor qualifies
+raw addresses from nursery storage. The runtime is unchanged.
 
 ## Collector-entry root baseline
 
