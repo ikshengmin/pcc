@@ -108,3 +108,58 @@ def test_official_go_reports_the_same_status_and_panic_prefix(name, original, ex
     else:
         # Official Go appends its goroutine traceback after the same report.
         assert oracle.returncode == 2 and oracle.stderr.startswith(expected)
+
+
+SIGNED_SHIFT_SOURCE = """package main
+var sequence int
+func value(x int8) int8 { sequence = sequence*10+1; return x }
+func count(n int16) int16 { sequence = sequence*10+2; return n }
+func shl(x int8, n int16) int8 { return value(x) << count(n) }
+func shr(x int8, n int16) int8 { return value(x) >> count(n) }
+func wide(x uint32, n int64) uint32 { return x >> n }
+func wideLeft(x uint64, n int) uint64 { return x << n }
+func main() {
+    if shl(3, 2) != 12 || sequence != 12 { panic("shift order") }
+    if shr(-2, 99) != -1 || sequence != 1212 { panic("arithmetic overflow") }
+    if wideLeft(1, 2) != 4 || wide(0xf0000000, 28) != 15 || wide(7, 1<<50) != 0 || shl(3, 99) != 0 { panic("wide") }
+}
+"""
+
+
+def test_signed_shift_guards_before_the_clamped_shift_and_keeps_other_targets_closed():
+    text = str(compile_go(SIGNED_SHIFT_SOURCE, "signed.go"))
+    assert "negative_shift_count" in text and "icmp slt i16" in text
+    assert "select i1" in text and "ashr i8" in text
+    with pytest.raises(UnsupportedGo, match="owned Linux terminal panic") as caught:
+        compile_go(SIGNED_SHIFT_SOURCE, "signed.go", target_triple="arm64-apple-darwin")
+    assert caught.value.code == "go.unsupported.negative-shift-panic"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_signed_dynamic_shifts_match_official_go_and_terminal_line(tmp_path, monkeypatch):
+    import os
+    from tests.go.owned_execution import compile_owned, compile_reference, run, write_artifact
+    from tests.go.test_execution import forbid_external_compiler
+
+    for name, source in (
+        ("valid", SIGNED_SHIFT_SOURCE),
+        ("negative-left", 'package main;func f(x,n int)int{return x<<n};func main(){_=f(3,-1)}'),
+        ("negative-right", 'package main;func f(x uint64,n int8)uint64{return x>>n};func main(){_=f(3,-128)}'),
+    ):
+        units = (("signed.go", source),)
+        with monkeypatch.context() as denied:
+            forbid_external_compiler(denied)
+            artifact = compile_owned(units)
+        program = tmp_path / (name + "-owned")
+        write_artifact(artifact, program)
+        reference = compile_reference(units, tmp_path / name,
+                                      compiler=os.environ["PCC_GO_REFERENCE"],
+                                      cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+        assert (reference.parent / "signed.go").read_bytes() == source.encode()
+        actual, oracle = run(program), run(reference)
+        if name == "valid":
+            assert actual == oracle == Execution(0, b"", b"")
+        else:
+            assert (actual.returncode, actual.stdout) == (oracle.returncode, oracle.stdout) == (2, b"")
+            assert actual.stderr.rstrip(b"\n") == oracle.stderr.splitlines()[0]

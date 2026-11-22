@@ -780,9 +780,22 @@ class Lowerer:
         count = expr.args[1].constant
         if count is not None:
             return overflow if count >= width else emitter(left, ir.Constant(left.type, count))
-        # A dynamic unsigned count cannot panic. Clamp *before* emitting a
-        # shift so neither the in-range nor out-of-range path creates poison.
+        # Counts are evaluated once after the already captured left operand.
         amount = self.expression(expr.args[1])
+        if integer_signed(expr.args[1].type):
+            if "linux" not in self.module.triple.split("-"):
+                raise UnsupportedGo(expr.token, "go.unsupported.negative-shift-panic",
+                                    "dynamic signed shifts require owned Linux terminal panic support")
+            from pcc.frontends.go.runtime_provider import NEGATIVE_SHIFT_ERROR
+            panic = self.function.append_basic_block("negative_shift_count")
+            shift = self.function.append_basic_block("nonnegative_shift_count")
+            self.builder.cbranch(self.builder.icmp_signed("<", amount, ir.Constant(amount.type, 0)),
+                                 panic, shift)
+            self.builder.position_at_end(panic)
+            self.builtin_io.runtime_panic(NEGATIVE_SHIFT_ERROR)
+            self.builder.position_at_end(shift)
+        # Clamp before the IR shift: a large count has Go's saturation result,
+        # not the ISA mask or LLVM poison.
         in_range = self.builder.icmp_unsigned("<", amount, ir.Constant(amount.type, width))
         safe = self.builder.select(in_range, amount, ir.Constant(amount.type, 0))
         if safe.type.width < width:

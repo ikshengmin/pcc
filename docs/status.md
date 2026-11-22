@@ -160,14 +160,13 @@ in the relevant section or issue and removes the entry.
   dispatch from an authenticated checkout; no need to wait for CI before
   focused rounds outside stopped areas.
 
-- TinyXML2 open virtual destruction: choose whether the exact Linux
-  owned project link may close the dynamic effect domain, or whether this
-  waits for a general C++ exception/ABI owner. Recommendation: a
-  source-bound, project-only proof, with foreign or unlisted targets
-  failing closed and no change to separately compiled library semantics.
-  [Cross-TU evidence](investigations/tinyxml2-explicit-virtual-destructor-effects.md)
-  rules out a current-TU-only effect certificate. While this is pending,
-  take the next eligible frontend target.
+- TinyXML2 open virtual destruction: earlier project-only proof
+  recommendation withdrawn. Agent recommendation: infer C++ destructor
+  exception specifications from declarations and subobjects, enforce
+  nonthrowing override contracts, and preserve ordinary virtual destructor
+  dispatch and terminate behavior. [Cross-TU evidence](investigations/tinyxml2-explicit-virtual-destructor-effects.md)
+  remains a regression target; a project name or closed build list is not
+  an effect certificate.
 
 - Whether the operating system's Metal shader compiler is an accepted platform
   boundary under the pcc1 ownership contract (item 5; open point in the
@@ -225,16 +224,19 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify dynamic signed shift counts at
-   `internal/cpu/datacache_x86.go:36:14`. The opt-in checker now types
-   the full original Name body with a distinct copied result plan but
-   does not expose its ABI. Native CPU and upstream tests remain unbuilt.
-   See the
+   draft the general shared Go/Java managed backing design before more
+   Go collection code: shared allocator/header/descriptor, slice growth,
+   string copy/ownership, and five-collector qualification. Agent
+   recommendation: freeze new package/source-shape admissions; keep
+   existing probes only as historical regression inputs, not acceptance.
+   Linux checked signed shifts are independent of that prototype. The
+   opt-in original source probe now reaches `internal/bytealg/bytealg.go:9:2`
+   but no original dependency-closure native executable exists. See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go checked dynamic signed shift counts: Codex, Linux x86-64, 2026-11-22 05:42 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -109,10 +109,11 @@ SEMANTIC_BOUNDARIES = [
 # The exact former panic original is a positive compile/terminal-execution
 # obligation in test_builtin_io; do not relabel it as an invalid program.
 GRADUATED_PANIC = ("panic(1)", "", "unsupported builtin panic")
-assert SEMANTIC_BOUNDARIES.count(GRADUATED_PANIC) == 1
+GRADUATED_SIGNED_SHIFT = ("_ = f(2, 0)", "func f(x, y int) int { return x<<y }", "dynamic signed shift")
+assert SEMANTIC_BOUNDARIES.count(GRADUATED_PANIC) == SEMANTIC_BOUNDARIES.count(GRADUATED_SIGNED_SHIFT) == 1
 
 
-@pytest.mark.parametrize("body,helpers,message", [case for case in SEMANTIC_BOUNDARIES if case != GRADUATED_PANIC])
+@pytest.mark.parametrize("body,helpers,message", [case for case in SEMANTIC_BOUNDARIES if case not in (GRADUATED_PANIC, GRADUATED_SIGNED_SHIFT)])
 def test_go_rejects_invalid_or_unimplemented_semantics(body, helpers, message):
     with pytest.raises(GoDiagnostic, match=message) as error:
         compile_go(source(body, helpers), "negative.go")

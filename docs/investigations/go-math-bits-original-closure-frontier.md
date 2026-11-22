@@ -794,3 +794,14 @@ gets through the unchanged CPU Name body, and stops in cache-size
 signed shift count. Eighty-five adjacent checks and four native
 byte-helper differentials passed. Original CPU and upstream test IR
 remain unemitted.
+
+Linux now checks a dynamic signed shift count for negativity before
+executing the clamped shift, retaining one-time evaluation and Go's
+large-count result on both signed and unsigned left operands.
+Standalone valid, left-panic and right-panic originals agree with Go
+1.27.3 (terminal status and initial panic line). 245 adjacent and
+45 native/reference checks passed; the independent opt-in source
+probe advanced to the unsafe import at `internal/bytealg/bytealg.go:9:2`.
+This is not native package admission. The next recommended unit is
+the shared managed-object design, not another shape-specific source
+admission.

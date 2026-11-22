@@ -65,7 +65,6 @@ def test_byte_and_rune_are_aliases_not_new_named_types():
     ("_ = f(1)", "func f(n uint) uint8{return uint8(-1 << n)}", "overflows uint8"),
     ("_ = f(1)", "func f(n uint) bool{return (18446744073709551615 >> n)>0}", "overflows int"),
     ("_ = 1 << 18446744073709551616", "", "shift count overflows uint64"),
-    ("_ = f(1,2)", "func f(x uint64,n int) uint64{return x<<n}", "negative-count panic support"),
 ])
 def test_integer_unsupported_or_invalid_boundaries_stay_diagnostic(body, helpers, message):
     with pytest.raises(GoDiagnostic, match=message):

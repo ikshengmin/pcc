@@ -2946,13 +2946,11 @@ class Analyzer:
                     raise GoDiagnostic(operand.token, f"shift operand has type {operand.type} and must be integer")
             if not is_integer(left.type) or not is_integer(right.type):
                 raise GoDiagnostic(expr.token, "shifts require integer operands")
-            if right.constant is None:
-                if integer_signed(right.type):
-                    raise UnsupportedGo(expr.token, 'go.unsupported.negative-shift-panic', "dynamic signed shift counts require shared-runtime negative-count panic support")
-            elif right.constant < 0:
-                raise GoDiagnostic(expr.token, "negative shift count")
-            elif right.constant > MAX_SHIFT_COUNT:
-                raise GoDiagnostic(expr.token, "shift count overflows uint64")
+            if right.constant is not None:
+                if right.constant < 0:
+                    raise GoDiagnostic(expr.token, "negative shift count")
+                if right.constant > MAX_SHIFT_COUNT:
+                    raise GoDiagnostic(expr.token, "shift count overflows uint64")
             expr.type = left.type
         else:
             numeric = ("untyped int", "untyped rune", "untyped float")

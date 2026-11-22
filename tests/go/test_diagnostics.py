@@ -122,7 +122,8 @@ RETIRED_DOT_IMPORT_CASE = ('dot-imports', 'package main;import . "local";func ma
 RETIRED_CASES = (RETIRED_DOT_IMPORT_CASE,)
 # The original pointer-switch bytes move to positive/same-input obligations in
 # test_pointer_switches, not to a skip or a reclassified historical result.
-GRADUATED_CASES = (GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
+GRADUATED_SIGNED_SHIFT_CASE = ('negative-shift-panic', original('func f(a,b int)int{return a<<b}'))
+GRADUATED_CASES = (GRADUATED_SIGNED_SHIFT_CASE, GRADUATED_RECEIVER_CASE, GRADUATED_ARRAY_RANGE_CASE,
                   GRADUATED_POINTER_SWITCH_CASE, GRADUATED_STRING_RANGE_CASE,
                   GRADUATED_STRUCT_TAG_CASE, GRADUATED_BLANK_FUNCTION_CASE, GRADUATED_BLANK_TYPE_CASE,
                   GRADUATED_RECORD_ARRAY_CASE, *GRADUATED_AGGREGATE_CASES, GRADUATED_DIVISION_CASE,
@@ -184,8 +185,21 @@ def test_import_capability_codes_are_file_graph_boundaries():
         assert caught.value.code=='go.unsupported.'+suffix
 
 
+TARGET_LIMITED_CASES = ((GRADUATED_SIGNED_SHIFT_CASE, "arm64-apple-darwin"),)
+
+
+@pytest.mark.parametrize("case,target", TARGET_LIMITED_CASES)
+def test_platform_limited_capability_has_an_exact_unqualified_witness(case, target):
+    name, source = case
+    with pytest.raises(UnsupportedGo) as caught:
+        compile_go(source, filename="platform.go", target_triple=target)
+    assert caught.value.code == "go.unsupported." + name
+    assert caught.value.filename == "platform.go" and caught.value.line > 0
+
+
 def test_registry_has_no_unused_codes_and_every_code_has_one_canonical_feature():
-    expected={'go.unsupported.'+name for _,name,_ in ACTIVE_CASES}
+    expected=({'go.unsupported.'+name for _,name,_ in ACTIVE_CASES}
+              | {'go.unsupported.'+case[0] for case, _ in TARGET_LIMITED_CASES})
     assert expected==set(UNIMPLEMENTED_FEATURES)
     assert len(set(UNIMPLEMENTED_FEATURES.values()))==len(UNIMPLEMENTED_FEATURES)
     with pytest.raises(ValueError,match='unknown Go capability'):

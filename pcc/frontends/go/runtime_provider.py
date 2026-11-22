@@ -22,6 +22,7 @@ class RuntimeErrorValue:
 
 # Uses the runtime memoryError text; does not grant a new //go:linkname.
 NIL_FUNCTION_ERROR = RuntimeErrorValue('runtime.memoryError', 'invalid memory address or nil pointer dereference')
+NEGATIVE_SHIFT_ERROR = RuntimeErrorValue('runtime.shiftError', 'negative shift amount')
 
 
 RUNTIME_ERROR_VALUES = {
