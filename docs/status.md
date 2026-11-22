@@ -148,7 +148,8 @@ identifies three Go ordinary node regressions
 node regression ([#11](https://github.com/ikshengmin/pcc/issues/11)),
 and a separate Windows collection blocker
 ([#12](https://github.com/ikshengmin/pcc/issues/12)).
-Stopped areas: `frontend-go` and `frontend-rust` until their fixes land.
+Stopped area: `frontend-rust` until #11 lands. The Go #10 repair
+has exact local validation; the affected hosted lane has not been rerun.
 Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
@@ -191,14 +192,13 @@ in the relevant section or issue and removes the entry.
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
    reproduction and acceptance. Platform: any; Next: rule 13 regression
-   [#10](https://github.com/ikshengmin/pcc/issues/10) on the Linux Go ordinary
-   lane. The [review fix](https://github.com/ikshengmin/pcc/commit/de41d64165f5c3faff421dad4a09caad579a1196)
-   passed 132 focused ordinary checks and six owned Linux index cases.
-   Broader Go validation with the pinned oracle is pending because the
-   Linux memory preflight refused the second run; no limit was relaxed.
-   Finish that validation when the host can admit it. The next actionable
-   checkpoint regression is [#11](https://github.com/ikshengmin/pcc/issues/11)
-   (Rust cfg-disabled macro body); #12 tracks Windows collection separately.
+   [#11](https://github.com/ikshengmin/pcc/issues/11) (Rust cfg-disabled macro
+   body); #12 tracks Windows collection separately. The #10 repair preserves
+   record diagnostic codes and qualifies the named string's checked index
+   on Linux without widening the Darwin boundary. Linux local: all 2,487
+   ordinary Go cases across unchanged file partitions, six owned native
+   index cases, and one reference integration against pinned Go 1.27.3.
+   The hosted lane was not rerun.
    Then #9 (GC1–4 weak
    callbacks and finalizers run too early under acyclic resurrection; filed
    by Claude on 2026-11-22 from the
@@ -271,7 +271,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Qualify Go regression 10 with the pinned reference and a stricter process cap: Codex, Linux x86-64, 2026-11-22 15:20 UTC, area frontend-go
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

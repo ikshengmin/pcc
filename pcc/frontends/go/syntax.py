@@ -613,7 +613,7 @@ class GoParser:
                     self.fail(names[0], "qualified embedded field cannot be mixed with a name list")
                 if anonymous and (len(names) != 1 or names[0].text in TYPE_NAMES):
                     self.unsupported(names[0], 'go.unsupported.embedded-fields',
-                                     "embedding requires one supported named value record")
+                                     "embedded fields require one supported named value record")
                 dtype = TypeName(names[0]) if anonymous else self.datatype(signature=signature)
                 tag = self.accept("string")
                 fields.extend((name, dtype) for name in names)
