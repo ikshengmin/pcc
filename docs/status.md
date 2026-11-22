@@ -344,7 +344,10 @@ in the relevant section or issue and removes the entry.
    uses the still-dead sealed cohort after the necessary previous-stop
    refresh. GC1–3 match CPython after intervening live publication, with
    one rather than three full rechecks; Linux 198 focused assertions passed.
-   Next: run the real background mark to automatic callback-sweep handoff. Arbitrary raw stack lifetimes, HTTP exact timings and
+   Real Linux CMS-to-automatic-sweep handoff: 18/18 exact callback traces
+   on GC1–3 (4/16/64 nodes, 1/4 peers), one committed mark per run, zero
+   full callback rechecks; probe only, no runtime fix needed.
+   Next: enforce the n/4n/16n #9 gate; identify the per-window cohort work. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
@@ -398,7 +401,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 20:49 UTC), #9 review only: exercise the real CMS marker and automatic application-gate callback handoff on Linux GC1–3.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
