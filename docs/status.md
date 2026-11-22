@@ -145,7 +145,10 @@ and are not regressions. Pending:
 dispatched by Claude from the local Mac on 2026-11-22 with
 `base_sha=7ce5cf6635b0893ceca1f06932b1127745099223` and
 `expected_sha=0f638af5bbaf8fb62b3e97d74e15d40fe3b89132`; the next untargeted
-round compares it first. Stopped areas: none.
+round after completion compares it first. Partial comparison: Linux Go
+ordinary changed from pass to fail for three exact nodes ([#10](https://github.com/ikshengmin/pcc/issues/10)).
+The C++ integration lane was still running. Stopped areas: `frontend-go`
+until the #10 fix lands; the checkpoint itself has not advanced.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
 answers here or in chat; the agent that next takes the unit records the answer
@@ -186,7 +189,9 @@ in the relevant section or issue and removes the entry.
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #9 first (GC1–4 weak
+   reproduction and acceptance. Platform: any; Next: rule 13 regression
+   [#10](https://github.com/ikshengmin/pcc/issues/10) on the Linux Go ordinary
+   lane, then #9 (GC1–4 weak
    callbacks and finalizers run too early under acyclic resurrection; filed
    by Claude on 2026-11-22 from the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
@@ -258,7 +263,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Compare completed checkpoint 45020986775 with exact red baseline 44358778171: Codex, Linux x86-64, 2026-11-22 14:57 UTC, area checkpoint
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
