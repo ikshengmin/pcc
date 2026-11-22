@@ -240,6 +240,11 @@ in the relevant section or issue and removes the entry.
    including native insertion in a callback and pre-existing worker
    fallback. One initial registry walk remains; no unrelated-size or
    general multi-mutator performance claim.
+   [Native chain scaling screen](https://github.com/ikshengmin/pcc/blob/87ae55217a8a5dc3dfe15274a74b2aea7eb92294/docs/investigations/gc-tracing-acyclic-weakref-resurrection.md#native-layered-chain-scaling-screen):
+   90 real Linux GC1/3 sweeps at 4/16/64 candidates and 0/4,096/16,384
+   unrelated live lists completed with no full recheck. All used one
+   callback stop per candidate. The 16→64 step with no extra heap took
+   5.8×/4.5× for 4× the candidates. Linear scaling is not qualified.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -296,8 +301,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Measure real layered issue 9 scaling at 4, 16 and 64 candidates: Codex, Linux x86-64, 2026-11-22 17:48 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
