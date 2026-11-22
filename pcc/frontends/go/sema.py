@@ -1096,7 +1096,7 @@ class Analyzer:
                 if blank:
                     if not isinstance(field_type, (ArraySyntax, TypeName)):
                         raise UnsupportedGo(token, 'go.unsupported.blank-struct-fields',
-                                            "blank fields require fixed byte-array or named blank-record padding")
+                                            "blank struct fields require fixed byte-array or named blank-record padding")
                 else:
                     if token.text in names:
                         raise GoDiagnostic(token, "duplicate struct field " + token.text)

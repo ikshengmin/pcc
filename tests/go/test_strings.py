@@ -45,12 +45,17 @@ def test_invalid_original_string_spelling_fails_located(spelling,message):
         compile_go(source("_="+spelling))
 
 
-@pytest.mark.parametrize("body,declarations,message", [
+# The formerly refused named-base case is now a checked Linux operation.
+# Keep its exact historical bytes and qualify both admission and execution.
+CHECKED_NAMED_INDEX = ('s:="a";_=s[0]', "", "bounds-panic")
+
+
+@pytest.mark.parametrize("body,declarations,message", [case for case in [
     ('const x="a"[0];_=x',"","not a constant"),
     ('var x int="a"[0];_=x',"","cannot use uint8 as int"),
     ('_="a"[-1]',"","nonnegative"), ('_="a"[1]',"","out of bounds"),
     ('_=""[0]',"","out of bounds"), ('_="a"[true]',"","must be an integer"),
-    ('i:=0;_="a"[i]',"","bounds-panic"), ('s:="a";_=s[0]',"","bounds-panic"),
+    ('i:=0;_="a"[i]',"","bounds-panic"), CHECKED_NAMED_INDEX,
     ('var x uint64;_="a"[x]',"","bounds-panic"), ('"a"[0]=1',"","non-addressable"),
     ('len("a")',"","only function calls"),
     ('var x uint8=len("abc");_=x',"","cannot use int as uint8"),
@@ -61,12 +66,45 @@ def test_invalid_original_string_spelling_fails_located(spelling,message):
     ('_=len(1)',"","len requires an admitted array or string"), ('_=len()',"","requires one argument"),
     ('_=[1]string{"a"}',"","string-element arrays"), ('_=[...]string{"a"}',"","non-scalar array elements"),
     ('', 'var S=Identity("a");func Identity(s string)string{return s}', "shared-runtime initialization"),
-])
+] if case != CHECKED_NAMED_INDEX])
 def test_string_unsupported_operations_never_reach_ir(body,declarations,message,monkeypatch):
     from pcc.frontends.go.lowering import Lowerer
     monkeypatch.setattr(Lowerer,"lower",lambda *args:pytest.fail("invalid string reached lowering"))
     with pytest.raises(GoDiagnostic,match=message):
         compile_go(source(body,declarations))
+
+
+def test_named_string_index_graduates_only_on_the_checked_target():
+    spelling = source(CHECKED_NAMED_INDEX[0])
+    linux = str(compile_go(spelling, target_triple="x86_64-unknown-linux-gnu"))
+    assert "string_index_ready" in linux and "string_index_bad" in linux
+    assert "icmp ult i64" in linux
+    with pytest.raises(GoDiagnostic, match="owned Linux terminal panic") as caught:
+        compile_go(spelling, target_triple="arm64-apple-darwin")
+    assert caught.value.code == "go.unsupported.string-bounds-panic"
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(platforms=("linux",), machines=("x86_64", "amd64"))
+@pytest.mark.parametrize("body,expected", [
+    (CHECKED_NAMED_INDEX[0], Execution(0, b"", b"")),
+    ('s:="é";if s[1]!=0xa9{panic("wrong UTF-8 byte")}', Execution(0, b"", b"")),
+    ('s:="a";_=s[1]', Execution(2, b"", b"panic: runtime error: index out of range [1] with length 1\n")),
+    ('s:="";_=s[0]', Execution(2, b"", b"panic: runtime error: index out of range [0] with length 0\n")),
+    ('s:="a";i:=-1;_=s[i]', Execution(2, b"", b"panic: runtime error: index out of range [-1]\n")),
+    ('s:="a";i:=uint64(18446744073709551615);_=s[i]', Execution(
+        2, b"", b"panic: runtime error: index out of range [18446744073709551615] with length 1\n",
+    )),
+])
+def test_checked_named_string_index_executes_exact_bytes_or_terminal_bounds_panic(
+    body, expected, tmp_path, monkeypatch,
+):
+    with monkeypatch.context() as denied:
+        forbid_external_compiler(denied)
+        artifact = compile_owned((("named_index.go", source(body)),))
+    binary = tmp_path / "named-index"
+    write_artifact(artifact, binary)
+    assert run(binary) == expected
 
 
 def test_string_precision_limit_is_a_diagnostic_not_unbounded_constant_concatenation():
