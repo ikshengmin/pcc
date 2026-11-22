@@ -554,3 +554,15 @@ with a current-codegen owned archive; the same binaries explicitly
 rejected other collectors. No runtime code or Go semantics changed.
 Next bind the checked Go scalar layout to this optional descriptor
 and call boundary without opening the default link path.
+
+The optional Go scalar emitter now derives the real v1 descriptor from
+the checked payload map and calls the existing allocator via its exact
+descriptor/count/handle-output ABI. No new allocator or default entry
+path is added. The C observer exercised the Go-emitted object through
+the unchanged production archive: allocated-empty, zero-initialized
+words, full-width values through collection, overflow, and owner release.
+The Go adapter and two independent native runtime controls passed;
+23 adjacent checks passed. GC1–4 remain explicit rejections. The next
+source shape starts at nil and appends one uintptr, as used by both
+cache-size producers; storage growth and source-result ownership still
+need dedicated proofs.

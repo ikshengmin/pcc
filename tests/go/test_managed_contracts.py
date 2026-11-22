@@ -206,3 +206,57 @@ def test_identical_static_backing_original_matches_official_go(tmp_path, monkeyp
         compiler=os.environ['PCC_GO_REFERENCE'], cache=os.environ['PCC_GO_REFERENCE_CACHE'])
     assert (reference.parent / 'managed_static_strings.go').read_bytes() == ORIGINAL.encode()
     assert run(owned) == run(reference) == Execution(0, b'', b'')
+
+
+def test_opt_in_scalar_slice_emits_pointer_free_descriptor_and_alloc_call():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    pointer = ir.IntType(8).as_pointer()
+    i64 = ir.IntType(64)
+    probe = ir.Function(module, ir.FunctionType(ir.IntType(32), [i64, pointer.as_pointer()]), "probe")
+    builder = ir.IRBuilder(probe.append_basic_block("entry"))
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    words = runtime.descriptor("uintptr")
+    assert words is runtime.descriptor("uintptr")
+    assert runtime.descriptor("uint8") is not words
+    assert words.global_constant and words.linkage == "private"
+    assert tuple(item.value for item in words.initializer.value) == (1, 0, 8, 8, 0, 0)
+    builder.ret(runtime.allocate(builder, "uintptr", *probe.args))
+    assert "call i32 (ptr, i64, ptr) @pcc_rt_managed_alloc(ptr @__pcc_go_scalar_backing_uintptr" in str(module)
+    assert "declare i32 @pcc_rt_managed_alloc(ptr, i64, ptr)" in str(module)
+    assert 'pcc_gc_alloc' not in str(module)
+    untouched = tuple(module.globals)
+    with pytest.raises(ManagedContractError, match="qualified scalar"):
+        runtime.descriptor("int64")
+    assert tuple(module.globals) == untouched
+
+    invalid = ir.Module()
+    invalid.triple = module.triple
+    runtime = ScalarSliceRuntime(invalid, gc_backend=0)
+    with pytest.raises(ManagedContractError, match="requires its module"):
+        runtime.allocate(builder, "uintptr", *probe.args)
+    assert not invalid.globals
+    conflicting = ir.Function(invalid, ir.FunctionType(i64, []), "pcc_rt_managed_alloc")
+    bad_probe = ir.Function(invalid, probe.function_type, "probe")
+    bad_builder = ir.IRBuilder(bad_probe.append_basic_block("entry"))
+    with pytest.raises(ManagedContractError, match="incompatible"):
+        runtime.allocate(bad_builder, "uintptr", *bad_probe.args)
+    assert set(invalid.globals) == {conflicting.name, bad_probe.name}
+
+
+@pytest.mark.parametrize("triple,backend", [
+    ("aarch64-unknown-linux-gnu", 0), ("arm64-apple-darwin", 0),
+    ("x86_64-unknown-linux-gnu", 3), ("x86_64-unknown-linux-gnu", False),
+])
+def test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir(triple, backend):
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = triple
+    with pytest.raises(ManagedContractError, match="Linux x86-64 GC0"):
+        ScalarSliceRuntime(module, gc_backend=backend)
+    assert not module.globals

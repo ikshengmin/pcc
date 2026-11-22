@@ -255,6 +255,9 @@
         "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
         "tests/go/test_managed_contracts.py::test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage",
         "tests/go/test_managed_contracts.py::test_escaping_uintptr_slice_keeps_scalar_payload_separate_from_owner_root",
+        "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_emits_pointer_free_descriptor_and_alloc_call",
+        "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir",
+        "tests/runtime_shared/test_managed_owned.py::test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator",
         "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
         "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
       ],
@@ -285,6 +288,9 @@
             "tests/go/test_managed_contracts.py::test_shared_plan_does_not_open_dynamic_string_or_interface_native_paths",
             "tests/go/test_managed_contracts.py::test_byte_slice_shares_a_rooted_backing_plan_without_claiming_native_storage",
             "tests/go/test_managed_contracts.py::test_escaping_uintptr_slice_keeps_scalar_payload_separate_from_owner_root",
+            "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_emits_pointer_free_descriptor_and_alloc_call",
+            "tests/go/test_managed_contracts.py::test_opt_in_scalar_slice_descriptor_rejects_unqualified_lane_without_ir",
+            "tests/runtime_shared/test_managed_owned.py::test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator",
             "tests/go/test_managed_contracts.py::test_exact_static_backing_original_executes_owned_native",
             "tests/go/test_managed_contracts.py::test_identical_static_backing_original_matches_official_go"
           ],
@@ -309,13 +315,17 @@
             "sha256": "88fe486393ec8cdf78a018adef6eb8f616d55bb9ad5f34a83cbaf4622c0bef2a"
           },
           {
+            "path": "pcc/frontends/go/scalar_slice_runtime.py",
+            "sha256": "465e5a6b10763c5dd22c1dc053934472d59cef4d688f22529763940f36df8063"
+          },
+          {
             "path": "pcc/frontends/go/lowering.py",
             "sha256": "717eb2a1543ac3199b6f3c6cfdaebc336be295896f7c41212fa8de71119ef946"
           }
         ]
       },
       "id": "go.shared-managed-compiler-contracts",
-      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted.",
+      "scope": "Compiler-only shared managed storage contracts preserving Go nominal identities, scalar payload facts, unresolved pointer provenance/aggregate tracing/interface boxing obligations, and static versus owner-relative managed string spans. Current static-string lowering consumes the common immutable static span without changing its pointer/length ABI. Full interface/itable/typed-nil/equality, managed allocation, GC registration, roots and native managed lowering remain unavailable. The exact static-string native/reference original does not qualify managed runtime support. Byte and uintptr slice views and their separate scalar backing owners remain logical plans. The uintptr payload repeats a checked pointer-free target word and does not replace the view owner root; no slice allocation or aliasing is admitted. Explicit Linux x86-64 GC0 envelope descriptors and a checked-symbol allocation call have an isolated owned native control; normal Go source still cannot allocate a slice.",
       "evidence": []
     },
     {

@@ -5,15 +5,22 @@ extern int64_t pcc_gc_backend(void);
 extern int64_t pcc_gc_pointer_is_managed(void *);
 extern int64_t pcc_gc_scheduler_root_count(void);
 
+#ifdef PCC_TEST_GO_SCALAR_ADAPTER
+extern int32_t scalar_slice_alloc_words(uint64_t count, pcc_rt_managed_handle **out);
+#else
 /* Equivalent to a repeated unsigned target word with no reference slots. */
 static const pcc_rt_managed_descriptor_v1 words = {1, 0, 8, 8, 0, 0};
+static int32_t scalar_slice_alloc_words(uint64_t count, pcc_rt_managed_handle **out) {
+    return pcc_rt_managed_alloc(&words, count, out);
+}
+#endif
 
 /* The allocated payload cannot be represented by a returned stack address. */
 static int hand_off(uint64_t n, pcc_rt_managed_handle **caller) {
     pcc_rt_managed_handle *producer = 0;
     uint64_t *payload;
     uint64_t i;
-    if (pcc_rt_managed_alloc(&words, n, &producer)) return 1;
+    if (scalar_slice_alloc_words(n, &producer)) return 1;
     payload = (uint64_t *)pcc_rt_managed_data(producer);
     for (i = 0; i < n; i++) {
         if (payload[i] != 0) return 2;
@@ -30,7 +37,7 @@ int main(void) {
     void *object;
     int64_t baseline = pcc_gc_scheduler_root_count();
     if (pcc_gc_backend()) {
-        if (pcc_rt_managed_alloc(&words, 0, &empty) != PCC_RT_MANAGED_UNSUPPORTED) return 10;
+        if (scalar_slice_alloc_words(0, &empty) != PCC_RT_MANAGED_UNSUPPORTED) return 10;
         if (empty || pcc_gc_scheduler_root_count() != baseline) return 11;
         return 0;
     }
@@ -44,7 +51,7 @@ int main(void) {
     if (pcc_rt_managed_ref_load(owner, 0, &unchanged) != PCC_RT_MANAGED_BAD_LAYOUT) return 16;
     if (unchanged != empty) return 17;
     unchanged = owner;
-    if (pcc_rt_managed_alloc(&words, UINT64_MAX, &unchanged) != PCC_RT_MANAGED_OVERFLOW ||
+    if (scalar_slice_alloc_words(UINT64_MAX, &unchanged) != PCC_RT_MANAGED_OVERFLOW ||
         unchanged != owner || pcc_gc_scheduler_root_count() != baseline + 2) return 18;
     if (pcc_rt_managed_collect() < 0) return 19;
     payload = (uint64_t *)pcc_rt_managed_data(owner);

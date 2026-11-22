@@ -97,7 +97,29 @@ def test_shared_scalar_slice_owner_survives_producer_and_collection(tmp_path, mo
     _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_owner.c")
 
 
-def _run_managed_fixture(tmp_path, monkeypatch, fixture_name):
+@pytest.mark.integration
+@pytest.mark.pcc_gate(probe=lambda: bool(os.environ.get("PCC_RUNTIME_ARCHIVE")) and sys.platform == "linux" and platform.machine() == "x86_64")
+def test_go_scalar_slice_descriptor_calls_the_real_opt_in_allocator(tmp_path, monkeypatch):
+    from pcc.backend.owned_object_emit import emit_owned_object
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = TARGET
+    pointer = ir.IntType(8).as_pointer()
+    i64 = ir.IntType(64)
+    fn = ir.Function(module, ir.FunctionType(ir.IntType(32), [i64, pointer.as_pointer()]),
+                     "scalar_slice_alloc_words")
+    builder = ir.IRBuilder(fn.append_basic_block("entry"))
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    builder.ret(runtime.allocate(builder, "uintptr", *fn.args))
+    adapter = tmp_path / "go_scalar_slice.o"
+    adapter.write_bytes(emit_owned_object(str(module), TARGET))
+    _run_managed_fixture(tmp_path, monkeypatch, "scalar_slice_owner.c",
+                         extra_object=adapter, cpp_args=["-DPCC_TEST_GO_SCALAR_ADAPTER"])
+
+
+def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=None, cpp_args=()):
     from pcc.driver.project import TranslationUnit
     from pcc.frontends.c.evaluator.c_evaluator import CEvaluator
     from pcc.runtime.shared_managed_build import managed_runtime_objects
@@ -114,9 +136,11 @@ def _run_managed_fixture(tmp_path, monkeypatch, fixture_name):
         evaluator = CEvaluator(backend="self", target_triple=TARGET)
         units = evaluator.compile_translation_units(
             [TranslationUnit(fixture.name, str(fixture), fixture.read_text())],
-            use_system_cpp=False, use_compile_cache=False,
+            use_system_cpp=False, use_compile_cache=False, cpp_args=list(cpp_args),
             include_dirs=[str(ROOT / "pcc/runtime/include"), str(ROOT / "utils/fake_libc_include")],
         )
+        if extra_object is not None:
+            objects.append(str(extra_object))
         evaluator.emit_executable(units, str(binary), link_args=[*objects, str(archive)])
     def limit_native_address_space():
         import resource
