@@ -233,11 +233,7 @@ def pcc_gc_callback_layers_build(nodes, count: i64, stop_epoch: i64):
 
 
 @c_abi_export("pcc_gc_callback_layers_count")
-def pcc_gc_callback_layers_count(plan, candidates: i64) -> i64:
-    # Mixed graphs still use the legacy sweep until its cyclic pass can be
-    # given the remaining subset without changing cyclic callback order.
-    if load_i64(plan, _PLAN_PEELED) != candidates:
-        return 0
+def pcc_gc_callback_layers_count(plan) -> i64:
     return load_i64(plan, _PLAN_LAYER_COUNT)
 
 

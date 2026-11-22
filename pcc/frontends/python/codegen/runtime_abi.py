@@ -3328,7 +3328,7 @@ def _cross_object_signatures_part_15():
     return {
     'pcc_gc_callback_layers_build': (('c_ptr', 'c_int64', 'c_int64'), 'c_ptr'),
     'pcc_gc_callback_layers_release': (('c_ptr',), 'c_void'),
-    'pcc_gc_callback_layers_count': (('c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_layers_count': (('c_ptr',), 'c_int64'),
     'pcc_gc_callback_layers_range': (('c_ptr', 'c_int64'), 'c_int64'),
     'pcc_gc_callback_layers_node': (('c_ptr', 'c_int64'), 'c_ptr'),
     'pcc_gc_callback_layers_contains': (('c_ptr', 'c_ptr', 'c_int64'), 'c_int64'),

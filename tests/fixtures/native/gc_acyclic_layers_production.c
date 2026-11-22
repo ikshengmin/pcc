@@ -20,10 +20,10 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { CLASS_A, CLASS_B, WEAK_A, WEAK_B, HOLD, ROOTS };
+enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, HOLD, ROOTS };
 static PyObject *roots[ROOTS];
-static void *nodes[2];
-static int rescue, withdrawn, error;
+static void *nodes[3];
+static int rescue, withdrawn, mixed, error;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 
@@ -52,6 +52,11 @@ static PyObject *finish_b(PyObject *self) {
     note(3);
     return py_int_from_i64(0);
 }
+static PyObject *finish_tail(PyObject *self) {
+    (void)self;
+    note(7);
+    return py_int_from_i64(0);
+}
 static PyObject *weak_event(PyObject *captures, PyObject *args) {
     (void)captures;
     PyObject *ref = py_tuple_get(args, 0);
@@ -64,10 +69,10 @@ static PyObject *weak_event(PyObject *captures, PyObject *args) {
 
 static void *seal_on_departing_thread(void *unused) {
     (void)unused;
-    const char *fields[] = {"child"};
+    const char *fields[] = {"child", "tail"};
     if (pcc_current_thread_id() <= 0) { error = 8; return NULL; }
     PyClassObject *a_cls = py_class_new("LayerA", NULL, 0, fields, 1);
-    PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, NULL, 0);
+    PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, mixed == 2 ? 2 : 1);
     if (!a_cls || !b_cls) { error = 9; return NULL; }
     pcc_gc_store_root(&roots[CLASS_A], (PyObject *)a_cls);
     pcc_gc_store_root(&roots[CLASS_B], (PyObject *)b_cls);
@@ -84,7 +89,19 @@ static void *seal_on_departing_thread(void *unused) {
         pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
         __atomic_fetch_and(&py_header(holder)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
     }
-    if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
+    PyObject *tail = NULL;
+    if (mixed == 2) {
+        PyClassObject *tail_cls = py_class_new("LayerTail", NULL, 0, NULL, 0);
+        if (!tail_cls) { error = 15; return NULL; }
+        pcc_gc_store_root(&roots[CLASS_TAIL], (PyObject *)tail_cls);
+        py_class_add_method(tail_cls, "__del__", (PyObject *)(uintptr_t)finish_tail);
+        tail = py_instance_new(tail_cls);
+        if (!tail) { error = 16; return NULL; }
+        py_instance_set_field((PyInstanceObject *)b, 1, tail);
+        pcc_gc_unpin(tail);
+    }
+    if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
+    else if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
     PyObject *wa = py_weakref_new(a, callback);
     PyObject *wb = py_weakref_new(b, callback);
     if (!wa || !wb) { error = 11; return NULL; }
@@ -93,11 +110,12 @@ static void *seal_on_departing_thread(void *unused) {
     pcc_gc_unpin(a);
     pcc_gc_unpin(b);
     pcc_py_gc_minor_graph_lock();
-    PyObject *items[] = {a, b};
-    for (int i = 0; i < 2; ++i) {
+    PyObject *items[] = {a, b, tail};
+    for (int i = 0; i < (mixed == 2 ? 3 : 2); ++i) {
         PyObject *obj = items[i];
-        nodes[rescue ? i : 1-i] = pcc_gc_object_index_find(obj);
-        if (!nodes[rescue ? i : 1-i]) error = 12;
+        int index = rescue || i >= 2 ? i : 1-i;
+        nodes[index] = pcc_gc_object_index_find(obj);
+        if (!nodes[index]) error = 12;
         pcc_gc_set_mark_color(obj, PY_FLAG_GC_WHITE);
         __atomic_fetch_and(&py_header(obj)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
         __atomic_fetch_or(&py_header(obj)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
@@ -111,6 +129,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "caller") == 0) rescue = 2;
     if (argc > 1 && strcmp(argv[1], "holder") == 0) rescue = 3;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
+    mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
+    if (argc > 1 && strcmp(argv[1], "mixed-tail") == 0) mixed = 2;
+    if (argc > 1 && strcmp(argv[1], "mixed-rescue") == 0) { mixed = 1; rescue = 1; }
     // Unregistered storage in the suspended owner’s caller frame. This slot
     // starts empty; the callback creates a new root through a saved address.
     PyObject *volatile raw = NULL;
@@ -128,19 +149,20 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_candidates_reset();
     pcc_gc_tracing_candidates_note(nodes[0]);
     pcc_gc_tracing_candidates_note(nodes[1]);
+    if (mixed == 2) pcc_gc_tracing_candidates_note(nodes[2]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
     pcc_py_gc_minor_graph_unlock();
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
-    pcc_gc_tracing_sweep_unreachable(2);
+    pcc_gc_tracing_sweep_unreachable(mixed == 2 ? 3 : 2);
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;
     pcc_gc_end_explicit_tracing_collect();
     if (pcc_resume_world() != 0) return 22;
     PyObject *b = py_weakref_call(roots[WEAK_B]);
     if (rescue == 2 && (raw != b || raw == py_None || raw == NULL)) error = 13;
     note(b == py_None ? 5 : 6);
-    const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live"};
+    const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del"};
     for (int i = 0; i < event_count; ++i)
         printf("%s%s", i ? " " : "", names[events[i]]);
     puts("");

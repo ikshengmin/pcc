@@ -1121,7 +1121,7 @@ pcc_gc_callback_layers_build = extern(
 )
 pcc_gc_callback_layers_release = extern("pcc_gc_callback_layers_release", (c_ptr,), c_void)
 pcc_gc_callback_layers_count = extern(
-    "pcc_gc_callback_layers_count", (c_ptr, c_int64), c_int64
+    "pcc_gc_callback_layers_count", (c_ptr,), c_int64
 )
 pcc_gc_callback_layers_range = extern(
     "pcc_gc_callback_layers_range", (c_ptr, c_int64), c_int64
@@ -1259,6 +1259,33 @@ def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64):
     return pcc_gc_callback_layers_build(nodes, count, stop_epoch)
 
 
+@c_abi_export("pcc_gc_review_full_recheck_from_caller")
+def _review_full_recheck_from_caller(caller) -> None:
+    cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
+    pcc_gc_conservative_capture_callback_words(cut, caller)
+    _recheck_reachability_after_window(cut)
+    pcc_gc_callback_root_cut_release(cut)
+
+
+@c_abi_export("pcc_gc_review_finish_cyclic_residue")
+def _review_finish_cyclic_residue(caller) -> None:
+    # A peeled candidate has either been rescued (no candidate bit), or its
+    # finalizer and existing weakrefs have already been settled. What remains
+    # follows the cyclic convention: early weakrefs, finalizers, late clear.
+    if _sweep_weak_callbacks(1) != 0:
+        _review_full_recheck_from_caller(caller)
+    finalizers: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    listed = stack_alloc(8)
+    nodes = stack_alloc(8)
+    count = stack_alloc(8)
+    commit = stack_alloc(8)
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    _sweep_finalizers(1, backend, finalizers, listed, nodes, count, commit)
+    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizers:
+        _review_full_recheck_from_caller(caller)
+    py_weakref_clear_tracing_candidates()
+
+
 @c_abi_export("pcc_gc_review_sweep_layers")
 def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, caller) -> i64:
     layer: i64 = 0
@@ -1286,7 +1313,10 @@ def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, call
             _user_code_window_close(window)
             _review_remark_layer_at_stop(nodes, count, caller)
         layer += 1
+    peeled: i64 = pcc_gc_callback_layers_range(plan, layers)
     pcc_gc_callback_layers_release(plan)
+    if peeled != count:
+        _review_finish_cyclic_residue(caller)
     commit: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
     return _sweep_clear_and_reclaim(budget, 1, 0, 1, nodes, count, commit)
 
@@ -1314,7 +1344,7 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     review_count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
     plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count)
     if ptr_is_null(plan) == 0:
-        layers: i64 = pcc_gc_callback_layers_count(plan, review_count)
+        layers: i64 = pcc_gc_callback_layers_count(plan)
         if layers > 0:
             return _review_sweep_layers(plan, layers, review_nodes, review_count, budget, ptr_add(frame_address(), 16))
         pcc_gc_callback_layers_release(plan)
