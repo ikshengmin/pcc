@@ -165,6 +165,14 @@ in the relevant section or issue and removes the entry.
   dispatch change, nursery activation or buffer-exporter admission.
   Use the GC0/GC1/GC2 ready units below while awaiting review.
 
+- GC0 atomic reference-count CPU share: Linux has working userspace
+  perf events, but no `perf` executable, no `pcc_perf top` Linux sampler,
+  and no sealed handler arm or gateway package in this checkout.
+  Recommendation: start with a sealed macOS arm and the profile commands in
+  [the measurement note](investigations/gc0-atomic-attribution-preflight.md),
+  or qualify a Linux `pcc_perf` sampler and provide the same gateway source.
+  Do not treat reference-count call totals as atomic-instruction CPU share.
+
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -278,9 +286,11 @@ in the relevant section or issue and removes the entry.
    it out of the stopped major walk; retry reused the mapping, and commit
    exposed exactly one entry. A Linux native promoted-owner probe also
    found its indexless child through the real strong-slot visitor.
-   Next GC3 runtime slice: see review question above. Until it clears,
-   take the next ready GC unit below. Production promotion and nursery
-   activation are still untested.
+   Next GC3 runtime slice: see review question above. Production promotion
+   and nursery activation are still untested. The GC0 atomic CPU-share
+   measurement is blocked on a validated profiling arm/backend; no
+   percentage was reported. The next ready unit is GC1 mutator-stepped
+   marking, starting with a native scheduling/lifetime control.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -292,7 +302,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC0 atomic reference-count CPU share: Codex, Linux x86-64, 2026-11-22 08:16 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
