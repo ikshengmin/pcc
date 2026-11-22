@@ -173,6 +173,12 @@ in the relevant section or issue and removes the entry.
   or qualify a Linux `pcc_perf` sampler and provide the same gateway source.
   Do not treat reference-count call totals as atomic-instruction CPU share.
 
+- GC1 review candidate has focused Linux evidence but waits on the
+  unchanged-GC0 control and maximum-pause comparison. Run the exact
+  [macOS A/B commands](https://github.com/ikshengmin/pcc/blob/f7f15a289f543a22e29de46ec2a532378ca808a0/docs/investigations/gc1-mutator-review-candidate.md).
+  Recommendation: retain the review branch and do not merge until the
+  pause/control gate qualifies. Continue ready GC2 work meanwhile.
+
 - Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
   Agent recommendation: use the same allocator and root protocol on GC0–4;
   do not implement another source-shape admission or promote the GC0-only envelope.
@@ -299,9 +305,13 @@ in the relevant section or issue and removes the entry.
    in the one-mutator Linux test. Its review follow-up
    [`5f17931`](https://github.com/ikshengmin/pcc/commit/5f1793111a53a1045ac3223764065effef4fb0d5)
    passed with four allocating mutators in three fresh Linux processes.
-   Runtime changes remain off master. Next: automatic sweep finalizer/
-   weakref behavior through paused and reentered collections, then
-   measure maximum pause with the unchanged GC0 A/B control.
+   The review follow-up
+   [`f7f15a28`](https://github.com/ikshengmin/pcc/commit/f7f15a289f543a22e29de46ec2a532378ca808a0)
+   also passed GC1 automatic weakref/finalizer delivery across disable/
+   enable and a native callback that reentered collect. Runtime changes
+   remain off master pending measured maximum pause and the unchanged
+   GC0 A/B control, below. Next ready Linux unit: GC2 pacer and assist
+   baseline (debt threshold, per-worker work, and stop telemetry).
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -313,7 +323,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC1 automatic finalizer and weakref behavior on review: Codex, Linux x86-64, 2026-11-22 08:36 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
