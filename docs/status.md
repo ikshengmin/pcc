@@ -172,14 +172,14 @@ in the relevant section or issue and removes the entry.
 1. **GC correctness.** Open issues
    [#4](https://github.com/ikshengmin/pcc/issues/4),
    and [#7](https://github.com/ikshengmin/pcc/issues/7); each states its
-   reproduction and acceptance. Platform: any; Next: #7, audit whether a
-   two-layer plain direct forwarding chain leaves a GC0 owner before
-   broadening beyond the one-layer proof. The [accessor audit](investigations/gc0-direct-boxed-int-accessor-owners.md)
-   field, literal-list and typed-string regression cases now release the
-   heap integer. The list proof includes tagged-range literal indices;
-   `[1]` and `[-1]` have both alias and detached native witnesses. Empty
-   list and invalid string still raise. Linux pcc0: 28 tests compared on
-   GC0–4 with CPython and 26 IR controls. No macOS or pcc1 execution.
+   reproduction and acceptance. Platform: any; Next: #7, audit a direct
+   `int(value)` return with a dynamic formal and actual object-conversion
+   runtime helper before extending the typed-string proof. The known field,
+   literal-list and typed-string cases release the GC0 heap int. The checked
+   ordinary forwarding path now handles two layers ending at a proven
+   owner. The three new production cases release; the invalid parser still
+   raises. Linux pcc0: 32 native cases on GC0–4 against CPython and 26 IR
+   controls. No macOS or pcc1 run.
    [#5](https://github.com/ikshengmin/pcc/issues/5) passed its nine native
    mode/backend cases and the public cyclic-list check against CPython on
    Linux pcc0 at `14aa66cf`. Under the unchanged >512 admission gate,
@@ -191,20 +191,16 @@ in the relevant section or issue and removes the entry.
    owner before dropping the temporary pin. On Linux pcc0, both unchanged
    pending-TLS probes and both ordinary Python call orderings passed on
    GC0–4. The latter matched CPython. Mac and pcc1 were not executed.
-   #7 fixes cover proved ordinary same-module integer returns, including
-   one direct forwarding wrapper around an alias, addition, or unshadowed
-   string-literal parse. The wrapper cases each stopped leaving one GC0
-   reference without changing identity or `ValueError`. All 17 guarded
-   Linux pcc0 cases across GC0–4 matched CPython and 19 IR checks passed;
-   Mac and pcc1 were not executed. Deeper wrappers, foreign ABI paths
-   and other unproved producers are not included.
+   #7 intentionally leaves three-layer forwarding, foreign ABI paths
+   and other unproved producers on their existing paths. Reproducers and
+   exact scopes are linked in the issue.
    #6 passed six guarded Linux pcc0 native cases across GC0–4 on
    `8e67977b`, with a source-matched archive, including the moving GC4
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
    Claims:
-   - #7 two-layer direct forwarding: Codex, Linux x86-64, 2026-11-22 00:29 UTC, area runtime-codegen
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).

@@ -166,19 +166,19 @@ def _direct_unary_boxed_int_def(host, fd, fn) -> bool:
     )
 
 
-def boxed_int_direct_forward_has_owner(host, fd, value) -> bool:
-    """A single plain direct call that forwards a proven leaf's one owner."""
+def _boxed_int_direct_forward_target(host, fd, value):
+    """Resolve one proved same-formal managed call edge without emitting it."""
     if (not isinstance(value, Call) or not isinstance(value.func, Name)
             or value.kwargs or len(value.args) != 1 or not isinstance(value.args[0], Name)
             or not _exact_int_repr(value.ty)
             or host._module_has_c_abi_export or host._module_uses_raw_int_scaffold
             or host._suppress_borrowed_return_retain
             or not _direct_unary_boxed_int_def(host, fd, host.functions.get(fd.name))):
-        return False
+        return None
     name = value.func.ident
     original = fd.args[0]
     if value.args[0].ident != original.name or value.args[0].ty != original.annotation:
-        return False
+        return None
     # These bindings can bypass ordinary declared-function lowering. The
     # wrapper has no locals besides its formal and no hoisted captures.
     if (name == original.name or name == fd.name or name.startswith("_")
@@ -196,14 +196,27 @@ def boxed_int_direct_forward_has_owner(host, fd, value) -> bool:
             or host._expr_looks_cpython(value.func)
             or getattr(host, "_native_extension_star_module_env", {})
             or getattr(host, "_cpy_star_module_env", {})):
-        return False
+        return None
     target = host.functions.get(name)
     if not isinstance(target, ir.Function) or target.name != host._user_symbol(name):
-        return False
+        return None
     leaf = host._native_symbol_funcdefs.get(target.name)
     if not _direct_unary_boxed_int_def(host, leaf, target):
+        return None
+    return leaf
+
+
+def boxed_int_direct_forward_has_owner(host, fd, value) -> bool:
+    """A chain of at most two plain calls ends at a proved owned producer."""
+    leaf = _boxed_int_direct_forward_target(host, fd, value)
+    if leaf is None:
         return False
     result = leaf.body[0].value
+    if isinstance(result, Call):
+        inner = _boxed_int_direct_forward_target(host, leaf, result)
+        if inner is not None:
+            leaf = inner
+            result = leaf.body[0].value
     formal = leaf.args[0]
     if isinstance(result, Name):
         # The normal return lowering retains a borrowed parameter once.

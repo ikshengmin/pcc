@@ -175,6 +175,37 @@ def via_wrapped_error(n: int) -> None:
         return
     raise AssertionError("missing exception in direct return chain")
 
+def forward_again_fresh(n: int) -> int:
+    return wrap_fresh(n)
+
+def forward_again_alias(n: int) -> int:
+    return wrap_alias(n)
+
+def forward_again_parse(n: int) -> int:
+    return wrap_parse(n)
+
+def forward_again_invalid(n: int) -> int:
+    return wrap_invalid(n)
+
+def consume_deeper_fresh(n: int) -> None:
+    value: object = forward_again_fresh(n)
+    assert value == 9223372036854775827 and value is not n
+
+def consume_deeper_alias(n: int) -> None:
+    value: object = forward_again_alias(n)
+    assert value is n
+
+def consume_deeper_parse(n: int) -> None:
+    value: object = forward_again_parse(n)
+    assert value == n and value is not n
+
+def consume_deeper_error(n: int) -> None:
+    try:
+        value: object = forward_again_invalid(n)
+    except ValueError:
+        return
+    raise AssertionError("missing exception in deeper direct return chain")
+
 def consume(f, n, original, expected_alias: bool) -> None:
     # An unresolved native callable uses the real owning object dispatcher.
     result: object = f(n)
@@ -213,6 +244,10 @@ CASES = {
     "wrapper-direct-alias": "via_wrapped_alias(n)",
     "wrapper-direct-parse": "via_wrapped_parse(n)",
     "wrapper-direct-error": "via_wrapped_error(n)",
+    "deeper-direct-fresh": "consume_deeper_fresh(n)",
+    "deeper-direct-alias": "consume_deeper_alias(n)",
+    "deeper-direct-parse": "consume_deeper_parse(n)",
+    "deeper-direct-error": "consume_deeper_error(n)",
     "name": "consume(by_name, n, n, True)",
     "int": "consume(by_int, n, n, True)",
     "plus": "consume(by_plus, n, n, True)",
@@ -264,6 +299,7 @@ def test_boxed_int_return_owner_native(
     if shape in {
         "string-direct-local", "mixed-direct-fresh",
         "wrapper-direct-fresh", "wrapper-direct-parse",
+        "deeper-direct-fresh", "deeper-direct-parse",
     }:
         # Exercise a separate heap result in addition to the source and
         # replacement instead of passing with only tagged results.
@@ -459,7 +495,7 @@ def leaf(n: int) -> int:
     assert "value.local.borrowed.retain" not in caller
 
 
-def test_direct_wrapper_does_not_prove_a_second_layer():
+def test_two_direct_wrappers_transfer_but_a_third_is_unproved():
     text = _emit("""\
 def terminal(n: int) -> int:
     return n
@@ -467,13 +503,20 @@ def leaf(n: int) -> int:
     return terminal(n)
 def wrap(n: int) -> int:
     return leaf(n)
+def beyond(n: int) -> int:
+    return wrap(n)
 def probe(n: int) -> bool:
     value: object = wrap(n)
     return value is n
+def unchecked(n: int) -> bool:
+    value: object = beyond(n)
+    return value is n
 """, strict=True)
     assert "return.int.forwarded" in _body(text, "leaf")
-    assert "return.int.forwarded" not in _body(text, "wrap")
-    assert "value.local.borrowed.retain" in _body(text)
+    assert "return.int.forwarded" in _body(text, "wrap")
+    assert "return.int.forwarded" not in _body(text, "beyond")
+    assert "value.local.borrowed.retain" not in _body(text)
+    assert "value.local.borrowed.retain" in _body(text, "unchecked")
 
 
 def test_wrapper_with_foreign_leaf_has_no_native_owner_proof():
