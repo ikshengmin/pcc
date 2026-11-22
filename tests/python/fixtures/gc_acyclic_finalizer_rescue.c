@@ -14,6 +14,9 @@ extern PyObject *py_instance_get_field(PyObject *, int32_t);
 extern void py_user_del_dispatch(PyObject *);
 extern void pcc_gc_set_mark_color(PyObject *, int64_t);
 extern int64_t pcc_thread_world_stop_epoch_held(void);
+typedef void (*SlotVisitor)(PyObject **, int64_t, void *);
+extern int64_t pcc_gc_visit_object_slots_slice(
+    PyObject *, int64_t, int64_t, SlotVisitor, void *, void *);
 extern void pcc_gc_tracing_user_code_window_open(void *);
 extern void pcc_gc_tracing_user_code_window_close(void *);
 extern void pcc_gc_tracing_recheck_reachability_after_finalizers(void);
@@ -154,6 +157,63 @@ static int settle_child_weakref(void) {
     return py_weakref_call(child_watch) == py_None;
 }
 
+enum { ROLE_VALUE = 1, ROLE_TYPE = 2, ROLE_WEAK = 3 };
+enum { REACHED_PARENT = 1, REACHED_CHILD = 2, BOTH_REACHED = 3 };
+enum { VISITOR_BATCH = 4, VISITOR_CURSOR = 0, VISITOR_VISITS = 1, VISITOR_WORDS = 2 };
+enum { VISITOR_END = -1, REFERENCE_SLOT_BUDGET = 32 };
+
+struct Trial {
+    int64_t found;
+    int64_t unsupported;
+};
+
+static void seed_child_from_slot(PyObject **slot, int64_t role, void *context) {
+    struct Trial *trial = context;
+    if (role == ROLE_WEAK) return;
+    if (role != ROLE_VALUE && role != ROLE_TYPE) {
+        trial->unsupported = 1;
+        return;
+    }
+    if (*slot == candidate_parent) trial->found |= REACHED_PARENT;
+    if (*slot == candidate_child) trial->found |= REACHED_CHILD;
+}
+
+/* This arm admits only the fixture's closed callback: a publication to the
+ * participating scheduler root, no dirty external owner, no relocation.
+ * A production collector cannot infer those conditions from a finalizer. */
+static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left,
+                           int64_t *mask_out, int64_t *visits_out) {
+    if (sealed_epoch < 0 || pcc_thread_world_stop_epoch_held() != sealed_epoch) return 0;
+    struct Trial trial = {0, 0};
+    if (restored == candidate_parent) trial.found = REACHED_PARENT;
+    else if (restored != NULL) return 0;
+    int64_t examined = 0, seen = 0;
+    while (seen != trial.found) {
+        int64_t next = (trial.found & ~seen) & REACHED_PARENT ? REACHED_PARENT : REACHED_CHILD;
+        PyObject *owner = next == REACHED_PARENT ? candidate_parent : candidate_child;
+        int64_t cursor = 0;
+        do {
+            if (!slots_left) return 0;
+            int64_t state[VISITOR_WORDS] = {0, 0};
+            int64_t limit = slots_left < VISITOR_BATCH ? slots_left : VISITOR_BATCH;
+            if (!pcc_gc_visit_object_slots_slice(owner, cursor, limit,
+                         seed_child_from_slot, &trial, state)
+                || trial.unsupported || state[VISITOR_VISITS] < 0
+                || state[VISITOR_VISITS] > limit
+                || (state[VISITOR_CURSOR] != VISITOR_END && state[VISITOR_CURSOR] <= cursor))
+                return 0;
+            slots_left -= state[VISITOR_VISITS];
+            cursor = state[VISITOR_CURSOR];
+        } while (cursor != VISITOR_END);
+        seen |= next;
+        examined++;
+    }
+    if (pcc_thread_world_stop_epoch_held() != sealed_epoch) return 0;
+    *mask_out = trial.found;
+    *visits_out = examined;
+    return 1;
+}
+
 static int check_first_verdict(void) {
     int parent_dead = is_candidate(candidate_parent);
     int child_dead = is_candidate(candidate_child);
@@ -175,6 +235,7 @@ int main(int argc, char **argv) {
     should_rescue = argv[1][0] == 'r';
     reentry = argc == 3 && argv[2][0] == 'n';
     int64_t heap_size = argc == 4 ? atoi(argv[3]) : 0;
+    int trial_bounded = argc == 4 && argv[2][0] == 'b';
     if (argc == 4 && (!should_rescue || heap_size <= 0 || heap_size > 2048)) return 1;
     py_gc_disable();
     if (!make_graph() || (heap_size && !make_fixed_live_graph(heap_size))) return 2;
@@ -192,6 +253,16 @@ int main(int argc, char **argv) {
     pcc_py_gc_minor_graph_unlock();
 
     if (!is_candidate(candidate_child) || !run_one(PARENT_FINALIZER)) return 4;
+    int64_t bounded_mask = -1, bounded_visits = -1;
+    if (trial_bounded) {
+        int64_t stopped = pcc_thread_world_stop_epoch_held();
+        if (bounded_recheck(stopped, 0, &bounded_mask, &bounded_visits)
+            || bounded_recheck(stopped - 1, REFERENCE_SLOT_BUDGET,
+                               &bounded_mask, &bounded_visits)
+            || bounded_mask != -1 || bounded_visits != -1) return 15;
+        if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET,
+                             &bounded_mask, &bounded_visits)) return 16;
+    }
     int64_t calls = __atomic_load_n(&pcc_gc_metric_sweep_recheck_calls, __ATOMIC_RELAXED);
     int64_t visits = __atomic_load_n(&pcc_gc_metric_sweep_recheck_nodes, __ATOMIC_RELAXED);
     int64_t saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED);
@@ -202,6 +273,8 @@ int main(int argc, char **argv) {
     saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED) - saved;
     elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED) - elapsed;
     if (!check_first_verdict()) return 5;
+    if (trial_bounded && (bounded_mask != BOTH_REACHED || bounded_visits != 2 || saved != 2))
+        return 17;
     if (!should_rescue) {
         if (!retire_parent_edge() || !run_one(CHILD_FINALIZER)) return 8;
         recheck_without_raw_candidate_locals();
@@ -228,6 +301,7 @@ int main(int argc, char **argv) {
         printf("recheck %lld %lld %lld %lld\n",
                (long long)calls, (long long)visits, (long long)saved, (long long)elapsed);
     }
+    if (trial_bounded) printf("bounded %lld %lld\n", (long long)bounded_mask, (long long)bounded_visits);
     puts("GC_ACYCLIC_FINALIZER_RESCUE_OK");
     return 0;
 }

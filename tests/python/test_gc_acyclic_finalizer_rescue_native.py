@@ -36,11 +36,12 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
         for size in (128, 512, 2048):
             result = _record_execution(
                 tmp_path, f"gc{backend}-scale-{size}",
-                [str(binary), "rescue", "scale", str(size)],
+                [str(binary), "rescue", "bounded", str(size)],
                 dict(os.environ, PCC_GC_BACKEND=str(backend)),
             )
             assert result["returncode"] == 0 and not result["stderr"], (backend, size, result)
-            metrics, marker = result["stdout"].splitlines()
+            metrics, bounded, marker = result["stdout"].splitlines()
+            assert bounded == "bounded 3 2"  # Both live candidates, no clean old visit.
             assert marker == "GC_ACYCLIC_FINALIZER_RESCUE_OK"
             name, calls, nodes, saved, _elapsed = metrics.split()
             assert (name, int(calls), int(saved)) == ("recheck", 1, 2)

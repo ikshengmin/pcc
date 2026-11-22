@@ -285,3 +285,13 @@ count, not a timing range. The pointer-bearing first-verdict check runs
 in a separate frame so additional metric locals cannot keep the second
 candidate alive through the conservative recheck. The 12 lifecycle
 controls and nine scaled executions all pass.
+
+The isolated `rescue bounded <size>` arm uses the real registered
+scheduler root published by the parent finalizer and the shared
+bounded slot visitor. It validates the reacquired stop epoch and
+reports the same two rescued candidates as the full oracle, at two
+visited owners regardless of size on GC1–3. The stale epoch and zero
+slot budget refuse without changing the report. This native test
+admits only its known callback and fixed live graph; it does not
+justify ignoring other roots, stores or allocations in production.
+No shipped barrier, weakref semantics or sweep dispatch changed.
