@@ -390,3 +390,51 @@ check and an unrooted third ref must not run. CPython and GC1–3
 independently produce `mixed 21 1 0` (callback IDs, one leaf finalizer,
 zero discarded-ref callbacks). This does not bound list traversal
 cost, implement late refs in the new arm, or admit GC4.
+
+## Native layered chain scaling screen
+
+Linux x86-64, owned pcc0 runtime from review commit
+[`b708d89`](https://github.com/ikshengmin/pcc/commit/b708d891bf83ed395081251b8b3d1e280af08fc2).
+The linked native fixture seals a chain of 4, 16 or 64 finalizable objects,
+in reverse order, after its allocating thread exits. Each node's finalizer
+does constant user work. The fixture starts timing after the initial mark
+verdict is sealed and before calling the real sweep, so the time includes
+topology, all of its stop transitions and reclamation. A separate registered
+root contains 0, 4,096 or 16,384 unrelated live empty lists with no weakrefs.
+Five fresh-process trials for every combination ran in shuffled order. Every
+run finalized and reclaimed exactly its sealed candidate count with zero
+full rechecks; every run entered exactly one callback window per candidate.
+
+| Collector | Extra live lists | Median sweep at 4 / 16 / 64 candidates (µs) |
+| --- | ---: | --- |
+| GC1 | 0 | 78 / 238 / 1,379 |
+| GC1 | 4,096 | 86 / 280 / 1,325 |
+| GC1 | 16,384 | 103 / 253 / 1,376 |
+| GC3 | 0 | 80 / 266 / 1,198 |
+| GC3 | 4,096 | 94 / 287 / 1,353 |
+| GC3 | 16,384 | 83 / 286 / 1,395 |
+
+With no extra heap, the 16→64 step took 5.8× / 4.5× (GC1/3) for 4× the
+candidates. This is not a passing linear-scale result. Additional rooted
+lists were not a large multiplier in this particular fixture; the timings
+nevertheless do not qualify unrelated-heap independence. In particular,
+they do not exercise unrelated weakrefs. The code still checks the entire
+bounded candidate vector at every callback stop, and this chain still
+has one stop per object even without fallback. The next experiment needs
+to remove the repeated candidate walk or demonstrate that its work is
+bounded by the observed roots, then repeat the matrix. Do not treat this
+as the no-observer five-pair `pcc_perf` gate or a production promotion.
+
+The exact source-matched archive has to be built first. Reproduce from the
+review branch with a fresh output directory, under the usual Linux reserve:
+
+```sh
+out=$(mktemp -d)
+PCC_RUNTIME_ARCHIVE=/absolute/path/to/libpy_runtime_pcc_py.a \
+  uv run python scripts/run_process_tree_sample.py \
+    --timeout 90 --max-tree-rss-bytes 419430400 \
+    --linux-physical-preflight-reserve-bytes 7516192768 \
+    --result "$out/guard.json" --samples "$out/rss.tsv" \
+    --stdout "$out/results.txt" --stderr "$out/errors.txt" \
+    -- uv run python tests/python/measure_gc_acyclic_layers_scale.py "$out"
+```
