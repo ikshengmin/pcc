@@ -224,7 +224,7 @@ in the relevant section or issue and removes the entry.
    the static destructor's effect certificate for an unproved override.
 
    Claims:
-   - none
+   - open virtual destructor target contract: Codex, Linux x86-64, 2026-11-22 01:23 UTC, area frontend-cpp
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
