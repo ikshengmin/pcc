@@ -61,3 +61,31 @@ four mutators, not that every assist did work or that one arm is faster.
 At four mutators stock max includes the post-join drain and opt-in max
 does not; comparing those as a pause improvement would be invalid.
 Neither this diagnostic nor the controlled stopped assist qualifies A/B.
+
+## Qualified tool identity and macOS commands
+
+The review branch includes the byte-identical pcc_perf tool and tests
+from master `8330c7d`. The native attestation linked against this review
+runtime and returned 100 / -1 / -1. No handler arm was built on Linux:
+the matching gateway source is not available in that checkout.
+
+From a clean authorized checkout of `review/gc2-pacer-20261122` on macOS,
+with the benchmark's fixed gateway package available, use:
+
+```sh
+uv run python scripts/pcc_perf.py arm gc2-stock-same-source
+uv run python scripts/pcc_perf.py arm gc2-goal-100 --gc2-pacer-percent 100
+uv run python scripts/pcc_perf.py ab gc2-stock-same-source gc2-goal-100 --pairs 5 --gc 0,2 --workers 1,4 --control 0
+uv run python scripts/pcc_perf.py table gc2-goal-100
+```
+
+Keep the same gateway source, process and memory guards. Build both from
+this same branch so the intended difference is the sealed parameter;
+do not set an ambient threshold override. Report maximum pause, peak
+RSS/tail latency and all five pairs, not just aggregate throughput.
+If either arm fails native qualification, preserve that receipt and
+stop the comparison.
+
+The current screen reports total stopped time, not per-pair maximum
+pause, RSS and p99. Those fields need to be recorded by the next
+measurement-tool slice before treating this command as the merge gate.
