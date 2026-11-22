@@ -298,8 +298,10 @@ in the relevant section or issue and removes the entry.
    wait until the child's final drop. The cyclic-parent control agrees.
    A test-only stop/recheck model covers rescued children, edge
    retirement, new roots/cycles and candidate identity reuse.
-   Next: audit which existing visitor/lease and candidate storage
-   can support that boundary without a full-heap walk per callback.
+   Owned Linux tests validate the stopped candidate-list storage and
+   bounded strong/weak slot roles. The regular GC4 finish has no such
+   list and the current recheck still makes two heap walks. Next:
+   compare bounded recheck/fallback designs for the callback protocol.
    No runtime ordering change.
    The old relocation fixture still fails before grouped take (GC3
    oldification, GC4 set admission).
@@ -473,7 +475,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Tracing acyclic runtime candidate enumerator and visitor boundary: Codex, Linux x86-64, 2026-11-22 12:08 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

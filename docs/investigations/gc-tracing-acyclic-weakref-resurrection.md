@@ -118,3 +118,43 @@ graph checks pass on guarded Linux; this is not a native stop-window,
 lease, code change, or throughput result. Next map the model to the
 existing collector visitors, root/lease boundaries, and candidate
 storage without adding an unbounded full-heap rescan per callback.
+
+## Existing runtime pieces and their limits
+
+The Linux owned native
+`tests/python/test_gc_tracing_candidate_slot_inventory_native.py`
+runs on GC1–4. A true stopped-world section fills the real list with
+three real object-index records, checks the unsealed/sealed/retired
+states and verifies that the stop epoch isn't held after resume. The
+test chooses the records manually; it does not color the heap or
+claim that native GC4 emits such a list by default. The regular stopped
+finish only fills this list on GC1–3. Failure to allocate it sets a
+negative count and the existing sweep falls back to a heap walk.
+The finish commit number alone does not authorize raw node access
+after resuming mutators.
+
+The same probe uses bounded one-position calls to
+`pcc_gc_visit_object_slots_slice`. Real list storage with 32 reserved
+slots and three occupied slots visits three roles, retaining the
+duplicate strong edge twice. A real weakref visits its referent as
+weak/derived (role 3) and its callback as owning (role 1); a real
+instance visits its class owner as role 2. Retain roles 1 and 2, not
+role 3, and resolve references before comparing candidate identity.
+The slice refuses generic C-extension storage. The whole-object visitor
+may then fall back to the C-extension slot API; do not treat an unknown
+layout as an empty leaf.
+
+The existing foreign-address lease takes an already rooted owning slot.
+It may be a no-op on GC1–3, so the slot, not the lease token, provides
+reachability. For GC4 a lease may forbid movement; its holder must
+reload after a locking or parking boundary. Do not lease every dead
+candidate and then mistake the artificially reachable result for
+resurrection.
+
+Finally, the current recheck seeds actual roots, then does one whole-heap
+walk to protect every noncandidate's referents and another to clear
+rescued candidate bits. Simply invoking it between each finalizer
+would multiply that work. Reuse its behavior as a correctness oracle;
+separately specify how a bounded version sees roots published during
+callbacks, conservative stack/register changes and noncandidate owners
+created or mutated after the verdict. No collector ordering was changed.
