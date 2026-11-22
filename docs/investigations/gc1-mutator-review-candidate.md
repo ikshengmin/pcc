@@ -17,14 +17,17 @@ observed mark commit, candidate sweep and survival of a registered root.
 The program also checks that disabled auto collection does not commit a mark,
 then re-enables it and checks progress. The five startup/lifetime cases
 and the five-collector native weakref+finalizer program passed. The
-scheduler/CPython reference set passed 88 host checks. This does not
-establish four-mutator progress, a maximum-pause result, a no-loss
-performance control, macOS behavior, or pcc1. No production/master
-runtime has changed.
+scheduler/CPython reference set passed 88 host checks.
+The focused four-mutator test then passed in three fresh processes. Each
+process completed 24,000 allocations, kept all four distinct roots,
+started no worker and reported 7/6/7 mark commits. Maximum recorded
+collection STW was 2,961/3,371/3,414 microseconds in this synthetic
+diagnostic. This is not an A/B maximum-pause result, a no-loss control,
+macOS behavior, or pcc1. No production/master runtime has changed.
 
-Next Linux gate: native four-mutator allocation and automatic collection,
-verify no duplicate starts or stalled work, then check GC1 stop/repair
-under paused and reentered collection. Next measurement, from an authorized
+Next Linux gate: check GC1 stop/repair under paused and reentered
+collection, including a terminal weakref/finalizer on the actual
+automatic sweep path. Next measurement, from an authorized
 macOS checkout with the same gateway source: seal base and review HEAD
 under the same `PCC_PERF_HOME` from their separate worktrees, then run:
 
