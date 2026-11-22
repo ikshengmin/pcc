@@ -113,14 +113,14 @@ def test_previous_benchmark_bound_executes_when_proven_and_stays_closed_otherwis
     from tests.go.owned_execution import Execution, compile_owned, run, write_artifact
     from tests.go.test_execution import forbid_external_compiler
 
-    # Same spelling, known nonempty constant input: this is a slice behavior
-    # check, not a claim that the complete dynamic testing.Set can execute.
-    original = 'package main;func Result()int{const s="314x";v:=s[:len(s)-1];if v=="314"{return 42};return 0};func main(){}'
+    # The benchmark-shaped named view has a checked dynamic length; this
+    # standalone program is not a build of the complete testing package.
+    original = 'package main;func F(s string)string{return s[:len(s)-1]};func Result()int{if F("314x")=="314"{return 42};return 0};func main(){}'
     with monkeypatch.context() as denied:
         forbid_external_compiler(denied)
         artifact = compile_owned((('bound.go', original),), observe_result=True)
         with pytest.raises(UnsupportedGo) as unproven:
-            compile_go('package main;func F(s string)string{return s[:len(s)-1]};func main(){}')
+            compile_go('package main;func copyName(s string)string{return s};func F(s string)string{return copyName(s)[:len(s)-1]};func main(){}')
         assert unproven.value.code == 'go.unsupported.string-bounds-panic'
     native = tmp_path / 'known-bound'
     write_artifact(artifact, native)

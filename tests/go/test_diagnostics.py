@@ -65,7 +65,7 @@ CASES = [
     ('dynamic-string-concatenation', original('func f(a,b string)string{return a+b}')),
     ('division-panic', original('func f(a,b int)int{return a/b}')),
     ('negative-shift-panic', original('func f(a,b int)int{return a<<b}')),
-    ('string-bounds-panic', original('func f(a string,i int)byte{return a[i]}')),
+    ('string-bounds-panic', original('func choose(a string)string{return a};func f(a string,i int)byte{return choose(a)[i]}')),
     ('array-bounds-panic', original('func f(a [2]int,i int)int{return a[i]}')),
     ('aggregate-comparison', original(body='var a [1]int;_=a==a')),
     ('aggregate-switch', original(body='var a [1]int;switch a{case a:}')),

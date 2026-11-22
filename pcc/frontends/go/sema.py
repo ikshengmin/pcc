@@ -2020,10 +2020,15 @@ class Analyzer:
             if is_string(base.type):
                 if not is_integer(index.type):
                     raise GoDiagnostic(index.token, "string index must be an integer")
-                if index.constant is not None and index.constant < 0:
-                    raise GoDiagnostic(index.token, "string index must be nonnegative")
+                if index.constant is not None and not 0 <= index.constant <= (1 << 63) - 1:
+                    raise GoDiagnostic(index.token, "constant string index must be nonnegative and representable as int")
                 if base.constant is None:
-                    raise UnsupportedGo(index.token, 'go.unsupported.string-bounds-panic', "unproven string bounds require shared-runtime bounds-panic support")
+                    if base.kind != "name":
+                        raise UnsupportedGo(index.token, 'go.unsupported.string-bounds-panic',
+                                            "unproven string bounds require shared-runtime bounds-panic support")
+                    coerce(index, default_type(index.type))
+                    expr.kind, expr.type = "checked_string_index", "uint8"
+                    return
                 if index.constant is not None:
                     value = self.array_index_constant(index, "string index")
                     if value >= len(base.constant):

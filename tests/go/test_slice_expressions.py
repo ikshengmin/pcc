@@ -153,3 +153,62 @@ def test_borrowed_dynamic_string_valid_and_panic_lines_match_go(tmp_path, monkey
             assert actual.returncode == oracle.returncode == 2
             assert actual.stdout == oracle.stdout == b""
             assert actual.stderr.rstrip(b"\n") == oracle.stderr.splitlines()[0]
+
+
+INDEX_NATIVE = r'''package main
+var calls int
+func indexByte(s string, c byte) int {
+    for i := 0; i < len(s); i++ {
+        if s[i] == c { return i }
+    }
+    return -1
+}
+func pos(i int) int { calls++; return i }
+func read(s string, i int) byte { return s[pos(i)] }
+func main() {
+    if indexByte("a\x00é\xff", 0xff) != 4 || indexByte("", 0) != -1 ||
+        indexByte("abc", 'b') != 1 || indexByte("abc", 'z') != -1 ||
+        read("é", 1) != 0xa9 || calls != 1 { panic("raw byte index") }
+}
+'''
+
+
+def test_named_string_index_checks_unsigned_bound_before_load():
+    ir = str(compile_go(INDEX_NATIVE, "index_native.go"))
+    assert "string_index_ready" in ir and "string_index_bad" in ir and "icmp ult i64" in ir
+    for constant in ("-1", "uint64(18446744073709551615)"):
+        source = "package main;func read(s string)byte{return s[" + constant + "]};func main(){}"
+        with pytest.raises(GoDiagnostic, match="nonnegative and representable as int"):
+            compile_go(source)
+    with pytest.raises(GoDiagnostic, match="owned Linux terminal panic"):
+        compile_go(INDEX_NATIVE, "index_native.go", target_triple="arm64-apple-darwin")
+
+
+@pytest.mark.integration
+@pytest.mark.pcc_gate(env="PCC_GO_REFERENCE")
+def test_dynamic_string_index_native_reference_success_and_panics(tmp_path, monkeypatch):
+    import os
+    from tests.go.owned_execution import compile_reference
+
+    for label, source in [
+        ("loop", INDEX_NATIVE),
+        ("negative", 'package main;func read(s string,n int)byte{return s[n]};func main(){_=read("abc",-1)}'),
+        ("equal", 'package main;func read(s string,n int)byte{return s[n]};func main(){_=read("abc",3)}'),
+        ("unsigned", 'package main;func read(s string,n uint64)byte{return s[n]};func main(){_=read("abc",18446744073709551615)}'),
+        ("empty", 'package main;func read(s string,n int)byte{return s[n]};func main(){_=read("",0)}'),
+    ]:
+        units = (("byteindex.go", source),)
+        with monkeypatch.context() as denied:
+            forbid_external_compiler(denied)
+            artifact = compile_owned(units)
+        native = tmp_path / (label + "-owned")
+        write_artifact(artifact, native)
+        reference = compile_reference(units, tmp_path / label, compiler=os.environ["PCC_GO_REFERENCE"],
+                                      cache=os.environ["PCC_GO_REFERENCE_CACHE"])
+        assert (reference.parent / "byteindex.go").read_bytes() == source.encode()
+        actual, oracle = run(native), run(reference)
+        if label == "loop":
+            assert actual == oracle == Execution(0, b"", b"")
+        else:
+            assert (actual.returncode, actual.stdout) == (oracle.returncode, oracle.stdout) == (2, b"")
+            assert actual.stderr.rstrip(b"\n") == oracle.stderr.splitlines()[0]

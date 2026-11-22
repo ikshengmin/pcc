@@ -590,7 +590,7 @@ class Lowerer:
                 panic_high = self.function.append_basic_block("string_slice_bad_high")
                 self.builder.cbranch(self.builder.icmp_unsigned("<=", high, extent), check_low, panic_high)
                 self.builder.position_at_end(panic_high)
-                self.builtin_io.string_slice_bounds_panic(high, extent, signed=signedness[1], high=True)
+                self.builtin_io.string_bounds_panic(high, extent, signed=signedness[1], mode="slice_high")
                 self.builder.position_at_end(check_low)
             if high is None:
                 high = extent
@@ -599,7 +599,7 @@ class Lowerer:
                 panic_low = self.function.append_basic_block("string_slice_bad_low")
                 self.builder.cbranch(self.builder.icmp_unsigned("<=", low, high), ready, panic_low)
                 self.builder.position_at_end(panic_low)
-                self.builtin_io.string_slice_bounds_panic(low, high, signed=signedness[0], high=False)
+                self.builtin_io.string_bounds_panic(low, high, signed=signedness[0], mode="slice_low")
                 self.builder.position_at_end(ready)
             data = self.builder.extract_value(header, 0)
             length = high
@@ -619,14 +619,27 @@ class Lowerer:
             if isinstance(dtype, PointerType):
                 dtype = underlying(dtype.element)
             return ir.Constant(ir_type(expr.type), dtype.count)
-        if expr.kind == "index" and is_string(expr.args[0].type):
+        if expr.kind in ("index", "checked_string_index") and is_string(expr.args[0].type):
+            checked = expr.kind == "checked_string_index"
+            if checked and "linux" not in self.module.triple.split("-"):
+                raise UnsupportedGo(expr.token, "go.unsupported.string-bounds-panic",
+                                    "checked string index currently requires owned Linux terminal panic support")
             base, index = expr.args
             value = self.expression(base)
-            pointer = self.builder.extract_value(value, 0)
+            signed = integer_signed(index.type)
             offset = self.expression(index)
             if offset.type.width < 64:
-                extend = self.builder.sext if integer_signed(index.type) else self.builder.zext
+                extend = self.builder.sext if signed else self.builder.zext
                 offset = extend(offset, ir.IntType(64))
+            if checked:
+                length = self.builder.extract_value(value, 1)
+                ready = self.function.append_basic_block("string_index_ready")
+                failed = self.function.append_basic_block("string_index_bad")
+                self.builder.cbranch(self.builder.icmp_unsigned("<", offset, length), ready, failed)
+                self.builder.position_at_end(failed)
+                self.builtin_io.string_bounds_panic(offset, length, signed=signed, mode="index")
+                self.builder.position_at_end(ready)
+            pointer = self.builder.extract_value(value, 0)
             return self.builder.load(self.builder.gep(pointer, [offset]))
         if expr.kind == "field":
             if expr.addressable:

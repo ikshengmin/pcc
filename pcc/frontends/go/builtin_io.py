@@ -184,26 +184,30 @@ class BuiltinIO:
         self.syscall(self.owner.builder, self.exit_number, number(2))
         self.owner.builder.unreachable()
 
-    def string_slice_bounds_panic(self, value, limit, *, signed, high):
-        """Report the terminal Go two-index string-slice bounds error."""
+    def string_bounds_panic(self, value, limit, *, signed, mode):
+        """Report the terminal bounds error for a byte index or string view."""
+        prefix = {
+            'index': b'index out of range [',
+            'slice_high': b'slice bounds out of range [:',
+            'slice_low': b'slice bounds out of range [',
+        }[mode]
+        low = mode == 'slice_low'
         owner = self.owner
         b = owner.builder
-        self.text(b'panic: runtime error: slice bounds out of range [')
-        if high:
-            self.text(b':')
+        self.text(b'panic: runtime error: ' + prefix)
         b.call(self.integer_helper(), [value, ir.Constant(ir.IntType(1), int(signed))])
-        self.text(b']' if high else b':')
-        tail = owner.function.append_basic_block('string_slice_panic_tail')
+        self.text(b':' if low else b']')
+        tail = owner.function.append_basic_block('string_bounds_panic_tail')
         if signed:
-            nonnegative = owner.function.append_basic_block('string_slice_panic_limit')
+            nonnegative = owner.function.append_basic_block('string_bounds_panic_limit')
             b.cbranch(b.icmp_signed('<', value, number(0)), tail, nonnegative)
             b.position_at_end(nonnegative)
-        if high:
+        if not low:
             self.text(b' with length ')
         b.call(self.integer_helper(), [limit, ir.Constant(ir.IntType(1), 0)])
         b.branch(tail)
         b.position_at_end(tail)
-        if not high:
+        if low:
             self.text(b']')
         self.text(b'\n')
         self.syscall(b, self.exit_number, number(2))

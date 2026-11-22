@@ -723,3 +723,14 @@ The exact source-instance probe advances to dynamic string byte
 indexing in `internal/cpu/cpu.go:293:8`. One hundred twenty-nine
 adjacent and 57 existing native/reference tests passed. The catalog,
 its global initialization and whole upstream execution remain unbuilt.
+
+Named string byte indexing now checks the unsigned offset against
+the descriptor length before any data access. A native indexByte-like
+loop, non-ASCII raw bytes and one-time index operand evaluation matched
+Go 1.27.3; four out-of-bounds forms matched the initial panic line and
+terminal status. The same tests retain the original checked-slice
+behavior, including the benchmark-shaped named input. One hundred
+twenty-one adjacent and four native/reference nodes passed. The exact
+source probe now reaches the original `options = []option{...}` write
+at `internal/cpu/cpu_x86.go:73:2`; catalog initialization and upstream
+native execution are still unsupported.

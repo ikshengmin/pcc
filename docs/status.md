@@ -225,15 +225,16 @@ in the relevant section or issue and removes the entry.
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any. Next:
-   qualify dynamic byte indexing on a named string for the original
-   `indexByte` loop at `internal/cpu/cpu.go:293:8`. The opt-in checker
-   now admits the catalog's copied-field loop and static pointee facts,
-   not native catalog storage. See the
+   type-check the proved catalog initializer and bounded append sites
+   at `internal/cpu/cpu_x86.go:73:2` without emitting native global
+   storage. Named string byte indexing now runs with checked bounds on
+   Linux and advances the opt-in source probe through `indexByte`.
+   See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - Go checked borrowed string byte indexing: Codex, Linux x86-64, 2026-11-22 05:18 UTC, area frontend-go
+   - none
 4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
