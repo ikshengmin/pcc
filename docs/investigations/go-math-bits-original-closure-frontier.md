@@ -601,3 +601,14 @@ bounded native process also observed real allocation failure leaving
 its old owner and output untouched. Thirty-six adjacent and five native
 checks passed. Geometric capacity may differ from Go's implementation;
 only the full base view, logical contents and ownership are qualified.
+
+A zero-offset scalar slice with spare capacity now writes its next
+element directly through the existing owner. An explicit unsigned
+length bound rejects full, out-of-range and negative-as-word indexes
+before data access, and an incompatible live descriptor is rejected.
+No allocation, root registration, or replacement occurs on this
+path. Two native GC0 handles saw the same mutation after collection;
+the surviving alias continued to append after the original handle
+was dropped. The raw words matched Go 1.27.3. Thirty-seven adjacent
+and six native checks passed. The caller's logical length still needs
+to flow through nil/in-capacity/full branches in one owning state.

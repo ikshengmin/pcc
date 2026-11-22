@@ -25,6 +25,7 @@ class ScalarSliceRuntime:
         self.descriptors = {}
         self.first_appends = {}
         self.full_appends = {}
+        self.in_capacity_appends = {}
 
     def descriptor(self, element):
         layout = scalar_slice_backing_plan(element).layout
@@ -195,6 +196,57 @@ class ScalarSliceRuntime:
         builder.position_at_end(done)
         builder.ret(status)
         self.full_appends[element] = fn
+        return fn
+
+    def in_capacity_append_function(self, element):
+        """Write a scalar in a zero-offset view without changing its owner.
+
+        The supplied logical length is the first unused element in this view,
+        not stored as shared backing metadata. Advance that view's length only
+        after success. This helper neither allocates nor grows a full backing.
+        """
+        layout = scalar_slice_backing_plan(element).layout
+        if element in self.in_capacity_appends:
+            return self.in_capacity_appends[element]
+        pointer = ir.IntType(8).as_pointer()
+        i32 = ir.IntType(32)
+        i64 = ir.IntType(64)
+        word = ir.IntType(8 * layout.element_stride)
+        externals = {
+            "pcc_rt_managed_descriptor": ir.FunctionType(pointer, [pointer]),
+            "pcc_rt_managed_element_count": ir.FunctionType(i64, [pointer]),
+            "pcc_rt_managed_data": ir.FunctionType(pointer, [pointer]),
+        }
+        bindings = {name: self._matching_function(name, signature) for name, signature in externals.items()}
+        for name, signature in externals.items():
+            if bindings[name] is None:
+                bindings[name] = ir.Function(self.module, signature, name)
+        descriptor = self.descriptor(element)
+        fn = ir.Function(self.module, ir.FunctionType(i32, [pointer, i64, word]),
+                         "__pcc_go_scalar_append_in_capacity_" + element)
+        fn.linkage = "internal"
+        owner, length, value = fn.args
+        builder = ir.IRBuilder(fn.append_basic_block("entry"))
+        classify = fn.append_basic_block("scalar_in_capacity_classify")
+        bounds = fn.append_basic_block("scalar_in_capacity_bounds")
+        invalid = fn.append_basic_block("scalar_in_capacity_invalid")
+        write = fn.append_basic_block("scalar_in_capacity_write")
+        builder.cbranch(builder.icmp_unsigned("==", owner, ir.Constant(pointer, None)), invalid, classify)
+        builder.position_at_end(classify)
+        identity = builder.call(bindings["pcc_rt_managed_descriptor"], [owner])
+        matches = builder.icmp_unsigned("==", identity, builder.bitcast(descriptor, pointer))
+        builder.cbranch(matches, bounds, invalid)
+        builder.position_at_end(bounds)
+        capacity = builder.call(bindings["pcc_rt_managed_element_count"], [owner])
+        builder.cbranch(builder.icmp_unsigned("<", length, capacity), write, invalid)
+        builder.position_at_end(invalid)
+        builder.ret(ir.Constant(i32, _BAD_LAYOUT))
+        builder.position_at_end(write)
+        payload = builder.call(bindings["pcc_rt_managed_data"], [owner])
+        slot = builder.gep(builder.bitcast(payload, word.as_pointer()), [length])
+        builder.store(value, slot)
+        builder.ret(ir.Constant(i32, 0))
+        self.in_capacity_appends[element] = fn
         return fn
 
 

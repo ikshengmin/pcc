@@ -343,3 +343,21 @@ def test_opt_in_full_scalar_growth_copies_after_allocation_before_publishing():
     assert "ret i32" in done
     with pytest.raises(ManagedContractError, match="qualified scalar"):
         runtime.full_append_function("int")
+
+
+def test_opt_in_in_capacity_append_checks_length_and_does_not_allocate():
+    from pcc.frontends.go.scalar_slice_runtime import ScalarSliceRuntime
+    from pcc.ir.compat import ir
+
+    module = ir.Module()
+    module.triple = "x86_64-unknown-linux-gnu"
+    runtime = ScalarSliceRuntime(module, gc_backend=0)
+    append = runtime.in_capacity_append_function("uintptr")
+    assert append is runtime.in_capacity_append_function("uintptr")
+    before, write = str(module).split("scalar_in_capacity_write:", 1)
+    assert "icmp ult i64" in before and "@pcc_rt_managed_element_count" in before
+    assert "@pcc_rt_managed_data" in write and "store i64" in write
+    assert "@pcc_rt_managed_alloc" not in str(module)
+    assert "@memcpy" not in str(module)
+    with pytest.raises(ManagedContractError, match="qualified scalar"):
+        runtime.in_capacity_append_function("int")
