@@ -347,9 +347,12 @@ in the relevant section or issue and removes the entry.
    The independent [GC2 list review](https://github.com/ikshengmin/pcc/blob/105122d146e18836f0ed3e08c7d3aac3a684475d/docs/investigations/gc2-exact-list-worker-review.md)
    now runs a rooted 32-slot exact-list native kernel: 3 GC2 executions,
    4 other-backend rejection controls, and 8 ABI checks passed on Linux.
-   It is not selected by ordinary marking. Next verify claim ownership
-   and stopped-world finish against an in-flight native scan before
-   enabling any workers. This branch is not part of the pacer A/B.
+   It is not selected by ordinary marking. Stock Linux now also shows
+   that list-scan credit and its token are visible at the stopped cut
+   only if the scan holds the no-park container lock. Next verify the
+   full claim across the gap between dequeue and lock, then across
+   unlock and retire or abort, before enabling workers. This branch is
+   not part of the pacer A/B.
    Ready GC units that wait on no review, for another agent or whenever the
    GC3 unit is claimed or blocked, in this order: the GC plan's step 5
    (GC0 atomic reference-count CPU share, one hour at most), then step 4
@@ -361,7 +364,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 in-flight list scan stopped-world native boundary: Codex, Linux x86-64, 2026-11-22 09:46 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

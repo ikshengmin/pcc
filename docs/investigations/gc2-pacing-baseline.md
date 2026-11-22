@@ -159,3 +159,17 @@ termination or a throughput claim. The atomic shade path can allocate
 a gray batch; an integration candidate must qualify bounded failure
 handling and must not assume that captured slots remain valid
 after container unlock.
+
+A stopped-world contrast makes the list callback reach a real stop
+request before marking its one child. With the container lock, the
+callback's poll cannot park: it shades and flushes, and the stop owner
+observes the child's credit and exact queued token. Without the lock, an
+otherwise quiescent control list parks before shading; the stop owner
+observes neither credit nor token until resume. Both variants run on the
+same stock owned runtime with automatic GC disabled, and each passed in
+three fresh Linux processes. The control list is not mutated and is
+rooted in both cases. This qualifies the scan-to-publication ordering
+under the lock, not ownership of a claim before lock acquisition or
+after release. A worker can park outside its container-locked section,
+so a scheduler still needs an explicit in-flight token and follow-up
+finish/abort tests.
