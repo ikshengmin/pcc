@@ -1,4 +1,4 @@
-"""Native, test-invoked #9 correctness arm: one finalizer and one refresh."""
+"""Native, test-invoked #9 correctness arm: rescue or terminal settlement."""
 import os
 from pathlib import Path
 
@@ -9,7 +9,7 @@ from tests.python.owned_regression_support import _record_execution, explicit_ow
 
 
 @pytest.mark.integration
-def test_native_acyclic_finalizer_recheck_protects_rescued_child(tmp_path, explicit_owned_runtime):
+def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, explicit_owned_runtime):
     repo = Path(__file__).resolve().parents[2]
     source = Path(__file__).with_name("fixtures") / "gc_acyclic_finalizer_rescue.c"
     binary = tmp_path / "acyclic_rescue"

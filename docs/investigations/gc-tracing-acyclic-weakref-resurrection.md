@@ -248,3 +248,14 @@ GC4 retains its current stopped-world user-code policy and is not
 included in this resumed-window reference arm. The fixture does not
 yet retire the non-resurrected parent's fields or dispatch the
 child's terminal callback; production #9 remains open.
+
+The same reference arm now settles the no-rescue pair. It removes the
+real instance field and verifies it is null before opening the child's
+finalizer window. A new stopped recheck precedes invalidating the
+original callback weakref. The exact event order is parent finalizer,
+child finalizer, then weak callback, each outside the stopped world;
+duplicate invalidation delivers nothing. The rescue arm still leaves
+the original weakref live. The linked Linux pcc0 program passed all
+six GC1–3 combinations ten times each. This fixture owns exactly one
+parent-to-child edge, does not generalize layout retirement or handle
+a reentrant weak callback yet, and is not called by shipped sweep.
