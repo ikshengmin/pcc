@@ -371,8 +371,13 @@ in the relevant section or issue and removes the entry.
    instrumented w4 hold samples (four pairs). Three matched allocation
    probes identify 19.7k/116.1k/115.7k gray allocations versus essentially
    identical 1 KiB reserves, almost every publication a singleton. The
-   544-byte full batch rounds to 1 KiB. Next: compact forced gray batches
-   without changing the publication contract; Linux native A/B first.
+   544-byte full batch rounds to 1 KiB. A 64-byte compact batch passed
+   46 model/ABI checks and native GC1–4 queue tests, but no production
+   patch was published: 48k allocations w1 five pairs inside drift; w4
+   three complete pairs, no stable gain or mark recovery. Two more w4
+   attempts failed memory preflight; the one complete 120k w4 pair was
+   worse. Next: bound raw allocations with reuse of already drained
+   batches; don't change the flush protocol.
    Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
    no-observable performance remain unqualified.
    Native Linux GC2 now reproduces zero mark completions
@@ -427,7 +432,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims: pccDot (2026-11-22 22:19 UTC), compact gray-batch review trial: vary private allocation size under the existing flush request, preserve release/consume and epoch contracts, run focused native controls and paired Linux evidence; no master merge.
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
