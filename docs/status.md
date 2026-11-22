@@ -215,6 +215,12 @@ in the relevant section or issue and removes the entry.
    not the live caller stack or parked mutator snapshots. Legacy root
    regression lane: 111 passed; three GC3 forwarding-model failures
    reproduced on the review parent. No master runtime change.
+   [Review commit 23e730f](https://github.com/ikshengmin/pcc/commit/23e730f23b1cba88c461668961004188b30bbe73)
+   resolves barrier shades against current roots and candidate edges before
+   the oracle. Linux: 59 focused checks passed. Both GC1/3 preserve a
+   registered sibling rescue with zero full rechecks. Withdrawn publication
+   and an indirect write through an old live list use one full recheck and
+   match CPython's observable outcome.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue; remove repeated candidate/weakref-list walks before
    scale tests. Mixed cyclic graphs, arbitrary raw stack lifetimes,
@@ -271,8 +277,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Resolve layered issue 9 insertion shades against current roots before fallback: Codex, Linux x86-64, 2026-11-22 17:16 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
