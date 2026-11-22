@@ -116,7 +116,7 @@ def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_run
     expected = hashlib.sha256(blob).hexdigest()
     resolved = RING.capture_sealed_cooperative_child(binary, expected, env={"PATH": "/nonexistent"})
     assert any(sample.file_offset is not None for sample in resolved)
-    assert sum(sample.sample.period_ns for sample in resolved) > 0
+    assert sum(sample.sample.period for sample in resolved) > 0
     original_capture = RING.capture_cooperative_child
 
     def move_original_after_open(argv, **kwargs):
@@ -312,3 +312,20 @@ def test_owned_linux_exact_instruction_calibration(tmp_path):
         # Task-clock sampling is not evidence that the processor spent one
         # sample's worth of time executing the instruction at each exact IP.
         print({"locked": locked, **result})
+
+
+def test_precise_cycle_request_is_hardware_and_does_not_relax_user_scope():
+    attr = RING._event_attributes(500_000, precise_cycles=True)
+    kind, size, code, period, samples, read_format, flags = struct.unpack_from("=IIQQQQQ", attr)
+    assert (kind, size, code, period) == (0, 64, 0, 500_000)
+    assert samples == 259 and read_format == 19
+    assert flags == (2 << 15) | (1 << 6) | (1 << 5) | 1
+
+
+def test_precise_capture_refuses_even_one_unqualified_ip():
+    exact = struct.pack("=IHH", 9, (1 << 14) | 2, 32) + _sample()[8:]
+    assert RING._read_frozen_ring(_ring(exact), require_exact_ip=True) == [
+        RING.TaskSample(0x2000, 7, 9, 500_000),
+    ]
+    with pytest.raises(ValueError, match="did not carry an exact IP"):
+        RING._read_frozen_ring(_ring(exact + _sample()), require_exact_ip=True)

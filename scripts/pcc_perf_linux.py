@@ -24,6 +24,8 @@ from dataclasses import dataclass
 
 # Linux UAPI: linux/perf_event.h and the architecture syscall tables.
 PERF_EVENT_OPEN = {"x86_64": 298, "aarch64": 241}
+PERF_TYPE_HARDWARE = 0
+PERF_COUNT_HW_CPU_CYCLES = 0
 PERF_TYPE_SOFTWARE = 1
 PERF_COUNT_SW_CPU_CLOCK = 0
 PERF_ATTR_SIZE_VER0 = 64
@@ -37,6 +39,7 @@ EVENT_READ = struct.Struct("=QQQQ")
 PERF_ATTR_DISABLED = 1 << 0
 PERF_ATTR_EXCLUDE_KERNEL = 1 << 5
 PERF_ATTR_EXCLUDE_HV = 1 << 6
+PERF_ATTR_REQUEST_ZERO_SKID = 2 << 15
 PERF_FLAG_FD_CLOEXEC = 1 << 3
 PERF_EVENT_IOC_ENABLE = 0x2400
 PERF_EVENT_IOC_DISABLE = 0x2401
@@ -45,6 +48,7 @@ PERF_RECORD_SAMPLE = 9
 PERF_RECORD_LOST_SAMPLES = 13
 PERF_RECORD_MISC_CPUMODE_MASK = 0b111
 PERF_RECORD_MISC_USER = 2
+PERF_RECORD_MISC_EXACT_IP = 1 << 14
 MMAP_DATA_HEAD = 1024
 RECORD_HEADER = struct.Struct("=IHH")
 SAMPLE = struct.Struct("=QIIQ")
@@ -68,7 +72,7 @@ class TaskSample:
     ip: int
     pid: int
     tid: int
-    period_ns: int
+    period: int
 
 
 @dataclass(frozen=True)
@@ -128,7 +132,7 @@ def read_executable_image(data: bytes) -> ExecutableImage:
     return image
 
 
-def _read_frozen_ring(mapping) -> list[TaskSample]:
+def _read_frozen_ring(mapping, *, require_exact_ip: bool = False) -> list[TaskSample]:
     """Read only after disabling this non-inherited event."""
     if len(mapping) < MMAP_DATA_HEAD + 32:
         raise ValueError("truncated perf metadata")
@@ -157,26 +161,37 @@ def _read_frozen_ring(mapping) -> list[TaskSample]:
             raise ValueError(f"unexpected perf record type or layout: {kind}")
         if (misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER:
             raise ValueError("unexpected non-user perf sample")
+        if require_exact_ip and (misc & PERF_RECORD_MISC_EXACT_IP) == 0:
+            raise ValueError("hardware sample did not carry an exact IP")
         sample = TaskSample(*SAMPLE.unpack(payload))
-        if not sample.ip or not sample.pid or not sample.tid or not sample.period_ns:
+        if not sample.ip or not sample.pid or not sample.tid or not sample.period:
             raise ValueError("incomplete perf sample")
         samples.append(sample)
         tail += length
     return samples
 
 
-def _open_task(tid: int, period_ns: int) -> int:
+def _event_attributes(period: int, *, precise_cycles: bool) -> bytearray:
+    attr = bytearray(PERF_ATTR_SIZE_VER0)
+    kind, event = PERF_TYPE_SOFTWARE, PERF_COUNT_SW_CPU_CLOCK
+    flags = PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HV
+    if precise_cycles:
+        kind, event = PERF_TYPE_HARDWARE, PERF_COUNT_HW_CPU_CYCLES
+        flags |= PERF_ATTR_REQUEST_ZERO_SKID
+    struct.pack_into(
+        "=IIQQQQQ", attr, 0, kind, len(attr), event, period,
+        PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_PERIOD,
+        PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING | PERF_FORMAT_LOST,
+        flags,
+    )
+    return attr
+
+
+def _open_task(tid: int, period: int, *, precise_cycles: bool = False) -> int:
     if (sys.platform != "linux" or sys.byteorder != "little"
             or platform.machine() not in PERF_EVENT_OPEN):
         raise OSError("task-clock preflight supports Linux x86-64 and arm64")
-    attr = bytearray(PERF_ATTR_SIZE_VER0)
-    struct.pack_into(
-        "=IIQQQQQ", attr, 0, PERF_TYPE_SOFTWARE, len(attr),
-        PERF_COUNT_SW_CPU_CLOCK, period_ns,
-        PERF_SAMPLE_IP | PERF_SAMPLE_TID | PERF_SAMPLE_PERIOD,
-        PERF_FORMAT_TOTAL_TIME_ENABLED | PERF_FORMAT_TOTAL_TIME_RUNNING | PERF_FORMAT_LOST,
-        PERF_ATTR_DISABLED | PERF_ATTR_EXCLUDE_KERNEL | PERF_ATTR_EXCLUDE_HV,
-    )
+    attr = _event_attributes(period, precise_cycles=precise_cycles)
     payload = (ctypes.c_char * len(attr)).from_buffer(attr)
     libc = ctypes.CDLL(None, use_errno=True)
     syscall = libc.syscall
@@ -186,13 +201,14 @@ def _open_task(tid: int, period_ns: int) -> int:
                  ctypes.c_ulong(PERF_FLAG_FD_CLOEXEC))
     if fd < 0:
         code = ctypes.get_errno()
-        raise OSError(code, os.strerror(code))
+        kind = "precise hardware cycles" if precise_cycles else "user task-clock"
+        raise OSError(code, f"kernel rejected perf_event_open for {kind}: {os.strerror(code)}")
     return fd
 
 
 @contextmanager
-def _task_ring(tid: int, period_ns: int, data_pages: int = RING_PAGES):
-    fd = _open_task(tid, period_ns)
+def _task_ring(tid: int, period: int, data_pages: int = RING_PAGES, *, precise_cycles: bool = False):
+    fd = _open_task(tid, period, precise_cycles=precise_cycles)
     try:
         size = os.sysconf("SC_PAGE_SIZE") * (1 + data_pages)
         with mmap.mmap(fd, size, flags=mmap.MAP_SHARED,
@@ -222,11 +238,11 @@ def _decode_event_read(data: bytes) -> tuple[int, int]:
     return value, running
 
 
-def _read_capture(fd: int, mapping) -> tuple[list[TaskSample], int, int]:
+def _read_capture(fd: int, mapping, *, require_exact_ip: bool = False) -> tuple[list[TaskSample], int, int]:
     # Even if a full ring cannot enqueue PERF_RECORD_LOST, the explicit
     # kernel lost counter must be zero. Never normalize a multiplexed run.
     clock_ns, running_ns = _decode_event_read(os.read(fd, EVENT_READ.size))
-    return _read_frozen_ring(mapping), clock_ns, running_ns
+    return _read_frozen_ring(mapping, require_exact_ip=require_exact_ip), clock_ns, running_ns
 
 
 def _verify_task(samples: list[TaskSample], pid: int, tid: int) -> None:
@@ -236,22 +252,24 @@ def _verify_task(samples: list[TaskSample], pid: int, tid: int) -> None:
         raise ValueError("task-clock capture included an unexpected thread")
 
 
-def task_clock_preflight(cpu_ms: int = 80) -> dict:
+def task_clock_preflight(cpu_ms: int = 80, *, precise_cycles: bool = False) -> dict:
     if not 10 <= cpu_ms <= 250:
         raise ValueError("cpu-ms must be between 10 and 250")
-    period_ns = 500_000
-    with _task_ring(0, period_ns) as (fd, mapping):
+    period = 500_000
+    with _task_ring(0, period, precise_cycles=precise_cycles) as (fd, mapping):
         deadline = time.monotonic_ns() + 3_000_000_000
         start = time.thread_time_ns()
         with _enabled(fd):
             while time.thread_time_ns() - start < cpu_ms * 1_000_000:
                 if time.monotonic_ns() >= deadline:
                     raise ValueError("task-clock preflight exceeded wall limit")
-        samples, clock_ns, running_ns = _read_capture(fd, mapping)
+        samples, value, running_ns = _read_capture(fd, mapping, require_exact_ip=precise_cycles)
     _verify_task(samples, os.getpid(), threading.get_native_id())
-    return {"scope": "calling-thread-user-cpu-only", "period_ns": period_ns,
+    quantities = ({"period_cycles": period, "counted_cycles": value, "exact_ip": True}
+                  if precise_cycles else {"period_ns": period, "clock_ns": value})
+    return {"scope": "calling-thread-user-cpu-only", "running_ns": running_ns,
             "samples": len(samples), "distinct_ips": len({s.ip for s in samples}),
-            "kernel_lost": 0, "clock_ns": clock_ns, "running_ns": running_ns}
+            "kernel_lost": 0, **quantities}
 
 
 def _receive_marker(pipe, marker: bytes, timeout: float) -> None:

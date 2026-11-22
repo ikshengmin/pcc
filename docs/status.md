@@ -165,13 +165,14 @@ in the relevant section or issue and removes the entry.
   dispatch change, nursery activation or buffer-exporter admission.
   Use the GC0/GC1/GC2 ready units below while awaiting review.
 
-- GC0 atomic reference-count CPU share: Linux has working userspace
-  perf events, but no `perf` executable, no `pcc_perf top` Linux sampler,
-  and no sealed handler arm or gateway package in this checkout.
-  Recommendation: start with a sealed macOS arm and the profile commands in
-  [the measurement note](investigations/gc0-atomic-attribution-preflight.md),
-  or qualify a Linux `pcc_perf` sampler and provide the same gateway source.
-  Do not treat reference-count call totals as atomic-instruction CPU share.
+- GC0 atomic reference-count CPU share: Linux has bounded user task-clock
+  transport, but the owned atomic control showed exact-IP misses and the
+  kernel refused the precise hardware cycle event (ENOENT). No sealed
+  gateway arm is available here. Recommendation: use a host with a
+  qualified attribution method and the same sealed workload; the
+  [measurement note](investigations/gc0-atomic-attribution-preflight.md)
+  records the preflights and Mac localization commands. Neither
+  software instruction PCs nor helper call totals qualify the 10% gate.
 
 - GC1 review candidate has focused Linux evidence but waits on the
   unchanged-GC0 control and maximum-pause comparison. Run the exact
@@ -315,8 +316,9 @@ in the relevant section or issue and removes the entry.
    (33 checks). The owned x86-64 calibration then ran 20 million locked
    increments with zero exact-start task-clock hits at the atomic opcode
    in three trials. This disproves using task-clock PCs for the GC0
-   atomic CPU-share gate. Next qualify precise hardware IPs or leave that
-   gate open; the gateway arm remains unavailable here. The native GC1 scheduling baseline verifies
+   atomic CPU-share gate. This host rejected the exact hardware event;
+   leave the gate open and take other ready GC work. The gateway
+   arm remains unavailable here. The native GC1 scheduling baseline verifies
    one CMS startup on each GC1–4 and none on GC0, with a rooted object
    surviving two explicit collections. A separate native GC1 workload
    reached an automatic mark commit and sweep without explicit collection
@@ -437,7 +439,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC0 Linux precise hardware CPU cycle capability with exact IP only: Codex, Linux x86-64, 2026-11-22 11:26 UTC, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

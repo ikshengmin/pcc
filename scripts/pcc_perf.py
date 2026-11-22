@@ -1222,6 +1222,8 @@ def main(argv: list[str] | None = None) -> int:
 
     probe = commands.add_parser("profile-preflight")
     probe.add_argument("--cpu-ms", type=int, default=80)
+    probe.add_argument("--precise-cycles", action="store_true",
+                       help="require hardware cycles and an exact IP on every sample")
 
     child = commands.add_parser("_build")
     child.add_argument("arm", type=Path)
@@ -1307,9 +1309,11 @@ def main(argv: list[str] | None = None) -> int:
         from scripts.pcc_perf_linux import task_clock_preflight
 
         try:
-            print(json.dumps(task_clock_preflight(args.cpu_ms), sort_keys=True))
+            result = task_clock_preflight(args.cpu_ms, precise_cycles=args.precise_cycles)
+            print(json.dumps(result, sort_keys=True))
         except (OSError, ValueError) as exc:
-            raise SystemExit(f"Linux task-clock preflight: {exc}") from exc
+            event = "precise cycles" if args.precise_cycles else "task-clock"
+            raise SystemExit(f"Linux {event} preflight: {exc}") from exc
         return 0
     if args.command == "arm":
         if args.gc2_pacer_percent is None:

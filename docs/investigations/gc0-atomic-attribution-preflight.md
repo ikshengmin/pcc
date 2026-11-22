@@ -115,3 +115,16 @@ follows. Thirty-five focused nodes passed. Next test whether the
 Linux host can actually provide precision-qualified hardware samples;
 if not, keep this tool as transport/localization and leave the atomic
 CPU-share gate open.
+
+`uv run python scripts/pcc_perf.py profile-preflight --cpu-ms 80 --precise-cycles`
+requests user-only hardware CPU cycles with the Linux UAPI zero-skid
+request. Success would additionally require the explicit per-record
+`PERF_RECORD_MISC_EXACT_IP` bit on every sample, full scheduling and
+zero loss; a software fallback is not considered success. The same
+Linux host refused `perf_event_open` for that event with ENOENT. The
+ordinary software preflight still ran. The bounded transport and
+measurement-tool tests passed 116 focused nodes, including synthetic
+unmarked-record rejection. There are no hardware samples, no GC0
+application CPU-share result and no biased-counting decision. Keep
+the gate open until an exact attribution method and the sealed same
+gateway workload are available.
