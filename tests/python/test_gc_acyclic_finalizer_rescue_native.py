@@ -30,9 +30,11 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
                 ), (lane, result)
 
     # Count actual visits with the same two candidates and three sizes
-    # of unrelated live heap, both with a direct root and a journaled edge.
+    # of unrelated live heap, with direct, old-owner and new-owner publication.
+    # An incomplete journal must reach the full oracle, not return false dead.
     for backend in (1, 2, 3):
-        for source, bound in (("bounded", 2), ("journal", 3)):
+        for source, expected in (("bounded", "bounded 3 2"), ("journal", "bounded 3 3"),
+                                 ("allocated", "bounded 3 3"), ("fallback", "fallback full")):
             visits = []
             for size in (128, 512, 2048):
                 result = _record_execution(
@@ -43,7 +45,7 @@ def test_native_acyclic_finalizer_recheck_and_terminal_child_order(tmp_path, exp
                 assert result["returncode"] == 0 and not result["stderr"], (
                     backend, source, size, result)
                 metrics, bounded, marker = result["stdout"].splitlines()
-                assert bounded == f"bounded 3 {bound}"
+                assert bounded == expected
                 assert marker == "GC_ACYCLIC_FINALIZER_RESCUE_OK"
                 name, calls, nodes, saved, _elapsed = metrics.split()
                 assert (name, int(calls), int(saved)) == ("recheck", 1, 2)

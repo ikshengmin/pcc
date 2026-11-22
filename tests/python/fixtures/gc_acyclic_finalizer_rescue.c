@@ -28,7 +28,7 @@ enum { PARENT_FINALIZER, CHILD_FINALIZER };
 enum { FIRST_PARENT = 1, SECOND_CHILD = 2, THIRD_WEAK = 3 };
 
 static PyObject *restored, *live_heap, *outside_owner;
-static int64_t use_old_owner, owner_in_journal;
+static int64_t use_old_owner, use_new_owner, owner_in_journal, journal_incomplete;
 /* The two candidate identities stand in for collector metadata, not roots.
  * Never load those raw pointers into a live recheck frame. */
 static PyObject *candidate_parent, *candidate_child;
@@ -51,7 +51,12 @@ static PyObject *parent_del(PyObject *self) {
     parent_calls++;
     parent_position = ++sequence;
     observe_callback_boundary();
-    if (should_rescue && use_old_owner) {
+    if (should_rescue && (use_old_owner || use_new_owner)) {
+        if (use_new_owner) outside_owner = py_list_new(1);
+        if (!outside_owner) {
+            callback_errors++;
+            return py_int_from_i64(0);
+        }
         py_list_append(outside_owner, self);
         if (py_list_len(outside_owner) != 1) callback_errors++;
         else owner_in_journal = 1; /* Explicit record by the reference arm only. */
@@ -212,6 +217,7 @@ static int bounded_recheck(int64_t sealed_epoch, int64_t slots_left, int64_t wit
     if (restored == candidate_parent) trial.found = REACHED_PARENT;
     else if (restored != NULL) return 0;
     int64_t examined = 0, seen = 0;
+    if (with_journal && journal_incomplete) return 0;
     if (with_journal && owner_in_journal) {
         if (!inspect_owner_slots(outside_owner, &slots_left, &trial)) return 0;
         examined++;
@@ -238,7 +244,7 @@ static int check_first_verdict(void) {
         return 0;
     }
     if (parent_calls != 1 || child_calls || weak_calls || ran_while_stopped) return 0;
-    if (use_old_owner) {
+    if (use_old_owner || use_new_owner) {
         if (restored || !owner_in_journal || py_list_get(outside_owner, 0) != candidate_parent)
             return 0;
     } else if (should_rescue ? restored != candidate_parent : restored != NULL) return 0;
@@ -254,7 +260,9 @@ int main(int argc, char **argv) {
     reentry = argc == 3 && argv[2][0] == 'n';
     int64_t heap_size = argc == 4 ? atoi(argv[3]) : 0;
     use_old_owner = argc == 4 && argv[2][0] == 'j';
-    int trial_bounded = (argc == 4 && argv[2][0] == 'b') || use_old_owner;
+    use_new_owner = argc == 4 && (argv[2][0] == 'a' || argv[2][0] == 'f');
+    journal_incomplete = argc == 4 && argv[2][0] == 'f';
+    int trial_bounded = (argc == 4 && argv[2][0] == 'b') || use_old_owner || use_new_owner;
     if (argc == 4 && (!should_rescue || heap_size <= 0 || heap_size > 2048)) return 1;
     py_gc_disable();
     if (!make_graph() || (heap_size && !make_fixed_live_graph(heap_size))) return 2;
@@ -284,13 +292,15 @@ int main(int argc, char **argv) {
             || bounded_recheck(stopped - 1, REFERENCE_SLOT_BUDGET, 1,
                                &bounded_mask, &bounded_visits)
             || bounded_mask != -1 || bounded_visits != -1) return 15;
-        if (use_old_owner) {
+        if (use_old_owner || use_new_owner) {
             int64_t missed = -1, missed_visits = -1;
             if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 0, &missed, &missed_visits)
                 || missed || missed_visits) return 16;
         }
-        if (!bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 1,
-                             &bounded_mask, &bounded_visits)) return 16;
+        int qualified = bounded_recheck(stopped, REFERENCE_SLOT_BUDGET, 1,
+                                        &bounded_mask, &bounded_visits);
+        if (journal_incomplete ? qualified || bounded_mask != -1 || bounded_visits != -1
+                               : !qualified) return 16;
     }
     int64_t calls = __atomic_load_n(&pcc_gc_metric_sweep_recheck_calls, __ATOMIC_RELAXED);
     int64_t visits = __atomic_load_n(&pcc_gc_metric_sweep_recheck_nodes, __ATOMIC_RELAXED);
@@ -302,9 +312,9 @@ int main(int argc, char **argv) {
     saved = __atomic_load_n(&pcc_gc_metric_sweep_recheck_work, __ATOMIC_RELAXED) - saved;
     elapsed = __atomic_load_n(&pcc_gc_metric_sweep_recheck_sum_us, __ATOMIC_RELAXED) - elapsed;
     if (!check_first_verdict()) return 5;
-    if (trial_bounded && (bounded_mask != BOTH_REACHED
-                         || bounded_visits != (use_old_owner ? 3 : 2) || saved != 2))
-        return 17;
+    if (trial_bounded && saved != 2) return 17;
+    if (trial_bounded && !journal_incomplete && (bounded_mask != BOTH_REACHED
+        || bounded_visits != ((use_old_owner || use_new_owner) ? 3 : 2))) return 17;
     if (!should_rescue) {
         if (!retire_parent_edge() || !run_one(CHILD_FINALIZER)) return 8;
         recheck_without_raw_candidate_locals();
@@ -335,7 +345,9 @@ int main(int argc, char **argv) {
         printf("recheck %lld %lld %lld %lld\n",
                (long long)calls, (long long)visits, (long long)saved, (long long)elapsed);
     }
-    if (trial_bounded) printf("bounded %lld %lld\n", (long long)bounded_mask, (long long)bounded_visits);
+    if (journal_incomplete) puts("fallback full");
+    else if (trial_bounded)
+        printf("bounded %lld %lld\n", (long long)bounded_mask, (long long)bounded_visits);
     puts("GC_ACYCLIC_FINALIZER_RESCUE_OK");
     return 0;
 }

@@ -305,3 +305,14 @@ visits at each size and each of GC1–3. This uses actual list publication
 and an explicit test journal, not proof that all production authors
 would log that store. With the explicit-root and lifecycle arms there
 are now 30 Linux native process executions. No default behavior changed.
+
+The `allocated` and `fallback` arms allocate the list during the real
+finalizer and do not register its local as a root. The full oracle must
+still preserve the list's referents for this sweep, since the new list
+is outside the disposal cohort. The bounded arm finds the same rescued
+pair only when the allocation's owner is in the explicit journal. A
+known-incomplete journal refuses without producing a verdict; the
+existing full recheck then protects both. This includes nine native
+points per source (three sizes and GC1–3), for 48 process executions
+including the previous lifecycle controls. No runtime allocation
+journal completeness is asserted.

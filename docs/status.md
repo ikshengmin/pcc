@@ -201,8 +201,10 @@ in the relevant section or issue and removes the entry.
    same two candidates in all three sizes and agrees with that oracle.
    A callback store through an older registered owner is missed without
    its journal entry; recording that owner restores parity in three
-   visits. Next #9: qualify a real new-owner publication pathway and
-   fall back when its callback-window record cannot be proven.
+   visits. The same bounded test now covers a callback-created owner;
+   incomplete journaling refuses and uses full recheck. Next #9:
+   wire the bounded graph primitive into an inert runtime entry for
+   selected candidates, under the existing stopped-epoch checks.
    No default path change.
    GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
@@ -243,7 +245,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 callback allocation journal and bounded refusal to full recheck: Codex, Linux x86-64, 2026-11-22 13:00 UTC, area runtime-gc
+   - none
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
