@@ -1220,7 +1220,7 @@
       "chapter_ids": [
         "structs"
       ],
-      "scope": "Explicitly rejected capability: embedded fields. No broader implementation or runtime support is claimed.",
+      "scope": "Remaining explicit boundary for embedded fields outside the unqualified defined value-record direct-selector subset, including promotion and other storage forms.",
       "status": "explicitly_unimplemented",
       "tests": [
         "tests/go/test_diagnostics.py::test_capability_codes_are_explicit_source_located_and_fail_before_ir",
@@ -2422,7 +2422,7 @@
         "assignment",
         "comparison"
       ],
-      "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; embedded-field source storage remains unavailable.",
+      "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; this compiler-only model does not itself implement embedded-field source storage.",
       "tests": [
         "tests/go/test_interface_methods.py::test_pointer_membership_is_not_addressable_call_permission",
         "tests/go/test_interface_methods.py::test_signatures_use_nominal_types_results_and_variadicness",
@@ -2490,7 +2490,7 @@
         {
           "id": "ci-only",
           "kind": "full-feature",
-          "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; embedded-field source storage remains unavailable.",
+          "scope": "Compiler-only exact T/*T method sets, breadth-first field hiding and distinct-path ambiguity, import-path-private method identity, exact signatures and nominal types. Shared unresolved storage/box/transfer/itable/equality plans retain typed nil, dynamic identity, receiver projections, effects, copy/root and panic obligations. No physical ABI, allocation, GC registration, dispatch, assertions or equality lowering; this compiler-only model does not itself implement embedded-field source storage.",
           "status": "unrun",
           "source_revision": "sha256:9ea08ccaac85e495588d746440bdd6ac4d48be25f2ad38650fb087a490c0acc0",
           "mode": "pcc0",
@@ -3646,6 +3646,42 @@
           "reason": "This source record carries no hosted CI acceptance receipt."
         }
       ]
+    },
+    {
+      "id": "go.named-value-record-embedding",
+      "title": "Unqualified named value-record embedding and direct selectors",
+      "chapter_ids": [
+        "structs",
+        "properties",
+        "expressions"
+      ],
+      "scope": "An unqualified embedded name that resolves to a defined struct uses ordinary value-record storage and its direct field name. The embedded bit and optional tag participate in type identity. Direct reads, writes and aggregate copy execute on Linux pcc0 against identical source built with official Go 1.27.3. Does not admit promotion, embedded scalar, pointer or parameterized storage, or full testing-package acceptance.",
+      "tests": [
+        "tests/go/test_named_embedded_field.py::test_named_value_embedded_field_uses_existing_owned_record_storage",
+        "tests/go/test_named_embedded_field.py::test_named_value_embedded_field_matches_official_go",
+        "tests/go/test_named_embedded_field.py::test_promoted_selector_remains_an_explicit_boundary",
+        "tests/go/test_named_embedded_field.py::test_embedded_and_explicitly_named_fields_are_not_identical_types"
+      ],
+      "diagnostics": [],
+      "evidence": [],
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:e8302ccfddfc460631b66e756851acacbc9d6cc6e1bd09fa40423c0685f128ec",
+        "sources": [
+          {
+            "path": "pcc/frontends/go/records.py",
+            "sha256": "a69d5a61e33adbf820ea0cebf0de13a5d175a707a669b3d60b5681073d0be654"
+          },
+          {
+            "path": "pcc/frontends/go/sema.py",
+            "sha256": "33cc3043943f76b114896dceeed5918fc220ff1deebb73ca732557768285a802"
+          },
+          {
+            "path": "pcc/frontends/go/syntax.py",
+            "sha256": "c2c7a9fb0746630cce745007516f5ca24eadf77cad9bde6c6a932fa1549ca619"
+          }
+        ]
+      }
     }
   ],
   "diagnostics": {

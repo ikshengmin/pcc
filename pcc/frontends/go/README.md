@@ -748,7 +748,8 @@ renew that historical qualification.
 | `go.capability.dot-imports` | File-scoped exported declaration lookup implemented | Authored source/native/reference obligations; all execution unrun | `missing` |
 | `go.capability.dynamic-string-concatenation` | Explicitly unimplemented boundary: dynamic string concatenation | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.dynamic-string-conversion` | Explicitly unimplemented boundary: dynamic string conversion | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
-| `go.capability.embedded-fields` | Explicitly unimplemented boundary: embedded fields | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
+| `go.named-value-record-embedding` | Unqualified defined struct embedding and direct field access preserve the embedded bit and tag | Linux pcc0 and official Go 1.27.3 match on the original native record-copy witness | Bounded implementation |
+| `go.capability.embedded-fields` | Remaining scope: promoted selectors and other embedded shapes | Explicit boundary tests; no qualification of testing.B | `explicitly_unimplemented` |
 | `go.capability.floating-types` | Explicitly unimplemented boundary: floating types | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |
 | `go.capability.interface-types` | Explicitly unimplemented boundary: general interface values and runtime dispatch | No positive runtime acceptance; declaration and compiler-model support is separate | `explicitly_unimplemented` |
 | `go.capability.limit-array-elements` | Explicitly unimplemented boundary: limit array elements | No positive acceptance; CAP-U checks this diagnostic boundary | `explicitly_unimplemented` |

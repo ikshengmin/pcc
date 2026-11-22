@@ -28,3 +28,19 @@ Next focused frontend slice: preserve the identity and direct selector of
 a named value-embedded field, with native execution and Go reference.
 Then address promotion and method sets explicitly; admitting a field
 declaration alone does not prove `testing.B` semantics.
+
+
+## Defined value embedding
+
+The direct selector of an embedded defined value record reuses the
+existing owned aggregate storage. The named-field and embedded-field
+types remain distinct, and record copy is by value. The same original
+program linked and ran in Linux pcc0 and with the exact Go 1.27.3
+Linux-amd64 archive, whose SHA-256 matched the repository pin.
+128 focused adjacent tests and one native/reference test passed.
+Promoted selectors and other embedded storage forms remain explicit.
+
+The pinned source union now advances to `testing/benchmark.go:116:8`
+at `extra map[string]float64` (parser expected a name, found `map`).
+This does not change the separate missing target-specific source
+selection or qualify its original test entry.

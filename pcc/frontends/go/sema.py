@@ -936,6 +936,11 @@ class Analyzer:
                 names.add(token.text)
                 package = "" if unicodedata.category(token.text[0]) == "Lu" else (self.package_path or "<main>")
                 field_type = self.resolve_type(field_type, signature=signature)
+                embedded = bool(dtype.embedded and dtype.embedded[index])
+                if embedded and (not isinstance(field_type, DefinedType)
+                                 or not isinstance(underlying(field_type), StructType)):
+                    raise UnsupportedGo(token, 'go.unsupported.embedded-fields',
+                                        "embedded fields require a defined value record")
                 if contains_parameter(field_type):
                     raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
                                         'dependent record layouts require generic data checking')
@@ -946,7 +951,7 @@ class Analyzer:
                     raise UnsupportedGo(token, 'go.unsupported.interface-types',
                                         "interface-bearing records require a runtime storage contract")
                 tag = dtype.tags[index] if dtype.tags else None
-                fields.append(Field(token.text, field_type, package,
+                fields.append(Field(token.text, field_type, package, embedded=embedded,
                                     tag=literal_bytes(tag) if tag else b""))
             result = StructType(tuple(fields))
             require_bounded_value_layout(result, dtype.token)
@@ -1892,6 +1897,9 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "field selector requires a struct value")
             names = [field.name for field in dtype.fields]
             if expr.value not in names:
+                if any(field.embedded for field in dtype.fields):
+                    raise UnsupportedGo(expr.token, 'go.unsupported.embedded-fields',
+                                        "promoted field and method selectors are not implemented")
                 raise GoDiagnostic(expr.token, "unknown struct field " + expr.value)
             index = names.index(expr.value)
             field = dtype.fields[index]

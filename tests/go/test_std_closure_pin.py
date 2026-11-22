@@ -13,7 +13,7 @@ import shutil
 
 import pytest
 
-from pcc.frontends.go import UnsupportedGo, compile_go, compile_go_packages
+from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go, compile_go_packages
 from scripts import ci_go_math_bits_project as project
 from scripts.go_std_closure import FIXTURE, LOCK, load_std_closure
 from scripts.pin_go_std_closure import evaluate, name_ok, selected
@@ -77,16 +77,12 @@ def test_math_bits_external_tests_with_the_pinned_closure_stop_inside_testing():
         project.PACKAGE: source(project.NORMAL + project.INTERNAL_TEST),
         project.PACKAGE + '_test': source(project.EXTERNAL_TEST),
     })
-    # Formerly bits_test.go:10:2, `import "testing"` without its sources, then
-    # allocs.go:20:44, AllocsPerRun's float64 result (tests/go/test_floating_types.py).
-    # benchmark.go:53:32 used to stop at the colon in s[:len(s)-1].
-    # Check the next exact rejection of the same whole, hash-verified graph.
-    # This frontier is not the separate whole math/bits acceptance gate.
-    with pytest.raises(UnsupportedGo, match=r"^benchmark\.go:95:2: Go: embedded fields require method/promotion support "
-                                             r"\[go\.unsupported\.embedded-fields\]$") as caught:
+    # The exact pinned union now parses the ordinary named embedded field
+    # of testing.B. Its next observed parser blocker is a map field type,
+    # not full type checking, dependency selection, or test execution.
+    with pytest.raises(GoDiagnostic, match=r"^benchmark\.go:116:8: Go: expected 'name', got 'map'$") as caught:
         compile_go_packages(packages, target_triple="x86_64-unknown-linux-gnu")
-    assert caught.value.code == 'go.unsupported.embedded-fields'
-    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 95, 2)
+    assert (caught.value.filename, caught.value.line, caught.value.column) == ('benchmark.go', 116, 8)
     assert [name for name, _ in std['testing'][:2]] == ['allocs.go', 'benchmark.go']
 
 

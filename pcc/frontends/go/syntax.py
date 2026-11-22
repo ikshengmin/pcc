@@ -276,6 +276,7 @@ class StructSyntax:
     token: Token
     fields: list
     tags: list = field(default_factory=list)
+    embedded: list = field(default_factory=list)
 
 
 @dataclass
@@ -544,20 +545,23 @@ class GoParser:
         if self.at("struct"):
             token = self.take("struct")
             self.take("{")
-            fields, tags = [], []
+            fields, tags, embedded = [], [], []
             while not self.at("}"):
                 names = [self.take("name")]
                 while self.accept(","):
                     names.append(self.take("name"))
-                if self.at(";") or self.at("}") or self.at(".") or self.at("string"):
-                    self.unsupported(names[0], 'go.unsupported.embedded-fields', "embedded fields require method/promotion support")
-                dtype = self.datatype(signature=signature)
+                anonymous = self.at(";") or self.at("}") or self.at("string")
+                if self.at(".") or (anonymous and (len(names) != 1 or names[0].text in TYPE_NAMES)):
+                    self.unsupported(names[0], 'go.unsupported.embedded-fields',
+                                     "only a single unqualified named value record can be embedded")
+                dtype = TypeName(names[0]) if anonymous else self.datatype(signature=signature)
                 tag = self.accept("string")
                 fields.extend((name, dtype) for name in names)
                 tags.extend([tag] * len(names))
+                embedded.extend([anonymous] * len(names))
                 self.end_statement()
             self.take("}")
-            return StructSyntax(token, fields, tags)
+            return StructSyntax(token, fields, tags, embedded)
         token = self.take("name")
         qualifier = token if self.accept(".") else None
         if qualifier is not None:

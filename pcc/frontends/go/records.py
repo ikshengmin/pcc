@@ -70,7 +70,7 @@ class StructType:
 
     def __str__(self):
         return "struct{" + "; ".join(
-            field.name + " " + str(field.type) +
+            (field.name if field.embedded else field.name + " " + str(field.type)) +
             (" " + repr(field.tag) if field.tag else "")
             for field in self.fields) + "}"
 
