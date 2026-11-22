@@ -268,8 +268,12 @@ in the relevant section or issue and removes the entry.
    adds native dict update, list slice replacement, and set update;
    source containers are in the sealed dead graph, so no source-building
    store in the callback can hide a missing destination shade. Linux
-   passed 95 focused checks. Nine writer forms are now covered; external
-   native writers and additional layouts are still open.
+   passed 95 focused checks. Nine internal writer forms are now covered.
+   [Review commit 28aa693](https://github.com/ikshengmin/pcc/commit/28aa693ee115fada587497a5687e9c8ea3023cbf)
+   exercises public C `PyDict_SetItem`, `PyList_Append` and
+   `PyObject_SetAttrString` during the actual callback. Linux passed 101
+   checks; all three preserve the candidate with the expected fallback.
+   This does not cover independent CpyHandle owners or non-API writers.
    Next: batch safe finalizer windows within a layer without missing a
    sibling rescue, and remove repeated candidate/weakref scans before
    scale tests. Arbitrary raw stack lifetimes, HTTP exact timings and
@@ -326,8 +330,7 @@ in the relevant section or issue and removes the entry.
    list control and the non-moving C-held handle. Mac and pcc1 were not
    executed.
 
-   Claims:
-   - Verify issue 9 publication via external C object setters: Codex, Linux x86-64, 2026-11-22 18:08 UTC, area runtime-gc
+   Claims: none.
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
