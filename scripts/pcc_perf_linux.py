@@ -1,7 +1,7 @@
 """Bounded Linux user-mode task-clock sample transport for pcc_perf.
 
-This layer only samples the calling thread. It does not attach to a PID,
-symbolize addresses, or infer a program's CPU distribution.
+This layer samples the calling thread or one directly launched cooperative
+child. It does not accept an external PID or infer a CPU distribution.
 """
 
 from __future__ import annotations
@@ -11,10 +11,13 @@ import fcntl
 import mmap
 import os
 import platform
+import selectors
 import struct
+import subprocess
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 # Linux UAPI: linux/perf_event.h and the architecture syscall tables.
@@ -34,6 +37,8 @@ PERF_EVENT_IOC_DISABLE = 0x2401
 PERF_RECORD_LOST = 2
 PERF_RECORD_SAMPLE = 9
 PERF_RECORD_LOST_SAMPLES = 13
+PERF_RECORD_MISC_CPUMODE_MASK = 0b111
+PERF_RECORD_MISC_USER = 2
 MMAP_DATA_HEAD = 1024
 RECORD_HEADER = struct.Struct("=IHH")
 SAMPLE = struct.Struct("=QIIQ")
@@ -67,7 +72,7 @@ def _read_frozen_ring(mapping) -> list[TaskSample]:
     while tail < head:
         if head - tail < RECORD_HEADER.size:
             raise ValueError("truncated perf record header")
-        kind, _, length = RECORD_HEADER.unpack(take(tail, RECORD_HEADER.size))
+        kind, misc, length = RECORD_HEADER.unpack(take(tail, RECORD_HEADER.size))
         if length < RECORD_HEADER.size or length > head - tail:
             raise ValueError("invalid perf record size")
         payload = take(tail + RECORD_HEADER.size, length - RECORD_HEADER.size)
@@ -75,6 +80,8 @@ def _read_frozen_ring(mapping) -> list[TaskSample]:
             raise ValueError("perf lost samples; no attribution is valid")
         if kind != PERF_RECORD_SAMPLE or len(payload) != SAMPLE.size:
             raise ValueError(f"unexpected perf record type or layout: {kind}")
+        if (misc & PERF_RECORD_MISC_CPUMODE_MASK) != PERF_RECORD_MISC_USER:
+            raise ValueError("unexpected non-user perf sample")
         sample = TaskSample(*SAMPLE.unpack(payload))
         if not sample.ip or not sample.pid or not sample.tid or not sample.period_ns:
             raise ValueError("incomplete perf sample")
@@ -83,7 +90,7 @@ def _read_frozen_ring(mapping) -> list[TaskSample]:
     return samples
 
 
-def _open_self(period_ns: int) -> int:
+def _open_task(tid: int, period_ns: int) -> int:
     if (sys.platform != "linux" or sys.byteorder != "little"
             or platform.machine() not in PERF_EVENT_OPEN):
         raise OSError("task-clock preflight supports Linux x86-64 and arm64")
@@ -99,7 +106,7 @@ def _open_self(period_ns: int) -> int:
     syscall = libc.syscall
     syscall.restype = ctypes.c_long
     fd = syscall(ctypes.c_long(PERF_EVENT_OPEN[platform.machine()]), payload,
-                 ctypes.c_int(0), ctypes.c_int(-1), ctypes.c_int(-1),
+                 ctypes.c_int(tid), ctypes.c_int(-1), ctypes.c_int(-1),
                  ctypes.c_ulong(PERF_FLAG_FD_CLOEXEC))
     if fd < 0:
         code = ctypes.get_errno()
@@ -107,30 +114,109 @@ def _open_self(period_ns: int) -> int:
     return fd
 
 
+@contextmanager
+def _task_ring(tid: int, period_ns: int):
+    fd = _open_task(tid, period_ns)
+    try:
+        size = os.sysconf("SC_PAGE_SIZE") * (1 + RING_PAGES)
+        with mmap.mmap(fd, size, flags=mmap.MAP_SHARED,
+                       prot=mmap.PROT_READ | mmap.PROT_WRITE) as mapping:
+            yield fd, mapping
+    finally:
+        os.close(fd)
+
+
+@contextmanager
+def _enabled(fd: int):
+    fcntl.ioctl(fd, PERF_EVENT_IOC_ENABLE)
+    try:
+        yield
+    finally:
+        fcntl.ioctl(fd, PERF_EVENT_IOC_DISABLE)
+
+
+def _verify_task(samples: list[TaskSample], pid: int, tid: int) -> None:
+    if not samples:
+        raise ValueError("kernel returned no task-clock samples")
+    if {(s.pid, s.tid) for s in samples} != {(pid, tid)}:
+        raise ValueError("task-clock capture included an unexpected thread")
+
+
 def task_clock_preflight(cpu_ms: int = 80) -> dict:
     if not 10 <= cpu_ms <= 250:
         raise ValueError("cpu-ms must be between 10 and 250")
-    page_size = os.sysconf("SC_PAGE_SIZE")
     period_ns = 500_000
-    fd = _open_self(period_ns)
-    try:
-        with mmap.mmap(fd, page_size * (1 + RING_PAGES), flags=mmap.MAP_SHARED,
-                       prot=mmap.PROT_READ | mmap.PROT_WRITE) as mapping:
-            deadline = time.monotonic_ns() + 3_000_000_000
-            start = time.thread_time_ns()
-            fcntl.ioctl(fd, PERF_EVENT_IOC_ENABLE)
-            try:
-                while time.thread_time_ns() - start < cpu_ms * 1_000_000:
-                    if time.monotonic_ns() >= deadline:
-                        raise ValueError("task-clock preflight exceeded wall limit")
-            finally:
-                fcntl.ioctl(fd, PERF_EVENT_IOC_DISABLE)
-            samples = _read_frozen_ring(mapping)
-    finally:
-        os.close(fd)
-    if not samples:
-        raise ValueError("kernel returned no task-clock samples")
-    if {(s.pid, s.tid) for s in samples} != {(os.getpid(), threading.get_native_id())}:
-        raise ValueError("task-clock preflight captured an unexpected thread")
+    with _task_ring(0, period_ns) as (fd, mapping):
+        deadline = time.monotonic_ns() + 3_000_000_000
+        start = time.thread_time_ns()
+        with _enabled(fd):
+            while time.thread_time_ns() - start < cpu_ms * 1_000_000:
+                if time.monotonic_ns() >= deadline:
+                    raise ValueError("task-clock preflight exceeded wall limit")
+        samples = _read_frozen_ring(mapping)
+    _verify_task(samples, os.getpid(), threading.get_native_id())
     return {"scope": "calling-thread-user-cpu-only", "period_ns": period_ns,
             "samples": len(samples), "distinct_ips": len({s.ip for s in samples})}
+
+
+def _receive_marker(pipe, marker: bytes, timeout: float) -> None:
+    # Read only the fixed protocol width. A broken child cannot grow a
+    # parent-side output buffer or hold a ready pipe open indefinitely.
+    fd = pipe.fileno()
+    deadline = time.monotonic() + timeout
+    with selectors.DefaultSelector() as selector:
+        selector.register(fd, selectors.EVENT_READ)
+        remainder = marker
+        while remainder:
+            budget = deadline - time.monotonic()
+            if budget <= 0 or not selector.select(budget):
+                raise ValueError("owned child marker timed out")
+            data = os.read(fd, len(remainder))
+            if not data or not remainder.startswith(data):
+                raise ValueError("owned child sent an invalid marker")
+            remainder = remainder[len(data):]
+
+
+def _verify_marker_eof(pipe) -> None:
+    # A descendant holding a copied pipe is a protocol error, not a reason
+    # to wait on it after the directly owned process has exited.
+    fd = pipe.fileno()
+    os.set_blocking(fd, False)
+    try:
+        if os.read(fd, 1):
+            raise ValueError("owned child sent unexpected output")
+    except BlockingIOError as exc:
+        raise ValueError("owned child left an output pipe open") from exc
+
+
+def capture_cooperative_child(argv, *, env: dict) -> list[TaskSample]:
+    """Sample the directly spawned, single-task helper between READY and DONE.
+
+    Internal test/benchmark transport, for an owned executable with the
+    bounded protocol only. No shell, external PID or inherited events.
+    """
+    if sys.platform != "linux":
+        raise OSError("child task-clock capture requires Linux")
+    with subprocess.Popen(argv, env=env, stdin=subprocess.PIPE,
+                          stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          bufsize=0) as child:
+        try:
+            _receive_marker(child.stdout, b"READY\n", 3)
+            if child.poll() is not None:
+                raise ValueError("owned child exited before sampling")
+            with _task_ring(child.pid, 500_000) as (fd, mapping):
+                with _enabled(fd):
+                    child.stdin.write(b"G")
+                    child.stdin.close()
+                    _receive_marker(child.stdout, b"DONE\n", 3)
+                samples = _read_frozen_ring(mapping)
+            if child.wait(timeout=3) != 0:
+                raise ValueError("owned child returned a failure")
+            _verify_marker_eof(child.stdout)
+            _verify_marker_eof(child.stderr)
+        finally:
+            if child.poll() is None:
+                child.kill()
+                child.wait(timeout=3)
+    _verify_task(samples, child.pid, child.pid)
+    return samples

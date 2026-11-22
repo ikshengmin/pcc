@@ -1,11 +1,13 @@
 """Deterministic Linux UAPI ring controls for pcc_perf's preflight."""
 import importlib.util
+import os
 import struct
 import subprocess
 import sys
 from pathlib import Path
 
 import pytest
+from tests.python.owned_regression_support import explicit_owned_runtime
 
 # The engine is loaded only for the Linux command; these synthetic native-
 # endian rings also run on hosts that cannot open a Linux perf event.
@@ -49,6 +51,7 @@ def test_task_clock_sample_header_and_payload_decode_across_wrap():
     (struct.pack("=IHH", 13, 0, 8), "lost samples"),
     (_sample(ip=0), "incomplete perf sample"),
     (_sample(tid=0), "incomplete perf sample"),
+    (struct.pack("=IHH", 9, 1, 32) + _sample()[8:], "non-user perf sample"),
 ))
 def test_task_clock_refuses_incomplete_or_unusable_attribution(data, match):
     with pytest.raises(ValueError, match=match):
@@ -71,3 +74,33 @@ def test_profile_preflight_invalid_request_refused_by_real_cli():
     expected = ("cpu-ms must be between 10 and 250" if sys.platform == "linux"
                 else "profile-preflight requires Linux")
     assert expected in p.stderr
+
+
+def test_child_protocol_refuses_a_persistently_open_output_pipe():
+    if sys.platform != "linux":
+        return
+    read_fd, write_fd = os.pipe()
+    with os.fdopen(read_fd, "rb") as pipe:
+        try:
+            with pytest.raises(ValueError, match="left an output pipe open"):
+                RING._verify_marker_eof(pipe)
+        finally:
+            os.close(write_fd)
+        RING._verify_marker_eof(pipe)
+
+
+@pytest.mark.integration
+def test_owned_native_child_emits_user_task_samples(tmp_path, explicit_owned_runtime):
+    from tests.owned_c_execution import compile_owned_c_with_runtime
+
+    if sys.platform != "linux":
+        # The real CLI rejection is covered above without calling perf_event_open.
+        with pytest.raises(OSError, match="requires Linux"):
+            RING.capture_cooperative_child((), env={})
+        return
+    source = Path(__file__).with_name("fixtures") / "pcc_perf_linux_user_loop.c"
+    binary = tmp_path / "task_clock_owned"
+    compile_owned_c_with_runtime(source, binary, runtime_archive=explicit_owned_runtime)
+    samples = RING.capture_cooperative_child([str(binary)], env={"PATH": "/nonexistent"})
+    assert len(samples) > 0 and len({sample.ip for sample in samples}) > 0
+    assert len({(sample.pid, sample.tid) for sample in samples}) == 1

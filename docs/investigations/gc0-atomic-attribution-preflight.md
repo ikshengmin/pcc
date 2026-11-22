@@ -44,3 +44,14 @@ ring boundary and broken/lost-record rejection. Linux arm64 is not
 yet executed. Next prove samples on a single owned child, then map
 those addresses to the sealed executable. Workload coverage and the
 gateway arm remain separate prerequisites for GC0 atomic CPU share.
+
+The owned cooperative-child control passed on the same Linux host.
+A pcc0/self-produced C ELF sends a ready marker before its loop. The
+parent opens a non-inheriting event on that directly spawned task
+and requires the kernel's user-mode PID/TID samples to belong to it.
+The sampler fails for an invalid or late marker, extra output or a
+lingering output pipe instead of including other tasks. This is not
+arbitrary PID attachment. Fourteen focused transport/protocol checks
+passed. Next attribute the real child's PCs from its ELF sections,
+including an explicit unknown bucket rather than assuming every sample
+hit the hot function.
