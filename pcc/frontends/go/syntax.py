@@ -271,6 +271,12 @@ class TypeInstantiationSyntax:
     arguments: tuple
 
 
+@dataclass(frozen=True)
+class TypeSetSyntax:
+    token: Token
+    tokens: tuple[Token, ...]
+
+
 @dataclass
 class MapSyntax:
     token: Token
@@ -837,15 +843,14 @@ class GoParser:
             # Parse type terms before reporting the capability boundary. A
             # valid exact *int, []int or struct constraint is not invalid Go;
             # conversely, a missing pointee/element/field type remains syntax
-            # invalid. This reader never supplies a representation to Sema.
+            # invalid. Compound forms retain their original token sequence.
+            first = self.index
             simple_name = self.at("name") and self.tokens[self.index + 1].kind in (",", "]")
             self.constraint_element()
             if not self.at(",") and not self.at("]"):
                 self.fail(self.current, "expected ',' or ']' after type parameter constraint")
-            if not simple_name:
-                self.unsupported(constraint, 'go.unsupported.generic-boundaries',
-                                 "non-name constraints require general type-set resolution")
-            parameters.extend((name, constraint) for name in names)
+            syntax = constraint if simple_name else TypeSetSyntax(constraint, tuple(self.tokens[first:self.index]))
+            parameters.extend((name, syntax) for name in names)
             if len(parameters) > 256:
                 self.unsupported(constraint, 'go.unsupported.limit-function-arity',
                                  "function exceeds implementation limit (256 type parameters)")
@@ -864,8 +869,7 @@ class GoParser:
 
     def constraint_type(self):
         # Unlike datatype(), this syntax reader admits runtime type spellings
-        # without admitting their storage or operations. Its entire result is
-        # discarded at the generic-boundaries diagnostic above.
+        # without admitting their storage or operations.
         if self.accept("*"):
             self.constraint_type()
         elif self.accept("["):

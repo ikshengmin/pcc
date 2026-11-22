@@ -12,6 +12,7 @@ from pcc.support.instantiation import InstanceRegistry
 from pcc.frontends.go.diagnostics import GoDiagnostic, UnsupportedGo
 from pcc.frontends.go.records import DefinedType, InterfaceType, StructType, is_named, same_underlying, underlying
 from pcc.frontends.go.interface_methods import interface_type
+from pcc.frontends.go.syntax import TypeSetSyntax
 from pcc.frontends.go.types import (
     ArrayType, PointerType, Results, SliceType, TYPE_NAMES, is_float, is_integer, is_string,
 )
@@ -231,6 +232,9 @@ class GenericSession:
         return scope
 
     def resolve_constraint(self, owner, token, declared_names):
+        if isinstance(token, TypeSetSyntax):
+            raise UnsupportedGo(token.token, 'go.unsupported.generic-boundaries',
+                                'non-name constraints require general type-set resolution')
         # Type parameters are in scope throughout this signature. Do not
         # interpret a shadowed spelling as a predeclared constraint identity.
         if token.text in declared_names:

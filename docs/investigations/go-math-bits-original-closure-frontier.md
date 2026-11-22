@@ -316,3 +316,12 @@ an owned implementation. The selected real graph now follows the
 ELF/reference source-plan control passed. This semantic probe never
 lowers the test graph or consumes external objects; runtime/assembly
 owners and compiler-added non-source edges are not qualified.
+
+Compound generic constraints now retain their validated token sequence
+and defer rejection to semantic constraint resolution; named
+`any`/`comparable` behavior is unchanged. The exact test-instance source
+walk now stops at the selected normal `internal/cpu/cpu.go:12:27`,
+its `_ [CacheLinePadSize]byte` padding field. It has not executed either
+the byte or string branch of `hashStr` with PCC. The focused suite passed
+249 checks and the selected existing Go generic integration subset
+passed 97 checks; an official Go reference ran both byte and string controls.
