@@ -624,7 +624,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -697,7 +697,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -811,7 +811,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -1008,7 +1008,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/diagnostics.py",
@@ -1168,7 +1168,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           }
         ]
       }
@@ -1267,7 +1267,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -1661,7 +1661,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           }
         ]
       },
@@ -1828,7 +1828,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/records.py",
@@ -2091,7 +2091,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
@@ -2304,7 +2304,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/packages.py",
@@ -2439,7 +2439,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/generics.py",
@@ -2656,7 +2656,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/packages.py",
@@ -2807,7 +2807,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/pointer_flow.py",
@@ -2929,7 +2929,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/types.py",
@@ -3068,7 +3068,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -3234,7 +3234,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/lowering.py",
@@ -3412,7 +3412,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           }
         ]
       }
@@ -3468,7 +3468,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -3588,7 +3588,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -3670,7 +3670,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/branches.py",
@@ -3759,7 +3759,7 @@
           },
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -3793,7 +3793,7 @@
         "sources": [
           {
             "path": "pcc/frontends/go/sema.py",
-            "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+            "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
           },
           {
             "path": "pcc/frontends/go/syntax.py",
@@ -4261,7 +4261,7 @@
         "message": "'invalid or unsupported integer literal ' + repr(text)",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4269,7 +4269,7 @@
         "message": "'unsupported statement ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4277,7 +4277,7 @@
         "message": "'unsupported expression ' + kind",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4285,7 +4285,7 @@
         "message": "'switch requires a comparable type'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4293,7 +4293,7 @@
         "message": "'range currently requires a fixed array or integer, a string, or a pointer to a fixed array; other iterator/runtime contracts are not implemented'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4301,7 +4301,7 @@
         "message": "'indexing requires an array or string (slices/maps are not implemented)'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4309,7 +4309,7 @@
         "message": "'first-class method expressions require function-value support'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4317,7 +4317,7 @@
         "message": "'unsupported string operator ' + op",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       },
@@ -4325,7 +4325,7 @@
         "message": "'unsupported comparison operands'",
         "source": {
           "path": "pcc/frontends/go/sema.py",
-          "sha256": "727ab2a0ac1220b0f04bb1bd85d68d379756a69dbac02abb4938f48ceeeae310"
+          "sha256": "80d6181977cae92b253903ab4d3ea30ddffe5f876841f3d0bd64262ae36db162"
         },
         "reason": "Uncoded parser/invalid-operand/internal defensive rejection; no stable feature is inferred from message text. More precise grammar/type classification remains missing."
       }

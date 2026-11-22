@@ -62,8 +62,21 @@ def test_all_selected_x86_feature_initializers_take_static_record_field_addresse
     assert len(set(selectors)) == 23
 
 
-def test_pointer_bearing_record_remains_unadmitted():
+def test_bool_pointer_field_declaration_does_not_need_native_storage():
     source = "package main;type option struct{Feature *bool};func main(){}"
+    ir = str(compile_go(source, "option.go"))
+    assert "define void @__pcc_go_main" in ir and "alloca" not in ir
+
+
+@pytest.mark.parametrize("rest", (
+    "func main(){var value option;_=value}",
+    "var Config option;func main(){}",
+    "func main(){_=option{Feature:nil}}",
+    "func read(value option){};func main(){}",
+    "func get()option{return option{}};func main(){}",
+))
+def test_pointer_bearing_record_storage_remains_unadmitted(rest):
+    source = "package main;type option struct{Feature *bool};" + rest
     with pytest.raises(UnsupportedGo) as caught:
         compile_go(source, "option.go")
     assert caught.value.code == "go.unsupported.pointer-storage"

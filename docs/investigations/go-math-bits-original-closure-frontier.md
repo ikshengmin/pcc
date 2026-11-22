@@ -357,3 +357,13 @@ analysis. The new proof is not authorization for aggregate storage
 or alias transport. Scoped validation: 189 checks and 24 selected
 pointer integration checks. The selected `option` declaration still
 rejects pending the distinction between metadata and storage uses.
+
+A boolean-pointer member now survives as declaration metadata only.
+Local/global values, composite temporaries, parameter and result
+carriers with that member still reject before IR. The exact bound
+package now reaches `internal/cpu/cpu.go:178:1`: one-argument
+`//go:linkname X86`, a local symbol exported for assembly consumers.
+It is not the two-argument runtime-object import currently supported
+in the restricted integer panic path. The scoped suite passed 237
+checks and the direct static-field native differential still passed.
+No pointer-bearing record or CPU feature table executed.

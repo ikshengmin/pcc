@@ -338,6 +338,11 @@ def coerce(expr, dtype):
     raise GoDiagnostic(expr.token, f"cannot use {expr.type} as {dtype}")
 
 
+def bool_pointer_field_metadata(dtype):
+    pointer = underlying(dtype)
+    return isinstance(pointer, PointerType) and underlying(pointer.element) == "bool"
+
+
 def require_value_type(dtype, token, *, declaration=False):
     """Separate complete semantic metadata from currently admitted storage.
 
@@ -385,7 +390,8 @@ def require_value_type(dtype, token, *, declaration=False):
             if callable_signature(field.type) is not None:
                 raise UnsupportedGo(token, 'go.unsupported.function-values',
                                     'function-valued record storage is not implemented')
-            if isinstance(underlying(field.type), PointerType):
+            if (isinstance(underlying(field.type), PointerType)
+                    and not (declaration and bool_pointer_field_metadata(field.type))):
                 raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                     "pointer-bearing records require aggregate lifetime/storage analysis")
             if interface_type(field.type) is not None:
@@ -987,7 +993,8 @@ class Analyzer:
                 if contains_parameter(field_type):
                     raise UnsupportedGo(token, 'go.unsupported.generic-boundaries',
                                         'dependent record layouts require generic data checking')
-                if not signature and isinstance(underlying(field_type), PointerType):
+                if (not signature and isinstance(underlying(field_type), PointerType)
+                        and not bool_pointer_field_metadata(field_type)):
                     raise UnsupportedGo(token, 'go.unsupported.pointer-storage',
                                         "pointer-bearing records require aggregate lifetime/storage analysis")
                 if not signature and interface_type(field_type) is not None:
