@@ -1,5 +1,5 @@
 """Source proofs for call-bounded byte growth, without slice lowering."""
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 
 from pcc.frontends.go.branches import walk
 from pcc.frontends.go.managed_objects import FixedByteExtent
@@ -478,6 +478,13 @@ class StaticOptionCatalogRequest:
 
 
 @dataclass(frozen=True)
+class StaticOptionCatalogWrite:
+    statement: object
+    reset: bool
+    entries: tuple
+
+
+@dataclass(frozen=True)
 class StaticOptionBuilderProof:
     """Bounds and static field sources, not an initialized global descriptor."""
     record: str
@@ -485,6 +492,7 @@ class StaticOptionBuilderProof:
     thresholds: tuple[tuple[int, int], ...]
     feature_fields: tuple[tuple[str, str], ...]
     unbound_exports: tuple[str, ...]
+    writes: tuple[StaticOptionCatalogWrite, ...] = field(repr=False, compare=False)
 
     @property
     def capacity(self):
@@ -543,6 +551,7 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
         return None
 
     seen_labels, seen_fields, field_order = set(), set(), []
+    entries = []
 
     def typed_element(dtype):
         return isinstance(dtype, TypeName) and dtype.qualifier is None and dtype.token.text == record
@@ -573,6 +582,7 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
         seen_labels.add(text)
         seen_fields.add(key)
         field_order.append(key)
+        entries.append((label, address))
         return True
 
     def write(stmt):
@@ -588,6 +598,7 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
             or any(key is not None for key in initial.keys)
             or not all(item(value, elided=True) for value in initial.args)):
         return None
+    sites = [StaticOptionCatalogWrite(setup, True, tuple(entries))]
     if (level.kind != ":=" or len(level.names) != len(level.exprs) or len(level.names) != 1
             or not _builtin_call(level.exprs[0], level_function) or level.exprs[0].args):
         return None
@@ -605,8 +616,10 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
         limit = _literal_dimension(control.args[1])
         if limit is None or limit > (1 << 31) - 1 or (thresholds and thresholds[-1][0] >= limit):
             return None
+        first = len(entries)
         if not all(item(value, elided=False) for value in append.args[1:]):
             return None
+        sites.append(StaticOptionCatalogWrite(node.body[0], False, tuple(entries[first:])))
         thresholds.append((limit, len(append.args) - 1))
         end += 1
     def slot_use(expr):
@@ -628,7 +641,8 @@ def bounded_static_option_builder(program, builder_name, slot, level_function):
     if any(link.target is not None or link.local not in owners for link in relevant):
         return None
     exports = tuple(sorted({link.local for link in relevant}))
-    return StaticOptionBuilderProof(record, len(initial.args), tuple(thresholds), tuple(field_order), exports)
+    return StaticOptionBuilderProof(record, len(initial.args), tuple(thresholds), tuple(field_order),
+                                    exports, tuple(sites))
 
 
 def static_catalog_index_places(statement, slot, fields):

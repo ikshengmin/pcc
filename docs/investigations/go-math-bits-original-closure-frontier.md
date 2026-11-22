@@ -734,3 +734,12 @@ twenty-one adjacent and four native/reference nodes passed. The exact
 source probe now reaches the original `options = []option{...}` write
 at `internal/cpu/cpu_x86.go:73:2`; catalog initialization and upstream
 native execution are still unsupported.
+
+The source-only catalog initializer and each proved append now
+type-check their original string labels and direct package bool
+addresses. The fixed capacity/source proofs retain exact write-site
+identity; all other global slice reads or writes remain rejected.
+The exact source probe advances to the noncapturing doDerived
+function literal at `internal/cpu/cpu_x86.go:213:14`. One hundred
+four adjacent and three native/reference controls passed. This is
+not a native catalog allocation, linked X86 export, or upstream build.

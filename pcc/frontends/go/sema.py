@@ -545,6 +545,7 @@ class Analyzer:
         self.source_only = source_only
         self.scalar_slice_owners = {}
         self.static_option_catalogs = {}
+        self.static_catalog_writes = {}
         self.static_catalog_places = {}
         self.static_catalog_copy_token = None
         self.static_catalog_copy_catalog = None
@@ -563,6 +564,8 @@ class Analyzer:
                 proof = bounded_static_option_builder(program, request.builder, request.slot, request.level)
                 if proof is not None:
                     self.static_option_catalogs[request.slot] = proof
+                    self.static_catalog_writes.update({id(site.statement): (request.slot, site)
+                                                       for site in proof.writes})
         if source_only and prove_scalar_slice_owners:
             from pcc.frontends.go.slice_proof import scalar_slice_owner_group
             self.scalar_slice_owners = scalar_slice_owner_group(program) or {}
@@ -1415,7 +1418,30 @@ class Analyzer:
                 raise GoDiagnostic(expr.token, "multiple-value call in single-value context")
         return expressions
 
+    def check_static_catalog_write(self, statement, key, site):
+        from pcc.frontends.go.pointer_flow import static_scalar_field_fact
+
+        catalog = self.globals[key]
+        assert catalog.static_option_catalog_proof is not None and not catalog.abi_symbol
+        typed_entries = []
+        for label, address in site.entries:
+            self.expression(label)
+            self.expression(address)
+            coerce(label, "string")
+            coerce(address, PointerType("bool"))
+            if address.kind != "address" or static_scalar_field_fact(address.args[0]) is None:
+                raise UnsupportedGo(address.token, 'go.unsupported.pointer-storage',
+                                    "catalog feature must retain a static package field source")
+            typed_entries.extend((label, address))
+        statement.kind = "static_catalog_init" if site.reset else "static_catalog_append"
+        statement.catalog_symbol = catalog
+        statement.exprs, statement.targets = typed_entries, []
+
     def statement(self, statement):
+        site = self.static_catalog_writes.get(id(statement))
+        if site is not None:
+            self.check_static_catalog_write(statement, *site)
+            return
         kind = statement.kind
         if kind == "type_switch":
             selector = statement.exprs[0]

@@ -370,6 +370,7 @@ class Stmt:
     label: Token | None = None
     control_target: object = None
     type_declarations: list = field(default_factory=list)
+    catalog_symbol: object = None
 
 
 @dataclass

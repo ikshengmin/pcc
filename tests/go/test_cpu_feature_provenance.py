@@ -190,6 +190,7 @@ func build() {
     level := hardware()
     if level < 2 { catalog = append(catalog, Item{Label:"b", Flag:&Flags.B}) }
 }
+func leak() { _ = catalog }
 func main() {}
 """
     units = (("catalog.go", source),)
@@ -202,7 +203,7 @@ func main() {}
                         static_option_catalogs=(request,))
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as candidate:
         analyzer.analyze()
-    assert candidate.value.line == 7
+    assert candidate.value.line == 11
     symbol = analyzer.globals["catalog"]
     assert isinstance(symbol.type, SliceType) and symbol.type.element.name == "Item"
     assert symbol.static_option_catalog_proof.capacity == 2
@@ -211,7 +212,7 @@ func main() {}
     instances = {"main": SourceInstance("main", units, {}, static_option_catalogs=(request,))}
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as nested:
         analyze_source_instances(instances, main_instance="main", target_triple="x86_64-unknown-linux-gnu")
-    assert nested.value.line == 7
+    assert nested.value.line == 11
 
 
 def test_invalid_static_option_catalog_request_never_authorizes_declaration():
@@ -245,6 +246,7 @@ func build() {
     level := hardware()
     if level < 2 { return }
 }
+func leak() { _ = catalog }
 func main() {}
 """
 
@@ -262,7 +264,7 @@ def test_static_catalog_index_range_checks_scalar_fields_before_storage_stop():
                        static_option_catalogs=(request,))
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
         checker.analyze()
-    assert caught.value.line == 12  # the unadmitted builder write, not the index range
+    assert caught.value.line == 16  # the unadmitted whole-catalog read, not the index range
     loop = checker.functions["use"].body[0]
     assert loop.exprs[0].kind == "static_catalog_range"
     assert loop.init.symbols[0].type == "int"
@@ -322,7 +324,7 @@ def test_static_catalog_copy_preserves_pointee_proof_without_materializing_recor
                        static_option_catalogs=(proof,))
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
         checker.analyze()
-    assert caught.value.line == 13
+    assert caught.value.line == 17
     consumer = checker.functions["use"]
     loop = consumer.body[0]
     assert loop.init.symbols[1].static_catalog_copy is checker.globals["catalog"]
@@ -353,3 +355,38 @@ def test_static_catalog_copy_proof_never_allows_pointer_or_record_escape(bad):
     with pytest.raises(UnsupportedGo, match="proved global record slice needs owned initialization") as caught:
         checker.analyze()
     assert caught.value.line == 7
+
+
+def test_catalog_builder_source_sites_typecheck_static_fields_as_addresses():
+    from pcc.frontends.go.branches import walk
+    from pcc.frontends.go.packages import SourceInstance, analyze_source_instances
+    from pcc.frontends.go.slice_proof import StaticOptionCatalogRequest
+
+    source = """package main
+type Item struct { Label string; Flag *bool; Enabled bool }
+var catalog []Item
+var Flags struct { A bool; B bool }
+func hardware() int32 { return 1 }
+func build() {
+    catalog = []Item{{Label:"a", Flag:&Flags.A}}
+    level := hardware()
+    if level < 2 { catalog = append(catalog, Item{Label:"b", Flag:&Flags.B}) }
+}
+func main() {}
+"""
+    units = (("catalog.go", source),)
+    instance = SourceInstance("main", units, {}, static_option_catalogs=(
+        StaticOptionCatalogRequest("catalog", "build", "hardware"),))
+    analyzer = analyze_source_instances({"main": instance}, main_instance="main",
+                                       target_triple="x86_64-unknown-linux-gnu")["main"]
+    catalog = analyzer.globals["catalog"]
+    sites = [stmt for stmt in walk(analyzer.functions["build"].body)
+             if stmt.kind in {"static_catalog_init", "static_catalog_append"}]
+    assert [stmt.kind for stmt in sites] == ["static_catalog_init", "static_catalog_append"]
+    for stmt, label, field in zip(sites, (b"a", b"b"), ("A", "B")):
+        assert stmt.catalog_symbol is catalog and stmt.targets == []
+        name, address = stmt.exprs
+        assert name.constant == label and address.kind == "address"
+        assert address.args[0].value == field
+    with pytest.raises(UnsupportedGo, match="slice types require shared-runtime"):
+        compile_go(source)
