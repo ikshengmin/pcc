@@ -480,9 +480,13 @@ could not explain the write-barrier shade:
 - Native instance field assignment through `py_instance_set_field`.
 - Replacement of an initialized list item through `py_list_set`.
 - Set insertion through `py_set_add`.
+- Dictionary bulk update through `py_dict_update`, list slice replacement
+  through `py_list_set_slice`, and set bulk update through `py_set_update`.
+  These three use a source sealed in the dead graph before the callback:
+  the fixture does not create a temporary live source or pre-shade its
+  value in the callback.
 
-These are six concrete paths, not a complete barrier audit. Bulk slice
-and dictionary operations, additional field layouts, external native
-writers, and publication not mediated by these helpers need separate
-coverage. These tests do not establish safe batching across
+These are nine concrete paths, not a complete barrier audit. Additional
+field layouts, external native writers and publication not mediated by
+these helpers need separate coverage. These tests do not establish safe batching across
 concurrent weakref readers.

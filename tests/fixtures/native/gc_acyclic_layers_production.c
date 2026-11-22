@@ -55,6 +55,18 @@ static PyObject *finish_a(PyObject *self) {
         else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
         else if (rescue == 9) py_list_set(roots[HOLD], 0, target);
         else if (rescue == 10) py_set_add(roots[HOLD], target);
+        else if (rescue >= 11) {
+            // The incoming value was installed in an unreachable source
+            // before the mark. This callback adds no separate source shade.
+            PyObject *source = py_instance_get_field((PyInstanceObject *)self, 0);
+            if (!source || source == py_None) error = 27;
+            else if (rescue == 11) py_dict_update(roots[HOLD], source);
+            else if (rescue == 12) {
+                if (py_list_set_slice(roots[HOLD], py_int_from_i64(0), py_int_from_i64(1),
+                                      py_None, source) != 0) error = 28;
+            } else py_set_update(roots[HOLD], source);
+            if (source) py_decref(source);
+        }
         else if (rescue == 3) py_list_append(roots[HOLD], target);
         else {
             pcc_gc_store_root(&roots[HOLD], target);
@@ -91,6 +103,7 @@ static void *seal_on_departing_thread(void *unused) {
     if (pcc_current_thread_id() <= 0) { error = 8; return NULL; }
     PyClassObject *a_cls = py_class_new("LayerA", NULL, 0, fields, 1);
     int want_tail = mixed == 2 || rescue == 4;
+    int bulk = rescue >= 11;
     PyClassObject *b_cls = py_class_new("LayerB", NULL, 0, fields, want_tail ? 2 : 1);
     if (!a_cls || !b_cls) { error = 9; return NULL; }
     pcc_gc_store_root(&roots[CLASS_A], (PyObject *)a_cls);
@@ -103,14 +116,14 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *b = py_instance_new(b_cls);
     PyObject *callback = silent || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
-    if (rescue == 3 || (rescue >= 6 && rescue <= 10)) {
-        PyObject *holder = rescue == 3 || rescue == 9 ? py_list_new(0) :
-                           rescue == 6 || rescue == 8 ? py_dict_new() :
+    if (rescue == 3 || rescue >= 6) {
+        PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 ? py_list_new(0) :
+                           rescue == 6 || rescue == 8 || rescue == 11 ? py_dict_new() :
                            rescue == 7 ? py_instance_new(a_cls) : py_set_new();
         if (!holder) { error = 14; return NULL; }
         pcc_gc_store_root(&roots[HOLD], holder);
         if (rescue == 8) py_dict_set(holder, py_int_from_i64(7), py_None);
-        if (rescue == 9) py_list_append(holder, py_None);
+        if (rescue == 9 || rescue == 12) py_list_append(holder, py_None);
         pcc_gc_set_mark_color(holder, PY_FLAG_GC_BLACK);
         __atomic_fetch_and(&py_header(holder)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
     }
@@ -125,7 +138,14 @@ static void *seal_on_departing_thread(void *unused) {
         py_instance_set_field((PyInstanceObject *)b, 1, tail);
         pcc_gc_unpin(tail);
     }
-    if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
+    if (bulk) {
+        tail = rescue == 11 ? py_dict_new() : py_list_new(0);
+        if (!tail) { error = 29; return NULL; }
+        if (rescue == 11) py_dict_set(tail, py_int_from_i64(7), b);
+        else py_list_append(tail, b);
+        py_instance_set_field((PyInstanceObject *)a, 0, tail);
+        pcc_gc_unpin(tail);
+    } else if (mixed) py_instance_set_field((PyInstanceObject *)b, 0, b);
     else if (!rescue) py_instance_set_field((PyInstanceObject *)a, 0, b);
     if (silent == 2) {
         PyClassObject *other = py_class_new("InactiveFinalizer", NULL, 0, NULL, 0);
@@ -144,7 +164,7 @@ static void *seal_on_departing_thread(void *unused) {
     pcc_gc_unpin(b);
     pcc_py_gc_minor_graph_lock();
     PyObject *items[] = {a, b, tail};
-    for (int i = 0; i < (want_tail ? 3 : 2); ++i) {
+    for (int i = 0; i < (want_tail || bulk ? 3 : 2); ++i) {
         PyObject *obj = items[i];
         int index = rescue || i >= 2 ? i : 1-i;
         nodes[index] = pcc_gc_object_index_find(obj);
@@ -180,6 +200,9 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "dict-replace") == 0) rescue = 8;
     if (argc > 1 && strcmp(argv[1], "list-replace") == 0) rescue = 9;
     if (argc > 1 && strcmp(argv[1], "set-holder") == 0) rescue = 10;
+    if (argc > 1 && strcmp(argv[1], "dict-update") == 0) rescue = 11;
+    if (argc > 1 && strcmp(argv[1], "list-slice") == 0) rescue = 12;
+    if (argc > 1 && strcmp(argv[1], "set-update") == 0) rescue = 13;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
     withdrawn = argc > 1 && strcmp(argv[1], "withdrawn") == 0;
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
@@ -206,7 +229,7 @@ int main(int argc, char **argv) {
     pcc_gc_tracing_candidates_reset();
     pcc_gc_tracing_candidates_note(nodes[0]);
     pcc_gc_tracing_candidates_note(nodes[1]);
-    if (mixed == 2 || rescue == 4) pcc_gc_tracing_candidates_note(nodes[2]);
+    if (mixed == 2 || rescue == 4 || rescue >= 11) pcc_gc_tracing_candidates_note(nodes[2]);
     pcc_gc_tracing_finish_commits = 1;
     pcc_gc_tracing_candidates_seal(1);
     pcc_gc_tracing_finish_stop_epoch = pcc_thread_world_stop_epoch_held();
@@ -214,7 +237,7 @@ int main(int argc, char **argv) {
     int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS);
     int64_t scans_start = pcc_gc_metric_layer_weak_registry_scans;
     int64_t pass0_start = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS);
-    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 ? 3 : 2);
+    int64_t reclaimed = pcc_gc_tracing_sweep_unreachable(mixed == 2 || rescue == 4 || rescue >= 11 ? 3 : 2);
     int64_t scans = pcc_gc_metric_layer_weak_registry_scans - scans_start;
     int64_t pass0 = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_PASS0_CALLS) - pass0_start;
     int64_t full = pcc_gc_telemetry(PCC_GC_COUNTER_SWEEP_RECHECK_CALLS) - before;

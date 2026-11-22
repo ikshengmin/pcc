@@ -19,7 +19,7 @@ field_holder = FieldHolder()
 late_refs = []
 late_new = sys.argv[1] == "late-new"
 indirect = sys.argv[1] == 'holder'
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder")
+rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update")
 withdrawn = sys.argv[1] == "withdrawn"
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
@@ -41,6 +41,12 @@ class A:
             list_holder[0] = weak_b()
         elif sys.argv[1] == "set-holder":
             set_holder.add(weak_b())
+        elif sys.argv[1] == "dict-update":
+            dict_holder.update(self.child)
+        elif sys.argv[1] == "list-slice":
+            list_holder[:] = self.child
+        elif sys.argv[1] == "set-update":
+            set_holder.update(self.child)
         elif rescue or withdrawn:
             held = weak_b()
             if withdrawn:
@@ -59,6 +65,10 @@ class Tail:
 
 b = B()
 a = A()
+if sys.argv[1] == "dict-update":
+    a.child = {7: b}
+elif sys.argv[1] in ("list-slice", "set-update"):
+    a.child = [b]
 if sys.argv[1] in ("mixed-tail", "pin"):
     b.tail = Tail()
 if mixed:
