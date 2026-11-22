@@ -11,6 +11,7 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     atomic_rmw_i64,
     atomic_store_i32,
+    cstr,
     define_global_i32,
     define_global_i64,
     define_thread_local_i32,
@@ -19,6 +20,7 @@ from pcc.unsafe import (
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
+    load_i8,
     load_i32,
     load_i64,
     load_ptr,
@@ -35,9 +37,9 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
-# Review branch only: enabled by an owned native probe before automatic
-# collection starts. No runtime flag, default dispatch, or new worker.
-define_global_i32("pcc_gc2_review_list_bridge_enabled", 0)
+# Review branch only. The uninitialized selector is frozen on the first
+# GC2 lookup. The owned fixture can still explicitly exercise mode 1.
+define_global_i32("pcc_gc2_review_list_bridge_enabled", -1)
 define_global_i64("pcc_gc2_review_list_bridge_visits", 0)
 define_global_i64("pcc_gc2_review_list_bridge_fallbacks", 0)
 
@@ -65,6 +67,7 @@ pcc_gc_is_cms_worker = extern("pcc_gc_is_cms_worker", (), c_int64)
 pcc_thread_join = extern("pcc_thread_join", (c_ptr, c_ptr), c_int64)
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
+pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 pcc_gc_maybe_start_cms_worker = extern(
     "pcc_gc_maybe_start_cms_worker", (), c_void
 )
@@ -801,6 +804,28 @@ def pcc_gc_tracing_finish_left_to_mutator() -> i64:
     return 1
 
 
+@c_abi_export("pcc_gc2_exact_list_bridge_read_gc2")
+def _gc2_exact_list_bridge_read_gc2() -> i64:
+    selector = global_addr("pcc_gc2_review_list_bridge_enabled")
+    cached: i64 = atomic_load_i32(selector, 0, "acquire")
+    if cached >= 0:
+        return cached
+    flag = pcc_platform_getenv(cstr("PCC_GC2_EXACT_LIST_BRIDGE"))
+    chosen: i64 = 0
+    if ptr_is_null(flag) == 0 and load_i8(flag, 0) == 49 and load_i8(flag, 1) == 0:
+        chosen = 2
+    prior: i64 = atomic_cas_i32(selector, 0, -1, chosen, "acq_rel", "acquire")
+    return chosen if prior == -1 else prior
+
+
+@c_abi_export("pcc_gc2_exact_list_bridge_mode")
+def pcc_gc2_exact_list_bridge_mode() -> i64:
+    """Report the sealed review selector, not a runtime write API."""
+    if pcc_gc_config_ensure() != 2:
+        return 0
+    return _gc2_exact_list_bridge_read_gc2()
+
+
 @c_abi_export("pcc_gc2_review_list_bridge")
 def _gc2_review_list_bridge(owner_slot, epoch: i64, token: i64) -> i64:
     """Consume one graph-owned claim and return without a stale local cursor."""
@@ -1033,6 +1058,8 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
         review_mode = atomic_load_i32(
             global_addr("pcc_gc2_review_list_bridge_enabled"), 0, "acquire"
         )
+        if review_mode < 0:
+            review_mode = _gc2_exact_list_bridge_read_gc2()
     if (
         review_mode != 0
         and pcc_py_gc_minor_graph_lock_depth() == 1

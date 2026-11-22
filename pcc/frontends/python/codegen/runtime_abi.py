@@ -3207,6 +3207,7 @@ def _cross_object_signatures_part_12():
     "pcc_gc_deferred_free_drain_raw_chain": (("c_ptr", "c_int64", "c_int64"), "c_void"),
     "pcc_gc_trace_referents_work": (("c_ptr",), "c_int64"),
     "pcc_gc_trace_gc2_rooted_short_list": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc2_exact_list_bridge_mode": ((), "c_int64"),
     "pcc_gc2_review_claim_open_locked": (("c_ptr", "c_int64"), "c_int64"),
     "pcc_gc2_review_claim_may_request_remark_locked": (("c_int64",), "c_int64"),
     "pcc_gc2_review_claim_close_locked": (("c_ptr", "c_int64", "c_int64", "c_int64"), "c_int64"),

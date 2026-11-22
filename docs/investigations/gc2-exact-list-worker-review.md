@@ -205,3 +205,24 @@ and one visible token. Both modes and the direct-cursor and depth-first
 shapes passed three times each (12 fresh processes). The automatic
 one/four-mutator harness and three other focused Linux native suites also
 passed. This does not enable another CMS worker or establish a speedup.
+
+## Startup selector for measuring the review candidate
+
+This revision accepts the exact startup environment value
+`PCC_GC2_EXACT_LIST_BRIDGE=1` only for GC2. It selects the reservation-
+aware bridge (native mode 2). The first GC2 query caches the choice using
+an atomic compare/exchange, and the read-only
+`pcc_gc2_exact_list_bridge_mode()` reports it. Unset, blank, or any
+other spelling stays off. Other collectors report off even if the
+environment contains the flag. Mode 1 is still fixture-only.
+
+The setting is for a sealed comparison, not a merge, agent worker
+expansion, or a claim of better throughput. Until the arm tooling
+attests it, do not use an inherited shell flag as proof that an A/B
+case actually selected the candidate.
+
+Linux owned native: 12 strict spelling/backend probes and 18 automatic
+one/four-mutator runs passed. Mode 2 in the automatic run was selected
+by startup environment, not by a direct runtime global write. Mode 0
+was unset; mode 1 remained a separate fixture control. Eight ABI checks
+passed. Native macOS and wall-time A/B were not run.

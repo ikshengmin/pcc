@@ -18,9 +18,13 @@ def test_gc2_actual_list_bridge_preserves_automatic_collection(tmp_path, explici
     for repeat in range(3):
         for workers in (1, 4):
             for enabled in (0, 1, 2) if repeat % 2 == 0 else (2, 1, 0):
+                case_env = dict(env)
+                case_env.pop("PCC_GC2_EXACT_LIST_BRIDGE", None)
+                if enabled == 2:
+                    case_env["PCC_GC2_EXACT_LIST_BRIDGE"] = "1"
                 result = _record_execution(
                     tmp_path, f"bridge-{workers}-{enabled}-{repeat}",
-                    [str(binary), str(workers), str(enabled)], env,
+                    [str(binary), str(workers), str(enabled)], case_env,
                 )
                 assert (result["returncode"], result["stderr"]) == (0, ""), result
                 count = r"[1-9]\d*" if enabled else "0"

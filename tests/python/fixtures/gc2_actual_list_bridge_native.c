@@ -6,6 +6,7 @@ extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 extern int64_t pcc_gc_telemetry(int64_t);
 extern int32_t pcc_gc2_review_list_bridge_enabled;
+extern int64_t pcc_gc2_exact_list_bridge_mode(void);
 extern int64_t pcc_gc2_review_list_bridge_visits;
 extern int64_t pcc_gc2_review_list_bridge_fallbacks;
 extern int64_t pcc_gc_tracing_finish_commits;
@@ -54,7 +55,10 @@ int main(int argc, char **argv) {
     if (pcc_gc_backend() != 2 || pcc_current_thread_id() <= 0) return 2;
     py_gc_disable();
     int enabled = argv[2][0] - '0';
-    __atomic_store_n(&pcc_gc2_review_list_bridge_enabled, enabled, __ATOMIC_RELEASE);
+    if (enabled == 1)
+        __atomic_store_n(&pcc_gc2_review_list_bridge_enabled, 1, __ATOMIC_RELEASE);
+    else if (pcc_gc2_exact_list_bridge_mode() != enabled)
+        return 11;
     int64_t start_commits = pcc_gc_tracing_finish_commits;
     Shared shared = {0};
     Task tasks[MAX_WORKERS];
