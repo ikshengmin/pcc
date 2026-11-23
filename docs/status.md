@@ -156,6 +156,30 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- **#9 Mac throughput and native verification:** candidate
+  [`eff808bf`](https://github.com/ikshengmin/pcc/commit/eff808bf3309a7a54f14bc15a95d1c1622548999),
+  verified head of `shenming/review/gc9-production-remark`. No merge.
+  Baseline existing arm `master-445df066` (the `64d49ae56`
+  runtime/benchmark-equivalent arm), same pinned gateway and
+  `PCC_PERF_HOME`. Candidate checkout is `eff808bf3309a7a54f14bc15a95d1c1622548999`.
+  Linux: 295 sealed checks, 248 production sweep cases, 5 model cases,
+  and 8 pending-generator native cases. Linux continues with correctness
+  and counters only. Mac owner runs these from the candidate checkout
+  with the existing project environment:
+
+  ```sh
+  export PCC_PERF_HOME="${PCC_PERF_HOME:-$HOME/.cache/pcc/perf}"
+  uv run --no-sync python scripts/pcc_perf.py arm gc9-eff808bf
+  uv run --no-sync python scripts/pcc_perf.py ab master-445df066 gc9-eff808bf --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0 --latency-receipts
+  export PCC_RUNTIME_ARCHIVE="$(uv run --no-sync python -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"])' "$PCC_PERF_HOME/arms/gc9-eff808bf/build.json")"
+  PCC_THREADS=1 PCC_REFCOUNT_KIND=atomic PCC_NO_AUTO_PCC1=1 PCC_TEST_NO_NATIVE_PROVISIONING=1 uv run --no-sync python -m pytest -x -n0 -m integration tests/python/test_gc_acyclic_singleton_production_native.py tests/python/test_gc_observer_generator_native.py
+  ```
+
+  Check actual candidate SHA in both receipts. Report GC0 floor, paired
+  throughput, max STW/peak RSS/p99, and the native result before deciding
+  whether to merge. Four parked peers' ~10× per-callback cost is a
+  separate non-blocking follow-up.
+
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -392,7 +416,7 @@ in the relevant section or issue and removes the entry.
        the same ten cleared-generator failures reproduced on the preimage.
        The exact non-instrumented 5-pair GC1/GC3 w4 effect changed sign
        across 20k/50k-request runs; unchanged GC0 floors were 19.3% and
-       14.5%. Do not call the throughput gate passed or request Mac A/B.
+       14.5%. These are historical Linux data, not a throughput decision.
        A local integration of the census fix, ABI cleanup, and module
        tests passed all 295 sealed checks, 248 native and 5 model cases.
        Its four-worker GC3 median changes sign again (-9.6% all CPUs,
@@ -411,8 +435,8 @@ in the relevant section or issue and removes the entry.
        #9 arm, the fix bundle's pinned 5-pair/50k GC2-w4 median was
        -2.5% (3/5 candidate wins), GC3-w4 -1.9% (4/5 wins), and the
        GC0 control floor was 20.4%. Do not tune GC2 from this result.
-       Throughput must be retried on a quieter Linux host or session
-       before requesting a final macOS comparison; no merge. The split opt-in Linux probe on
+       Throughput qualification is now Mac-only by maintainer direction;
+       no merge is implied. The split opt-in Linux probe on
        `b7845414c` ran 9 times (40k requests each) and reconciled to
        counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
        median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
@@ -466,7 +490,9 @@ in the relevant section or issue and removes the entry.
        zero full rechecks/weak-registry scans. Base-to-16n growth was
        14–17×; the largest paired median ballast shifts were +6.6% live
        and +10.0% weakrefs, not proportional to ballast. Parked peers
-       still raise the per-callback cost; this did not pass HTTP or Mac.
+       multiplied measured unit callback cost by roughly 10×, despite
+       near-linear growth. Maintainer: separate follow-up, non-blocking
+       for this handoff. This did not pass HTTP or Mac.
      - Throughput gate moves to the Mac (Claude review, 2026-11-23). The
        Linux host cannot resolve it: identical-binary GC0 A/A swings up
        to 19.0% and the GC0 floors were 14.5–43.7%, while the Mac floors
@@ -592,7 +618,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 publish exact Mac verification candidate: Codex, Linux x86-64, 2026-11-23 03:37 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
