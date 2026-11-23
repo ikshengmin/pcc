@@ -156,6 +156,15 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- **#9 macOS verification**: review `aac63c5c1e0d1db352280a1d4aabae58f9b320ca` on
+  `review/gc9-production-remark`; no merge pending local Mac evidence. With
+  the exact sealed runtime, run the new process-entry test on GC0–4 and the
+  six 256-node sealed/public cases 30 times (180 runs, require zero failures).
+  Repeat the five-pair Mac handler A/B with GC0 control at w1 and w4: the
+  cutoff changes the shared snapshot taken even on collections with no
+  callbacks. Keep `master-445df066` as the frozen comparison and report
+  max STW, RSS and p99.
+
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -529,15 +538,19 @@ in the relevant section or issue and removes the entry.
        every other thread, since a foreign caller's frame above a
        registration point can hold a returned object. This changes the
        shared root contract, so validate all five collectors.
-     - Next #9: fix that early stop before merge. Repro on any host: loop
-       the 256-node cases 30 times, e.g. `-k 256` on
-       `test_gc_acyclic_singleton_production_native.py::test_callback_chain_scale_matches_cpython`
-       with `-x -n0 -m integration`; a qualifying fix shows 0 of at
-       least 30 runs red on Linux. Unverified lead, mine: a stale stack
-       or register word naming the next chain item, kept by the
-       conservative callback-window capture. After the fix, request one
-       Mac rerun of the native loop only; the throughput result above
-       stands unless the fix touches the no-observer sweep path.
+     - Next #9: Mac execution and throughput at [`aac63c5c1`](https://github.com/ikshengmin/pcc/commit/aac63c5c1e0d1db352280a1d4aabae58f9b320ca).
+       Linux pcc0 rebuilt the owned runtime and passed 20 deterministic
+       root-range cases across GC0–4, 248 production-sweep cases, 180/180
+       strict 256-node repetitions, and eight separately built/rerun
+       generator programs. Five Mach-O cross-link and eight ABI-inventory
+       checks passed. The active process-entry scope excludes its caller's
+       startup words while retaining true application and foreign-thread
+       roots, including when main is a parked peer. The regular and
+       windowed owned Mach-O paths pick the adapter only if the conservative
+       thread runtime is linked. Native macOS is unrun; no master runtime
+       change. The final Linux test groups ran at the 90-second/1-GiB cap;
+       the combined test invocation hit its time limit before compiling
+       both generator fixtures, which completed as separate stages.
      - Linux memory preflight: the Linux check requires `MemAvailable` of
        at least `--max-tree-rss` plus `--preflight-reserve`. The defaults,
        6 GiB plus 8 GiB, suit a large Mac only. The tool's own comment says
@@ -652,7 +665,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 bound main-thread conservative roots below process entry: Codex, Linux, 2026-11-23T04:45Z, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
