@@ -860,6 +860,12 @@ in the relevant section or issue and removes the entry.
    each red 5/5 on the exact review base; rooted indexed control green
    5/5). For shared root-store, pin and container locks, eliminate work
    actually executed at entry; frame-size changes alone do not qualify.
+   Linux root-store candidate (`7f051450`, local only) cut pre-slot zero
+   stores 28→15 and passed native and ABI checks. Sealed five-pair w1/w4
+   A/B with a separate stock control was inconclusive in all ten rows;
+   GC0 w4 +1.8% (4/5, 32.7% floor), while GC2 w4 was −23.3%
+   (0/5, 47.0% floor). No runtime push; retain the local candidate and
+   pause Codex work at the maintainer's request.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -1081,7 +1087,6 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Remove executed initialization from shared root-store entry: Codex, Linux, 2026-11-23T12:35Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
