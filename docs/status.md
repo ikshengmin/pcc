@@ -768,9 +768,16 @@ in the relevant section or issue and removes the entry.
    Next GC3: make a live bump owner visible to the major marker and give
    mixed spans an exact lifecycle; rerun the rooted/unrooted probe and
    frozen-root controls before any production allocation or Mac A/B.
-   Next available GC2 diagnostic: on current master distinguish GC2
-   four-worker allocator refill/lock contention from gray-queue costs
-   before selecting any further pacer candidate. Linux counters only.
+   GC2 diagnostics on the landed #9 runtime (`2d9393e95`): five
+   alternating Linux pairs of the same 120,000-list native probe again
+   locate the direct plus inlined raw/object allocator spin loop, at
+   median 56.56% of CMS+mutator user CPU samples at w4 vs 4.12% w1;
+   explicit gray worklist functions were 3.97% vs 0.77%. Four of five
+   w4 runs finished no mark during allocation, vs none at w1 (21
+   finishes median). This is not a throughput test or exclusive cause.
+   Next GC2: test reserving the same-slab raw magazine extras as a
+   batch under the allocator lock, and compare the actual spin and
+   completed marks. Preserve trim accounting and other-backend controls.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -992,7 +999,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 verify four-worker allocator refill contention on current master: Codex, Linux, 2026-11-23T08:50Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
