@@ -1038,7 +1038,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - Isolate GC2 long allocator lock holds by raw refill phase: Codex, Linux, 2026-11-23T09:57Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
