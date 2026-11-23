@@ -389,6 +389,15 @@ in the relevant section or issue and removes the entry.
      - Put the 16n and heap-independence rows in the receipt itself
        (condition 3).
      - Then request the same macOS A/B again in the waiting list.
+   - Linux observer-free check: exact stock and `b7845414c` reclaimed all
+     1,024/4,096/16,384 plain lists on GC1–3 with zero user finalizers.
+     Previous-stop sweep kept exactly one mandatory refresh. A local trial
+     deferred candidate compaction until after the observer check; 33 native
+     cases passed, including previous-stop finalizer-only and live rescue.
+     Seven paired 16,384/32,768-list cuts were within duplicate-parent noise.
+     No code pushed; this does not explain the Mac four-thread loss. Next
+     compare the per-bucket graph-lock counters and request call sites on
+     the two existing Mac arms before changing the hot path.
    - Dependent GC2/GC3 review slices stay paused.
    Separately, GC2 Linux task-clock attribution (120,000 list allocations,
    five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
@@ -474,7 +483,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 observer-free sweep cost: Codex, Linux x86-64, 2026-11-23 01:02 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
