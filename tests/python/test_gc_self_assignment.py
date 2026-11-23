@@ -3,17 +3,17 @@
 from pathlib import Path
 import subprocess
 
+from tests.owned_runtime_c_fixture import link_c_harness_bounded
+
 
 def test_refcount_store_self_assignment_preserves_distinct_owners(tmp_path: Path, pcc_runtime_archive):
-    archive = pcc_runtime_archive
-    root = Path(__file__).resolve().parents[2]
     source = tmp_path / "self_assignment.c"
     source.write_text('''#include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
 static int64_t refs(PyObject *value) { return *(int64_t *)value; }
 int main(void) {
-    if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) return 1;
+    py_gc_init();
     PyObject *value = py_list_new(0);
     PyObject *root = NULL;
     PyObject *container = py_list_new(0);
@@ -44,10 +44,7 @@ int main(void) {
 }
 ''')
     executable = tmp_path / "self_assignment"
-    built = subprocess.run([
-        "clang", "-std=c11", "-I" + str(root / "pcc/runtime/include"),
-        str(source), str(archive), "-pthread", "-o", str(executable),
-    ], capture_output=True, text=True, timeout=30)
+    built = link_c_harness_bounded(source, executable, runtime_archive=pcc_runtime_archive)
     assert built.returncode == 0, built.stdout + built.stderr
     ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=10)
     assert ran.returncode == 0, ran.stdout + ran.stderr

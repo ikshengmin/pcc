@@ -1484,6 +1484,18 @@ the native path is a Linux check:
 
     PCC_RUNTIME_ARCHIVE=<owned archive> gtimeout 1800s uv run pytest -x -v -n0 -m integration tests/runtime_shared/test_managed_owned.py tests/runtime_shared/test_java_reference_abi.py tests/go/test_managed_contracts.py tests/java/test_source_native_arrays.py
 
+Linux x86-64 at `cba826a9`, host pcc0 emitting owned native programs:
+17 focused collector and ABI cases passed (five bounded-stop cases,
+generations, three slab-return programs and eight ABI checks). The four
+shared-storage files ran 173 ordinary cases; five integration cases passed
+with the source-matched runtime archive, including the managed graph, scalar
+slice ownership, Go managed allocation and the Java reference/roots client.
+The Java client uses a separately built `PCC_JAVA_MANAGED_OBJECT`. External
+Go/JDK oracle cases, pcc1, Windows and post-removal QPS were not run.
+The explicit-collection pause telemetry and self-assignment ownership
+harnesses now run without the deleted selector, using the owned C fixture
+linker. Both passed; remaining selector-dependent tests are not qualified.
+
 Stage 3 (full collection in bounded stops; written by Claude on the local
 Mac, 2026-11-24, uncommitted on `90f4345db`).
 `freestanding_gc_backend0_incremental.py` replaces the stopped-world full
