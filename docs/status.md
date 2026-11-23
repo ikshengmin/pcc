@@ -408,8 +408,13 @@ in the relevant section or issue and removes the entry.
        19.6%). Linux `top`/`locks` currently require macOS `sample`; the
        direct lock buckets did not reproduce the GC1/GC2 wait-count spikes.
        No production change and no new Mac run requested.
-     - Fold into the production path, or remove, the four caller-less
-       inert exports named in the review (condition 6).
+     - Linux-validated independent condition-6 cleanup, not merged: the
+       four prototype-only entries and two private refresh helpers are
+       absent from a rebuilt owned archive. Two CPython-oracle cases now
+       exercise real cyclic weakref order (including an unreachable ref)
+       and nested collection instead of the injected callback arm.
+       242 focused native assertions passed on Linux x86-64; no Mac run.
+       Keep the cleanup together with the replacement coverage.
      - Put the 16n and heap-independence rows in the receipt itself
        (condition 3).
      - Iterate on the Linux host with the same handler measurement,
@@ -532,7 +537,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 remove unused review ABI: Codex, Linux x86-64, 2026-11-23 02:47 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
