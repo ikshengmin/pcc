@@ -6,7 +6,11 @@ tables and name sets of runtime_abi.py, their prototypes leave the C
 headers, deleted modules leave the Makefile, and words nothing names any
 more leave freestanding_gc_state.py.
 
-    cleanup_declarations.py report | apply
+    cleanup_declarations.py report | apply [BASE]
+
+BASE is the revision whose runtime is "before" (default: the last commit
+before the removal began). The list of what is gone goes to removed.json
+beside this file, which is tracked: prune_tests.py reads it on any host.
 """
 from __future__ import annotations
 
@@ -29,19 +33,23 @@ EXPORT = re.compile(r'@c_abi(?:_typed)?_export\(\s*"([A-Za-z0-9_]+)"')
 GLOBAL = re.compile(r'define_(?:global|thread_local)_[a-z0-9_]+\(\s*"([A-Za-z0-9_]+)"')
 
 
-def committed_runtime():
-    listing = subprocess.run(["git", "-C", str(REPO), "ls-tree", "--name-only", "HEAD", "pcc/runtime/py/"],
+# The last commit before collectors 1-4 were removed.
+BASE = "90f4345db"
+
+
+def committed_runtime(base: str):
+    listing = subprocess.run(["git", "-C", str(REPO), "ls-tree", "--name-only", base, "pcc/runtime/py/"],
                              capture_output=True, text=True, check=True).stdout.split()
     out = {}
     for relative in listing:
         if relative.endswith(".py"):
-            out[relative] = subprocess.run(["git", "-C", str(REPO), "show", "HEAD:" + relative],
+            out[relative] = subprocess.run(["git", "-C", str(REPO), "show", base + ":" + relative],
                                            capture_output=True, text=True, check=True).stdout
     return out
 
 
-def survey():
-    before = committed_runtime()
+def survey(base: str = BASE):
+    before = committed_runtime(base)
     now = {str(p.relative_to(REPO)): p.read_text(encoding="utf-8") for p in sorted(RUNTIME.glob("*.py"))}
     symbols_before = set()
     globals_before = set()
@@ -167,7 +175,8 @@ def clean_state(words, apply: bool) -> int:
 
 def main(argv) -> int:
     apply = len(argv) > 0 and argv[0] == "apply"
-    removed_symbols, removed_globals, removed_modules, now = survey()
+    base = argv[1] if len(argv) > 1 else BASE
+    removed_symbols, removed_globals, removed_modules, now = survey(base)
     words = unused_state_words(now)
     removed_names = set(removed_symbols) | set(removed_globals) | set(words)
     print("removed symbols:", len(removed_symbols), " removed words:", len(removed_globals),
@@ -183,7 +192,7 @@ def main(argv) -> int:
     print("Makefile names:", clean_makefile(removed_modules, apply))
     json.dump({"symbols": sorted(removed_symbols), "globals": sorted(removed_globals | set(words)),
                "modules": removed_modules},
-              open(REPO / "build/one-collector/removed.json", "w"), indent=1)
+              open(Path(__file__).with_name("removed.json"), "w"), indent=1)
     return 0
 
 

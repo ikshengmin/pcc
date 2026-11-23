@@ -728,8 +728,10 @@ in the relevant section or issue and removes the entry.
        `table`. A loss beyond the noise floor is located before any other
        unit of this item. Platform macOS.
    (b) Tests that still name removed entry points.
-       `scripts/one_collector/prune_tests.py report` lists them: 77 files
-       in which every test does, 194 files in which 955 tests do. A test of
+       `scripts/one_collector/prune_tests.py report` lists them from the
+       tracked `removed.json` (what the removal took, against `90f4345db`),
+       on any host: 75 files in which every test does and 192 files in
+       which 951 tests do, at `4f0efe6db`. A test of
        the one collector is rewritten without the removed setter or loop
        and must pass; a test of collectors 1-4 is deleted. They fail until
        then, so compare a suite by node id against this list.
@@ -1104,9 +1106,9 @@ Still open in stage 2:
   `pipeline_frontend_workers.py`, `package/runtime_profile.py`); the
   closed-young analysis of the frontend (`closed_young_domain.py`,
   `closed_young_closure.py`) has no consumer left.
-- Tests: `scripts/one_collector/prune_tests.py report` finds 77 more test
-  files in which every test names something removed, and 194 files in
-  which 955 tests do. Many of them test the one collector and only select
+- Tests: `scripts/one_collector/prune_tests.py report` finds 75 more test
+  files in which every test names something removed, and 192 files in
+  which 951 tests do (at `4f0efe6db`). Many of them test the one collector and only select
   it through the removed setter or loop over removed entry points, so they
   need a rewrite, not deletion; none was touched.
 - The pin, lease, relocation-read and write-barrier calls are still

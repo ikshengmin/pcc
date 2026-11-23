@@ -17,7 +17,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 (REPO / "build" / "one-collector").mkdir(parents=True, exist_ok=True)
-removed = json.load(open(REPO / "build/one-collector/removed.json"))
+removed = json.load(open(Path(__file__).with_name("removed.json")))
 NAMES = set(removed["symbols"]) | set(removed["globals"]) | {m for m in removed["modules"]}
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 SELECT = re.compile(
