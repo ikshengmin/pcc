@@ -469,10 +469,13 @@ in the relevant section or issue and removes the entry.
    [GC3 closed young review 7d745c3](https://github.com/ikshengmin/pcc/commit/7d745c310ada9f7c1ff6bda713d5f41004b31b22)
    closes a real explicit-root and dirty-edge cohort. Five Linux runs
    each preserved four young cells and retired one, rejecting four
-   incomplete cuts. No automatic caller, real caller root discovery,
-   bump or slab rewind. Next GC3: capture the real caller and mapped
-   roots before entering the young transaction; prove raw scratch
-   does not keep a dead cell. Then test admitted allocation and reuse.
+   incomplete cuts. [GC3 root review 0da03b2](https://github.com/ikshengmin/pcc/commit/0da03b22694fadd9370a64c1448a110cebfc75a5)
+   uses the initial frozen threads' root cut and registered value walker.
+   Nine Linux controls distinguish a caller interior word, separate
+   scheduler slot, and post-stop scratch; prior cohort regression passed.
+   No automatic entry or complete precise/foreign root qualification.
+   Next GC3: native bump span publication and reuse, then link actual
+   layout/admission to a measured minor and seal the handler arm.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -694,7 +697,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-22 23:50 UTC), GC3 narrow caller-root adapter from the existing stopped snapshot/mapped-root cut: add real retention and stale collector scratch controls before nursery activation.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
