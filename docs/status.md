@@ -381,9 +381,20 @@ in the relevant section or issue and removes the entry.
      the layered path, and the cost above comes from collections that have
      no observable candidate. Cause not attributed.
    - Next #9, in order:
-     - Profile both arms with `pcc_perf locks` and `top`, and remove that
-       cost, so a sweep with no observable candidate costs what the parent
-       costs (condition 4).
+     - Split `sweep_other` into the prior-stop cohort compaction, observer
+       selection and layer-plan work in the opt-in pause diagnostic; then
+       remove any unnecessary work on the no-observer path (condition 4).
+       Linux `64d49ae56` vs `b7845414c`: three alternating 40k-request
+       pairs per cell, all 18 exclusive reports reconcile to metrics
+       119–121. Aggregate `sweep_other` paired median increases: GC1 w4
+       +38.0 ms, GC2 w1 +45.0 ms, GC3 w4 +41.6 ms; all 9 pairs increased,
+       stopped-window counts unchanged. In GC3 w4's longest window the
+       same bucket increased by a paired median 11.6 ms. No callback-window
+       time or full recheck was observed. Initial and longer Linux
+       throughput A/B still inconclusive (GC0 w4 noise floors 43.7% and
+       19.6%). Linux `top`/`locks` currently require macOS `sample`; the
+       direct lock buckets did not reproduce the GC1/GC2 wait-count spikes.
+       No production change and no new Mac run requested.
      - Fold into the production path, or remove, the four caller-less
        inert exports named in the review (condition 6).
      - Put the 16n and heap-independence rows in the receipt itself
@@ -508,7 +519,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 Linux handler stop-phase attribution: Codex, Linux x86-64, 2026-11-23 02:03 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
