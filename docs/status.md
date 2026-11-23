@@ -836,10 +836,14 @@ in the relevant section or issue and removes the entry.
    w4 median carve µs/slab was 29.81→26.03 (3/5), 21.99→23.96
    (2/5), and 19.18→27.17 (3/5), respectively. Only w1 size 16
    improved in all pairs (23.05→20.54). Do not merge or request a
-   Mac A/B for this splice. Next GC2: audit the contract for preparing
-   a fresh raw slab outside the allocator lock, keeping provenance,
-   trim and the publish decision serialized; identify a bounded
-   test for refill races before attempting mixed-path code.
+   Mac A/B for this splice. A scratch Linux native probe verified off-lock
+   raw-slab preparation on GC0–4: two preparations, one publication,
+   one private discard, two distinct reservations, exact mapped payload
+   accounting, and one reclaimable slab. The test is not on a production
+   allocation path and did not measure throughput. Next GC2: wire the bounded
+   prepare/recheck into both raw allocation paths in a local candidate;
+   test preparation/registration failure and trim, then run the fixed-count
+   and native four-worker workload controls before any merge.
    Shared-root cost stays open; seek a change that removes actual hot
    entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
@@ -1065,7 +1069,6 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Audit off-lock raw slab preparation and refill race: Codex, Linux, 2026-11-23T11:10Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
