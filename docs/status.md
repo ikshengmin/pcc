@@ -1030,7 +1030,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - Shrink hot root-store entry by splitting its checked plan: Codex, Linux, 2026-11-23T09:38Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
