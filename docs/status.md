@@ -814,15 +814,25 @@ in the relevant section or issue and removes the entry.
    pairs, 120k lists, phase timers enabled only in the workload.
    Fresh raw slab carve was the largest measured subtotal in all
    five w4 runs (median 55.3 ms vs w1 0.39 ms); map/register median
-   26.7 ms, raw magazine extras 19.6 ms. Trim was infrequent (0–4
+   27.3 ms, raw magazine extras 19.6 ms. Trim was infrequent (0–4
    calls per w4 run), but single calls reached 19.9 ms. The fresh-slab
    timers include direct central refills; do not sum these with the
    enclosing magazine totals. w4 completed no mark during allocation
    in four runs, versus none stalled at w1. Not a throughput claim.
-   Next GC2: form the fresh raw free chain and splice it once, rather
-   than doing a size-class dispatch and global insertion for every
-   cell under the lock. Preserve raw retirement and first-cell
-   admission; compare protected carve work before widening to trim.
+   The one-splice raw-chain candidate on `a0639f6` preserves complete
+   LIFO order in three size classes on all five Linux backends.
+   Both exact unmodified and candidate smoke binaries ran under
+   GC0–4 with identical expected output; both enclosing pytest
+   nodes still fail the existing `nm` symbol assertion before
+   executing that smoke. Five alternating GC2 workload pairs with
+   identical phase instrumentation: w4 median carve per fresh slab
+   77.86→39.70 µs, with improvement in only 3/5 same-pair comparisons,
+   and w1 30.89→37.33 µs. w4 fresh-refill counts differed substantially
+   in one pair; median w4 finished mark count stayed zero. This does
+   not isolate an effect or qualify a throughput result. No runtime
+   code pushed. Next GC2: fix the number and size of fresh slabs to
+   isolate protected carve cost in the same pair setup; decide if
+   this splice merited a Mac A/B before adding another allocator edit.
    Shared-root cost stays open; seek a change that removes actual hot
    entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
@@ -1048,7 +1058,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Splice each new raw slab free chain once: Codex, Linux, 2026-11-23T10:04Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
