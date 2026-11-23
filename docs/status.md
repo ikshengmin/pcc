@@ -139,7 +139,9 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. Pending: none.
+That run is a red baseline. Pending: none. The 2026-11-23 checkpoint
+is due; dispatch was not admitted because the Linux GitHub CLI has no
+authenticated host. No run ID was issued.
 [Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
 at `0f638af5b` completed red and did not replace it. The
 [checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
@@ -156,12 +158,18 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- **#9 macOS w4 throughput**: correctness and w1 throughput of `aac63c5c1`
-  pass on the Mac (see Item 1). Two w4 A/B runs were inconclusive, with
-  GC0 floors of 56.8% and 6.5% under load from unrelated work. Rerun only
-  w4 on a quiet Mac: `ab master-445df066 gc9-main-aac63c5c --pairs 5 --gc
-  0,1,2,3,4 --workers 4 --control 0 --latency-receipts`. The floor must be
-  below 5% and no row may be a loss.
+- **#9 integration: superseded test files**. The maintainer confirmed the
+  remaining macOS w4 gate on `aac63c5c1` in chat on 2026-11-23:
+  “通过了继续吧”. The final control floor and row values were not provided;
+  earlier noisy runs remain inconclusive. Linux tested the combined tree:
+  268 native cases and 77 other checks passed (one deselected); runtime and
+  benchmark source are byte-identical to the accepted candidate.
+  The accepted production tests replace the test-only oracle using removed
+  runtime interfaces. Request explicit approval to remove
+  `tests/python/fixtures/gc_acyclic_finalizer_rescue.c` and
+  `tests/python/test_gc_acyclic_finalizer_rescue_native.py` in the #9
+  landing. Recommendation: remove these two superseded files with the
+  replacement, not a disable/skip. No runtime on master yet.
 
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
@@ -560,8 +568,8 @@ in the relevant section or issue and removes the entry.
          Peak RSS stays within 6 MiB. w1 p99 swings both ways with
          whether a pause lands in the tail.
        Details are in the #9 comment.
-     - Next #9: rerun only the w4 A/B on a quiet Mac (waiting list). If no
-       row is a loss, the Mac verification of `aac63c5c1` is complete.
+     - Next #9: integrate the accepted candidate after approval for the
+       two superseded test removals, as listed under Waiting on maintainer.
        Linux evidence for the same commit: pcc0 rebuilt the owned runtime
        and passed 20 deterministic root-range cases across GC0–4, 248 production-sweep cases, 180/180
        strict 256-node repetitions, and eight separately built/rerun
@@ -687,7 +695,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 integrate Mac-accepted acyclic weakrefs and finalizers: Codex, Linux, 2026-11-23T06:46Z, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
