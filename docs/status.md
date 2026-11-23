@@ -429,7 +429,11 @@ in the relevant section or issue and removes the entry.
        throughput A/B still inconclusive (GC0 w4 noise floors 43.7% and
        19.6%). Linux `top`/`locks` currently require macOS `sample`; the
        direct lock buckets did not reproduce the GC1/GC2 wait-count spikes.
-       No production change and no new Mac run requested.
+       A native pending-generator regression now matches CPython across
+       GC0–4 and reads the hint inside the finalizer on GC1–3: the active
+       commit never carries a negative, while the later clean commit
+       does. Eight focused Linux cases passed; no source was changed by
+       this test unit.
      - Linux-validated independent condition-6 cleanup, not merged: the
        four prototype-only entries and two private refresh helpers are
        absent from a rebuilt owned archive. Two CPython-oracle cases now
@@ -588,7 +592,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 native same-stop generator observer guard: Codex, Linux x86-64, 2026-11-23 03:29 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
