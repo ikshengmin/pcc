@@ -415,6 +415,12 @@ in the relevant section or issue and removes the entry.
        and nested collection instead of the injected callback arm.
        242 focused native assertions passed on Linux x86-64; no Mac run.
        Keep the cleanup together with the replacement coverage.
+     - Condition 2 publication coverage: existing and newly created
+       module owners both preserve the rescued child in six native
+       GC1–3 cases against the CPython module-store oracle. Each currently
+       needs one full refresh. Local regression tests exist, no production
+       fix or Mac claim; determine the exact reject reason in the shared
+       remark before treating these as candidate-local coverage.
      - Condition 3, Linux sealed callback sweep: 270 runs, GC1–3,
        0/4 parked peers, n/4n/16n = 256/1,024/4,096. Medians in ms below,
        each triple is no ballast / +16,384 unrelated live objects /
@@ -551,7 +557,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 callback publication-path coverage: Codex, Linux x86-64, 2026-11-23 02:55 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
