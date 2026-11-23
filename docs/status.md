@@ -791,10 +791,22 @@ in the relevant section or issue and removes the entry.
    +462 µs, positive in 5/5 vs GC0 (max absolute GC0 A/A 19 µs).
    This confirms the w4 CPU gap on the handler, not a Linux throughput
    qualification or a diagnosis of which threads spend it.
-   Next: split mutator and collector CPU and rank shared root stores,
-   pins, locks and TLS by actual handler sample ownership; the current
-   `top` worker-count/throughput estimate is not CPU accounting.
-   Mac same-input asyncio remains the throughput reference.
+   Standard x86-64 handler ELF Linux task-clock screen, matching
+   executable runtime section bytes outside relocations: three w4
+   samples per GC0–3 and one w1 each. GC0 w4 median root-store self
+   share was 6.33%; pin/unpin 4.14%, container-lock 2.91%. In the
+   exact-PC follow-up, 325/742 GC0 root-store samples were at its
+   entry frame, before its first argument check (432-byte frame).
+   The four-carrier GC2 collector thread took 15.9–16.4% of sampled
+   user CPU in the two runs that hit its worker-entry symbol; the
+   third role was not proven. One separate GC2 w4 instruction screen
+   put 25.4% of all samples at the single allocator lock's direct and
+   inlined wait loops (GC0 0.38%); this is not throughput validation.
+   Next shared candidate: keep root store semantics and dispatch but
+   move cold relocation/checked plan storage off the common entry
+   frame. Verify emitted prologue and native root/foreign/forwarding
+   controls, then qualify against an unchanged arm. GC2 still needs
+   a separate measured allocator hold/removal candidate.
    Next GC2 allocator fix must target a measured lock holder or remove
    a round trip, not another gray-queue or raw-debit-only candidate.
    The first sparse remembered-set slice is a test-only serial model: seven
@@ -1018,7 +1030,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Rank handler CPU owners by mutator and collector with matched Linux samples: Codex, Linux, 2026-11-23T09:23Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
