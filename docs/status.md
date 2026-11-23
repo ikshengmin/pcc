@@ -753,11 +753,24 @@ in the relevant section or issue and removes the entry.
    no-explicit-root cut. Do not dereference after rewind. The same bump
    path also keeps a whole mixed live/dead slab; the existing in-place
    promotion requires ordinary allocator provenance, not bump cells.
-   Next GC3: route the frozen roots into the actual bump cut and give
-   live/mixed slabs a bounded, exact lifetime through the major cycle
-   before routing a measured closed handler allocation group. Keep
-   production off until both obligations hold; no isolated test-only
-   admission change and no Mac A/B yet.
+   Linux pcc0/self scratch result on that review base: feeding the initial
+   frozen caller snapshot plus registered roots preserved the intended
+   bump cells in all 20 runs (four root combinations; no-root control
+   rewound all three). This local root-only fix was not published.
+   The production explicit-major probe on the same archive exposed a
+   separate activation blocker. Construct a normal indexed empty list
+   on a worker, keep it only in slot 0 of a one-element tuple, publish
+   only the tuple into a registered scheduler root, and join the worker.
+   Call `pcc_gc_collect(2)` before loading the list address on the main
+   thread. The list index remains live 5/5 with an ordinary tuple and
+   disappears 5/5 with a bump tuple; both unrooted controls clear 5/5.
+   The probe checks the index, never dereferences the reclaimed list.
+   Next GC3: make a live bump owner visible to the major marker and give
+   mixed spans an exact lifecycle; rerun the rooted/unrooted probe and
+   frozen-root controls before any production allocation or Mac A/B.
+   Next available GC2 diagnostic: on current master distinguish GC2
+   four-worker allocator refill/lock contention from gray-queue costs
+   before selecting any further pacer candidate. Linux counters only.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -979,7 +992,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 prove exact mixed-span survival and frozen-root ownership: Codex, Linux, 2026-11-23T08:07Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
