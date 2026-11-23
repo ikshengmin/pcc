@@ -8,7 +8,7 @@ pointer.  The only platform boundary is ``pcc.unsafe.page_alloc/page_free``.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_ptr
+from pcc.extern import c_abi_export, c_int64, c_ptr, extern
 from pcc.unsafe import (
     logical_shift_right_i64,
     atomic_cas_i64,
@@ -23,6 +23,7 @@ from pcc.unsafe import (
     define_thread_local_ptr_null,
     define_thread_local_i32,
     frame_address,
+    gc_backend_current,
     getpid,
     global_addr,
     global_load_ptr,
@@ -33,6 +34,7 @@ from pcc.unsafe import (
     load_i32,
     load_i64,
     load_ptr,
+    memset,
     mul_overflow_i64,
     null,
     page_alloc,
@@ -3257,3 +3259,140 @@ def pcc_posix_memalign(out_ptr, alignment: i64, size: i64) -> i64:
         return 12
     store_ptr(out_ptr, 0, ptr)
     return 0
+
+
+# GC3 review-only nursery spans. Their payload has no ordinary allocator
+# cell header. Other allocator walkers skip this separate descriptor kind.
+# Register a region once; reserve/commit touch only its own cursor and bytes.
+_GC3_BUMP_KIND = 3
+_GC3_BUMP_BYTES = 65536
+_GC3_BUMP_KIND_OFFSET = 0
+_GC3_BUMP_STRIDE = 8
+_GC3_BUMP_BASE = 16
+_GC3_BUMP_COUNT = 24
+_GC3_BUMP_COMMITTED = 32
+_GC3_BUMP_STAGED = 40
+_GC3_BUMP_OWNER = 48
+_GC3_BUMP_GENERATION = 56
+
+pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
+pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
+pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_open")
+def pcc_allocator_gc3_review_bump_open(stride: i64) -> c_ptr:
+    if gc_backend_current() != 3 or (stride != 32 and stride != 64 and stride != 128):
+        return null()
+    owner: i64 = pcc_current_thread_id()
+    if owner <= 0:
+        return null()
+    base = page_alloc(_GC3_BUMP_BYTES)
+    if ptr_is_null(base) != 0:
+        return null()
+    pcc_allocator_lock_acquire()
+    status: i64 = _granule_register_slab_locked(base, _GC3_BUMP_KIND, stride)
+    if status != 1:
+        pcc_allocator_lock_release()
+        page_free(base, _GC3_BUMP_BYTES)
+        return null()
+    span = _granule_radix_span_probe(logical_shift_right_i64(ptr_to_int(base), 12))
+    atomic_rmw_i64(
+        "add", global_addr("pcc_allocator_mapped"), 0, _GC3_BUMP_BYTES, "relaxed",
+    )
+    if ptr_is_null(span) == 0:
+        store_i64(span, _GC3_BUMP_COUNT, _GC3_BUMP_BYTES // stride)
+        store_i64(span, _GC3_BUMP_OWNER, owner)
+        atomic_store_i64(span, _GC3_BUMP_GENERATION, 1, "release")
+    pcc_allocator_lock_release()
+    return span
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_writable")
+def _gc3_review_bump_writable(span) -> i64:
+    if (ptr_is_null(span) != 0 or load_i64(span, _GC3_BUMP_KIND_OFFSET) != _GC3_BUMP_KIND
+            or pcc_thread_no_park_depth() <= 0):
+        return 0
+    return 1 if load_i64(span, _GC3_BUMP_OWNER) == pcc_current_thread_id() else 0
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_reserve")
+def pcc_allocator_gc3_review_bump_reserve(span, size: i64) -> c_ptr:
+    if _gc3_review_bump_writable(span) == 0 or load_i64(span, _GC3_BUMP_STAGED) != 0:
+        return null()
+    stride: i64 = load_i64(span, _GC3_BUMP_STRIDE)
+    committed: i64 = atomic_load_i64(span, _GC3_BUMP_COMMITTED, "relaxed")
+    if size < 16 or size > stride or committed >= load_i64(span, _GC3_BUMP_COUNT):
+        return null()
+    cell = ptr_add(load_ptr(span, _GC3_BUMP_BASE), committed * stride)
+    memset(cell, 0, stride)
+    store_i64(span, _GC3_BUMP_STAGED, 1)
+    return cell
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_staged_cell")
+def _gc3_review_bump_staged_cell(span) -> c_ptr:
+    if _gc3_review_bump_writable(span) == 0 or load_i64(span, _GC3_BUMP_STAGED) != 1:
+        return null()
+    committed: i64 = atomic_load_i64(span, _GC3_BUMP_COMMITTED, "relaxed")
+    return ptr_add(load_ptr(span, _GC3_BUMP_BASE), committed * load_i64(span, _GC3_BUMP_STRIDE))
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_commit")
+def pcc_allocator_gc3_review_bump_commit(span, cell) -> i64:
+    if ptr_is_null(cell) != 0 or ptr_eq(cell, _gc3_review_bump_staged_cell(span)) == 0:
+        return 0
+    # The owner has set the header and initialized every visible slot.
+    # Release publication exposes that payload together with its extent.
+    committed: i64 = atomic_load_i64(span, _GC3_BUMP_COMMITTED, "relaxed")
+    atomic_store_i64(span, _GC3_BUMP_COMMITTED, committed + 1, "release")
+    store_i64(span, _GC3_BUMP_STAGED, 0)
+    return 1
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_cancel")
+def pcc_allocator_gc3_review_bump_cancel(span, cell) -> i64:
+    if ptr_is_null(cell) != 0 or ptr_eq(cell, _gc3_review_bump_staged_cell(span)) == 0:
+        return 0
+    store_i64(span, _GC3_BUMP_STAGED, 0)
+    return 1
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_lookup")
+def pcc_allocator_gc3_review_bump_lookup(cell) -> c_ptr:
+    """Exact committed start only. It does not make ordinary free legal."""
+    span = _granule_radix_span_probe(logical_shift_right_i64(ptr_to_int(cell), 12))
+    if ptr_is_null(span) != 0 or load_i64(span, _GC3_BUMP_KIND_OFFSET) != _GC3_BUMP_KIND:
+        return null()
+    offset: i64 = ptr_diff(cell, load_ptr(span, _GC3_BUMP_BASE))
+    stride: i64 = load_i64(span, _GC3_BUMP_STRIDE)
+    if offset < 0 or offset >= _GC3_BUMP_BYTES or stride <= 0:
+        return null()
+    ordinal: i64 = offset // stride
+    if (ordinal * stride != offset
+            or ordinal >= atomic_load_i64(span, _GC3_BUMP_COMMITTED, "acquire")):
+        return null()
+    return span
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_generation")
+def pcc_allocator_gc3_review_bump_generation(span) -> i64:
+    if ptr_is_null(span) != 0 or load_i64(span, _GC3_BUMP_KIND_OFFSET) != _GC3_BUMP_KIND:
+        return 0
+    return atomic_load_i64(span, _GC3_BUMP_GENERATION, "acquire")
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_reset_stopped")
+def pcc_allocator_gc3_review_bump_reset_stopped(
+    span, generation: i64, expected: i64, survivors: i64,
+) -> i64:
+    """Rewind only a complete, current, caller-proved empty stopped span."""
+    if (survivors != 0 or generation <= 0 or generation == 9223372036854775807
+            or expected < 0 or pcc_thread_owns_stopped_world() == 0
+            or pcc_allocator_gc3_review_bump_generation(span) != generation
+            or load_i64(span, _GC3_BUMP_STAGED) != 0
+            or atomic_load_i64(span, _GC3_BUMP_COMMITTED, "acquire") != expected):
+        return 0
+    atomic_store_i64(span, _GC3_BUMP_COMMITTED, 0, "release")
+    atomic_store_i64(span, _GC3_BUMP_GENERATION, generation + 1, "release")
+    return 1

@@ -619,3 +619,26 @@ qualify native Python mapped-frame coverage, caller-register capture as
 a separate control, or raw list backing exposure. Conservative snapshot
 precision across automatic entries, full root admission and bump/slab
 recycling remain open.
+
+### True bump storage for a review nursery span
+
+The review allocator registers one 64 KiB nursery slab as a distinct
+span kind. A single owner reserves the next size-class slot under its
+no-park lease, zeroes the slot and initializes it, then release-publishes
+the committed frontier. Readers accept only exact starts below the
+acquired frontier. There is no per-cell allocator header, index record,
+radix insertion or allocator lock in reserve/commit. Ordinary allocation
+and pointer admission do not accept this new span kind. The span can be
+rewound only in a stopped world with the current generation, no staged
+cell, the expected frontier and proof that no survivor remains.
+
+Linux x86-64 pcc0/self linked the actual allocator. A peer could neither
+see a staged cell nor reserve from the owner's span; after publication
+it received the initialized header. Rejected/cancelled reservations
+were never visible. A full slab held 2,048 32-byte cells with only 16
+granule keys and zero object records. Live-survivor/stale-generation
+rewinds failed; a valid empty rewind reused the same addresses. Linux
+ran all five mode lanes and five additional GC3 processes. All 92
+existing allocator LLVM function bodies were byte-identical. This is
+not ordinary tuple/list allocation, a complete minor, or a throughput
+result: real liveness/promotion must supply the proof before rewind.
