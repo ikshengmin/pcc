@@ -847,9 +847,16 @@ in the relevant section or issue and removes the entry.
    same 35 or 1,366 slabs per arm: 512-byte median wall 1.69→2.86 ms
    (1/5 wins), 16,384-byte 54.33→75.07 ms (0/5). All 30 fixed runs
    passed but off-lock preparation did not improve work time. No code
-   push or Mac A/B for this candidate. The maintainer's next priority is to explain GC2 w4 unfinished marking
-   with assist counts and collector-thread work before any new allocator
-   tweaks. GC3 old-child liveness remains open (rooted bump depth 1 and 2
+   push or Mac A/B for this candidate. GC2 w4 unfinished-mark attribution, Linux 120k-list controls: stock
+   at all-workers-held finished median 16 w1 vs 3 w4, zero assists. In the
+   phase-timed arm four of five w4 runs finished no mark by that boundary:
+   all four had zero debt and assists, median w4 gray 63,027 overall;
+   >99% of timed collector CPU was inside the mark step on those four.
+   An existing stepmul diagnostic also changed debt credit, not just
+   assist pacing: 22–113 assists in each w4 run, finishes 1–5 in all five.
+   This is causal evidence for the assist gate, not a throughput result or
+   a claim about every HTTP run. No allocator change. Next GC2: isolate a
+   gray-backlog assist admission rule, keeping finish and lock invariants. GC3 old-child liveness remains open (rooted bump depth 1 and 2
    each red 5/5 on the exact review base; rooted indexed control green
    5/5). For shared root-store, pin and container locks, eliminate work
    actually executed at entry; frame-size changes alone do not qualify.
@@ -1074,7 +1081,6 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Explain GC2 w4 unfinished marking with assist and collector phase accounting: Codex, Linux, 2026-11-23T12:25Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
