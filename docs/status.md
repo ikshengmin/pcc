@@ -388,7 +388,21 @@ in the relevant section or issue and removes the entry.
        inert exports named in the review (condition 6).
      - Put the 16n and heap-independence rows in the receipt itself
        (condition 3).
-     - Then request the same macOS A/B again in the waiting list.
+     - Iterate on the Linux host with the same handler measurement,
+       `pcc_perf ab` (five pairs, GC0 control, w1 and w4), plus `locks` and
+       `top` on both arms. Do not wait for the Mac between iterations.
+       Request one macOS A/B in the waiting list only when the Linux
+       handler A/B shows no loss. AGENTS.md still requires that final Mac
+       assessment before merge.
+     - Mac lock buckets (Claude, from direct `--summary` runs of the two
+       existing arms, one run per cell):
+       - Every graph-lock wait on both arms is in the `other` bucket. The
+         barrier, allocation and store buckets are zero.
+       - Counts match within 2% between arms, for example GC1 w4 at 5.83M
+         against 5.83M.
+       - The A/B rows' "18 -> 631" lock-wait figure comes from
+         `--latency-receipts` runs. It is not reproduced here, so treat it
+         as unconfirmed rather than as the cause.
    - Linux observer-free check: exact stock and `b7845414c` reclaimed all
      1,024/4,096/16,384 plain lists on GC1–3 with zero user finalizers.
      Previous-stop sweep kept exactly one mandatory refresh. A local trial
