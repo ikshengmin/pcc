@@ -775,9 +775,21 @@ in the relevant section or issue and removes the entry.
    explicit gray worklist functions were 3.97% vs 0.77%. Four of five
    w4 runs finished no mark during allocation, vs none at w1 (21
    finishes median). This is not a throughput test or exclusive cause.
-   Next GC2: test reserving the same-slab raw magazine extras as a
-   batch under the allocator lock, and compare the actual spin and
-   completed marks. Preserve trim accounting and other-backend controls.
+   A local raw magazine experiment reserved same-slab extras with one
+   span lookup and debit. The expanded trim/remote-free test passed
+   twice on each of GC0–4, and the object magazine and standalone
+   allocator controls passed. It did not fix GC2's w4 mark progress:
+   4/5 still finished no mark, same as stock, vs 1/5 on the unchanged
+   stock repeat. Median lock-spin sample shares were 56.62% stock,
+   51.02% candidate and 48.06% unchanged control. CPU and pause did not
+   improve consistently. Do not publish that code as an improvement.
+   Next GC performance diagnostic: attribute the same handler's actual
+   CPU/request for GC0–3 at w1/w4 before selecting a shared candidate
+   (root stores, pins, locks, TLS). Separate mutator and collector and
+   distinguish absolute CPU from worker-count/throughput estimates and
+   wall pause. Mac same-input asyncio remains the throughput reference.
+   Next GC2 allocator fix must target a measured lock holder or remove
+   a round trip, not another gray-queue or raw-debit-only candidate.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -999,7 +1011,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC2 batch same-slab magazine reservation with native trim controls: Codex, Linux, 2026-11-23T08:53Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
