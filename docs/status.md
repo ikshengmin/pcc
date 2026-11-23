@@ -810,9 +810,19 @@ in the relevant section or issue and removes the entry.
    unchanged `2763d378` parent and first candidate, before it calls
    the root store. Forwarding was not qualified. No throughput gain
    shown; do not merge that split or spend a Mac A/B on it.
-   Next GC2: distinguish fresh raw-slab mapping/carving from trim and
-   same-slab magazine refill under the measured shared allocator lock.
-   Remove a measured long hold, not another gray batch/debit-only edit.
+   GC2 Linux owned diagnostic on `50a97945`: five alternating w1/w4
+   pairs, 120k lists, phase timers enabled only in the workload.
+   Fresh raw slab carve was the largest measured subtotal in all
+   five w4 runs (median 55.3 ms vs w1 0.39 ms); map/register median
+   26.7 ms, raw magazine extras 19.6 ms. Trim was infrequent (0–4
+   calls per w4 run), but single calls reached 19.9 ms. The fresh-slab
+   timers include direct central refills; do not sum these with the
+   enclosing magazine totals. w4 completed no mark during allocation
+   in four runs, versus none stalled at w1. Not a throughput claim.
+   Next GC2: form the fresh raw free chain and splice it once, rather
+   than doing a size-class dispatch and global insertion for every
+   cell under the lock. Preserve raw retirement and first-cell
+   admission; compare protected carve work before widening to trim.
    Shared-root cost stays open; seek a change that removes actual hot
    entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
@@ -1038,7 +1048,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Isolate GC2 long allocator lock holds by raw refill phase: Codex, Linux, 2026-11-23T09:57Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
