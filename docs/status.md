@@ -156,14 +156,12 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- **#9 macOS verification**: review `aac63c5c1e0d1db352280a1d4aabae58f9b320ca` on
-  `review/gc9-production-remark`; no merge pending local Mac evidence. With
-  the exact sealed runtime, run the new process-entry test on GC0–4 and the
-  six 256-node sealed/public cases 30 times (180 runs, require zero failures).
-  Repeat the five-pair Mac handler A/B with GC0 control at w1 and w4: the
-  cutoff changes the shared snapshot taken even on collections with no
-  callbacks. Keep `master-445df066` as the frozen comparison and report
-  max STW, RSS and p99.
+- **#9 macOS w4 throughput**: correctness and w1 throughput of `aac63c5c1`
+  pass on the Mac (see Item 1). Two w4 A/B runs were inconclusive, with
+  GC0 floors of 56.8% and 6.5% under load from unrelated work. Rerun only
+  w4 on a quiet Mac: `ab master-445df066 gc9-main-aac63c5c --pairs 5 --gc
+  0,1,2,3,4 --workers 4 --control 0 --latency-receipts`. The floor must be
+  below 5% and no row may be a loss.
 
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
@@ -538,17 +536,41 @@ in the relevant section or issue and removes the entry.
        every other thread, since a foreign caller's frame above a
        registration point can hold a returned object. This changes the
        shared root contract, so validate all five collectors.
-     - Next #9: Mac execution and throughput at [`aac63c5c1`](https://github.com/ikshengmin/pcc/commit/aac63c5c1e0d1db352280a1d4aabae58f9b320ca).
-       Linux pcc0 rebuilt the owned runtime and passed 20 deterministic
-       root-range cases across GC0–4, 248 production-sweep cases, 180/180
+     - **macOS verification of [`aac63c5c1`](https://github.com/ikshengmin/pcc/commit/aac63c5c1e0d1db352280a1d4aabae58f9b320ca)
+       (Claude, local Mac, 2026-11-23): correctness and w1 pass; w4 is
+       inconclusive.** Sealed arm `gc9-main-aac63c5c`, primitive oracle
+       green on five collectors, every test on that arm's archive:
+       - Process-entry root test: 20 passed.
+       - `test_macho_runtime_main_entry.py`: 5 passed.
+       - The six 256-node sealed/public GC1–3 scale cases, 30 rounds:
+         180/180 passed, against a base rate of about 4%.
+       - Both #9 native files: 256 passed, scale test included.
+       - Machine code: `pcc_process_call_main` saves x19–x28 above the
+         bound and overwrites all ten before the call. So loader values
+         in callee-saved registers do not reach `main`'s spills. Register
+         allocation provides this, not an explicit rule.
+       - Two `ab master-445df066 gc9-main-aac63c5c --pairs 5 --gc 0,1,2,3,4
+         --workers 1,4 --control 0 --latency-receipts` runs at load
+         7.7–9.5. The second run's w1 floor is 1.4%: GC1 −0.3%, GC3
+         +1.0% and GC4 0.0% are within noise, and GC2 +2.5% is a gain.
+       - The w4 floors are 56.8% and 6.5%, so every w4 row is
+         inconclusive. Medians range from −4.0% to +2.7%, and processor
+         time per request moves by at most 2%, with no consistent sign.
+       - Max STW stays within 1 ms, except GC2 w1, which is 2–3 ms lower.
+         Peak RSS stays within 6 MiB. w1 p99 swings both ways with
+         whether a pause lands in the tail.
+       Details are in the #9 comment.
+     - Next #9: rerun only the w4 A/B on a quiet Mac (waiting list). If no
+       row is a loss, the Mac verification of `aac63c5c1` is complete.
+       Linux evidence for the same commit: pcc0 rebuilt the owned runtime
+       and passed 20 deterministic root-range cases across GC0–4, 248 production-sweep cases, 180/180
        strict 256-node repetitions, and eight separately built/rerun
        generator programs. Five Mach-O cross-link and eight ABI-inventory
        checks passed. The active process-entry scope excludes its caller's
        startup words while retaining true application and foreign-thread
        roots, including when main is a parked peer. The regular and
        windowed owned Mach-O paths pick the adapter only if the conservative
-       thread runtime is linked. Native macOS is unrun; no master runtime
-       change. The final Linux test groups ran at the 90-second/1-GiB cap;
+       thread runtime is linked. No master runtime change. The final Linux test groups ran at the 90-second/1-GiB cap;
        the combined test invocation hit its time limit before compiling
        both generator fixtures, which completed as separate stages.
      - Linux memory preflight: the Linux check requires `MemAvailable` of
