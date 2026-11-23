@@ -24,7 +24,7 @@ The maintainer's previous fallback instruction was “达不到就转 GC0 + 偏�
 The evidence below evaluates the tested prototype only, not all count-free
 designs. The maintainer superseded that fallback with
 “我还是想GC0-4全部优化的不能优化之后，再融合。” The
-[current status](../status.md#gc04-optimize-each-collector-before-unifying)
+[current status](../status.md#collector-measurement-rules)
 records the active five-collector roadmap and stopping rule.
 
 ## Added stock GC3 control
