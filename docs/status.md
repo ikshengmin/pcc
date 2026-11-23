@@ -759,7 +759,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (0a) bound young log without net growth: Codex, Linux x86-64, 2026-11-23 20:56 UTC, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
