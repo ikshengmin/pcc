@@ -491,8 +491,14 @@ in the relevant section or issue and removes the entry.
        14–17×; the largest paired median ballast shifts were +6.6% live
        and +10.0% weakrefs, not proportional to ballast. Parked peers
        multiplied measured unit callback cost by roughly 10×, despite
-       near-linear growth. Maintainer: separate follow-up, non-blocking
-       for this handoff. This did not pass HTTP or Mac.
+       near-linear growth. Maintainer: separate follow-up, non-blocking.
+       A separate Linux diagnostic build from the review candidate
+       measured 60 runs (GC1–3, 256/1,024 candidates, 0/4 peers).
+       The extra time came mainly from re-parking peers (35–42% of the
+       increase; included in window-close), window-open (31–35%) and
+       root snapshot/cut capture (20–28%), not remark drain or the
+       collector's own stack copy. No new code on the review branch;
+       these are phase timings, not a handler throughput result.
      - Throughput gate moves to the Mac (Claude review, 2026-11-23). The
        Linux host cannot resolve it: identical-binary GC0 A/A swings up
        to 19.0% and the GC0 floors were 14.5–43.7%, while the Mac floors
@@ -618,7 +624,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 attribute parked-peer callback cost: Codex, Linux x86-64, 2026-11-23 03:40 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
