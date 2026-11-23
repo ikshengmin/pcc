@@ -156,30 +156,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- **#9 Mac throughput and native verification:** candidate
-  [`eff808bf`](https://github.com/ikshengmin/pcc/commit/eff808bf3309a7a54f14bc15a95d1c1622548999),
-  verified head of `shenming/review/gc9-production-remark`. No merge.
-  Baseline existing arm `master-445df066` (the `64d49ae56`
-  runtime/benchmark-equivalent arm), same pinned gateway and
-  `PCC_PERF_HOME`. Candidate checkout is `eff808bf3309a7a54f14bc15a95d1c1622548999`.
-  Linux: 295 sealed checks, 248 production sweep cases, 5 model cases,
-  and 8 pending-generator native cases. Linux continues with correctness
-  and counters only. Mac owner runs these from the candidate checkout
-  with the existing project environment:
-
-  ```sh
-  export PCC_PERF_HOME="${PCC_PERF_HOME:-$HOME/.cache/pcc/perf}"
-  uv run --no-sync python scripts/pcc_perf.py arm gc9-eff808bf
-  uv run --no-sync python scripts/pcc_perf.py ab master-445df066 gc9-eff808bf --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0 --latency-receipts
-  export PCC_RUNTIME_ARCHIVE="$(uv run --no-sync python -c 'import json,sys; print(json.load(open(sys.argv[1]))["runtime"])' "$PCC_PERF_HOME/arms/gc9-eff808bf/build.json")"
-  PCC_THREADS=1 PCC_REFCOUNT_KIND=atomic PCC_NO_AUTO_PCC1=1 PCC_TEST_NO_NATIVE_PROVISIONING=1 uv run --no-sync python -m pytest -x -n0 -m integration tests/python/test_gc_acyclic_singleton_production_native.py tests/python/test_gc_observer_generator_native.py
-  ```
-
-  Check actual candidate SHA in both receipts. Report GC0 floor, paired
-  throughput, max STW/peak RSS/p99, and the native result before deciding
-  whether to merge. Four parked peers' ~10× per-callback cost is a
-  separate non-blocking follow-up.
-
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -499,17 +475,39 @@ in the relevant section or issue and removes the entry.
        root snapshot/cut capture (20–28%), not remark drain or the
        collector's own stack copy. No new code on the review branch;
        these are phase timings, not a handler throughput result.
-     - Throughput gate moves to the Mac (Claude review, 2026-11-23). The
-       Linux host cannot resolve it: identical-binary GC0 A/A swings up
-       to 19.0% and the GC0 floors were 14.5–43.7%, while the Mac floors
-       were 2.4% (w4) and 6.4% (w1). Stop retrying Linux throughput; keep
-       Linux for correctness and the phase/counter probes. Next unit after
-       the current claim: push the integrated local fix bundle (census
-       fix, condition-6 cleanup with its replacement coverage, module
-       tests) as a commit on `shenming/review/gc9-production-remark`, and
-       add a waiting entry naming its SHA. The local Mac agent then runs
-       `ab` against `64d49ae56`-equivalent master with five pairs, GC0
-       control, w1/w4, plus the native files with `-x -m integration`.
+     - **macOS verification of `eff808bf3` (Claude, local Mac,
+       2026-11-23): throughput passes; not mergeable while the scale
+       test below is intermittently red.** Same `master-445df066` base
+       arm and gateway as the `b7845414c` run; candidate arm sealed from
+       a detached `eff808bf3` checkout, primitive oracle green on five
+       collectors. `ab --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0
+       --latency-receipts` at load 6.0: GC0 floors 5.2% (w1) and 4.2%
+       (w4); GC1–4 all inside noise (GC1 −0.4%/+1.5%, GC2 −3.4%/+0.6%,
+       GC3 −0.3%/+1.1% with 4/5 wins, GC4 +0.2%/−0.6%). Medians of max
+       STW, peak RSS and p99 are unchanged or lower on every row; stopped
+       time is equal except GC2 w1 25 -> 28 ms. The previous GC3 w4 loss
+       is gone. Graph-lock wait counts are now ~640 on both arms (the
+       earlier 18 -> 631 was not a candidate effect).
+     - Native on the same archive: 226 passed with
+       `test_callback_chain_scale_matches_cpython` deselected; that test
+       (30 cases) is intermittently red on both arms. Interleaved 30 runs
+       per arm of its six 256-node cases: base `b7845414c` 4/30 runs
+       failed, candidate 2/30. Failures hit GC1, GC2 and GC3, sealed and
+       public. Signature: exit 26 (a candidate weakref still returns its
+       target), `del` 119, 174 or 231 of 256, `windows` = 2 x `del`, the
+       same cut-off points on both arms. The fixture is unchanged since
+       `87ae55217`, so this is a pre-existing review-branch defect
+       (condition 1 parity), not caused by `eff808bf3`. Single-pass
+       Linux and Mac runs missed it.
+     - Next #9: fix that early stop before merge. Repro on any host: loop
+       the 256-node cases 30 times, e.g. `-k 256` on
+       `test_gc_acyclic_singleton_production_native.py::test_callback_chain_scale_matches_cpython`
+       with `-x -n0 -m integration`; a qualifying fix shows 0 of at
+       least 30 runs red on Linux. Unverified lead, mine: a stale stack
+       or register word naming the next chain item, kept by the
+       conservative callback-window capture. After the fix, request one
+       Mac rerun of the native loop only; the throughput result above
+       stands unless the fix touches the no-observer sweep path.
      - Linux memory preflight: the Linux check requires `MemAvailable` of
        at least `--max-tree-rss` plus `--preflight-reserve`. The defaults,
        6 GiB plus 8 GiB, suit a large Mac only. The tool's own comment says
