@@ -97,6 +97,8 @@ FREESTANDING_PY_MODULES += freestanding_runtime_traps
 FREESTANDING_PY_MODULES += freestanding_gc_deferred_free freestanding_gc_scalar_sweep
 FREESTANDING_PY_MODULES += freestanding_gc_alloc_stage
 FREESTANDING_OBJS_PY = $(patsubst %,$(OBJDIR_PY)/%.o,$(FREESTANDING_PY_MODULES))
+FREESTANDING_PY_MODULES += freestanding_process_main
+
 # Keep the explicit host/Make reference builder on the same target-specific
 # membership contract as the in-process owned builder. In particular Linux
 # startup/libc and optional platform thread modules are not in the common

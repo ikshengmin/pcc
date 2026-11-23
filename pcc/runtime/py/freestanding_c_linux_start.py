@@ -7,11 +7,12 @@ lifecycle (callbacks, finalizers, stream flush, then ``exit_group``).  No C or a
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export, c_int, c_int32, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_abi_typed_export, c_int, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     define_global_null_ptr_array,
     define_global_i64_array,
     store_i64,
+    function_addr,
     global_addr,
     int_to_ptr,
     load_i8,
@@ -41,6 +42,7 @@ define_global_i64_array("pcc_linux_tls_image", 0, 0, 0, 1)
 
 
 c_main = extern("main", (c_int, c_ptr, c_ptr), c_int)
+call_main = extern("pcc_process_call_main", (c_ptr, c_int64, c_ptr, c_ptr, c_ptr), c_int64)
 platform_env_init = extern("pcc_platform_env_init", (c_ptr,), c_int)
 c_exit = extern("exit", (c_int32,), c_void)
 
@@ -172,6 +174,11 @@ def pcc_linux_allocate_tls(allocation_out: c_ptr) -> c_ptr:
     return thread_pointer
 
 
+@c_abi_typed_export("pcc_linux_dispatch_main", "i32", ("i32", "ptr", "ptr", "ptr"))
+def pcc_linux_dispatch_main(argc: i64, argv: c_ptr, envp: c_ptr, apple: c_ptr) -> i64:
+    return c_main(argc, argv, envp)
+
+
 @c_abi_export("_start")
 def pcc_c_linux_start(initial_stack: c_ptr) -> None:
     # This is the initial-thread half of the compiler-owned TLS contract; the
@@ -191,7 +198,7 @@ def pcc_c_linux_start(initial_stack: c_ptr) -> None:
             while index < init_count:
                 call_void_ptr0(load_ptr(initializers, index * 8))
                 index = index + 1
-            status = c_main(argc, argv, envp)
+            status = call_main(function_addr("pcc_linux_dispatch_main"), argc, argv, envp, null())
             c_exit(status)
         else:
             status: i64 = 70
