@@ -7,6 +7,10 @@ This module owns only the raw backend-0 collection state machine.
 
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.runtime.py.py_abi_constants import (
+    PY_FLAG_GC_DEALLOCATING, PY_FLAG_GC_TRACKED, PY_TYPE_DICT, PY_TYPE_LIST,
+    PY_TYPE_SET, PY_TYPE_TUPLE,
+)
 from pcc.unsafe import (
     atomic_load_i32,
     abi_constant,
@@ -699,8 +703,15 @@ def _collect(pairs, candidate_count: i64) -> i64:
             obj = load_ptr(node, 0)
             pcc_gc_default_unlink_tracked_node(node)
             py_gc_index_remove(obj)
-            flags: i64 = load_i32(obj, 12)
-            store_i32(obj, 12, flags & ~2)
+            flags: i64 = load_i32(obj, 12) & ~PY_FLAG_GC_TRACKED
+            tag: i64 = load_i32(obj, 8)
+            if tag == PY_TYPE_LIST or tag == PY_TYPE_TUPLE or tag == PY_TYPE_DICT or tag == PY_TYPE_SET:
+                # The exact verdict is final and these built-ins have had
+                # their owning slots cleared. Publish terminal ownership as
+                # the ordinary last decrement does. The free owner still
+                # checks exact provenance, identity and free-watch state.
+                flags = flags | PY_FLAG_GC_DEALLOCATING
+            store_i32(obj, 12, flags)
             store_i64(obj, 0, 0)
             free(node)
             pcc_gc_note_object_freeing(obj)

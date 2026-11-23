@@ -220,8 +220,12 @@ in the relevant section or issue and removes the entry.
        changing collection admission; see the regression evidence below.
    (0b) Slot slicing and allocation-free gray links landed. The 320k
        live-container probe improves on Linux; the complete pause target
-       is not met. Next: reproduce a large unreachable component, then
-       bound candidate-buffer growth and handover in separate slices.
+       is not met.
+       Exact reclaim now uses the existing terminal free protocol for
+       already-cleared built-in containers; the 320k Linux pause fell from
+       a median 226 to 173 ms, and is still not bounded. Next: bound the
+       full-to-young handover without exposing partial cycles, then split
+       the expensive exact reclaim phases.
    macOS verification of (0b) gray links: focused high-fanout and incremental
    full tests, plus a sealed A/B against its parent with a duplicate parent
    control arm and `table`. Platform macOS.
@@ -279,7 +283,6 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0b) unreachable candidate handover pause: Codex, Linux x86-64, 2026-11-23 21:24 UTC, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
@@ -660,6 +663,19 @@ mark-start step 6.52 → 0.44 ms (10/10 lower for both); candidate worst
 targeted pause probe, not a 200 us end-to-end bound or a throughput
 verdict. Candidate buffer growth and handover, root and extension
 traversal, and explicit collection remain separate.
+
+The unreachable control uses `tests/python/fixtures/gc_full_unreachable_scaling.c`
+with the same link helper and argv. It verifies that a whole unreachable
+component is handed over, still tracked until the exact young decision, and
+then reclaimed. The exact collector now publishes terminal ownership only
+for cleared built-in lists, tuples, dicts and sets, enabling the existing
+metadata-free route when its provenance, identity and free-watch checks
+allow it. The mixed built-in regression also checks that a live referent
+keeps its ownership. Linux native: 13 distinct focused cases passed.
+Ten CPU-pinned, alternating 320k pairs against `a2e7bc36`: median exact
+young pause 226.2 to 173.3 ms (9/10 lower, one 284.7 ms candidate);
+median handover essentially unchanged at about 10 ms. This is a targeted
+pause probe, not a throughput claim. macOS was not run.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through
