@@ -589,6 +589,7 @@ def _gc_tracks_objects() -> int:
 
 
 pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+pcc_gc_young_log_thread_exit = extern("pcc_gc_young_log_thread_exit", (), c_void)
 
 
 # A remembered entry: owner @0, slot @8, next @16 and prev @24 in the set's
@@ -1380,6 +1381,7 @@ def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_tracked_count_flush()
     # Publish the batch of allocation debt the thread had not yet published.
     _live_bytes_flush()
+    pcc_gc_young_log_thread_exit()
     # Called on thread exit. The removed C runtime flushed and freed a
     # PER-THREAD backend-4 medium store-buffer state here. This runtime keeps the
     # backend-4 store buffer as GLOBAL state (see _store_buffer_medium_head;

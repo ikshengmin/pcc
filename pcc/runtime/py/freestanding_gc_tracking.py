@@ -482,66 +482,103 @@ def py_gc_track(obj: c_ptr) -> None:
 # newcomers, not the heap. An entry is only a hint: the reader keeps it when
 # the address is still a live object carrying both the tracked and young
 # flags, and node insertion drops duplicates. Chunks are published once on
-# pcc_gc_young_log_chunks and reused after every reset; a failed chunk
-# allocation sets pcc_gc_young_log_lost, which sends the next young
-# collection back to the flag enumeration.
-#   chunk: +0 next published chunk, +8 entry count, +16 the owner's next
-#   chunk, +24 the owner's first chunk, +32 entries (1020)
+# pcc_gc_young_log_chunks and reused after every reset. Exhaustion marks
+# this log incomplete; the next already-requested young collection uses the
+# exact object flags instead. Saturation itself must never request a collection.
+_YOUNG_CHUNK_NEXT: i64 = 0
+_YOUNG_CHUNK_USED: i64 = 8
+_YOUNG_CHUNK_OWNER_NEXT: i64 = 16
+_YOUNG_CHUNK_OWNER_FIRST: i64 = 24
+_YOUNG_CHUNK_OWNER_RETIRED: i64 = 32
+_YOUNG_CHUNK_ITEMS: i64 = 40
+_YOUNG_CHUNK_BYTES: i64 = 8192
+_YOUNG_CHUNK_CAPACITY: i64 = 1019
+# Process-wide, including exited carriers awaiting the next reset: 1 MiB.
+_YOUNG_LOG_MAX_CHUNKS: i64 = 128
 define_thread_local_ptr_null("pcc_tls_young_log_chunk")
+define_thread_local_i32("pcc_tls_young_log_unbuffered", 0)
 _pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
 _pcc_gc_managed_pointer_index_contains = extern(
     "pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64
 )
 
 
+@c_abi_export("pcc_gc_young_log_pace_full")
+def _young_log_pace_full() -> None:
+    if load_i32(global_addr("pcc_gc_full_phase"), 0) != 0:
+        atomic_store_i32(global_addr("pcc_gc_full_slice_pending"), 0, 1, "release")
+        atomic_store_i32(
+            global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
+        )
+
+
+@c_abi_export("pcc_gc_young_log_allocate")
+def _young_log_allocate() -> c_ptr:
+    count = global_addr("pcc_gc_young_log_chunk_count")
+    used: i64 = atomic_load_i32(count, 0, "acquire")
+    while used < _YOUNG_LOG_MAX_CHUNKS:
+        prior: i64 = atomic_cas_i32(count, 0, used, used + 1, "acq_rel", "acquire")
+        if prior == used:
+            chunk = malloc(_YOUNG_CHUNK_BYTES)
+            if ptr_is_null(chunk):
+                atomic_rmw_i32("sub", count, 0, 1, "acq_rel")
+            return chunk
+        used = prior
+    return null()
+
+
 @c_abi_export("pcc_gc_young_log_note")
 def _young_log_note(obj: c_ptr) -> None:
     chunk = global_load_ptr("pcc_tls_young_log_chunk")
     if ptr_is_null(chunk) == 0:
-        used: i64 = load_i64(chunk, 8)
+        used: i64 = load_i64(chunk, _YOUNG_CHUNK_USED)
         if used == 0:
-            # Fresh, or emptied by a reset: start again at this thread's
-            # first chunk, so the chain is reused instead of growing.
-            chunk = load_ptr(chunk, 24)
+            # The previous collection reset the ring; start at its first chunk.
+            chunk = load_ptr(chunk, _YOUNG_CHUNK_OWNER_FIRST)
             global_store_ptr("pcc_tls_young_log_chunk", chunk)
-            used = load_i64(chunk, 8)
-        if used < 1020:
-            store_ptr(chunk, 32 + used * 8, obj)
-            store_i64(chunk, 8, used + 1)
+            used = load_i64(chunk, _YOUNG_CHUNK_USED)
+        if used < _YOUNG_CHUNK_CAPACITY:
+            store_ptr(chunk, _YOUNG_CHUNK_ITEMS + used * 8, obj)
+            store_i64(chunk, _YOUNG_CHUNK_USED, used + 1)
             return
-        if load_i32(global_addr("pcc_gc_full_phase"), 0) != 0:
-            # A full chunk is the pace of a full collection in bounded
-            # stops: one stop for every 1020 containers this thread tracks.
-            atomic_store_i32(global_addr("pcc_gc_full_slice_pending"), 0, 1, "release")
-            atomic_store_i32(
-                global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
-            )
-        following = load_ptr(chunk, 16)
+        _young_log_pace_full()
+        following = load_ptr(chunk, _YOUNG_CHUNK_OWNER_NEXT)
         if ptr_is_null(following) == 0:
             # The thread fills its chain in order: the next chunk is empty.
             global_store_ptr("pcc_tls_young_log_chunk", following)
-            used = load_i64(following, 8)
-            if used < 1020:
-                store_ptr(following, 32 + used * 8, obj)
-                store_i64(following, 8, used + 1)
-                return
-    fresh = malloc(8192)
+            store_ptr(following, _YOUNG_CHUNK_ITEMS, obj)
+            store_i64(following, _YOUNG_CHUNK_USED, 1)
+            return
+    fresh = _young_log_allocate()
     if ptr_is_null(fresh):
         atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 1, "release")
+        if ptr_is_null(chunk) == 0:
+            # The incomplete log will not be consulted. Reuse this chunk so
+            # an already-active full cycle still gets paced once per batch.
+            store_ptr(chunk, _YOUNG_CHUNK_ITEMS, obj)
+            store_i64(chunk, _YOUNG_CHUNK_USED, 1)
+        else:
+            ticks = global_addr("pcc_tls_young_log_unbuffered")
+            used = load_i32(ticks, 0) + 1
+            if used >= _YOUNG_CHUNK_CAPACITY:
+                _young_log_pace_full()
+                used = 0
+            store_i32(ticks, 0, used)
         return
-    store_ptr(fresh, 32, obj)
-    store_i64(fresh, 8, 1)
-    store_ptr(fresh, 16, null())
+    store_ptr(fresh, _YOUNG_CHUNK_ITEMS, obj)
+    store_i64(fresh, _YOUNG_CHUNK_USED, 1)
+    store_ptr(fresh, _YOUNG_CHUNK_OWNER_NEXT, null())
+    store_i32(fresh, _YOUNG_CHUNK_OWNER_RETIRED, 0)
     if ptr_is_null(chunk) == 0:
-        store_ptr(fresh, 24, load_ptr(chunk, 24))
-        store_ptr(chunk, 16, fresh)
+        store_ptr(fresh, _YOUNG_CHUNK_OWNER_FIRST, load_ptr(chunk, _YOUNG_CHUNK_OWNER_FIRST))
+        store_ptr(chunk, _YOUNG_CHUNK_OWNER_NEXT, fresh)
     else:
-        store_ptr(fresh, 24, fresh)
+        store_ptr(fresh, _YOUNG_CHUNK_OWNER_FIRST, fresh)
     head_slot = global_addr("pcc_gc_young_log_chunks")
     head: i64 = atomic_load_i64(head_slot, 0, "acquire")
     published: i64 = 0
     while published == 0:
-        store_i64(fresh, 0, head)
+        store_i64(fresh, _YOUNG_CHUNK_NEXT, head)
         observed: i64 = atomic_cas_i64(
             head_slot, 0, head, ptr_diff(fresh, null()), "acq_rel", "acquire"
         )
@@ -552,6 +589,18 @@ def _young_log_note(obj: c_ptr) -> None:
     global_store_ptr("pcc_tls_young_log_chunk", fresh)
 
 
+@c_abi_export("pcc_gc_young_log_thread_exit")
+def _young_log_thread_exit() -> None:
+    chunk = global_load_ptr("pcc_tls_young_log_chunk")
+    global_store_ptr("pcc_tls_young_log_chunk", null())
+    store_i32(global_addr("pcc_tls_young_log_unbuffered"), 0, 0)
+    if ptr_is_null(chunk) == 0:
+        first = load_ptr(chunk, _YOUNG_CHUNK_OWNER_FIRST)
+        # Keep all entries discoverable until the stopped-world reset.
+        # This is the retiring owner's last access to its chain.
+        atomic_store_i32(first, _YOUNG_CHUNK_OWNER_RETIRED, 1, "release")
+
+
 @c_abi_export("pcc_gc_young_log_collect")
 def _young_log_collect(out: c_ptr, capacity: i64, required: i64) -> i64:
     """Stopped world: the logged objects that are still live with every bit
@@ -559,10 +608,10 @@ def _young_log_collect(out: c_ptr, capacity: i64, required: i64) -> i64:
     total: i64 = 0
     chunk = int_to_ptr(atomic_load_i64(global_addr("pcc_gc_young_log_chunks"), 0, "acquire"))
     while ptr_is_null(chunk) == 0:
-        used: i64 = load_i64(chunk, 8)
+        used: i64 = load_i64(chunk, _YOUNG_CHUNK_USED)
         index: i64 = 0
         while index < used:
-            obj = load_ptr(chunk, 32 + index * 8)
+            obj = load_ptr(chunk, _YOUNG_CHUNK_ITEMS + index * 8)
             live: i64 = 0
             if _pcc_gc_granule_is_object_start(obj) == 1:
                 live = 1
@@ -573,17 +622,28 @@ def _young_log_collect(out: c_ptr, capacity: i64, required: i64) -> i64:
                     store_ptr(out, total * 8, obj)
                 total = total + 1
             index = index + 1
-        chunk = load_ptr(chunk, 0)
+        chunk = load_ptr(chunk, _YOUNG_CHUNK_NEXT)
     return total
 
 
 @c_abi_export("pcc_gc_young_log_reset")
 def _young_log_reset() -> None:
-    """Stopped world: empty every chunk; their owners reuse them."""
-    chunk = int_to_ptr(atomic_load_i64(global_addr("pcc_gc_young_log_chunks"), 0, "acquire"))
+    """Stopped world: clear active chains and free retired carrier chains."""
+    link = global_addr("pcc_gc_young_log_chunks")
+    chunk = load_ptr(link, 0)
     while ptr_is_null(chunk) == 0:
-        store_i64(chunk, 8, 0)
-        chunk = load_ptr(chunk, 0)
+        following = load_ptr(chunk, _YOUNG_CHUNK_NEXT)
+        first = load_ptr(chunk, _YOUNG_CHUNK_OWNER_FIRST)
+        # New chunks were pushed at the head. Every later chunk of a chain
+        # is visited before its first chunk, which owns the retirement word.
+        if atomic_load_i32(first, _YOUNG_CHUNK_OWNER_RETIRED, "acquire") != 0:
+            store_ptr(link, 0, following)
+            free(chunk)
+            atomic_rmw_i32("sub", global_addr("pcc_gc_young_log_chunk_count"), 0, 1, "acq_rel")
+        else:
+            store_i64(chunk, _YOUNG_CHUNK_USED, 0)
+            link = ptr_add(chunk, _YOUNG_CHUNK_NEXT)
+        chunk = following
     atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 0, "release")
 
 

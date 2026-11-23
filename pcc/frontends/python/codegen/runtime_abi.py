@@ -1638,6 +1638,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend0_young_collections',
         'pcc_gc_tracked_after_full',
         'pcc_gc_young_log_chunks',
+        'pcc_gc_young_log_chunk_count',
         'pcc_gc_young_log_lost',
         'pcc_tls_young_log_chunk',
         'pcc_gc_full_phase',
@@ -1851,6 +1852,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
         "pcc_process_main_anchor",
+        "pcc_tls_young_log_unbuffered",
         "pcc_gc_deferred_free_active",
         "pcc_gc_deferred_free_head",
         "pcc_gc_deferred_free_tail",
@@ -2415,6 +2417,7 @@ def _cross_object_signatures_part_12():
     "pcc_gc_backend0_full_mark": (("c_ptr",), "c_void"),
     "pcc_gc_backend0_mark_runtime_roots": ((), "c_void"),
     "pcc_gc_young_log_note": (("c_ptr",), "c_void"),
+    "pcc_gc_young_log_thread_exit": ((), "c_void"),
     "pcc_gc_tracked_shard_index": (("c_ptr",), "c_int64"),
     "pcc_gc_tracked_shard_lock": (("c_int64",), "c_void"),
     "pcc_gc_tracked_shard_unlock": (("c_int64",), "c_void"),

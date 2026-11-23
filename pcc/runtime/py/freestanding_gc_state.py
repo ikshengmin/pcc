@@ -62,6 +62,7 @@ define_global_i32("pcc_gc_backend0_young_request", 0)
 define_global_i32("pcc_gc_backend0_young_collections", 0)
 define_global_i64("pcc_gc_tracked_after_full", 0)
 define_global_i64("pcc_gc_young_log_chunks", 0)
+define_global_i32("pcc_gc_young_log_chunk_count", 0)
 define_global_i32("pcc_gc_young_log_lost", 0)
 # Full collection of the fused collector in bounded stops
 # (freestanding_gc_backend0_incremental.py). pcc_gc_full_phase is the cycle's

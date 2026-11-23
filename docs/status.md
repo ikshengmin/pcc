@@ -713,16 +713,18 @@ in the relevant section or issue and removes the entry.
    is too large for a round; area `runtime-gc` unless it names another.
    Two defects found on Linux at `cba826a9` come first (details in the
    section below):
-   (0a) The young log grows without bound when containers are tracked and
-       released by count with no net growth (four batches of 100,000 list
-       pairs: 99, 197, 295, 393 chunks). Bound it independently of the
-       growth-triggered collection.
+   (0a) Done on Linux: the young log is process-wide bounded without
+       changing collection admission; see the regression evidence below.
    (0b) The bounded stop is not bounded for a high-fanout container: one
        old list holding 320k lists gave a 27.76 ms step. The passes check
        the budget between objects; a large object's slots need a cursor
        (`pcc_gc_visit_object_slots_slice` exists). Its acceptance probe
        includes a high-fanout container as well as heap size; this
        replaces (f).
+   macOS verification of (0a) young-log cap: run
+   `uv run pytest -x -v tests/python/test_gc0_young_log_bound.py` and
+   seal the (0a) commit, its parent, and a second parent arm for
+   `pcc_perf.py ab --control-arm` followed by `table`. Platform macOS.
    (a) Throughput of what landed on 2026-11-24 (`2498f19ff`, `5c20d934b`):
        `arm` for `90f4345db` and for master, `ab` with `--control-arm`,
        `table`. A loss beyond the noise floor is located before any other
@@ -761,7 +763,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0a) bound young log without net growth: Codex, Linux x86-64, 2026-11-23 20:56 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
@@ -1205,11 +1207,18 @@ stopped; `ab gc0-head gc0-stage3 --control-arm gc0-head-b`, five pairs:
 noise. The handler seldom reaches a full collection: this shows no cost on
 the request path, not the pause bound.
 
-Open, reproduced on Linux x86-64 at `cba826a9` with a PCC-built C probe:
-four batches of 100,000 `py_list_new(0)` / `py_decref` pairs kept the
-tracked count and pause count at zero, while the 8 KiB young-log chunks
-grew to 99, 197, 295 and 393. The log needs a bound that does not depend
-on an automatic collection triggered by net growth.
+Young-log growth (0a), fixed: Linux x86-64 at `cba826a9` grew to
+99 / 197 / 295 / 393 chunks in four batches of 100,000 track/release
+pairs, with no net growth or collection. The log now reserves at most
+128 chunks of 8 KiB (1 MiB process-wide). Saturation does not trigger a
+collection; the next already-requested young collection uses the
+existing exact allocator/index flag enumeration (which can scan the
+heap). Exited carriers' logs remain visible until reset, then their
+chunks are freed. The native churn and exit regressions in
+`tests/python/test_gc0_young_log_bound.py` check the cap, no extra
+collection, reclamation of the young cycle without the old cycle, and
+reclamation of 16 departed carriers' cycles and chunks. No throughput
+claim; macOS A/B is pending.
 
 The 200 us budget is not a pause bound. A Linux x86-64 screening run at
 the same revision, with one old list retaining 20k / 80k / 320k lists,
