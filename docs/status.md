@@ -840,10 +840,15 @@ in the relevant section or issue and removes the entry.
    raw-slab preparation on GC0–4: two preparations, one publication,
    one private discard, two distinct reservations, exact mapped payload
    accounting, and one reclaimable slab. The test is not on a production
-   allocation path and did not measure throughput. Next GC2: wire the bounded
-   prepare/recheck into both raw allocation paths in a local candidate;
-   test preparation/registration failure and trim, then run the fixed-count
-   and native four-worker workload controls before any merge.
+   allocation path and did not measure throughput. A local candidate wired both raw allocation paths and passed all ten
+   Linux four-mutator native controls (512 and 16,384 bytes, GC0–4). For
+   48,000 GC2 lists, w4 won 2/5 (paired median throughput −4.6%; stock
+   control −25% to +37%). A fixed 4,096-buffer native control forced the
+   same 35 or 1,366 slabs per arm: 512-byte median wall 1.69→2.86 ms
+   (1/5 wins), 16,384-byte 54.33→75.07 ms (0/5). All 30 fixed runs
+   passed but off-lock preparation did not improve work time. No code
+   push or Mac A/B for this candidate. Return to the GC3 major-marker
+   old-child liveness blocker before a further allocator candidate.
    Shared-root cost stays open; seek a change that removes actual hot
    entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
@@ -1069,7 +1074,6 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Wire bounded off-lock raw slab refill: Codex, Linux, 2026-11-23T11:58Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
