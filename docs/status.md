@@ -1244,7 +1244,9 @@ handler, not the C512 network server. Local Mac evidence only; no Linux or pcc1.
 Five collectors at master `fd567f664`, arm `master-fd567f66`, two `table`
 runs, plus `pcc_perf.py asyncio` (88,674 req/s), in req/s:
 
-- GC0: w1 49,168 / 49,599; w4 103,898 / 104,934 (w4 is 118% of asyncio).
+- GC0: w1 49,168 / 49,599; w4 103,898 / 104,934. The asyncio figure above
+  is one process; compared with the same worker count (see the 2026-11-23
+  note below) GC0 is 55% of asyncio at w1 and 37% at w4.
 - GC1: w1 34,855 / 35,365; w4 69,097 / 69,793.
 - GC2: w1 36,382 / 35,899; w4 49,208 / 48,150. At w4 the table reports
   0 ms stopped, 10 to 12 ms lock wait and 105 us CPU per request; the A/B
@@ -1291,6 +1293,56 @@ owners for GC0.
 
 Reproduce with `scripts/pcc_perf.py arm`, `table`, `asyncio`, `ab` and
 `top` as above, each arm sealed from a clean worktree at the named commit.
+
+### GC0 shared-cost rounds (local Mac, 2026-11-23)
+
+`pcc_perf.py asyncio` now measures one and four processes (one event loop
+each, the requests split over them) and `table` compares each row with the
+same worker count: asyncio w1 88,246, w4 261,373 req/s; at `a2ca33bb5` GC0
+is 55%/37% of it, GC1-3 about 37%/18-25%, GC4 30%/14%. `top --callers F`
+splits a function's own time by caller.
+
+Five rounds on GC0 one-worker cost, each A/B against its parent with a
+rebuilt-parent control arm (`ab A B --pairs 5 --gc 0,1,2,3,4 --workers 1,4
+--control-arm C --latency-receipts`):
+
+1. `2c9e814eb` pin/unpin return at once on GC0 (`pcc_gc_pins_inert`):
+   GC0 w1 +2.6% (5/5, floor 1.2%), repeat +1.9% (floor 2.0%); CPU -2%.
+2. `a1cf0d1f0` no mode-lease CAS pair once the collector is fixed: no
+   measurable change.
+3. `f8ccccbd8` string equality/search and module-name matching over
+   memcmp/memchr: no measurable change (short names and keys).
+4. `e73525ede` slot calls skip no-op address leases on collectors 0-3
+   (`pcc_gc_leases_inert`): method calls +16%, generators +11.5% (prim
+   screen); handler unchanged.
+5. A rewritten compact JSON encoder (merged separators, fewer arguments)
+   was 27% faster under CPython and not faster compiled (6.1-6.4 us both):
+   not committed.
+
+Cumulative, `master-a2ca33bb` against round 4 (7 pairs): GC0 w1 +3.2% (7/7),
+w4 +7.4% (6/7), CPU per request -2%/-4%, inside a 10-13% control floor on a
+loaded host; GC1-4 unchanged. GC0 w1 primitives against CPython stay 3x
+for list/dict/instance creation, 3.6x for method calls and string
+concatenation, 8x for `time.perf_counter()`, 4x for `json.dumps`; loops,
+calls and tuples are already faster than CPython. The one-worker request
+(about 20 us of CPU) is spread over dozens of runtime helpers, each 1-3%:
+allocation and release layers, root stores, module attribute lookups.
+Measurable gains now need structural work on those paths, not one helper.
+
+Failures found while validating these rounds, all failing on the parent
+too: `test_gc_backend4_production.py` 92 of 162 (14 relocate outside a
+stopped world, 14 more inside one, 21 test GC4 store-buffer/remembered-set
+generations, 41 logical zpages, 2 other); the GC1 order case of
+`test_bulk_nonterminal_retirement.py`; and stale IR-shape cases in
+`test_slot_call_multiplication_producers.py`,
+`test_slot_call_namespace_literals.py`,
+`test_slot_call_environment_copy_producer.py`,
+`test_slot_call_dynamic_append_result.py`, `test_slot_call_lexical_roots.py`,
+`test_slot_call_return_publication.py`,
+`test_slot_call_sequence_constructor_producers.py` and
+`test_private_root_copy.py`. `test_freestanding_gc_root_operations.py`
+(4, stale since #9 and GC4's stopped-world relocation) is fixed in
+`2c9e814eb`. Next: classify each as a code or a test defect and fix it.
 
 ## GC0–4: optimize each collector before unifying
 
