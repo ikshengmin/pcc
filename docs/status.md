@@ -572,7 +572,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - none
+   - #9 GC2 four-carrier mark completion: Codex, Linux x86-64, 2026-11-23 03:17 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
