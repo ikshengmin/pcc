@@ -13,8 +13,10 @@ The queue an agent takes when the maintainer says only "推进"; see
 [AGENTS.md](../AGENTS.md#continuing-on-推进). Platform "any" means Linux or
 macOS.
 
-Who set the order: the GC order is the maintainer's decision of 2026-11-21
-(next section); self-host last and its completion bar, "推进" authorizing
+Who set the order: item 2 is the one-collector work the maintainer ordered
+on 2026-11-24, when the maintainer also told Claude to rewrite that item,
+rules 13 to 15 and the collector measurement rules for one collector;
+self-host last and its completion bar, "推进" authorizing
 commit and push, and the round and claim rules below are the maintainer's
 decisions of 2026-11-22. Item 3 (pcc-gateway throughput) is the
 maintainer's addition of 2026-11-23, placed after the GC item. The relative
@@ -97,7 +99,7 @@ under each item and through Git alone.
     A checkpoint is due when ten or more commits since the last checkpoint
     below touch the compiler or runtime
     (`git rev-list --count <checkpoint>..shenming/master -- pcc/runtime pcc/frontends pcc/ir pcc/backend pcc/driver`),
-    or when a result of GC plan steps 2 to 5 lands.
+    or when a result of item 2 lands.
     - Dispatch: any round, targeted or not, that finds a checkpoint due and
       none pending first runs
       `gh workflow run "PCC validation" --repo ikshengmin/pcc --ref master -f base_sha=<checkpoint> -f expected_sha=<current master SHA>`,
@@ -118,22 +120,24 @@ under each item and through Git alone.
     - The maintainer's approval of 2026-11-22 covers this dispatch at this
       cadence only. `full_chain`, performance A/B dispatches and local
       full-suite or bootstrap runs still need the maintainer's explicit OK.
-14. macOS verification. Each result of GC plan steps 2 to 5 adds a unit
-    "macOS verification of <step>" to item 2, platform macOS. A local agent
-    on the maintainer's Mac takes it: `scripts/pcc_perf.py arm` for the result
-    and its parent, `ab` with `--control` or `--control-arm`, `table`, and the
-    step's focused native tests, reported as local Mac evidence. Until one
-    does, the result's report lists those commands for the maintainer.
-15. Design review. The first code round of three architecture units is
-    preceded by a design round: GC3's young generation and remembered set,
-    GC4 phase two, and biased reference counting once its ceiling qualifies.
-    The design round writes a note in the unit's issue: the data
-    structures; every store path the barrier must cover; conservative roots
-    and pins, finalizers, weakrefs and C-API handles; what stays inert for
-    the other collectors; and the measurement that decides the unit. The
-    unit then waits under "Waiting on maintainer" until the maintainer, or a
-    reviewer the maintainer names, approves the note. Agents take other
-    units meanwhile.
+14. macOS verification. Each result of item 2 that changes the collector,
+    the allocator or the code they generate, and that was not measured on
+    the maintainer's Mac, adds a unit "macOS verification of <unit>" to item
+    2, platform macOS. A local agent on the maintainer's Mac takes it:
+    `scripts/pcc_perf.py arm` for the result and its parent, `ab` with
+    `--control-arm`, `table`, and the unit's focused native tests, reported
+    as local Mac evidence. Until one does, the result's report lists those
+    commands for the maintainer.
+15. Design review. The first code round of two architecture units is
+    preceded by a design round: object relocation, and biased reference
+    counting once its ceiling qualifies. The design round writes a note in
+    the unit's issue: the data structures; every place that holds an
+    object's address without a count (stack words, runtime caches) or as a
+    value (`id()`, the default hash, weak references, C-API handles);
+    finalizers; and the measurement that decides the unit. The unit then
+    waits under "Waiting on maintainer" until the maintainer, or a reviewer
+    the maintainer names, approves the note. Agents take other units
+    meanwhile.
 16. Rules. Agents change AGENTS.md's continuation section and these rules
     only on the maintainer's instruction; a proposed change goes to the
     waiting list. Rewriting an item's "Next", claim lines, the checkpoint lines and
@@ -695,398 +699,52 @@ in the relevant section or issue and removes the entry.
    Claims:
    - none
 
-2. **GC0–4 optimization, then one collector.** The next section is the plan
-   and its stopping rule. Platform: any for code and Linux measurements;
-   macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. [GC3 review e955661](https://github.com/ikshengmin/pcc/commit/e955661bb8674c4ea425b70ed6b12762821a70f5)
-   wires the test-invoked stopped promotion approved on #8: exact slab
-   provenance, record and card preflight, in-place no-park commit.
-   Linux: eight native cases, including two subsequent GC3 collections;
-   20 existing emitted bodies unchanged. No production caller or nursery.
-   [GC3 census 39e1b8b](https://github.com/ikshengmin/pcc/commit/39e1b8bbfeec1b98af5afac92dac64fe1db7e1e0):
-   tuples and lists account for 53.5–55.2% of logged allocations in two
-   sequential single-carrier gateway controls. This is not sealed handler
-   throughput or an admitted share. [GC3 review d47a368](https://github.com/ikshengmin/pcc/commit/d47a368ecd5ac5e0534a6d642d76b2a74481af89)
-   carries the actual old receiver through ordinary direct and planned
-   stores, verified with real off-object list and inline tuple slots on
-   Linux; roots are ownerless and the bounded observer flags overflow.
-   No real minor reads the buffer. [GC3 review b2a6508](https://github.com/ikshengmin/pcc/commit/b2a65080db00de0a7c0a2f8cba86b95467c0548f)
-   covers native locked list first stores into spare storage and a new
-   backing array: exact parent fails, five backend lanes and 18 host
-   models pass fixed. Ordinary tuple construction already passes the
-   owner; exclude the raw dictionary materializer and foreign paths.
-   [GC3 sparse cut bbcfa4a](https://github.com/ikshengmin/pcc/commit/bbcfa4a77da42432d1a884df4c6524573fc4a212)
-   retains live dirty cards and drops cleared/retired ones. Fifteen Linux
-   runs at 64/256/1024 unrelated old lists visited exactly two dirty owners
-   and zero clean old per cut; incomplete input/frontier is rejected.
-   [GC3 closed young review 7d745c3](https://github.com/ikshengmin/pcc/commit/7d745c310ada9f7c1ff6bda713d5f41004b31b22)
-   closes a real explicit-root and dirty-edge cohort. Five Linux runs
-   each preserved four young cells and retired one, rejecting four
-   incomplete cuts. [GC3 root review 0da03b2](https://github.com/ikshengmin/pcc/commit/0da03b22694fadd9370a64c1448a110cebfc75a5)
-   uses the initial frozen threads' root cut and registered value walker.
-   Nine Linux controls distinguish a caller interior word, separate
-   scheduler slot, and post-stop scratch; prior cohort regression passed.
-   No automatic entry or complete precise/foreign root qualification.
-   [GC3 bump review c3f7b47](https://github.com/ikshengmin/pcc/commit/c3f7b4716f07feab7d0bb09aafe4803293626286)
-   registers one 64 KiB slab once: 2,048 cells, zero tracing records.
-   Peer publication, ownership, cancellation and stopped empty rewind
-   passed five mode lanes and five extra GC3 runs; 92 prior allocator
-   bodies are unchanged. Reviews only: `94ceb2116` uses a real marked, closed
-   tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
-   and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
-   into that slab: five native runs and 15 controls pass. No production
-   allocation in those probes. The existing GC3 review now includes the
-   landed #9 baseline `1a083c619`, without rewriting published history:
-   [`3cf06a390`](https://github.com/ikshengmin/pcc/commit/3cf06a3904cf728e68b62262f494a72dcc460161).
-   Linux pcc0 rebuilt the exact owned archive: 26 native and 111 other
-   checks passed, nine legacy host-Clang cases unrun (Clang unavailable).
-   The dispatcher inventory now distinguishes its owned card word from
-   external dependencies and checks the existing bump-card export.
-   This did not enable the nursery on the production path or measure
-   throughput. Production activation remains blocked on the review:
-   in five Linux pcc0/self runs an interior pointer to the third tuple
-   was present in the initial frozen caller snapshot (two visitor hits),
-   yet the explicit-root-only bump cut rewound all three cells when its
-   explicit list was empty. This is a test-only API's boundary, not a
-   production regression. Reproduce from the bump-cut C fixture on
-   `3cf06a390`: before the first stop keep `(uintptr_t)third + 1` in a
-   volatile caller slot, enable conservative snapshots, and count that
-   word through `pcc_thread_visit_conservative_words` before the existing
-   no-explicit-root cut. Do not dereference after rewind. The same bump
-   path also keeps a whole mixed live/dead slab; the existing in-place
-   promotion requires ordinary allocator provenance, not bump cells.
-   Linux pcc0/self scratch result on that review base: feeding the initial
-   frozen caller snapshot plus registered roots preserved the intended
-   bump cells in all 20 runs (four root combinations; no-root control
-   rewound all three). This local root-only fix was not published.
-   The production explicit-major probe on the same archive exposed a
-   separate activation blocker. Construct a normal indexed empty list
-   on a worker, keep it only in slot 0 of a one-element tuple, publish
-   only the tuple into a registered scheduler root, and join the worker.
-   Call `pcc_gc_collect(2)` before loading the list address on the main
-   thread. The list index remains live 5/5 with an ordinary tuple and
-   disappears 5/5 with a bump tuple; both unrooted controls clear 5/5.
-   The probe checks the index, never dereferences the reclaimed list.
-   Next GC3: make a live bump owner visible to the major marker and give
-   mixed spans an exact lifecycle; rerun the rooted/unrooted probe and
-   frozen-root controls before any production allocation or Mac A/B.
-   GC2 diagnostics on the landed #9 runtime (`2d9393e95`): five
-   alternating Linux pairs of the same 120,000-list native probe again
-   locate the direct plus inlined raw/object allocator spin loop, at
-   median 56.56% of CMS+mutator user CPU samples at w4 vs 4.12% w1;
-   explicit gray worklist functions were 3.97% vs 0.77%. Four of five
-   w4 runs finished no mark during allocation, vs none at w1 (21
-   finishes median). This is not a throughput test or exclusive cause.
-   A local raw magazine experiment reserved same-slab extras with one
-   span lookup and debit. The expanded trim/remote-free test passed
-   twice on each of GC0–4, and the object magazine and standalone
-   allocator controls passed. It did not fix GC2's w4 mark progress:
-   4/5 still finished no mark, same as stock, vs 1/5 on the unchanged
-   stock repeat. Median lock-spin sample shares were 56.62% stock,
-   51.02% candidate and 48.06% unchanged control. CPU and pause did not
-   improve consistently. Do not publish that code as an improvement.
-   Linux handler CPU on `336879392`, pinned gateway `b1490486`: one
-   source-matched native binary, C100, delay 0, 150 timed rounds plus
-   2 warmup, five alternating sets and an unchanged GC0 repeat.
-   `wait4` median CPU µs/request w1/w4: GC0 62/94, GC1 131/186,
-   GC2 133/408, GC3 128/207. GC2's w4 paired excess was +132 to
-   +462 µs, positive in 5/5 vs GC0 (max absolute GC0 A/A 19 µs).
-   This confirms the w4 CPU gap on the handler, not a Linux throughput
-   qualification or a diagnosis of which threads spend it.
-   Standard x86-64 handler ELF Linux task-clock screen, matching
-   executable runtime section bytes outside relocations: three w4
-   samples per GC0–3 and one w1 each. GC0 w4 median root-store self
-   share was 6.33%; pin/unpin 4.14%, container-lock 2.91%. In the
-   exact-PC follow-up, 325/742 GC0 root-store samples were at its
-   entry frame, before its first argument check (432-byte frame).
-   The four-carrier GC2 collector thread took 15.9–16.4% of sampled
-   user CPU in the two runs that hit its worker-entry symbol; the
-   third role was not proven. One separate GC2 w4 instruction screen
-   put 25.4% of all samples at the single allocator lock's direct and
-   inlined wait loops (GC0 0.38%); this is not throughput validation.
-   The local shared root-store split moved checked plan scratch off
-   its common entry: owned x86-64 frame 432→288 bytes, but only two
-   of 28 pre-check zero stores disappeared. Ten native direct runs
-   across GC0–4 (checked/normal) and eight ABI chunk checks passed.
-   The forwarded control returns 9 (`shared_slot_registered`) on the
-   unchanged `2763d378` parent and first candidate, before it calls
-   the root store. Forwarding was not qualified. No throughput gain
-   shown; do not merge that split or spend a Mac A/B on it.
-   GC2 Linux owned diagnostic on `50a97945`: five alternating w1/w4
-   pairs, 120k lists, phase timers enabled only in the workload.
-   Fresh raw slab carve was the largest measured subtotal in all
-   five w4 runs (median 55.3 ms vs w1 0.39 ms); map/register median
-   27.3 ms, raw magazine extras 19.6 ms. Trim was infrequent (0–4
-   calls per w4 run), but single calls reached 19.9 ms. The fresh-slab
-   timers include direct central refills; do not sum these with the
-   enclosing magazine totals. w4 completed no mark during allocation
-   in four runs, versus none stalled at w1. Not a throughput claim.
-   The one-splice raw-chain candidate on `a0639f6` preserves complete
-   LIFO order in three size classes on all five Linux backends.
-   Both exact unmodified and candidate smoke binaries ran under
-   GC0–4 with identical expected output; both enclosing pytest
-   nodes still fail the existing `nm` symbol assertion before
-   executing that smoke. Five alternating GC2 workload pairs with
-   identical phase instrumentation: w4 median carve per fresh slab
-   77.86→39.70 µs, with improvement in only 3/5 same-pair comparisons,
-   and w1 30.89→37.33 µs. w4 fresh-refill counts differed substantially
-   in one pair; median w4 finished mark count stayed zero. This does
-   not isolate an effect or qualify a throughput result. No runtime
-   code pushed. The fixed-count follow-up used 1,024 fresh raw slabs
-   per process, 16/64/512-byte classes, five alternating pairs per
-   class and worker count, and rejected any incidental refill/trim.
-   w4 median carve µs/slab was 29.81→26.03 (3/5), 21.99→23.96
-   (2/5), and 19.18→27.17 (3/5), respectively. Only w1 size 16
-   improved in all pairs (23.05→20.54). Do not merge or request a
-   Mac A/B for this splice. A scratch Linux native probe verified off-lock
-   raw-slab preparation on GC0–4: two preparations, one publication,
-   one private discard, two distinct reservations, exact mapped payload
-   accounting, and one reclaimable slab. The test is not on a production
-   allocation path and did not measure throughput. A local candidate wired both raw allocation paths and passed all ten
-   Linux four-mutator native controls (512 and 16,384 bytes, GC0–4). For
-   48,000 GC2 lists, w4 won 2/5 (paired median throughput −4.6%; stock
-   control −25% to +37%). A fixed 4,096-buffer native control forced the
-   same 35 or 1,366 slabs per arm: 512-byte median wall 1.69→2.86 ms
-   (1/5 wins), 16,384-byte 54.33→75.07 ms (0/5). All 30 fixed runs
-   passed but off-lock preparation did not improve work time. No code
-   push or Mac A/B for this candidate. GC2 w4 unfinished-mark attribution, Linux 120k-list controls: stock
-   at all-workers-held finished median 16 w1 vs 3 w4, zero assists. In the
-   phase-timed arm four of five w4 runs finished no mark by that boundary:
-   all four had zero debt and assists, median w4 gray 63,027 overall;
-   >99% of timed collector CPU was inside the mark step on those four.
-   An existing stepmul diagnostic also changed debt credit, not just
-   assist pacing: 22–113 assists in each w4 run, finishes 1–5 in all five.
-   This is causal evidence for the assist gate, not a throughput result or
-   a claim about every HTTP run. No allocator change. Next GC2: isolate a
-   gray-backlog assist admission rule, keeping finish and lock invariants. GC3 old-child liveness remains open (rooted bump depth 1 and 2
-   each red 5/5 on the exact review base; rooted indexed control green
-   5/5). For shared root-store, pin and container locks, eliminate work
-   actually executed at entry; frame-size changes alone do not qualify.
-   Linux root-store candidate (`7f051450`, local only) cut pre-slot zero
-   stores 28→15 and passed native and ABI checks. Sealed five-pair w1/w4
-   A/B with a separate stock control was inconclusive in all ten rows;
-   GC0 w4 +1.8% (4/5, 32.7% floor), while GC2 w4 was −23.3%
-   (0/5, 47.0% floor). No runtime push; retain the local candidate and
-   pause Codex work at the maintainer's request.
-   The first sparse remembered-set slice is a test-only serial model: seven
-   guarded Linux host tests exercised the missed-writer oracle, zero clean-old
-   enumeration at 32/128/512 old owners, persistent cards, promotion and
-   fail-closed queue overflow. This is not native runtime or performance
-   evidence. The maintainer named Claude reviewer on 2026-11-22; the first
-   slice was approved, and slice 2 and activation must meet the applicable
-   conditions in [the review](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7075091903).
-   The [ownerless-writer audit](investigations/gc3-remembered-writer-coverage.md)
-   identifies the shared nonmoving store, generator and fast first-store
-   paths. A source/model witness executes the GC3 dictionary admission and
-   first-store helpers; native writer coverage is still required. A
-   source-mode snapshot witness also distinguishes collector-only words
-   from caller entry roots. The Linux x86-64 native capture control passed
-   with callee-saved register allocation both off and on. A Linux GC3
-   finalizer now tests a root published while the outer sweep has resumed
-   the world, including nested `gc.collect()`. The proposed GC3
-   major-cycle policy closes nursery admission from pre-seed handoff through
-   sweep and uses indexed old allocation in that interval. A Linux native
-   control at an artificially held active-mark boundary checked index,
-   bitmap, and both list append paths. A second Linux native control
-   checked dictionary insertion/replacement and the value-only initializer.
-   The native private dict-items builder now confirms indexed black list and
-   tuple results, both child identities, and no output on fast-path refusal.
-   The native sorted writer covers insertion, reverse merge and a
-   non-plain comparison that refuses after the copy without publishing.
-   Linux native GC0–4 now confirms only GC0 allocates inline generator
-   frames; GC3 takes the list path and shades its child. A live frame
-   prevents switching collectors. The group helpers currently decline;
-   the native regression now checks unchanged cells, GC3 active-mark
-   invariants and scalar transfer into registered caller roots. A separate
-   unchanged generator case and a standalone
-   [resurrection probe](investigations/gc-tracing-acyclic-weakref-resurrection.md)
-   confirm GC1–4 clear acyclic callback weakrefs too early; GC0 and both
-   cycle controls match CPython. A stopped candidate-only peel matches
-   the cycle-descendant oracle in a test-only model (66,066 small graphs).
-   The paired native owner/child probe confirms GC1–4 also finalize a
-   child rescued by an acyclic parent's finalizer; CPython and GC0
-   wait until the child's final drop. The cyclic-parent control agrees.
-   A test-only stop/recheck model covers rescued children, edge
-   retirement, new roots/cycles and candidate identity reuse.
-   Owned Linux tests validate the stopped candidate-list storage and
-   bounded strong/weak slot roles. The regular GC4 finish has no such
-   list and the current recheck still makes two heap walks. A
-   candidate-only journal model stays flat at n/4n/16n old owners but
-   misses a single unrecorded writer. **Recommendation:** review a
-   test-gated full-recheck correctness arm before a production journal;
-   see the waiting list. No runtime ordering change.
-   The old relocation fixture still fails before grouped take (GC3
-   oldification, GC4 set admission).
-   The dictionary transaction witness identifies the commit point after both
-   slots succeed; rollback publishes no edge. Linux native GC3 also
-   exercised the raw generator frame's set, replace and clear. Native heap
-   and registered-root controls plus source tests confirm the common fast
-   path drops the owner and shades only indexed values. A standalone owned
-   native probe classifies old-to-young edges with two header reads and no
-   index or major-phase read; it is not in the runtime. The live GC3
-   memoryview C export retains the original buffer through its view/base
-   across two majors, but has no dedicated cache exporter root: the
-   helper that would register one is not dispatched. Its tests now run
-   the dormant helper directly, separately from the public-entry controls.
-   The distinct `PyObject_GetBuffer` pin/release path passed Linux native
-   shared-export tests in both release orders. Exporter admission still
-   waits for promotion/exclusion review. Weakref creation now has a source
-   publication witness and a public native identity control. The promotion
-   model keeps the source young on metadata/card failure. Native GC3
-   recognized an exact allocator-published cell without a tracing index
-   but did not expose it through the record-backed span lookup. A serial
-   cursor model now separates the published tail from a pending reservation,
-   an in-place old cell, and a reused span. A standalone Linux native
-   cursor probe passes the same boundaries across two bitmap words. A
-   real PCC-thread stop now sees a fully published test cell after no-park
-   exit, and no published cell in the unprotected control. The same
-   owned native probe now checks real allocator cells: published exact
-   addresses need no tracing index, and stopped incomplete cells remain
-   unknown. With an explicit owner and fixture-managed age, a published
-   indexless cell now gets a stable old record at its original address
-   and survives two majors. Preparing its record without committing kept
-   it out of the stopped major walk; retry reused the mapping, and commit
-   exposed exactly one entry. A Linux native promoted-owner probe also
-   found its indexless child through the real strong-slot visitor.
-   GC3 production promotion and nursery activation are still untested. The GC0 atomic CPU-share
-   measurement lacks a sealed gateway arm; no percentage was reported.
-   Linux `pcc_perf profile-preflight` now gets real task-clock instruction
-   samples for its own thread and the Linux probe now captures a directly
-   owned PCC-emitted C child. Fourteen transport/protocol checks passed.
-   The actual stripped ELF's sampled PCs now map through file-backed
-   executable ranges; unknown PCs stay unattributed (25 focused checks).
-   Capture and address mapping now share an opened, SHA-verified ELF,
-   even if the pathname changes (26 focused checks). Real kernel loss
-   and scheduling counters now reject an overrun/incomplete run (32
-   focused checks). A fixed owned four-task cohort now verifies separate
-   kernel PID/TID streams, actual run counters and expected membership
-   (33 checks). The owned x86-64 calibration then ran 20 million locked
-   increments with zero exact-start task-clock hits at the atomic opcode
-   in three trials. This disproves using task-clock PCs for the GC0
-   atomic CPU-share gate. This host rejected the exact hardware event;
-   leave the gate open and take other ready GC work. The gateway
-   arm remains unavailable here. The native GC1 scheduling baseline verifies
-   one CMS startup on each GC1–4 and none on GC0, with a rooted object
-   surviving two explicit collections. A separate native GC1 workload
-   reached an automatic mark commit and sweep without explicit collection
-   and rejected the zero-worker expectation on stock. Review candidate
-   [`f8017e98`](https://github.com/ikshengmin/pcc/commit/f8017e982cc583675efe5db35e17635906d81ae3)
-   made automatic progress with zero CMS workers and no allocation assists
-   in the one-mutator Linux test. Its review follow-up
-   [`5f17931`](https://github.com/ikshengmin/pcc/commit/5f1793111a53a1045ac3223764065effef4fb0d5)
-   passed with four allocating mutators in three fresh Linux processes.
-   The review follow-up
-   [`f7f15a28`](https://github.com/ikshengmin/pcc/commit/f7f15a289f543a22e29de46ec2a532378ca808a0)
-   also passed GC1 automatic weakref/finalizer delivery across disable/
-   enable and a native callback that reentered collect. The macOS A/B
-   of 2026-11-22 (section "macOS verification" below) measured it as a
-   loss: w1 -17.9%, w4 -47.1%, maximum STW 21 -> 68 ms and 19 -> 110 ms.
-   It stays off master; next is debt-proportional step work. GC2 now has a native stock arithmetic
-   control for live-byte threshold, minimum/override, step budget and
-   debt discharge. A stock GC2 native harness now records assist/mark/
-   stop counters for 48,000 list allocations split across one or four
-   mutators. An isolated model now separates live heap goal, start
-   headroom and capped assist-during-mark. Opt-in review candidate
-   [`4c64bd32`](https://github.com/ikshengmin/pcc/commit/4c64bd32007ec66ff11c3438db43c3b221ba0a91)
-   used actual GC2 marking with controlled occupancy: one batch assisted
-   and paid down mark debt with no occupancy decrease. All default/override
-   and non-GC2 controls stayed disabled. Review follow-up
-   [`48159db`](https://github.com/ikshengmin/pcc/commit/48159dbeabfe31254c9a9d3866a9a351bb01e9be)
-   reached automatic sweep with and without opt-in in the same ELF, no
-   threshold override, and observed real four-mutator assist entries.
-   pcc_perf now seals an explicit per-arm GC2 mode, checks an owned
-   runtime attestation and binary identity, and records the mode in the
-   GC2 comparison ledger. The byte-identical tool is available on review
-   [`20428077`](https://github.com/ikshengmin/pcc/commit/20428077c8f1d9c3c0fe8dc4e4d8b26a401e85f6).
-   pcc_perf A/B now supports per-run maximum STW, process peak RSS, and
-   timed p99 through `--latency-receipts`. The qualified
-   collector-neutral tool is now on both review branches, with exact
-   [GC1](https://github.com/ikshengmin/pcc/blob/00f9fe1a3fa5f201bdbf129eb0becf4b2ac1d66f/docs/investigations/gc1-mutator-review-candidate.md)
-   and [GC2](https://github.com/ikshengmin/pcc/blob/3881de679be11087bdef747955d8bd357d21196c/docs/investigations/gc2-pacer-review-candidate.md)
-   macOS comparison commands. The pre-existing 51-entry runtime ABI
-   chunk regression revealed by GC2 checks is fixed; all 1,202 ordinary
-   signatures retain their exact flattened order and definitions.
-   No master runtime or A/B change. Stock GC2's focused native
-   ownership probe exercises one real gray list: a second registered
-   thread cannot process it until the graph owner unlocks. A test-only
-   model now covers bounded whole-owner claims and refuses final remark
-   with unpublished or in-flight work. Three Linux native processes
-   observed two independent rooted lists' real slot visitors overlap
-   while the graph was locked. Another Linux native probe verifies that
-   an exact-list scan shades a repeated child once and that a later
-   public append supplies the missing gray credit via the same lock.
-   The independent [GC2 list review](https://github.com/ikshengmin/pcc/blob/105122d146e18836f0ed3e08c7d3aac3a684475d/docs/investigations/gc2-exact-list-worker-review.md)
-   now runs a rooted 32-slot exact-list native kernel: 3 GC2 executions,
-   4 other-backend rejection controls, and 8 ABI checks passed on Linux.
-   It is not selected by ordinary marking. Stock Linux now also shows
-   that list-scan credit and its token are visible at the stopped cut
-   only if the scan holds the no-park container lock. The
-   [single-task review](https://github.com/ikshengmin/pcc/blob/135633c3a6fa1e00a4ea51175c32d89551776c35/docs/investigations/gc2-exact-list-worker-review.md)
-   passed both stopped gaps for normal retirement and abandon (3+3 Linux
-   native runs); the token itself blocked remark even at simulated zero
-   credit. The [stopped epoch-reset follow-up](https://github.com/ikshengmin/pcc/blob/f564e16e73c7e684a79a1981a106a9cd57226081/docs/investigations/gc2-exact-list-worker-review.md)
-   also passed three native runs of a late old worker returning after the
-   new epoch had claimed the same list, using real bitmap rotation.
-   The [test-gated automatic bridge](https://github.com/ikshengmin/pcc/blob/51d00e120424f0141e6322042868dae28ab58a7a/docs/investigations/gc2-exact-list-worker-review.md)
-   now takes one task through the actual GC2 slice and real finish/sweep.
-   Twelve Linux subprocesses (one/four mutators, bridge off/on, three each)
-   kept rooted owners and children alive; candidate counters saw both
-   shortcut and fallback, off had neither. Keep disabled. Ask Claude
-   to inspect no-park and graph lock order and finish. The
-   [forced fallback probe](https://github.com/ikshengmin/pcc/blob/57402250070a8eccddcb8d37067a8a606d2afe27/docs/investigations/gc2-exact-list-worker-review.md)
-   passed 18 Linux cases: 32 slots shortcut, 33 ordinary fallback, tuple
-   bypass; each path debited one owner and published one child.
-   The [contended-owner regression](https://github.com/ikshengmin/pcc/blob/3cc6e9c9b9083c00440e233a47456bf9e8642f47/docs/investigations/gc2-exact-list-worker-review.md)
-   forced the fallback cursor and bridge onto one owner: both previously
-   returned a debt credit; only the real retiring path now earns it.
-   Five focused Linux native suites passed. The
-   [reserved cursor mode](https://github.com/ikshengmin/pcc/blob/04d395b0c4eba8ed616338df5093412640fb5c54/docs/investigations/gc2-exact-list-worker-review.md)
-   also skips the outstanding owner without scanning: six forced native
-   interleaves and 18 automatic runs passed. The
-   [depth-first-stack follow-up](https://github.com/ikshengmin/pcc/blob/28a23fd7d25b8deb253e6ea3e61652fc661dd2a1/docs/investigations/gc2-exact-list-worker-review.md)
-   also drops the duplicate hint when another owner points to a claim;
-   12 controlled interleaves and the automatic tests passed. The
-   [startup selector](https://github.com/ikshengmin/pcc/blob/d658048175e19b7ea67e1a31cc45cb10bbd15c00/docs/investigations/gc2-exact-list-worker-review.md)
-   now attests the optional GC2 mode: 12 Linux scope/spelling cases, 18
-   automatic cases and 8 ABI checks passed. The
-   [sealed Mac A/B handoff](https://github.com/ikshengmin/pcc/blob/ec60c7bed4e39baf963adfb9e841d812291374d8/docs/investigations/gc2-exact-list-worker-review.md#same-input-mac-handoff-sealed-arms)
-   binds the flag to arm identity, an actual native on/off/GC0 probe and
-   matched binary hash; 82 tool tests passed. macOS verification of GC2
-   list bridge is ready (5 pairs, w1/w4, unchanged GC0, QPS/pause/RSS/p99).
-   No gateway workload or Mac was executed in Linux. While waiting on
-   performance and source review, the
-   [automatic lifecycle check](https://github.com/ikshengmin/pcc/blob/25d340a11c01bcddad4fba1dedc28a759a29ba8d/docs/investigations/gc2-exact-list-worker-review.md#automatic-lifecycle-smoke-on-the-measured-runtime)
-   matched the ordinary CPython weakref/finalizer order, and passed 12
-   Linux owned runs including reentrant collect and positive shortcut
-   visits. The [foreign C hold follow-up](https://github.com/ikshengmin/pcc/blob/3dde8f24ebad6ca838b7906e7124435154d2b887/docs/investigations/gc2-exact-list-worker-review.md#automatic-lifecycle-smoke-on-the-measured-runtime)
-   passed six runs: two then one persistent C holder stayed valid across
-   real automatic mark/sweep; the last release was once. The
-   [resurrection follow-up](https://github.com/ikshengmin/pcc/blob/625c3b595cc1e46757c6e03ddf9a9fcf6d9673ce/docs/investigations/gc2-exact-list-worker-review.md#automatic-lifecycle-smoke-on-the-measured-runtime)
-   preserves the nested graph through resurrection and fires a second
-   weakref without repeating finalization (six native runs; CPython
-   semantic control). The [review raw ABI and model checks](https://github.com/ikshengmin/pcc/blob/a0d32db686fffc68fb916cacb1a67dc4f07045b0/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
-   qualify exact imports/owners and the disabled scheduler: 108 focused
-   Linux checks and two owned integration nodes passed. Ten host-Clang
-   lanes remain unqualified in this workspace. The [other-backend C hold controls](https://github.com/ikshengmin/pcc/blob/862875c01cf91a390210edd8a6891912d4bebc0e/docs/investigations/gc2-exact-list-worker-review.md#raw-ownership-and-disabled-control-model-checks)
-   passed with the flag present and absent on GC0/1/3/4, alongside the
-   existing all-five pcc0 ownership cases (eight nodes). The
-   [profiling follow-up](https://github.com/ikshengmin/pcc/blob/0553ec68419ebeb976dd7fa21fb75e4cd2aea283/docs/investigations/gc2-exact-list-worker-review.md)
-   attributes clipped bridge frames to collection without changing
-   the denominator (87 host checks). The macOS A/B and Claude's review of
-   2026-11-22 put the exact-list branch within noise (w1 +0.9%, w4 -0.0%)
-   with no lock/stop defect found; do not merge or extend it. A Go-style
-   per-worker gray-buffer design note is the recommended next GC2 marking
-   step. Master runtime and the
-   separate pacer A/B branch are unchanged.
-   Ready GC units that wait on no review, for another agent or whenever the
-   GC3 unit is claimed or blocked, in this order: the GC plan's step 5
-   (GC0 atomic reference-count CPU share, one hour at most), then step 4
-   (GC1 mutator-stepped incremental without a marker thread, then the GC2
-   pacer and assist). GC4 phase two waits for GC3. The agent's
-   recommendation, which the maintainer approved on 2026-11-22: while item 2
-   has a ready unit, an untargeted round takes it before item 3; when one of
-   item 2's units waits on review, this "Next" still lists the item's other
-   ready units.
+2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
+   one collector, the features of the former collectors 1-4 enter it, and
+   the redundant collectors and the selector go, with no option left. State
+   and evidence are in
+   [One collector](#one-collector-gc0-is-the-fused-collector-maintainer-decision-2026-11-24)
+   below. This item's earlier text, the per-collector results of
+   collectors 1-4, is in this file at `cba826a93`. Platform: any for code;
+   macOS for the measurements (rule 14). Measure with
+   `scripts/pcc_perf.py`. While this item has a ready unit, an untargeted
+   round takes it before item 3.
+   Next, in order. Each letter is one unit, a group of files of it when it
+   is too large for a round; area `runtime-gc` unless it names another:
+   (a) Throughput of what landed on 2026-11-24 (`2498f19ff`, `5c20d934b`):
+       `arm` for `90f4345db` and for master, `ab` with `--control-arm`,
+       `table`. A loss beyond the noise floor is located before any other
+       unit of this item. Platform macOS.
+   (b) Tests that still name removed entry points.
+       `scripts/one_collector/prune_tests.py report` lists them: 77 files
+       in which every test does, 194 files in which 955 tests do. A test of
+       the one collector is rewritten without the removed setter or loop
+       and must pass; a test of collectors 1-4 is deleted. They fail until
+       then, so compare a suite by node id against this list.
+   (c) The functions left in twelve of the former modules.
+       `scripts/one_collector/sweep_one_collector.py entries` names their
+       callers. Remove what only collectors 1-4 used; move what the
+       collector uses beside its users, then delete the module.
+   (d) Emitted protocol. Stop emitting the pin, lease, relocation-read and
+       write-barrier calls and retire the fused-protocol pass; remove
+       `pcc_gc_backend()` and the compiler's reads of `PCC_GC_BACKEND`;
+       remove the frontend's closed-young analysis, which has no consumer;
+       remove the per-collector options of `scripts/pcc_perf.py` (`--gc`,
+       the pacer option). Area `runtime-codegen`.
+   (e) Collector thread default. A program in which threads change old
+       lists and dictionaries while a cycle scans them; a join of the
+       thread at process exit; an A/B at four workers. The maintainer then
+       decides the default.
+   (f) Acceptance probe of the bounded stop: the maximum stop at 20,000 /
+       80,000 / 320,000 long-lived containers.
+   (g) Linux: `page_discard` and the shared-managed integration cases; the
+       command is in the section below. Platform Linux.
+   (h) Memory still pinned after the occupancy-ordered slab lists, measured
+       on the gateway. It decides whether object relocation becomes a unit;
+       that unit starts with a design review (rule 15).
+   Then the collector's throughput work, each candidate with its ceiling
+   recorded first: borrowed temporaries in code generation, generator frame
+   locals, the owner-thread fast path for counts and container locks.
 
    Claims:
    - none
@@ -1359,9 +1017,8 @@ counting with the cycle collector, and GC1-4 stay in the repository and
 keep building. The maintainer added the same day that the characteristic
 feature of each of GC1-4 must enter the fused collector; they are not
 dropped. Tests and performance acceptance target the fused collector. This
-supersedes the order of the next section ("optimize each collector before
-unifying"): its GC1-4 identities are no longer built as separate
-collectors.
+superseded the order of 2026-11-21 ("optimize each collector before
+unifying"): the GC1-4 identities are not built as separate collectors.
 
 Maintainer decisions later on 2026-11-24: slab evacuation is not built into
 the fused collector (it needs the pin, lease and read-barrier protocol that
@@ -1646,58 +1303,32 @@ count tests at every call site (IR grows 3.3x and the benchmark build
 exceeds its memory cap) and flattening the allocator's helper calls
 (handler +0.6%, 11/15 pairs; a call costs about 1 ns here).
 
-## GC0–4: optimize each collector before unifying
+## Collector measurement rules
 
-Maintainer decision: “我还是想GC0-4全部优化的不能优化之后，再融合。”
-This supersedes the earlier recommendation to continue the GC0 fallback.
-Keep all five backends and the runtime selector. Do not start unification
-until all five collectors meet the stopping rule below.
-
-1. Verify and resolve the known correctness issues in
-   [#3](https://github.com/ikshengmin/pcc/issues/3),
-   [#5](https://github.com/ikshengmin/pcc/issues/5), and
-   [#6](https://github.com/ikshengmin/pcc/issues/6) before performance work
-   on GC1–4. #3 is closed upstream; independently verify its native test.
-2. GC3 mainline: use a write barrier and a remembered set of dirty regions,
-   with a bump-allocated young region and no per-object registration.
-   Minor GC scans roots, the remembered set, and the young region only.
-   Hold those inputs fixed while measuring old-heap sizes n/4n/16n;
-   demonstrate that minor cost does not grow with the whole heap. Beat
-   stock GC3 before comparing against GC0.
-3. GC4 phase two builds on GC3's generational substrate: evacuate young
-   slabs and support in-place promotion of survivors.
-4. GC1: mutator-stepped incremental collection, no background marking
-   thread; validate maximum pause. GC2: pacer and allocation assist;
-   validate four-worker scaling and pause.
-5. GC0 in parallel: spend at most one hour measuring the CPU share of
-   atomic reference counting; do not pursue biased counting if it is
-   below 10%. It is a candidate, not the chosen architecture.
+These rules came with the five-collector plan of 2026-11-21 and hold for
+the one collector. That plan ended with the one-collector decision of
+2026-11-24; its text is in this file at `cba826a93`.
 
 Each performance candidate needs five same-input A/B pairs and an unchanged
-control: `scripts/pcc_perf.py ab --control GC` names a collector the change
-cannot reach, and `--control-arm NAME` adds a second build of the base arm
-for a change every collector sees. The control's largest deviation from 1.0
-is the noise floor, and `ab` gives each row a verdict against it. A change
-counts as a gain or a loss only beyond that floor. When the change is within
-the floor and the floor is 5% or more, the A/B is inconclusive. It then
-counts neither as a gain nor toward freezing; rerun it with more pairs or
-on a quieter host. Freeze a collector for optimization when three
-consecutive conclusive candidates each have measured gains below 5%, or an
-Amdahl ceiling below 10%. Then continue correctness fixes and move to the
-next collector.
+control: `scripts/pcc_perf.py ab --control-arm NAME` adds a second build of
+the base arm. The control's largest deviation from 1.0 is the noise floor,
+and `ab` gives each row a verdict against it. A change counts as a gain or
+a loss only beyond that floor. When the change is within the floor and the
+floor is 5% or more, the A/B is inconclusive. It then counts neither as a
+gain nor toward freezing; rerun it with more pairs or on a quieter host.
+Freeze the collector for optimization when three consecutive conclusive
+candidates each have measured gains below 5%, or an Amdahl ceiling below
+10%. Correctness fixes continue.
 
-Code merged before its candidate can be measured must stay inert for the
-collectors that do not use it: no added call, load or store on their common
-path. Show this with `ab --control` and no loss on an unaffected collector,
-GC0 at least. Otherwise keep the slices on a review branch and merge them
-with the first measurable candidate. Commit or report
-after each step, report any hour without output, move to the next ready item
-when blocked, and give the maintainer the macOS commands to run.
+Code merged before its candidate can be measured must stay inert: no added
+call, load or store on the common path, shown by an `ab` against a control
+arm with no loss. Otherwise keep the slices on a review branch and merge
+them with the first measurable candidate. Commit or report after each step,
+report any hour without output, move to the next ready item when blocked,
+and give the maintainer the macOS commands to run.
 
-The [Linux nursery and scheduler investigation](investigations/gc-nursery-and-scheduler-linux.md)
-covers a limited prototype, not a dirtied-regions-only nursery or a decision
-against count-free collection. [#4](https://github.com/ikshengmin/pcc/issues/4)
-remains open/intermittent; no independent macOS acceptance is claimed here.
+[#4](https://github.com/ikshengmin/pcc/issues/4) remains open/intermittent;
+no independent macOS acceptance is claimed here.
 
 ## Self-host fixed point: the final convergence step
 

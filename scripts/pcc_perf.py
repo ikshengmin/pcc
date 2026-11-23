@@ -5,14 +5,12 @@
                         version of each --with PATH (your own uncommitted
                         edits; other sessions' stay out), build its runtime
                         and the benchmark program, and run every primitive
-                        on all five collectors
     ab A B              alternating paired runs of two arms: medians, pair
-                        wins, stopped time and graph-lock waits per collector;
-                        with --control GC or --control-arm NAME, the noise
-                        floor and a verdict for every row
-    table NAME          every collector with one and four workers, against
-                        GC0 and against the recorded asyncio figure for the
-                        same worker count
+                        wins, stopped time and graph-lock waits; with
+                        --control-arm NAME, the noise floor and a verdict
+                        for every row
+    table NAME          one and four workers, against the recorded asyncio
+                        figure for the same worker count
     asyncio             measure the CPython asyncio counterpart with one and
                         four workers (one event loop per process, the same
                         requests split over them) and record it
@@ -26,8 +24,6 @@
                         --callers F, F's own time split by who called it
     locks NAME          which callers wait for the graph lock
     layout A [B]        cache-line audit (scripts/pcc_hot_layout.py)
-    pause prepare      make an opt-in tracing GC source overlay
-    pause report       verify exclusive GC phase counters from a native log
     profile-preflight  test Linux kernel sample transport on this tool's thread
 
 Arms, the object cache and the ledger live outside the repository, under
@@ -54,9 +50,8 @@ The loop this replaces took ten minutes per question. What makes it short:
   neighbours" and "who waits".
 
 A result is a claim only with at least five pairs and an unchanged control:
-``--control`` names a collector the change cannot reach, ``--control-arm``
-a second build of arm A rotated with A and B (for a change every collector
-sees). The control's largest deviation from 1.0 is the noise floor; ``ab``
+``--control-arm`` names a second build of arm A, rotated with A and B. The
+control's largest deviation from 1.0 is the noise floor; ``ab``
 calls each row a gain or a loss only beyond it, and a change inside a floor
 of 5% or more inconclusive. Every comparison goes to the ledger.
 Rates are wall-clock and need idle cores: ``ab`` and ``table`` print the
@@ -626,32 +621,23 @@ def verdict(change: float, noise: float | None, pairs: int,
     return "inconclusive" if noise >= threshold else "within noise"
 
 
-def apply_control(rows: list[dict], collector: int | None = None,
-                  threshold: float = FREEZE_PERCENT) -> list[dict]:
+def apply_control(rows: list[dict], threshold: float = FREEZE_PERCENT) -> list[dict]:
     """Give every row its noise floor and verdict.
 
-    The floor is the largest deviation of the unchanged control from 1.0:
-    over its single pairs and its median. The control is the named
-    collector the change cannot reach (one floor per worker count), or
-    else each row's own duplicate base arm.
+    The floor is the largest deviation of the unchanged control from 1.0,
+    over its single pairs and its median. The control is the row's own
+    duplicate base arm (``ab --control-arm``); without one a row has no
+    floor and cannot count.
     """
     def floor(ratios, change):
         return max([abs(ratio - 1.0) * 100.0 for ratio in ratios] + [abs(change)])
 
-    floors = {row["workers"]: floor(row["ratios"], row["change_percent"])
-              for row in rows if collector is not None and row["gc"] == collector}
     for row in rows:
-        if collector is not None:
-            noise = floors.get(row["workers"])
-        elif "control_ratios" in row:
+        noise = None
+        if "control_ratios" in row:
             noise = floor(row["control_ratios"], row["control_change_percent"])
-        else:
-            noise = None
         row["noise_percent"] = noise
-        if collector is not None and row["gc"] == collector:
-            row["verdict"] = "control"
-        else:
-            row["verdict"] = verdict(row["change_percent"], noise, row["pairs"], threshold)
+        row["verdict"] = verdict(row["change_percent"], noise, row["pairs"], threshold)
     return rows
 
 
@@ -1331,13 +1317,9 @@ def main(argv: list[str] | None = None) -> int:
     ab.add_argument("--rounds", type=int, default=100)
     ab.add_argument("--latency-receipts", action="store_true",
                     help="record timed request p99 in each pair (CPU/RSS include output formatting)")
-    control = ab.add_mutually_exclusive_group()
-    control.add_argument("--control", type=int, default=None, metavar="GC",
-                         help="a measured collector the change cannot reach; "
-                              "its pairs set the noise floor")
-    control.add_argument("--control-arm", default=None, metavar="NAME",
-                         help="a second build of arm A, rotated with A and B; "
-                              "when every collector is reached")
+    ab.add_argument("--control-arm", default=None, metavar="NAME",
+                    help="a second build of arm A, rotated with A and B; "
+                         "its pairs set the noise floor")
 
     table = commands.add_parser("table")
     table.add_argument("name")
@@ -1390,14 +1372,6 @@ def main(argv: list[str] | None = None) -> int:
     layout.add_argument("a")
     layout.add_argument("b", nargs="?")
 
-    pause = commands.add_parser("pause", help="diagnose tracing GC collection windows")
-    pause_commands = pause.add_subparsers(dest="pause_command", required=True)
-    prepare = pause_commands.add_parser("prepare", help="write an isolated diagnostic source overlay")
-    prepare.add_argument("checkout", type=Path)
-    prepare.add_argument("new_directory", type=Path)
-    report = pause_commands.add_parser("report", help="verify one quiescent native snapshot")
-    report.add_argument("file", type=Path)
-
     args = parser.parse_args(argv)
     if args.command == "profile-preflight":
         if sys.platform != "linux":
@@ -1443,13 +1417,11 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "_build":
         return build_child(args.arm)
     if args.command == "ab":
-        if args.control is not None and args.control not in args.gc:
-            parser.error(f"--control {args.control} is not among the measured collectors")
         with performance_lock():
             flags = {"latency_receipts": True} if args.latency_receipts else {}
             rows = compare(args.a, args.b, args.pairs, args.gc, args.workers, args.rounds,
                            control_arm=args.control_arm, **flags)
-        apply_control(rows, collector=args.control)
+        apply_control(rows)
         print_comparison(rows)
         append_ledger(rows)
         return 0
@@ -1502,24 +1474,6 @@ def main(argv: list[str] | None = None) -> int:
         if args.b:
             argv_layout += ["--diff", str(binary_of(args.b))]
         return pcc_hot_layout.main(argv_layout)
-    if args.command == "pause":
-        sys.path.insert(0, str(REPO_ROOT))
-        if args.pause_command == "prepare":
-            from pcc.diagnostics.gc_pause_probe import make_overlay
-
-            try:
-                make_overlay(args.checkout, args.new_directory)
-            except (OSError, ValueError) as exc:
-                prepare.error(f"cannot prepare GC phase diagnostic: {exc}")
-        else:
-            from pcc.diagnostics.gc_pause_report import read_measurement
-
-            try:
-                measurement = read_measurement(args.file)
-            except (OSError, ValueError) as exc:
-                report.error(f"{args.file}: {exc}")
-            print(json.dumps(measurement, indent=2))
-        return 0
     return 2
 
 

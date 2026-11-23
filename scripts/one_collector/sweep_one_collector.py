@@ -163,8 +163,6 @@ def compiler_identifiers() -> set:
             continue
         if path.parent == RUNTIME or path == ABI:
             continue
-        if parts[:2] == ("pcc", "diagnostics") and path.name == "gc_pause_probe.py":
-            continue
         found.update(IDENT.findall(path.read_text(encoding="utf-8", errors="replace")))
     return found
 

@@ -31,42 +31,6 @@ PERF = _load()
 WAIT = PERF.LOCK_WAIT
 
 
-def test_pause_subcommand_reports_one_quiescent_snapshot(tmp_path):
-    from pcc.diagnostics import _gc_pause_layout as layout
-
-    vector = [0] * layout.SLOTS
-    vector[layout.WINDOWS:layout.INVALID] = [2, 3, 3]
-    vector[layout.AGGREGATE] = vector[layout.LONGEST] = 3
-    vector[layout.ZERO_US_WINDOWS] = 1
-    snapshot = tmp_path / "native.json"
-    snapshot.write_text(json.dumps({
-        "gc": {"119": 2, "120": 4, "121": 3}, "pause_vector": vector,
-    }))
-    argv = [sys.executable, "-I", str(ROOT / "scripts" / "pcc_perf.py"),
-            "pause", "report", str(snapshot)]
-    result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 0, result.stderr
-    report = json.loads(result.stdout)
-    assert report["longest_window_us"]["runtime_other"] == 3
-    assert report["total_us"] == 3 and report["public_telemetry"]["total_us"] == 4
-    assert report["zero_us_windows"] == 1
-    snapshot.write_text("gc-pause-stw 1 3 3\n")
-    result = subprocess.run(argv, cwd=tmp_path, capture_output=True, text=True, timeout=30)
-    assert result.returncode == 2
-    assert "public counters alone are insufficient" in result.stderr
-    assert not result.stdout
-
-
-def test_pause_prepare_dispatches_to_the_overlay_builder(tmp_path, monkeypatch):
-    from pcc.diagnostics import gc_pause_probe
-
-    calls = []
-    monkeypatch.setattr(gc_pause_probe, "make_overlay", lambda *args: calls.append(args))
-    checkout, out = tmp_path / "source", tmp_path / "diagnostic"
-    assert PERF.main(["pause", "prepare", str(checkout), str(out)]) == 0
-    assert calls == [(checkout, out)]
-
-
 def _run(qps, stw=0.0, waits=0, wait_ms=0.0, cpu=0.0):
     return {"qps": qps, "requests": 10000, "stw_ms": stw, "sweep_ms": 0.0,
             "lock_waits": waits, "lock_wait_ms": wait_ms, "allocations": 0,
@@ -283,36 +247,6 @@ def _row(gc, workers, first, second):
     return row
 
 
-def test_an_unreached_collector_sets_the_noise_floor_of_its_worker_count():
-    # gc0 is the control: the arms differ only where gc0 never goes, so its
-    # largest single-pair deviation is the noise floor of that worker count.
-    rows = [
-        _row(0, 1, [100] * 5, [104, 98, 101, 100, 99]),
-        _row(3, 1, [100] * 5, [110, 109, 108, 111, 110]),
-        _row(2, 1, [100] * 5, [103, 102, 101, 104, 103]),
-        _row(0, 4, [100] * 5, [100, 101, 99, 100, 100]),
-        _row(3, 4, [100] * 5, [97, 96, 98, 97, 95]),
-    ]
-    PERF.apply_control(rows, collector=0)
-    verdicts = {(row["gc"], row["workers"]): (row["verdict"], round(row["noise_percent"], 1))
-                for row in rows}
-    assert verdicts == {
-        (0, 1): ("control", 4.0), (3, 1): ("gain", 4.0), (2, 1): ("within noise", 4.0),
-        (0, 4): ("control", 1.0), (3, 4): ("loss", 1.0),
-    }
-
-
-def test_a_change_inside_a_noise_floor_of_five_percent_or_more_is_inconclusive():
-    rows = [
-        _row(0, 4, [100] * 5, [118, 86, 104, 97, 101]),
-        _row(3, 4, [100] * 5, [104, 103, 106, 102, 104]),
-        _row(1, 4, [100] * 5, [125, 122, 121, 124, 123]),
-    ]
-    PERF.apply_control(rows, collector=0)
-    assert [row["verdict"] for row in rows] == ["control", "inconclusive", "gain"]
-    assert rows[1]["noise_percent"] == pytest.approx(18.0)
-
-
 def test_a_duplicate_base_arm_gives_each_row_its_own_noise_floor():
     row = PERF.summarize_pairs(
         [_run(100)] * 5, [_run(q) for q in (106, 107, 105, 108, 106)],
@@ -323,23 +257,36 @@ def test_a_duplicate_base_arm_gives_each_row_its_own_noise_floor():
     assert row["noise_percent"] == pytest.approx(2.0)
 
 
+def _controlled_row(first, second, control):
+    row = PERF.summarize_pairs([_run(q) for q in first], [_run(q) for q in second],
+                               control=[_run(q) for q in control])
+    row.update({"gc": 0, "workers": 4})
+    return row
+
+
+def test_a_change_inside_a_noise_floor_of_five_percent_or_more_is_inconclusive():
+    noisy = [118, 86, 104, 97, 101]
+    rows = [
+        _controlled_row([100] * 5, [104, 103, 106, 102, 104], noisy),
+        _controlled_row([100] * 5, [125, 122, 121, 124, 123], noisy),
+    ]
+    PERF.apply_control(rows)
+    assert [row["verdict"] for row in rows] == ["inconclusive", "gain"]
+    assert rows[0]["noise_percent"] == pytest.approx(18.0)
+
+
+def test_fewer_than_five_pairs_stay_a_screen_whatever_the_control_says():
+    rows = [_controlled_row([100] * 3, [150] * 3, [100] * 3)]
+    PERF.apply_control(rows)
+    assert rows[0]["verdict"] == "screen"
+
+
 def test_without_a_control_a_comparison_cannot_count(capsys):
     rows = [_row(3, 1, [100] * 5, [110] * 5)]
     PERF.apply_control(rows)
     PERF.print_comparison(rows)
     assert rows[0]["verdict"] == "no control"
     assert "cannot count toward the freeze rule" in capsys.readouterr().out
-
-
-def test_fewer_than_five_pairs_stay_a_screen_whatever_the_control_says():
-    rows = [_row(0, 1, [100] * 3, [100] * 3), _row(3, 1, [100] * 3, [150] * 3)]
-    PERF.apply_control(rows, collector=0)
-    assert rows[1]["verdict"] == "screen"
-
-
-def test_the_control_collector_must_be_measured():
-    with pytest.raises(SystemExit):
-        PERF.main(["ab", "a", "b", "--gc", "3", "--control", "0"])
 
 
 def _record_order(monkeypatch, rates):
