@@ -1529,7 +1529,11 @@ without bound. Probe it before relying on either answer.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through
-`pcc_gc_backend0_full_set_concurrent(1)`; its test case passed once). When a cycle begins in a threaded
+`pcc_gc_backend0_full_set_concurrent(1)`; the program of its test case
+passed 30 consecutive runs on the local Mac). It stays off (Claude's
+choice, not a maintainer decision) until three things exist: a program in
+which threads change old lists and dictionaries while a cycle scans them,
+a join of the thread at process exit, and an A/B at four workers. When a cycle begins in a threaded
 program with atomic counts and container locks, a detached thread does the
 passes with the world running. It holds the object-graph lock for a batch,
 scans a list or an instance under that object's container lock, reaches an
@@ -1541,9 +1545,7 @@ a stop of their own when the work done is behind sixteen node visits per
 tracked container (`pcc_gc_backend0_full_step`). A reference the thread ends
 up owning is released by a mutator. The fifth case of the test file above
 (`concurrent`) exercises it with four threads. Not handled: the thread is
-not joined at process exit. The switch stays off until that case has run
-green three times (Claude's recommendation; the maintainer has not decided
-the default).
+not joined at process exit.
 
 Memory return, the purpose of the former GC4 (done without relocation,
 Claude, local Mac, 2026-11-24). The maintainer said in this session that the features of
