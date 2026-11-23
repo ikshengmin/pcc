@@ -394,6 +394,17 @@ in the relevant section or issue and removes the entry.
        Request one macOS A/B in the waiting list only when the Linux
        handler A/B shows no loss. AGENTS.md still requires that final Mac
        assessment before merge.
+     - Linux memory preflight: the Linux check requires `MemAvailable` of
+       at least `--max-tree-rss` plus `--preflight-reserve`. The defaults,
+       6 GiB plus 8 GiB, suit a large Mac only. The tool's own comment says
+       a smaller host names a smaller reserve, and the tree cap is still
+       enforced.
+       - Mac arm builds peaked at 2.55 GiB and 1.37 GiB tree RSS. Build
+         with `--max-tree-rss 4294967296 --preflight-reserve 2147483648`
+         (6 GiB in total).
+       - If a build hits the 4 GiB cap, retry at 4.5 GiB.
+       - Use `--control 0` rather than a third control arm. Two arms plus
+         the object cache took about 1.3 GiB of disk on the Mac.
      - Mac lock buckets (Claude, from direct `--summary` runs of the two
        existing arms, one run per cell):
        - Every graph-lock wait on both arms is in the `other` bucket. The
