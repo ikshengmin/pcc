@@ -662,3 +662,23 @@ owner, and a root in another young span did not rewind. Only closed
 tuple cohorts are admitted by this API. The real old-to-bump writer/
 root integration, list backing traffic, foreign ownership and automatic
 admission are still excluded. No sealed handler or pause result.
+
+### Scan actual old-to-bump slots
+
+The closed cut now equips the shared sparse scanner with the allocator's
+exact, acquire-checked bump lookup. It only reads a child's generation flag
+after proving an ordinary object start or a committed bump start. A retained
+entry still owns no young object by itself: the scanner rereads its strong
+slots in every cut, and drops it once those slots no longer point to young
+storage. This lookup is not on the production barrier or allocator path.
+
+On Linux x86-64 the native fixture used the shared heap store to write an
+actual indexed old list's off-object slot. The parent stopped before
+producing the dirty frontier (exit 19). With the new scanner, an edge into a
+different slab and an overflowed board each denied rewind. An edge into the
+active slab protected the same tuple over two distinct stops with no
+intervening write; clearing the slot dropped the card and rewound the slab.
+The five fresh pcc0/self processes agreed. Twelve prior root/cohort runs
+and the three sparse-card scale controls also passed. Ordinary allocation, foreign/raw
+array exports and a root snapshot for bump storage remain outside this
+closed review path; this is not a performance or macOS result.

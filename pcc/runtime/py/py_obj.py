@@ -3053,8 +3053,8 @@ pcc_allocator_object_retire_live = extern("pcc_allocator_object_retire_live", (c
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
-pcc_gc3_review_scan_owner_cards_stopped = extern(
-    "pcc_gc3_review_scan_owner_cards_stopped", (c_ptr, c_ptr), c_int64
+pcc_gc3_review_scan_owner_cards_with_bump_stopped = extern(
+    "pcc_gc3_review_scan_owner_cards_with_bump_stopped", (c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_thread_visit_conservative_words = extern(
     "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
@@ -3089,7 +3089,6 @@ _CLOSED_FRONTIER_CAPACITY = 0
 _CLOSED_FRONTIER_COUNT = 8
 _CLOSED_FRONTIER_FAILED = 32
 _CLOSED_FRONTIER_ITEMS = 40
-_BUMP_CUT_CARDS_USED = 8
 _BUMP_CUT_SNAPSHOT_BASE = 0
 _BUMP_CUT_SNAPSHOT_STRIDE = 8
 _BUMP_CUT_SNAPSHOT_GENERATION = 16
@@ -3203,6 +3202,11 @@ def pcc_gc3_review_young_machine_word(word, cut) -> None:
     _gc3_closed_young_add(cut, word, 1)
 
 
+@c_abi_export("pcc_gc3_review_bump_slot_lookup")
+def pcc_gc3_review_bump_slot_lookup(value) -> c_ptr:
+    return pcc_allocator_gc3_review_bump_lookup(value)
+
+
 @c_abi_export("pcc_gc3_review_collect_young_with_initial_snapshot_stopped")
 def pcc_gc3_review_collect_young_with_initial_snapshot_stopped(cut, cards, frontier) -> int:
     """Use the initial stop, before the owner loaded the candidate objects.
@@ -3230,14 +3234,15 @@ def pcc_gc3_review_collect_bump_span_stopped(
 ) -> int:
     """Link actual marking to rewind for a closed, tuple-only review slab.
 
-    Until the old-to-bump barrier and raw export controls are admitted,
-    even one dirty owner makes this particular route incomplete.
+    The sparse owner frontier is rebuilt under the same stop. Any root
+    naming a different young span invalidates this closed cut. Raw
+    exports and automatic admission are still outside this review path.
     """
     if (load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
             or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
             or pcc_thread_owns_stopped_world() == 0
             or ptr_is_null(cut) != 0 or ptr_is_null(cards) != 0
-            or ptr_is_null(frontier) != 0 or load_i64(cards, _BUMP_CUT_CARDS_USED) != 0
+            or ptr_is_null(frontier) != 0
             or root_count < 0 or root_count > _CLOSED_YOUNG_LIMIT
             or (root_count > 0 and ptr_is_null(roots) != 0)):
         return -1
@@ -3282,7 +3287,8 @@ def _gc3_collect_closed_young_in_cut(
         return -1
     # Build the dirty frontier inside this same cut. A caller cannot accidentally
     # reuse yesterday's successful frontier after the card buffer overflows.
-    if pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) < 0:
+    if pcc_gc3_review_scan_owner_cards_with_bump_stopped(
+            cards, frontier, function_addr("pcc_gc3_review_bump_slot_lookup")) < 0:
         return -1
     frontier_count: int = load_i64(frontier, _CLOSED_FRONTIER_COUNT)
     if (load_i64(frontier, _CLOSED_FRONTIER_FAILED) != 0

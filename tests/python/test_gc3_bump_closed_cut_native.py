@@ -20,5 +20,5 @@ def test_gc3_bump_span_rewinds_only_after_an_empty_actual_mark(tmp_path, explici
     result = _record_execution(tmp_path, "bump-cut", [str(binary)],
                                dict(os.environ, PCC_GC_BACKEND="3"))
     assert (result["returncode"], result["stdout"], result["stderr"]) == (
-        0, "GC3_BUMP_CUT_OK survivors=2 deferred=1 rewound=3 reused=1\n", "",
+        0, "GC3_BUMP_CUT_OK survivors=2 deferred=1 rewound=3 reused=1 dirty=2 cleared=1\n", "",
     ), result

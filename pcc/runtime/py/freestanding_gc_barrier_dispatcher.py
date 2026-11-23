@@ -9,6 +9,7 @@ from pcc.unsafe import (
     atomic_rmw_i32,
     atomic_rmw_i64,
     atomic_store_i64,
+    call_ptr1,
     define_global_i64,
     function_addr,
     global_addr,
@@ -444,19 +445,27 @@ _GC3_FRONTIER_FAILED = 32
 _GC3_FRONTIER_ITEMS = 40
 _GC3_CARD_TYPE_TAG = 8
 _GC3_CARD_STRONG_ROLE = 1
+_GC3_SCAN_FRONTIER = 0
+_GC3_SCAN_BUMP_LOOKUP = 8
+_GC3_SCAN_CONTEXT_BYTES = 16
 
 
 @c_abi_export("pcc_gc3_review_append_young_slot")
-def pcc_gc3_review_append_young_slot(slot, role: i64, frontier) -> None:
+def pcc_gc3_review_append_young_slot(slot, role: i64, scan) -> None:
     if role != _GC3_CARD_STRONG_ROLE:
         return
+    frontier = load_ptr(scan, _GC3_SCAN_FRONTIER)
     store_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS,
               load_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS) + 1)
     child = load_ptr(slot, 0)
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
+    # The review nursery uses a separate span kind, absent from ordinary
+    # object-start lookup. Check committed publication before reading flags.
     if pcc_gc_granule_is_object_start(child) != 1:
-        return
+        bump_lookup = load_ptr(scan, _GC3_SCAN_BUMP_LOOKUP)
+        if ptr_is_null(bump_lookup) != 0 or ptr_is_null(call_ptr1(bump_lookup, child)) != 0:
+            return
     if (load_i32(child, _GC3_CARD_OBJECT_FLAGS) & _GC3_CARD_YOUNG) == 0:
         return
     count: i64 = load_i64(frontier, _GC3_FRONTIER_COUNT)
@@ -469,6 +478,11 @@ def pcc_gc3_review_append_young_slot(slot, role: i64, frontier) -> None:
 
 @c_abi_export("pcc_gc3_review_scan_owner_cards_stopped")
 def pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) -> i64:
+    return pcc_gc3_review_scan_owner_cards_with_bump_stopped(cards, frontier, null())
+
+
+@c_abi_export("pcc_gc3_review_scan_owner_cards_with_bump_stopped")
+def pcc_gc3_review_scan_owner_cards_with_bump_stopped(cards, frontier, bump_lookup) -> i64:
     """Collect young frontier roots from dirty old list/tuple owners only.
 
     A live card remains in the buffer across minor cuts until it has no
@@ -493,6 +507,9 @@ def pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) -> i64:
     store_i64(frontier, _GC3_FRONTIER_OLD_VISITS, 0)
     store_i64(frontier, _GC3_FRONTIER_STRONG_SLOTS, 0)
     store_i64(frontier, _GC3_FRONTIER_FAILED, 0)
+    scan = stack_alloc(_GC3_SCAN_CONTEXT_BYTES)
+    store_ptr(scan, _GC3_SCAN_FRONTIER, frontier)
+    store_ptr(scan, _GC3_SCAN_BUMP_LOOKUP, bump_lookup)
     visit = function_addr("pcc_gc3_review_append_young_slot")
     read: i64 = 0
     retain: i64 = 0
@@ -514,7 +531,7 @@ def pcc_gc3_review_scan_owner_cards_stopped(cards, frontier) -> i64:
         previous: i64 = load_i64(frontier, _GC3_FRONTIER_COUNT)
         store_i64(frontier, _GC3_FRONTIER_OLD_VISITS,
                   load_i64(frontier, _GC3_FRONTIER_OLD_VISITS) + 1)
-        if (pcc_gc_visit_object_slots(owner, visit, frontier) == 0
+        if (pcc_gc_visit_object_slots(owner, visit, scan) == 0
                 or load_i64(frontier, _GC3_FRONTIER_FAILED) != 0):
             store_i64(cards, _GC3_CARD_OVERFLOW, 1)
             return -1

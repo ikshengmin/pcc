@@ -7,6 +7,7 @@ extern void *pcc_allocator_gc3_review_bump_reserve(void *, int64_t);
 extern int64_t pcc_allocator_gc3_review_bump_commit(void *, void *);
 extern void *pcc_allocator_gc3_review_bump_lookup(void *);
 extern int64_t pcc_allocator_gc3_review_bump_generation(void *);
+extern int64_t pcc_gc3_review_owner_cards_set_stopped(void *);
 extern int64_t pcc_gc3_review_collect_bump_span_stopped(void *, void *, PyObject **, int64_t,
                                                         void *, void *);
 
@@ -61,10 +62,9 @@ int main(void) {
     if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 1, &cards, &frontier) != -1)
         return 4;
     if (pcc_stop_the_world() != 0) return 5;
-    cards.used = 1;
-    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 1, &cards, &frontier) != -1
+    Cards malformed = {1, 1, 0, {NULL}};
+    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 1, &malformed, &frontier) != -1
         || pcc_allocator_gc3_review_bump_lookup(third) != span) return 6;
-    cards.used = 0;
     if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 2, &cards, &frontier) != -1
         || pcc_allocator_gc3_review_bump_lookup(third) != span) return 11;
     if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 1, &cards, &frontier) != 0
@@ -80,6 +80,49 @@ int main(void) {
     pcc_thread_no_park_enter();
     if (put_tuple(span, 0) != first) return 10;
     pcc_thread_no_park_exit();
-    puts("GC3_BUMP_CUT_OK survivors=2 deferred=1 rewound=3 reused=1");
+    /* An indexed old owner publishes a real off-object strong slot. */
+    PyListObject *old = (PyListObject *)py_list_new(1);
+    if (!old) return 12;
+    py_list_append((PyObject *)old, NULL);
+    if (old->length != 1 || !old->items) return 13;
+    old->h.flags |= PY_FLAG_GC_OLD;
+    if (pcc_stop_the_world() != 0) return 14;
+    if (pcc_gc3_review_owner_cards_set_stopped(&cards) != 1) return 15;
+    if (pcc_resume_world() != 0) return 16;
+    pcc_gc_store_ptr((PyObject *)old, old->items, (PyObject *)outside);
+    if (cards.used != 1 || cards.owners[0] != (PyObject *)old || cards.overflow) return 17;
+    if (pcc_stop_the_world() != 0) return 18;
+    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, NULL, 0, &cards, &frontier) != -1
+        || frontier.count != 1 || frontier.young[0] != (PyObject *)outside
+        || cards.used != 1 || pcc_allocator_gc3_review_bump_lookup(first) != span) return 19;
+    Cards overflow = cards;
+    overflow.overflow = 1;
+    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, NULL, 0, &overflow, &frontier) != -1
+        || pcc_allocator_gc3_review_bump_lookup(first) != span) return 23;
+    if (pcc_resume_world() != 0) return 20;
+    pcc_gc_store_ptr((PyObject *)old, old->items, NULL);
+    if (pcc_stop_the_world() != 0) return 21;
+    roots[0] = (PyObject *)first;
+    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, roots, 1, &cards, &frontier) != 0
+        || cards.used || pcc_resume_world() != 0) return 22;
+    pcc_gc_store_ptr((PyObject *)old, old->items, (PyObject *)first);
+    if (cards.used != 1 || cards.overflow || pcc_stop_the_world() != 0) return 29;
+    for (int iteration = 0; iteration < 2; ++iteration) {
+        if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, NULL, 0, &cards, &frontier) != 0
+            || cut.enqueued != 1 || frontier.count != 1 || frontier.owners_visited != 1
+            || frontier.strong_slots != 1 || frontier.young[0] != (PyObject *)first
+            || cards.used != 1 || pcc_allocator_gc3_review_bump_generation(span) != 2) return 24;
+        if (iteration == 0 && (pcc_resume_world() != 0 || pcc_stop_the_world() != 0)) return 30;
+    }
+    if (pcc_resume_world() != 0) return 25;
+    pcc_gc_store_ptr((PyObject *)old, old->items, NULL);
+    if (pcc_stop_the_world() != 0) return 26;
+    if (pcc_gc3_review_collect_bump_span_stopped(span, &cut, NULL, 0, &cards, &frontier) != 1
+        || frontier.count || cards.used || frontier.owners_visited != 1
+        || pcc_allocator_gc3_review_bump_lookup(first)
+        || pcc_allocator_gc3_review_bump_lookup(outside) != other_span
+        || pcc_allocator_gc3_review_bump_generation(span) != 3) return 27;
+    if (pcc_gc3_review_owner_cards_set_stopped(NULL) != 1 || pcc_resume_world() != 0) return 28;
+    puts("GC3_BUMP_CUT_OK survivors=2 deferred=1 rewound=3 reused=1 dirty=2 cleared=1");
     return 0;
 }
