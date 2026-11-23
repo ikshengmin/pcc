@@ -830,9 +830,16 @@ in the relevant section or issue and removes the entry.
    and w1 30.89→37.33 µs. w4 fresh-refill counts differed substantially
    in one pair; median w4 finished mark count stayed zero. This does
    not isolate an effect or qualify a throughput result. No runtime
-   code pushed. Next GC2: fix the number and size of fresh slabs to
-   isolate protected carve cost in the same pair setup; decide if
-   this splice merited a Mac A/B before adding another allocator edit.
+   code pushed. The fixed-count follow-up used 1,024 fresh raw slabs
+   per process, 16/64/512-byte classes, five alternating pairs per
+   class and worker count, and rejected any incidental refill/trim.
+   w4 median carve µs/slab was 29.81→26.03 (3/5), 21.99→23.96
+   (2/5), and 19.18→27.17 (3/5), respectively. Only w1 size 16
+   improved in all pairs (23.05→20.54). Do not merge or request a
+   Mac A/B for this splice. Next GC2: audit the contract for preparing
+   a fresh raw slab outside the allocator lock, keeping provenance,
+   trim and the publish decision serialized; identify a bounded
+   test for refill races before attempting mixed-path code.
    Shared-root cost stays open; seek a change that removes actual hot
    entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
@@ -1058,7 +1065,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Isolate equal-size raw slab carve pairs: Codex, Linux, 2026-11-23T11:09Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
