@@ -463,12 +463,17 @@ in the relevant section or issue and removes the entry.
        14–17×; the largest paired median ballast shifts were +6.6% live
        and +10.0% weakrefs, not proportional to ballast. Parked peers
        still raise the per-callback cost; this did not pass HTTP or Mac.
-     - Iterate on the Linux host with the same handler measurement,
-       `pcc_perf ab` (five pairs, GC0 control, w1 and w4), plus `locks` and
-       `top` on both arms. Do not wait for the Mac between iterations.
-       Request one macOS A/B in the waiting list only when the Linux
-       handler A/B shows no loss. AGENTS.md still requires that final Mac
-       assessment before merge.
+     - Throughput gate moves to the Mac (Claude review, 2026-11-23). The
+       Linux host cannot resolve it: identical-binary GC0 A/A swings up
+       to 19.0% and the GC0 floors were 14.5–43.7%, while the Mac floors
+       were 2.4% (w4) and 6.4% (w1). Stop retrying Linux throughput; keep
+       Linux for correctness and the phase/counter probes. Next unit after
+       the current claim: push the integrated local fix bundle (census
+       fix, condition-6 cleanup with its replacement coverage, module
+       tests) as a commit on `shenming/review/gc9-production-remark`, and
+       add a waiting entry naming its SHA. The local Mac agent then runs
+       `ab` against `64d49ae56`-equivalent master with five pairs, GC0
+       control, w1/w4, plus the native files with `-x -m integration`.
      - Linux memory preflight: the Linux check requires `MemAvailable` of
        at least `--max-tree-rss` plus `--preflight-reserve`. The defaults,
        6 GiB plus 8 GiB, suit a large Mac only. The tool's own comment says
