@@ -51,6 +51,12 @@ class SnapshotRuntime:
                        atomic_store_i32=lambda p, o, v, order: self.store(p, o, v),
                        atomic_store_i64=lambda p, o, v, order: self.store(p, o, v),
                        atomic_cas_i32=self.cas, atomic_rmw_i32=self.rmw,
+                       # The young log of generational collection: inactive
+                       # here (pcc_gc_tracking_young_bit stays 0), but every
+                       # view teardown resets it.
+                       atomic_cas_i64=self.cas, int_to_ptr=lambda value: value,
+                       _pcc_gc_granule_is_object_start=lambda obj: 0,
+                       _pcc_gc_managed_pointer_index_contains=lambda obj: 0,
                        pcc_threads_enabled=lambda: 1, gc_backend_current=lambda: backend,
                        pcc_current_thread_id=lambda: 77,
                        pcc_current_native_thread_token=lambda: 77,
@@ -231,7 +237,14 @@ class SnapshotRuntime:
 
     def drain_pool(self):
         self.ns['pcc_gc_tracked_node_pool_drain']()
-        assert self.allocations == self.freed
+        # Young-log chunks are published once and reused for the process's
+        # life (pcc_gc_young_log_chunks): they are never freed.
+        chunks = set()
+        chunk = self.global_get('pcc_gc_young_log_chunks')
+        while chunk:
+            chunks.add(chunk)
+            chunk = self.load(chunk, 0)
+        assert self.allocations - chunks == self.freed
 
 
 @pytest.mark.parametrize('fault', ['array', 'node1', 'node2', 'node3', 'index1', 'index2', 'index3', 'small', 'large'])

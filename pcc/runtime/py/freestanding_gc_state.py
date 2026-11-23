@@ -50,6 +50,19 @@ define_global_i32("pcc_gc_tracking_flag_mode", 0)
 # 1 while pcc_gc_tracked_materialize's nodes exist (stopped world, whole
 # table held); track and untrack then keep the nodes exact.
 define_global_i32("pcc_gc_tracking_materialized", 0)
+# Generational cycle collection of the fused collector (GC0). An object
+# tracked in flag mode also gets pcc_gc_tracking_young_bit (131072 on GC0,
+# 0 elsewhere: the relocating collector uses that header bit for
+# forwarding). A young collection builds its view from the objects carrying
+# both flags (pcc_gc_tracking_young_view set); every view's teardown clears
+# the bit, which promotes the survivors.
+define_global_i32("pcc_gc_tracking_young_bit", 0)
+define_global_i32("pcc_gc_tracking_young_view", 0)
+define_global_i32("pcc_gc_backend0_young_request", 0)
+define_global_i32("pcc_gc_backend0_young_collections", 0)
+define_global_i64("pcc_gc_tracked_after_full", 0)
+define_global_i64("pcc_gc_young_log_chunks", 0)
+define_global_i32("pcc_gc_young_log_lost", 0)
 define_global_ptr_null("py_gc_head")
 define_global_ptr_null("pcc_gc_deferred_node_free_head")
 # Recycled 40-byte tracking nodes (freestanding_gc_tracking.py). Mutators

@@ -2117,7 +2117,32 @@ def _gc_maybe_auto_collect() -> None:
         return
     backend: int = _gc_backend_fast()
     if backend == 0:
-        pcc_gc_collect(0)
+        # Generational pacing of the fused collector: a young collection
+        # examines the containers tracked since the last collection; after
+        # ten of them, a full one runs once the tracked population has
+        # grown by a quarter since the last full collection.
+        pcc_gc_tracked_count_flush()
+        tracked_now: int = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
+        after_full: int = atomic_load_i64(global_addr("pcc_gc_tracked_after_full"), 0, "relaxed")
+        young_runs: int = load_i32(global_addr("pcc_gc_backend0_young_collections"), 0)
+        full: int = 0
+        if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) == 0:
+            full = 1
+        elif young_runs >= 10 and tracked_now - after_full >= after_full // 4:
+            full = 1
+        if full == 0:
+            store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 1)
+            pcc_gc_collect(0)
+            store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 0)
+            store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, young_runs + 1)
+        else:
+            pcc_gc_collect(0)
+            store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, 0)
+            pcc_gc_tracked_count_flush()
+            atomic_store_i64(
+                global_addr("pcc_gc_tracked_after_full"), 0,
+                atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire"), "relaxed",
+            )
     else:
         # The collector thread of GC1, GC2 and GC3 left a traced mark's
         # final remark to this collection (pcc_gc_cms_finish_pending).

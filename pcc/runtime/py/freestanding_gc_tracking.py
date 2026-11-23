@@ -10,6 +10,9 @@ outermost unlock repartitions the nodes.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    int_to_ptr,
+    define_thread_local_ptr_null,
+    atomic_cas_i64,
     define_thread_local_i32,
     atomic_cas_i32,
     atomic_load_i32,
@@ -392,9 +395,14 @@ def py_gc_track(obj: c_ptr) -> None:
     if _flag_only_tracking() != 0:
         # One atomic: the previous flags say whether this call tracked it,
         # so concurrent trackers count the object once.
-        previous: i64 = atomic_rmw_i32("or", obj, 12, _TRACKED, "acq_rel")
+        previous: i64 = atomic_rmw_i32(
+            "or", obj, 12,
+            _TRACKED | load_i32(global_addr("pcc_gc_tracking_young_bit"), 0), "acq_rel",
+        )
         if (previous & _TRACKED) == 0:
             _tracked_count_note(1)
+            if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) != 0:
+                _young_log_note(obj)
         return
     merged: i64 = _tracked_table_owned_by_current()
     index: i64 = _tracked_shard_index(obj)
@@ -457,10 +465,119 @@ def py_gc_track(obj: c_ptr) -> None:
     tracked: i64 = atomic_rmw_i32(
         "add", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel"
     ) + 1
-    atomic_rmw_i32("or", obj, 12, _TRACKED, "acq_rel")
+    atomic_rmw_i32(
+        "or", obj, 12,
+        _TRACKED | load_i32(global_addr("pcc_gc_tracking_young_bit"), 0), "acq_rel",
+    )
     if merged == 0:
         _tracked_shard_unlock(index)
+    if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) != 0:
+        _young_log_note(obj)
     _tracked_growth(tracked)
+
+
+# The young log of generational collection (fused collector). Each thread
+# appends the containers it tracks to its own chunk; a young collection
+# reads every chunk instead of walking the heap, so its cost follows the
+# newcomers, not the heap. An entry is only a hint: the reader keeps it when
+# the address is still a live object carrying both the tracked and young
+# flags, and node insertion drops duplicates. Chunks are published once on
+# pcc_gc_young_log_chunks and reused after every reset; a failed chunk
+# allocation sets pcc_gc_young_log_lost, which sends the next young
+# collection back to the flag enumeration.
+#   chunk: +0 next published chunk, +8 entry count, +16 the owner's next
+#   chunk, +24 the owner's first chunk, +32 entries (1020)
+define_thread_local_ptr_null("pcc_tls_young_log_chunk")
+_pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
+_pcc_gc_managed_pointer_index_contains = extern(
+    "pcc_gc_managed_pointer_index_contains", (c_ptr,), c_int64
+)
+
+
+@c_abi_export("pcc_gc_young_log_note")
+def _young_log_note(obj: c_ptr) -> None:
+    chunk = global_load_ptr("pcc_tls_young_log_chunk")
+    if ptr_is_null(chunk) == 0:
+        used: i64 = load_i64(chunk, 8)
+        if used == 0:
+            # Fresh, or emptied by a reset: start again at this thread's
+            # first chunk, so the chain is reused instead of growing.
+            chunk = load_ptr(chunk, 24)
+            global_store_ptr("pcc_tls_young_log_chunk", chunk)
+            used = load_i64(chunk, 8)
+        if used < 1020:
+            store_ptr(chunk, 32 + used * 8, obj)
+            store_i64(chunk, 8, used + 1)
+            return
+        following = load_ptr(chunk, 16)
+        if ptr_is_null(following) == 0:
+            # The thread fills its chain in order: the next chunk is empty.
+            global_store_ptr("pcc_tls_young_log_chunk", following)
+            used = load_i64(following, 8)
+            if used < 1020:
+                store_ptr(following, 32 + used * 8, obj)
+                store_i64(following, 8, used + 1)
+                return
+    fresh = malloc(8192)
+    if ptr_is_null(fresh):
+        atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 1, "release")
+        return
+    store_ptr(fresh, 32, obj)
+    store_i64(fresh, 8, 1)
+    store_ptr(fresh, 16, null())
+    if ptr_is_null(chunk) == 0:
+        store_ptr(fresh, 24, load_ptr(chunk, 24))
+        store_ptr(chunk, 16, fresh)
+    else:
+        store_ptr(fresh, 24, fresh)
+    head_slot = global_addr("pcc_gc_young_log_chunks")
+    head: i64 = atomic_load_i64(head_slot, 0, "acquire")
+    published: i64 = 0
+    while published == 0:
+        store_i64(fresh, 0, head)
+        observed: i64 = atomic_cas_i64(
+            head_slot, 0, head, ptr_diff(fresh, null()), "acq_rel", "acquire"
+        )
+        if observed == head:
+            published = 1
+        else:
+            head = observed
+    global_store_ptr("pcc_tls_young_log_chunk", fresh)
+
+
+@c_abi_export("pcc_gc_young_log_collect")
+def _young_log_collect(out: c_ptr, capacity: i64, required: i64) -> i64:
+    """Stopped world: the logged objects that are still live with every bit
+    of ``required``. Counts with a zero capacity, as the enumerations do."""
+    total: i64 = 0
+    chunk = int_to_ptr(atomic_load_i64(global_addr("pcc_gc_young_log_chunks"), 0, "acquire"))
+    while ptr_is_null(chunk) == 0:
+        used: i64 = load_i64(chunk, 8)
+        index: i64 = 0
+        while index < used:
+            obj = load_ptr(chunk, 32 + index * 8)
+            live: i64 = 0
+            if _pcc_gc_granule_is_object_start(obj) == 1:
+                live = 1
+            elif _pcc_gc_managed_pointer_index_contains(obj) != 0:
+                live = 1
+            if live != 0 and (load_i32(obj, 12) & required) == required:
+                if total < capacity:
+                    store_ptr(out, total * 8, obj)
+                total = total + 1
+            index = index + 1
+        chunk = load_ptr(chunk, 0)
+    return total
+
+
+@c_abi_export("pcc_gc_young_log_reset")
+def _young_log_reset() -> None:
+    """Stopped world: empty every chunk; their owners reuse them."""
+    chunk = int_to_ptr(atomic_load_i64(global_addr("pcc_gc_young_log_chunks"), 0, "acquire"))
+    while ptr_is_null(chunk) == 0:
+        store_i64(chunk, 8, 0)
+        chunk = load_ptr(chunk, 0)
+    atomic_store_i32(global_addr("pcc_gc_young_log_lost"), 0, 0, "release")
 
 
 # Flag-only tracking counted every track and untrack on the one shared
@@ -513,7 +630,9 @@ def _tracked_growth(tracked: i64) -> None:
         global_addr("pcc_gc_tracked_after_collect"), 0, "relaxed"
     )
     growth: i64 = threshold
-    if live > growth:
+    if live > growth and load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) == 0:
+        # Without generations every collection walks the heap: wait for it
+        # to double. A young collection examines only the newcomers.
         growth = live
     if tracked - live >= growth:
         atomic_store_i32(
@@ -557,6 +676,10 @@ def py_gc_untrack(obj: c_ptr) -> None:
             _tracked_shard_unlock(index)
         return
     node = py_gc_index_remove(obj)
+    if ptr_is_null(node) != 0 and load_i32(global_addr("pcc_gc_tracking_young_view"), 0) != 0:
+        # A young view holds nodes for young objects only: this tracked
+        # object is outside it, and unlinking a node is what counts.
+        atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
     if ptr_is_null(node) == 0:
         pcc_gc_default_unlink_tracked_node(node)
         if merged != 0:
@@ -585,18 +708,38 @@ def pcc_gc_tracked_materialize() -> i64:
     """
     if atomic_load_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, "acquire") == 0:
         return 0
+    required: i64 = _TRACKED
     if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") != 0:
-        count: i64 = 0
-        node = global_load_ptr("py_gc_head")
-        while ptr_is_null(node) == 0:
-            count = count + 1
-            node = load_ptr(node, _NODE_NEXT)
-        return count
-    small_cap: i64 = pcc_allocator_object_cells_enumerate(null(), 0, _TRACKED)
-    large_cap: i64 = pcc_gc_managed_pointer_index_enumerate(null(), 0, _TRACKED)
+        if load_i32(global_addr("pcc_gc_tracking_young_view"), 0) == 0:
+            count: i64 = 0
+            node = global_load_ptr("py_gc_head")
+            while ptr_is_null(node) == 0:
+                count = count + 1
+                node = load_ptr(node, _NODE_NEXT)
+            return count
+        # A borrower needs every tracked object (a gc-module snapshot from a
+        # finalizer of a young collection): complete the young view in
+        # place. Objects that already have a node are skipped below.
+        store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
+    elif load_i32(global_addr("pcc_gc_backend0_young_request"), 0) != 0:
+        young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
+        if young != 0:
+            required = _TRACKED | young
+            store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 1)
+    logged: i64 = 0
+    if (required != _TRACKED
+            and atomic_load_i32(global_addr("pcc_gc_young_log_lost"), 0, "acquire") == 0):
+        logged = 1
+    small_cap: i64 = 0
+    large_cap: i64 = 0
+    if logged != 0:
+        small_cap = _young_log_collect(null(), 0, required)
+    else:
+        small_cap = pcc_allocator_object_cells_enumerate(null(), 0, required)
+        large_cap = pcc_gc_managed_pointer_index_enumerate(null(), 0, required)
     tracing_cap: i64 = 0
     if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        tracing_cap = pcc_gc_object_list_non_slab_enumerate(null(), 0, _TRACKED)
+        tracing_cap = pcc_gc_object_list_non_slab_enumerate(null(), 0, required)
     # Count/fill runs under STW. Reject invalid sizes or changed enumeration
     # rather than clamp away tracked objects and publish a partial snapshot.
     if small_cap < 0 or large_cap < 0 or tracing_cap < 0:
@@ -609,24 +752,35 @@ def pcc_gc_tracked_materialize() -> i64:
     capacity = capacity + tracing_cap
     if capacity == 0:
         atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
-        return 0
+        count_existing: i64 = 0
+        node = global_load_ptr("py_gc_head")
+        while ptr_is_null(node) == 0:
+            count_existing = count_existing + 1
+            node = load_ptr(node, _NODE_NEXT)
+        return count_existing
     objects = malloc(capacity * 8)
     if ptr_is_null(objects):
         return -1
-    small: i64 = pcc_allocator_object_cells_enumerate(objects, small_cap, _TRACKED)
+    small: i64 = 0
+    large: i64 = 0
+    if logged != 0:
+        small = _young_log_collect(objects, small_cap, required)
+    else:
+        small = pcc_allocator_object_cells_enumerate(objects, small_cap, required)
     if small != small_cap:
         free(objects)
         return -1
-    large: i64 = pcc_gc_managed_pointer_index_enumerate(
-        ptr_add(objects, small * 8), large_cap, _TRACKED
-    )
+    if logged == 0:
+        large = pcc_gc_managed_pointer_index_enumerate(
+            ptr_add(objects, small * 8), large_cap, required
+        )
     if large != large_cap:
         free(objects)
         return -1
     tracing: i64 = 0
     if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
         tracing = pcc_gc_object_list_non_slab_enumerate(
-            ptr_add(objects, (small + large) * 8), tracing_cap, _TRACKED
+            ptr_add(objects, (small + large) * 8), tracing_cap, required
         )
     if tracing != tracing_cap:
         free(objects)
@@ -681,6 +835,7 @@ def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
         return
     if atomic_load_i32(global_addr("pcc_gc_tracking_materialized"), 0, "acquire") == 0:
         return
+    young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
     node = global_load_ptr("py_gc_head")
     global_store_ptr("py_gc_head", null())
     while ptr_is_null(node) == 0:
@@ -688,8 +843,13 @@ def pcc_gc_tracked_dematerialize(acquired: i64) -> None:
         obj = load_ptr(node, _NODE_OBJECT)
         if ptr_is_null(obj) == 0:
             py_gc_index_remove(obj)
+            if young != 0:
+                # Examined by this collection: no longer young.
+                atomic_rmw_i32("and", obj, 12, ~young, "acq_rel")
         _tracked_node_recycle(node)
         node = next_node
+    store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
+    _young_log_reset()
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 0, "release")
 
 
@@ -706,6 +866,9 @@ def pcc_gc_tracking_enter_flag_mode() -> None:
     pcc_gc_default_table_lock()
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     pcc_gc_tracked_dematerialize(1)
+    if gc_backend_current() == 0:
+        # The fused collector collects by generation (131072: its young bit).
+        store_i32(global_addr("pcc_gc_tracking_young_bit"), 0, 131072)
     # Publish only after old nodes/index entries are gone and materialized is
     # clear. A fast reader's acquire must never see flag mode before teardown.
     atomic_store_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, 1, "release")

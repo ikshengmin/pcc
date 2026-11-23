@@ -1356,8 +1356,15 @@ supersedes the order of the next section ("optimize each collector before
 unifying"): its GC1-4 identities are no longer built as separate
 collectors.
 
-Claude's proposed mapping of those features onto the counting base, for the
-maintainer to confirm or change (a proposal, not a decision):
+Maintainer decisions later on 2026-11-24: slab evacuation is not built into
+the fused collector (it needs the pin, lease and read-barrier protocol that
+the fused protocol removes); the fused collector's pause must be very short
+and independent of heap size, as ZGC's is; and the five-collector structure
+is to be deleted quickly so that one collector remains, which then gets the
+optimization work ("做完删除 5GC这种。然后主力优化融合GC。 只留一个gC").
+
+Claude's proposed mapping of the remaining features onto the counting base
+(a proposal; GC4's line is superseded by the decision above):
 
 - GC1, incremental: the cycle collector runs in bounded mutator-paced steps
   instead of one stop per collection (bounded pause).

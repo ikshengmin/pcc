@@ -78,6 +78,9 @@ class TrackingState:
             "py_gc_tracked_count": {0: 1 if initial & TRACKED else 0},
             # This thread's unpublished changes of that count.
             "pcc_tls_tracked_delta": {0: 0},
+            # Generational collection is off in this model (young bit 0).
+            "pcc_gc_tracking_young_bit": {0: 0},
+            "pcc_gc_tracking_young_view": {0: 0},
             "pcc_gc_deferred_node_free_head": None,
             "pcc_gc_tracking_flag_mode": {0: flag_mode},
             "pcc_gc_tracking_materialized": {0: 0},
@@ -331,9 +334,17 @@ def test_tracking_header_writes_are_exact_masked_atomic_operations():
     constants = _layout_constants()
     assert constants["_TRACKED"] == TRACKED
 
+    YOUNG = 131072  # pcc_gc_tracking_young_bit on the fused collector
+
     def mask_value(node):
         if isinstance(node, ast.Name):
-            return constants[node.id]
+            # ``young`` is the loaded pcc_gc_tracking_young_bit.
+            return YOUNG if node.id == "young" else constants[node.id]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return mask_value(node.left) | mask_value(node.right)
+        if isinstance(node, ast.Call):
+            assert ast.unparse(node) == "load_i32(global_addr('pcc_gc_tracking_young_bit'), 0)"
+            return YOUNG
         if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
             return ~mask_value(node.operand)
         return ast.literal_eval(node)
@@ -361,4 +372,9 @@ def test_tracking_header_writes_are_exact_masked_atomic_operations():
             assert ast.unparse(node.args[0]) != "obj"
     # Node-path untrack/track (two ors: tracked and already-indexed), plus
     # flag-mode entry and the first-freeze race recheck under shard ownership.
-    assert sorted(writes) == [("and", ~TRACKED)] * 3 + [("or", TRACKED)] * 4
+    # A first track also sets the young bit (flag mode and the node path);
+    # every view teardown clears it, which promotes the survivors.
+    assert sorted(writes) == (
+        [("and", ~YOUNG)] + [("and", ~TRACKED)] * 3
+        + [("or", TRACKED)] * 2 + [("or", TRACKED | YOUNG)] * 2
+    )

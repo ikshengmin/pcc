@@ -24,6 +24,10 @@ INTERNAL_SYMBOLS = {
     # Per-thread batches of the flag-mode tracked count.
     "pcc_gc_tracked_count_note",
     "pcc_gc_tracked_count_flush",
+    # The young log of generational collection.
+    "pcc_gc_young_log_note",
+    "pcc_gc_young_log_collect",
+    "pcc_gc_young_log_reset",
     "pcc_gc_default_drain_deferred_nodes",
     "pcc_gc_default_table_lock",
     "pcc_gc_default_table_unlock",
@@ -48,6 +52,9 @@ INTERNAL_SYMBOLS = {
 RAW_FUNCTION_IMPORTS = {
     # The Darwin thread-local descriptor bootstrap of pcc_tls_tracked_delta.
     "tlv_bootstrap",
+    # The young log keeps an entry only while its address is a live object.
+    "pcc_gc_granule_is_object_start",
+    "pcc_gc_managed_pointer_index_contains",
     "free",
     "malloc",
     "pcc_current_native_thread_token",
@@ -66,6 +73,12 @@ RAW_FUNCTION_IMPORTS = {
     "pcc_gc_object_list_non_slab_enumerate",
 }
 RAW_GLOBAL_IMPORTS = {
+    # Generational collection: the young bit, the young view and its log.
+    "pcc_gc_tracking_young_bit",
+    "pcc_gc_tracking_young_view",
+    "pcc_gc_backend0_young_request",
+    "pcc_gc_young_log_chunks",
+    "pcc_gc_young_log_lost",
     "pcc_gc_tracking_flag_mode",
     "pcc_gc_tracking_materialized",
     "pcc_gc_nonmoving_count_free",
@@ -336,7 +349,9 @@ def test_gc_tracking_object_has_exact_raw_closure_and_atomic_lock(
         if line.strip() and " U " not in line
     }
     # The object also defines its thread-local pending-count word.
-    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | {"pcc_tls_tracked_delta"}
+    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | {
+        "pcc_tls_tracked_delta", "pcc_tls_young_log_chunk",
+    }
     assert "cmpxchg ptr" in ir_text
     assert "acq_rel acquire" in ir_text
     assert "store atomic i32" in ir_text
