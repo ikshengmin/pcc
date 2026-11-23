@@ -7,7 +7,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET,
 )
 
-from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
+from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     atomic_cas_i64,
     atomic_load_i64,
@@ -447,23 +447,25 @@ def _module_name_key(module_name):
     return py_str_new(module_name, strlen(module_name))
 
 
+_memcmp = extern("memcmp", (c_ptr, c_ptr, c_int64), c_int32)
+
+
 def _str_matches_cstr(key, text) -> int:
     """Whether str ``key`` holds exactly the bytes of the C string ``text``.
 
-    Stops at the C string's terminator, so it never reads past it.
+    strlen stops at the C string's terminator, so neither call reads past
+    it; equal lengths then bound the comparison. Both are the platform C
+    library's: a compiled byte loop made every module attribute read pay a
+    load, compare and branch per byte of each name.
     """
     length: int = load_i64(key, PYSTROBJECT_BYTE_LEN_OFFSET)
-    data = ptr_add(key, PYSTROBJECT_DATA_OFFSET)
-    index: int = 0
-    same: int = 1
-    while same != 0 and index < length:
-        byte: int = load_i8(text, index)
-        if byte == 0 or byte != load_i8(data, index):
-            same = 0
-        index = index + 1
-    if same != 0 and load_i8(text, length) != 0:
-        same = 0
-    return same
+    if strlen(text) != length:
+        return 0
+    if length == 0:
+        return 1
+    if _memcmp(text, ptr_add(key, PYSTROBJECT_DATA_OFFSET), length) != 0:
+        return 0
+    return 1
 
 
 def _threaded_name_key_match(entry, text):

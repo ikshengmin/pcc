@@ -60,6 +60,7 @@ from pcc.unsafe import (
     ptr_add,
     ptr_eq,
     ptr_is_null,
+    ptr_to_int,
     store_i8,
     store_i32,
     store_i64,
@@ -158,13 +159,19 @@ def _is_ascii_ws(c: int) -> int:
     return 0
 
 
+# The platform C library's comparison and search, as CPython's own string
+# equality and single-character search use them: a compiled byte loop paid
+# a load, compare and branch per byte. memcmp returns a C int.
+_memcmp = extern("memcmp", (c_ptr, c_ptr, c_int64), c_int32)
+_memchr = extern("memchr", (c_ptr, c_int32, c_int64), c_ptr)
+
+
 def _bytes_eq(a, b, n: int) -> int:
-    # Byte-by-byte memcmp equivalent; returns 1 if equal, 0 otherwise.
-    i: int = 0
-    while i < n:
-        if (load_i8(a, i) & 0xFF) != (load_i8(b, i) & 0xFF):
-            return 0
-        i = i + 1
+    # 1 if the n bytes at a and b are equal, 0 otherwise.
+    if n <= 0:
+        return 1
+    if _memcmp(a, b, n) != 0:
+        return 0
     return 1
 
 
@@ -180,18 +187,22 @@ def _utf8_codepoint_count(data, byte_len: int) -> int:
 
 
 def _byte_find(hay, hay_len: int, need, need_len: int) -> int:
+    """The first offset of need in hay, or -1: memchr finds each candidate
+    first byte, memcmp checks the rest."""
     if need_len == 0:
         return 0
     if need_len > hay_len:
         return -1
     last: int = hay_len - need_len
+    first_need: int = load_i8(need, 0) & 0xFF
     i: int = 0
     while i <= last:
-        first_hay: int = load_i8(hay, i) & 0xFF
-        first_need: int = load_i8(need, 0) & 0xFF
-        if first_hay == first_need:
-            if _bytes_eq(ptr_add(hay, i), need, need_len) != 0:
-                return i
+        found = _memchr(ptr_add(hay, i), first_need, last - i + 1)
+        if ptr_is_null(found) != 0:
+            return -1
+        i = ptr_to_int(found) - ptr_to_int(hay)
+        if need_len == 1 or _bytes_eq(ptr_add(found, 1), ptr_add(need, 1), need_len - 1) != 0:
+            return i
         i = i + 1
     return -1
 
