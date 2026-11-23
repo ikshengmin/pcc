@@ -381,9 +381,16 @@ in the relevant section or issue and removes the entry.
      the layered path, and the cost above comes from collections that have
      no observable candidate. Cause not attributed.
    - Next #9, in order:
-     - Remove the redundant observer census on the common no-observer
-       handler path while keeping the weakref, pending generator, and
-       finalizer semantics (condition 4). The split opt-in Linux probe on
+     - Keep the same-stop negative observer hint a local candidate: it
+       removes the redundant handler census in nine Linux diagnostic runs
+       (GC3 w4 40.6 ms to 10 µs median). The new regression is red before and
+       passes all five cases after; 249 focused native checks passed, with
+       the same ten cleared-generator failures reproduced on the preimage.
+       The exact non-instrumented 5-pair GC1/GC3 w4 effect changed sign
+       across 20k/50k-request runs; unchanged GC0 floors were 19.3% and
+       14.5%. Do not call the throughput gate passed or request Mac A/B.
+       Move to condition 6 and 3 independently; retry throughput only
+       with a quieter Linux session or a stable unchanged control. The split opt-in Linux probe on
        `b7845414c` ran 9 times (40k requests each) and reconciled to
        counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
        median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
@@ -525,7 +532,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 eliminate redundant observer census: Codex, Linux x86-64, 2026-11-23 02:29 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
