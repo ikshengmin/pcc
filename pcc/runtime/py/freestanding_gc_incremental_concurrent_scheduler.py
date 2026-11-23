@@ -782,7 +782,8 @@ def pcc_gc_tracing_finish_left_to_mutator() -> i64:
 
 @c_abi_export("pcc_gc_tracing_step_cycle")
 def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
-    if remaining_budget <= 0:
+    # An open sweep remark is not a cycle the marker can advance.
+    if remaining_budget <= 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) == 2:
         return 0
 
     # A concurrent slice must also bound skipped object-list nodes: a sparse
@@ -815,6 +816,9 @@ def pcc_gc_tracing_step_cycle(remaining_budget: i64) -> i64:
     pcc_py_gc_minor_graph_lock()
     local_processed: i64 = 0
     active: i64 = load_i32(global_addr("pcc_gc_mark_active"), 0)
+    if active == 2:
+        pcc_py_gc_minor_graph_unlock()
+        return 0
     requested: i64 = load_i32(global_addr("pcc_gc_cycle_requested"), 0)
     if active == 0:
         if requested == 0:

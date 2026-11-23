@@ -93,6 +93,7 @@ py_incref_extern = extern("py_incref", (c_ptr,), c_void)
 py_decref_extern = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -1710,7 +1711,7 @@ def _thread_invoke_clear(slots, pins, offset: int) -> None:
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         pcc_gc_unpin(value)
         if load_i64(pins, offset) != 0:
-            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -1762,7 +1763,7 @@ def _thread_invoke(thread) -> None:
             pcc_gc_pin(result)
             pcc_gc_note_write_barrier(null(), result)
         thread = load_ptr(slots, 0)
-        atomic_rmw_i32("or", thread, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(thread)
         pcc_gc_store_ptr(thread, ptr_add(thread, 40), load_ptr(slots, 24))
     else:
         pcc_gc_store_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 40), global_load_ptr("py_None"))

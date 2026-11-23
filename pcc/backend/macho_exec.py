@@ -39,7 +39,7 @@ from . import macho_spec as spec
 from .macho_codesign import _CD_HEADER_SIZE as _CD_FIXED
 from .macho_codesign import _align8, build_signature
 from .macho_exports import build_exports_trie
-from .macho_archive import ArchiveError, read_archive, select_members
+from .macho_archive import ArchiveError, RUNTIME_MAIN_ENTRY, read_archive, select_members
 from .macho_obj import _build_string_table
 from .macho_link import (
     LinkInput,
@@ -629,6 +629,7 @@ def prepare_executable_object(
     compact_budget=None,
     coordinator_timing=None,
     required_symbols=(),
+    runtime_main=False,
 ):
     """Resolve a final link job into its reusable relocatable state.
 
@@ -698,6 +699,7 @@ def prepare_executable_object(
                 pending,
                 already_defined=already_defined,
                 selected_members=selected_members,
+                runtime_main=runtime_main,
             )
             if archive_selections is not None:
                 import hashlib
@@ -842,6 +844,7 @@ def _prepare_executable_inputs(objects, archives, entry, minos, identifier,
             _source_view=direct_source_view,
             archive_selections=selections,
             required_symbols=export_symbols,
+            runtime_main=entry == "_main",
         ),
         entry=entry,
         minos=minos,
@@ -985,6 +988,8 @@ def _prepare_executable_image(
             raise LinkError("exporting weak definitions requires unsupported dynamic coalescing")
         if not symbol["n_type"] & spec.N_EXT or symbol["n_type"] & spec.N_PEXT:
             raise LinkError("requested Mach-O export is not public: " + name)
+    if entry == "_main" and RUNTIME_MAIN_ENTRY in defined:
+        entry = RUNTIME_MAIN_ENTRY
     if entry not in defined:
         raise LinkError(f"entry symbol {entry!r} is not defined by the inputs")
     entry_symbol = defined[entry]

@@ -116,6 +116,7 @@ pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
@@ -1658,7 +1659,7 @@ def _bind_dataclass_factory(factory, bound, remaining, names, kinds, has_default
     if ptr_is_null(empty_args) == 0 and is_tagged_int(empty_args) == 0:
         pcc_gc_unpin(empty_args)
         if load_i64(pins, 0) != 0:
-            atomic_rmw_i32("or", empty_args, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(empty_args)
     pcc_gc_store_root(slots, result)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
         pcc_gc_pin(result)
@@ -1669,7 +1670,7 @@ def _bind_dataclass_factory(factory, bound, remaining, names, kinds, has_default
         offset = offset - 8
     result = load_ptr(slots, 0)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
@@ -2298,7 +2299,7 @@ def _builtin_value_unpin_slot(slots, offset: int, prior: int) -> None:
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         pcc_gc_unpin(value)
         if prior != 0:
-            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
 
 
 def _builtin_value_finish(slots, result_offset: int):
@@ -2513,7 +2514,7 @@ def _func_clear_call_root(slots, pins, offset: int) -> None:
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         pcc_gc_unpin(value)
         if load_i64(pins, offset) != 0:
-            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -2595,7 +2596,7 @@ def _func_call_restore_error(slots, pins) -> None:
         if ptr_is_null(error) == 0 and is_tagged_int(error) == 0:
             pcc_gc_unpin(error)
             if prior != 0:
-                atomic_rmw_i32("or", error, 12, 64, "relaxed")
+                pcc_gc_reassert_pin(error)
     store_i64(pins, 16, 0)
 
 
@@ -2681,7 +2682,7 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     # restore that bit without acquiring an extra metric-counted pin.
     result = load_ptr(slots, 8)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     store_i32(global_addr("pcc_native_callable_forward_context"), 0, previous_forward)
     store_i32(global_addr("pcc_native_callable_sync_context"), 0, context)
@@ -3056,7 +3057,7 @@ def _partial_entry(captures, args, has_kwargs: int):
         _func_clear_call_root(slots, pins, 64)
     result = load_ptr(slots, 0)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 

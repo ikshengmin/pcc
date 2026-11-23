@@ -1831,6 +1831,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_backend4_auto_step_pending',
         'pcc_gc_last_alloc_bytes',
         'pcc_gc_mark_active',
+        'pcc_gc_callback_candidate_pin_dirty',
         'pcc_gc_metric_load',
         'pcc_gc_metric_pause_hist0',
         'pcc_gc_metric_pause_hist1',
@@ -2014,6 +2015,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_candidate_count',
         'pcc_gc_tracing_candidate_capacity',
         'pcc_gc_tracing_candidate_commit',
+        'pcc_gc_tracing_candidate_no_pending_gen_commit',
         'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
@@ -2122,6 +2124,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_process_main_anchor",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active",
         "pcc_gc_deferred_free_head",
@@ -3326,6 +3329,29 @@ def _cross_object_signatures_part_14():
 
 def _cross_object_signatures_part_15():
     return {
+    "pcc_process_main_boundary": ((), "c_ptr"),
+    "pcc_process_call_main": (("c_ptr", "c_int64", "c_ptr", "c_ptr", "c_ptr"), "c_int64"),
+    'pcc_gc_callback_layers_build': (('c_ptr', 'c_int64', 'c_int64'), 'c_ptr'),
+    'pcc_gc_callback_layers_release': (('c_ptr',), 'c_void'),
+    'pcc_gc_callback_layers_count': (('c_ptr',), 'c_int64'),
+    'pcc_gc_callback_layers_range': (('c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_layers_node': (('c_ptr', 'c_int64'), 'c_ptr'),
+    'pcc_gc_callback_layers_contains': (('c_ptr', 'c_ptr', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_layers_hull_low': (('c_ptr',), 'c_int64'),
+    'pcc_gc_callback_layers_hull_high': (('c_ptr',), 'c_int64'),
+    'pcc_gc_callback_cut_may_hit': (('c_ptr', 'c_int64', 'c_int64'), 'c_int64'),
+    'pcc_gc_callback_trace_cached_extents': (('c_ptr', 'c_ptr', 'c_int64', 'c_ptr'), 'c_int64'),
+    'pcc_gc_callback_layers_layer_of': (('c_ptr', 'c_ptr'), 'c_int64'),
+    'py_weakref_layer_snapshot_create': (('c_ptr', 'c_int64'), 'c_ptr'),
+    'py_weakref_layer_snapshot_release': (('c_ptr',), 'c_void'),
+    'py_weakref_queue_tracing_layer': (('c_ptr', 'c_ptr', 'c_int64', 'c_ptr'), 'c_int64'),
+    "pcc_gc_callback_singleton_conservative_root": (("c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_callback_root_cut_release": (("c_ptr",), "c_void"),
+    "pcc_thread_visit_conservative_callback_words": (("c_ptr", "c_ptr", "c_ptr"), "c_int64"),
+    "pcc_gc_conservative_capture_callback_words": (("c_ptr", "c_ptr", "c_int64", "c_int64"), "c_void"),
+    "pcc_gc_conservative_capture_thread_words": (("c_ptr",), "c_void"),
+    "pcc_gc_scan_captured_thread_roots": (("c_ptr", "c_int64"), "c_int64"),
+    "pcc_gc_seed_roots_with_stop_cut": (("c_ptr",), "c_void"),
     # GC4 evacuates object slabs (freestanding_gc_relocation_selector).
     "pcc_gc_page_of": (("c_ptr",), "c_ptr"),
     "pcc_gc_page_evacuating": (("c_ptr",), "c_int64"),

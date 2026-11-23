@@ -405,6 +405,8 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
     black unless ``allow_black`` asks for a re-scan.
     """
     old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
+    if (old & 1024) == 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) == 2:
+        return
     if (old & (16 | 524288)) != 0 or (
         allow_black == 0 and pcc_gc_object_is_black(obj, old) != 0
     ):
@@ -725,6 +727,7 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
             if observed == active:
                 if status == 1:
                     store_i64(node, 80, load_i64(node, 80) + 1)
+                    _notice_callback_pin(flags)
                 break
             active = observed
     pcc_py_gc_minor_graph_unlock()
@@ -750,8 +753,8 @@ def pcc_gc_cpy_handle_change_c_owners(obj, delta: i64) -> None:
         pcc_py_gc_minor_graph_unlock()
         pcc_platform_abort()
         return
-    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
-            & (2048 | PY_FLAG_GC_DEALLOCATING)) != 0:
+    flags: i64 = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
+    if (flags & (2048 | PY_FLAG_GC_DEALLOCATING)) != 0:
         pcc_py_gc_minor_graph_unlock()
         pcc_platform_abort()
         return
@@ -787,6 +790,7 @@ def pcc_gc_cpy_handle_change_c_owners(obj, delta: i64) -> None:
             active = seen
         store_i64(node, 80, count + delta)
         if delta > 0:
+            _notice_callback_pin(flags)
             # Root seeding sees the persistent pin on the next stopped walk;
             # an already active mark also needs this root's insertion shade.
             pcc_gc_count_free_store_shade(obj)
@@ -1122,6 +1126,32 @@ def pcc_gc_metric_shard_reset(field: i64) -> None:
         index = index + 1
 
 
+# Candidate and callback-phase flags are stable until a cooperative stop.
+# Only an owning transition on a pending candidate needs to notify the
+# stopped callback remark. There is no per-write journal.
+_CALLBACK_PIN_CANDIDATE = 1024
+_CALLBACK_PIN_MARK_WINDOW = 2
+
+
+@c_abi_export("pcc_gc_notice_callback_pin")
+def _notice_callback_pin(flags: i64) -> None:
+    if ((flags & _CALLBACK_PIN_CANDIDATE) != 0
+            and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") == _CALLBACK_PIN_MARK_WINDOW):
+        atomic_store_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, 1, "release")
+
+
+@c_abi_export("pcc_gc_reassert_pin")
+def pcc_gc_reassert_pin(obj) -> None:
+    """Set the Boolean header pin without changing the balance metric.
+
+    For the nonparking return/exception paths that restore a prior pin
+    flag (or transfer the raw pin on a result), not the normal pin API.
+    The caller has already validated the header.
+    """
+    previous: i64 = atomic_rmw_i32("or", obj, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+    _notice_callback_pin(previous)
+
+
 # Pin acquisition/release must not park before touching their raw object arg.
 # Keep this existing header/metric protocol in the strict primitive owner.
 @c_abi_export("pcc_gc_pin")
@@ -1141,7 +1171,7 @@ def pcc_gc_pin(o) -> None:
         return
     # Other threads and collector workers update the same flags word: the
     # pin bit is one atomic or, never a lost read-modify-write.
-    atomic_rmw_i32("or", o, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+    pcc_gc_reassert_pin(o)
     # pcc_gc_note_pin(1), inline: codegen pins around most calls. The shard
     # is computed here too, so pinning calls nothing before it returns.
     region: i64 = logical_shift_right_i64(ptr_to_int(frame_address()), 19)
@@ -1187,7 +1217,7 @@ def pcc_gc_take_pinned_slot(slot, prior_pin: i64):
     pcc_gc_unpin(value)
     if (prior_pin & PY_FLAG_GC_PINNED) != 0:
         if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+            pcc_gc_reassert_pin(value)
     return value
 
 

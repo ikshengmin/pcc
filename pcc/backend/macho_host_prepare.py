@@ -1335,7 +1335,10 @@ def _merge_paths(paths, archives, archive_paths, ledger, _phase_callback=None, *
                 members = read_archive(raw)
             except (ArchiveError, spec.MachOFormatError) as exc:
                 raise link.LinkError(f"archive {archive_index} is outside the proven subset: {exc}") from exc
-            pulled, _pending = select_members(members, undefined - already_defined, already_defined=already_defined)
+            pulled, _pending = select_members(
+                members, undefined - already_defined, already_defined=already_defined,
+                runtime_main=True,
+            )
             for member in pulled:
                 descriptor = _archive_descriptor(member, len(descriptors), ledger)
                 descriptors.append(descriptor)

@@ -892,7 +892,7 @@ def _bound_clear_root(slots, pins, offset: int) -> None:
         if prior >= 0:
             pcc_gc_unpin(value)
             if prior != 0:
-                atomic_rmw_i32("or", value, 12, 64, "relaxed")
+                pcc_gc_reassert_pin(value)
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -1018,7 +1018,7 @@ def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
         _bound_clear_root(slots, pins, 80)
     result = load_ptr(slots, 0)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(slots, prior_result_pin)
 
@@ -2131,12 +2131,12 @@ def _object_new_accepts_excess(cls) -> bool:
     if _ptr_can_have_header(inherited):
         pcc_gc_unpin(inherited)
         if inherited_pin != 0:
-            atomic_rmw_i32("or", inherited, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(inherited)
     py_decref(inherited)
     if _ptr_can_have_header(current):
         pcc_gc_unpin(current)
         if current_pin != 0:
-            atomic_rmw_i32("or", current, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(current)
     py_decref(current)
     if same == 0:
         return False
@@ -2223,13 +2223,13 @@ def _object_new_cache_fill(root, result_slot) -> None:
             pcc_gc_store_root(result_slot, descriptor)
             pcc_gc_unpin(descriptor)
             if prior_pin != 0:
-                atomic_rmw_i32("or", descriptor, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+                pcc_gc_reassert_pin(descriptor)
             py_decref(descriptor)
         pcc_gc_unpin(key)
         py_decref(key)
     pcc_gc_unpin(attrs)
     if prior_attrs_pin != 0:
-        atomic_rmw_i32("or", attrs, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+        pcc_gc_reassert_pin(attrs)
     if ptr_is_null(load_ptr(result_slot, 0)) != 0:
         _class_require_result(null(), cstr("object.__new__"), cstr("object allocator callable allocation failed"))
 
@@ -3038,7 +3038,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
         if ptr_eq(value, result) != 0 or load_i64(pins, cleanup_index * C_POINTER_SIZE) != 0:
             # Balance this input's pin lease, but preserve the original bit
             # or the independent result lease. No moving window under lock.
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
         cleanup_index = cleanup_index + 1
     pcc_py_gc_minor_graph_unlock()
     cleanup_index = 0
@@ -3066,36 +3066,6 @@ def py_instance_set_field(inst, idx: int, value) -> None:
     pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
 
 
-@c_abi_export("pcc_gc_tracing_callback_store_instance_field")
-def pcc_gc_tracing_callback_store_instance_field(inst, idx: int, value, owner_cell) -> int:
-    """Opt-in one-owner receipt for a checked store in the #9 reference arm.
-
-    The caller owns a private unmanaged cell and keeps the instance alive
-    throughout this window. No ordinary setter calls this entry. An exact
-    owner receipt does not establish callback-window coverage or root identity.
-    """
-    backend: int = pcc_gc_backend()
-    if (
-        backend < 1 or backend > 3
-        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
-        or pcc_thread_world_stop_epoch_held() >= 0
-        or ptr_is_null(owner_cell) != 0 or idx < 0 or not _ptr_is_instance(inst)
-        or ptr_is_null(value) != 0 or is_tagged_int(value) != 0
-    ):
-        return 0
-    recorded = load_ptr(owner_cell, 0)
-    if ptr_is_null(recorded) == 0 and ptr_eq(recorded, inst) == 0:
-        return 0
-    cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
-    n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
-    if idx >= n_fields:
-        return 0
-    # Same locked store transaction as py_instance_set_field, with no opt-in
-    # check in that path. The count-free plan has no retaining refusal.
-    fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-    pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
-    store_ptr(owner_cell, 0, inst)
-    return 1
 
 
 @c_abi_export("py_valuebox_new")
@@ -6927,6 +6897,7 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 

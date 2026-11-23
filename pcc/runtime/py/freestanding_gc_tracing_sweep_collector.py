@@ -9,6 +9,7 @@ from pcc.unsafe import (
     atomic_rmw_i64,
     atomic_store_i32,
     free,
+    frame_address,
     global_addr,
     global_load_ptr,
     global_store_ptr,
@@ -63,7 +64,22 @@ pcc_gc_object_is_known_no_lock = extern(
 pcc_gc_object_node_is_active = extern(
     "pcc_gc_object_node_is_active", (c_ptr,), c_int64
 )
+pcc_gc_gray_registered_roots = extern("pcc_gc_gray_registered_roots", (), c_void)
+pcc_gc_callback_singleton_conservative_root = extern(
+    "pcc_gc_callback_singleton_conservative_root", (c_ptr, c_ptr), c_int64
+)
+pcc_gc_callback_root_cut_release = extern("pcc_gc_callback_root_cut_release", (c_ptr,), c_void)
+pcc_gc_conservative_capture_thread_words = extern(
+    "pcc_gc_conservative_capture_thread_words", (c_ptr,), c_void
+)
 pcc_gc_seed_roots = extern("pcc_gc_seed_roots", (), c_void)
+pcc_gc_seed_roots_with_stop_cut = extern("pcc_gc_seed_roots_with_stop_cut", (c_ptr,), c_void)
+pcc_gc_gray_count_load_acquire = extern("pcc_gc_gray_count_load_acquire", (), c_int64)
+pcc_gc_gray_count_store_release = extern("pcc_gc_gray_count_store_release", (c_int64,), c_void)
+pcc_gc_gray_worklist_clear_stopped = extern("pcc_gc_gray_worklist_clear_stopped", (), c_void)
+pcc_gc_set_mark_color = extern("pcc_gc_set_mark_color", (c_ptr, c_int64), c_void)
+pcc_gc_page_mark_assign = extern("pcc_gc_page_mark_assign", (c_ptr, c_int64), c_void)
+
 pcc_gc_mark_root_gray_if_known = extern(
     "pcc_gc_mark_root_gray_if_known", (c_ptr,), c_void
 )
@@ -154,6 +170,7 @@ def pcc_gc_tracing_candidates_reset() -> None:
     """Start the candidate list of a finish (stopped world, graph lock)."""
     store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, 0)
     store_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0, -1)
+    store_i64(global_addr("pcc_gc_tracing_candidate_no_pending_gen_commit"), 0, -1)
 
 
 @c_abi_export("pcc_gc_tracing_candidates_note")
@@ -335,6 +352,11 @@ def pcc_gc_tracing_finalize_unpinned(obj) -> None:
 
 @c_abi_export("pcc_gc_tracing_recheck_reachability_after_finalizers")
 def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
+    _recheck_reachability_after_window(null())
+
+
+@c_abi_export("pcc_gc_tracing_recheck_reachability_with_stop_cut")
+def _recheck_reachability_after_window(context) -> None:
     # Refresh the candidate verdict from current roots.  This is also used
     # before PASS-0; keep the exported name for the existing runtime ABI.
     # After PASS-0, PEP 442 requires the same refresh to rescue resurrection
@@ -342,7 +364,10 @@ def pcc_gc_tracing_recheck_reachability_after_finalizers() -> None:
     started: i64 = pcc_platform_monotonic_us()
     visited: i64 = 0
     cleared_candidates: i64 = 0
-    pcc_gc_seed_roots()
+    if ptr_is_null(context) != 0:
+        pcc_gc_seed_roots()
+    else:
+        pcc_gc_seed_roots_with_stop_cut(context)
     if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
         # This sweep owns a fixed disposal set. A finalizer can allocate an
         # object outside it, then leave that object temporarily unreachable.
@@ -788,125 +813,12 @@ def pcc_gc_tracing_classify_callback_cohort(
     return 1
 
 
-_CALLBACK_REFRESH_PENDING: i64 = 1
-_CALLBACK_REFRESH_SEEN: i64 = 2
-_CALLBACK_REFRESH_SWEEP_FLAG = 1024
 
 
-@c_abi_export("pcc_gc_tracing_callback_refresh_edge")
-def _callback_refresh_edge(slot, role: i64, scratch) -> None:
-    if role == _ACYCLIC_ROLE_DERIVED:
-        return
-    if role != _ACYCLIC_ROLE_VALUE and role != _ACYCLIC_ROLE_TYPE:
-        store_i64(scratch, _ACYCLIC_UNSUPPORTED, 1)
-        return
-    value = load_ptr(slot, 0)
-    cohort = load_ptr(scratch, _ACYCLIC_COHORT_PTR)
-    count: i64 = load_i64(scratch, _ACYCLIC_COUNT)
-    index: i64 = 0
-    while index < count:
-        if ptr_eq(value, load_ptr(cohort, index * _ACYCLIC_WORD)) != 0:
-            offset: i64 = _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD
-            if load_i64(scratch, offset) == 0:
-                store_i64(scratch, offset, _CALLBACK_REFRESH_PENDING)
-            return
-        index += 1
 
 
-@c_abi_export("pcc_gc_tracing_callback_refresh_owner")
-def _callback_refresh_owner(owner, scratch, slots_left: i64) -> i64:
-    cursor: i64 = 0
-    state = stack_alloc(_ACYCLIC_SCAN_BYTES)
-    while cursor >= 0:
-        if slots_left <= 0:
-            return -1
-        limit: i64 = slots_left if slots_left < _ACYCLIC_SCAN_LIMIT else _ACYCLIC_SCAN_LIMIT
-        handled: i64 = pcc_gc_visit_object_slots_slice(
-            owner, cursor, limit, _callback_refresh_edge, scratch, state,
-        )
-        examined: i64 = load_i64(state, _ACYCLIC_SCAN_EXAMINED)
-        next_cursor: i64 = load_i64(state, _ACYCLIC_SCAN_NEXT)
-        if (
-            handled == 0 or load_i64(scratch, _ACYCLIC_UNSUPPORTED) != 0
-            or examined < 0 or examined > limit
-            or (next_cursor != -1 and next_cursor <= cursor)
-        ):
-            return -1
-        slots_left -= examined
-        cursor = next_cursor
-    return slots_left
 
 
-@c_abi_export("pcc_gc_tracing_refresh_callback_cohort")
-def pcc_gc_tracing_refresh_callback_cohort(
-    cohort, count: i64, roots_and_owners, seeds: i64,
-    stop_epoch: i64, slots_left: i64, coverage_complete: i64, result
-) -> i64:
-    """Report a bounded rescue bitmap; all raw inputs must come from this stop.
-
-    The caller proves completeness of roots, writes and new owners before
-    passing coverage_complete. This makes no changes to object flags.
-    """
-    if (
-        coverage_complete != 1 or ptr_is_null(result) != 0
-        or seeds < 0 or seeds > _ACYCLIC_MAX_COHORT or slots_left < 0
-        or (seeds > 0 and ptr_is_null(roots_and_owners) != 0)
-        or _callback_cohort_valid(cohort, count, stop_epoch) == 0
-    ):
-        return 0
-    scratch = stack_alloc(_ACYCLIC_SCRATCH_BYTES)
-    memset(scratch, 0, _ACYCLIC_SCRATCH_BYTES)
-    store_ptr(scratch, _ACYCLIC_COHORT_PTR, cohort)
-    store_i64(scratch, _ACYCLIC_COUNT, count)
-    index: i64 = 0
-    visited: i64 = 0
-    cursor: i64 = 0
-    while cursor < seeds:
-        seed = load_ptr(roots_and_owners, cursor * _ACYCLIC_WORD)
-        if ptr_is_null(seed) == 0:
-            index = 0
-            while index < count and ptr_eq(seed, load_ptr(cohort, index * _ACYCLIC_WORD)) == 0:
-                index += 1
-            if index < count:
-                store_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD, _CALLBACK_REFRESH_PENDING)
-            else:
-                if (
-                    is_tagged_int(seed) != 0 or pcc_gc_object_is_known_no_lock(seed) == 0
-                    or (load_i32(seed, abi_constant("object.header.flags_offset"))
-                        & _CALLBACK_REFRESH_SWEEP_FLAG) != 0
-                ):
-                    return 0
-                slots_left = _callback_refresh_owner(seed, scratch, slots_left)
-                if slots_left < 0:
-                    return 0
-                visited += 1
-        cursor += 1
-    while True:
-        index = 0
-        while index < count:
-            if load_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD) == _CALLBACK_REFRESH_PENDING:
-                break
-            index += 1
-        if index == count:
-            break
-        store_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD, _CALLBACK_REFRESH_SEEN)
-        slots_left = _callback_refresh_owner(load_ptr(cohort, index * _ACYCLIC_WORD), scratch, slots_left)
-        if slots_left < 0:
-            return 0
-        visited += 1
-    if pcc_thread_world_stop_epoch_held() != stop_epoch:
-        return 0
-    bits: i64 = 0
-    mask: i64 = 1
-    index = 0
-    while index < count:
-        if load_i64(scratch, _ACYCLIC_FRONTIER + index * _ACYCLIC_WORD) == _CALLBACK_REFRESH_SEEN:
-            bits = bits | mask
-        mask = mask << 1
-        index += 1
-    store_i64(result, 0, bits)
-    store_i64(result, _ACYCLIC_WORD, visited)
-    return 1
 
 
 @c_abi_export("pcc_gc_tracing_dispatch_callback_head")
@@ -938,26 +850,451 @@ def pcc_gc_tracing_dispatch_callback_head(target, verdict: i64, stop_epoch: i64)
     return 1
 
 
-@c_abi_export("pcc_gc_tracing_dispatch_classified_head")
-def pcc_gc_tracing_dispatch_classified_head(
-    cohort, count: i64, index: i64, stop_epoch: i64, slots_left: i64
-) -> i64:
-    """Bind dispatch to a current complete cohort instead of a loose verdict.
 
-    The stopped caller supplies unmanaged immutable cohort storage. Return
-    before reseeding roots: the selected pointer must not be on the active
-    dispatch stack during the full recheck. No production caller uses this arm.
+
+# Review-only production admission. This is a true sweep route, not the
+# injected-callback fixtures. A single acyclic object has one real ready layer.
+# The layered path handles multi-object topology. GC4 and uncovered
+# barriers stay on the old route; GC4 requires a separate review.
+_CALLBACK_SWEEP_CANDIDATE = 1024
+_CALLBACK_FRESH_ALLOCATION = 16384
+_CALLBACK_MARK_WINDOW = 2
+_CALLBACK_WHITE = 8
+_CALLBACK_GRAY = 16
+_CALLBACK_BLACK = 32
+# Data pointer, count and capacity, as in the conservative root-cut owner.
+_CALLBACK_ROOT_CUT_BYTES = 24
+
+
+@c_abi_export("pcc_gc_review_acyclic_singleton")
+def _review_acyclic_singleton(stop_epoch: i64, backend: i64):
+    if (
+        (backend < 1 or backend > 3)
+        or stop_epoch < 0
+        or stop_epoch != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
+        or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        or pcc_gc_gray_count_load_acquire() != 0
+        or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0) != 1
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0) <= 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+           != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    ):
+        return null()
+    node = load_ptr(global_load_ptr("pcc_gc_tracing_candidate_nodes"), 0)
+    if pcc_gc_object_node_is_active(node) == 0:
+        return null()
+    obj = load_ptr(node, 0)
+    if (
+        (load_i32(obj, abi_constant("object.header.flags_offset")) & _CALLBACK_FRESH_ALLOCATION) != 0
+        or pcc_gc_tracing_is_sweep_candidate(obj) == 0
+        or load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen")
+        or py_user_del_pending(obj) == 0
+    ):
+        return null()
+    cohort = stack_alloc(8)
+    verdict = stack_alloc(8)
+    store_ptr(cohort, 0, obj)
+    if pcc_gc_tracing_classify_callback_cohort(cohort, 1, stop_epoch, 64, verdict) == 0:
+        return null()
+    return node if load_i64(verdict, 0) == _ACYCLIC_HEAD else null()
+
+
+@c_abi_export("pcc_gc_review_remark_singleton_after_window")
+def _review_remark_singleton_after_window(node, context) -> i64:
+    """Only the singleton can be rescued. Never seed/scan the survivor heap.
+
+    Treat an insertion shade without a current root as ambiguous: a callback
+    can write to temporary storage, or it can publish into an old object.
+    Until the shared coverage and drop cases are proven, use the existing
+    full oracle for that unresolved case.
     """
-    if index < 0 or index >= count:
+    prior_gray: i64 = pcc_gc_gray_count_load_acquire()
+    conservative: i64 = pcc_gc_callback_singleton_conservative_root(node, context)
+    obj = load_ptr(node, 0)
+    offset: i64 = abi_constant("object.header.flags_offset")
+    explicit: i64 = pcc_gc_object_node_is_address_pinned(node, obj)
+    flags: i64 = load_i32(obj, offset)
+    if prior_gray > 1 or (prior_gray == 1 and (flags & _CALLBACK_GRAY) == 0):
+        atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
         return 0
-    verdicts = stack_alloc(_ACYCLIC_MAX_COHORT * _ACYCLIC_WORD)
-    if pcc_gc_tracing_classify_callback_cohort(cohort, count, stop_epoch, slots_left, verdicts) == 0:
+
+    # A gray token from the insertion barrier does not say whether a
+    # published edge still exists. Revisit the actual registered roots with
+    # this one colour reset to distinguish a current owned cross-thread
+    # root from a transient store. The world is stopped and there is no
+    # other gray work, so this discards no peer's tracing credit.
+    if prior_gray == 1:
+        pcc_gc_gray_worklist_clear_stopped()
+        pcc_gc_gray_count_store_release(0)
+        pcc_gc_set_mark_color(obj, _CALLBACK_WHITE)
+        pcc_gc_page_mark_assign(obj, 0)
+    pcc_gc_gray_registered_roots()
+
+    flags = load_i32(obj, offset)
+    now_gray: i64 = pcc_gc_gray_count_load_acquire()
+    declared: i64 = 1 if explicit != 0 or (flags & _CALLBACK_GRAY) != 0 else 0
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+    if now_gray > 1 or (prior_gray != 0 and declared == 0):
+        # An old-heap publication has not been ruled out. The stopped
+        # fallback resets the queue and performs the full reachability scan.
         return 0
-    verdict: i64 = load_i64(verdicts, index * _ACYCLIC_WORD)
-    if verdict != _ACYCLIC_HEAD:
+    if conservative != 0 or declared != 0:
+        pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
+        flags = load_i32(obj, offset)
+        store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
+    pcc_gc_gray_worklist_clear_stopped()
+    pcc_gc_gray_count_store_release(0)
+    return 1
+
+
+@c_abi_export("pcc_gc_review_remark_singleton_at_stop")
+def _review_remark_singleton_at_stop(node) -> None:
+    # Take one root cut before the collector loads a raw candidate pointer.
+    # A fail-closed full recheck must not take a second snapshot of frames
+    # newly polluted by the failed fast attempt. The world has not resumed
+    # between capture and either decision.
+    context = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
+    pcc_gc_conservative_capture_thread_words(context)
+    if _review_remark_singleton_after_window(node, context) == 0:
+        _recheck_reachability_after_window(context)
+    pcc_gc_callback_root_cut_release(context)
+
+
+@c_abi_export("pcc_gc_review_sweep_acyclic_singleton")
+def _review_sweep_acyclic_singleton(node, budget: i64, backend: i64) -> i64:
+    finalizers: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    listed = stack_alloc(8)
+    nodes = stack_alloc(8)
+    count = stack_alloc(8)
+    commit = stack_alloc(8)
+    # Real PASS0 routes the finalizer through the existing user-code window,
+    # but its weakrefs have not been cleared yet.
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+    _sweep_finalizers(1, backend, finalizers, listed, nodes, count, commit)
+    _review_remark_singleton_at_stop(node)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+    weak_callbacks: i64 = _sweep_weak_callbacks(1)
+    if weak_callbacks != 0:
+        _review_remark_singleton_at_stop(node)
+    else:
+        atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+    py_weakref_clear_tracing_candidates()
+    return _sweep_clear_and_reclaim(
+        budget, 1, 0, load_i64(listed, 0), load_ptr(nodes, 0),
+        load_i64(count, 0), load_i64(commit, 0),
+    )
+
+
+pcc_gc_conservative_capture_callback_words = extern(
+    "pcc_gc_conservative_capture_callback_words", (c_ptr, c_ptr, c_int64, c_int64), c_void
+)
+pcc_gc_callback_layers_build = extern(
+    "pcc_gc_callback_layers_build", (c_ptr, c_int64, c_int64), c_ptr
+)
+pcc_gc_callback_layers_release = extern("pcc_gc_callback_layers_release", (c_ptr,), c_void)
+pcc_gc_callback_layers_count = extern(
+    "pcc_gc_callback_layers_count", (c_ptr,), c_int64
+)
+pcc_gc_callback_layers_range = extern(
+    "pcc_gc_callback_layers_range", (c_ptr, c_int64), c_int64
+)
+pcc_gc_callback_layers_node = extern("pcc_gc_callback_layers_node", (c_ptr, c_int64), c_ptr)
+pcc_gc_callback_layers_hull_low = extern("pcc_gc_callback_layers_hull_low", (c_ptr,), c_int64)
+pcc_gc_callback_layers_hull_high = extern("pcc_gc_callback_layers_hull_high", (c_ptr,), c_int64)
+pcc_gc_callback_cut_may_hit = extern(
+    "pcc_gc_callback_cut_may_hit", (c_ptr, c_int64, c_int64), c_int64
+)
+pcc_gc_callback_trace_cached_extents = extern(
+    "pcc_gc_callback_trace_cached_extents", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
+)
+py_weakref_layer_snapshot_create = extern(
+    "py_weakref_layer_snapshot_create", (c_ptr, c_int64), c_ptr
+)
+py_weakref_layer_snapshot_release = extern("py_weakref_layer_snapshot_release", (c_ptr,), c_void)
+py_weakref_queue_tracing_layer = extern(
+    "py_weakref_queue_tracing_layer", (c_ptr, c_ptr, c_int64, c_ptr), c_int64
+)
+pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
+pcc_gc_gray_worklist_take_locked = extern("pcc_gc_gray_worklist_take_locked", (), c_ptr)
+pcc_gc_gray_count_decrement_acq_rel = extern("pcc_gc_gray_count_decrement_acq_rel", (), c_void)
+pcc_gc_trace_referents = extern("pcc_gc_trace_referents", (c_ptr,), c_void)
+
+# Raw probe bits are indexed by the sealed candidate vector, not the
+# runtime heap. The graph planner supplies the membership-size limit.
+_REVIEW_SHADE_WORD_BITS = 64
+_REVIEW_SHADE_WORD_BYTES = 8
+# Native callback extent cache: array pointer followed by attempted bit.
+_REVIEW_EXTENT_CACHE_BYTES = 16
+_REVIEW_EXTENT_ARRAY = 0
+_REVIEW_EXTENT_ATTEMPTED = 8
+
+
+@c_abi_export("pcc_gc_review_layer_finalizer")
+def _review_layer_finalizer(node, window) -> i64:
+    obj = load_ptr(node, 0)
+    if pcc_gc_tracing_is_sweep_candidate(obj) == 0 or py_user_del_pending(obj) == 0:
         return 0
-    target = load_ptr(cohort, index * _ACYCLIC_WORD)
-    return pcc_gc_tracing_dispatch_callback_head(target, verdict, stop_epoch)
+    atomic_store_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, 0, "relaxed")
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+    _user_code_window_open(window)
+    if load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen"):
+        py_gen_finalize_tracing_candidate(obj)
+    else:
+        py_user_del_dispatch(obj)
+    _user_code_window_close(window)
+    return 1
+
+
+@c_abi_export("pcc_gc_review_collect_layer_roots")
+def _review_collect_layer_roots(plan, nodes, count: i64, cut, extent_cache,
+                                suspected, shade_bytes: i64) -> i64:
+    # Peel off the write-barrier evidence before looking at actual roots.
+    # It can contain a transient store or publication into an old owner.
+    # Keep an unmanaged bit per prior shade without a mutation journal.
+    # Word indices and shift counts are independent across the sealed batch.
+    prior: i64 = pcc_gc_gray_count_load_acquire()
+    seen: i64 = 0
+    pos: i64 = 0
+    offset: i64 = abi_constant("object.header.flags_offset")
+    if prior > count:
+        return 0
+    if prior != 0:
+        memset(suspected, 0, shade_bytes)
+        while pos < count:
+            obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+            flags: i64 = load_i32(obj, offset)
+            if (flags & _CALLBACK_GRAY) != 0:
+                if (flags & _CALLBACK_SWEEP_CANDIDATE) == 0:
+                    return 0
+                word: i64 = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+                bit: i64 = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+                store_i64(suspected, word, load_i64(suspected, word) | bit)
+                seen += 1
+            pos += 1
+        if seen != prior:
+            return 0
+        pos = 0
+        while pos < count:
+            word = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+            bit = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+            if (load_i64(suspected, word) & bit) != 0:
+                obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+                pcc_gc_set_mark_color(obj, _CALLBACK_WHITE)
+                pcc_gc_page_mark_assign(obj, 0)
+            pos += 1
+        pcc_gc_gray_worklist_clear_stopped()
+        pcc_gc_gray_count_store_release(0)
+    raw_possible: i64 = pcc_gc_callback_cut_may_hit(
+        cut, pcc_gc_callback_layers_hull_low(plan), pcc_gc_callback_layers_hull_high(plan),
+    )
+    if raw_possible != 0 and pcc_gc_callback_trace_cached_extents(cut, nodes, count, extent_cache) != 0:
+        raw_possible = 0
+    pin_dirty: i64 = atomic_load_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, "acquire")
+    if pin_dirty != 0 or raw_possible != 0:
+        pos = 0
+        while pos < count:
+            node = load_ptr(nodes, pos * 8)
+            obj = load_ptr(node, 0)
+            # The ordinary candidate predicate excludes pins. Here a newly
+            # pinned candidate is itself a root, and its children must survive.
+            if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                if (pcc_gc_object_node_is_address_pinned(node, obj) != 0
+                        or (raw_possible != 0
+                            and pcc_gc_callback_singleton_conservative_root(node, cut) != 0)):
+                    pcc_gc_mark_root_gray_if_known(obj)
+            pos += 1
+    pcc_gc_gray_registered_roots()
+    while pcc_gc_gray_count_load_acquire() != 0:
+        pcc_gc_gray_worklist_flush()
+        obj = pcc_gc_gray_worklist_take_locked()
+        if ptr_is_null(obj) != 0:
+            return 0
+        if (load_i32(obj, abi_constant("object.header.flags_offset")) & _CALLBACK_GRAY) != 0:
+            pcc_gc_trace_referents(obj)
+            pcc_gc_set_mark_color(obj, _CALLBACK_BLACK)
+            # This closure came from actual current roots, not write-barrier
+            # evidence. Retire the candidate bit as we drain the queue.
+            flags: i64 = load_i32(obj, offset)
+            store_i32(obj, offset, flags & ~_CALLBACK_SWEEP_CANDIDATE)
+            pcc_gc_gray_count_decrement_acq_rel()
+    if prior != 0:
+        pos = 0
+        while pos < count:
+            word = (pos // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+            bit = 1 << (pos % _REVIEW_SHADE_WORD_BITS)
+            if (load_i64(suspected, word) & bit) != 0:
+                obj = load_ptr(load_ptr(nodes, pos * 8), 0)
+                if (load_i32(obj, offset) & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                    # Some observed store is not explained by current
+                    # candidate/root reachability: do not lose a live edge
+                    # from an old owner, or keep a cleared edge as a root.
+                    return 0
+            pos += 1
+    pcc_gc_gray_worklist_clear_stopped()
+    return 1
+
+
+@c_abi_export("pcc_gc_review_remark_layer_at_stop")
+def _review_remark_layer_at_stop(plan, nodes, count: i64, caller, extent_cache,
+                                 suspected, shade_bytes: i64) -> None:
+    cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
+    low: i64 = pcc_gc_callback_layers_hull_low(plan)
+    high: i64 = pcc_gc_callback_layers_hull_high(plan)
+    pcc_gc_conservative_capture_callback_words(cut, caller, low, high)
+    precise: i64 = _review_collect_layer_roots(plan, nodes, count, cut, extent_cache, suspected, shade_bytes)
+    atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, 0, "release")
+    if precise == 0:
+        if low > 0 and high > low:
+            # A valid old owner can lie outside the candidate hull. The
+            # full oracle must see the unfiltered words from this same stop.
+            pcc_gc_callback_root_cut_release(cut)
+            pcc_gc_conservative_capture_callback_words(cut, caller, 0, 0)
+        _recheck_reachability_after_window(cut)
+    pcc_gc_callback_root_cut_release(cut)
+
+
+@c_abi_export("pcc_gc_review_layer_plan")
+def _review_layer_plan(stop_epoch: i64, backend: i64, nodes, count: i64, validated_epoch: i64):
+    if (
+        (backend < 1 or backend > 3) or count <= 0
+        or ptr_is_null(nodes) != 0 or stop_epoch < 0
+        or stop_epoch != validated_epoch
+        or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+        or pcc_gc_gray_count_load_acquire() != 0
+        or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0) <= 0
+        or load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+           != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+    ):
+        return null()
+    if (ptr_is_null(global_load_ptr("py_weakref_head")) != 0
+            and ptr_is_null(global_load_ptr("py_weakref_late_head")) != 0):
+        # Without weakrefs a graph cannot affect callback order unless an
+        # actual candidate can finalize. In the common no-__del__ process
+        # only a suspended generator needs the pending-finalizer query.
+        class_finalizers: i64 = load_i32(global_addr("pcc_class_del_defined_count"), 0)
+        # Only trust the generator negative observed by this exact finish
+        # without any intervening mutator or callback window.
+        if (class_finalizers == 0
+                and stop_epoch == load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
+                and load_i64(global_addr("pcc_gc_tracing_candidate_no_pending_gen_commit"), 0)
+                    == load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)):
+            return null()
+        pos: i64 = 0
+        while pos < count:
+            node = load_ptr(nodes, pos * 8)
+            if pcc_gc_object_node_is_active(node) != 0:
+                obj = load_ptr(node, 0)
+                if (class_finalizers != 0
+                        or load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen")):
+                    if pcc_gc_tracing_is_sweep_candidate(obj) != 0 and py_user_del_pending(obj) != 0:
+                        return pcc_gc_callback_layers_build(nodes, count, stop_epoch)
+            pos += 1
+        return null()
+    return pcc_gc_callback_layers_build(nodes, count, stop_epoch)
+
+
+@c_abi_export("pcc_gc_review_full_recheck_from_caller")
+def _review_full_recheck_from_caller(caller) -> None:
+    cut = stack_alloc(_CALLBACK_ROOT_CUT_BYTES)
+    pcc_gc_conservative_capture_callback_words(cut, caller, 0, 0)
+    _recheck_reachability_after_window(cut)
+    pcc_gc_callback_root_cut_release(cut)
+
+
+@c_abi_export("pcc_gc_review_finish_cyclic_residue")
+def _review_finish_cyclic_residue(caller) -> None:
+    # A peeled candidate has either been rescued (no candidate bit), or its
+    # finalizer and existing weakrefs have already been settled. What remains
+    # follows the cyclic convention: early weakrefs, finalizers, late clear.
+    if _sweep_weak_callbacks(1) != 0:
+        _review_full_recheck_from_caller(caller)
+    finalizers: i64 = load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0)
+    listed = stack_alloc(8)
+    nodes = stack_alloc(8)
+    count = stack_alloc(8)
+    commit = stack_alloc(8)
+    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    _sweep_finalizers(1, backend, finalizers, listed, nodes, count, commit)
+    if load_i64(global_addr("pcc_gc_user_finalizer_runs"), 0) != finalizers:
+        _review_full_recheck_from_caller(caller)
+    py_weakref_clear_tracing_candidates()
+
+
+@c_abi_export("pcc_gc_review_sweep_layers")
+def _review_sweep_layers(plan, layers: i64, nodes, count: i64, budget: i64, caller,
+                         suspected, shade_bytes: i64) -> i64:
+    layer: i64 = 0
+    window = stack_alloc(16)
+    pending = stack_alloc(16)
+    # The native extent cache owns only raw entries and is built lazily.
+    extent_cache = stack_alloc(_REVIEW_EXTENT_CACHE_BYTES)
+    store_ptr(extent_cache, _REVIEW_EXTENT_ARRAY, null())
+    store_i64(extent_cache, _REVIEW_EXTENT_ATTEMPTED, 0)
+    weak_snapshot = py_weakref_layer_snapshot_create(plan, layers)
+    while layer < layers:
+        pos: i64 = pcc_gc_callback_layers_range(plan, layer)
+        end: i64 = pcc_gc_callback_layers_range(plan, layer + 1)
+        while pos < end:
+            node = pcc_gc_callback_layers_node(plan, pos)
+            # A sibling may revive another sibling even through raw C roots
+            # that do not shade. Settle that window before dispatching again.
+            if _review_layer_finalizer(node, window) != 0:
+                _review_remark_layer_at_stop(plan, nodes, count, caller, extent_cache, suspected, shade_bytes)
+            pos += 1
+        store_ptr(pending, 0, null())
+        store_ptr(pending, 8, null())
+        weak: i64 = py_weakref_queue_tracing_layer(weak_snapshot, plan, layer, pending)
+        if weak < 0:
+            pcc_platform_abort()
+        if weak > 0:
+            atomic_store_i32(global_addr("pcc_gc_callback_candidate_pin_dirty"), 0, 0, "relaxed")
+            atomic_store_i32(global_addr("pcc_gc_mark_active"), 0, _CALLBACK_MARK_WINDOW, "release")
+            _user_code_window_open(window)
+            py_weakref_run_queued_callbacks(pending, 0)
+            _user_code_window_close(window)
+            _review_remark_layer_at_stop(plan, nodes, count, caller, extent_cache, suspected, shade_bytes)
+        layer += 1
+    py_weakref_layer_snapshot_release(weak_snapshot)
+    free(load_ptr(extent_cache, _REVIEW_EXTENT_ARRAY))
+    peeled: i64 = pcc_gc_callback_layers_range(plan, layers)
+    pcc_gc_callback_layers_release(plan)
+    if peeled != count:
+        _review_finish_cyclic_residue(caller)
+    commit: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+    return _sweep_clear_and_reclaim(budget, 1, 0, 1, nodes, count, commit)
+
+
+@c_abi_export("pcc_gc_review_compact_refreshed_candidates")
+def _review_compact_refreshed_candidates(held: i64) -> i64:
+    # The caller has just run the full stopped refresh, which can only
+    # remove candidate flags. A sealed list remains complete for the
+    # survivors of that filtering. Compact record pointers, not roots.
+    commit: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_commit"), 0)
+    count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+    nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+    if (held < 0 or ptr_is_null(nodes) != 0 or count <= 0 or commit <= 0
+            or commit != load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
+            or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
+            or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
+            or pcc_gc_gray_count_load_acquire() != 0
+            or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0):
+        return -1
+    kept: i64 = 0
+    index: i64 = 0
+    while index < count:
+        node = load_ptr(nodes, index * _ACYCLIC_WORD)
+        if pcc_gc_object_node_is_active(node) != 0:
+            obj = load_ptr(node, 0)
+            flags: i64 = load_i32(obj, abi_constant("object.header.flags_offset"))
+            if (flags & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                if kept != index:
+                    store_ptr(nodes, kept * _ACYCLIC_WORD, node)
+                kept += 1
+        index += 1
+    store_i64(global_addr("pcc_gc_tracing_candidate_count"), 0, kept)
+    return held
 
 
 @c_abi_export("pcc_gc_tracing_sweep_unreachable")
@@ -973,8 +1310,44 @@ def pcc_gc_tracing_sweep_unreachable(budget: i64) -> i64:
     # its verdicts stand. Keep the separate post-finalizer refresh for PEP
     # 442 resurrection.
     held: i64 = pcc_thread_world_stop_epoch_held()
-    if held < 0 or held != load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0):
+    validated_epoch: i64 = load_i64(global_addr("pcc_gc_tracing_finish_stop_epoch"), 0)
+    backend_for_review: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
+    review: i64 = 1 if backend_for_review >= 1 and backend_for_review <= 3 else 0
+    previous_stop: i64 = 1 if held < 0 or held != validated_epoch else 0
+    if previous_stop != 0:
         pcc_gc_tracing_recheck_reachability_after_finalizers()
+        if review != 0:
+            validated_epoch = _review_compact_refreshed_candidates(held)
+    if review != 0:
+        if previous_stop == 0:
+            review_node = _review_acyclic_singleton(held, backend_for_review)
+            if ptr_is_null(review_node) == 0:
+                return _review_sweep_acyclic_singleton(review_node, budget, backend_for_review)
+        review_nodes = global_load_ptr("pcc_gc_tracing_candidate_nodes")
+        review_count: i64 = load_i64(global_addr("pcc_gc_tracing_candidate_count"), 0)
+        # An earlier stop can shrink to a single node. Keep it on the
+        # layered route and its caller-relative root cut; the narrower
+        # singleton shortcut assumes a same-stop finished mark.
+        plan = null()
+        if review_count > 1 or previous_stop != 0:
+            plan = _review_layer_plan(held, backend_for_review, review_nodes, review_count, validated_epoch)
+        if ptr_is_null(plan) == 0:
+            layers: i64 = pcc_gc_callback_layers_count(plan)
+            if layers > 0:
+                # A successful plan bounded review_count before this
+                # arithmetic. Reserve scratch once, before running code.
+                # OOM leaves the original sweep available before effects.
+                shade_bytes: i64 = ((review_count + _REVIEW_SHADE_WORD_BITS - 1)
+                                    // _REVIEW_SHADE_WORD_BITS) * _REVIEW_SHADE_WORD_BYTES
+                suspected = malloc(shade_bytes)
+                if ptr_is_null(suspected) == 0:
+                    reclaimed: i64 = _review_sweep_layers(
+                        plan, layers, review_nodes, review_count, budget,
+                        ptr_add(frame_address(), 16), suspected, shade_bytes,
+                    )
+                    free(suspected)
+                    return reclaimed
+            pcc_gc_callback_layers_release(plan)
     # Keep phase-local object aliases out of the coordinator's live frame.
     # This is not a root filter: every phase still uses the full root scanner.
     weak_callbacks: i64 = _sweep_weak_callbacks(count_free)

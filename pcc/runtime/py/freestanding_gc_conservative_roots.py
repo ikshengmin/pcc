@@ -8,13 +8,15 @@ every possible owner. The world and graph stay stopped throughout the scan.
 """
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
-from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED
+from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED, PYOBJECTHEADER_FLAGS_OFFSET
 from pcc.unsafe import (
     free,
+    function_addr,
     global_addr,
     global_load_ptr,
     global_store_ptr,
     is_tagged_int,
+    int_to_ptr,
     load_i32,
     load_i64,
     load_ptr,
@@ -47,6 +49,9 @@ pcc_gc_shade_gray_atomic = extern("pcc_gc_shade_gray_atomic", (c_ptr, c_int64), 
 pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
 pcc_thread_visit_conservative_words = extern(
     "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
+)
+pcc_thread_visit_conservative_callback_words = extern(
+    "pcc_thread_visit_conservative_callback_words", (c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
 pcc_thread_snapshot_stopped_world_owner = extern(
@@ -467,18 +472,21 @@ def _extent_has_paged_word(pages, words, count: i64, base, size: i64) -> i64:
 
 @c_abi_export("pcc_gc_scan_conservative_thread_roots")
 def _scan_thread_roots(mark: i64) -> i64:
+    context = stack_alloc(_WORDS_CONTEXT_BYTES)
+    _capture_thread_words(context)
+    listed_in_walk: i64 = _scan_captured_thread_roots(context, mark)
+    free(load_ptr(context, _WORDS_DATA))
+    return listed_in_walk
+
+
+@c_abi_export("pcc_gc_scan_captured_thread_roots")
+def _scan_captured_thread_roots(context, mark: i64) -> i64:
     active = global_load_ptr("pcc_gc_backend3_step_pin_snapshot")
     if ptr_is_null(active) == 0:
         # A nested mark may discover roots acquired since the outer step's
         # snapshot. Keep its remainder nonmoving rather than trust that cut.
         store_i64(active, _WORDS_CAPACITY, -1)
-    context = stack_alloc(_WORDS_CONTEXT_BYTES)
-    _capture_thread_words(context)
-    words = load_ptr(context, _WORDS_DATA)
-    count: i64 = load_i64(context, _WORDS_COUNT)
-    listed_in_walk: i64 = _pin_snapshot_owners(words, count, mark)
-    free(words)
-    return listed_in_walk
+    return _pin_snapshot_owners(load_ptr(context, _WORDS_DATA), load_i64(context, _WORDS_COUNT), mark)
 
 
 @c_abi_export("pcc_gc_conservative_capture_thread_words")
@@ -512,6 +520,180 @@ def _capture_thread_words(context) -> None:
         return
     count: i64 = _sort_words(words, capacity)
     store_i64(context, _WORDS_COUNT, count)
+
+
+# The caller's first three cells are the existing stopped root-cut format.
+# The filter is local to the visitor; legacy root seeding sees no new layout.
+_CALLBACK_FILTER_WORDS: i64 = 0
+_CALLBACK_FILTER_LOW: i64 = 8
+_CALLBACK_FILTER_HIGH: i64 = 16
+_CALLBACK_FILTER_BYTES: i64 = 24
+
+
+@c_abi_export("pcc_gc_conservative_record_callback_word")
+def _record_callback_word(word, filter_ctx) -> None:
+    value: i64 = ptr_to_int(word)
+    if (value >= load_i64(filter_ctx, _CALLBACK_FILTER_LOW)
+            and value < load_i64(filter_ctx, _CALLBACK_FILTER_HIGH)):
+        _record_word(word, load_ptr(filter_ctx, _CALLBACK_FILTER_WORDS))
+
+
+@c_abi_export("pcc_gc_conservative_capture_callback_words")
+def pcc_gc_conservative_capture_callback_words(context, caller, low: i64, high: i64) -> None:
+    if pcc_thread_world_stop_epoch_held() < 0 or ptr_is_null(caller) != 0:
+        pcc_platform_abort()
+        return
+    store_ptr(context, _WORDS_DATA, null())
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, 0)
+    filter_ctx = stack_alloc(_CALLBACK_FILTER_BYTES)
+    visitor_ctx = context
+    visitor = function_addr("pcc_gc_conservative_record_word")
+    if low > 0 and high > low:
+        store_ptr(filter_ctx, _CALLBACK_FILTER_WORDS, context)
+        store_i64(filter_ctx, _CALLBACK_FILTER_LOW, low)
+        store_i64(filter_ctx, _CALLBACK_FILTER_HIGH, high)
+        visitor_ctx = filter_ctx
+        visitor = function_addr("pcc_gc_conservative_record_callback_word")
+    visited: i64 = pcc_thread_visit_conservative_callback_words(visitor, visitor_ctx, caller)
+    if visited < 0:
+        pcc_platform_abort()
+        return
+    capacity: i64 = load_i64(context, _WORDS_COUNT)
+    if capacity == 0:
+        return
+    words = malloc(capacity * _WORD_BYTES)
+    if ptr_is_null(words):
+        pcc_platform_abort()
+        return
+    store_ptr(context, _WORDS_DATA, words)
+    store_i64(context, _WORDS_COUNT, 0)
+    store_i64(context, _WORDS_CAPACITY, capacity)
+    captured: i64 = pcc_thread_visit_conservative_callback_words(visitor, visitor_ctx, caller)
+    if captured != visited or load_i64(context, _WORDS_COUNT) != capacity:
+        free(words)
+        pcc_platform_abort()
+        return
+    count: i64 = _sort_words(words, capacity)
+    store_i64(context, _WORDS_COUNT, count)
+
+@c_abi_export("pcc_gc_callback_singleton_conservative_root")
+def pcc_gc_callback_singleton_conservative_root(node, context) -> i64:
+    """Look for one candidate in the caller's stopped stack cut."""
+    words = load_ptr(context, _WORDS_DATA)
+    count: i64 = load_i64(context, _WORDS_COUNT)
+    obj = load_ptr(node, 0)
+    rooted: i64 = _extent_has_word(words, count, obj, load_i64(node, 8))
+    owner = load_ptr(node, 48)
+    if ptr_is_null(owner) == 0:
+        span = load_ptr(owner, 64)
+        while rooted == 0 and ptr_is_null(span) == 0:
+            rooted = _extent_has_word(words, count, load_ptr(span, 8), load_i64(span, 16))
+            span = load_ptr(span, 40)
+    return rooted
+
+
+@c_abi_export("pcc_gc_callback_cut_may_hit")
+def pcc_gc_callback_cut_may_hit(context, low: i64, high: i64) -> i64:
+    if low <= 0 or high <= low:
+        return 1
+    return _extent_has_word(load_ptr(context, _WORDS_DATA), load_i64(context, _WORDS_COUNT),
+                            int_to_ptr(low), high - low)
+
+
+# The caller owns this cache for one sealed, nonmoving callback sweep.
+# A negative attempt keeps every later raw window on the old extent walk.
+_CALLBACK_INDEX_ENTRIES: i64 = 0
+_CALLBACK_INDEX_ATTEMPTED: i64 = 8
+_CALLBACK_INDEX_MAX_RECORDS: i64 = 16777216
+_CALLBACK_RECORD_SIZE: i64 = 8
+_CALLBACK_NODE_OWNER_SPANS: i64 = 48
+_CALLBACK_SWEEP_CANDIDATE: i64 = 1024
+
+
+@c_abi_export("pcc_gc_callback_cache_fixed_extents")
+def _cache_callback_fixed_extents(nodes, count: i64, cache):
+    store_i64(cache, _CALLBACK_INDEX_ATTEMPTED, 1)
+    if count <= 0 or count > _CALLBACK_INDEX_MAX_RECORDS:
+        return null()
+    entries = malloc(count * _INTERVAL_BYTES)
+    if ptr_is_null(entries) != 0:
+        return null()
+    i: i64 = 0
+    while i < count:
+        node = load_ptr(nodes, i * _WORD_BYTES)
+        if (pcc_gc_object_node_is_active(node) == 0
+                or ptr_is_null(load_ptr(node, _CALLBACK_NODE_OWNER_SPANS)) == 0):
+            free(entries)
+            return null()
+        obj = load_ptr(node, 0)
+        base: i64 = ptr_to_int(obj)
+        size: i64 = load_i64(node, _CALLBACK_RECORD_SIZE)
+        if base <= 0 or size <= 0 or size > 9223372036854775807 - base:
+            free(entries)
+            return null()
+        i = _append_interval(entries, i, node, obj, size)
+    pcc_gc_conservative_sort_intervals(entries, count)
+    i = 1
+    while i < count:
+        if (load_i64(entries, (i - 1) * _INTERVAL_BYTES + _INTERVAL_END)
+                > load_i64(entries, i * _INTERVAL_BYTES + _INTERVAL_START)):
+            free(entries)
+            return null()
+        i += 1
+    store_ptr(cache, _CALLBACK_INDEX_ENTRIES, entries)
+    return entries
+
+
+@c_abi_export("pcc_gc_callback_trace_cached_extents")
+def pcc_gc_callback_trace_cached_extents(cut, nodes, count: i64, cache) -> i64:
+    """Trace raw words into the same sealed cohort without recording pin bits.
+
+    Build once on the first relevant cut. A detached/ambiguous extent or an
+    allocation miss retains the original per-candidate root walk. Never
+    dereference a captured word or use it to look up an unrelated live owner.
+    """
+    entries = load_ptr(cache, _CALLBACK_INDEX_ENTRIES)
+    if ptr_is_null(entries) != 0:
+        if load_i64(cache, _CALLBACK_INDEX_ATTEMPTED) != 0:
+            return 0
+        entries = _cache_callback_fixed_extents(nodes, count, cache)
+        if ptr_is_null(entries) != 0:
+            return 0
+    words = load_ptr(cut, _WORDS_DATA)
+    nwords: i64 = load_i64(cut, _WORDS_COUNT)
+    last_extent: i64 = 0
+    i: i64 = 0
+    while i < nwords:
+        address: i64 = load_i64(words, i * _WORD_BYTES)
+        lo: i64 = 0
+        hi: i64 = count
+        while lo < hi:
+            middle: i64 = lo + (hi - lo) // 2
+            if load_i64(entries, middle * _INTERVAL_BYTES + _INTERVAL_START) <= address:
+                lo = middle + 1
+            else:
+                hi = middle
+        if lo > 0 and lo != last_extent:
+            found = ptr_add(entries, (lo - 1) * _INTERVAL_BYTES)
+            if address < load_i64(found, _INTERVAL_END):
+                # Captured words are sorted; one exact owner need only
+                # enter the root drain once even for many interior aliases.
+                last_extent = lo
+                node = load_ptr(found, _INTERVAL_OWNER)
+                if pcc_gc_object_node_is_active(node) != 0:
+                    obj = load_ptr(node, 0)
+                    if ptr_to_int(obj) != load_i64(found, _INTERVAL_START):
+                        return 0
+                    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & _CALLBACK_SWEEP_CANDIDATE) != 0:
+                        pcc_gc_mark_root_gray_if_known(obj)
+        i += 1
+    return 1
+
+
+@c_abi_export("pcc_gc_callback_root_cut_release")
+def pcc_gc_callback_root_cut_release(context) -> None:
+    free(load_ptr(context, _WORDS_DATA))
 
 
 @c_abi_export("pcc_gc_conservative_step_pin_begin")

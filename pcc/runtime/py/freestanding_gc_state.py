@@ -16,6 +16,11 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
+# A layered callback stop may skip the pin walk only if the current window
+# installed no candidate pin through the shared root-owner protocol.
+define_global_i32("pcc_gc_callback_candidate_pin_dirty", 0)
+
+
 # Backend-0 cycle collector and public gc-module policy.
 define_global_i32("py_gc_enabled", 1)
 # CPython 3.15: gc.get_threshold() == (2000, 10, 10).
@@ -434,6 +439,7 @@ define_global_ptr_null("pcc_gc_tracing_candidate_nodes")
 define_global_i64("pcc_gc_tracing_candidate_count", 0)
 define_global_i64("pcc_gc_tracing_candidate_capacity", 0)
 define_global_i64("pcc_gc_tracing_candidate_commit", -1)
+define_global_i64("pcc_gc_tracing_candidate_no_pending_gen_commit", -1)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
 # The stopped-world epoch the current mark's roots were seeded in. A final

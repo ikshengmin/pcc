@@ -158,19 +158,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- **#9 integration: superseded test files**. The maintainer confirmed the
-  remaining macOS w4 gate on `aac63c5c1` in chat on 2026-11-23:
-  “通过了继续吧”. The final control floor and row values were not provided;
-  earlier noisy runs remain inconclusive. Linux tested the combined tree:
-  268 native cases and 77 other checks passed (one deselected); runtime and
-  benchmark source are byte-identical to the accepted candidate.
-  The accepted production tests replace the test-only oracle using removed
-  runtime interfaces. Request explicit approval to remove
-  `tests/python/fixtures/gc_acyclic_finalizer_rescue.c` and
-  `tests/python/test_gc_acyclic_finalizer_rescue_native.py` in the #9
-  landing. Recommendation: remove these two superseded files with the
-  replacement, not a disable/skip. No runtime on master yet.
-
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -181,9 +168,9 @@ in the relevant section or issue and removes the entry.
    rather than requiring empty syntax metadata; 4,486 local ordinary
    cases and one Linux owned native case passed. The CI-only reference
    lane was not run locally. #12 tracks Windows collection independently.
-   Platform: any; Next: #9 (GC1–4 weak
-   callbacks and finalizers run too early under acyclic resurrection; filed
-   by Claude on 2026-11-22 from the
+   #9's production correction for GC1–3 is integrated; the GC4 part is
+   separate. Historical cause: weak callbacks and finalizers ran too early
+   under acyclic resurrection (filed by Claude on 2026-11-22; see the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
    The inert Linux pcc0 reference arm now classifies the exact stopped
    cohort and dispatches one selected acyclic head on GC1–3. It rejects
@@ -568,8 +555,15 @@ in the relevant section or issue and removes the entry.
          Peak RSS stays within 6 MiB. w1 p99 swings both ways with
          whether a pause lands in the tail.
        Details are in the #9 comment.
-     - Next #9: integrate the accepted candidate after approval for the
-       two superseded test removals, as listed under Waiting on maintainer.
+     - The maintainer confirmed the remaining macOS w4 gate on `aac63c5c1`
+       in chat on 2026-11-23: “通过了继续吧”. No final numeric receipt was
+       supplied; the earlier noisy w4 runs remain inconclusive. The
+       maintainer replied “批准” to removing the two superseded test files
+       in this integration. The production-path tests replace that oracle.
+       The combined Linux tree passed 268 focused native cases and 77
+       model/inventory/owned-link checks (one deselected); runtime and
+       benchmark scripts are byte-identical to the accepted candidate.
+       Next: rebase the GC3 follow-on on this integrated #9 baseline.
        Linux evidence for the same commit: pcc0 rebuilt the owned runtime
        and passed 20 deterministic root-range cases across GC0–4, 248 production-sweep cases, 180/180
        strict 256-node repetitions, and eight separately built/rerun
@@ -578,7 +572,8 @@ in the relevant section or issue and removes the entry.
        startup words while retaining true application and foreign-thread
        roots, including when main is a parked peer. The regular and
        windowed owned Mach-O paths pick the adapter only if the conservative
-       thread runtime is linked. No master runtime change. The final Linux test groups ran at the 90-second/1-GiB cap;
+       thread runtime is linked. The final Linux test groups ran at the
+       90-second/1-GiB cap;
        the combined test invocation hit its time limit before compiling
        both generator fixtures, which completed as separate stages.
      - Linux memory preflight: the Linux check requires `MemAvailable` of
@@ -657,7 +652,8 @@ in the relevant section or issue and removes the entry.
    paired QPS −0.2% / −4.3% at w1/w4 and a worse w4 worst pause/RSS
    despite better medians. Keep it review-only; next locate the GC2 w4
    gray-work owners and estimate the ceiling before the per-worker design.
-   GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
+   GC1–4 performance candidates still need their own validation against
+   the landed #9 baseline. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
    transfers the actual conversion result. String and heap-int alias
@@ -695,7 +691,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 integrate Mac-accepted acyclic weakrefs and finalizers: Codex, Linux, 2026-11-23T06:58Z, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
@@ -737,7 +733,8 @@ in the relevant section or issue and removes the entry.
    tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
    and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
    into that slab: five native runs and 15 controls pass. No production
-   allocation. GC3 follow-on is paused behind #9; no further review slices.
+   allocation. Next GC3: rebase the review on the landed #9 baseline and
+   prove the first production allocation path before measuring it.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and

@@ -69,6 +69,7 @@ py_exc_get_message   = extern("py_exc_get_message",   (c_ptr,),       c_ptr)
 py_gc_track          = extern("py_gc_track",          (c_ptr,),         c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
+pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -630,12 +631,12 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
         py_tls_exc_set(saved)
         pcc_gc_unpin(saved)
         if saved_pin != 0:
-            atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+            pcc_gc_reassert_pin(saved)
     pcc_gc_unpin(gen)
     # Legacy pins are Boolean, not nested holds. Balance our pin calls, but
     # leave an enclosing caller's pre-existing protection intact.
     if (flags & PY_FLAG_GC_PINNED) != 0:
-        atomic_rmw_i32("or", gen, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+        pcc_gc_reassert_pin(gen)
     py_decref(gen)
 
 
@@ -829,7 +830,7 @@ def _gen_sync_clear(slots, pins, offset: int) -> None:
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         pcc_gc_unpin(value)
         if load_i64(pins, offset) != 0:
-            atomic_rmw_i32("or", value, 12, 64, "relaxed")
+            pcc_gc_reassert_pin(value)
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -858,7 +859,7 @@ def _gen_sync_build(slots, pins) -> None:
         # parking call inside a virtual thread; do not block its carrier.
         _gen_sync_clear(slots, pins, 24)
         gen = load_ptr(slots, 0)
-        atomic_rmw_i32("or", gen, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(gen)
         closed = py_gen_close(gen)
         if ptr_is_null(closed) == 0 and is_tagged_int(closed) == 0:
             store_i64(pins, 32, load_i32(closed, 12) & 64)
@@ -880,7 +881,7 @@ def _gen_sync_build(slots, pins) -> None:
     pcc_gc_note_write_barrier(null(), error)
     stop_type = py_exc_builtin_class(8)
     error = load_ptr(slots, 16)
-    atomic_rmw_i32("or", error, 12, 64, "relaxed")
+    pcc_gc_reassert_pin(error)
     if py_exc_matches(error, stop_type) == 0:
         return
     value = py_exc_get_message(load_ptr(slots, 16))
@@ -936,7 +937,7 @@ def py_gen_run_may_park_sync(gen):
     _gen_sync_clear(slots, pins, 16)
     result = load_ptr(slots, 8)
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        atomic_rmw_i32("or", result, 12, 64, "relaxed")
+        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
 
@@ -998,7 +999,7 @@ def py_gen_next_direct(gen, returned):
         store_i64(returned, 0, 1)
     pcc_gc_unpin(gen)
     if prior_pin != 0:
-        atomic_rmw_i32("or", gen, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, "relaxed")
+        pcc_gc_reassert_pin(gen)
     return result
 
 
