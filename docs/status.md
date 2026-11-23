@@ -710,7 +710,19 @@ in the relevant section or issue and removes the entry.
    `scripts/pcc_perf.py`. While this item has a ready unit, an untargeted
    round takes it before item 3.
    Next, in order. Each letter is one unit, a group of files of it when it
-   is too large for a round; area `runtime-gc` unless it names another:
+   is too large for a round; area `runtime-gc` unless it names another.
+   Two defects found on Linux at `cba826a9` come first (details in the
+   section below):
+   (0a) The young log grows without bound when containers are tracked and
+       released by count with no net growth (four batches of 100,000 list
+       pairs: 99, 197, 295, 393 chunks). Bound it independently of the
+       growth-triggered collection.
+   (0b) The bounded stop is not bounded for a high-fanout container: one
+       old list holding 320k lists gave a 27.76 ms step. The passes check
+       the budget between objects; a large object's slots need a cursor
+       (`pcc_gc_visit_object_slots_slice` exists). Its acceptance probe
+       includes a high-fanout container as well as heap size; this
+       replaces (f).
    (a) Throughput of what landed on 2026-11-24 (`2498f19ff`, `5c20d934b`):
        `arm` for `90f4345db` and for master, `ab` with `--control-arm`,
        `table`. A loss beyond the noise floor is located before any other
@@ -735,10 +747,10 @@ in the relevant section or issue and removes the entry.
        lists and dictionaries while a cycle scans them; a join of the
        thread at process exit; an A/B at four workers. The maintainer then
        decides the default.
-   (f) Acceptance probe of the bounded stop: the maximum stop at 20,000 /
-       80,000 / 320,000 long-lived containers.
-   (g) Linux: `page_discard` and the shared-managed integration cases; the
-       command is in the section below. Platform Linux.
+   (f) Replaced by (0b).
+   (g) Linux: done at `cba826a9` (the slab-return programs, which call
+       `page_discard`, and five shared-managed integration cases). Left:
+       the external Go and JDK oracle cases, and Windows.
    (h) Memory still pinned after the occupancy-ordered slab lists, measured
        on the gateway. It decides whether object relocation becomes a unit;
        that unit starts with a design review (rule 15).
