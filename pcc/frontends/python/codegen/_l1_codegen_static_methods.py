@@ -206,7 +206,7 @@ def _part_14(out):
     _append_method(out, '_emit_may_park_import_call', (('self', 'pos', False), ('expr', 'pos', False), ('name', 'pos', False)))
     _append_method(out, '_drive_or_take_frame_result', (('self', 'pos', False), ('expr', 'pos', False), ('callee_name', 'pos', False), ('child_slot', 'pos', False), ('child_root_ptr', 'pos', False), ('typed_value', 'pos', False)))
     _append_method(out, '_move_call_result_to_frame', (('self', 'pos', False), ('result_root', 'pos', False), ('child_root_ptr', 'pos', False), ('span', 'pos', False), ('what', 'pos', False)))
-    _append_method(out, '_emit_virtual_thread_current_fd_wait', (('self', 'pos', False), ('fd', 'pos', False), ('events', 'pos', False), ('timeout_ms', 'pos', False)))
+    _append_method(out, '_emit_virtual_thread_current_fd_wait', (('self', 'pos', False), ('fd', 'pos', False), ('events', 'pos', False), ('timeout_ms', 'pos', False), ('runtime_name', 'pos', True)))
 
 
 def _part_15(out):

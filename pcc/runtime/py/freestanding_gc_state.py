@@ -160,6 +160,12 @@ define_global_i32("pcc_gc_refcount_atomic", 0)
 # the tracing and relocating collectors (GC1-4) consult the pin bit. Set
 # with pcc_gc_refcount_atomic; 0 before configuration keeps the full path.
 define_global_i32("pcc_gc_pins_inert", 0)
+# Collectors 0-3 without the provenance probe: an address lease guards
+# nothing there (none moves an object, and none can be replaced once an
+# object exists), so pcc_gc_foreign_lease_acquire answers 0 before reading
+# its slot. Slot calls read this word inline instead of calling. Set with
+# the selected backend; 0 before configuration keeps every lease call.
+define_global_i32("pcc_gc_leases_inert", 0)
 # Effective ownership mode, derived only from the selected collector:
 # GC0 counts references; GC1-4 trace. The exported ABI name is retained.
 # Configuration runs before the first managed allocation publishes a header.

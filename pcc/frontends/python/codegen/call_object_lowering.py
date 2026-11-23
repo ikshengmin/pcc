@@ -717,6 +717,51 @@ class CallObjectLoweringMixin:
         self.runtime[key] = helper
         return helper
 
+    def _slot_call_lease_acquire(self, helper: str, slot, name: str):
+        """A slot call's address lease, or token 0 where every lease is a
+        no-op (pcc_gc_leases_inert: collectors 0-3 once configured, without
+        the provenance probe). There the runtime would return 0 before
+        reading the slot, so the call is skipped, not its effect."""
+        inert_gv = self._declare_external_global("pcc_gc_leases_inert", _I32)
+        inert = self.builder.load(inert_gv, name=self._fresh(name + ".inert"))
+        skip = self.builder.icmp_signed("!=", inert, ir.Constant(_I32, 0),
+                                        name=self._fresh(name + ".inert.set"))
+        entry = self.builder.block
+        lease = self.current_function.append_basic_block(self._fresh(name + ".acquire"))
+        done = self.current_function.append_basic_block(self._fresh(name + ".done"))
+        self.builder.cbranch(skip, done, lease)
+        self.builder.position_at_end(lease)
+        called = self.builder.call(self.runtime[helper], [self._as_gc_ptr(slot)],
+                                   name=self._fresh(name + ".call"))
+        acquired = self.builder.block
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        token = self.builder.phi(_I64, name=self._fresh(name))
+        token.add_incoming(ir.Constant(_I64, 0), entry)
+        token.add_incoming(called, acquired)
+        return token
+
+    def _slot_call_lease_release(self, slot, token, name: str):
+        """Release a slot-call lease; a 0 token is a no-op the runtime
+        answers with 0 (pcc_gc_foreign_lease_release), so it is not called."""
+        skip = self.builder.icmp_signed("==", token, ir.Constant(_I64, 0),
+                                        name=self._fresh(name + ".lease.none"))
+        entry = self.builder.block
+        release = self.current_function.append_basic_block(self._fresh(name + ".call"))
+        done = self.current_function.append_basic_block(self._fresh(name + ".done"))
+        self.builder.cbranch(skip, done, release)
+        self.builder.position_at_end(release)
+        called = self.builder.call(self.runtime["pcc_gc_foreign_lease_release"],
+                                   [self._as_gc_ptr(slot), token],
+                                   name=self._fresh(name + ".status"))
+        released = self.builder.block
+        self.builder.branch(done)
+        self.builder.position_at_end(done)
+        status = self.builder.phi(_I64, name=self._fresh(name))
+        status.add_incoming(ir.Constant(_I64, 0), entry)
+        status.add_incoming(called, released)
+        return status
+
     def _slot_call_check_status(self, status, operation: str, span=None) -> None:
         failed = self.builder.icmp_signed("<", status, ir.Constant(_I64, 0))
         error = self.current_function.append_basic_block(self._fresh("call.slot.error"))
@@ -887,9 +932,8 @@ class CallObjectLoweringMixin:
                 [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), value],
             )
             return
-        token = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(slot)],
-            name=self._fresh("call.slot.publish.lease"),
+        token = self._slot_call_lease_acquire(
+            "pcc_gc_foreign_lease_acquire", slot, "call.slot.publish.lease",
         )
         self._slot_call_check_status(token, "owned-result lease")
         current = self.builder.load(slot, name=self._fresh("call.slot.published"))
@@ -897,10 +941,7 @@ class CallObjectLoweringMixin:
             self.runtime["pcc_gc_note_slot_write_barrier"],
             [ir.Constant(_CSTR, None), self._as_gc_ptr(slot), current],
         )
-        released = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(slot), token],
-            name=self._fresh("call.slot.publish.release"),
-        )
+        released = self._slot_call_lease_release(slot, token, "call.slot.publish.release")
         self._slot_call_check_status(released, "owned-result lease release")
 
     def _slot_call_builtin_power_expr(self, expr):
@@ -1727,9 +1768,8 @@ class CallObjectLoweringMixin:
                 lease_helper = ("pcc_gc_borrowed_lease_acquire"
                                 if borrowed.get(id(slot)) is slot
                                 else "pcc_gc_foreign_lease_acquire")
-                token = self.builder.call(
-                    self.runtime[lease_helper], [self._as_gc_ptr(slot)],
-                    name=self._fresh("call.slot.argument.lease"),
+                token = self._slot_call_lease_acquire(
+                    lease_helper, slot, "call.slot.argument.lease",
                 )
                 self._slot_call_check_status(token, "argument lease", span)
                 leases.append((slot, token))
@@ -1777,10 +1817,8 @@ class CallObjectLoweringMixin:
                 # A rejected release has not consumed its token. Keep it on
                 # the error cleanup edge until the success continuation.
                 slot, token = leases[-1]
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"],
-                    [self._as_gc_ptr(slot), token],
-                    name=self._fresh("call.slot.argument.release"),
+                released = self._slot_call_lease_release(
+                    slot, token, "call.slot.argument.release",
                 )
                 self._slot_call_check_status(released, "argument lease release", span)
                 leases.pop()

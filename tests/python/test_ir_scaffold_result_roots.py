@@ -304,8 +304,13 @@ def _assert_builder_sink_publication_and_cleanup(body, suffix):
     # Publication status failures and the provider's pending native exception
     # must retire this existing caller output root exactly once. No argument
     # pinning/release protocol is added by this result-only change.
-    failure_targets = re.findall(r"br i1 [^,\n]+, label %([^,\s]+), label %[^,\s]+",
-                                 publication[:check_start])
+    # The inline no-op lease gates (pcc_gc_leases_inert set, a 0 token at
+    # release) branch to their join, not to a failure edge.
+    failure_targets = [
+        target for condition, target in re.findall(
+            r"br i1 ([^,\n]+), label %([^,\s]+), label %[^,\s]+", publication[:check_start])
+        if ".lease.inert.set." not in condition and ".lease.none." not in condition
+    ]
     failure_targets.append(error)
     for target in failure_targets:
         pending = [(target, (), 0)]

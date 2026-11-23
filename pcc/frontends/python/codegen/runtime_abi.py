@@ -1800,6 +1800,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_refcount_atomic',
         # GC0's no-op pin gate, written with pcc_gc_refcount_atomic.
         'pcc_gc_pins_inert',
+        # Slot calls' inline no-op lease gate (collectors 0-3, no probe).
+        'pcc_gc_leases_inert',
         'pcc_gc_backend4_no_refcounts',
         'pcc_gc_cms_mutator_assists',
         'pcc_gc_cms_queue_pushes',

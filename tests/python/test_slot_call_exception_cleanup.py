@@ -671,6 +671,19 @@ def _assert_two_root_program_error_edge(program=TWO_ROOT_PROGRAM):
             )
             name = branch[2]
             break
+        # The inline no-op lease gates (pcc_gc_leases_inert set, or a 0
+        # token at release): both edges join before the status check.
+        gate = re.search(re.escape(branch[1]) + r" = icmp ne i32 (%[\w.]+), 0", block)
+        if gate is not None and re.search(
+            re.escape(gate[1]) + r" = load i32, ptr @pcc_gc_leases_inert", block,
+        ):
+            name = branch[2]
+            continue
+        if ".lease.none." in branch[1] and re.search(
+            re.escape(branch[1]) + r" = icmp eq i64 %[^,]+, 0", block,
+        ):
+            name = branch[2]
+            continue
         assert re.search(re.escape(branch[1]) + r" = icmp slt i64 %[^,]+, 0", block)
         name = branch[3]
     # This pending-error edge must reach the exact helper through unconditional

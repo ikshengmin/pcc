@@ -1304,6 +1304,18 @@ class _LeaseCallModel:
         assert self.memory.active() == 0, "outer root retirement still has a live lease"
         raise _LeaseEdgeSelected
 
+    def _slot_call_lease_acquire(self, helper, slot, name):
+        # The emitted gate calls whenever leases are not inert (GC4, or an
+        # unconfigured runtime); the model runs that call.
+        return self.runtime[helper](slot)
+
+    def _slot_call_lease_release(self, slot, token, name):
+        # A 0 token is the runtime's own no-op answer: the emitted release
+        # tests it and does not call.
+        if token == 0:
+            return 0
+        return self.runtime["pcc_gc_foreign_lease_release"](slot, token)
+
     def _slot_call_check_status(self, status, operation, span):
         if status < 0:
             if self.pending is None:
@@ -1323,6 +1335,17 @@ def test_runtime_call_retires_lease_only_on_success(token_kind, fail_release, re
     outer, cpy = model._try_err_block, model._cpy_operand_cleanup_block
     kwargs = ({"result_slot": object()} if result_kind == "object" else
               {"exception_slot": object()} if result_kind == "iteration" else {})
+    if token_kind == 0:
+        # Every token is the no-op 0: no release is called, so none can be
+        # refused, and the call completes.
+        result = L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
+        assert result == (None if result_kind == "object" else 17)
+        assert model.release_attempts == 0 and model.successful_releases == []
+        assert model.memory.active() == 0
+        assert model._try_err_block is outer and model._cpy_operand_cleanup_block is cpy
+        assert model.runtime_called
+        assert model.output == (17 if result_kind == "object" else None)
+        return
     if fail_release:
         with pytest.raises(_LeaseEdgeSelected):
             L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
@@ -1376,11 +1399,20 @@ def test_emitted_runtime_release_failure_keeps_exact_token_in_cleanup(monkeypatc
 
     def observe(self, status, operation, span=None):
         if operation == 'argument lease release':
-            releases = [str(instruction) for instruction in self.builder.block.instructions
+            # The release call sits in its own block behind the 0-token test
+            # (a 0 token is the runtime's no-op answer); the checked status
+            # is the phi of that call and the skipped edge's 0.
+            incomings = getattr(status, '_incomings', None)
+            assert incomings, 'release status must join the call and the 0-token edge'
+            called = [value for value, _block in incomings
+                      if not isinstance(value, ir.Constant)]
+            assert len(called) == 1
+            releases = [str(instruction)
+                        for _value, block in incomings for instruction in block.instructions
                         if '@pcc_gc_foreign_lease_release(' in str(instruction)]
             assert releases
             released = releases[-1]
-            assert released.startswith(str(status) + ' = call i64 ')
+            assert released.startswith(str(called[0]) + ' = call i64 ')
             token = re.search(r', i64 ([^)]+)\)$', released).group(1)
             target = self._current_try_err_block()
             cleanup_calls = [str(instruction) for instruction in target.instructions
