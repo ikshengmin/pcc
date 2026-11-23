@@ -973,6 +973,9 @@ def _set_evacuation_page_head(head) -> None:
     global_store_ptr("pcc_gc_backend4_evacuation_page_head", head)
 
 
+pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+
+
 @c_abi_export("pcc_gc_backend4_relocation_set_find")
 def _relocation_set_find(obj):
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
@@ -6595,6 +6598,7 @@ def pcc_gc_thread_unregister_buffers() -> None:
     pcc_gc_scheduler_root_tls_cache_drain()
     pcc_gc_gray_worklist_unregister()
     pcc_gc_alloc_stage_thread_exit()
+    pcc_gc_tracked_count_flush()
     # Publish the batch of allocation debt the thread had not yet published.
     pcc_gc_cms_note_alloc_flush()
     _live_bytes_flush()

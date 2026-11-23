@@ -10,6 +10,7 @@ outermost unlock repartitions the nodes.
 from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
+    define_thread_local_i32,
     atomic_cas_i32,
     atomic_load_i32,
     atomic_load_i64,
@@ -393,9 +394,7 @@ def py_gc_track(obj: c_ptr) -> None:
         # so concurrent trackers count the object once.
         previous: i64 = atomic_rmw_i32("or", obj, 12, _TRACKED, "acq_rel")
         if (previous & _TRACKED) == 0:
-            _tracked_growth(atomic_rmw_i32(
-                "add", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel"
-            ) + 1)
+            _tracked_count_note(1)
         return
     merged: i64 = _tracked_table_owned_by_current()
     index: i64 = _tracked_shard_index(obj)
@@ -464,6 +463,39 @@ def py_gc_track(obj: c_ptr) -> None:
     _tracked_growth(tracked)
 
 
+# Flag-only tracking counted every track and untrack on the one shared
+# word py_gc_tracked_count: with four carriers that line moved between cores
+# about 76 times a request (py_gc_track/py_gc_untrack cost ten times their
+# one-carrier time). Each thread now keeps its changes in this word and
+# publishes them 64 at a time; pcc_gc_tracked_count_flush publishes the
+# caller's remainder before an exact read and at thread exit.
+define_thread_local_i32("pcc_tls_tracked_delta", 0)
+
+@c_abi_export("pcc_gc_tracked_count_note")
+def _tracked_count_note(change: i64) -> None:
+    slot = global_addr("pcc_tls_tracked_delta")
+    pending: i64 = load_i32(slot, 0) + change
+    if pending < 64 and pending > -64:
+        store_i32(slot, 0, pending)
+        return
+    store_i32(slot, 0, 0)
+    total: i64 = atomic_rmw_i32(
+        "add", global_addr("py_gc_tracked_count"), 0, pending, "acq_rel"
+    ) + pending
+    if pending > 0:
+        _tracked_growth(total)
+
+
+@c_abi_export("pcc_gc_tracked_count_flush")
+def pcc_gc_tracked_count_flush() -> None:
+    """Publish this thread's pending tracked-count changes."""
+    slot = global_addr("pcc_tls_tracked_delta")
+    pending: i64 = load_i32(slot, 0)
+    if pending != 0:
+        store_i32(slot, 0, 0)
+        atomic_rmw_i32("add", global_addr("py_gc_tracked_count"), 0, pending, "acq_rel")
+
+
 @c_abi_export("pcc_gc_tracked_growth")
 def _tracked_growth(tracked: i64) -> None:
     # Phase 1 retains the exact shared count and the existing growth trigger.
@@ -505,7 +537,7 @@ def py_gc_untrack(obj: c_ptr) -> None:
     if _flag_only_tracking() != 0:
         previous: i64 = atomic_rmw_i32("and", obj, 12, ~_TRACKED, "acq_rel")
         if (previous & _TRACKED) != 0:
-            atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
+            _tracked_count_note(-1)
         return
     merged: i64 = _tracked_table_owned_by_current()
     index: i64 = _tracked_shard_index(obj)

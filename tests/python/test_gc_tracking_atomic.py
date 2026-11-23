@@ -76,6 +76,8 @@ class TrackingState:
             "pcc_gc_tracked_node_pool_count": {0: 0},
             "py_gc_head": head if owner else None,
             "py_gc_tracked_count": {0: 1 if initial & TRACKED else 0},
+            # This thread's unpublished changes of that count.
+            "pcc_tls_tracked_delta": {0: 0},
             "pcc_gc_deferred_node_free_head": None,
             "pcc_gc_tracking_flag_mode": {0: flag_mode},
             "pcc_gc_tracking_materialized": {0: 0},
@@ -113,7 +115,7 @@ class TrackingState:
             "py_gc_index_remove": self.remove,
         })
         for name in ("_tracked_table_owned_by_current", "_flag_only_tracking",
-                     "_tracked_growth", "_tracked_node_pool_take",
+                     "_tracked_growth", "_tracked_count_note", "_tracked_node_pool_take",
                      "_tracked_node_recycle", "pcc_gc_default_unlink_tracked_node",
                      "py_gc_track", "py_gc_untrack"):
             _load(TRACKING, name, self.namespace)
@@ -231,7 +233,7 @@ def test_track_only_sets_membership_bit(update, inserted, owner):
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked | TRACKED)
     assert state.memory.writes[-1] == "or"
-    assert state.globals["py_gc_tracked_count"][0] == (1 if inserted > 0 else 0)
+    assert _tracked_count(state) == (1 if inserted > 0 else 0)
     if inserted > 0:
         assert state.head() is state.node
         assert state.node[0] is state.memory.obj
@@ -241,6 +243,14 @@ def test_track_only_sets_membership_bit(update, inserted, owner):
     state.check_locks()
 
 
+
+
+def _tracked_count(state) -> int:
+    """The exact tracked count: the published word plus this thread's
+    pending flag-mode changes (pcc_gc_tracked_count_flush adds them)."""
+    return (state.globals["py_gc_tracked_count"][0]
+            + state.globals["pcc_tls_tracked_delta"][0])
+
 @pytest.mark.parametrize("update", UPDATES)
 def test_flag_mode_track_is_one_header_bit_counted_once(update):
     # GC0 tracking keeps no nodes between collections: no lock, pool, index
@@ -249,9 +259,9 @@ def test_flag_mode_track_is_one_header_bit_counted_once(update):
     state = TrackingState(initial, update, flag_mode=1)
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked | TRACKED)
-    assert state.globals["py_gc_tracked_count"][0] == 1
+    assert _tracked_count(state) == 1
     state.namespace["py_gc_track"](state.memory.obj)
-    assert state.globals["py_gc_tracked_count"][0] == 1
+    assert _tracked_count(state) == 1
     assert state.events == []
     assert state.head() is None and state.pool() is None
 
@@ -262,9 +272,9 @@ def test_flag_mode_untrack_clears_the_bit_counted_once(update):
     state = TrackingState(initial, update, flag_mode=1)
     state.namespace["py_gc_untrack"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
-    assert state.globals["py_gc_tracked_count"][0] == 0
+    assert _tracked_count(state) == 0
     state.namespace["py_gc_untrack"](state.memory.obj)
-    assert state.globals["py_gc_tracked_count"][0] == 0
+    assert _tracked_count(state) == 0
     assert state.events == []
 
 
@@ -278,7 +288,7 @@ def test_untrack_only_clears_membership_bit(update, present, owner):
     state.namespace["py_gc_untrack"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
     assert state.memory.writes[-1] == "and"
-    assert state.globals["py_gc_tracked_count"][0] == (0 if present else 1)
+    assert _tracked_count(state) == (0 if present else 1)
     if present:
         assert state.head() is None
         if owner:
@@ -311,7 +321,7 @@ def test_failed_tracking_does_not_publish_membership(allocation):
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
     assert "or" not in state.memory.writes and "and" not in state.memory.writes
-    assert state.globals["py_gc_tracked_count"][0] == 0
+    assert _tracked_count(state) == 0
     assert state.head() is None
     state.check_locks()
 

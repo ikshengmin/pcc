@@ -196,7 +196,8 @@ def test_gc_control_object_has_exact_raw_cross_object_closure(
         for line in undefined_result.stdout.splitlines()
         if line.strip()
     }
-    assert undefined == expected_globals
+    # The exact count reads publish this thread's pending changes first.
+    assert undefined == expected_globals | {"pcc_gc_tracked_count_flush"}
 
     symbols_result = subprocess.run(
         ["nm", "-g", str(obj)], capture_output=True, text=True, timeout=30

@@ -21,6 +21,9 @@ MAKEFILE = RUNTIME_DIR / "Makefile"
 
 PUBLIC_SYMBOLS = {"py_gc_track", "py_gc_untrack"}
 INTERNAL_SYMBOLS = {
+    # Per-thread batches of the flag-mode tracked count.
+    "pcc_gc_tracked_count_note",
+    "pcc_gc_tracked_count_flush",
     "pcc_gc_default_drain_deferred_nodes",
     "pcc_gc_default_table_lock",
     "pcc_gc_default_table_unlock",
@@ -43,6 +46,8 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_tracking_enter_flag_mode",
 }
 RAW_FUNCTION_IMPORTS = {
+    # The Darwin thread-local descriptor bootstrap of pcc_tls_tracked_delta.
+    "tlv_bootstrap",
     "free",
     "malloc",
     "pcc_current_native_thread_token",
@@ -330,7 +335,8 @@ def test_gc_tracking_object_has_exact_raw_closure_and_atomic_lock(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS
+    # The object also defines its thread-local pending-count word.
+    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | {"pcc_tls_tracked_delta"}
     assert "cmpxchg ptr" in ir_text
     assert "acq_rel acquire" in ir_text
     assert "store atomic i32" in ir_text

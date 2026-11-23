@@ -458,6 +458,9 @@ def _gc_backend4_should_check_slot(owner, slot) -> int:
 # public port ABI contract.
 
 
+pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+
+
 @c_abi_export("py_bool_from_bit")
 def py_bool_from_bit(b: int):
     if b != 0:
@@ -2124,6 +2127,7 @@ def _gc_maybe_auto_collect() -> None:
         if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
             finish = 0
         _gc_tracing_automatic_collect(finish)
+    pcc_gc_tracked_count_flush()
     atomic_store_i64(
         global_addr("pcc_gc_tracked_after_collect"),
         0,

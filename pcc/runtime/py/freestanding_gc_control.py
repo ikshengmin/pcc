@@ -7,7 +7,7 @@ C ABI.
 """
 
 from pcc import i64
-from pcc.extern import c_abi_export
+from pcc.extern import c_abi_export, c_void, extern
 from pcc.unsafe import (
     atomic_load_i32,
     global_addr,
@@ -19,6 +19,9 @@ from pcc.unsafe import (
 
 
 __pcc_freestanding__ = True
+
+
+pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
 
 
 @c_abi_export("py_gc_init")
@@ -58,6 +61,7 @@ def py_gc_is_tracked(o) -> i64:
 @c_abi_export("py_gc_get_count")
 def py_gc_get_count(generation: i64) -> i64:
     if generation == 0:
+        pcc_gc_tracked_count_flush()
         return atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
     return 0
 
@@ -85,6 +89,7 @@ def py_gc_set_threshold(gen0: i64, gen1: i64, gen2: i64) -> None:
 
 @c_abi_export("py_gc_freeze")
 def py_gc_freeze() -> None:
+    pcc_gc_tracked_count_flush()
     tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
     if tracked <= 0:
         tracked: i64 = 1

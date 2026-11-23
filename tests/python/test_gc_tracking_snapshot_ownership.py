@@ -96,7 +96,16 @@ class SnapshotRuntime:
         return result
 
     def global_get(self, name):
-        return self.load(self.address(name), 0)
+        value = self.load(self.address(name), 0)
+        if name == "py_gc_tracked_count":
+            # Flag-only track/untrack keep a thread's changes in
+            # pcc_tls_tracked_delta and publish them 64 at a time; an exact
+            # reader (pcc_gc_tracked_count_flush) adds its own remainder.
+            try:
+                value += self.load(self.address("pcc_tls_tracked_delta"), 0)
+            except KeyError:
+                pass
+        return value
 
     def global_set(self, name, value):
         self.store(self.address(name), 0, value)

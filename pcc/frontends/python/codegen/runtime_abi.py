@@ -1801,6 +1801,8 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_refcount_atomic',
         # GC0's no-op pin gate, written with pcc_gc_refcount_atomic.
         'pcc_gc_pins_inert',
+        # A thread's unpublished tracked-count changes.
+        'pcc_tls_tracked_delta',
         # Slot calls' inline no-op lease gate (collectors 0-3, no probe).
         'pcc_gc_leases_inert',
         'pcc_gc_backend4_no_refcounts',
@@ -3229,6 +3231,7 @@ def _cross_object_signatures_part_12():
     "pcc_gc_tracked_materialize": ((), "c_int64"),
     "pcc_gc_tracked_dematerialize": (("c_int64",), "c_void"),
     "pcc_gc_tracking_enter_flag_mode": ((), "c_void"),
+    "pcc_gc_tracked_count_flush": ((), "c_void"),
     # Keep graph-wait additions out of the already full chunks 0 and 1.
     "pcc_py_gc_minor_graph_lock_for": (("c_int64",), "c_void"),
     "pcc_gc_record_graph_lock_wait": (("c_int64", "c_int64", "c_int64"), "c_void"),

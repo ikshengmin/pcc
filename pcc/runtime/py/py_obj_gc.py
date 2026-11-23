@@ -115,6 +115,9 @@ def _append_referents_to(o, out) -> None:
     pcc_gc_visit_object_slots(o, _py_obj_gc_visit_append_slot, out)
 
 
+pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+
+
 @c_abi_export("py_gc_get_referents")
 def py_gc_get_referents(o):
     # A list's referents are its items in order. Another thread may change a
@@ -150,6 +153,7 @@ def py_gc_get_objects():
     if ownership < 0:
         return null()
     try:
+        pcc_gc_tracked_count_flush()
         tracked = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
         n = global_load_ptr("py_gc_head")
         out = py_list_new(tracked)

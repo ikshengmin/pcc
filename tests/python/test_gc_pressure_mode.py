@@ -493,6 +493,7 @@ def test_gc0_completion_hook_distinguishes_empty_success_from_failure(
         pcc_gc_default_table_lock=lock, pcc_gc_default_table_unlock=unlock,
         pcc_gc_tracked_materialize=materialize,
         pcc_gc_tracked_dematerialize=dematerialize,
+        pcc_gc_tracked_count_flush=lambda: None,
         _finish_subset=finish, _recompute_reachability=mark,
         py_weakref_invalidate_gc0_candidates=weak_candidates,
         # The late clear always closes the early pass's weak window; it

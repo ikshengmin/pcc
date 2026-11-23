@@ -79,7 +79,8 @@ def test_list_claim_releases_items_before_seal_and_only_worker_retires_shell(
         assert obj in rt.granules and rt.nodes[obj] == node
         assert rt.sc(1) == 1 and rt.sc(2) == 64
         if tracking == "flags":
-            assert rt.scalar("py_gc_tracked_count") == 0
+            # Published count plus this thread's pending change.
+            assert rt.scalar("py_gc_tracked_count") + rt.scalar("pcc_tls_tracked_delta") == 0
         if tracked and tracking == "merged":
             assert rt.scalar("pcc_gc_deferred_node_free_head") == gc_node
     else:

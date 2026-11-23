@@ -145,6 +145,9 @@ _COLLECTOR_WEAK_CANDIDATE = 16
 _COLLECTOR_HELD = 32
 
 
+pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+
+
 @c_abi_export("pcc_gc_backend0_is_weak_candidate")
 def pcc_gc_backend0_is_weak_candidate(obj) -> i64:
     if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
@@ -546,6 +549,7 @@ def _collect(pairs, candidate_count: i64) -> i64:
         materialized = pcc_gc_tracked_materialize()
         if materialized < 0:
             materialization_owned = 0
+    pcc_gc_tracked_count_flush()
     tracked: i64 = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
     if materialized > tracked:
         tracked = materialized

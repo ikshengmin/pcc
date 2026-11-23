@@ -41,6 +41,8 @@ class Runtime:
     def __init__(self, backend=1):
         self.backend = backend
         self.memory, self.globals, self.tls, self.tls_defaults = {}, {}, {}, {}
+        # A thread's unpublished tracked-count changes (freestanding_gc_tracking).
+        self.tls_defaults["pcc_tls_tracked_delta"] = 0
         self.thread, self.next_address = 1, 4096
         self.world, self.graph, self.no_park = 1, 0, 0
         self.managed, self.nodes, self.freed, self.noted = set(), {}, set(), []
