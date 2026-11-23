@@ -376,10 +376,14 @@ in the relevant section or issue and removes the entry.
        1.6–2.6 ms on GC1/GC3.
      - Graph-lock waits rose from 18 to 631 (GC1 w4) and from 0 to 640
        (GC2 w1).
-   - Condition 5: handler runs on both arms run 0 user finalizers and
-     0 post-callback rechecks on GC1–4. The workload therefore never takes
-     the layered path, and the cost above comes from collections that have
-     no observable candidate. Cause not attributed.
+   - Condition 5: Mac handler counters reported 0 user finalizers and
+     0 full post-callback rechecks; those counters alone do not exclude
+     bounded weakref callbacks. On exact Linux handler arms (GC1–3, w1/w4,
+     40k timed + 200 warmup each), direct event logs found no weakref
+     callbacks or finalizer events in any of the 12 untimed runs. A
+     weakref-only positive control logged both callbacks despite 0 full
+     rechecks. Together with the Linux phase probe this identifies a
+     callback-free handler cost; no socket C512 or Mac event-log claim.
    - Next #9, in order:
      - Keep the same-stop negative observer hint a local candidate: it
        removes the redundant handler census in nine Linux diagnostic runs
@@ -561,7 +565,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 count observed callbacks on sealed Linux handler: Codex, Linux x86-64, 2026-11-23 03:02 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
