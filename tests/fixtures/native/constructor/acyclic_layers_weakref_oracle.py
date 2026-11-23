@@ -2,6 +2,7 @@
 import gc
 import sys
 import threading
+import types
 import weakref
 
 events = []
@@ -19,8 +20,12 @@ class FieldHolder:
 field_holder = FieldHolder()
 late_refs = []
 late_new = sys.argv[1] == "late-new"
+module_case = sys.argv[1] in ("module-existing", "module-new")
+module_name = "pcc_gc9_owner"
+if sys.argv[1] == "module-existing":
+    sys.modules[module_name] = types.ModuleType(module_name)
 indirect = sys.argv[1] in ("holder", "capi-list", "caller-old-holder")
-rescue = sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "pin-reassert", "pin-transfer", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder")
+rescue = module_case or sys.argv[1] in ("rescue", "caller", "holder", "mixed-rescue", "pin", "pin-reassert", "pin-transfer", "interior", "dict-holder", "field-holder", "dict-replace", "list-replace", "set-holder", "dict-update", "list-slice", "set-update", "capi-dict", "capi-list", "capi-attr", "extension-field", "caller-old-holder")
 withdrawn = sys.argv[1] in ("withdrawn", "pin-withdraw")
 mixed = sys.argv[1] in ("mixed", "mixed-tail", "mixed-rescue")
 gc.disable()
@@ -55,6 +60,10 @@ class A:
                 peer.join()
         if late_new:
             late_refs.append(weakref.ref(weak_b(), lambda _: events.append("b-new")))
+        if module_case:
+            if module_name not in sys.modules:
+                sys.modules[module_name] = types.ModuleType(module_name)
+            sys.modules[module_name].kept = weak_b()
         if indirect:
             holder.append(weak_b())
         elif sys.argv[1] in ("dict-holder", "dict-replace", "capi-dict"):
@@ -115,6 +124,8 @@ else:
     del a
 if mixed:
     gc.collect()
+if module_case:
+    assert weak_b() is not None and sys.modules[module_name].kept is weak_b()
 events.append("b-dead" if weak_b() is None else "b-live")
 print(" ".join(events))
 

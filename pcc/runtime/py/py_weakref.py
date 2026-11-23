@@ -1260,46 +1260,6 @@ def py_weakref_queue_tracing_layer(snapshot, plan, layer: int, pending_cell) -> 
     return count
 
 
-@c_abi_export("py_weakref_queue_tracing_target_callbacks")
-def py_weakref_queue_tracing_target_callbacks(target, pending_cell) -> int:
-    """Prepare just one exact tracing target's early callback-bearing refs.
-
-    Test-invoked #9 arm. It neither runs user code nor starts a late window.
-    Callback-free refs and refs to other targets are left alone. A live
-    callback holds a lease until queued execution; a dead ref is cleared
-    without delivery. Normal batch sweep does not call this entry.
-    """
-    backend: int = pcc_gc_backend()
-    if (
-        backend < 1 or backend > 3 or pcc_thread_owns_stopped_world() == 0
-        or load_i32(global_addr("pcc_weakref_late_windows"), 0) != 0
-        or ptr_is_null(pending_cell) != 0
-        or ptr_is_null(load_ptr(pending_cell, _PENDING_WEAK_HEAD)) == 0
-        or ptr_is_null(load_ptr(pending_cell, _PENDING_WEAK_TAIL)) == 0
-        or _tracing_target_dies(target) == 0
-    ):
-        return -1
-    count: int = 0
-    wr = global_load_ptr("py_weakref_head")
-    while ptr_is_null(wr) == 0:
-        if (
-            ptr_eq(load_ptr(wr, _WEAKREF_TARGET), target) != 0
-            and ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0
-            and (load_i32(wr, PYOBJECTHEADER_FLAGS_OFFSET)
-                 & (_TRACING_WEAK_SWEEP_CANDIDATE | PY_FLAG_GC_DEALLOCATING)) == 0
-        ):
-            if _queue_callback_hold(wr, pending_cell, 0) != 0:
-                return -1
-            count += 1
-        wr = load_ptr(wr, _WEAKREF_NEXT)
-    # Clear the whole target group before even the newest live callback runs.
-    wr = global_load_ptr("py_weakref_head")
-    while ptr_is_null(wr) == 0:
-        if (ptr_eq(load_ptr(wr, _WEAKREF_TARGET), target) != 0
-                and ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0):
-            _clear_tracing_weak_target(wr)
-        wr = load_ptr(wr, _WEAKREF_NEXT)
-    return count
 
 
 @c_abi_export("py_weakref_clear_tracing_candidates")

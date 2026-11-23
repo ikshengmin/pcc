@@ -114,6 +114,7 @@ pcc_gc_record_is_white = extern(
 )
 pcc_gc_tracing_candidates_reset = extern("pcc_gc_tracing_candidates_reset", (), c_void)
 pcc_gc_tracing_candidates_note = extern("pcc_gc_tracing_candidates_note", (c_ptr,), c_void)
+py_gen_finalize_pending = extern("py_gen_finalize_pending", (c_ptr,), c_int64)
 pcc_gc_tracing_candidates_seal = extern("pcc_gc_tracing_candidates_seal", (c_int64,), c_void)
 
 
@@ -559,6 +560,7 @@ def pcc_gc_finish_tracing_cycle(
         pcc_platform_abort()
         return 0
     marked_bytes: i64 = 0
+    pending_gen: i64 = 0
     # The nonmoving count-free collectors' sweep visits the candidates this
     # walk flags instead of walking every object again for each of its
     # passes (pcc_gc_tracing_candidates_note).
@@ -583,6 +585,8 @@ def pcc_gc_finish_tracing_cycle(
             store_i32(obj, 12, flags | 1024)
             if listing != 0:
                 pcc_gc_tracing_candidates_note(node)
+                if pending_gen == 0 and load_i32(obj, abi_constant("object.header.type_tag_offset")) == abi_constant("object.type.gen"):
+                    pending_gen = py_gen_finalize_pending(obj)
         else:
             store_i32(obj, 12, flags & ~1024)
             # The node records the object's size at offset 8.
@@ -616,6 +620,8 @@ def pcc_gc_finish_tracing_cycle(
     # while this claimant was waiting for the stopped-world cut.
     if listing != 0:
         pcc_gc_tracing_candidates_seal(commits + 1)
+        if pending_gen == 0:
+            store_i64(global_addr("pcc_gc_tracing_candidate_no_pending_gen_commit"), 0, commits + 1)
     store_i64(
         global_addr("pcc_gc_tracing_finish_commits"), 0, commits + 1
     )

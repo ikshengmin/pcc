@@ -2015,6 +2015,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_candidate_count',
         'pcc_gc_tracing_candidate_capacity',
         'pcc_gc_tracing_candidate_commit',
+        'pcc_gc_tracing_candidate_no_pending_gen_commit',
         'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
