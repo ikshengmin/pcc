@@ -473,8 +473,14 @@ in the relevant section or issue and removes the entry.
        The extra time came mainly from re-parking peers (35–42% of the
        increase; included in window-close), window-open (31–35%) and
        root snapshot/cut capture (20–28%), not remark drain or the
-       collector's own stack copy. No new code on the review branch;
-       these are phase timings, not a handler throughput result.
+       collector's own stack copy. A separate correctness probe rules out
+       deferring all sibling remarks to the end of a layer: in 18 Linux
+       runs, all three GC1–3 retaining-peer arms finalized a still-live
+       sibling only when the per-finalizer check was removed. Ordinary
+       chains and departing peers were insensitive. Keep the intermediate
+       reachability boundary; optimize stop/resume or capture without
+       discarding it. No code on the review branch; no handler throughput
+       claim.
      - **macOS verification of `eff808bf3` (Claude, local Mac,
        2026-11-23): throughput passes; not mergeable while the scale
        test below is intermittently red.** Same `master-445df066` base
@@ -622,7 +628,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 validate safe callback-window batching boundary: Codex, Linux x86-64, 2026-11-23 04:03 UTC, area runtime-gc
+   - none
    - #9 scale-test early stop, diagnosis only (no source edits until the files are named here): Claude, macOS arm64, 2026-11-23 04:05 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
