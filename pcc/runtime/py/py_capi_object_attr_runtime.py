@@ -49,9 +49,6 @@ pcc_capi_builtin_object_getattr = extern(
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register", (c_ptr,), c_int64
 )
-pcc_gc_note_object_allocated_sized = extern(
-    "pcc_gc_note_object_allocated_sized", (c_ptr, c_int64), c_void
-)
 
 
 def _type_error(message) -> None:
@@ -210,7 +207,6 @@ def PyObject_Init(op, type_obj) -> c_ptr:
         tracked_size = load_i64(type_obj, 40)
     if tracked_size < 16:
         tracked_size = 16
-    pcc_gc_note_object_allocated_sized(op, tracked_size)
     store_ptr(op, 16, type_obj)  # ob_type slot
     return op
 
@@ -234,7 +230,6 @@ def PyObject_InitVar(op, type_obj, size: int) -> c_ptr:
     if size > 0 and item_size > 0:
         if size <= (9223372036854775807 - tracked_size) // item_size:
             tracked_size = tracked_size + size * item_size
-    pcc_gc_note_object_allocated_sized(op, tracked_size)
     store_i64(op, 24, size)  # ob_size after 16-byte header + ob_type
     return op
 

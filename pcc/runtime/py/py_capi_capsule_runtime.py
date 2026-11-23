@@ -432,9 +432,6 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -453,7 +450,6 @@ def _capsule_import_adopt(slots, tokens, index: int) -> int:
         py_runtime_error_if_unset(cstr("capsule import"), cstr("result owner lease failed"))
         return -1
     store_i64(tokens, offset, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 

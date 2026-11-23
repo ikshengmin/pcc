@@ -114,11 +114,6 @@ pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_pointer_register = extern("pcc_gc_pointer_register", (c_ptr,), c_int64)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read",
-    (c_ptr,),
-    c_ptr,
-)
 pcc_debug_bad_str_concat = extern(
     "pcc_debug_bad_str_concat",
     (c_ptr, c_ptr, c_int64, c_int64),
@@ -3233,8 +3228,8 @@ def _str_join_list(sep, sep_len: int, lst):
         if ptr_is_null(out) != 0:
             return null()
         # The allocation may run a relocating collector.
-        sep = pcc_gc_note_relocation_read(sep)
-        lst = pcc_gc_note_relocation_read(lst)
+        sep = sep
+        lst = lst
         locked = lst
         pcc_list_lock(locked)
         if (_str_join_list_size_locked(sep_len, lst, length_slot) == total
@@ -3266,8 +3261,8 @@ def py_str_join(sep, lst):
         return null()
     if ptr_is_null(lst) != 0:
         return null()
-    sep = pcc_gc_note_relocation_read(sep)
-    lst = pcc_gc_note_relocation_read(lst)
+    sep = sep
+    lst = lst
     if _type_of(sep) != PY_TYPE_STR:
         return null()
     sequence_tag: int = _type_of(lst)
@@ -3314,8 +3309,8 @@ def py_str_join(sep, lst):
 
     # Result allocation may run a relocating collector.  Do not reuse the
     # pre-allocation object or item pointers while copying the payload.
-    sep = pcc_gc_note_relocation_read(sep)
-    lst = pcc_gc_note_relocation_read(lst)
+    sep = sep
+    lst = lst
     items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     out_data = ptr_add(out, PYSTROBJECT_DATA_OFFSET)
     sep_data = ptr_add(sep, PYSTROBJECT_DATA_OFFSET)

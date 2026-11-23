@@ -49,9 +49,6 @@ pcc_capi_method_invoke_into = extern(
     "pcc_capi_method_invoke_into",
     (c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_ptr, c_ptr), c_void,
 )
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 
 # Owning frame layout, registered by py_capi_method_entry before body entry.
 _METHOD_RESULT = 0
@@ -94,7 +91,6 @@ def _method_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("C method"), cstr("object address lease failed"))
         return 0
     store_i64(tokens, index * 8, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return 1
 
 

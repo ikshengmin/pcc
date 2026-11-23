@@ -14,7 +14,6 @@ from pcc.runtime.py.py_abi_constants import PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJ
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register", (c_ptr,), c_int64
 )
-pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int64, c_int64), c_ptr)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 from pcc.unsafe import (
     free,
@@ -321,26 +320,6 @@ def _publish_heap_bigint(b):
     # constructor has selected the collector.
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
         pcc_gc_config_ensure()
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        # Arithmetic scratch buffers are explicitly freed and may have a
-        # larger capacity than their normalized digit count. Publish an exact
-        # managed allocation so tracing owns its debt, extent and reclamation.
-        # Keep the allocator's header: it carries the current mark color and
-        # allocation origin, neither of which belongs to the scratch buffer.
-        ndigits: int = load_i32(b, PYINTOBJECT_NDIGITS_OFFSET)
-        obj = pcc_gc_alloc(PYINTOBJECT_DIGITS_OFFSET + ndigits * 4, PY_TYPE_INT, 0)
-        if ptr_is_null(obj):
-            free(b)
-            return obj
-        store_i32(obj, PYINTOBJECT_SIGN_OFFSET, load_i32(b, PYINTOBJECT_SIGN_OFFSET))
-        store_i32(obj, PYINTOBJECT_NDIGITS_OFFSET, ndigits)
-        i: int = 0
-        while i < ndigits:
-            store_i32(obj, PYINTOBJECT_DIGITS_OFFSET + i * 4,
-                      load_i32(b, PYINTOBJECT_DIGITS_OFFSET + i * 4))
-            i = i + 1
-        free(b)
-        return obj
     store_i32(
         b,
         PYOBJECTHEADER_FLAGS_OFFSET,

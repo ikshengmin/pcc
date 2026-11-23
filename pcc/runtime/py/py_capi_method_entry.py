@@ -36,43 +36,6 @@ pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_capi_is_type_object_value = extern("pcc_capi_is_type_object_value", (c_ptr,), c_int64)
 pcc_capi_method_call_into = extern("pcc_capi_method_call_into", (c_ptr, c_ptr, c_ptr, c_int64), c_int64)
 
-pcc_gc_native_frame_enter_borrowed_slot = extern(
-    "pcc_gc_native_frame_enter_borrowed_slot", (c_ptr, c_ptr, c_ptr), c_void
-)
-pcc_gc_native_frame_leave = extern("pcc_gc_native_frame_leave", (c_ptr,), c_int64)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
-    "pcc_gc_resolve_borrowed_root_slot_unlocked", (c_ptr, c_int64), c_ptr
-)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-
-
-@c_abi_export("pcc_capi_pin_borrowed_result_gc4")
-def pcc_capi_pin_borrowed_result_gc4(item: c_ptr) -> c_ptr:
-    """Pin the actual GC4 result, not an obsolete physical shell.
-
-    The container owns the element. Capture the raw return before any
-    safepoint, without allocating. A stop can heal the precise slot while
-    graph acquisition waits. Resolve the whole chain and apply the original
-    Boolean pin under the same graph exclusion as a forwarding commit.
-    """
-    if ptr_is_null(item) or is_tagged_int(item):
-        return item  # The original Boolean pin is a no-op on immediates.
-    pcc_thread_no_park_enter()
-    frame: c_ptr = stack_alloc(40)
-    entry: c_ptr = stack_alloc(16)
-    slot: c_ptr = stack_alloc(8)
-    memset(frame, 0, 40)
-    store_ptr(slot, 0, item)
-    pcc_gc_native_frame_enter_borrowed_slot(frame, entry, slot)
-    pcc_thread_no_park_exit()
-    pcc_py_gc_minor_graph_lock()
-    result: c_ptr = pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
-    pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_native_frame_leave(frame)
-    return result
 
 
 # Shared layout with py_capi_method_call_runtime: result is owning slot zero.

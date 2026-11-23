@@ -145,9 +145,6 @@ py_str_count = extern("py_str_count", (c_ptr, c_ptr), c_int64)
 py_str_count_range = extern(
     "py_str_count_range", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
 )
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
@@ -440,11 +437,6 @@ pcc_gc_release = extern("pcc_gc_release", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read",
-    (c_ptr,),
-    c_ptr,
-)
 pcc_diagnostics_runtime_log_event_code = extern(
     "pcc_diagnostics_runtime_log_event_code",
     (c_int32, c_int32, c_int64, c_int64, c_ptr),
@@ -1461,7 +1453,6 @@ def _bitwise_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
     if token < 0:
         return _bitwise_error(7, cstr("binary bitwise result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _bitwise_error(19, cstr("binary bitwise result allocation failed"))
     return -1 if py_err_occurred() != 0 else 0
@@ -3493,7 +3484,6 @@ def _bound_list_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("bound list method owner lease failed")))
         return -1
-    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bound list method allocation failed")))
@@ -3779,7 +3769,6 @@ def _bound_method_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("bound method owner lease failed")))
         return -1
-    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(19, cstr("bound method allocation failed")))
@@ -4726,13 +4715,13 @@ def py_obj_getattr(o, name):
             result = py_exc_get_legacy_value(o)
             if ptr_is_null(result) == 0:
                 return result
-            return _raise_attribute_error(pcc_gc_note_relocation_read(o), name)
+            return _raise_attribute_error(o, name)
         os_field: int = _os_error_attribute_index(name)
         if (load_i32(o, 12) & PY_FLAG_EXC_OS_PAYLOAD) != 0:
             if os_field >= 0:
                 return py_os_error_get_field(o, os_field)
         elif os_field > 0 and _is_os_error(o) != 0:
-            return py_os_error_get_field(pcc_gc_note_relocation_read(o), os_field)
+            return py_os_error_get_field(o, os_field)
         if (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
             field: int = _unicode_error_attribute_index(name)
             if field >= 0:
@@ -4749,7 +4738,7 @@ def py_obj_getattr(o, name):
             if ptr_is_null(result) != 0:
                 result = global_load_ptr("py_None")
         elif strcmp(name, cstr("__suppress_context__")) == 0:
-            o = pcc_gc_note_relocation_read(o)
+            o = o
             suppressed: int = atomic_load_i32(o, 12, "relaxed") & PY_FLAG_EXC_SUPPRESS_CONTEXT
             return py_bool_from_bit(1 if suppressed != 0 else 0)
         elif strcmp(name, cstr("__traceback__")) == 0:
@@ -4958,7 +4947,7 @@ def py_obj_setattr(o, name, v) -> int:
     if tag == PY_TYPE_EXC:
         os_field: int = _os_error_attribute_index(name)
         if os_field >= 0 and _is_os_error(o) != 0:
-            return py_os_error_set_field(pcc_gc_note_relocation_read(o), os_field, pcc_gc_note_relocation_read(v))
+            return py_os_error_set_field(o, os_field, v)
 
     if tag == PY_TYPE_EXC and (load_i32(o, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
         field: int = _unicode_error_attribute_index(name)
@@ -4967,11 +4956,11 @@ def py_obj_setattr(o, name, v) -> int:
 
     if tag == PY_TYPE_EXC and strcmp(name, cstr("__suppress_context__")) == 0:
         if ptr_eq(v, global_load_ptr("py_True")) != 0:
-            o = pcc_gc_note_relocation_read(o)
+            o = o
             atomic_rmw_i32("or", o, 12, PY_FLAG_EXC_SUPPRESS_CONTEXT, "relaxed")
             return 0
         if ptr_eq(v, global_load_ptr("py_False")) != 0:
-            o = pcc_gc_note_relocation_read(o)
+            o = o
             atomic_rmw_i32("and", o, 12, ~PY_FLAG_EXC_SUPPRESS_CONTEXT, "relaxed")
             return 0
         py_raise_owned(py_exc_new(3, cstr("attribute value type must be bool")))
@@ -5170,7 +5159,6 @@ def _descriptor_call_adopt(slots, tokens, index: int) -> int:
         if py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("descriptor constructor owner lease failed")))
         return -1
-    pcc_gc_note_root_slot_barrier(slot)
     return -1 if py_err_occurred() != 0 else 0
 
 
@@ -6345,8 +6333,8 @@ def py_obj_issubclass(derived, cls) -> int:
         if derived_is_capi_type == 0 or cls_is_capi_type == 0:
             return 0
         return pcc_capi_type_object_issubclass(derived, cls)
-    derived = pcc_gc_note_relocation_read(derived)
-    cls = pcc_gc_note_relocation_read(cls)
+    derived = derived
+    cls = cls
     if ptr_eq(derived, cls) != 0:
         return 1
     # dict is not an MRO entry of its subclasses; their classes carry the flag.

@@ -858,6 +858,13 @@ def page_free(ptr: Any, size: int) -> int:
     _trap("page_free")
 
 
+def page_discard(ptr: Any, size: int) -> int:
+    """Give the physical pages of a mapped range back to the system and
+    keep the mapping; return the platform status. The range stays readable
+    and writable, and holds unspecified bytes until it is written again."""
+    _trap("page_discard")
+
+
 def va_start() -> Any:
     """Create a cursor over the current variadic C-ABI arguments."""
     _trap("va_start")
@@ -1401,6 +1408,7 @@ __all__ = [
     "linux_set_thread_pointer",
     "page_alloc",
     "page_free",
+    "page_discard",
     "va_start",
     "va_arg_i64",
     "va_arg_i32",

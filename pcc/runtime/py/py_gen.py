@@ -75,17 +75,8 @@ pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr), c_ptr)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_container_lock = extern("pcc_container_lock", (c_ptr,), c_void)
-pcc_container_unlock = extern("pcc_container_unlock", (c_ptr,), c_void)
-pcc_gc_count_free_store_shade = extern(
-    "pcc_gc_count_free_store_shade", (c_ptr,), c_void
-)
 
 
 def _frame_list_raw() -> int:
@@ -95,9 +86,7 @@ def _frame_list_raw() -> int:
     reachability and never move the frame. Both access the compiler-private
     fixed-size list directly; the relocating collectors use the list ABI.
     """
-    if pcc_gc_backend() == 0:
-        return 1
-    return load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
+    return 1
 pcc_gc_pointer_is_managed = extern("pcc_gc_pointer_is_managed", (c_ptr,), c_int64)
 pcc_gc_store_ptr     = extern("pcc_gc_store_ptr",     (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root    = extern("pcc_gc_store_root",    (c_ptr, c_ptr), c_void)
@@ -112,15 +101,8 @@ pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void
 py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr
 )
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64), c_int64,
-)
 
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
-py_list_take_for_gen_frame = extern(
-    "py_list_take_for_gen_frame", (c_ptr, c_int64), c_ptr
-)
 py_list_len = extern("py_list_len", (c_ptr,), c_int64)
 py_list_set = extern("py_list_set", (c_ptr, c_int64, c_ptr), c_void)
 pcc_gc_retain_known = extern("pcc_gc_retain_known", (c_ptr,), c_ptr)
@@ -133,7 +115,6 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_frame_enter_local = extern("pcc_gc_frame_enter_local", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave_local = extern("pcc_gc_frame_leave_local", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
-pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 define_global_i32("pcc_gen_sync_frame_map", 5)
 
 _GEN_FRAME_FACTORY_VALUE = 0
@@ -142,80 +123,13 @@ _GEN_FRAME_FACTORY_SLOT_COUNT = 2
 define_global_i32("pcc_gen_frame_factory_map", _GEN_FRAME_FACTORY_SLOT_COUNT)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
-)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_gc_retain_plan_prepare_locked = extern(
-    "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
-)
-pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void)
-pcc_gc_store_ptr_plan_init = extern(
-    "pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void
-)
-pcc_gc_store_ptr_plan_commit_locked = extern(
-    "pcc_gc_store_ptr_plan_commit_locked", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
-)
-pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
 define_global_i32("pcc_gen_inline_borrowed_map", -2)
 define_global_i32("pcc_gen_inline_result_map", 1)
 _GEN_INLINE_OWNER = 0
 _GEN_INLINE_VALUE = 8
 _GEN_INLINE_BORROWED_BYTES = 16
-
-
-def _inline_frame_access(frame, index: int, value, operation: int):
-    """Preserve an existing inline frame across a collector-mode switch.
-
-    Operation 0 copies, 1 takes and 2 replaces. Frame allocation selects GC0,
-    but changing collectors must keep existing objects usable and traceable.
-    The graph transaction covers every derived address; the result stays rooted
-    through deferred reference-count work and terminal root teardown.
-    """
-    borrowed = stack_alloc(_GEN_INLINE_BORROWED_BYTES)
-    owner_slot = ptr_add(borrowed, _GEN_INLINE_OWNER)
-    value_slot = ptr_add(borrowed, _GEN_INLINE_VALUE)
-    store_ptr(owner_slot, 0, frame)
-    store_ptr(value_slot, 0, value)
-    result_slot = stack_alloc(C_POINTER_SIZE)
-    store_ptr(result_slot, 0, null())
-    pcc_gc_frame_enter(global_addr("pcc_gen_inline_borrowed_map"), borrowed)
-    pcc_gc_frame_enter(global_addr("pcc_gen_inline_result_map"), result_slot)
-    retain_plan = stack_alloc(56)
-    store_plan = stack_alloc(128)
-    if operation != 0:
-        pcc_gc_store_ptr_plan_init(store_plan, load_ptr(owner_slot, 0), pcc_gc_backend())
-    pcc_py_gc_minor_graph_lock()
-    frame = pcc_gc_load_ptr(null(), owner_slot)
-    valid: int = 0
-    if index >= 0 and index < load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET):
-        valid = 1
-        slot = ptr_add(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
-        if operation != 2:
-            current = pcc_gc_load_ptr(frame, slot)
-            current = pcc_gc_retain_plan_prepare_locked(retain_plan, current)
-            store_ptr(result_slot, 0, current)
-        if operation != 0:
-            replacement = null()
-            if operation == 2:
-                replacement = pcc_gc_load_ptr(null(), value_slot)
-            pcc_gc_store_ptr_plan_commit_locked(store_plan, frame, slot, replacement)
-    pcc_py_gc_minor_graph_unlock()
-    if valid != 0 and operation != 2:
-        pcc_gc_retain_plan_finish(retain_plan)
-    if operation != 0:
-        pcc_gc_store_ptr_plan_finish(store_plan)
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), result_slot)
-    prior: i64 = 0
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior = i64(load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED)
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_frame_leave(result_slot)
-    pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
 
 
 @c_abi_export("py_gen_frame_get")
@@ -224,8 +138,6 @@ def py_gen_frame_get(frame, index: int):
     if ptr_is_null(frame) != 0:
         return py_list_get(frame, index)
     if load_i32(frame, 8) == PY_TYPE_GEN and (load_i32(frame, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
-        if pcc_gc_backend() != 0:
-            return _inline_frame_access(frame, index, null(), 0)
         if index < 0 or index >= load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET):
             return null()
         return pcc_gc_retain_known(load_ptr(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE))
@@ -234,10 +146,6 @@ def py_gen_frame_get(frame, index: int):
     if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
         return py_list_get(frame, index)
     items = load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET)
-    if pcc_gc_backend() != 0:
-        # A count-free copy: the caller's frame or stack slot holds it,
-        # and the stopped-world remark rescans those.
-        return load_ptr(items, index * C_POINTER_SIZE)
     return pcc_gc_retain_known(load_ptr(items, index * C_POINTER_SIZE))
 
 
@@ -286,8 +194,6 @@ def py_gen_frame_take(frame, index: int):
     if ptr_is_null(frame) != 0:
         return py_list_get(frame, index)
     if load_i32(frame, 8) == PY_TYPE_GEN and (load_i32(frame, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
-        if pcc_gc_backend() != 0:
-            return _inline_frame_access(frame, index, null(), 1)
         if index < 0 or index >= load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET):
             return null()
         slot = ptr_add(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
@@ -297,12 +203,6 @@ def py_gen_frame_take(frame, index: int):
     if _frame_list_raw() == 0:
         # Fuse only the count-free moving case. Counted, logging and
         # provenance modes keep the original callback/diagnostic ordering.
-        if (index >= 0
-                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-                and atomic_load_i32(global_addr("pcc_log_init_state"), 0, "acquire") == 2
-                and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-                and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0):
-            return py_list_take_for_gen_frame(frame, index)
         value = py_list_get(frame, index)
         py_list_set(frame, index, null())
         return value
@@ -332,9 +232,6 @@ def py_gen_frame_set(frame, index: int, value) -> None:
         py_list_set(frame, index, value)
         return
     if load_i32(frame, 8) == PY_TYPE_GEN and (load_i32(frame, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0:
-        if pcc_gc_backend() != 0:
-            _inline_frame_access(frame, index, value, 2)
-            return
         if index < 0 or index >= load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET):
             return
         slot = ptr_add(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
@@ -350,15 +247,6 @@ def py_gen_frame_set(frame, index: int, value) -> None:
         return
     if index < 0 or index >= load_i64(frame, PYLISTOBJECT_LENGTH_OFFSET):
         py_list_set(frame, index, value)
-        return
-    if pcc_gc_backend() != 0:
-        # Count-free GC1/GC2: no counts, but a store during a cycle shades
-        # the value under the same container lock the marker scans with.
-        pcc_container_lock(frame)
-        cell = ptr_add(load_ptr(frame, PYLISTOBJECT_ITEMS_OFFSET), index * C_POINTER_SIZE)
-        pcc_gc_count_free_store_shade(value)
-        store_ptr(cell, 0, value)
-        pcc_container_unlock(frame)
         return
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(2, 3, 0, 0, frame)
@@ -448,7 +336,6 @@ def py_gen_frame_new(slot_count: i64):
         _require_result(null(), cstr("py_gen_frame_new"), cstr("generator frame address lease failed"))
         return _gen_frame_factory_finish(slots, token, 0)
     frame = load_ptr(value_slot, 0)
-    pcc_gc_note_slot_write_barrier(null(), value_slot, frame)
     slot_bytes: i64 = i64(C_POINTER_SIZE)
     items = malloc(capacity * slot_bytes)
     if ptr_is_null(items):
@@ -464,9 +351,7 @@ def py_gen_frame_new(slot_count: i64):
         store_ptr(items, index * slot_bytes, none)
         index += 1
     store_i64(frame, PYLISTOBJECT_LENGTH_OFFSET, slot_count)
-    pcc_gc_backend4_zpage_register_owner_payload_span(frame, items, capacity * slot_bytes)
     py_gc_track(frame)
-    pcc_gc_publish_initialized(frame)
     return _gen_frame_factory_finish(slots, token, 1)
 
 
@@ -479,8 +364,6 @@ def py_gen_inline_frame_new(slot_count: i64):
     py_gen_from_inline_frame installs the resume function and acquires the caller's
     result owner, preserving the existing factory construction lease.
     """
-    if pcc_gc_backend() != 0:
-        return py_gen_frame_new(slot_count)
     if slot_count < 0 or slot_count > 134217728:
         return _require_result(null(), cstr("py_gen_inline_frame_new"), cstr("invalid generator frame size"))
     slots = stack_alloc(_GEN_FRAME_FACTORY_SLOT_COUNT * C_POINTER_SIZE)
@@ -512,13 +395,12 @@ def py_gen_inline_frame_new(slot_count: i64):
         index += 1
     store_i64(gen, PYINLINEGENOBJECT_LENGTH_OFFSET, slot_count)
     py_gc_track(gen)
-    pcc_gc_publish_initialized(gen)
     return _gen_frame_factory_finish(slots, token, 1)
 
 @c_abi_export("py_gen_frame_save")
 def py_gen_frame_save(frame, slot_addresses, slot_count: int) -> int:
     """Batch one GC0 save; other collectors keep the ordinary setter path."""
-    if pcc_gc_backend() != 0 or ptr_is_null(frame) or ptr_is_null(slot_addresses):
+    if ptr_is_null(frame) or ptr_is_null(slot_addresses):
         return 0
     if slot_count < 0 or pcc_gc_pointer_is_managed(frame) == 0:
         return 0
@@ -575,7 +457,6 @@ def py_gen_new(resume, frame):
     pcc_gc_store_ptr(g, ptr_add(g, 24), frame)
     pcc_gc_store_ptr(g, ptr_add(g, 48), global_load_ptr("py_None"))
     py_gc_track(g)
-    pcc_gc_publish_initialized(g)
     return g
 
 
@@ -604,14 +485,6 @@ def py_dealloc_gen(o) -> None:
 @c_abi_export("py_gen_finalize")
 def py_gen_finalize(gen) -> None:
     _gen_finalize_mode(gen, 1)
-
-
-@c_abi_export("py_gen_finalize_tracing_candidate")
-def py_gen_finalize_tracing_candidate(gen) -> None:
-    # Only count-free tracing PASS0 calls this, after validating its candidate.
-    # The collector rechecks resurrection after every finalizer has run, then
-    # silently clears still-dead late weakrefs without invoking callbacks.
-    _gen_finalize_mode(gen, 0)
 
 
 @c_abi_export("py_gen_finalize_pending")
@@ -877,7 +750,6 @@ def _gen_sync_build(slots, pins) -> None:
             pcc_gc_pin(completed)
         py_incref(completed)
         store_ptr(slots, 8, completed)
-        pcc_gc_note_write_barrier(null(), completed)
         return
     if ptr_is_null(py_current_exception()) == 0:
         return
@@ -886,7 +758,6 @@ def _gen_sync_build(slots, pins) -> None:
         store_i64(pins, 24, load_i32(yielded, 12) & 64)
         pcc_gc_pin(yielded)
     store_ptr(slots, 24, yielded)
-    pcc_gc_note_write_barrier(null(), yielded)
     if ptr_is_null(yielded) == 0:
         # Preserve the existing explicit boundary for an unresolved dynamic
         # parking call inside a virtual thread; do not block its carrier.
@@ -898,7 +769,6 @@ def _gen_sync_build(slots, pins) -> None:
             store_i64(pins, 32, load_i32(closed, 12) & 64)
             pcc_gc_pin(closed)
         store_ptr(slots, 32, closed)
-        pcc_gc_note_write_barrier(null(), closed)
         _gen_sync_clear(slots, pins, 32)
         py_clear_exception()
         py_raise_owned(py_exc_new(7, cstr("a parking call suspended outside a resumable caller")))
@@ -911,7 +781,6 @@ def _gen_sync_build(slots, pins) -> None:
         pcc_gc_pin(error)
     py_incref(error)
     store_ptr(slots, 16, error)
-    pcc_gc_note_write_barrier(null(), error)
     stop_type = py_exc_builtin_class(8)
     error = load_ptr(slots, 16)
     pcc_gc_reassert_pin(error)
@@ -925,7 +794,6 @@ def _gen_sync_build(slots, pins) -> None:
         pcc_gc_pin(value)
     py_incref(value)
     store_ptr(slots, 8, value)
-    pcc_gc_note_write_barrier(null(), value)
     # The message is a borrowed field. Its own root and pin precede clearing
     # TLS or releasing the StopIteration; either operation can run cleanup.
     py_clear_exception()
@@ -954,7 +822,6 @@ def py_gen_run_may_park_sync(gen):
                 pcc_gc_pin(error)
             py_incref(error)
             store_ptr(slots, 16, error)
-            pcc_gc_note_write_barrier(null(), error)
     prior_result_pin: int = load_i64(pins, 8)
     if ptr_eq(load_ptr(slots, 8), load_ptr(slots, 16)):
         prior_result_pin = load_i64(pins, 16)

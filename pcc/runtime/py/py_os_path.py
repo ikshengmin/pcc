@@ -85,7 +85,6 @@ pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 
 py_bool_from_bit = extern("py_bool_from_bit", (c_int32,), c_ptr)
 py_exc_matches = extern("py_exc_matches", (c_ptr, c_ptr), c_int64)
@@ -100,9 +99,6 @@ pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -199,7 +195,6 @@ def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots,
     if not ptr_is_null(left_text):
         store_i64(pins, 0, load_i32(left_text, 12) & 64)
         pcc_gc_pin(left_text)
-        pcc_gc_note_write_barrier(null(), left_text)
     if ptr_is_null(left_text):
         return 0
     right_text = py_str_new(right, right_len)
@@ -207,7 +202,6 @@ def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots,
     if not ptr_is_null(right_text):
         store_i64(pins, 8, load_i32(right_text, 12) & 64)
         pcc_gc_pin(right_text)
-        pcc_gc_note_write_barrier(null(), right_text)
     if ptr_is_null(right_text):
         return 0
     left_key = py_os_path_normcase(load_ptr(slots, 0))
@@ -215,7 +209,6 @@ def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots,
     if not ptr_is_null(left_key):
         store_i64(pins, 16, load_i32(left_key, 12) & 64)
         pcc_gc_pin(left_key)
-        pcc_gc_note_write_barrier(null(), left_key)
     if ptr_is_null(left_key):
         return 0
     right_key = py_os_path_normcase(load_ptr(slots, 8))
@@ -223,7 +216,6 @@ def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots,
     if not ptr_is_null(right_key):
         store_i64(pins, 24, load_i32(right_key, 12) & 64)
         pcc_gc_pin(right_key)
-        pcc_gc_note_write_barrier(null(), right_key)
     if ptr_is_null(right_key):
         return 0
     left_key = load_ptr(slots, 16)
@@ -813,7 +805,6 @@ def _fs_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _fs_fail(7, cstr("filesystem encoding could not lease its owner"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return -1 if py_err_occurred() else 0
 
 
@@ -1102,7 +1093,6 @@ def _path_abspath_build(path, slots, pins) -> None:
         if not ptr_is_null(converted):
             store_i64(pins, 0, load_i32(converted, 12) & 64)
             pcc_gc_pin(converted)
-            pcc_gc_note_write_barrier(null(), converted)
         if ptr_is_null(converted):
             return
         item = load_ptr(slots, 0)
@@ -1120,7 +1110,6 @@ def _path_abspath_build(path, slots, pins) -> None:
             if not ptr_is_null(out):
                 store_i64(pins, 8, load_i32(out, 12) & 64)
                 pcc_gc_pin(out)
-                pcc_gc_note_write_barrier(null(), out)
         free(buffer)
         return
     if in_len > 0 and load_i8(data, 0) == 47:
@@ -1129,7 +1118,6 @@ def _path_abspath_build(path, slots, pins) -> None:
         if not ptr_is_null(out):
             store_i64(pins, 8, load_i32(out, 12) & 64)
             pcc_gc_pin(out)
-            pcc_gc_note_write_barrier(null(), out)
         return
     cwd_ptr = py_path_getcwd()
     if ptr_is_null(cwd_ptr):
@@ -1143,7 +1131,6 @@ def _path_abspath_build(path, slots, pins) -> None:
         if not ptr_is_null(out):
             store_i64(pins, 8, load_i32(out, 12) & 64)
             pcc_gc_pin(out)
-            pcc_gc_note_write_barrier(null(), out)
         return
     # getcwd("/") already supplies the separator. Inventing a second slash
     # would create a distinct POSIX // prefix that normpath must preserve.
@@ -1154,7 +1141,6 @@ def _path_abspath_build(path, slots, pins) -> None:
     if not ptr_is_null(out):
         store_i64(pins, 8, load_i32(out, 12) & 64)
         pcc_gc_pin(out)
-        pcc_gc_note_write_barrier(null(), out)
     if ptr_is_null(out):
         return
     out = load_ptr(slots, 8)
@@ -1181,7 +1167,6 @@ def py_os_path_abspath(path):
         if not ptr_is_null(normalized):
             store_i64(pins, 16, load_i32(normalized, 12) & 64)
             pcc_gc_pin(normalized)
-            pcc_gc_note_write_barrier(null(), normalized)
     _path_clear_root_prefix(slots, pins, 2)
     pcc_gc_frame_leave(slots)
     return pcc_gc_take_pinned_slot(ptr_add(slots, 16), load_i64(pins, 16))
@@ -1483,7 +1468,6 @@ def _path_normpath_build(path, slots, pins) -> None:
         if not ptr_is_null(converted):
             store_i64(pins, 0, load_i32(converted, 12) & 64)
             pcc_gc_pin(converted)
-            pcc_gc_note_write_barrier(null(), converted)
         if ptr_is_null(converted):
             return
         item = load_ptr(slots, 0)
@@ -1556,7 +1540,6 @@ def _path_normpath_build(path, slots, pins) -> None:
     if not ptr_is_null(result):
         store_i64(pins, 8, load_i32(result, 12) & 64)
         pcc_gc_pin(result)
-        pcc_gc_note_write_barrier(null(), result)
     free(work)
     free(starts)
     free(lens)
@@ -2048,7 +2031,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
         if not ptr_is_null(converted):
             store_i64(pins, 0, load_i32(converted, 12) & 64)
             pcc_gc_pin(converted)
-            pcc_gc_note_write_barrier(null(), converted)
         if ptr_is_null(converted):
             return
         path_item = load_ptr(slots, 0)
@@ -2060,7 +2042,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
     if not ptr_is_null(path_absolute):
         store_i64(pins, 8, load_i32(path_absolute, 12) & 64)
         pcc_gc_pin(path_absolute)
-        pcc_gc_note_write_barrier(null(), path_absolute)
     if ptr_is_null(path_absolute):
         return
     start_absolute = py_os_path_abspath(start)
@@ -2068,7 +2049,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
     if not ptr_is_null(start_absolute):
         store_i64(pins, 16, load_i32(start_absolute, 12) & 64)
         pcc_gc_pin(start_absolute)
-        pcc_gc_note_write_barrier(null(), start_absolute)
     if ptr_is_null(start_absolute):
         return
     windows: int = _path_windows()
@@ -2126,7 +2106,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
         if not ptr_is_null(out):
             store_i64(pins, 24, load_i32(out, 12) & 64)
             pcc_gc_pin(out)
-            pcc_gc_note_write_barrier(null(), out)
         return
     output_len: int = 2 * up + total - 1
     j: int = common
@@ -2138,7 +2117,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
     if not ptr_is_null(out):
         store_i64(pins, 24, load_i32(out, 12) & 64)
         pcc_gc_pin(out)
-        pcc_gc_note_write_barrier(null(), out)
     if ptr_is_null(out):
         free(path_offsets)
         free(path_lengths)

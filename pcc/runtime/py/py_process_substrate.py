@@ -1047,7 +1047,6 @@ pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -1082,7 +1081,6 @@ def _listdir_adopt(slots, tokens, index: int) -> int:
     store_i64(tokens, index * _LISTDIR_BYTES, token)
     if token < 0:
         return _listdir_error(19, cstr("listdir: cannot lease owner"))
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
     if py_err_occurred() != 0:
         return -1
     return 0

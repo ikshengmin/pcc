@@ -215,7 +215,6 @@ int64_t pcc_gc_granule_object_publish(void *ptr);
 int64_t pcc_gc_granule_object_retire(void *ptr);
 /* Diagnostic alias for the production LIVE-positive predicate.  Production
  * callers use the normal managed-pointer API; this helper has no callers. */
-int64_t pcc_gc_granule_s2_candidate_positive(PyObject *obj);
 int64_t pcc_gc_pointer_unregister(PyObject *obj);
 PyObject *pcc_gc_retain(PyObject *o);
 void      pcc_gc_release(PyObject *o);
@@ -272,7 +271,6 @@ void     *pcc_gc_register_continuation_root_node(const void *frame_map, PyObject
 void      pcc_gc_unregister_continuation_root_node(void *node);
 void      pcc_gc_unregister_continuation_root(PyObject **slots);
 int64_t   pcc_gc_trace_continuation_roots(void);
-int64_t   pcc_gc_rewrite_continuation_roots(void);
 
 /* Opaque external-device resources live in the C-level kernel, outside the
  * PyObject graph. The same registry is consumed by every GC backend and by
@@ -345,11 +343,8 @@ int64_t   pcc_dlpack_capsule_consume(
 );
 int64_t   pcc_dlpack_managed_tensor_release(void *managed_tensor);
 
-PccGcSchedulerQueue *pcc_gc_scheduler_queue_new(void);
-void      pcc_gc_scheduler_queue_free(PccGcSchedulerQueue *queue);
 int64_t   pcc_gc_scheduler_queue_push(PccGcSchedulerQueue *queue, PyObject *value);
 int64_t   pcc_gc_scheduler_queue_pop_into(PccGcSchedulerQueue *queue, PyObject **out_slot);
-int64_t   pcc_gc_scheduler_queue_len(PccGcSchedulerQueue *queue);
 /* Frame map format, v0: frame_map points at a signed int32 slot count.
  * Positive counts are owning roots; negative counts are borrowed roots.
  * slots points at a contiguous PyObject* local/root array. Future precise
@@ -374,7 +369,6 @@ void      pcc_gc_frame_leave_mapped(PyObject **slots);
 void      pcc_gc_frame_enter_lifo_mapped(const void *frame_map, PyObject **slots);
 void      pcc_gc_frame_leave_lifo_mapped(PyObject **slots);
 int64_t   pcc_gc_frame_slots_walked(PyObject **slots);
-int64_t   pcc_gc_visit_walked_stack_roots(int64_t mode, int64_t resolve);
 /* Differential consumer for pcc precise-stackmap v1.  backend3/4 may mark
  * (mode=1) or rewrite (mode=3) the exact PC record.  backend0/1/2 are no-op;
  * negative results are fail-closed ABI/PC errors.  Registered slots remain
@@ -477,36 +471,20 @@ int64_t pcc_gc_try_init_ptr_locked(PyObject **destination, PyObject **source);
 PyObject *pcc_gc_take_pinned_slot(PyObject **slot, int64_t prior_pin);
 
 void      pcc_gc_immortalize(PyObject *o);
-int64_t   pcc_gc_object_id(PyObject *o);
 int64_t   py_obj_id(PyObject *o);
-void      pcc_gc_reset_relocation_set(void);
-int64_t   pcc_gc_select_relocation_set(int64_t budget);
-int64_t   pcc_gc_backend4_evacuation_drain(int64_t budget);
-int64_t   pcc_gc_backend4_evacuation_page_drain(int64_t page_budget);
-int64_t   pcc_gc_relocation_set_contains(PyObject *o);
-int64_t   pcc_gc_relocation_set_size(void);
 /* Historical raw edge installer.  Returns -3 without mutation when the
  * selected backend needs relocation/oldification payload-commit adjuncts
  * which this public seam cannot provide. */
-int64_t   pcc_gc_install_forwarding(PyObject *from, PyObject *to);
-PyObject *pcc_gc_relocate_copy(PyObject *o, int64_t size);
 /* Raw graph-lock-held cross-object transaction used by relocation-source
  * retirement.  prepare allocates and snapshots without mutation; commit
  * detaches owner store/remembered/zpage metadata without decref; finish
  * releases the detached store-buffer references.  prepare/preflight may
  * report failure; an invariant failure after commit starts mutating is an
  * unconditional fail-stop and never returns partial state to the caller. */
-void     *pcc_gc_backend4_source_side_table_plan_prepare(PyObject *owner);
-int64_t   pcc_gc_backend4_source_side_table_plan_commit(void *plan);
-void      pcc_gc_backend4_source_side_table_plan_finish(
-    void *plan,
-    PyObject *decref_exclusion
-);
 /* Relocation-source ownership cleanup.  The caller holds the GC graph lock
  * and preserves the source forwarding edge/flags through this call.  The
  * transaction also removes any still-live source zpage owner/payload-span
  * accounting before independent raw payload storage is freed. */
-int64_t   pcc_gc_relocation_retire_source_payload(PyObject *o);
 PyObject *pcc_gc_note_relocation_read(PyObject *o);
 
 enum {
@@ -750,8 +728,6 @@ enum {
 };
 
 int64_t   pcc_gc_backend(void);
-int64_t   pcc_gc_set_backend(int64_t backend);
-const char *pcc_gc_backend_name(int64_t backend);
 int64_t   pcc_gc_telemetry(int64_t metric);
 /* G-P3-LONGRUN: process RSS sampling (C-only; -1 on failure). */
 int64_t   pcc_os_current_rss_bytes(void);
@@ -780,121 +756,18 @@ PyObject *py_int_to_bytes(PyObject *v, int64_t length, PyObject *byteorder);
 PyObject *py_int_to_bytes_args(PyObject *v, PyObject *length, PyObject *byteorder, PyObject *signed_value);
 PyObject *py_int_from_bytes(PyObject *bytes_obj, PyObject *byteorder);
 PyObject *py_int_from_bytes_signed(PyObject *bytes_obj, PyObject *byteorder, int64_t is_signed);
-void      pcc_gc_telemetry_reset(void);
-int64_t   pcc_gc_step(int64_t budget);
-int64_t   pcc_gc_backend4_verify_no_old_addresses(void);
-int64_t   pcc_gc_backend4_fragmentation_score(void);
-int64_t   pcc_gc_backend4_forwarding_entries(void);
-int64_t   pcc_gc_backend4_stable_id_entries(void);
-int64_t   pcc_gc_backend4_generation_barrier_score(void);
-int64_t   pcc_gc_backend4_store_buffer_entries(void);
-int64_t   pcc_gc_backend4_generation_promotion_score(void);
-int64_t   pcc_gc_backend4_evacuation_candidate_score(void);
-int64_t   pcc_gc_backend4_evacuated_bytes(void);
-int64_t   pcc_gc_backend4_page_policy_score(void);
-int64_t   pcc_gc_backend4_large_object_defer_score(void);
-int64_t   pcc_gc_backend4_large_object_deferred_bytes(void);
-int64_t   pcc_gc_backend4_small_page_candidate_score(void);
-int64_t   pcc_gc_backend4_medium_page_candidate_score(void);
-int64_t   pcc_gc_backend4_evacuation_candidate_bytes(void);
-int64_t   pcc_gc_backend4_small_page_candidate_bytes(void);
-int64_t   pcc_gc_backend4_medium_page_candidate_bytes(void);
-int64_t   pcc_gc_backend4_evacuation_candidate_zpage_bytes(void);
-int64_t   pcc_gc_backend4_small_page_candidate_zpage_bytes(void);
-int64_t   pcc_gc_backend4_medium_page_candidate_zpage_bytes(void);
-int64_t   pcc_gc_backend4_evacuation_page_candidate_score(void);
 /* Deterministic diagnostic seam for relocation-reseed revalidation and OOM
  * tests. pause is a phase bitmask (1=count/prepare, 2=aggregate, 4=page scan).
  * Defaults are
  * pause=0/allocation_limit=-1; production callers should not configure it. */
-void      pcc_gc_backend4_reseed_plan_probe_config(
-    int64_t pause,
-    int64_t allocation_limit
-);
-int64_t   pcc_gc_backend4_reseed_plan_probe_state(void);
 /* Deterministic Backend-3 remembered-owner OOM seam.  -1 is the production
  * default, 0 forces overflow fallback, and positive values allow that many
  * remembered-node allocations before forcing fallback. */
-int64_t   pcc_gc_backend4_evacuation_page_candidate_bytes(void);
-int64_t   pcc_gc_backend4_evacuation_page_dirty_cards(void);
-int64_t   pcc_gc_backend4_store_buffer_drain_batches(void);
-int64_t   pcc_gc_backend4_store_buffer_drained_entries(void);
-int64_t   pcc_gc_backend4_store_buffer_duplicate_skips(void);
-int64_t   pcc_gc_backend4_store_buffer_high_water(void);
-int64_t   pcc_gc_backend4_page_pressure_score(void);
-int64_t   pcc_gc_backend4_store_buffer_owner_fanout_high_water(void);
-int64_t   pcc_gc_backend4_store_buffer_owner_count_high_water(void);
-int64_t   pcc_gc_backend4_store_buffer_incomplete_drains(void);
-int64_t   pcc_gc_backend4_evacuation_incomplete_batches(void);
-int64_t   pcc_gc_backend4_store_buffer_batch_capacity(void);
-int64_t   pcc_gc_backend4_store_buffer_max_batch_size(void);
-int64_t   pcc_gc_backend4_store_buffer_full_batches(void);
-int64_t   pcc_gc_backend4_store_buffer_medium_capacity(void);
-int64_t   pcc_gc_backend4_store_buffer_medium_pending(void);
-int64_t   pcc_gc_backend4_store_buffer_medium_flushes(void);
-int64_t   pcc_gc_backend4_store_buffer_medium_flushed_entries(void);
-int64_t   pcc_gc_backend4_store_buffer_medium_full_flushes(void);
-int64_t   pcc_gc_backend4_store_buffer_cross_thread_medium_flushes(void);
-int64_t   pcc_gc_backend4_store_buffer_cross_thread_medium_flushed_entries(void);
-int64_t   pcc_gc_backend4_remembered_set_entries(void);
-int64_t   pcc_gc_backend4_remembered_set_duplicate_skips(void);
-int64_t   pcc_gc_backend4_remembered_set_high_water(void);
-int64_t   pcc_gc_backend4_remembered_page_entries(void);
-int64_t   pcc_gc_backend4_remembered_page_slot_entries(void);
-int64_t   pcc_gc_backend4_remembered_page_high_water(void);
-int64_t   pcc_gc_backend4_remembered_page_contains_slot(PyObject **slot);
-int64_t   pcc_gc_backend4_remembered_page_clear_slot(PyObject **slot);
-int64_t   pcc_gc_backend4_zpage_contains_remembered_card(PyObject *owner, PyObject **slot);
-int64_t   pcc_gc_backend4_zpage_clear_remembered_card(PyObject *owner, PyObject **slot);
 #ifndef PCC_GC_BACKEND4_ZPAGE_SPAN_CARD_BYTES
 #define PCC_GC_BACKEND4_ZPAGE_SPAN_CARD_BYTES 512
 #endif
-int64_t   pcc_gc_backend4_zpage_owner_offset_bytes(PyObject *owner);
-int64_t   pcc_gc_backend4_zpage_owner_size_bytes(PyObject *owner);
-int64_t   pcc_gc_backend4_zpage_owner_span_card(PyObject *owner);
-int64_t   pcc_gc_backend4_zpage_owner_slot_span_card(PyObject *owner, PyObject **slot);
-int64_t   pcc_gc_backend4_zpage_register_owner_payload_span(PyObject *owner, void *base, int64_t size_bytes);
 int64_t   pcc_gc_backend4_zpage_unregister_owner_payload_span(PyObject *owner, void *base);
 int64_t   pcc_gc_backend4_zpage_retarget_owner_payload_span(PyObject *owner, void *old_base, void *new_base, int64_t size_bytes);
-int64_t   pcc_gc_backend4_zpage_count(void);
-int64_t   pcc_gc_backend4_zpage_capacity_bytes(void);
-int64_t   pcc_gc_backend4_zpage_fragmentation_bytes(void);
-int64_t   pcc_gc_backend4_zpage_large_pages(void);
-int64_t   pcc_gc_backend4_zpage_used_bytes(void);
-int64_t   pcc_gc_backend4_zpage_allocated_bytes(void);
-int64_t   pcc_gc_backend4_zpage_reclaimable_gap_bytes(void);
-int64_t   pcc_gc_backend4_zpage_span_bytes(void);
-int64_t   pcc_gc_backend4_zpage_fragmentation_per_mille(void);
-int64_t   pcc_gc_backend4_zpage_policy_score(void);
-int64_t   pcc_gc_backend4_zpage_remembered_slots(void);
-int64_t   pcc_gc_backend4_zpage_remembered_cards(void);
-int64_t   pcc_gc_backend4_zpage_remembered_card_ratio_per_mille(void);
-int64_t   pcc_gc_backend4_zpage_dirty_pages(void);
-int64_t   pcc_gc_backend4_zpage_fragmented_pages(void);
-int64_t   pcc_gc_backend4_zpage_young_pages(void);
-int64_t   pcc_gc_backend4_zpage_old_pages(void);
-int64_t   pcc_gc_backend4_zpage_free_pages(void);
-int64_t   pcc_gc_backend4_zpage_free_capacity_bytes(void);
-int64_t   pcc_gc_backend4_zpage_free_span_bytes(void);
-int64_t   pcc_gc_backend4_evacuation_efficiency_per_mille(void);
-int64_t   pcc_gc_backend4_fragmentation_backlog_bytes(void);
-int64_t   pcc_gc_backend4_fragmentation_policy_score(void);
-int64_t   pcc_gc_backend4_small_page_limit_bytes(void);
-int64_t   pcc_gc_backend4_medium_page_limit_bytes(void);
-int64_t   pcc_gc_backend4_large_defer_limit_bytes(void);
-int64_t   pcc_gc_backend4_large_object_reconsiderations(void);
-int64_t   pcc_gc_backend4_young_object_count(void);
-int64_t   pcc_gc_backend4_old_object_count(void);
-int64_t   pcc_gc_backend4_young_bytes(void);
-int64_t   pcc_gc_backend4_old_bytes(void);
-int64_t   pcc_gc_backend4_small_page_object_count(void);
-int64_t   pcc_gc_backend4_medium_page_object_count(void);
-int64_t   pcc_gc_backend4_large_page_object_count(void);
-int64_t   pcc_gc_backend4_small_page_live_bytes(void);
-int64_t   pcc_gc_backend4_medium_page_live_bytes(void);
-int64_t   pcc_gc_backend4_large_page_live_bytes(void);
-int64_t   pcc_gc_backend2_production_score(void);
-int64_t   pcc_gc_backend2_worker_buffer_score(void);
 int64_t   pcc_gc_scheduler_root_count(void);
 int64_t   pcc_gc_frame_root_slot_count(void);
 int64_t   pcc_gc_continuation_root_slot_count(void);
@@ -933,7 +806,6 @@ int64_t pcc_thread_blocking_enter(void *frame);
 void    pcc_thread_blocking_leave(int64_t entered);
 int64_t pcc_thread_collect_stopped_frames(void *frames, int64_t capacity);
 void pcc_thread_enable_conservative_roots(void);
-int64_t pcc_thread_visit_conservative_words(void *visitor, void *context);
 int64_t pcc_current_thread_id(void);
 void   *pcc_current_native_thread_token(void);
 int64_t pcc_refcount_strategy(void);

@@ -131,12 +131,8 @@ pcc_runtime_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_record_explicit_pause = extern(
     "pcc_gc_record_explicit_pause", (c_int64, c_int64), c_void
 )
-pcc_gc_record_collection_stw_pause = extern(
-    "pcc_gc_record_collection_stw_pause", (c_int64, c_int64), c_void
-)
 py_gc_collect = extern("py_gc_collect", (), c_int64)
 py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
-pcc_gc_slot_is_runtime_root = extern("pcc_gc_slot_is_runtime_root", (c_ptr,), c_int64)
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
 py_list_append = extern("py_list_append", (c_ptr, c_ptr), c_void)
 py_list_get = extern("py_list_get", (c_ptr, c_int64), c_ptr)
@@ -153,29 +149,13 @@ py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 pcc_gc_note_alloc = extern("pcc_gc_note_alloc", (c_int64,), c_void)
-pcc_gc_backend4_maybe_auto_step = extern("pcc_gc_backend4_maybe_auto_step", (), c_void)
-pcc_gc_tracing_debt_threshold = extern("pcc_gc_tracing_debt_threshold", (), c_int64)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
-pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
-pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_py_gc_minor_graph_lock_depth = extern("pcc_py_gc_minor_graph_lock_depth", (), c_int64)
 pcc_gc_note_object_allocated = extern(
     "pcc_gc_note_object_allocated",
     (c_ptr,),
     c_void,
 )
-pcc_gc_alloc_stage_note = extern(
-    "pcc_gc_alloc_stage_note", (c_ptr, c_int64), c_int64
-)
-pcc_gc_note_object_allocated_sized = extern(
-    "pcc_gc_note_object_allocated_sized",
-    (c_ptr, c_int64),
-    c_void,
-)
-pcc_gc_register_object_cell = extern(
-    "pcc_gc_register_object_cell", (c_ptr, c_int64), c_int64
-)
-pcc_gc_object_is_white = extern("pcc_gc_object_is_white", (c_ptr, c_int64), c_int64)
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register",
     (c_ptr,),
@@ -185,16 +165,8 @@ pcc_gc_fix_backend = extern("pcc_gc_fix_backend", (), c_void)
 pcc_allocator_alloc_object = extern(
     "pcc_allocator_alloc_object", (c_int64,), c_ptr
 )
-pcc_allocator_alloc_object_outside_evacuation = extern(
-    "pcc_allocator_alloc_object_outside_evacuation", (c_int64,), c_ptr
-)
 pcc_allocator_object_publish_fresh = extern(
     "pcc_allocator_object_publish_fresh", (c_ptr,), c_int64
-)
-pcc_gc_backend4_try_zpage_alloc = extern(
-    "pcc_gc_backend4_try_zpage_alloc",
-    (c_int64, c_int32),
-    c_ptr,
 )
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing",
@@ -207,23 +179,8 @@ pcc_gc_free_watch_begin = extern(
 pcc_gc_free_watch_end = extern("pcc_gc_free_watch_end", (c_ptr,), c_int64)
 # pcc_gc_free_watch_begin's record (layout owned by py_gc_backend.py).
 GC_FREE_WATCH_BYTES = 24
-pcc_gc_note_load = extern("pcc_gc_note_load", (), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read",
-    (c_ptr,),
-    c_ptr,
-)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
-pcc_gc_metric_shard = extern("pcc_gc_metric_shard", (), c_int64)
-pcc_gc_object_index_seen_stable = extern(
-    "pcc_gc_object_index_seen_stable", (c_ptr,), c_int64
-)
-pcc_gc_shade_gray_atomic = extern(
-    "pcc_gc_shade_gray_atomic", (c_ptr, c_int64), c_void
-)
 pcc_gc_note_safepoint = extern("pcc_gc_note_safepoint", (), c_void)
-pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
-pcc_gc_tracing_step_cycle = extern("pcc_gc_tracing_step_cycle", (c_int64,), c_int64)
 pcc_gc_dispatch_tracing_work_pending = extern(
     "pcc_gc_dispatch_tracing_work_pending", (), c_int64
 )
@@ -236,9 +193,6 @@ pcc_gc_tracing_record_pause = extern(
 pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_thread_all_stopped_at_gates = extern(
     "pcc_thread_all_stopped_at_gates", (), c_int64
-)
-pcc_gc_concurrent_sweep_finish_stopped = extern(
-    "pcc_gc_concurrent_sweep_finish_stopped", (), c_int64
 )
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_note_frame_enter = extern(
@@ -268,24 +222,8 @@ pcc_gc_note_write_barrier = extern(
     (c_ptr, c_ptr),
     c_void,
 )
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier",
-    (c_ptr, c_ptr, c_ptr),
-    c_void,
-)
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock",
-    (c_ptr,),
-    c_int64,
-)
-pcc_gc_object_is_known_stable = extern(
-    "pcc_gc_object_is_known_stable", (c_ptr,), c_int64
-)
-pcc_gc_backend4_slot_needs_resolve = extern(
-    "pcc_gc_backend4_slot_needs_resolve",
     (c_ptr,),
     c_int64,
 )
@@ -305,18 +243,6 @@ def _untracked_task_object_is_known(o, backend: int) -> int:
         return pcc_gc_object_is_known_no_lock(o)
     return pcc_gc_object_is_known(o)
 pcc_gc_has_tracing_sweep = extern("pcc_gc_has_tracing_sweep", (), c_int64)
-pcc_gc_sweep_owed = extern("pcc_gc_sweep_owed", (), c_int64)
-pcc_gc_collect_tracing = extern("pcc_gc_collect_tracing", (), c_int64)
-pcc_gc_begin_explicit_tracing_collect = extern(
-    "pcc_gc_begin_explicit_tracing_collect",
-    (),
-    c_void,
-)
-pcc_gc_end_explicit_tracing_collect = extern(
-    "pcc_gc_end_explicit_tracing_collect",
-    (),
-    c_void,
-)
 pcc_gc_external_resource_poll = extern(
     "pcc_gc_external_resource_poll",
     (),
@@ -324,18 +250,6 @@ pcc_gc_external_resource_poll = extern(
 )
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
-pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
-pcc_gc_precise_stack_diff_if_requested = extern(
-    "pcc_gc_precise_stack_diff_if_requested", (), c_void
-)
-pcc_resume_world = extern("pcc_resume_world", (), c_int64)
-pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
-pcc_gc_deferred_free_begin = extern("pcc_gc_deferred_free_begin", (c_int64,), c_int64)
-pcc_gc_deferred_free_close = extern("pcc_gc_deferred_free_close", (), c_int64)
-pcc_gc_scalar_sweep_seal = extern("pcc_gc_scalar_sweep_seal", (), c_void)
-pcc_gc_reclaim_retired_index_tables = extern(
-    "pcc_gc_reclaim_retired_index_tables", (), c_int64
-)
 pcc_gc_reclaim_retired_index_tables_if_alone = extern(
     "pcc_gc_reclaim_retired_index_tables_if_alone", (), c_void
 )
@@ -432,24 +346,7 @@ def _gc_forwarding_population() -> int:
     it, until its references are rewritten (pcc_gc_backend4_remap_owed):
     edges kept for their grace epochs name sources nothing reaches.
     """
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        return load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0)
     return load_i32(global_addr("pcc_gc_forwarding_population"), 0)
-
-
-def _gc_backend4_should_check_slot(owner, slot) -> int:
-    if _gc_forwarding_population() > 0:
-        return 1
-    if ptr_is_null(global_load_ptr("pcc_gc_relocation_set_head")) != 0:
-        return 0
-    # A slot of an ``owner`` object is a heap slot, never a runtime root:
-    # only an ownerless slot asks the root registry, which takes the graph
-    # lock (the lock a container-locked reader must not take).
-    if ptr_is_null(owner) == 0:
-        return 1
-    if pcc_gc_slot_is_runtime_root(slot) != 0:
-        return 0
-    return 1
 
 
 # Header layout, stable flags, and public type tags come from the generated
@@ -459,6 +356,13 @@ def _gc_backend4_should_check_slot(owner, slot) -> int:
 
 
 pcc_gc_tracked_count_flush = extern("pcc_gc_tracked_count_flush", (), c_void)
+pcc_gc_backend0_full_begin = extern("pcc_gc_backend0_full_begin", (), c_int64)
+pcc_gc_backend0_full_step = extern("pcc_gc_backend0_full_step", (), c_int64)
+pcc_gc_backend0_full_drain_releases = extern(
+    "pcc_gc_backend0_full_drain_releases", (), c_int64
+)
+pcc_allocator_trim = extern("pcc_allocator_trim", (), c_int64)
+pcc_allocator_trim_objects = extern("pcc_allocator_trim_objects", (), c_int64)
 
 
 @c_abi_export("py_bool_from_bit")
@@ -503,46 +407,8 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     # The first managed allocation fixes the collector before reading it.
     if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
         pcc_gc_fix_backend()
-    backend: int = _gc_backend_fast()
     obj = null()
     stored_flags: int = flags
-    if backend == 4:
-        if (
-            type_tag == PY_TYPE_LIST
-            or type_tag == PY_TYPE_TUPLE
-            or type_tag == PY_TYPE_DICT
-            or type_tag == PY_TYPE_SET
-            or type_tag == PY_TYPE_PROPERTY
-            or type_tag == PY_TYPE_CLASSMETHOD
-            or type_tag == PY_TYPE_WEAKREF
-            # Every remaining tag the colored-relocation accept predicate
-            # admits (GC-P1-BACKEND4-RELOCATABLE-TAGS-LACK-FRESH-ALLOC).
-            # Constructors publish on success.
-            or type_tag == PY_TYPE_FUNC
-            or type_tag == PY_TYPE_ITER
-            or type_tag == PY_TYPE_GEN
-            or type_tag == PY_TYPE_COROUTINE
-            or type_tag == PY_TYPE_CONTINUATION
-            or type_tag == PY_TYPE_TASK
-            or type_tag == PY_TYPE_EXC
-            or type_tag == PY_TYPE_CLASS
-            or type_tag == PY_TYPE_STATICMETHOD
-            or type_tag == PY_TYPE_MEMORYVIEW
-        ):
-            stored_flags = stored_flags | 16384
-    if backend == 4:
-        # The page allocator bumps a shared active page under the graph
-        # lock, and a page object's provenance is a locked index insert:
-        # two lock round trips for every container, which put four workers
-        # below one. Under the nonmoving protocol every object comes from
-        # the allocator's per-thread object cells; relocation copies cells.
-        if (_gc_graph_leaf_tag(type_tag) == 0
-                and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0):
-            obj = pcc_gc_backend4_try_zpage_alloc(size, flags)
-            if ptr_is_null(obj) == 0:
-                stored_flags = stored_flags | 65536
-        else:
-            stored_flags = stored_flags & ~65536
     from_allocator: int = 0
     if ptr_is_null(obj) != 0:
         from_allocator = 1
@@ -552,18 +418,9 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
         # allocator's OBJECT slab family (ARCH-P0 S1) so their granules are
         # registered for exact structural provenance; raw allocations keep
         # using plain malloc and never share these slabs.
-        if (
-            backend == 4
-            and load_i32(global_addr("pcc_gc_backend4_relocation_target_alloc"), 0) != 0
-        ):
-            # A relocation copy never lands in a slab being evacuated.
-            obj = pcc_allocator_alloc_object_outside_evacuation(size)
-        else:
-            obj = pcc_allocator_alloc_object(size)
+        obj = pcc_allocator_alloc_object(size)
         if ptr_is_null(obj) == 0:
             memset(obj, 0, size)
-            if backend == 4:
-                stored_flags = (stored_flags & ~65536) | 262144
     if ptr_is_null(obj):
         return obj
     store_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET, 1)
@@ -591,10 +448,6 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
     # graph-lock holder that needs the index registers the batch.
     # An object cell registers through its record without the graph lock
     # under GC1/GC2 (pcc_gc_register_object_cell).
-    if backend != 0:
-        if pcc_gc_register_object_cell(obj, size) == 0:
-            if pcc_gc_alloc_stage_note(obj, size) == 0:
-                pcc_gc_note_object_allocated_sized(obj, size)
     # Tracking may rehash the object index, which is read without the lock;
     # with one thread the replaced table can go now.
     if ptr_is_null(global_load_ptr("pcc_py_gc_index_retired_tables")) == 0:
@@ -606,20 +459,7 @@ def pcc_gc_alloc(size: int, type_tag: int, flags: int):
 
 @c_abi_export("pcc_gc_publish_initialized")
 def pcc_gc_publish_initialized(obj) -> None:
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    if _gc_backend_fast() != 4:
-        return
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        # Nothing reads the pending bit while a mutator runs: selection and
-        # the sweep read it in a stopped world. One atomic clear replaces
-        # the graph-lock round trip every container allocation paid.
-        atomic_rmw_i32("and", obj, PYOBJECTHEADER_FLAGS_OFFSET, ~16384, "acq_rel")
-        return
-    pcc_py_gc_minor_graph_lock_for(2)
-    flags: int = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
-    store_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~16384)
-    pcc_py_gc_minor_graph_unlock()
+    return
 
 
 @c_abi_export("pcc_gc_retain")
@@ -632,15 +472,6 @@ def pcc_gc_retain(o):
 def pcc_gc_release(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
-    backend: int = _gc_backend_fast()
-    if backend == 4:
-        if _gc_forwarding_population() > 0 and _gc_relocation_candidate(o) != 0:
-            resolved = pcc_gc_note_relocation_read(o)
-            # Identity, not ``!=``: a value comparison retains both operands
-            # and drops them through this very function, recursing forever.
-            if ptr_eq(resolved, o) != 0 and pcc_gc_object_is_known_stable(o) == 0:
-                return
-            o = resolved
     py_decref(o)
 
 
@@ -672,27 +503,6 @@ def pcc_gc_load_ptr(owner, slot):
     if load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
         return v
     backend: int = 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        backend = pcc_gc_backend()
-    else:
-        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == 4:
-        # Only the relocating collector forwards. Null and tagged values
-        # cannot relocate: skip root membership and resolution before
-        # counting a read-barrier check.
-        if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
-            return v
-        if _gc_backend4_should_check_slot(owner, slot) == 0:
-            return v
-        pcc_gc_note_load()
-        # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
-        # header deref of a possibly-stale/unmapped slot value.
-        if pcc_gc_backend4_slot_needs_resolve(v) != 0:
-            resolved = pcc_gc_note_relocation_read(v)
-            if ptr_eq(resolved, v) == 0:
-                store_ptr(slot, 0, resolved)
-                v = resolved
-        return v
     return v
 
 
@@ -703,24 +513,6 @@ def pcc_gc_load_borrowed_ptr(owner, slot):
     v = load_ptr(slot, 0)
     if load_i32(global_addr("pcc_gc_read_barrier_enabled"), 0) == 0:
         return v
-    backend: int = _gc_backend_fast()
-    if backend == 4:
-        # Only the relocating collector forwards. Null and tagged values
-        # cannot relocate: skip root membership and resolution before
-        # counting a read-barrier check.
-        if ptr_is_null(v) != 0 or is_tagged_int(v) != 0:
-            return v
-        if _gc_backend4_should_check_slot(owner, slot) == 0:
-            return v
-        pcc_gc_note_load()
-        # G-P0-LONGRUN: decide via pointer-value lookups, never a raw
-        # header deref of a possibly-stale/unmapped slot value.
-        if pcc_gc_backend4_slot_needs_resolve(v) != 0:
-            resolved = pcc_gc_note_relocation_read(v)
-            if ptr_eq(resolved, v) == 0:
-                store_ptr(slot, 0, resolved)
-                v = resolved
-        return v
     return v
 
 
@@ -730,14 +522,6 @@ def pcc_gc_resolve_owned_ptr(value):
         return value
     if is_tagged_int(value) != 0:
         return value
-    backend: int = _gc_backend_fast()
-    if backend != 4:
-        return value
-    if _gc_forwarding_population() <= 0:
-        return value
-    resolved = pcc_gc_note_relocation_read(value)
-    if ptr_eq(resolved, value) == 0:
-        return resolved
     return value
 
 
@@ -750,32 +534,17 @@ def pcc_gc_store_ptr(owner, slot, value) -> None:
         backend = pcc_gc_backend()
     else:
         backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend == 0:
-        if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
-            pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
-        old = load_ptr(slot, 0)
-        # This retaining store already owns the same reference. GC0 has no
-        # tracing/relocation barrier to perform for an unchanged edge.
-        if ptr_eq(old, value) != 0:
-            return
-        py_incref(value)
-        store_ptr(slot, 0, value)
-        py_decref(old)
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, owner)
+    old = load_ptr(slot, 0)
+    # This retaining store already owns the same reference. GC0 has no
+    # tracing/relocation barrier to perform for an unchanged edge.
+    if ptr_eq(old, value) != 0:
         return
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        # The nonmoving count-free tracers (GC1, GC2 and GC3) neither count
-        # nor move: the plan would only note
-        # the store, write the slot and shade the value in a cycle. Do that
-        # under one no-park scope, as a root store does, without the graph
-        # lock that serialized every such store with the marker.
-        _store_root_nonmoving_tracing(slot, value, backend)
-        return
-    plan = stack_alloc(128)
-    pcc_gc_store_ptr_plan_init(plan, owner, backend)
-    pcc_py_gc_minor_graph_lock_for(3)
-    pcc_gc_store_ptr_plan_commit_locked(plan, owner, slot, value)
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_store_ptr_plan_finish(plan)
+    py_incref(value)
+    store_ptr(slot, 0, value)
+    py_decref(old)
+    return
 
 
 def _fields_lock_themselves() -> int:
@@ -927,9 +696,6 @@ def pcc_gc_store_root_plan_init(plan, backend: int) -> None:
         return
     memset(plan, 0, _STORE_PLAN_BYTES)
     store_i64(plan, _STORE_PLAN_BACKEND, backend)
-    if backend >= 1 and backend <= 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        store_i32(plan, _STORE_PLAN_MODE, _STORE_PLAN_COUNT_FREE)
-        return
     store_i32(plan, _STORE_PLAN_MODE, 0)
 
 
@@ -975,7 +741,7 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         pcc_gc_note_store()
     if backend == 4:
         if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
-            value = pcc_gc_note_relocation_read(value)
+            value = value
     if load_i32(plan, _STORE_PLAN_MODE) != 0:
         # The existing no-RC prepare/finish routines have no ownership effect.
         # Keep relocation and the insertion barrier, but do not initialize RC
@@ -986,9 +752,6 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # barrier for heap fields because generation recording is independent
         # of the major-mark flag. No nested lock or provenance probe is needed
         # for the root case while this same outer lock keeps the phase stable.
-        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-            if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1
@@ -997,8 +760,6 @@ def _pcc_gc_store_plan_commit_locked(plan, owner, slot, value) -> int:
         # Debug-invalid value: the store note and the deferred diagnostic
         # run, but no slot publication or old-value release occurs.
         return 0
-    if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
     old = load_ptr(slot, 0)
     store_ptr(slot, 0, load_ptr(plan, 0))
     if ptr_is_null(old) == 0 and is_tagged_int(old) == 0:
@@ -1048,16 +809,13 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
     if load_i32(plan, _STORE_PLAN_MODE) != 0:
         if ptr_eq(value, sentinel) == 0:
             if _gc_forwarding_population() > 0 and _gc_relocation_candidate(value) != 0:
-                value = pcc_gc_note_relocation_read(value)
+                value = value
         store_ptr(plan, _STORE_PLAN_VALUE, value)
         # This transaction already owns the graph lock. Immediate values have
         # no edges; an idle root has no marking work. Keep the owner-aware
         # barrier for heap fields because generation recording is independent
         # of the major-mark flag. No nested lock or provenance probe is needed
         # for the root case while this same outer lock keeps the phase stable.
-        if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-            if ptr_is_null(owner) == 0 or load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-                pcc_gc_note_slot_write_barrier(owner, slot, value)
         store_ptr(slot, 0, value)
         store_i32(plan, _STORE_PLAN_STATE, 3)
         return 1
@@ -1071,12 +829,10 @@ def _pcc_gc_store_plan_commit_sentinel_aware_locked(
                 _gc_forwarding_population() > 0
                 and _gc_relocation_candidate(value) != 0
             ):
-                value = pcc_gc_note_relocation_read(value)
+                value = value
         _py_incref_prepare(value, plan)
         if load_i64(plan, 48) != 0:
             return 0
-    if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_slot_write_barrier(owner, slot, load_ptr(plan, 0))
     old = load_ptr(slot, 0)
     store_ptr(slot, 0, load_ptr(plan, 0))
     if ptr_eq(old, sentinel) != 0:
@@ -1142,74 +898,6 @@ def pcc_gc_store_ptr_plan_finish(plan) -> None:
     _pcc_gc_store_plan_finish(plan, 0)
 
 
-def _store_root_nonmoving_tracing(slot, value, backend: int) -> None:
-    # Initial seeding and the final root verdict stop the world, so a store
-    # and its insertion barrier must never be split by a stop. Only
-    # intrinsics run between the store and the phase read below: a stop is
-    # admitted only at a poll, and the mark phase changes only in a stopped
-    # world, so the read answers for this store. Outside a cycle the store
-    # owes nothing; during one, the shade runs in a no-park scope that opens
-    # before anything could poll (pcc_thread_no_park_enter polls nowhere).
-    store_ptr(slot, 0, value)
-    if (
-        ptr_is_null(value) == 0
-        and is_tagged_int(value) == 0
-        and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
-    ):
-        pcc_thread_no_park_enter()
-        if pcc_gc_object_index_seen_stable(value) != 0:
-            flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
-            if (flags & 524288) == 0:
-                if backend == 2:
-                    if (flags & 16) == 0:
-                        # GC2's barrier telemetry, as its locked root barrier
-                        # counts each store that shades.
-                        atomic_rmw_i32(
-                            "add", global_addr("pcc_gc_cms_wb_flushes"), 0, 1, "relaxed"
-                        )
-                    pcc_gc_shade_gray_atomic(value, 1)
-                elif pcc_gc_object_is_white(value, flags) != 0:
-                    pcc_gc_shade_gray_atomic(value, 0)
-        pcc_thread_no_park_exit()
-    # pcc_gc_note_store's count, without its call and entry poll.
-    atomic_rmw_i64(
-        "add", global_addr("pcc_gc_metric_shards"), pcc_gc_metric_shard() + 16, 1, "relaxed"
-    )
-
-
-def _store_root_count_free_unforwarded(slot, value) -> int:
-    # Keep the existing no-forwarding publication/barrier path below. With
-    # forwarding present, even an immediate store must serialize with shared
-    # root readers that heal an old forwarded address back into this slot.
-    pcc_thread_no_park_enter()
-    if atomic_load_i32(global_addr("pcc_gc_forwarding_population"), 0, "acquire") != 0:
-        # Preserve the original stop-admission boundary before graph entry.
-        pcc_thread_no_park_exit()
-        if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
-            # NULL/tagged ints need no relocation, old-owner release or gray
-            # work in count-free mode. Skip only StorePlan setup/finish, not
-            # the graph lock or its own no-park/safepoint protocol.
-            pcc_py_gc_minor_graph_lock()
-            pcc_gc_note_store()
-            store_ptr(slot, 0, value)
-            pcc_py_gc_minor_graph_unlock()
-            return 1
-        return 0
-    pcc_gc_note_store()
-    store_ptr(slot, 0, value)
-    if (
-        ptr_is_null(value) == 0
-        and is_tagged_int(value) == 0
-        and atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
-        and pcc_gc_object_index_seen_stable(value) != 0
-    ):
-        flags: i64 = i64(atomic_load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire"))
-        if (flags & 524288) == 0 and pcc_gc_object_is_white(value, flags) != 0:
-            pcc_gc_shade_gray_atomic(value, 0)
-    pcc_thread_no_park_exit()
-    return 1
-
-
 def _gc0_owner_fast_path() -> int:
     """py_incref/py_decref's own gate: backend 0, no probe, no log, threads.
 
@@ -1243,10 +931,8 @@ def pcc_gc_store_return_root(slot, value) -> None:
     so a slot's store and its clear always take the same path."""
     if ptr_is_null(slot) != 0:
         return
-    if _gc_backend_fast() == 0:
-        store_ptr(slot, 0, value)
-        return
-    pcc_gc_store_root(slot, value)
+    store_ptr(slot, 0, value)
+    return
 
 
 @c_abi_export("pcc_gc_store_root")
@@ -1308,7 +994,7 @@ def pcc_gc_store_root(slot, value) -> None:
     backend: int = _gc_backend_fast()
     # PCC_DEBUG_RUNTIME validates both values in the store plan, which
     # publishes nothing it refuses; the direct path below cannot refuse.
-    if backend == 0 and load_i32(global_addr("pcc_debug_runtime_enabled_cache"), 0) == 0:
+    if load_i32(global_addr('pcc_debug_runtime_enabled_cache'), 0) == 0:
         if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
             pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, null())
         old = load_ptr(slot, 0)
@@ -1326,22 +1012,6 @@ def pcc_gc_store_root(slot, value) -> None:
         if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
             py_decref(old)
         return
-    if (
-        (backend == 1 or backend == 2 or backend == 3 or backend == 4)
-        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
-        _store_root_nonmoving_tracing(slot, value, backend)
-        return
-    if (
-        (backend == 4)
-        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
-        if _store_root_count_free_unforwarded(slot, value) != 0:
-            return
     plan = stack_alloc(128)
     pcc_gc_store_root_plan_init(plan, backend)
     pcc_py_gc_minor_graph_lock()
@@ -1393,43 +1063,16 @@ def pcc_gc_store_root_take(slot, value) -> None:
     if ptr_is_null(slot) != 0:
         return
     backend: int = _gc_backend_fast()
-    if backend == 0:
-        if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
-            pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, null())
-        old = load_ptr(slot, 0)
-        store_ptr(slot, 0, value)
-        if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
-            py_decref(old)
-        return
-    if (
-        (backend == 1 or backend == 2 or backend == 3 or backend == 4)
-        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
-        _store_root_nonmoving_tracing(slot, value, backend)
-        return
-    if (
-        (backend == 4)
-        and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
-        # Count-free: the caller's reference moves without a release.
-        if _store_root_count_free_unforwarded(slot, value) != 0:
-            return
+    if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+        pcc_diagnostics_runtime_log_event_code(2, 3, backend, 0, null())
+    old = load_ptr(slot, 0)
+    store_ptr(slot, 0, value)
+    if is_tagged_int(old) == 0 and ptr_is_null(old) == 0:
+        py_decref(old)
+    return
     # Moving/tracing backends: commit through the relocation-aware plan (which
     # retains the stored value), then release the caller's reference through
     # the slot so a relocated address is never touched.
-    pcc_gc_store_root(slot, value)
-    # An empty input transfers no owner. The checked root store has already
-    # retired the old reference, and a fresh slot reload may be nonempty if
-    # that finalizer reentered and repopulated it. Do not release that value.
-    if ptr_is_null(value) != 0:
-        return
-    stored = pcc_gc_load_ptr(null(), slot)
-    if is_tagged_int(stored) == 0 and ptr_is_null(stored) == 0:
-        py_decref(stored)
 
 
 @c_abi_export("pcc_gc_store_root_known")
@@ -1442,7 +1085,7 @@ def pcc_gc_store_root_known(slot, value) -> None:
     """
     if ptr_is_null(slot) != 0:
         return
-    if _gc_backend_fast() != 0 or _known_ref_checks() != 0 or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+    if _known_ref_checks() != 0 or load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0:
         pcc_gc_store_root(slot, value)
         return
     old = load_ptr(slot, 0)
@@ -1460,7 +1103,7 @@ def pcc_gc_store_root_take_known(slot, value) -> None:
     """Transfer an initialized object's owner into a compiler-owned root."""
     if ptr_is_null(slot) != 0:
         return
-    if _gc_backend_fast() != 0 or _known_ref_checks() != 0 or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
+    if _known_ref_checks() != 0 or load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0:
         pcc_gc_store_root_take(slot, value)
         return
     old = load_ptr(slot, 0)
@@ -1483,16 +1126,13 @@ def pcc_gc_publish_owned_root(slot) -> int:
     if ptr_is_null(slot) != 0:
         return -1
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0
     ):
         return 0
     token: int = pcc_gc_foreign_lease_acquire(slot)
     if token < 0:
         return token
     value = load_ptr(slot, 0)
-    pcc_gc_note_slot_write_barrier(null(), slot, value)
     return pcc_gc_foreign_lease_release(slot, token)
 
 
@@ -1567,24 +1207,6 @@ def pcc_gc_root_copy_lease(destination, source) -> int:
                     atomic_rmw_i64("add", shared, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
                     store_ptr(destination, 0, shared)
                     return 0
-        elif (
-            load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-        ):
-            # The four tracing collectors. Reachability through the
-            # destination is the retain, and no object moves while a mutator
-            # runs, so no address is leased. One no-park interval covers the
-            # emptiness test, the load and the publication with its barrier.
-            pcc_thread_no_park_enter()
-            traced_status: int = -4
-            if ptr_is_null(load_ptr(destination, 0)) != 0:
-                _store_root_nonmoving_tracing(
-                    destination, load_ptr(source, 0),
-                    load_i32(global_addr("pcc_gc_backend_selected"), 0),
-                )
-                traced_status = 0
-            pcc_thread_no_park_exit()
-            return traced_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     return _gc_root_copy_lease_locked(destination, source)
@@ -1631,28 +1253,12 @@ def pcc_gc_root_move(destination, source) -> int:
     if ptr_eq(destination, source) != 0:
         return -1
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0
     ):
         # As in pcc_gc_root_copy_borrowed_lease: GC0 neither moves nor traces
         # roots concurrently (its cycle collection stops the world) and roots
         # have no barrier, so the move is two plain stores. No graph lock, so
         # concurrent threads do not serialize here.
-        if ptr_is_null(load_ptr(destination, 0)) == 0:
-            return -4
-        store_ptr(destination, 0, load_ptr(source, 0))
-        store_ptr(source, 0, null())
-        return 0
-    if (
-        load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and pcc_gc_stack_slot_root_is_conservative(source) != 0
-        and pcc_gc_stack_slot_root_is_conservative(destination) != 0
-    ):
-        # Both roots lie in this thread's stack: a count-free collector's
-        # conservative scan names the value in either, keeps it in place and,
-        # at every stopped-world remark, finds it wherever it moved. Two
-        # plain stores, as on GC0.
         if ptr_is_null(load_ptr(destination, 0)) == 0:
             return -4
         store_ptr(destination, 0, load_ptr(source, 0))
@@ -1664,7 +1270,6 @@ def pcc_gc_root_move(destination, source) -> int:
         pcc_py_gc_minor_graph_unlock()
         return -4
     value = pcc_gc_resolve_root_slot_unlocked(source, 0)
-    pcc_gc_note_slot_write_barrier(null(), destination, value)
     store_ptr(destination, 0, value)
     store_ptr(source, 0, null())
     pcc_py_gc_minor_graph_unlock()
@@ -1688,9 +1293,7 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
     if ptr_eq(destination, source) != 0:
         return -1
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0
     ):
         # GC0 neither moves nor traces roots concurrently (its cycle
         # collection stops the world), and roots have no barrier: the copy
@@ -1703,23 +1306,6 @@ def pcc_gc_root_copy_borrowed_lease(destination, source) -> int:
             py_incref(copied)
         store_ptr(destination, 0, copied)
         return 0
-    if (
-        load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-    ):
-        # As pcc_gc_root_copy_lease: the tracing collectors publish the
-        # copy in one no-park interval and lease no address.
-        pcc_thread_no_park_enter()
-        borrowed_status: int = -4
-        if ptr_is_null(load_ptr(destination, 0)) != 0:
-            _store_root_nonmoving_tracing(
-                destination, load_ptr(source, 0),
-                load_i32(global_addr("pcc_gc_backend_selected"), 0),
-            )
-            borrowed_status = 0
-        pcc_thread_no_park_exit()
-        return borrowed_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     return _gc_root_copy_borrowed_lease_locked(destination, source)
@@ -1795,9 +1381,7 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
     if source_borrowed != 0 and source_borrowed != 1:
         return -1
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0
     ):
         # The existing borrowed-root GC0 copy has the same nonmoving proof.
         # Private owning roots need no resolver or address transaction either.
@@ -1808,34 +1392,6 @@ def pcc_gc_root_copy_local(destination, source, source_borrowed: int) -> int:
             py_incref(value)
         store_ptr(destination, 0, value)
         return 0
-    if (
-        atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0
-        and atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") != 0
-    ):
-        local_backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if (
-            (local_backend == 1 or local_backend == 2 or local_backend == 3 or local_backend == 4)
-            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-            and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-        ):
-            # Private bindings and a live actual owner make a nonmoving copy
-            # independent of the shared graph lock. Protect every raw load
-            # through publication, including the nested publisher's exit.
-            pcc_thread_no_park_enter()
-            local_status: int = -4
-            if ptr_is_null(load_ptr(destination, 0)) != 0:
-                local_value = load_ptr(source, 0)
-                local_valid: int = 1
-                if ptr_is_null(local_value) == 0 and is_tagged_int(local_value) == 0:
-                    if (atomic_load_i32(local_value, PYOBJECTHEADER_FLAGS_OFFSET, "acquire") & 524288) != 0:
-                        local_valid = 0
-                        local_status = -1
-                if local_valid != 0:
-                    _store_root_nonmoving_tracing(destination, local_value, local_backend)
-                    local_status = 0
-            pcc_thread_no_park_exit()
-            return local_status
     _gc_backend_fast()
     pcc_py_gc_minor_graph_lock()
     return _gc_root_copy_local_locked(destination, source, source_borrowed)
@@ -1910,7 +1466,7 @@ def pcc_gc_root_copy_lease_finish(plan) -> None:
 
 @c_abi_export("pcc_gc_try_store_ptr_take")
 def pcc_gc_try_store_ptr_take(owner, slot, value) -> int:
-    if ptr_is_null(slot) != 0 or _gc_backend_fast() != 0:
+    if ptr_is_null(slot) != 0:
         return 0
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(2, 3, 0, 0, owner)
@@ -1924,7 +1480,7 @@ def pcc_gc_try_store_ptr_take(owner, slot, value) -> int:
 
 @c_abi_export("pcc_gc_try_take_ptr")
 def pcc_gc_try_take_ptr(owner, slot):
-    if ptr_is_null(slot) != 0 or _gc_backend_fast() != 0:
+    if ptr_is_null(slot) != 0:
         return null()
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(2, 3, 0, 0, owner)
@@ -2017,77 +1573,6 @@ def pcc_gc_frame_leave_lifo_mapped(slots) -> None:
     return
 
 
-def _gc_tracing_collect_step(budget: int) -> int:
-    # Full-collection owners check sweep_owed before this call; the public
-    # step dispatcher does every collector's step.
-    if budget <= 0:
-        return 0
-    return pcc_gc_step(budget)
-
-
-def _gc_tracing_automatic_collect(mark: int) -> int:
-    # One automatic collection of GC1..GC4 with the world stopped, as an
-    # explicit gc.collect() runs it, but a single cycle. With mark 1 (GC3, or
-    # GC1/GC2's left remark) it finishes the mark in progress or runs one;
-    # with 0 it sweeps only a mark that has completed (GC4's automatic step
-    # completed it). With 2 it only finishes the traced mark the collector
-    # thread left to this mutator, as that thread would have: GC3/GC4 steps
-    # also promote, and each promoted copy is gray work that a stopped walk
-    # finds only by passing the whole object list again. An explicit collect
-    # keeps stepping until nothing is left.
-    if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
-        return 0
-    _pcc_gc_fire_callbacks(cstr("start"), 5)
-    prior_world_held: int = pcc_thread_owns_stopped_world()
-    stw: int = pcc_stop_the_world()
-    while stw != 0:
-        pcc_thread_safepoint()
-        stw = pcc_stop_the_world()
-    collection_stw_start: int = pcc_runtime_monotonic_us()
-    deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
-    pcc_gc_reclaim_retired_index_tables()
-    pcc_gc_begin_explicit_tracing_collect()
-    # Finish the collector thread's deferred frees before any mark step or
-    # sweep reads candidate flags again.
-    pcc_gc_concurrent_sweep_finish_stopped()
-    collected: int = 0
-    idle_rounds: int = 0
-    # One mark: the one in progress, or a new one. A mark finished in this
-    # stopped world is swept by its own verdict, without another re-mark.
-    commits: int = load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0)
-    while (
-        mark != 0
-        and pcc_gc_sweep_owed() == 0
-        and idle_rounds < 4
-        and load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == commits
-    ):
-        stepped: int = 0
-        if mark == 2:
-            stepped = pcc_gc_tracing_step_cycle(1024)
-        else:
-            stepped = _gc_tracing_collect_step(1024)
-        if stepped > 0:
-            idle_rounds = 0
-        else:
-            idle_rounds = idle_rounds + 1
-    if pcc_gc_sweep_owed() != 0:
-        # An automatic GC1/GC2 sweep may leave plain dead objects to the
-        # collector thread (pcc_gc_concurrent_sweep_slice).
-        store_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0, 1)
-        collected = pcc_gc_collect_tracing()
-        store_i32(global_addr("pcc_gc_concurrent_sweep_allowed"), 0, 0)
-    pcc_gc_end_explicit_tracing_collect()
-    if deferred_free != 0:
-        pcc_gc_scalar_sweep_seal()
-    pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
-    pcc_resume_world()
-    if deferred_free != 0:
-        pcc_gc_deferred_free_close()
-    pcc_gc_external_resource_poll()
-    _pcc_gc_fire_callbacks(cstr("stop"), 4)
-    return collected
-
-
 def _gc_automatic_collection_enabled() -> int:
     # gc.disable() and threshold0 == 0 turn automatic collection off.
     if load_i32(global_addr("py_gc_enabled"), 0) == 0:
@@ -2095,6 +1580,15 @@ def _gc_automatic_collection_enabled() -> int:
     if load_i32(global_addr("py_gc_threshold0"), 0) <= 0:
         return 0
     return 1
+
+
+def _gc_return_free_slabs() -> None:
+    # A full collection is where slabs become empty in numbers: give them
+    # back to the system. A raw slab is unmapped; an object slab keeps its
+    # mapping and span and gives its pages back, to be carved again when
+    # its size class next needs cells.
+    pcc_allocator_trim()
+    pcc_allocator_trim_objects()
 
 
 def _gc_maybe_auto_collect() -> None:
@@ -2111,47 +1605,70 @@ def _gc_maybe_auto_collect() -> None:
     pending = global_addr("pcc_gc_backend4_auto_step_pending")
     if atomic_rmw_i32("xchg", pending, 0, 0, "acq_rel") == 0:
         return
+    # A full collection of the fused collector runs in bounded stops or on
+    # its collector thread (freestanding_gc_backend0_incremental.py). Every
+    # request is this thread's turn to advance or assist it, also while
+    # automatic collection is off, when the cycle only releases its view.
+    # When it has ended, its candidates are young again and a young
+    # collection decides among them now. References the collector thread
+    # ended up owning are released here: that may run a finalizer.
+    if atomic_load_i64(global_addr("pcc_gc_full_release_head"), 0, "acquire") != 0:
+        pcc_gc_backend0_full_drain_releases()
+    stepped: int = 0
+    if (load_i32(global_addr("pcc_gc_full_phase"), 0) != 0
+            and load_i32(global_addr("py_gc_collecting"), 0) == 0):
+        stepped = pcc_gc_backend0_full_step()
+    paced: int = atomic_rmw_i32(
+        "xchg", global_addr("pcc_gc_full_slice_pending"), 0, 0, "acq_rel"
+    )
+    completed: int = atomic_rmw_i32(
+        "xchg", global_addr("pcc_gc_full_finished"), 0, 0, "acq_rel"
+    )
     if _gc_automatic_collection_enabled() == 0:
         return
     if load_i32(global_addr("py_gc_collecting"), 0) != 0:
         return
-    backend: int = _gc_backend_fast()
-    if backend == 0:
-        # Generational pacing of the fused collector: a young collection
-        # examines the containers tracked since the last collection; after
-        # ten of them, a full one runs once the tracked population has
-        # grown by a quarter since the last full collection.
-        pcc_gc_tracked_count_flush()
-        tracked_now: int = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
-        after_full: int = atomic_load_i64(global_addr("pcc_gc_tracked_after_full"), 0, "relaxed")
-        young_runs: int = load_i32(global_addr("pcc_gc_backend0_young_collections"), 0)
-        full: int = 0
-        if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) == 0:
-            full = 1
-        elif young_runs >= 10 and tracked_now - after_full >= after_full // 4:
-            full = 1
-        if full == 0:
-            store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 1)
-            pcc_gc_collect(0)
-            store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 0)
-            store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, young_runs + 1)
-        else:
-            pcc_gc_collect(0)
+    # Generational pacing of the fused collector: a young collection
+    # examines the containers tracked since the last collection; after
+    # ten of them, a full one starts once the tracked population has
+    # grown by a quarter since the last full collection.
+    pcc_gc_tracked_count_flush()
+    tracked_now: int = atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire")
+    after_full: int = atomic_load_i64(global_addr("pcc_gc_tracked_after_full"), 0, "relaxed")
+    young_runs: int = load_i32(global_addr("pcc_gc_backend0_young_collections"), 0)
+    if completed == 0 and paced != 0:
+        # The request came from the full collection's pacing: a young
+        # collection runs only when tracking growth asks for one too.
+        grown: int = tracked_now - atomic_load_i64(
+            global_addr("pcc_gc_tracked_after_collect"), 0, "relaxed"
+        )
+        if grown < load_i32(global_addr("py_gc_threshold0"), 0):
+            return
+    if load_i32(global_addr("pcc_gc_tracking_young_bit"), 0) == 0:
+        # No generations: every collection is a stopped-world full one.
+        pcc_gc_collect(0)
+    else:
+        store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 1)
+        pcc_gc_collect(0)
+        store_i32(global_addr("pcc_gc_backend0_young_request"), 0, 0)
+        if completed != 0:
+            # That young collection completed the full one.
+            _gc_return_free_slabs()
             store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, 0)
             pcc_gc_tracked_count_flush()
             atomic_store_i64(
                 global_addr("pcc_gc_tracked_after_full"), 0,
                 atomic_load_i32(global_addr("py_gc_tracked_count"), 0, "acquire"), "relaxed",
             )
-    else:
-        # The collector thread of GC1, GC2 and GC3 left a traced mark's
-        # final remark to this collection (pcc_gc_cms_finish_pending).
-        finish: int = atomic_rmw_i32(
-            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
-        )
-        if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
-            finish = 0
-        _gc_tracing_automatic_collect(finish)
+        elif (
+            stepped == 0
+            and young_runs >= 10
+            and tracked_now - after_full >= after_full // 4
+            and pcc_gc_backend0_full_begin() != 0
+        ):
+            store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, 0)
+        else:
+            store_i32(global_addr("pcc_gc_backend0_young_collections"), 0, young_runs + 1)
     pcc_gc_tracked_count_flush()
     atomic_store_i64(
         global_addr("pcc_gc_tracked_after_collect"),
@@ -2161,62 +1678,12 @@ def _gc_maybe_auto_collect() -> None:
     )
 
 
-def _gc4_maybe_auto_step() -> None:
-    # GC4 steps from allocation debt. Its steps mark, relocate and remap;
-    # reclaiming what a completed mark found unreachable is a collection
-    # like an explicit gc.collect(), which sweeps that mark.
-    if _gc_automatic_collection_enabled() == 0:
-        atomic_store_i32(
-            global_addr("pcc_gc_backend4_auto_step_pending"), 0, 0, "release"
-        )
-        return
-    if pcc_thread_no_park_depth() == 0 and pcc_py_gc_minor_graph_lock_depth() == 0:
-        # The collector thread left a traced mark's final remark to this
-        # gate (pcc_gc_cms_finish_pending): finish and sweep it in one
-        # stopped world. Its thread re-arms the request while marking.
-        finish: int = atomic_rmw_i32(
-            "xchg", global_addr("pcc_gc_cms_finish_pending"), 0, 0, "acq_rel"
-        )
-        if finish != 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-            _gc_tracing_automatic_collect(2)
-            return
-    pcc_gc_backend4_maybe_auto_step()
-    if pcc_thread_no_park_depth() == 0 and pcc_py_gc_minor_graph_lock_depth() == 0:
-        # The step leaves a due mark to this gate (pcc_gc_step): run or
-        # finish it and sweep it in one stopped world, the gc callbacks
-        # outside it. A mark finished in the step's own stop was swept at a
-        # later one, after re-marking the whole heap from every survivor.
-        if (
-            atomic_load_i64(global_addr("pcc_gc_debt_bytes"), 0, "acquire")
-            >= pcc_gc_tracing_debt_threshold()
-            and (
-                load_i32(global_addr("pcc_gc_mark_active"), 0) != 0
-                or load_i32(global_addr("pcc_gc_cycle_requested"), 0) != 0
-            )
-        ):
-            _gc_tracing_automatic_collect(2)
-            return
-    # The background marker may have finished before this gate was entered.
-    # Its completed sweep must not depend on this mutator finishing a cycle.
-    if (
-        atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") == 0
-        and pcc_gc_sweep_owed() == 0
-    ):
-        return
-    if pcc_thread_no_park_depth() != 0 or pcc_py_gc_minor_graph_lock_depth() != 0:
-        return
-    _gc_tracing_automatic_collect(0)
-
-
 @c_abi_export("pcc_gc_safepoint")
 def pcc_gc_safepoint() -> None:
     pcc_gc_note_safepoint()
     # Emitted only at application gates of compiled program code.
     pcc_thread_safepoint_gate()
-    if _gc_backend_fast() == 4:
-        _gc4_maybe_auto_step()
-    else:
-        _gc_maybe_auto_collect()
+    _gc_maybe_auto_collect()
     pcc_gc_external_resource_poll()
     return
 
@@ -2258,8 +1725,8 @@ def _pcc_gc_callback_eq(a, b) -> int:
         return 0
     if is_tagged_int(a) != 0 or is_tagged_int(b) != 0:
         return py_obj_eq(a, b)
-    a = pcc_gc_note_relocation_read(a)
-    b = pcc_gc_note_relocation_read(b)
+    a = a
+    b = b
     if ptr_eq(a, b) != 0:
         return 1
     if load_i32(a, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_FUNC:
@@ -2366,71 +1833,18 @@ def pcc_gc_collect(reason: int) -> int:
     # STW/callbacks (re-entering STW on an already-stopped world would also hang).
     # #0 (refcount+cycle) never sets the flag and is reentrancy-safe already.
     # See gc-5backend-reentrant-collect-during-finalizer-no-libpython.md.
-    if backend != 0:
-        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
-            return 0
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         pcc_diagnostics_runtime_log_event_code(2, 1, reason, backend, null())
     _pcc_gc_fire_callbacks(cstr("start"), 5)
     collected: int = 0
-    if backend == 0:
-        # G-P3: time backend 0's explicit cycle collect (its only
-        # pause-like window) so pause telemetry covers all backends.
-        pause_t0: int = pcc_runtime_monotonic_us()
-        collected = py_gc_collect()
-        pcc_gc_record_explicit_pause(pause_t0, pcc_runtime_monotonic_us())
-    else:
-        prior_world_held: int = pcc_thread_owns_stopped_world()
-        stw: int = pcc_stop_the_world()
-        while stw != 0:
-            pcc_thread_safepoint()
-            stw = pcc_stop_the_world()
-        collection_stw_start: int = pcc_runtime_monotonic_us()
-        deferred_free: int = pcc_gc_deferred_free_begin(prior_world_held)
-        pcc_gc_reclaim_retired_index_tables()
-        # gc.collect() frees what an automatic sweep deferred, synchronously.
-        pcc_gc_concurrent_sweep_finish_stopped()
-        if backend == 4:
-            # Stack-map step 3: with PCC_GC_STACKMAP_DIFF and a published table,
-            # compare the stopped stack's mapped roots with the registered ones.
-            pcc_gc_precise_stack_diff_if_requested()
-        pcc_gc_begin_explicit_tracing_collect()
-        # Sweep only when a mark cycle has actually finished.  The gate is
-        # pcc_gc_sweep_owed(), not pcc_gc_has_tracing_sweep(): the latter
-        # ignores mark_active, so candidates left over from a previous
-        # unfinished sweep read true mid-mark, and sweeping there frees live
-        # objects (measured).
-        #
-        # The round bound is a LIVENESS backstop only and is not load bearing
-        # for correctness: a step legitimately reports zero progress at a phase
-        # boundary (measured 1, 0, 6 on backend 1), so breaking on the first
-        # zero returns with work outstanding, while looping unbounded would spin
-        # if the collector never converges.  Sweeping stays gated either way.
-        idle_rounds: int = 0
-        draining: int = 1
-        while draining != 0:
-            if pcc_gc_sweep_owed() != 0:
-                swept: int = pcc_gc_collect_tracing()
-                collected = collected + swept
-                if swept == 0 and pcc_gc_sweep_owed() != 0:
-                    draining = 0
-                else:
-                    idle_rounds = 0
-            else:
-                stepped: int = _gc_tracing_collect_step(1024)
-                if stepped > 0:
-                    idle_rounds = 0
-                else:
-                    idle_rounds = idle_rounds + 1
-                    if idle_rounds >= 4:
-                        draining = 0
-        pcc_gc_end_explicit_tracing_collect()
-        if deferred_free != 0:
-            pcc_gc_scalar_sweep_seal()
-        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_runtime_monotonic_us())
-        pcc_resume_world()
-        if deferred_free != 0:
-            pcc_gc_deferred_free_close()
+    # G-P3: time backend 0's explicit cycle collect (its only
+    # pause-like window) so pause telemetry covers all backends.
+    pause_t0: int = pcc_runtime_monotonic_us()
+    collected = py_gc_collect()
+    pcc_gc_record_explicit_pause(pause_t0, pcc_runtime_monotonic_us())
+    if load_i32(global_addr("pcc_gc_backend0_young_request"), 0) == 0:
+        # A full collection, not an automatic young one.
+        _gc_return_free_slabs()
     # Release callbacks run after the tracing world is resumed. The shared
     # C-kernel registry has a zero-ready fast path and contains no PyObjects.
     pcc_gc_external_resource_poll()
@@ -2456,11 +1870,7 @@ def pcc_gc_pin_slot_for_take(slot, keep_pinned: int) -> int:
     value = load_ptr(slot, 0)
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return PY_FLAG_GC_PINNED if keep_pinned != 0 else 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0 and (
-        load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-        or pcc_gc_stack_slot_root_is_conservative(slot) != 0
-    ):
+    if load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0:
         # Nothing can move the object between the load and the pin: GC0 and
         # the nonmoving GC1/GC2 never relocate, and a count-free collector
         # keeps in place what this thread's stack slot names.
@@ -2530,8 +1940,6 @@ def _debug_refuses_unmanaged(o, prepared) -> int:
 # pcc user classes and must be refcounted.
 def _py_incref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
@@ -2559,21 +1967,6 @@ def _py_incref_prepare(o, prepared) -> None:
             store_i64(prepared, 48, 1)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (backend == 1 or backend == 2 or backend == 3) and flags == 0:
-        if pcc_gc_pointer_is_managed(o) == 0:
-            return
-    if (
-        backend == 4
-        and _gc_forwarding_population() > 0
-        and (flags & 2048) != 0
-    ):
-        # Count-on-NEW model (gc4 remap design): after relocation the
-        # outstanding refcount lives on the NEW copy; resolve first.
-        resolved = pcc_gc_note_relocation_read(o)
-        if ptr_is_null(resolved) == 0 and ptr_eq(resolved, o) == 0:
-            o = resolved
-            tag = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            flags = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     store_ptr(prepared, 0, o)
     store_i64(prepared, 8, tag)
     store_i64(prepared, 16, flags)
@@ -2590,9 +1983,6 @@ def _py_incref_prepare(o, prepared) -> None:
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
         return
-    if backend == 3 and (flags & 4096) != 0 and (flags & 256) != 0:
-        if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
-            return
     if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) < 0:
         return  # already freed (poisoned); stray reference, skip
     new_rc: int = pcc_refcount_incref(o)
@@ -2659,8 +2049,6 @@ def py_incref(o) -> None:
             if atomic_load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET, "relaxed") >= 0:
                 atomic_rmw_i64("add", o, PYOBJECTHEADER_REFCOUNT_OFFSET, 1, "relaxed")
                 return
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        return
     _py_incref_checked_tail(o)
 
 
@@ -2688,11 +2076,6 @@ def _py_incref_checked_tail(o) -> None:
                     return
     # Standalone GC0 operations need no prepare record on the nonterminal
     # path. Keep provenance/type checks and share terminal finish with plans.
-    if _gc_backend_fast() != 0:
-        prepared = stack_alloc(56)
-        _py_incref_prepare(o, prepared)
-        _py_incref_finish(prepared)
-        return
     if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
@@ -2713,8 +2096,6 @@ def _py_incref_checked_tail(o) -> None:
 
 def _py_decref_prepare(o, prepared) -> None:
     _py_refcount_prepared_reset(prepared, o)
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
@@ -2741,22 +2122,6 @@ def _py_decref_prepare(o, prepared) -> None:
             store_i64(prepared, 48, 1)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (backend == 1 or backend == 2 or backend == 3) and flags == 0:
-        if pcc_gc_pointer_is_managed(o) == 0:
-            return
-    if (
-        backend == 4
-        and _gc_forwarding_population() > 0
-        and (flags & 2048) != 0
-    ):
-        # Count-on-NEW model (gc4 remap design): resolve before
-        # decrementing; old copies are immortal shells so an
-        # unresolvable stray decref is a no-op below.
-        resolved = pcc_gc_note_relocation_read(o)
-        if ptr_is_null(resolved) == 0 and ptr_eq(resolved, o) == 0:
-            o = resolved
-            tag_dbg = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            flags = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     store_ptr(prepared, 0, o)
     store_i64(prepared, 8, tag_dbg)
     store_i64(prepared, 16, flags)
@@ -2772,15 +2137,6 @@ def _py_decref_prepare(o, prepared) -> None:
     ):
         return
     if (flags & PY_FLAG_IMMORTAL) != 0:
-        return
-    if backend == 3 and (flags & 4096) != 0 and (flags & 256) != 0:
-        if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
-            return
-    if (
-        backend == 4
-        and (flags & (2048 | 8192 | 131072)) != 0
-        and pcc_gc_object_is_known(o) == 0
-    ):
         return
     # Match the C owner: never mutate a non-positive counter under a graph/root
     # lock.  Capture the underflow token here and fail-stop from finish after
@@ -2896,8 +2252,6 @@ def py_decref(o) -> None:
                 if observed == count:
                     return
                 count = observed
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        return
     _py_decref_checked_tail(o)
 
 
@@ -2923,11 +2277,6 @@ def _py_decref_checked_tail(o) -> None:
                     return
     # Standalone GC0 operations need no prepare record on the nonterminal
     # path. Keep provenance/type checks and share terminal finish with plans.
-    if _gc_backend_fast() != 0:
-        prepared = stack_alloc(56)
-        _py_decref_prepare(o, prepared)
-        _py_decref_finish(prepared)
-        return
     if _refcount_provenance_probe_enabled() != 0 and not _ptr_can_have_header(o):
         _note_unmanaged_refcount_op()
         return
@@ -2999,7 +2348,7 @@ def pcc_gc_retain_known(o):
     """
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return o
-    if _gc_backend_fast() != 0 or _known_ref_checks() != 0:
+    if _known_ref_checks() != 0:
         return pcc_gc_retain(o)
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
     if (flags & PY_FLAG_IMMORTAL) != 0:
@@ -3017,7 +2366,7 @@ def pcc_gc_release_known(o) -> None:
     """Consume one proven owner; terminal release uses the existing finish."""
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
         return
-    if _gc_backend_fast() != 0 or _known_ref_checks() != 0:
+    if _known_ref_checks() != 0:
         pcc_gc_release(o)
         return
     flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)

@@ -60,7 +60,6 @@ define_global_i32("pcc_threading_invoke_frame_map", 4)
 define_global_i32("pcc_threading_condition_borrowed_frame_map", -3)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
-pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 
 _VTHREAD_WAITER_POOL_LIMIT = 4096
 _WAITER_NEXT_OFFSET = 8
@@ -1761,7 +1760,6 @@ def _thread_invoke(thread) -> None:
         if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
             store_i64(pins, 24, load_i32(result, 12) & 64)
             pcc_gc_pin(result)
-            pcc_gc_note_write_barrier(null(), result)
         thread = load_ptr(slots, 0)
         pcc_gc_reassert_pin(thread)
         pcc_gc_store_ptr(thread, ptr_add(thread, 40), load_ptr(slots, 24))

@@ -161,10 +161,6 @@ pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
-pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 py_str_concat = extern("py_str_concat", (c_ptr, c_ptr), c_ptr)
 hypot_c = extern("hypot", (c_double, c_double), c_double)
 pow_c = extern("pow", (c_double, c_double), c_double)
@@ -944,7 +940,6 @@ pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_p
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -982,7 +977,6 @@ def _buffer_adopt(slots, tokens, index: int) -> int:
     store_i64(tokens, index * _BUFFER_BYTES, token)
     if token < 0:
         return _buffer_error(19, cstr("buffer conversion: cannot lease owner"))
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
     if py_err_occurred() != 0:
         return -1
     return 0
@@ -1189,7 +1183,6 @@ def _buffer_fill(slots, tokens, mode: int) -> int:
         pcc_gc_store_ptr(view, ptr_add(view, PYMEMORYVIEWOBJECT_BASE_OFFSET), load_ptr(source, 0))
         if py_err_occurred() != 0:
             return -1
-        pcc_gc_publish_initialized(load_ptr(result, 0))
         return 0
     if ptr_is_null(load_ptr(source, 0)) != 0:
         return _buffer_new_raw(slots, tokens, null(), 0, mode)
@@ -3359,8 +3352,8 @@ def _bytes_join_list(sep, sep_len: int, lst):
         if ptr_is_null(out):
             return null()
         # Result allocation may run a relocating collector.
-        sep = pcc_gc_note_relocation_read(sep)
-        lst = pcc_gc_note_relocation_read(lst)
+        sep = sep
+        lst = lst
         locked = lst
         pcc_list_lock(locked)
         if (_bytes_join_list_size_locked(sep_len, lst, length_slot) == total
@@ -3396,8 +3389,8 @@ def py_bytes_join(sep, lst):
     # quadratic bytearray += under pcc1.
     if ptr_is_null(sep) or ptr_is_null(lst):
         return null()
-    sep = pcc_gc_note_relocation_read(sep)
-    lst = pcc_gc_note_relocation_read(lst)
+    sep = sep
+    lst = lst
     st: int = _type_of(sep)
     if not (st == PY_TYPE_BYTES or st == PY_TYPE_BYTEARRAY):
         py_raise_owned(py_exc_new(3, cstr("bytes.join receiver must be bytes-like")))
@@ -3441,8 +3434,8 @@ def py_bytes_join(sep, lst):
         return null()
     # Result allocation may run a relocating collector: refresh the rooted
     # inputs and the list items pointer before copying payloads.
-    sep = pcc_gc_note_relocation_read(sep)
-    lst = pcc_gc_note_relocation_read(lst)
+    sep = sep
+    lst = lst
     items = ptr_add(lst, PYTUPLEOBJECT_ITEMS_OFFSET)
     dst = _bytes_data(out)
     sd = _bytes_data(sep)
@@ -4844,7 +4837,7 @@ def py_exc_base_str(o, key_error: int):
     """
     if ptr_is_null(o):
         return null()
-    o = pcc_gc_note_relocation_read(o)
+    o = o
     if _type_of(o) == PY_TYPE_EXC:
         args = py_exc_get_args(o)
     else:
@@ -5019,7 +5012,7 @@ def py_obj_ascii(o):
 def py_obj_str(o):
     if ptr_is_null(o):
         return null()
-    o = pcc_gc_note_relocation_read(o)
+    o = o
     tag: int = _type_of(o)
     if tag == PY_TYPE_STR:  # PY_TYPE_STR
         py_incref(o)
@@ -5036,7 +5029,7 @@ def py_obj_str(o):
             # KeyError.__str__ is repr(key), not the bare key (CPython):
             # str(KeyError('x')) == "'x'".
             key_error: int = py_exc_matches(o, py_exc_builtin_class(4))  # PY_EXC_KEYERROR
-            o = pcc_gc_note_relocation_read(o)
+            o = o
             msg = py_exc_get_message(o)
             if key_error != 0:
                 return py_obj_repr(msg)

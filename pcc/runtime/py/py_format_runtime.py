@@ -113,7 +113,6 @@ py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 pcc_stdio_format_float_raw = extern(
     "pcc_stdio_format_float_raw",
     (c_ptr, c_double, c_int64, c_int64, c_int64, c_int64, c_int64),
@@ -1157,7 +1156,7 @@ def py_complex_repr(value):
 
 @c_abi_export("py_exc_repr")
 def py_exc_repr(value):
-    value = pcc_gc_note_relocation_read(value)
+    value = value
     if ptr_is_null(value) != 0 or _type_of(value) != PY_TYPE_EXC:
         return null()
     if (load_i32(value, 12) & PY_FLAG_EXC_UNICODE_PAYLOAD) != 0:
@@ -1177,7 +1176,7 @@ def py_exc_repr(value):
     _buffer_char(state, 40)
     # Buffer helpers may park; get the borrowed argument only after them and
     # consume it once in py_obj_repr, without keeping it across conversion.
-    message = py_exc_get_message(pcc_gc_note_relocation_read(value))
+    message = py_exc_get_message(value)
     if ptr_is_null(message) == 0:
         rendered = py_obj_repr(message)
         if ptr_is_null(rendered) != 0:
@@ -2206,7 +2205,6 @@ def _format_callback_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
         py_runtime_error_if_unset(cstr("format callback"), cstr("result owner lease failed"))
         return -1
     store_i64(tokens, offset, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -2415,9 +2413,6 @@ define_global_i32("pcc_percent_owned_map", _PERCENT_SLOT_COUNT)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 py_dict_get_default_slots = extern(
     "py_dict_get_default_slots", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64
-)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
 )
 py_bytes_from_obj = extern("py_bytes_from_obj", (c_ptr,), c_ptr)
 

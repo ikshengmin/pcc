@@ -101,9 +101,6 @@ pcc_gc_note_frame_enter_local_checked = extern(
     "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
 pcc_gc_note_frame_leave_local = extern("pcc_gc_note_frame_leave_local", (c_ptr,), c_void)
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
@@ -233,7 +230,7 @@ def _buffer_get_open_roots(obj, flags: int, roots) -> int:
     pcc_py_gc_minor_graph_unlock()
     # The outer no-park still protects the initialized pair. Frame arena
     # allocation, when needed, stays outside the graph transaction.
-    if status == 0 and pcc_gc_stack_slot_root_is_conservative(roots) == 0:
+    if status == 0:
         if pcc_gc_note_frame_enter_local_checked(
             global_addr("pcc_capi_buffer_get_borrowed_map"), roots
         ) != 1:
@@ -444,24 +441,20 @@ def _memoryview_gc3_owned_buffer(obj) -> c_ptr:
     roots_ready: int = 0
     status: int = 0
     pcc_thread_no_park_enter()
-    if pcc_gc_stack_slot_root_is_conservative(borrowed) == 0:
-        if pcc_gc_note_frame_enter_local_checked(
-            global_addr("pcc_memoryview_buffer_borrowed_map"), borrowed
-        ) == 1:
-            borrowed_registered = 1
-        else:
-            status = -1
+    if pcc_gc_note_frame_enter_local_checked(
+        global_addr("pcc_memoryview_buffer_borrowed_map"), borrowed
+    ) == 1:
+        borrowed_registered = 1
+    else:
+        status = -1
     if status == 0:
-        if pcc_gc_stack_slot_root_is_conservative(roots) != 0:
+        if pcc_gc_note_frame_enter_local_checked(
+            global_addr("pcc_memoryview_buffer_owned_map"), roots
+        ) == 1:
+            roots_registered = 1
             roots_ready = 1
         else:
-            if pcc_gc_note_frame_enter_local_checked(
-                global_addr("pcc_memoryview_buffer_owned_map"), roots
-            ) == 1:
-                roots_registered = 1
-                roots_ready = 1
-            else:
-                status = -1
+            status = -1
     pcc_thread_no_park_exit()
 
     result = null()

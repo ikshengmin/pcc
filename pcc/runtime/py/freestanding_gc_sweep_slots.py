@@ -19,30 +19,15 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
-pcc_gc_object_is_address_pinned = extern("pcc_gc_object_is_address_pinned", (c_ptr,), c_int64)
 
 
 pcc_gc_backend0_is_unreachable = extern(
     "pcc_gc_backend0_is_unreachable", (c_ptr,), c_int64
 )
-pcc_gc_object_is_known_no_lock = extern(
-    "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
-)
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
 py_decref = extern("py_decref", (c_ptr,), c_void)
-py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
-
-
-@c_abi_export("pcc_gc_tracing_is_sweep_candidate")
-def pcc_gc_tracing_is_sweep_candidate(obj) -> i64:
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return 0
-    if pcc_gc_object_is_known_no_lock(obj) == 0:
-        return 0
-    flags: i64 = load_i32(obj, 12)
-    return 1 if (flags & 1024) != 0 and pcc_gc_object_is_address_pinned(obj) == 0 else 0
 
 
 @c_abi_export("pcc_gc_backend0_clear_slot")
@@ -54,23 +39,6 @@ def pcc_gc_backend0_clear_slot(slot, role: i64, context) -> None:
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
     if pcc_gc_backend0_is_unreachable(child) != 0:
-        return
-    py_decref(child)
-
-
-@c_abi_export("pcc_gc_tracing_clear_slot")
-def pcc_gc_tracing_clear_slot(slot, role: i64, context) -> None:
-    if role != 1:  # only owned references are cleared/decref'd
-        return
-    child = load_ptr(slot, 0)
-    store_ptr(slot, 0, null())
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        # Count-free collectors count nothing: py_decref returns at once,
-        # so the child's candidate verdict cannot change this slot's work.
-        return
-    if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
-        return
-    if pcc_gc_tracing_is_sweep_candidate(child) != 0:
         return
     py_decref(child)
 
@@ -130,54 +98,3 @@ def pcc_gc_backend0_clear_referents(obj) -> None:
     )
     if handled != 0:
         pcc_gc_clear_container_metadata(obj, tag)
-
-
-@c_abi_export("pcc_gc_tracing_clear_referents")
-def pcc_gc_tracing_clear_referents(obj) -> None:
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    tag: i64 = load_i32(obj, 8)
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        # A count-free clear stores NULL into every owned slot and releases
-        # nothing (pcc_gc_tracing_clear_slot): a tuple's or list's items are
-        # its owned slots, which the visitor would visit one call each.
-        if tag == PY_TYPE_TUPLE:
-            length: i64 = load_i64(obj, abi_constant("object.tuple.length_offset"))
-            index: i64 = 0
-            while index < length:
-                store_ptr(obj, abi_constant("object.tuple.items_offset") + index * 8, null())
-                index = index + 1
-            pcc_gc_clear_container_metadata(obj, tag)
-            return
-        if tag == PY_TYPE_LIST:
-            items = load_ptr(obj, abi_constant("object.list.items_offset"))
-            if ptr_is_null(items) == 0:
-                length: i64 = load_i64(obj, abi_constant("object.list.length_offset"))
-                index: i64 = 0
-                while index < length:
-                    store_ptr(items, index * 8, null())
-                    index = index + 1
-            pcc_gc_clear_container_metadata(obj, tag)
-            return
-    handled: i64 = pcc_gc_visit_object_slots(
-        obj, pcc_gc_tracing_clear_slot, null()
-    )
-    if handled != 0:
-        pcc_gc_clear_container_metadata(obj, tag)
-
-
-@c_abi_export("pcc_gc_tracing_clear_unreachable")
-def pcc_gc_tracing_clear_unreachable(obj) -> None:
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    if pcc_gc_object_is_address_pinned(obj) != 0:
-        return
-    pcc_gc_tracing_clear_unpinned(obj)
-
-
-@c_abi_export("pcc_gc_tracing_clear_unpinned")
-def pcc_gc_tracing_clear_unpinned(obj) -> None:
-    """Clear a candidate whose caller found it unpinned (its walk read the
-    object's own node), without probing the index again."""
-    py_weakref_invalidate(obj)
-    pcc_gc_tracing_clear_referents(obj)

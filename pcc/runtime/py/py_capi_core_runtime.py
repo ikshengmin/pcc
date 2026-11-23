@@ -25,10 +25,6 @@ from pcc.unsafe import (
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_cpy_handle_change_c_owners = extern(
-    "pcc_gc_cpy_handle_change_c_owners", (c_ptr, c_int64), c_void
-)
-pcc_gc_pointer_is_managed = extern("pcc_gc_pointer_is_managed", (c_ptr,), c_int64)
 pcc_refcount_forget = extern("pcc_refcount_forget", (c_ptr,), c_void)
 py_dict_new = extern("py_dict_new", (), c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -69,32 +65,13 @@ def PyEval_GetBuiltins():
     return builtins
 
 
-def _c_owns_tracing_handle(obj) -> bool:
-    # In count-free mode the ordinary incref/decref could decline an
-    # unmanaged input without reading its header. Preserve that boundary.
-    return (
-        not ptr_is_null(obj)
-        and not is_tagged_int(obj)
-        and pcc_gc_pointer_is_managed(obj) != 0
-        and load_i32(obj, 8) == PY_TYPE_CPY_HANDLE
-    )
-
-
 @c_abi_typed_export("Py_INCREF", "void", ("ptr",))
 def Py_INCREF(obj) -> None:
-    if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and _c_owns_tracing_handle(obj)):
-        pcc_gc_cpy_handle_change_c_owners(obj, 1)
-        return
     py_incref(obj)
 
 
 @c_abi_typed_export("Py_DECREF", "void", ("ptr",))
 def Py_DECREF(obj) -> None:
-    if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and _c_owns_tracing_handle(obj)):
-        pcc_gc_cpy_handle_change_c_owners(obj, -1)
-        return
     py_decref(obj)
 
 

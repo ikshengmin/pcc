@@ -76,35 +76,6 @@ def pcc_gc_page_mark_epoch() -> i64:
     return atomic_load_i64(global_addr("pcc_gc_page_mark_epoch_word"), 0, "acquire")
 
 
-@c_abi_export("pcc_gc_page_mark_epoch_flip")
-def pcc_gc_page_mark_epoch_flip() -> None:
-    """Start using the other bitmap (pcc_gc_page_marks_begin)."""
-    epoch: i64 = pcc_gc_page_mark_epoch()
-    atomic_store_i64(
-        global_addr("pcc_gc_page_mark_epoch_word"), 0, 1 - epoch, "release"
-    )
-
-
-pcc_allocator_record_span_first = extern(
-    "pcc_allocator_record_span_first", (), c_ptr
-)
-pcc_allocator_record_span_next = extern(
-    "pcc_allocator_record_span_next", (c_ptr,), c_ptr
-)
-
-
-@c_abi_export("pcc_gc_page_marks_begin")
-def pcc_gc_page_marks_begin() -> None:
-    """Start a mark with the world stopped: switch to the other bitmap and
-    clear it on every page. The bitmap left behind keeps the last finished
-    mark. Clearing here, not after a sweep, keeps an abandoned mark's bits
-    from ever reading as marked; it costs a slab's few words."""
-    pcc_gc_page_mark_epoch_flip()
-    epoch: i64 = pcc_gc_page_mark_epoch()
-    span = pcc_allocator_record_span_first()
-    while ptr_is_null(span) == 0:
-        pcc_gc_page_marks_clear(span, epoch)
-        span = pcc_allocator_record_span_next(span)
 
 
 @c_abi_export("pcc_gc_page_bitmap")
@@ -115,17 +86,6 @@ def pcc_gc_page_bitmap(span: c_ptr, which: i64) -> c_ptr:
         return null()
     words: i64 = pcc_allocator_record_span_mark_words(span)
     return ptr_add(page, GC_PAGE_HEADER_BYTES + which * words * 8)
-
-
-@c_abi_export("pcc_gc_page_of")
-def pcc_gc_page_of(obj: c_ptr) -> c_ptr:
-    """The GC page header of an object cell, or NULL for any other object."""
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return null()
-    span = pcc_allocator_object_cell_span(obj)
-    if ptr_is_null(span) != 0:
-        return null()
-    return pcc_allocator_record_span_page(span)
 
 
 @c_abi_export("pcc_gc_page_mark_test")
@@ -164,88 +124,6 @@ def pcc_gc_page_mark_set(obj: c_ptr) -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_page_mark_assign")
-def pcc_gc_page_mark_assign(obj: c_ptr, marked: i64) -> None:
-    """Set or clear a fresh object cell's bit: a cell is reused, so the bit
-    a registration finds may be its previous object's. No-op elsewhere."""
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    span = pcc_allocator_object_cell_span(obj)
-    if ptr_is_null(span) != 0:
-        return
-    cell: i64 = pcc_allocator_object_cell_number(span, obj)
-    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
-    bit: i64 = 1 << (cell & 63)
-    if marked != 0:
-        atomic_rmw_i64("or", bitmap, (cell // 64) * 8, bit, "acq_rel")
-    else:
-        atomic_rmw_i64("and", bitmap, (cell // 64) * 8, ~bit, "acq_rel")
-
-
-@c_abi_export("pcc_gc_page_mark_assign_cell")
-def pcc_gc_page_mark_assign_cell(span: c_ptr, cell: i64, marked: i64) -> None:
-    """pcc_gc_page_mark_assign for cell ``cell`` of record span ``span``,
-    which the registering caller has already located.
-
-    A bit that already reads ``marked`` is left alone. Outside a mark a
-    reused cell's bit is clear (bitmaps are cleared when a mark begins and
-    only a mark sets them; a freed cell was white), and no mark can begin
-    while the caller holds its no-park scope. The unconditional
-    read-modify-write took the span's bitmap line, shared by every core
-    allocating cells of that span, exclusively on every allocation."""
-    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
-    if ptr_is_null(bitmap) != 0:
-        return
-    offset: i64 = (cell // 64) * 8
-    bit: i64 = 1 << (cell & 63)
-    word: i64 = atomic_load_i64(bitmap, offset, "acquire")
-    if marked != 0:
-        if (word & bit) == 0:
-            atomic_rmw_i64("or", bitmap, offset, bit, "acq_rel")
-    elif (word & bit) != 0:
-        atomic_rmw_i64("and", bitmap, offset, ~bit, "acq_rel")
-
-
-@c_abi_export("pcc_gc_object_is_white")
-def pcc_gc_object_is_white(obj: c_ptr, flags: i64) -> i64:
-    """1 when the current mark has not reached ``obj``: an object cell's
-    page bit is clear, any other object's header ``flags`` hold white."""
-    marked: i64 = pcc_gc_page_mark_test(obj)
-    if marked < 0:
-        if (flags & 8) != 0:
-            return 1
-        return 0
-    if marked == 0:
-        return 1
-    return 0
-
-
-@c_abi_export("pcc_gc_record_is_white")
-def pcc_gc_record_is_white(node: c_ptr, obj: c_ptr, flags: i64) -> i64:
-    """pcc_gc_object_is_white for the object of walked node ``node``.
-
-    A slab record names its span and, by its place in the span's record
-    array, its cell: the bit is read without locating the object's cell
-    again from its address (a span lookup and a division per object of every
-    finish walk). Any other node (object-list objects outside the slabs)
-    takes pcc_gc_object_is_white, as does every node while GC4 forwarding
-    edges exist (a moved object need not lie in its record's cell)."""
-    span = load_ptr(node, NODE_RECORD_SPAN)
-    if ptr_is_null(span) != 0:
-        return pcc_gc_object_is_white(obj, flags)
-    if atomic_load_i32(global_addr("pcc_gc_forwarding_population"), 0, "acquire") != 0:
-        return pcc_gc_object_is_white(obj, flags)
-    bitmap = pcc_gc_page_bitmap(span, pcc_gc_page_mark_epoch())
-    if ptr_is_null(bitmap) != 0:
-        return pcc_gc_object_is_white(obj, flags)
-    records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
-    cell: i64 = (ptr_to_int(node) - records) // OBJECT_NODE_RECORD_BYTES
-    word: i64 = atomic_load_i64(bitmap, (cell // 64) * 8, "acquire")
-    if (word & (1 << (cell & 63))) != 0:
-        return 0
-    return 1
-
-
 @c_abi_export("pcc_gc_object_is_black")
 def pcc_gc_object_is_black(obj: c_ptr, flags: i64) -> i64:
     """1 when ``obj`` is marked and scanned: an object cell's page bit is set
@@ -258,50 +136,3 @@ def pcc_gc_object_is_black(obj: c_ptr, flags: i64) -> i64:
     if marked != 0 and (flags & 16) == 0:
         return 1
     return 0
-
-
-@c_abi_export("pcc_gc_page_marks_clear")
-def pcc_gc_page_marks_clear(span: c_ptr, which: i64) -> None:
-    """Clear bitmap ``which`` of a record span's page (the sweep clears the
-    bitmap the next mark will set)."""
-    bitmap = pcc_gc_page_bitmap(span, which)
-    if ptr_is_null(bitmap) != 0:
-        return
-    words: i64 = pcc_allocator_record_span_mark_words(span)
-    index: i64 = 0
-    while index < words:
-        atomic_store_i64(bitmap, index * 8, 0, "relaxed")
-        index = index + 1
-
-
-@c_abi_export("pcc_gc_page_generation")
-def pcc_gc_page_generation(page: c_ptr) -> i64:
-    return load_i64(page, PAGE_GENERATION)
-
-
-@c_abi_export("pcc_gc_page_set_generation")
-def pcc_gc_page_set_generation(page: c_ptr, generation: i64) -> None:
-    store_i64(page, PAGE_GENERATION, generation)
-
-
-@c_abi_export("pcc_gc_page_evacuating")
-def pcc_gc_page_evacuating(page: c_ptr) -> i64:
-    return atomic_load_i64(page, PAGE_FLAGS, "acquire") & PAGE_FLAG_EVACUATING
-
-
-@c_abi_export("pcc_gc_page_set_evacuating")
-def pcc_gc_page_set_evacuating(page: c_ptr, evacuating: i64) -> None:
-    flags: i64 = atomic_load_i64(page, PAGE_FLAGS, "acquire") & ~PAGE_FLAG_EVACUATING
-    if evacuating != 0:
-        flags = flags | PAGE_FLAG_EVACUATING
-    atomic_store_i64(page, PAGE_FLAGS, flags, "release")
-
-
-@c_abi_export("pcc_gc_page_live_bytes")
-def pcc_gc_page_live_bytes(page: c_ptr) -> i64:
-    return load_i64(page, PAGE_LIVE_BYTES)
-
-
-@c_abi_export("pcc_gc_page_set_live_bytes")
-def pcc_gc_page_set_live_bytes(page: c_ptr, live: i64) -> None:
-    store_i64(page, PAGE_LIVE_BYTES, live)

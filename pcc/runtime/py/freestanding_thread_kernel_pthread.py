@@ -198,13 +198,6 @@ pthread_cond_broadcast = extern("pthread_cond_broadcast", (c_ptr,), c_int64)
 sched_yield = extern("sched_yield", (), c_int64)
 pcc_platform_wall_time_us = extern("pcc_platform_wall_time_us", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_gc_gray_worklist_flush = extern("pcc_gc_gray_worklist_flush", (), c_void)
-pcc_gc_alloc_stage_drain_stopped = extern(
-    "pcc_gc_alloc_stage_drain_stopped", (), c_int64
-)
-pcc_gc_relocation_settle_stopped = extern(
-    "pcc_gc_relocation_settle_stopped", (), c_int64
-)
 pcc_gc_thread_unregister_buffers = extern(
     "pcc_gc_thread_unregister_buffers", (), c_void
 )
@@ -792,116 +785,15 @@ def _thread_snapshot_roots(record) -> None:
     store_i64(record, _THREAD_ROOT_BYTES, size)
 
 
-@c_abi_export("pcc_thread_snapshot_stopped_world_owner")
-def pcc_thread_snapshot_stopped_world_owner() -> int:
-    """Refresh the stopped world's owner's own snapshot; 1 when refreshed.
-
-    The owner snapshots itself when it stops the world. Objects it allocates
-    or loads afterwards (a stopped-world collection that begins a cycle, a
-    finalizer) live in frames that snapshot predates: a conservative scan
-    refreshes it first, so the owner's current frames are roots like every
-    parked thread's. Returns -1 when the caller does not own the stop.
-    """
-    if pcc_thread_world_stop_epoch_held() < 0:
-        return -1
-    if atomic_load_i32(
-        global_addr("pcc_thread_conservative_roots_enabled"), 0, "acquire"
-    ) == 0:
-        return 0
-    record = global_load_ptr("pcc_tls_thread_record_py")
-    if ptr_is_null(record):
-        return 0
-    lock = global_load_ptr("pcc_world_lock_py")
-    pthread_mutex_lock(lock)
-    _thread_snapshot_roots(record)
-    pthread_mutex_unlock(lock)
-    return 1
-
-
 @c_abi_export("pcc_thread_enable_conservative_roots")
 def pcc_thread_enable_conservative_roots() -> None:
     """One-way startup admission; the collector freezes this before allocation."""
     atomic_store_i32(global_addr("pcc_thread_conservative_roots_enabled"), 0, 1, "release")
 
 
-@c_abi_export("pcc_thread_visit_conservative_words")
-def pcc_thread_visit_conservative_words(visitor, context) -> int:
-    """Visit every mutator snapshot only while this thread owns the stopped world.
-
-    The callback receives an untrusted machine word, never a proven object.
-    It must resolve allocator/index membership before dereferencing anything.
-    Registration, exit and blocking-leave cannot alter the list during a stop.
-    """
-    if ptr_is_null(visitor) or pcc_thread_world_stop_epoch_held() < 0:
-        return -1
-    visited: int = 0
-    node = global_load_ptr("pcc_thread_records_head_py")
-    while ptr_is_null(node) == 0:
-        size: int = load_i64(node, _THREAD_ROOT_BYTES)
-        data = load_ptr(node, _THREAD_ROOT_DATA)
-        if size <= 0 or ptr_is_null(data):
-            return -1
-        offset: int = 0
-        while offset < _THREAD_ROOT_REGISTER_BYTES:
-            call_void_ptr2(visitor, load_ptr(node, _THREAD_ROOT_REGISTERS + offset), context)
-            offset = offset + 8
-            visited = visited + 1
-        offset = 0
-        while offset < size:
-            call_void_ptr2(visitor, load_ptr(data, offset), context)
-            offset = offset + 8
-            visited = visited + 1
-        node = load_ptr(node, 0)
-    return visited
-
-
-@c_abi_export("pcc_thread_visit_conservative_callback_words")
-def pcc_thread_visit_conservative_callback_words(visitor, context, caller) -> int:
-    # A sealed same-stop sweep already accounted for the owner's caller
-    # registers. They cannot change while that call is suspended; callback
-    # stores into addressable caller slots are observed by scanning that
-    # live stack again. The collector's disposable scratch is not a root.
-    if ptr_is_null(visitor) or pcc_thread_world_stop_epoch_held() < 0:
-        return -1
-    visited: int = 0
-    owner = global_load_ptr("pcc_tls_thread_record_py")
-    node = global_load_ptr("pcc_thread_records_head_py")
-    while ptr_is_null(node) == 0:
-        if ptr_is_null(caller) == 0 and ptr_to_int(node) == ptr_to_int(owner):
-            lower: int = ptr_to_int(caller)
-            upper: int = _thread_conservative_stack_high(node, lower)
-            if (lower & 7) != 0 or upper < lower or upper - lower > 1073741824:
-                return -1
-            read_at: int = 0
-            while read_at < upper - lower:
-                call_void_ptr2(visitor, load_ptr(caller, read_at), context)
-                visited += 1
-                read_at += 8
-            node = load_ptr(node, 0)
-            continue
-        size: int = load_i64(node, _THREAD_ROOT_BYTES)
-        data = load_ptr(node, _THREAD_ROOT_DATA)
-        if size <= 0 or ptr_is_null(data):
-            return -1
-        offset: int = 0
-        while offset < _THREAD_ROOT_REGISTER_BYTES:
-            call_void_ptr2(visitor, load_ptr(node, _THREAD_ROOT_REGISTERS + offset), context)
-            offset = offset + 8
-            visited = visited + 1
-        offset = 0
-        while offset < size:
-            call_void_ptr2(visitor, load_ptr(data, offset), context)
-            offset = offset + 8
-            visited = visited + 1
-        node = load_ptr(node, 0)
-    return visited
-
-
 def _thread_record_mark(state: int, frame) -> None:
     # Caller holds the world lock. Publish before advertising parked/exited;
     # the raw flush neither allocates nor polls nor acquires another lock.
-    if state != 0:
-        pcc_gc_gray_worklist_flush()
     record = global_load_ptr("pcc_tls_thread_record_py")
     if ptr_is_null(record):
         return
@@ -1225,35 +1117,6 @@ def _graph_wait_release(lock_word) -> None:
     # No subsequent access to successor or any shared field of this node.
 
 
-@c_abi_export("pcc_thread_graph_lock_has_waiter")
-def pcc_thread_graph_lock_has_waiter(lock_word) -> int:
-    """1 when another thread is queued for ``lock_word``, else 0.
-
-    A holder asks this to hand the lock over now instead of after a batch.
-    It is read-only: a word nobody has waited for has no context and answers
-    0. The queue's tail names its last thread. A holder that acquired through
-    the queue stays the tail until a later waiter links behind it, so only a
-    tail other than its own node is another thread. A thread between its
-    failed CAS and its enqueue is not seen yet; it is served at the holder's
-    next release.
-    """
-    context = int_to_ptr(i64(atomic_load_i64(
-        global_addr("pcc_graph_wait_context_head_py"), 0, "acquire"
-    )))
-    while ptr_is_null(context) == 0:
-        if ptr_to_int(load_ptr(context, _GRAPH_CONTEXT_WORD)) == ptr_to_int(lock_word):
-            tail_bits: i64 = i64(atomic_load_i64(context, _GRAPH_CONTEXT_TAIL, "acquire"))
-            if tail_bits == 0:
-                return 0
-            state: i64 = i64(load_i64(global_addr("pcc_tls_thread_state_py"), 0))
-            own_bits: i64 = i64(ptr_to_int(global_load_ptr("pcc_tls_graph_wait_node_py")))
-            if (state & _GRAPH_QUEUED_BIT) != 0 and tail_bits == own_bits:
-                return 0
-            return 1
-        context = load_ptr(context, _GRAPH_CONTEXT_NEXT)
-    return 0
-
-
 pcc_platform_monotonic_us = extern("pcc_platform_monotonic_us", (), c_int64)
 pcc_gc_record_graph_lock_wait = extern(
     "pcc_gc_record_graph_lock_wait", (c_int64, c_int64, c_int64), c_void
@@ -1543,15 +1406,6 @@ def pcc_container_unlock_pair(first, second) -> None:
     _container_exit()
 
 
-@c_abi_export("pcc_container_lock_held")
-def pcc_container_lock_held() -> int:
-    """Whether this thread holds a container lock."""
-    # 9007199254740992: the container-lock held bit.
-    if (load_i64(global_addr("pcc_tls_thread_state_py"), 0) & 9007199254740992) != 0:
-        return 1
-    return 0
-
-
 @c_abi_export("pcc_thread_note_deferred_tripwire")
 def pcc_thread_note_deferred_tripwire() -> None:
     """Have the outermost graph-lock release report a deferred tripwire."""
@@ -1605,8 +1459,6 @@ def pcc_thread_safepoint() -> None:
     # returns first while pcc_gc_backend4_no_refcounts is 0, and the backend
     # commit sets it before any tracing allocation). Under GC0 every poll,
     # one per allocation, would read an always-empty thread-local batch.
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        pcc_gc_gray_worklist_flush()
     # Nothing requested and nothing to undo: this thread is registered
     # (pcc_current_thread_id admits a newcomer under the world lock), it is
     # not still marked parked from an earlier stop, and either no stop is
@@ -1730,7 +1582,6 @@ def pcc_stop_the_world() -> int:
     if _world_init() != 0:
         return -1
     self_id = pcc_current_thread_id()
-    pcc_gc_gray_worklist_flush()
     lock = global_load_ptr("pcc_world_lock_py")
     cond = global_load_ptr("pcc_world_cond_py")
     trace_records = null()
@@ -1835,7 +1686,6 @@ def pcc_stop_the_world() -> int:
     _thread_trace(17, epoch, live, null())
     # Every parked thread's staged allocations enter the object list and
     # index before the holder walks either.
-    pcc_gc_alloc_stage_drain_stopped()
     return 0
 
 
@@ -1851,11 +1701,6 @@ def pcc_resume_world() -> int:
     # mutator runs again: running threads load slots without asking whether
     # a value was forwarded. Only the owner writes these words while it owns
     # the world, and only its outermost resume releases it.
-    if load_i32(global_addr("pcc_gc_backend4_remap_owed"), 0) != 0:
-        if (load_i32(global_addr("pcc_thread_world_stop_py"), 0) != 0
-                and _world_i64(global_addr("pcc_stop_owner_thread_id_py")) == self_id
-                and _world_i64(global_addr("pcc_stop_depth_py")) == 1):
-            pcc_gc_relocation_settle_stopped()
     pthread_mutex_lock(lock)
     epoch = _world_i64(global_addr("pcc_stop_epoch_py"))
     if load_i32(global_addr("pcc_thread_world_stop_py"), 0) == 0 or _world_i64(
@@ -2286,23 +2131,6 @@ def pcc_gc_native_frame_enter(frame, ranges, capacity: int) -> int:
     return 0
 
 
-@c_abi_export("pcc_gc_native_frame_enter_borrowed_slot")
-def pcc_gc_native_frame_enter_borrowed_slot(frame, entry, slot) -> None:
-    """Publish one precise, caller-owned return slot before permitting a stop.
-
-    A conservative stack hit keeps an unforwarded address in place, but it
-    cannot rewrite this cell when a forwarding edge already exists. The
-    current, registered thread owns all three stack records through leave.
-    Ordinary bind_range's conservative fast path is deliberately unchanged.
-    """
-    if ptr_is_null(slot) or pcc_gc_native_frame_enter(frame, entry, 1) != 0:
-        pcc_platform_abort()
-        return
-    store_ptr(entry, 0, slot)
-    store_i64(entry, 8, -1)
-    store_i64(frame, _NATIVE_FRAME_USED, 1)
-
-
 @c_abi_export("pcc_gc_native_frame_leave")
 def pcc_gc_native_frame_leave(frame) -> int:
     # No poll, callback, allocation or deallocation after the last root leaves.
@@ -2494,11 +2322,7 @@ def pcc_gc_native_frame_bind_map(frame_map, slots) -> None:
     # The nonmoving count-free GC1/GC2 enter no native list frame
     # (pcc_gc_nonmoving_count_free): their stopped-world conservative stack
     # scans find these slots.
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        return
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         return
     if ptr_is_null(frame_map) or ptr_is_null(slots):
         pcc_platform_abort()
@@ -2510,10 +2334,6 @@ def pcc_gc_native_frame_bind_map(frame_map, slots) -> None:
 
 @c_abi_export("pcc_gc_native_frame_unbind_map")
 def pcc_gc_native_frame_unbind_map(slots) -> None:
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        return
-    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-            and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0):
+    if (load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0):
         return
     pcc_gc_native_root_unbind_slots(slots)

@@ -237,6 +237,15 @@ def page_free(ptr: c_ptr, size: i64) -> i64:
     return 0
 
 
+@c_abi_export("pcc_win_page_discard")
+def page_discard(ptr: c_ptr, size: i64) -> i64:
+    # MEM_RESET (0x80000): the contents are no longer needed and the range
+    # stays committed and read/write.
+    if ptr_is_null(VirtualAlloc(ptr, size, 524288, 4)) != 0:
+        return error()
+    return 0
+
+
 @c_abi_export("pcc_win_read")
 def read(fd: i64, buffer: c_ptr, size: i64) -> i64:
     count = stack_alloc(8)

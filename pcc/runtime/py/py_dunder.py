@@ -85,8 +85,6 @@ py_gen_finalize_pending = extern("py_gen_finalize_pending", (c_ptr,), c_int64)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 strlen = extern("strlen", (c_ptr,), c_int64)
 pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_object_id = extern("pcc_gc_object_id", (c_ptr,), c_int64)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
 pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
@@ -500,21 +498,14 @@ def py_obj_id(o) -> int:
     """
     if ptr_is_null(o) or is_tagged_int(o):
         return ptr_to_int(o)
-    backend: int = pcc_gc_backend()
-    if backend == 4:
-        return pcc_gc_object_id(o) * 16
     return ptr_to_int(o)
 
 
 def _identity_hash(o) -> int:
     # object.__hash__: identity.  The forwarding collectors move objects, so
     # they hash the stable object id instead of the address.
-    backend: int = pcc_gc_backend()
     h: int = 0
-    if backend == 4:
-        h = pcc_gc_object_id(o)
-    else:
-        h = ptr_to_int(o) >> 4
+    h = ptr_to_int(o) >> 4
     if h == -1:
         return -2
     return h

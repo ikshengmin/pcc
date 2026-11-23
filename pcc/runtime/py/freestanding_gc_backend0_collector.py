@@ -117,7 +117,6 @@ pcc_gc_backend0_visit_subtract = extern(
 pcc_gc_visit_native_root_frames = extern(
     "pcc_gc_visit_native_root_frames", (c_int64, c_int64), c_int64
 )
-pcc_gc_visit_walked_stack_roots = extern("pcc_gc_visit_walked_stack_roots", (c_int64, c_int64), c_int64)
 pcc_gc_backend0_mark_reachable = extern(
     "pcc_gc_backend0_mark_reachable", (c_ptr,), c_void
 )
@@ -185,7 +184,9 @@ def _prepare_subset(pairs, count: i64) -> i64:
         obj = load_ptr(source, _SUBSET_OBJECT)
         node = py_gc_index_find(obj)
         if ptr_is_null(node) == 0 and ptr_eq(node, load_ptr(source, _SUBSET_NODE)) != 0:
-            if ptr_eq(load_ptr(node, 0), obj) != 0 and (load_i32(node, 16) & _SUBSET_CANDIDATE) == 0:
+            # 64: the node of a full collection in bounded stops is in no
+            # stopped-world view, so it is no candidate record either.
+            if ptr_eq(load_ptr(node, 0), obj) != 0 and (load_i32(node, 16) & (_SUBSET_CANDIDATE | 64)) == 0:
                 destination = ptr_add(owned, valid * _SUBSET_RECORD_BYTES)
                 store_ptr(destination, _SUBSET_NODE, node)
                 store_ptr(destination, _SUBSET_OBJECT, obj)
@@ -337,13 +338,10 @@ def _mark_runtime_roots() -> None:
     # precise walk is active), then the registered frames. Without frame
     # roots, GC0 finds stack references through their counts and its frames
     # register nothing, so it does not walk.
-    if load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) != 0:
-        pcc_gc_visit_walked_stack_roots(6, 0)
-    else:
-        # Native handles replace scheduler roots and remain roots even when
-        # optional compiled frame roots are disabled. Optional native frame
-        # groups are omitted at binding, preserving the GC0 policy.
-        pcc_gc_visit_native_root_frames(6, 0)
+    # Native handles replace scheduler roots and remain roots even when
+    # optional compiled frame roots are disabled. Optional native frame
+    # groups are omitted at binding, preserving the GC0 policy.
+    pcc_gc_visit_native_root_frames(6, 0)
     frame = global_load_ptr("pcc_gc_frame_head")
     while ptr_is_null(frame) == 0:
         frame_map = load_ptr(frame, 0)
@@ -530,11 +528,6 @@ def _collect(pairs, candidate_count: i64) -> i64:
     collection_stw_start: i64 = pcc_platform_monotonic_us()
     pcc_gc_reclaim_retired_index_tables()
     pcc_gc_default_table_lock()
-    if ptr_is_null(pairs) == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
-        pcc_gc_default_table_unlock()
-        pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
-        pcc_resume_world()
-        return 0
     store_i32(collecting_slot, 0, 1)
 
     # Flag-only tracking keeps no nodes between collections: a full

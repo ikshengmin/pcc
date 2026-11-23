@@ -35,15 +35,23 @@ py_gc_index_find = extern("py_gc_index_find", (c_ptr,), c_ptr)
 # validated subset. Ordinary full collections leave bit 2 clear everywhere.
 _GC0_REACHABLE = 1
 _GC0_CANDIDATE = 4
+# A node of a full collection in bounded stops
+# (freestanding_gc_backend0_incremental.py) is in no stopped-world view.
+_GC0_FULL_VIEW = 64
+
+pcc_gc_backend0_full_mark = extern("pcc_gc_backend0_full_mark", (c_ptr,), c_void)
 
 
 @c_abi_export("pcc_gc_backend0_node_in_collection")
 def _in_collection(node) -> i64:
     if ptr_is_null(node) != 0:
         return 0
+    bits: i64 = load_i32(node, 16)
+    if (bits & _GC0_FULL_VIEW) != 0:
+        return 0
     if load_i32(global_addr("pcc_gc_backend0_subset_active"), 0) == 0:
         return 1
-    return 1 if (load_i32(node, 16) & _GC0_CANDIDATE) != 0 else 0
+    return 1 if (bits & _GC0_CANDIDATE) != 0 else 0
 
 
 @c_abi_export("pcc_gc_backend0_is_unreachable")
@@ -91,6 +99,11 @@ _MARK_INLINE_CAPACITY = 64
 @c_abi_export("pcc_gc_backend0_mark_reachable")
 def pcc_gc_backend0_mark_reachable(o) -> None:
     if ptr_is_null(o) != 0 or is_tagged_int(o) != 0:
+        return
+    if load_i32(global_addr("pcc_gc_full_marking"), 0) != 0:
+        # The mark pass of a full collection in bounded stops scans the
+        # runtime's roots through this entry.
+        pcc_gc_backend0_full_mark(o)
         return
     node = py_gc_index_find(o)
     if _in_collection(node) == 0 or (load_i32(node, 16) & _GC0_REACHABLE) != 0:

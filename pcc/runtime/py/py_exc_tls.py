@@ -53,9 +53,6 @@ from pcc.unsafe import (
 
 py_handled_exception_slot = extern("py_handled_exception_slot", (), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
 pcc_gc_note_frame_enter_local_checked = extern(
     "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
@@ -88,9 +85,6 @@ py_tuple_new           = extern("py_tuple_new",           (c_int64,), c_ptr)
 py_str_utf8            = extern("py_str_utf8",            (c_ptr,), c_ptr)
 pcc_gc_load_ptr        = extern("pcc_gc_load_ptr",        (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr       = extern("pcc_gc_store_ptr",       (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read", (c_ptr,), c_ptr,
-)
 pcc_diagnostics_runtime_log_event_code = extern(
     "pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void,
 )
@@ -101,7 +95,7 @@ def _type_of(obj) -> int:
     # (which would require a main() for init). See py_obj_stubs.py.
     if is_tagged_int(obj):
         return PY_TYPE_INT       # PY_TYPE_INT
-    obj = pcc_gc_note_relocation_read(obj)
+    obj = obj
     return load_i32(obj, 8)   # PyObjectHeader.type_tag
 
 
@@ -243,7 +237,7 @@ def _resolve_current_exception():
     cur = py_tls_exc_get()
     if ptr_is_null(cur):
         return cur
-    resolved = pcc_gc_note_relocation_read(cur)
+    resolved = cur
     if ptr_eq(resolved, cur) == 0:
         py_incref(resolved)
         py_tls_exc_set(resolved)
@@ -270,16 +264,15 @@ def py_clear_exception() -> None:
         owned = stack_alloc(_CLEAR_EXCEPTION_BYTES)
         store_ptr(owned, _CLEAR_EXCEPTION_ROOT, null())
         registered: int = 0
-        if pcc_gc_stack_slot_root_is_conservative(owned) == 0:
-            pcc_thread_no_park_enter()
-            status: int = pcc_gc_note_frame_enter_local_checked(
-                global_addr("pcc_raise_owned_frame_map"), owned
-            )
-            pcc_thread_no_park_exit()
-            if status != 1:
-                pcc_platform_abort()
-                return
-            registered = 1
+        pcc_thread_no_park_enter()
+        status: int = pcc_gc_note_frame_enter_local_checked(
+            global_addr("pcc_raise_owned_frame_map"), owned
+        )
+        pcc_thread_no_park_exit()
+        if status != 1:
+            pcc_platform_abort()
+            return
+        registered = 1
         py_tls_exc_swap_slot(owned)
         pcc_gc_store_root(owned, null())
         if registered != 0:
@@ -326,7 +319,7 @@ _CLEAR_EXCEPTION_BYTES = 8
 
 @c_abi_export("py_raise")
 def py_raise(exc: c_ptr) -> None:
-    exc = pcc_gc_note_relocation_read(exc)
+    exc = exc
     borrowed = stack_alloc(16)
     owned = stack_alloc(8)
     store_ptr(borrowed, 0, exc)
@@ -351,7 +344,7 @@ def py_raise(exc: c_ptr) -> None:
 
 @c_abi_export("py_raise_owned")
 def py_raise_owned(exc: c_ptr) -> None:
-    exc = pcc_gc_note_relocation_read(exc)
+    exc = exc
     owned = stack_alloc(8)
     store_ptr(owned, 0, exc)
     prior: int = 0

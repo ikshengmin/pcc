@@ -170,9 +170,6 @@ pcc_gc_free_object_memory = extern(
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read", (c_ptr,), c_ptr
-)
 pcc_gc_scheduler_root_register_handle = extern(
     "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
 )
@@ -438,7 +435,7 @@ def _checked(vthread):
     if ptr_is_null(vthread) or is_tagged_int(vthread):
         py_raise_owned(py_exc_new(3, cstr("object is not a virtual thread")))
         return null()
-    resolved = pcc_gc_note_relocation_read(vthread)
+    resolved = vthread
     if ptr_is_null(resolved) == 0:
         vthread = resolved
     if load_i32(vthread, 8) != PY_TYPE_VIRTUAL_THREAD:
@@ -1214,7 +1211,7 @@ def _channel_arm_index(group, arm) -> int:
 def _channel_valid_object(obj, kind: int):
     if ptr_is_null(obj) or is_tagged_int(obj):
         return null()
-    obj = pcc_gc_note_relocation_read(obj)
+    obj = obj
     if ptr_is_null(obj) or load_i32(obj, 8) != PY_TYPE_VTHREAD_CHANNEL:
         return null()
     if load_i64(obj, 16) != kind:
@@ -1647,7 +1644,7 @@ def py_virtual_thread_channel_sender_clone(sender):
 
 def _channel_current_running(vthread) -> int:
     current = global_load_ptr("pcc_current_virtual_thread_py")
-    current = pcc_gc_note_relocation_read(current)
+    current = current
     if ptr_is_null(current) or ptr_eq(current, vthread) == 0:
         return 0
     if atomic_load_i64(vthread, 32, "acquire") != 2 or load_i64(vthread, 120) != 0:
@@ -4322,7 +4319,7 @@ def py_virtual_thread_join(vthread, target) -> int:
     current = global_load_ptr("pcc_current_virtual_thread_py")
     if ptr_is_null(current):
         return -1
-    resolved = pcc_gc_note_relocation_read(current)
+    resolved = current
     if ptr_is_null(resolved) == 0:
         current = resolved
     if ptr_eq(current, waiter) == 0:

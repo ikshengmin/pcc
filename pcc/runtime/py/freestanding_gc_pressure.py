@@ -40,7 +40,6 @@ define_thread_local_i32("pcc_gc_pressure_owner", 0)
 define_thread_local_i32("pcc_gc_pressure_image_depth", 0)
 
 pcc_gc_collect = extern("pcc_gc_collect", (c_int32,), c_int64)
-pcc_gc_sweep_owed = extern("pcc_gc_sweep_owed", (), c_int64)
 pcc_thread_gc_pressure_safe = extern("pcc_thread_gc_pressure_safe", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
@@ -100,17 +99,6 @@ def pcc_gc_pressure_collection_completed() -> None:
             pcc_platform_abort()
 
 
-@c_abi_export("pcc_gc_pressure_tracing_completed")
-def pcc_gc_pressure_tracing_completed(start_commits: i64, had_sweep: i64) -> None:
-    if load_i32(global_addr("pcc_gc_mark_active"), 0) != 0:
-        return
-    if pcc_gc_sweep_owed() != 0:
-        return
-    if had_sweep == 0 and load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) == start_commits:
-        return
-    pcc_gc_pressure_collection_completed()
-
-
 @c_abi_export("pcc_gc_pressure_allowed")
 def _pressure_allowed() -> i64:
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
@@ -122,8 +110,6 @@ def _pressure_allowed() -> i64:
     if load_i32(global_addr("py_gc_threshold0"), 0) <= 0:
         return 0
     if load_i32(global_addr("py_gc_collecting"), 0) != 0:
-        return 0
-    if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) != 0:
         return 0
     return pcc_thread_gc_pressure_safe()
 

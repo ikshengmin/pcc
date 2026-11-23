@@ -72,7 +72,6 @@ py_str_new           = extern("py_str_new",           (c_ptr, c_int64),         
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,),                  c_ptr)
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 pcc_gc_publish_initialized = extern(
     "pcc_gc_publish_initialized", (c_ptr,), c_void
 )
@@ -258,7 +257,7 @@ def py_exc_set_cause(exc, cause) -> None:
         return
     if _type_of(exc) != PY_TYPE_EXC:
         return
-    exc = pcc_gc_note_relocation_read(exc)
+    exc = exc
     # Explicit cause assignment suppresses implicit context even for None.
     # Atomic bit operations leave concurrent collector flags unchanged.
     atomic_rmw_i32("or", exc, 12, PY_FLAG_EXC_SUPPRESS_CONTEXT, "relaxed")
@@ -295,12 +294,6 @@ def py_exc_set_implicit_context_slots(exception_slot, context_slot) -> None:
     if ptr_is_null(raw_context) != 0:
         return
     backend: int = pcc_gc_backend()
-    if backend >= 1 and backend <= 3:
-        # The caller owns both rooted slots and the nonmoving collectors do
-        # not rewrite either while it runs. The same object cannot require
-        # a link mutation, even when it already has an explicit context.
-        if ptr_eq(load_ptr(exception_slot, 0), raw_context) != 0:
-            return
     sever = stack_alloc(128)
     replace = stack_alloc(128)
     pcc_gc_store_ptr_plan_init(sever, null(), backend)

@@ -244,15 +244,8 @@ py_gc_untrack = extern("py_gc_untrack", (c_ptr,), c_void)
 pcc_gc_note_object_freeing = extern(
     "pcc_gc_note_object_freeing", (c_ptr,), c_void
 )
-pcc_gc_free_watch_begin = extern(
-    "pcc_gc_free_watch_begin", (c_ptr, c_ptr), c_void
-)
-pcc_gc_free_watch_end = extern("pcc_gc_free_watch_end", (c_ptr,), c_int64)
 # pcc_gc_free_watch_begin's record (layout owned by py_gc_backend.py).
 GC_FREE_WATCH_BYTES = 24
-pcc_gc_object_index_find = extern(
-    "pcc_gc_object_index_find", (c_ptr,), c_ptr
-)
 py_user_del_dispatch = extern("py_user_del_dispatch", (c_ptr,), c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
@@ -290,25 +283,6 @@ pcc_container_lock_pair = extern("pcc_container_lock_pair", (c_ptr, c_ptr), c_vo
 pcc_container_unlock_pair = extern("pcc_container_unlock_pair", (c_ptr, c_ptr), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_thread_world_stop_epoch_held = extern("pcc_thread_world_stop_epoch_held", (), c_int64)
-pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
-pcc_gc_note_write_barrier = extern(
-    "pcc_gc_note_write_barrier",
-    (c_ptr, c_ptr),
-    c_void,
-)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier",
-    (c_ptr, c_ptr, c_ptr),
-    c_void,
-)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_backend4_zpage_unregister_owner_payload_span = extern(
     "pcc_gc_backend4_zpage_unregister_owner_payload_span",
     (c_ptr, c_ptr),
@@ -369,14 +343,14 @@ def _ptr_is_class_of_validated_instance(cls) -> bool:
     probe was not buying safety against that; it only excluded a genuinely
     foreign pointer, which this slot cannot hold.  The relocation read is kept.
     """
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     if ptr_is_null(cls) != 0:
         return False
     return load_i32(cls, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_CLASS
 
 
 def _ptr_is_class(o) -> bool:
-    o = pcc_gc_note_relocation_read(o)
+    o = o
     if not _ptr_can_have_header(o):
         return False
     return load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_CLASS
@@ -404,7 +378,7 @@ def _dealloc_ptr_is_instance(o) -> bool:
     # ``_ptr_is_instance`` for an object whose header this thread is about to
     # free: provenance is already established (we hold the last reference),
     # so the radix-walk ``_ptr_can_have_header`` probe is skipped.
-    o = pcc_gc_note_relocation_read(o)
+    o = o
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
     # A valuebox is an instance of its class too, with the same layout.
     if tag != PY_TYPE_INSTANCE and tag != PY_TYPE_VALUEBOX:
@@ -417,7 +391,7 @@ def _dealloc_ptr_is_instance(o) -> bool:
 
 
 def _ptr_is_instance(o) -> bool:
-    o = pcc_gc_note_relocation_read(o)
+    o = o
     if not _ptr_can_have_header(o):
         return False
     tag: int = load_i32(o, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -437,10 +411,6 @@ def _class_note_borrowed_metadata_store(cls, value) -> None:
 def _class_note_borrowed_metadata_slot_store(cls, slot, value) -> None:
     if not _ptr_is_class(cls):
         return
-    backend: int = pcc_gc_backend()
-    if backend == 1 or backend == 2 or backend == 3 or backend == 4:
-        pcc_gc_note_store()
-    pcc_gc_note_slot_write_barrier(cls, slot, value)
 
 
 def _strs_eq(a, b) -> int:
@@ -612,7 +582,7 @@ def _class_lookup_in_mro(cls, name):
                             method_slot = ptr_add(
                                 methods, m_off + PYCLASSMETHOD_FUNC_OFFSET
                             )
-                            func = pcc_gc_note_relocation_read(load_ptr(method_slot, 0))
+                            func = load_ptr(method_slot, 0)
                             store_ptr(method_slot, 0, func)
                             return func
                 j = j + 1
@@ -655,7 +625,7 @@ def _bump_class_attr_cache_epoch() -> None:
 def py_class_attrs_dict(cls, create: int):
     if not _ptr_is_class(cls):
         return null()
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     attrs = pcc_gc_load_ptr(cls, ptr_add(cls, PYCLASSOBJECT_ATTRS_OFFSET))
     if ptr_is_null(attrs) != 0 and create != 0:
         created = py_dict_new()
@@ -693,7 +663,6 @@ def py_classmethod_new(func):
         func,
     )
     py_gc_track(descriptor)
-    pcc_gc_publish_initialized(descriptor)
     return descriptor
 
 
@@ -709,7 +678,6 @@ def py_staticmethod_new(func):
         descriptor, ptr_add(descriptor, PYSTATICMETHODOBJECT_FUNC_OFFSET), func
     )
     py_gc_track(descriptor)
-    pcc_gc_publish_initialized(descriptor)
     return descriptor
 
 
@@ -735,7 +703,6 @@ def py_property_new(fget, fset, fdel):
             descriptor, ptr_add(descriptor, PYPROPERTYOBJECT_FDEL_OFFSET), fdel
         )
     py_gc_track(descriptor)
-    pcc_gc_publish_initialized(descriptor)
     return descriptor
 
 
@@ -910,13 +877,11 @@ def _bound_entry_build(slots, pins) -> None:
     if managed and is_tagged_int(func) == 0:
         store_i64(pins, 24, load_i32(func, 12) & 64)
         pcc_gc_pin(func)
-        pcc_gc_note_write_barrier(null(), func)
     self_obj = py_tuple_get(load_ptr(slots, 8), 1)
     store_ptr(slots, 32, self_obj)
     if ptr_is_null(self_obj) == 0 and is_tagged_int(self_obj) == 0:
         store_i64(pins, 32, load_i32(self_obj, 12) & 64)
         pcc_gc_pin(self_obj)
-        pcc_gc_note_write_barrier(null(), self_obj)
     if ptr_is_null(self_obj):
         return
     n_args: int = py_tuple_len(load_ptr(slots, 16))
@@ -927,7 +892,6 @@ def _bound_entry_build(slots, pins) -> None:
         if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
             store_i64(pins, 48, load_i32(full, 12) & 64)
             pcc_gc_pin(full)
-            pcc_gc_note_write_barrier(null(), full)
         if ptr_is_null(full):
             return
         py_tuple_set_item(load_ptr(slots, 48), 0, load_ptr(slots, 32))
@@ -938,7 +902,6 @@ def _bound_entry_build(slots, pins) -> None:
             if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
                 store_i64(pins, 56, load_i32(arg, 12) & 64)
                 pcc_gc_pin(arg)
-                pcc_gc_note_write_barrier(null(), arg)
             if ptr_is_null(arg):
                 return
             py_tuple_set_item(load_ptr(slots, 48), i + 1, load_ptr(slots, 56))
@@ -949,7 +912,6 @@ def _bound_entry_build(slots, pins) -> None:
         if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
             store_i64(pins, 0, load_i32(result, 12) & 64)
             pcc_gc_pin(result)
-            pcc_gc_note_write_barrier(null(), result)
     elif n_args >= 0 and n_args <= 3:
         i: int = 0
         while i < n_args:
@@ -958,7 +920,6 @@ def _bound_entry_build(slots, pins) -> None:
             if ptr_is_null(arg) == 0 and is_tagged_int(arg) == 0:
                 store_i64(pins, 56 + i * 8, load_i32(arg, 12) & 64)
                 pcc_gc_pin(arg)
-                pcc_gc_note_write_barrier(null(), arg)
             if ptr_is_null(arg):
                 return
             i = i + 1
@@ -974,7 +935,6 @@ def _bound_entry_build(slots, pins) -> None:
         if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
             store_i64(pins, 0, load_i32(result, 12) & 64)
             pcc_gc_pin(result)
-            pcc_gc_note_write_barrier(null(), result)
 
 
 @c_abi_export("pcc_instance_bound_method_entry")
@@ -1001,7 +961,6 @@ def _instance_bound_method_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
             pcc_gc_pin(error)
             py_incref(error)
             store_ptr(slots, 80, error)
-            pcc_gc_note_write_barrier(null(), error)
     prior_result_pin: int = load_i64(pins, 0)
     index: int = 9
     while index > 0:
@@ -1153,7 +1112,7 @@ def py_func_kind(fn) -> int:
     """
     if ptr_is_null(fn) != 0 or is_tagged_int(fn) != 0:
         return -1
-    fn = pcc_gc_note_relocation_read(fn)
+    fn = fn
     if load_i32(fn, PYOBJECTHEADER_TYPE_TAG_OFFSET) != PY_TYPE_FUNC:
         return -1
     if ptr_eq(load_ptr(fn, 56), function_addr("pcc_instance_bound_method_entry")) != 0:
@@ -1344,9 +1303,6 @@ def _attr_res_store_dict_only(cls, name, epoch: int) -> None:
 
 def _attr_res_method_cacheable() -> int:
     # Methods are cached by address; the forwarding collectors can move them.
-    backend: int = pcc_gc_backend()
-    if backend == 4:
-        return 0
     return 1
 
 
@@ -1429,7 +1385,7 @@ def py_str_payload(value):
     # identity, fields, dictionary and finalizer throughout this view.
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return null()
-    value = pcc_gc_note_relocation_read(value)
+    value = value
     if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR:
         return value
     if not _ptr_is_instance(value):
@@ -1458,7 +1414,7 @@ def py_tuple_payload(value):
     # its own payload-slot owner/lease rather than retaining this raw view.
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return null()
-    value = pcc_gc_note_relocation_read(value)
+    value = value
     if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
         return value
     if not _ptr_is_instance(value):
@@ -1479,7 +1435,7 @@ def py_tuple_payload(value):
 def py_tuple_check(value) -> int:
     if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
         return 0
-    value = pcc_gc_note_relocation_read(value)
+    value = value
     if load_i32(value, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
         return 1
     if not _ptr_is_instance(value):
@@ -1511,8 +1467,8 @@ def py_instance_copy_builtin_payload(source, destination) -> None:
         pcc_gc_store_ptr_plan_finish(plan)
         return
     pcc_py_gc_minor_graph_lock()
-    source = pcc_gc_note_relocation_read(source)
-    destination = pcc_gc_note_relocation_read(destination)
+    source = source
+    destination = destination
     cls = pcc_gc_load_ptr(source, ptr_add(source, PYINSTANCEOBJECT_CLS_OFFSET))
     source_slot = _instance_builtin_payload_slot(source, cls)
     if ptr_is_null(source_slot) == 0:
@@ -1576,7 +1532,6 @@ def _copy_instance_reserved_owner(obj, dst, cls) -> None:
             store_ptr(destination, 0, value)
             # GC0 has no slot barrier; the container-mode tracers shade the
             # new referent without the graph lock under these locks.
-            pcc_gc_note_slot_write_barrier(dst, destination, value)
         pcc_container_unlock_pair(obj, dst)
         pcc_gc_retain_plan_finish(plan)
         return
@@ -1587,7 +1542,6 @@ def _copy_instance_reserved_owner(obj, dst, cls) -> None:
     if ptr_is_null(value) == 0:
         py_incref(value)
         store_ptr(destination, 0, value)
-        pcc_gc_note_slot_write_barrier(dst, destination, value)
     pcc_py_gc_minor_graph_unlock()
 
 
@@ -1714,7 +1668,7 @@ def _class_attr_lookup_in_mro(cls, name):
         return null()
     if ptr_is_null(name) != 0:
         return null()
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     # The cache owns its pinned key; an uncached key is this lookup's own.
     owned: int = 0
     key = pcc_cached_name_key(name)
@@ -1977,7 +1931,7 @@ def _metaclass(cls):
     metaclass = pcc_gc_load_ptr(cls, ptr_add(cls, PYCLASSOBJECT_METACLASS_OFFSET))
     if not _ptr_is_class(metaclass):
         return null()
-    return pcc_gc_note_relocation_read(metaclass)
+    return metaclass
 
 
 def _object_new_cache_mutex() -> c_ptr:
@@ -2001,7 +1955,7 @@ def _object_allocator_supports_class(cls) -> bool:
     """An ordinary class layout, excluding other builtin allocation owners."""
     if not _ptr_is_class(cls):
         return False
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     n_mro: int = load_i32(cls, PYCLASSOBJECT_N_MRO_OFFSET)
     mro = load_ptr(cls, PYCLASSOBJECT_MRO_OFFSET)
     root = global_load_ptr("py_object_root_cache")
@@ -2301,7 +2255,7 @@ def _class_new_lookup(cls) -> c_ptr:
                 offset: int = j * PYCLASSMETHOD_SIZE
                 method_name = load_ptr(methods, offset + PYCLASSMETHOD_NAME_OFFSET)
                 if _strs_eq(method_name, cstr("__new__")) != 0:
-                    value = pcc_gc_note_relocation_read(load_ptr(methods, offset + PYCLASSMETHOD_FUNC_OFFSET))
+                    value = load_ptr(methods, offset + PYCLASSMETHOD_FUNC_OFFSET)
                     prior_pin: int = 0
                     if _ptr_can_have_header(value):
                         prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
@@ -2430,7 +2384,7 @@ def py_class_metaclass_call(cls, args, kwargs):
 def py_class_getattr(cls, name):
     if not _ptr_is_class(cls) or ptr_is_null(name) != 0:
         return null()
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     if _cstr_is_dunder_dict(name) != 0:
         attrs = py_class_attrs_dict(cls, 1)
         if ptr_is_null(attrs) == 0:
@@ -2493,7 +2447,7 @@ def py_class_setattr_raw(cls, name, value) -> int:
         return -1
     if ptr_is_null(name) != 0 or ptr_is_null(value) != 0:
         return -1
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     attrs = py_class_attrs_dict(cls, 1)
     if ptr_is_null(attrs) != 0:
         return -1
@@ -2578,7 +2532,7 @@ def py_class_setattr(cls, name, value) -> int:
         return -1
     if ptr_is_null(name) != 0 or ptr_is_null(value) != 0:
         return -1
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     metaclass = _metaclass(cls)
     if ptr_is_null(metaclass) == 0:
         meta_attr = _class_attr_lookup_in_mro(metaclass, name)
@@ -2590,7 +2544,7 @@ def py_class_setattr(cls, name, value) -> int:
             py_decref(meta_attr)
     stored: int = py_class_setattr_raw(cls, name, value)
     if stored == 0:
-        _class_method_alias_sync(pcc_gc_note_relocation_read(cls), name, value)
+        _class_method_alias_sync(cls, name, value)
     return stored
 
 
@@ -2598,7 +2552,7 @@ def py_class_setattr(cls, name, value) -> int:
 def py_class_delattr(cls, name) -> int:
     if not _ptr_is_class(cls) or ptr_is_null(name) != 0:
         return -1
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     metaclass = _metaclass(cls)
     if ptr_is_null(metaclass) == 0:
         meta_attr = _class_attr_lookup_in_mro(metaclass, name)
@@ -2617,7 +2571,7 @@ def py_class_delattr(cls, name) -> int:
     rc: int = py_dict_del(attrs, key)
     py_decref(key)
     if rc == 0:
-        _class_method_alias_sync(pcc_gc_note_relocation_read(cls), name, null())
+        _class_method_alias_sync(cls, name, null())
         _bump_class_attr_cache_epoch()
     return rc
 
@@ -2653,7 +2607,7 @@ def py_class_lookup(cls, name):
         return null()
     if ptr_is_null(name) != 0:
         return null()
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     if _cstr_is_dunder_name(name) != 0:
         cls_name = load_ptr(cls, PYCLASSOBJECT_NAME_OFFSET)
         if ptr_is_null(cls_name) != 0:
@@ -2690,7 +2644,7 @@ def py_class_add_method(cls, name, func) -> None:
     _method_name_signature(name, signature)
     name_hash: int = load_i32(signature, 0) & 0xFFFFFFFF
     name_length: int = load_i32(signature, 4)
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     n_methods_i32: int = load_i32(cls, PYCLASSOBJECT_N_METHODS_OFFSET)
     new_n: int = n_methods_i32 + 1
     methods = load_ptr(cls, PYCLASSOBJECT_METHODS_OFFSET)
@@ -2717,9 +2671,6 @@ def py_class_add_method(cls, name, func) -> None:
         if ptr_is_null(methods) == 0:
             if ptr_eq(methods, new_methods) == 0:
                 pcc_gc_backend4_zpage_unregister_owner_payload_span(cls, methods)
-        pcc_gc_backend4_zpage_register_owner_payload_span(
-            cls, new_methods, new_n * PYCLASSMETHOD_SIZE
-        )
     _class_note_borrowed_metadata_slot_store(
         cls,
         ptr_add(new_methods, method_off + 8),
@@ -2742,11 +2693,11 @@ def py_class_add_method(cls, name, func) -> None:
 def py_class_set_metaclass(cls, metaclass) -> None:
     if not _ptr_is_class(cls):
         return
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     if ptr_is_null(metaclass) == 0:
         if not _ptr_is_class(metaclass):
             return
-        metaclass = pcc_gc_note_relocation_read(metaclass)
+        metaclass = metaclass
     # A metaclass is a counted class owner. The retaining store also retires
     # the previous relation.
     pcc_gc_store_ptr(
@@ -2758,7 +2709,7 @@ def py_class_set_metaclass(cls, metaclass) -> None:
 def py_instance_new(cls) -> c_ptr:
     if not _ptr_is_class(cls):
         return null()
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     n_fields_i32: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if n_fields_i32 < 0:
         n_fields_i32 = 0
@@ -2825,7 +2776,7 @@ def py_instance_get_field(inst, idx: int):
         return null()
     # Validation heals its own local copy. Derive every subsequent slot from
     # the current receiver, rather than the caller's old relocation address.
-    inst = pcc_gc_note_relocation_read(inst)
+    inst = inst
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
     if idx >= n_fields:
@@ -2852,22 +2803,21 @@ def _instance_field_load(inst, offset: int, out) -> int:
     moving collector the receiver and the result stay rooted across it.
     """
     store_ptr(out, 0, null())
-    if _gc_backend_selected_fast() == 0:
-        # NULL, a tagged int and the image's static singletons are never
-        # freed and need no count: one word load, which sees the field
-        # before or after any concurrent store, returns them without the
-        # transaction. Only the address is examined, never a header.
-        word: int = atomic_load_i64(inst, offset, "relaxed")
-        immediate = int_to_ptr(word)
-        if (
-            word == 0
-            or (word & 1) != 0
-            or ptr_eq(immediate, global_addr("py_none_storage")) != 0
-            or ptr_eq(immediate, global_addr("py_true_storage")) != 0
-            or ptr_eq(immediate, global_addr("py_false_storage")) != 0
-        ):
-            store_ptr(out, 0, immediate)
-            return 0
+    # NULL, a tagged int and the image's static singletons are never
+    # freed and need no count: one word load, which sees the field
+    # before or after any concurrent store, returns them without the
+    # transaction. Only the address is examined, never a header.
+    word: int = atomic_load_i64(inst, offset, "relaxed")
+    immediate = int_to_ptr(word)
+    if (
+        word == 0
+        or (word & 1) != 0
+        or ptr_eq(immediate, global_addr("py_none_storage")) != 0
+        or ptr_eq(immediate, global_addr("py_true_storage")) != 0
+        or ptr_eq(immediate, global_addr("py_false_storage")) != 0
+    ):
+        store_ptr(out, 0, immediate)
+        return 0
     if _fields_lock_themselves() != 0:
         # The field's writers and the concurrent marker hold this same lock.
         owned_plan = stack_alloc(56)
@@ -2877,43 +2827,14 @@ def _instance_field_load(inst, offset: int, out) -> int:
         pcc_gc_retain_plan_finish(owned_plan)
         store_ptr(out, 0, owned)
         return 0
-    if _gc_backend_selected_fast() == 0:
-        # GC0 never relocates: one transaction around the load and retain,
-        # unless acquiring it parked through a backend switch.
-        pcc_py_gc_minor_graph_lock()
-        if _gc_backend_selected_fast() == 0:
-            shared = load_ptr(inst, offset)
-            if ptr_is_null(shared) == 0:
-                py_incref(shared)
-            pcc_py_gc_minor_graph_unlock()
-            store_ptr(out, 0, shared)
-            return 0
-        pcc_py_gc_minor_graph_unlock()
-    receiver_slot = stack_alloc(C_POINTER_SIZE)
-    store_ptr(receiver_slot, 0, inst)
-    result_handle = null()
-    retain_plan = stack_alloc(56)
+    # GC0 never relocates: one transaction around the load and retain,
+    # unless acquiring it parked through a backend switch.
     pcc_py_gc_minor_graph_lock()
-    receiver = load_ptr(receiver_slot, 0)
-    value = pcc_gc_load_ptr(receiver, ptr_add(receiver, offset))
-    value = pcc_gc_retain_plan_prepare_locked(retain_plan, value)
-    store_ptr(out, 0, value)
+    shared = load_ptr(inst, offset)
+    if ptr_is_null(shared) == 0:
+        py_incref(shared)
     pcc_py_gc_minor_graph_unlock()
-    pcc_gc_retain_plan_finish(retain_plan)
-    if ptr_is_null(result_handle) != 0:
-        # GC0/1/2 cannot relocate the retained owner, and the count-free
-        # GC3/GC4 do not move what a stack ``out`` holds.
-        return 0
-    # Only the result root's teardown needs a short pin (py_list_get's finish).
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), out)
-    prior_pin: int = 0
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
-    pcc_gc_scheduler_root_unregister_handle(result_handle)
-    store_ptr(out, 0, pcc_gc_take_pinned_slot(out, prior_pin))
+    store_ptr(out, 0, shared)
     return 0
 
 
@@ -2974,7 +2895,7 @@ def _instance_lookup_rooted(inst, idx: int, name, lookup_kind: int):
     memset(handles, 0, 3 * C_POINTER_SIZE)
     memset(pins, 0, 2 * C_POINTER_SIZE)
     pcc_py_gc_minor_graph_lock()
-    inst = pcc_gc_note_relocation_read(inst)
+    inst = inst
     cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
     if lookup_kind == _INSTANCE_LOOKUP_VARS and not _ptr_is_class(cls):
         pcc_py_gc_minor_graph_unlock()
@@ -3334,7 +3255,7 @@ def _instance_getattr_default_body(inst, cls, name, slots, pins):
         if ptr_is_null(entry) != 0 or load_i32(entry, 12) == _ATTR_RES_DATA_DESCRIPTOR:
             empty_index: int = _lookup_field_index(cls, name)
             if empty_index >= 0:
-                inst = pcc_gc_note_relocation_read(inst)
+                inst = inst
                 empty_value = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET + empty_index * C_POINTER_SIZE))
                 if ptr_is_null(empty_value) != 0:
                     return _instance_missing_field_lookup(inst, empty_index, 1)
@@ -3782,8 +3703,8 @@ def py_class_apply_namespace_dict(cls, ns) -> int:
 
 @c_abi_export("py_isinstance")
 def py_isinstance(obj, cls) -> int:
-    obj = pcc_gc_note_relocation_read(obj)
-    cls = pcc_gc_note_relocation_read(cls)
+    obj = obj
+    cls = cls
     # One provenance probe, for `obj`.  `cls` is only compared by address with
     # the validated class of `obj` and its MRO entries, all real classes, so
     # an argument that is not a class never matches -- the answer the former
@@ -5728,7 +5649,7 @@ def _super_start_type(receiver, from_cls):
     if ptr_is_null(receiver) != 0 or is_tagged_int(receiver) != 0:
         return null()
     if _ptr_is_class(receiver):
-        if _super_mro_index(pcc_gc_note_relocation_read(receiver), from_cls) >= 0:
+        if _super_mro_index(receiver, from_cls) >= 0:
             return receiver
         return null()
     if _ptr_is_instance(receiver):
@@ -5750,8 +5671,8 @@ def py_super_lookup(start_cls, from_cls, name):
         return null()
     if not _ptr_is_class(start_cls):
         return _super_raise_not_subtype(null(), start_cls, from_cls)
-    start_cls = pcc_gc_note_relocation_read(start_cls)
-    from_cls = pcc_gc_note_relocation_read(from_cls)
+    start_cls = start_cls
+    from_cls = from_cls
     start: int = _super_mro_index(start_cls, from_cls)
     if start < 0:
         return _super_raise_not_subtype(null(), start_cls, from_cls)
@@ -5772,7 +5693,7 @@ def py_super_lookup(start_cls, from_cls, name):
                         methods,
                         m_off + PYCLASSMETHOD_FUNC_OFFSET,
                     )
-                    func = pcc_gc_note_relocation_read(load_ptr(method_slot, 0))
+                    func = load_ptr(method_slot, 0)
                     store_ptr(method_slot, 0, func)
                     return func
                 k = k + 1
@@ -5800,8 +5721,8 @@ def py_super_getattr(start_cls, from_cls, receiver, name):
         start_cls = _super_start_type(receiver, from_cls)
     start: int = -1
     if ptr_is_null(start_cls) == 0 and _ptr_is_class(start_cls):
-        start_cls = pcc_gc_note_relocation_read(start_cls)
-        start = _super_mro_index(start_cls, pcc_gc_note_relocation_read(from_cls))
+        start_cls = start_cls
+        start = _super_mro_index(start_cls, from_cls)
     if start < 0:
         return _super_raise_not_subtype(receiver, start_cls, from_cls)
     owned_key: int = 0
@@ -5971,15 +5892,7 @@ def py_instance_dealloc(o) -> None:
     py_user_del_dispatch(o)
     if load_i64(o, PYOBJECTHEADER_REFCOUNT_OFFSET) > 0:
         py_gc_track(o)
-        backend: int = _gc_backend_selected_fast()
         metadata_valid: int = 1
-        if backend == 4:
-            if pcc_gc_pointer_is_managed(o) == 0:
-                metadata_valid = 0
-            elif ptr_is_null(pcc_gc_object_index_find(o)) != 0:
-                metadata_valid = 0
-        if metadata_valid == 0:
-            return
         flags: int = load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET)
         store_i32(o, PYOBJECTHEADER_FLAGS_OFFSET, flags & ~524288)
         return
@@ -6018,23 +5931,9 @@ def py_instance_dealloc(o) -> None:
         if ptr_is_null(owner_class) == 0:
             py_decref(owner_class)
     delayed_zpage_note: int = 0
-    if _gc_backend_selected_fast() == 4:
-        if (load_i32(o, PYOBJECTHEADER_FLAGS_OFFSET) & 65536) != 0:
-            delayed_zpage_note = 1
-    if delayed_zpage_note == 0:
-        pcc_gc_note_object_freeing(o)
-        py_gc_untrack(o)
-        pcc_gc_free_object_memory(o)
-    else:
-        py_gc_untrack(o)
-        # Probe the address only while this free has not noted ``o``: once
-        # it has, its zpage bytes may hold another thread's new object.
-        watch = stack_alloc(GC_FREE_WATCH_BYTES)
-        pcc_gc_free_watch_begin(watch, o)
-        pcc_gc_free_object_memory(o)
-        if pcc_gc_free_watch_end(watch) == 0:
-            if pcc_gc_pointer_is_managed(o) != 0:
-                pcc_gc_note_object_freeing(o)
+    pcc_gc_note_object_freeing(o)
+    py_gc_untrack(o)
+    pcc_gc_free_object_memory(o)
 
 
 @c_abi_export("py_dataclass_replace")
@@ -6155,7 +6054,7 @@ def _class_construct_input_roots(bases, count: int):
     pcc_py_gc_minor_graph_lock()
     index: int = 0
     while index < count:
-        value = pcc_gc_note_relocation_read(load_ptr(bases, index * C_POINTER_SIZE))
+        value = load_ptr(bases, index * C_POINTER_SIZE)
         store_ptr(bases, index * C_POINTER_SIZE, value)
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(bases, index * C_POINTER_SIZE))
         if ptr_is_null(handle):
@@ -6376,7 +6275,6 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
             store_ptr(copied, index * C_POINTER_SIZE, base)
             index = index + 1
         store_ptr(c, PYCLASSOBJECT_BASES_OFFSET, copied)
-        pcc_gc_backend4_zpage_register_owner_payload_span(c, copied, n_bases * C_POINTER_SIZE)
         pcc_py_gc_minor_graph_unlock()
     if n_fields > 0 and ptr_is_null(field_names) == 0:
         copied_fields = malloc(n_fields * C_POINTER_SIZE)
@@ -6510,7 +6408,6 @@ def py_class_new(name, bases, n_bases: int, field_names, n_fields: int):
         store_ptr(mro, (mro_len - 1) * C_POINTER_SIZE, pcc_gc_load_ptr(null(), ptr_add(borrowed, 8)))
     store_ptr(c, PYCLASSOBJECT_MRO_OFFSET, mro)
     store_i32(c, PYCLASSOBJECT_N_MRO_OFFSET, mro_len)
-    pcc_gc_backend4_zpage_register_owner_payload_span(c, mro, mro_len * C_POINTER_SIZE)
     pcc_py_gc_minor_graph_unlock()
     c = pcc_gc_load_ptr(null(), roots)
     str_payload: int = py_class_is_str_subclass(c)
@@ -6962,10 +6859,7 @@ def _special_adopt(slots, tokens, index: int) -> int:
     # already registered empty slot, with no intervening call or poll.
     slot = ptr_add(slots, index * C_POINTER_SIZE)
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 0
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-        and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_gc_refcount_provenance_probe'), 0) == 0 and (load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) == 0)
     ):
         # GC0's already published owner needs neither an address lease nor
         # a root barrier. Other collectors keep the durable lease below.
@@ -6977,7 +6871,6 @@ def _special_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _special_error(cstr("special-call result lease acquisition failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 

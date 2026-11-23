@@ -24,11 +24,6 @@ py_func_call = extern("py_func_call", (c_ptr, c_ptr), c_ptr)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_current_exception = extern("py_current_exception", (), c_ptr)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read",
-    (c_ptr,),
-    c_ptr,
-)
 py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
 py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr
@@ -161,7 +156,7 @@ def py_context_exit(manager, exc_type, exc, traceback) -> int:
     method = py_obj_getattr(manager, cstr("__exit__"))
     if ptr_is_null(method):
         if not ptr_is_null(stashed):
-            py_tls_exc_set(pcc_gc_note_relocation_read(stashed))
+            py_tls_exc_set(stashed)
         return 0
 
     result = _call_exit_method(method, manager, exc_type, exc, traceback)
@@ -173,12 +168,12 @@ def py_context_exit(manager, exc_type, exc, traceback) -> int:
         )
         py_decref(method)
         if not ptr_is_null(stashed):
-            py_decref(pcc_gc_note_relocation_read(stashed))
+            py_decref(stashed)
         return 0
 
     truth: int = py_obj_truthy(result)
     py_decref(result)
     py_decref(method)
     if not ptr_is_null(stashed):
-        py_tls_exc_set(pcc_gc_note_relocation_read(stashed))
+        py_tls_exc_set(stashed)
     return truth

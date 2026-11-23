@@ -71,12 +71,8 @@ pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void
 pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
-pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_ptr,), c_void)
 pcc_list_snapshot_commit_slots = extern(
     "pcc_list_snapshot_commit_slots", (c_ptr, c_ptr, c_int64, c_ptr, c_ptr), c_int64
-)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
 )
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
@@ -144,7 +140,6 @@ def _mul_adopt(slots: c_ptr, tokens: c_ptr, index: int) -> int:
     if token < 0:
         return _mul_error(7, cstr("multiplication result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         return _mul_error(19, cstr("multiplication allocation failed"))
     return -1 if py_err_occurred() != 0 else 0
@@ -228,8 +223,6 @@ def _mul_snapshot_list(slots: c_ptr, tokens: c_ptr, source_index: int) -> int:
                 if py_err_occurred() != 0:
                     status = -1
                 index += 1
-            if status == 0:
-                pcc_gc_publish_initialized(load_ptr(snapshot, 0))
         # Independent roots remain registered through tuple allocation/stores,
         # every partial failure and all potentially reentrant retirement.
         py_tls_exc_swap_slot(error)

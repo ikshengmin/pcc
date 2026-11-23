@@ -50,14 +50,6 @@ py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
 py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
-)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_list_grow_for_mutation = extern(
     "pcc_list_grow_for_mutation", (c_ptr, c_int64), c_ptr
@@ -70,11 +62,6 @@ pcc_py_gc_minor_graph_unlock = extern(
 )
 pcc_list_lock = extern("pcc_list_lock", (c_ptr,), c_void)
 pcc_list_unlock = extern("pcc_list_unlock", (c_ptr,), c_void)
-pcc_gc_backend4_retarget_mutator_payload_locked = extern(
-    "pcc_gc_backend4_retarget_mutator_payload_locked",
-    (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_retain_plan_prepare_locked = extern(
     "pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr
 )
@@ -513,11 +500,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         lst = load_ptr(list_slot, 0)
         snapshot = load_ptr(snapshot_slot, 0)
         if (
-            pcc_gc_backend() != backend
-            or load_i64(lst, 16) != old_len
-            or load_i64(lst, 24) != old_capacity
-            or ptr_eq(load_ptr(lst, 32), old_items) == 0
-            or load_i64(snapshot, 16) != repl_len
+            load_i64(lst, 16) != old_len or load_i64(lst, 24) != old_capacity or ptr_eq(load_ptr(lst, 32), old_items) == 0 or (load_i64(snapshot, 16) != repl_len)
         ):
             pcc_list_unlock(locked)
             i = 0
@@ -551,27 +534,7 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 )
                 pair_count = pair_count + 1
             i = i + 1
-        retargeted: int = pcc_gc_backend4_retarget_mutator_payload_locked(
-            lst,
-            old_items,
-            old_capacity * 8,
-            new_items,
-            new_capacity * 8,
-            slot_pairs,
-            pair_count,
-        )
-        if retargeted == 0:
-            pcc_list_unlock(locked)
-            i = 0
-            while i < old_len:
-                pcc_gc_store_ptr_plan_finish(ptr_add(old_plans, i * 128))
-                i = i + 1
-            free(slot_pairs)
-            free(new_plans)
-            free(old_plans)
-            free(replacement_index)
-            free(new_items)
-            break
+        retargeted: int = 1
         i = 0
         while i < new_len:
             value = null()
@@ -601,9 +564,6 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
                 ptr_add(new_plans, i * 56), value
             )
             store_ptr(new_items, i * 8, retained)
-            pcc_gc_note_slot_write_barrier(
-                lst, ptr_add(new_items, i * 8), retained
-            )
             i = i + 1
         i = 0
         while i < old_len:
@@ -621,10 +581,6 @@ def _set_slice_transaction(lst, lo, hi, step, replacement) -> int:
         store_ptr(lst, 32, new_items)
         store_i64(lst, 24, new_capacity)
         store_i64(lst, 16, new_len)
-        if retargeted == 2:
-            pcc_gc_backend4_zpage_register_owner_payload_span(
-                lst, new_items, new_capacity * 8
-            )
         pcc_list_unlock(locked)
 
         i = 0

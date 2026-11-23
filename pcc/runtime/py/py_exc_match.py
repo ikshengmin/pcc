@@ -29,7 +29,6 @@ from pcc.unsafe import (
 )
 
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_relocation_read = extern("pcc_gc_note_relocation_read", (c_ptr,), c_ptr)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 
@@ -47,7 +46,7 @@ def _to_class(obj):
         return null()
     if is_tagged_int(obj):
         return null()
-    obj = pcc_gc_note_relocation_read(obj)
+    obj = obj
     tag: int = load_i32(obj, 8)
     if tag == PY_TYPE_CLASS:                         # PY_TYPE_CLASS
         return obj
@@ -93,7 +92,7 @@ def _handler_class_valid(cls) -> int:
     # subclass has been constructed yet. Read it without a lazy allocation.
     if ptr_is_null(cls):
         return 0
-    cls = pcc_gc_note_relocation_read(cls)
+    cls = cls
     if _type_of(cls) != PY_TYPE_CLASS:
         return 0
     base = pcc_gc_load_ptr(null(), global_addr("py_exc_classes"))
@@ -116,7 +115,7 @@ def py_exc_match_handler(exc, type_) -> int:
     if ptr_is_null(type_):
         valid = 0
     else:
-        type_ = pcc_gc_note_relocation_read(type_)
+        type_ = type_
         if _type_of(type_) == PY_TYPE_TUPLE:
             count: int = load_i64(type_, PYTUPLEOBJECT_LEN_OFFSET)
             i: int = 0

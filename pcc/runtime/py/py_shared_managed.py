@@ -52,8 +52,6 @@ from pcc.unsafe import (
 )
 
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_publish_initialized = extern("pcc_gc_publish_initialized", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 py_gc_collect = extern("py_gc_collect", (), c_int64)
@@ -76,7 +74,7 @@ def pcc_rt_java_class_enter(state) -> int:
     -1: previously erroneous or invalid execution context. No user code runs
     while competing on the word. An acquire pairs with the owner's release.
     """
-    if ptr_is_null(state) or pcc_gc_backend() != 0 or class_thread_registered() == 0:
+    if ptr_is_null(state) or class_thread_registered() == 0:
         return -1
     owner: int = class_thread_id()
     if owner <= 0:
@@ -99,8 +97,7 @@ def pcc_rt_java_class_enter(state) -> int:
 
 @c_abi_typed_export("pcc_rt_java_class_publish", "i32", ("ptr", "i32"))
 def pcc_rt_java_class_publish(state, succeeded: int) -> int:
-    if (ptr_is_null(state) or pcc_gc_backend() != 0 or class_thread_registered() == 0
-            or (succeeded != 0 and succeeded != 1)):
+    if (ptr_is_null(state) or class_thread_registered() == 0 or (succeeded != 0 and succeeded != 1)):
         return -1
     owner: int = class_thread_id()
     if owner <= 0:
@@ -203,8 +200,6 @@ def _metadata(obj) -> c_ptr:
 def pcc_rt_managed_alloc(descriptor, count: int, output) -> int:
     if ptr_is_null(output):
         return BAD_LAYOUT
-    if pcc_gc_backend() != 0:
-        return UNSUPPORTED
     layout = stack_alloc(LAYOUT_BYTES)
     status: int = _layout(descriptor, count, layout)
     if status != OK:
@@ -232,7 +227,6 @@ def pcc_rt_managed_alloc(descriptor, count: int, output) -> int:
         if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_TRACKED) == 0:
             pcc_rt_managed_drop(handle)
             return OOM
-    pcc_gc_publish_initialized(obj)
     store_ptr(output, 0, handle)
     return OK
 
@@ -339,6 +333,4 @@ def pcc_rt_managed_ref_load(handle, index: int, output) -> int:
 
 @c_abi_export("pcc_rt_managed_collect")
 def pcc_rt_managed_collect() -> int:
-    if pcc_gc_backend() != 0:
-        return -UNSUPPORTED
     return py_gc_collect()

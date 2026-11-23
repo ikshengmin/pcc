@@ -59,25 +59,18 @@ pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
 )
 pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 pcc_gc_pointer_is_managed = extern("pcc_gc_pointer_is_managed", (c_ptr,), c_int64)
-pcc_thread_collect_stopped_frames = extern(
-    "pcc_thread_collect_stopped_frames", (c_ptr, c_int64), c_int64
-)
 pcc_thread_visit_native_root_frames = extern(
     "pcc_thread_visit_native_root_frames", (c_ptr, c_ptr), c_int64
 )
 pcc_thread_all_stopped_at_gates = extern(
     "pcc_thread_all_stopped_at_gates", (), c_int64
 )
-pcc_thread_live_count = extern("pcc_thread_live_count", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
 pcc_resume_world = extern("pcc_resume_world", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_backend0_mark_root_slot = extern(
     "pcc_gc_backend0_mark_root_slot", (c_ptr, c_int64), c_void
-)
-py_subs_exc_cache_slot = extern(
-    "py_subs_exc_cache_slot", (c_int64,), c_ptr
 )
 
 
@@ -119,13 +112,6 @@ def pcc_gc_visit_mapped_root_slot(
             after = pcc_gc_resolve_borrowed_root_slot_unlocked(slot_base, slot_offset)
         else:
             after = pcc_gc_resolve_root_slot_unlocked(slot_base, slot_offset)
-        if (ptr_is_null(stable_base) == 0
-                and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
-                and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0):
-            # A NoRC GC3 source may be physically reused after this complete
-            # remap. Its old address must not remain an equality-only cache
-            # hit which could skip promotion of a different future object.
-            store_ptr(stable_base, slot_offset, null())
         if ptr_eq(before, after) == 0:
             return 1
     if mode == 5:  # verify: a mapped object that no registered root holds
@@ -155,65 +141,6 @@ def _pcc_stack_diff_note_mapped(value) -> None:
         store_i64(global_addr("pcc_gc_stack_diff_capacity"), 0, grown)
     store_ptr(values, count * 8, value)
     store_i64(global_addr("pcc_gc_stack_diff_count"), 0, count + 1)
-
-
-@c_abi_export("pcc_gc_stack_diff_mapped_holds")
-def _pcc_stack_diff_mapped_holds(value) -> i64:
-    count: i64 = load_i64(global_addr("pcc_gc_stack_diff_count"), 0)
-    values = global_load_ptr("pcc_gc_stack_diff_values")
-    found: i64 = 0
-    index: i64 = 0
-    while index < count and found == 0:
-        if ptr_eq(load_ptr(values, index * 8), value) != 0:
-            found = 1
-        index = index + 1
-    return found
-
-
-@c_abi_export("pcc_gc_stack_diff_unmapped_registered")
-def _pcc_stack_diff_unmapped_registered(low: i64, high: i64) -> i64:
-    """Registered root slots inside this thread's walked stack whose managed
-    object no mapped location holds: roots the map would miss."""
-    missing: i64 = 0
-    node = global_load_ptr("pcc_gc_frame_head")
-    while ptr_is_null(node) == 0:
-        slots = load_ptr(node, 8)
-        count: i64 = load_i64(node, 40)
-        index: i64 = 0
-        while index < count:
-            address: i64 = ptr_to_int(slots) + index * 8
-            if address >= low and address < high:
-                value = load_ptr(slots, index * 8)
-                if (
-                    ptr_is_null(value) == 0
-                    and pcc_gc_pointer_is_managed(value) != 0
-                    and _pcc_stack_diff_mapped_holds(value) == 0
-                ):
-                    missing = missing + 1
-            index = index + 1
-        node = load_ptr(node, 16)
-    return missing
-
-
-@c_abi_export("pcc_gc_stack_diff_registered_in_range")
-def _pcc_stack_diff_registered_in_range(low: i64, high: i64) -> i64:
-    """Managed objects held by registered root slots inside the walked stack,
-    so a zero ``unmapped`` count is known to cover something."""
-    held: i64 = 0
-    node = global_load_ptr("pcc_gc_frame_head")
-    while ptr_is_null(node) == 0:
-        slots = load_ptr(node, 8)
-        count: i64 = load_i64(node, 40)
-        index: i64 = 0
-        while index < count:
-            address: i64 = ptr_to_int(slots) + index * 8
-            if address >= low and address < high:
-                value = load_ptr(slots, index * 8)
-                if ptr_is_null(value) == 0 and pcc_gc_pointer_is_managed(value) != 0:
-                    held = held + 1
-            index = index + 1
-        node = load_ptr(node, 16)
-    return held
 
 
 @c_abi_export("pcc_gc_registered_roots_hold")
@@ -263,44 +190,6 @@ def pcc_gc_visit_mapped_root_slots(
     return root_count
 
 
-@c_abi_export("pcc_gc_visit_scheduler_root_slots")
-def pcc_gc_visit_scheduler_root_slots(mode: i64, resolve: i64) -> i64:
-    result: i64 = 0
-    node = global_load_ptr("pcc_gc_scheduler_root_head")
-    while ptr_is_null(node) == 0:
-        slot = load_ptr(node, 0)
-        if ptr_is_null(slot) == 0:
-            slot_result: i64 = pcc_gc_visit_mapped_root_slot(
-                slot, 0, null(), 0, mode, resolve
-            )
-            if mode == 3:
-                result = result + slot_result
-            else:
-                result = result + 1
-        node = load_ptr(node, 8)
-    return result
-
-
-@c_abi_export("pcc_gc_visit_builtin_exception_cache_slots")
-def pcc_gc_visit_builtin_exception_cache_slots(mode: i64, resolve: i64) -> i64:
-    result: i64 = pcc_gc_visit_mapped_root_slots(
-        65,  # PY_EXC_N_BUILTIN
-        py_subs_exc_cache_slot(0),
-        null(),
-        0,
-        mode,
-        resolve,
-    )
-    index: i64 = 0
-    slot = load_ptr(global_addr("pcc_builtin_type_root_slots"), index * 8)
-    while ptr_is_null(slot) == 0:
-        visited: i64 = pcc_gc_visit_mapped_root_slot(slot, 0, null(), 0, mode, resolve)
-        result = result + (visited if mode == 3 else 1)
-        index = index + 1
-        slot = load_ptr(global_addr("pcc_builtin_type_root_slots"), index * 8)
-    return result
-
-
 @c_abi_export("pcc_gc_stackmap_roots_mode")
 def _pcc_stackmap_roots_mode() -> i64:
     """1: the precise stack walk roots the mapped stack frames of every
@@ -328,40 +217,6 @@ def _pcc_stackmap_roots_mode() -> i64:
         return 0
     store_i32(global_addr("pcc_gc_stackmap_walk_state"), 0, 1)
     return setting
-
-
-@c_abi_export("pcc_gc_stackmap_visit_stack_roots")
-def _pcc_stackmap_visit_stack_roots(mode: i64, resolve: i64, bounds) -> i64:
-    """Visit every recorded frame of this thread's stack, from this frame up.
-
-    Stores the walked range [this frame, outermost frame pointer) in bounds.
-    """
-    return _pcc_stackmap_visit_frames_from(frame_address(), mode, resolve, bounds)
-
-
-@c_abi_export("pcc_gc_stackmap_visit_frames_from")
-def _pcc_stackmap_visit_frames_from(frame, mode: i64, resolve: i64, bounds) -> i64:
-    """Visit the recorded callers of ``frame`` up to the outermost frame."""
-    low: i64 = ptr_to_int(frame)
-    high: i64 = low
-    visited: i64 = 0
-    frames: i64 = 0
-    done: i64 = 0
-    while done == 0:
-        caller = load_ptr(frame, 0)
-        if ptr_is_null(caller) != 0 or frames >= 100000:
-            done = 1
-        else:
-            return_address: i64 = load_i64(frame, 8) & 140737488355327
-            result: i64 = pcc_gc_visit_precise_frame(return_address, caller, mode, resolve)
-            if result > 0:
-                visited = visited + result
-            frames = frames + 1
-            frame = caller
-            high = ptr_to_int(caller)
-    store_i64(bounds, 0, low)
-    store_i64(bounds, 8, high)
-    return visited
 
 
 # Shared native frame layout: previous, ranges, used, capacity, owner id.
@@ -434,108 +289,6 @@ def pcc_gc_visit_native_root_frames(mode: i64, resolve: i64) -> i64:
     return result
 
 
-@c_abi_export("pcc_gc_visit_walked_stack_roots")
-def pcc_gc_visit_walked_stack_roots(mode: i64, resolve: i64) -> i64:
-    """Visit the mapped stack frames of every mutator thread with ``mode``.
-
-    0 when no walk is active (no published table): mapped frames then
-    registered and their owners visit the registry.
-    Another mutator's stack is stable only while it is parked or exited, so
-    the visit owns a stopped world, stopping it for the walk when needed.
-    """
-    if _pcc_stackmap_roots_mode() == 0:
-        return pcc_gc_visit_native_root_frames(mode, resolve)
-    stopped_here: i64 = 0
-    if pcc_thread_live_count() > 1 and pcc_thread_owns_stopped_world() == 0:
-        if pcc_stop_the_world() != 0:
-            pcc_platform_abort()
-            return 0
-        stopped_here = 1
-    capacity: i64 = pcc_thread_live_count() + 1
-    pairs = malloc(capacity * 16)
-    if ptr_is_null(pairs):
-        pcc_platform_abort()
-        return 0
-    others: i64 = 0
-    if capacity > 2:
-        others = pcc_thread_collect_stopped_frames(pairs, capacity)
-        if others < 0:
-            # A registered mutator kept running through the stop.
-            pcc_platform_abort()
-            return 0
-    bounds = stack_alloc(16)
-    mapped: i64 = pcc_gc_visit_native_root_frames(mode, resolve)
-    mapped = mapped + _pcc_stackmap_visit_stack_roots(mode, resolve, bounds)
-    other_index: i64 = 0
-    while other_index < others:
-        mapped = mapped + _pcc_stackmap_visit_frames_from(
-            load_ptr(pairs, other_index * 16), mode, resolve, bounds
-        )
-        other_index = other_index + 1
-    free(pairs)
-    if stopped_here != 0:
-        pcc_resume_world()
-    return mapped
-
-
-@c_abi_export("pcc_gc_visit_registered_root_slots")
-def pcc_gc_visit_registered_root_slots(mode: i64, resolve: i64) -> i64:
-    """Visit every frame root: walked stack frames, then the registry."""
-    gc3_rewrite: i64 = 1 if (mode == 3
-                           and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 3
-                           and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
-    result: i64 = 0
-    stack_mode: i64 = _pcc_stackmap_roots_mode()
-    mapped: i64 = pcc_gc_visit_walked_stack_roots(mode, resolve)
-    result = result + mapped
-    registered: i64 = 0
-    # Every registered frame is visited: mapped frames the walk roots never
-    # register, and a registered frame (no records, a heap frame) is seen
-    # only here.
-    frame = global_load_ptr("pcc_gc_frame_head")
-    while ptr_is_null(frame) == 0:
-        stable_values = null()
-        if mode == 2 or gc3_rewrite != 0:
-            stable_values = load_ptr(frame, 56)
-        registered = registered + load_i64(frame, 40)
-        result = result + pcc_gc_visit_mapped_root_slots(
-            load_i64(frame, 40),
-            load_ptr(frame, 8),
-            stable_values,
-            load_i32(frame, 48) & 1,
-            mode,
-            resolve,
-        )
-        frame = load_ptr(frame, 16)
-    if stack_mode == 2:
-        _pcc_write_text(cstr("pcc-stackmap-roots mode="), 24)
-        _pcc_write_decimal(mode)
-        _pcc_write_text(cstr(" mapped="), 8)
-        _pcc_write_decimal(mapped)
-        _pcc_write_text(cstr(" registered="), 12)
-        _pcc_write_decimal(registered)
-        _pcc_write_text(cstr("\n"), 1)
-
-    continuation = global_load_ptr("pcc_gc_continuation_root_head")
-    while ptr_is_null(continuation) == 0:
-        stable_values = null()
-        if mode == 2 or gc3_rewrite != 0:
-            stable_values = load_ptr(continuation, 40)
-        result = result + pcc_gc_visit_mapped_root_slots(
-            load_i64(continuation, 24),
-            load_ptr(continuation, 8),
-            stable_values,
-            load_i32(continuation, 32),
-            mode,
-            resolve,
-        )
-        continuation = load_ptr(continuation, 16)
-
-    result = result + pcc_gc_visit_scheduler_root_slots(mode, resolve)
-    result = result + pcc_gc_visit_builtin_exception_cache_slots(mode, resolve)
-    return result
-
-
 @c_abi_export("pcc_gc_gray_mapped_roots")
 def pcc_gc_gray_mapped_roots(frame_map, root_slots, resolve: i64) -> i64:
     return pcc_gc_visit_mapped_root_slots(
@@ -545,18 +298,6 @@ def pcc_gc_gray_mapped_roots(frame_map, root_slots, resolve: i64) -> i64:
         pcc_gc_root_map_is_borrowed(frame_map),
         1,
         resolve,
-    )
-
-
-@c_abi_export("pcc_gc_rewrite_mapped_roots")
-def pcc_gc_rewrite_mapped_roots(frame_map, root_slots) -> i64:
-    return pcc_gc_visit_mapped_root_slots(
-        pcc_gc_root_slot_count_from_map(frame_map),
-        root_slots,
-        null(),
-        pcc_gc_root_map_is_borrowed(frame_map),
-        3,
-        0,
     )
 
 
@@ -870,28 +611,6 @@ def _pcc_write_text(text, length: i64) -> None:
     write(2, text, length)
 
 
-@c_abi_export("pcc_gc_stack_diff_write_decimal")
-def _pcc_write_decimal(value: i64) -> None:
-    buffer = stack_alloc(24)
-    negative: i64 = 0
-    if value < 0:
-        negative = 1
-        value = 0 - value
-    position: i64 = 23
-    store_i8(buffer, position, 0)
-    if value == 0:
-        position = position - 1
-        store_i8(buffer, position, 48)
-    while value > 0:
-        position = position - 1
-        store_i8(buffer, position, 48 + value % 10)
-        value = value // 10
-    if negative != 0:
-        position = position - 1
-        store_i8(buffer, position, 45)
-    _pcc_write_text(ptr_add(buffer, position), 23 - position)
-
-
 @c_abi_export("pcc_gc_stackmap_index_swap")
 def _pcc_stackmap_index_swap(entries, left: i64, right: i64) -> None:
     word: i64 = 0
@@ -1026,58 +745,6 @@ def _pcc_stackmap_runtime_table_valid(table, arch: i64) -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_stackmap_visit_runtime_record")
-def _pcc_stackmap_visit_runtime_record(
-    table, function, target: i64, frame_pointer, mode: i64, resolve: i64
-) -> i64:
-    """Visit the version 3 record at code offset ``target`` of ``function``.
-
-    A function's records are sorted by pc, so the record is found by binary
-    search; its live set names the slots, each an int32 frame offset with the
-    owned bit in bit 0. -13 when no record has that pc.
-    """
-    records_base: i64 = (
-        abi_constant("stackmap.runtime.header_size")
-        + _pcc_stackmap_u32(table, 12) * abi_constant("stackmap.runtime.function_size")
-    )
-    live_sets_base: i64 = records_base + _pcc_stackmap_u32(table, 16) * abi_constant(
-        "stackmap.runtime.record_size"
-    )
-    locations_base: i64 = live_sets_base + _pcc_stackmap_u32(table, 20) * abi_constant(
-        "stackmap.runtime.live_set_size"
-    )
-    low: i64 = _pcc_stackmap_u32(function, 24)
-    end: i64 = low + _pcc_stackmap_u32(function, 28)
-    high: i64 = end
-    while low < high:
-        middle: i64 = (low + high) // 2
-        if _pcc_stackmap_u32(table, records_base + middle * abi_constant("stackmap.runtime.record_size")) < target:
-            low = middle + 1
-        else:
-            high = middle
-    record: i64 = records_base + low * abi_constant("stackmap.runtime.record_size")
-    if low >= end or _pcc_stackmap_u32(table, record) != target:
-        return -13
-    entry: i64 = live_sets_base + _pcc_stackmap_u32(table, record + 4) * abi_constant(
-        "stackmap.runtime.live_set_size"
-    )
-    location: i64 = _pcc_stackmap_u32(table, entry)
-    location_end: i64 = location + _pcc_stackmap_u32(table, entry + 4)
-    result: i64 = 0
-    while location < location_end:
-        word: i64 = load_i32(
-            table, locations_base + location * abi_constant("stackmap.runtime.location_size")
-        )
-        owned: i64 = word & 1
-        result = result + pcc_gc_visit_mapped_root_slot(
-            frame_pointer, word - owned, null(), 1 - owned, mode, resolve
-        )
-        if mode == 1 or mode == 7:
-            result = result + 1
-        location = location + 1
-    return result
-
-
 @c_abi_export("pcc_gc_stackmap_index_ready")
 def _pcc_stackmap_index_ready() -> i64:
     """Validate the published table once and index its functions by address.
@@ -1151,154 +818,6 @@ def _pcc_stackmap_index_ready() -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_stackmap_find_function")
-def _pcc_stackmap_find_function(program_counter: i64) -> i64:
-    """Payload offset of the function whose code holds the pc, or -1."""
-    entries = global_load_ptr("pcc_gc_stackmap_index")
-    low: i64 = 0
-    high: i64 = load_i64(global_addr("pcc_gc_stackmap_index_count"), 0)
-    while low < high:
-        middle: i64 = (low + high) // 2
-        if load_i64(entries, middle * 24) <= program_counter:
-            low = middle + 1
-        else:
-            high = middle
-    if low == 0:
-        return -1
-    found: i64 = low - 1
-    if program_counter >= load_i64(entries, found * 24 + 8):
-        return -1
-    return load_i64(entries, found * 24 + 16)
-
-
-@c_abi_export("pcc_gc_visit_precise_frame")
-def pcc_gc_visit_precise_frame(
-    program_counter: i64, frame_pointer, mode: i64, resolve: i64
-) -> i64:
-    """Visit the frame's call record found through the address index.
-
-    Same visits and result as ``pcc_gc_consume_precise_stackmap`` for that
-    record, without revalidating the whole table on each frame. -13 when no
-    function or record covers the pc, -1 when no valid table is published.
-    """
-    if _pcc_stackmap_index_ready() == 0:
-        return -1
-    function_offset: i64 = _pcc_stackmap_find_function(program_counter)
-    if function_offset < 0:
-        return -13
-    table = global_load_ptr("pcc_gc_precise_stackmap_table")
-    function = ptr_add(table, function_offset)
-    target: i64 = program_counter - load_i64(function, 8)
-    if (_pcc_stackmap_u32(table, 8) & 65535) == 3:
-        return _pcc_stackmap_visit_runtime_record(
-            table, function, target, frame_pointer, mode, resolve
-        )
-    record_count: i64 = _pcc_stackmap_u32(function, 24)
-    record_index: i64 = 0
-    record = null()
-    while record_index < record_count and ptr_is_null(record) != 0:
-        candidate = ptr_add(
-            function,
-            abi_constant("stackmap.function_size")
-            + record_index * abi_constant("stackmap.record_size"),
-        )
-        if _pcc_stackmap_u32(candidate, 8) == target:
-            record = candidate
-        record_index = record_index + 1
-    if ptr_is_null(record) != 0:
-        return -13
-    location_count: i64 = _pcc_stackmap_u32(record, 20) & 65535
-    locations = ptr_add(
-        table,
-        load_i64(global_addr("pcc_gc_stackmap_location_base"), 0)
-        + _pcc_stackmap_u32(record, 28) * abi_constant("stackmap.location_size"),
-    )
-    result: i64 = 0
-    location_index: i64 = 0
-    while location_index < location_count:
-        location = ptr_add(locations, location_index * abi_constant("stackmap.location_size"))
-        flags: i64 = (_pcc_stackmap_u32(location, 0) >> 8) & 255
-        borrowed: i64 = 1
-        if (flags & abi_constant("stackmap.location.owned")) != 0:
-            borrowed = 0
-        result = result + pcc_gc_visit_mapped_root_slot(
-            frame_pointer, load_i32(location, 8), null(), borrowed, mode, resolve
-        )
-        if mode == 1 or mode == 7:
-            result = result + 1
-        location_index = location_index + 1
-    return result
-
-
-@c_abi_export("pcc_gc_precise_stack_diff")
-def pcc_gc_precise_stack_diff(report: i64) -> i64:
-    """Compare this thread's stack-mapped roots with the registered slots.
-
-    Walks the frame-pointer chain from this frame: each frame record holds
-    the caller's frame pointer and the return address the caller's call
-    safepoint is recorded at. For every frame with a record, counts mapped
-    managed objects that no registered frame root holds (consumer mode 5).
-    Frames without a record (foreign code) are skipped. Returns the
-    mismatch count plus consumer errors, or -1 without a published table.
-    """
-    if _pcc_stackmap_index_ready() == 0:
-        return -1
-    store_i64(global_addr("pcc_gc_stack_diff_count"), 0, 0)
-    frame = frame_address()
-    low: i64 = ptr_to_int(frame)
-    high: i64 = low
-    frames: i64 = 0
-    mapped: i64 = 0
-    mismatches: i64 = 0
-    errors: i64 = 0
-    done: i64 = 0
-    while done == 0:
-        caller = load_ptr(frame, 0)
-        if ptr_is_null(caller) != 0 or frames >= 100000:
-            done = 1
-        else:
-            # The saved return address may carry a pointer-authentication
-            # code above the user address bits.
-            return_address: i64 = load_i64(frame, 8) & 140737488355327
-            result: i64 = pcc_gc_visit_precise_frame(return_address, caller, 5, 0)
-            if result >= 0:
-                mapped = mapped + 1
-                mismatches = mismatches + result
-            elif result != -13:
-                errors = errors + 1
-            frames = frames + 1
-            frame = caller
-            high = ptr_to_int(caller)
-    unmapped: i64 = _pcc_stack_diff_unmapped_registered(low, high)
-    registered: i64 = _pcc_stack_diff_registered_in_range(low, high)
-    if report != 0:
-        _pcc_write_text(cstr("pcc-stackmap-diff frames="), 25)
-        _pcc_write_decimal(frames)
-        _pcc_write_text(cstr(" mapped="), 8)
-        _pcc_write_decimal(mapped)
-        _pcc_write_text(cstr(" mismatches="), 12)
-        _pcc_write_decimal(mismatches)
-        _pcc_write_text(cstr(" errors="), 8)
-        _pcc_write_decimal(errors)
-        _pcc_write_text(cstr(" registered="), 12)
-        _pcc_write_decimal(registered)
-        _pcc_write_text(cstr(" unmapped="), 10)
-        _pcc_write_decimal(unmapped)
-        _pcc_write_text(cstr("\n"), 1)
-    return mismatches + errors + unmapped
-
-
-@c_abi_export("pcc_gc_precise_stack_diff_if_requested")
-def pcc_gc_precise_stack_diff_if_requested() -> None:
-    """Run and report the differential walk when PCC_GC_STACKMAP_DIFF is set
-    and the executable published a table."""
-    if ptr_is_null(global_load_ptr("pcc_gc_precise_stackmap_table")) != 0:
-        return
-    if ptr_is_null(pcc_platform_getenv(cstr("PCC_GC_STACKMAP_DIFF"))) != 0:
-        return
-    pcc_gc_precise_stack_diff(1)
-
-
 @c_abi_export("pcc_gc_trace_continuation_roots")
 def pcc_gc_trace_continuation_roots() -> i64:
     gc_backend_current()
@@ -1312,18 +831,3 @@ def pcc_gc_trace_continuation_roots() -> i64:
         node = load_ptr(node, 16)
     pcc_py_gc_minor_graph_unlock()
     return traced
-
-
-@c_abi_export("pcc_gc_rewrite_continuation_roots")
-def pcc_gc_rewrite_continuation_roots() -> i64:
-    gc_backend_current()
-    rewritten: i64 = 0
-    pcc_py_gc_minor_graph_lock()
-    node = global_load_ptr("pcc_gc_continuation_root_head")
-    while ptr_is_null(node) == 0:
-        rewritten = rewritten + pcc_gc_rewrite_mapped_roots(
-            load_ptr(node, 0), load_ptr(node, 8)
-        )
-        node = load_ptr(node, 16)
-    pcc_py_gc_minor_graph_unlock()
-    return rewritten

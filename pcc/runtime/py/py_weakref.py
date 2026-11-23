@@ -74,7 +74,6 @@ from pcc.unsafe import (
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
 pcc_gc_backend0_is_weak_candidate = extern(
     "pcc_gc_backend0_is_weak_candidate", (c_ptr,), c_int64
@@ -97,9 +96,6 @@ py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_clear_exception = extern("py_clear_exception", (), c_void)
 py_current_exception = extern("py_current_exception", (), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
 pcc_gc_note_frame_enter_local_checked = extern(
     "pcc_gc_note_frame_enter_local_checked", (c_ptr, c_ptr), c_int64
 )
@@ -120,20 +116,13 @@ py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read", (c_ptr,), c_ptr,
-)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_capi_is_cext_type_tag = extern("pcc_capi_is_cext_type_tag", (c_int64,), c_int64)
-pcc_gc_tracing_is_sweep_candidate = extern("pcc_gc_tracing_is_sweep_candidate", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -321,16 +310,6 @@ def _target_directory_unlink_locked(ref) -> None:
     free(entry)
 
 
-def _clear_tracing_weak_target(ref) -> None:
-    if _target_directory_supported() != 0:
-        pcc_py_gc_minor_graph_lock()
-        _target_directory_unlink_locked(ref)
-        store_ptr(ref, _WEAKREF_TARGET, null())
-        pcc_py_gc_minor_graph_unlock()
-    else:
-        store_ptr(ref, _WEAKREF_TARGET, null())
-
-
 def _retarget_weak(ref, resolved) -> None:
     # Moving configurations use the legacy path. An unexpected remap in an
     # indexed configuration must not leave a trusted incomplete directory.
@@ -355,7 +334,7 @@ def _weakref_target_is_base_object(target) -> int:
     # and ordinary subclasses have their own weak-reference policy; this is
     # only the canonical builtin object's unconditional exclusion.
     pcc_py_gc_minor_graph_lock()
-    current = pcc_gc_note_relocation_read(target)
+    current = target
     cls = pcc_gc_load_ptr(current, ptr_add(current, PYINSTANCEOBJECT_CLS_OFFSET))
     base = pcc_gc_load_ptr(null(), global_addr("py_object_root_cache"))
     result: int = 0
@@ -515,7 +494,7 @@ def py_weakref_new(target, callback):
         return null()
     if ptr_eq(callback, _py_none()) != 0:
         callback = null()
-    target = pcc_gc_note_relocation_read(target)
+    target = target
 
     wr = pcc_gc_alloc(_WEAKREF_BYTES, PY_TYPE_WEAKREF, 0)
     if ptr_is_null(wr) != 0:
@@ -530,18 +509,17 @@ def py_weakref_new(target, callback):
     if ptr_is_null(callback) == 0:
         pcc_gc_store_ptr(wr, ptr_add(wr, 24), callback)
 
-    if pcc_gc_backend() == 0:
-        # The weak target is not a strong edge, but the callback is. GC0
-        # must see this owner to distinguish a live callback from a weakref
-        # participating in the same unreachable cycle as its target.
-        py_gc_track(wr)
-        if (load_i32(wr, 12) & 2) == 0:
-            # Tracking can allocate while GC0's table is materialized. The
-            # object is still private: release its callback without ever
-            # leaving an untracked node in the weak-reference chain.
-            py_decref(wr)
-            py_raise_owned(py_exc_new(19, cstr("weak reference tracking failed")))
-            return null()
+    # The weak target is not a strong edge, but the callback is. GC0
+    # must see this owner to distinguish a live callback from a weakref
+    # participating in the same unreachable cycle as its target.
+    py_gc_track(wr)
+    if (load_i32(wr, 12) & 2) == 0:
+        # Tracking can allocate while GC0's table is materialized. The
+        # object is still private: release its callback without ever
+        # leaving an untracked node in the weak-reference chain.
+        py_decref(wr)
+        py_raise_owned(py_exc_new(19, cstr("weak reference tracking failed")))
+        return null()
     if load_i32(global_addr("pcc_weakref_late_windows"), 0) != 0:
         # Created by a weak callback or finalizer: the open window's late
         # clear decides it with the refs that kept their targets.
@@ -549,7 +527,6 @@ def py_weakref_new(target, callback):
     else:
         _link_main(wr)
     pcc_diagnostics_runtime_log_event_code(4, 1, load_i32(target, 8), 0 if ptr_is_null(callback) != 0 else 1, target)
-    pcc_gc_publish_initialized(wr)
     return wr
 
 
@@ -566,7 +543,7 @@ def py_weakref_call(ref):
         none_obj = _py_none()
         py_incref(none_obj)
         return none_obj
-    resolved = pcc_gc_note_relocation_read(target)
+    resolved = target
     if ptr_eq(resolved, target) == 0:
         _retarget_weak(ref, resolved)
         target = resolved
@@ -786,16 +763,15 @@ def _weakref_run_callback(wr) -> None:
             # TLS remains the only owner until the empty activation-private
             # slot is known to be traced. Keep no borrowed address across the
             # registration guard's exit, which permits relocation.
-            if pcc_gc_stack_slot_root_is_conservative(saved) == 0:
-                pcc_thread_no_park_enter()
-                status: int = pcc_gc_note_frame_enter_local_checked(
-                    global_addr("pcc_weakref_callback_exception_map"), saved
-                )
-                pcc_thread_no_park_exit()
-                if status != 1:
-                    pcc_platform_abort()
-                    return
-                registered = 1
+            pcc_thread_no_park_enter()
+            status: int = pcc_gc_note_frame_enter_local_checked(
+                global_addr("pcc_weakref_callback_exception_map"), saved
+            )
+            pcc_thread_no_park_exit()
+            if status != 1:
+                pcc_platform_abort()
+                return
+            registered = 1
             py_tls_exc_swap_slot(saved)
             saved_owner = 1
         args = py_tuple_new(1)
@@ -939,8 +915,6 @@ def py_weakref_queue_gc0_candidates(pending_cell) -> int:
     late list for py_weakref_clear_gc0_candidates. This opens a weak window,
     which that late clear closes.
     """
-    if pcc_gc_backend() != 0:
-        return 0
     if pcc_thread_owns_stopped_world() == 0:
         pcc_platform_abort()
         return -1
@@ -983,8 +957,6 @@ def py_weakref_clear_gc0_candidates() -> int:
     clears refs to final-unreachable objects; every late ref then returns to
     the ordinary list. This visits the late list only.
     """
-    if pcc_gc_backend() != 0:
-        return 0
     if pcc_thread_owns_stopped_world() == 0:
         pcc_platform_abort()
         return -1
@@ -1005,109 +977,10 @@ def py_weakref_clear_gc0_candidates() -> int:
     return count
 
 
-def _tracing_target_dies(target) -> int:
-    if (ptr_is_null(target) == 0 and is_tagged_int(target) == 0
-            and pcc_gc_tracing_is_sweep_candidate(target) != 0
-            and (load_i32(target, 12) & 16384) == 0
-            and pcc_capi_is_cext_type_tag(load_i32(target, 8)) == 0):
-        return 1
-    return 0
 
 
-@c_abi_export("py_weakref_invalidate_tracing_candidates")
-def py_weakref_invalidate_tracing_candidates() -> int:
-    """py_weakref_queue_tracing_candidates, then its callbacks at once."""
-    pending_cell = stack_alloc(16)
-    store_ptr(pending_cell, 0, null())
-    store_ptr(pending_cell, 8, null())
-    count: int = py_weakref_queue_tracing_candidates(pending_cell)
-    if count < 0:
-        return count
-    py_weakref_run_queued_callbacks(pending_cell, 0)
-    return count
 
 
-@c_abi_export("py_weakref_queue_tracing_candidates")
-def py_weakref_queue_tracing_candidates(pending_cell) -> int:
-    """The tracing sweep's early pass (CPython handle_weakrefs).
-
-    The tracing collector owns the stopped world. A ref with a callback to an
-    unreachable target loses it now and its callback is queued in
-    ``pending_cell`` (head @0, tail @8, both null on entry) for
-    py_weakref_run_queued_callbacks; one which is itself unreachable must
-    not run its callback. Independent counted address leases retain queued
-    refs across callback allocation, collection and mutation. A ref without
-    a callback keeps its target through finalizers on the late list. This
-    opens a weak window, which py_weakref_clear_tracing_candidates closes.
-    """
-    _open_late_window()
-    count: int = 0
-    wr = global_load_ptr("py_weakref_head")
-    while ptr_is_null(wr) == 0:
-        nxt = load_ptr(wr, _WEAKREF_NEXT)
-        target = pcc_gc_note_relocation_read(load_ptr(wr, _WEAKREF_TARGET))
-        if _tracing_target_dies(target) != 0:
-            if ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) != 0:
-                _unlink(wr)
-                _link_late(wr)
-            else:
-                _clear_tracing_weak_target(wr)
-                pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
-                if (load_i32(wr, 12) & (1024 | 524288)) == 0:
-                    if _queue_callback_hold(wr, pending_cell, 0) != 0:
-                        return -1
-                    count = count + 1
-        wr = nxt
-    return count
-
-
-pcc_gc_callback_layers_build_graph = extern(
-    "pcc_gc_callback_layers_build_graph", (c_ptr, c_int64, c_int64), c_ptr
-)
-pcc_gc_object_node_is_active = extern("pcc_gc_object_node_is_active", (c_ptr,), c_int64)
-py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
-
-
-@c_abi_export("pcc_gc_callback_layers_build")
-def pcc_gc_callback_layers_build(nodes, count: int, stop_epoch: int):
-    """Admit a review graph only if this batch can run or expose user code.
-
-    The low-level collector already handles an empty weak registry. With a
-    nonempty registry, only a stopped exact directory and an empty late
-    list can prove unrelated observers irrelevant. An unknown result keeps
-    the original graph builder, including the cyclic residual path.
-    """
-    if (_target_directory_available() != 0
-            and ptr_is_null(global_load_ptr("py_weakref_head")) == 0
-            and ptr_is_null(global_load_ptr("py_weakref_late_head")) != 0
-            and pcc_thread_owns_stopped_world() != 0
-            and ptr_is_null(nodes) == 0 and count > 0):
-        class_finalizers: int = load_i32(global_addr("pcc_class_del_defined_count"), 0)
-        i: int = 0
-        while i < count:
-            node = load_ptr(nodes, i * 8)
-            if pcc_gc_object_node_is_active(node) != 0:
-                target = load_ptr(node, 0)
-                if ptr_is_null(_target_directory_head(target)) == 0:
-                    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
-                if ((class_finalizers != 0
-                     or load_i32(target, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_GEN)
-                        and pcc_gc_tracing_is_sweep_candidate(target) != 0
-                        and py_user_del_pending(target) != 0):
-                    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
-            i += 1
-        return null()
-    return pcc_gc_callback_layers_build_graph(nodes, count, stop_epoch)
-
-
-pcc_gc_callback_layers_contains = extern(
-    "pcc_gc_callback_layers_contains", (c_ptr, c_ptr, c_int64), c_int64
-)
-
-
-pcc_gc_callback_layers_layer_of = extern(
-    "pcc_gc_callback_layers_layer_of", (c_ptr, c_ptr), c_int64
-)
 
 _WEAK_GROUP_BYTES = 16
 _WEAK_GROUP_HEAD = 0
@@ -1118,178 +991,6 @@ _WEAK_ENTRY_REF = 0
 _WEAK_ENTRY_NEXT = 8
 
 
-def _count_weak_registry_scan() -> None:
-    addr = global_addr("pcc_gc_metric_layer_weak_registry_scans")
-    store_i64(addr, 0, load_i64(addr, 0) + 1)
-
-
-@c_abi_export("py_weakref_layer_snapshot_release")
-def py_weakref_layer_snapshot_release(snapshot) -> None:
-    if ptr_is_null(snapshot) != 0:
-        return
-    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, 0, "release")
-    index: int = 0
-    layers: int = load_i64(snapshot, 0)
-    while index < layers:
-        group: int = _WEAK_GROUP_START + index * _WEAK_GROUP_BYTES
-        entry = load_ptr(snapshot, group + _WEAK_GROUP_HEAD)
-        while ptr_is_null(entry) == 0:
-            nxt = load_ptr(entry, _WEAK_ENTRY_NEXT)
-            free(entry)
-            entry = nxt
-        index += 1
-    free(snapshot)
-
-
-@c_abi_export("py_weakref_layer_snapshot_create")
-def py_weakref_layer_snapshot_create(plan, layers: int):
-    if layers < 2 or _target_directory_available() != 0:
-        return null()
-    wr = global_load_ptr("py_weakref_head")
-    if ptr_is_null(wr) != 0:
-        return null()
-    # This borrow is built and consumed only by the stopped-world owner.
-    # _link_main, _link_late and _unlink invalidate before their first
-    # write and cannot poll/allocate between that check and the final
-    # write. A parked peer therefore cannot resume inside a mutation that
-    # checked the old, unarmed state. A peer that starts changing the
-    # list during a callback invalidates before the next stopped read.
-    if (pcc_thread_owns_stopped_world() == 0
-            or atomic_load_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, "acquire") != 0):
-        return null()
-    snapshot = calloc(1, _WEAK_GROUP_START + layers * _WEAK_GROUP_BYTES)
-    if ptr_is_null(snapshot) != 0:
-        return null()
-    store_i64(snapshot, 0, layers)
-    _count_weak_registry_scan()
-    while ptr_is_null(wr) == 0:
-        layer: int = pcc_gc_callback_layers_layer_of(plan, load_ptr(wr, _WEAKREF_TARGET))
-        if layer >= 0:
-            entry = malloc(_WEAK_ENTRY_BYTES)
-            if ptr_is_null(entry) != 0:
-                py_weakref_layer_snapshot_release(snapshot)
-                return null()
-            store_ptr(entry, _WEAK_ENTRY_REF, wr)
-            store_ptr(entry, _WEAK_ENTRY_NEXT, null())
-            group: int = _WEAK_GROUP_START + layer * _WEAK_GROUP_BYTES
-            tail = load_ptr(snapshot, group + _WEAK_GROUP_TAIL)
-            if ptr_is_null(tail) != 0:
-                store_ptr(snapshot, group + _WEAK_GROUP_HEAD, entry)
-            else:
-                store_ptr(tail, _WEAK_ENTRY_NEXT, entry)
-            store_ptr(snapshot, group + _WEAK_GROUP_TAIL, entry)
-        wr = load_ptr(wr, _WEAKREF_NEXT)
-    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, 0, "release")
-    atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_active"), 0, 1, "release")
-    return snapshot
-
-
-def _queue_one_layer_weakref(wr, target, pending_cell) -> int:
-    count: int = 0
-    if _tracing_target_dies(target) != 0:
-        if (ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0
-                and (load_i32(wr, PYOBJECTHEADER_FLAGS_OFFSET)
-                     & (_TRACING_WEAK_SWEEP_CANDIDATE | PY_FLAG_GC_DEALLOCATING)) == 0):
-            if _queue_callback_hold(wr, pending_cell, 0) != 0:
-                return -1
-            count = 1
-        _clear_tracing_weak_target(wr)
-    return count
-
-
-pcc_gc_callback_layers_range = extern(
-    "pcc_gc_callback_layers_range", (c_ptr, c_int64), c_int64
-)
-pcc_gc_callback_layers_node = extern(
-    "pcc_gc_callback_layers_node", (c_ptr, c_int64), c_ptr
-)
-
-
-def _queue_directory_layer(plan, layer: int, pending_cell) -> int:
-    if load_i64(global_addr("pcc_weak_target_count"), 0) == 0:
-        return 0
-    count: int = 0
-    i: int = pcc_gc_callback_layers_range(plan, layer)
-    end: int = pcc_gc_callback_layers_range(plan, layer + 1)
-    while i < end:
-        target = load_ptr(pcc_gc_callback_layers_node(plan, i), 0)
-        entry = _target_directory_head(target)
-        while ptr_is_null(entry) == 0:
-            nxt = load_ptr(entry, _DIR_NEXT)
-            wr = load_ptr(entry, _DIR_REF)
-            queued: int = _queue_one_layer_weakref(wr, target, pending_cell)
-            if queued < 0:
-                return -1
-            count += queued
-            entry = nxt
-        i += 1
-    return count
-
-
-@c_abi_export("py_weakref_queue_tracing_layer")
-def py_weakref_queue_tracing_layer(snapshot, plan, layer: int, pending_cell) -> int:
-    """Settle only the current acyclic layer, before running any queued code."""
-    if _target_directory_available() != 0 and pcc_thread_owns_stopped_world() != 0:
-        return _queue_directory_layer(plan, layer, pending_cell)
-    count: int = 0
-    if (ptr_is_null(snapshot) == 0
-            and atomic_load_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, "acquire") == 0):
-        entry = load_ptr(snapshot, _WEAK_GROUP_START + layer * _WEAK_GROUP_BYTES + _WEAK_GROUP_HEAD)
-        while ptr_is_null(entry) == 0:
-            wr = load_ptr(entry, _WEAK_ENTRY_REF)
-            target = load_ptr(wr, _WEAKREF_TARGET)
-            if pcc_gc_callback_layers_contains(plan, target, layer) != 0:
-                queued: int = _queue_one_layer_weakref(wr, target, pending_cell)
-                if queued < 0:
-                    return -1
-                count += queued
-            entry = load_ptr(entry, _WEAK_ENTRY_NEXT)
-        return count
-    wr = global_load_ptr("py_weakref_head")
-    if ptr_is_null(wr) == 0:
-        _count_weak_registry_scan()
-    while ptr_is_null(wr) == 0:
-        nxt = load_ptr(wr, _WEAKREF_NEXT)
-        target = load_ptr(wr, _WEAKREF_TARGET)
-        if pcc_gc_callback_layers_contains(plan, target, layer) != 0:
-            queued: int = _queue_one_layer_weakref(wr, target, pending_cell)
-            if queued < 0:
-                return -1
-            count += queued
-        wr = nxt
-    return count
-
-
-
-
-@c_abi_export("py_weakref_clear_tracing_candidates")
-def py_weakref_clear_tracing_candidates() -> int:
-    """The tracing sweep's late clear: settle the late list, close the window.
-
-    Runs after finalizers and the resurrection recheck. A late-list ref whose
-    target is still a sweep candidate is cleared silently; late callbacks are
-    never delivered. Every late ref then returns to the ordinary list. This
-    visits the late list only.
-    """
-    if pcc_gc_backend() == 0:
-        return 0
-    if pcc_thread_owns_stopped_world() == 0:
-        pcc_platform_abort()
-        return -1
-    count: int = 0
-    wr = global_load_ptr("py_weakref_late_head")
-    while ptr_is_null(wr) == 0:
-        nxt = load_ptr(wr, _WEAKREF_NEXT)
-        target = pcc_gc_note_relocation_read(load_ptr(wr, _WEAKREF_TARGET))
-        if _tracing_target_dies(target) != 0:
-            _clear_tracing_weak_target(wr)
-            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
-            count += 1
-        _unlink(wr)
-        _link_main(wr)
-        wr = nxt
-    _close_late_window()
-    return count
 
 
 def _gc0_hold_target_callbacks(wr, target, pending_cell) -> None:
@@ -1330,43 +1031,19 @@ def _weakref_invalidate_gc0_target(target) -> None:
     _run_callback_queue(load_ptr(pending_cell, 0), 1)
 
 
-def _invalidate_chain(wr, target) -> None:
-    while ptr_is_null(wr) == 0:
-        nxt = load_ptr(wr, _WEAKREF_NEXT)
-        wr_target = load_ptr(wr, _WEAKREF_TARGET)
-        resolved = pcc_gc_note_relocation_read(wr_target)
-        if ptr_eq(wr_target, target) != 0 or ptr_eq(resolved, target) != 0:
-            _clear_tracing_weak_target(wr)
-            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
-            # Weakref callbacks are an unraisable boundary; the helper also
-            # releases the ignored owned result before clearing its exception.
-            _weakref_run_callback(wr)
-        elif ptr_eq(resolved, wr_target) == 0:
-            _retarget_weak(wr, resolved)
-        wr = nxt
-
-
 @c_abi_export("py_weakref_invalidate")
 def py_weakref_invalidate(target) -> None:
     if ptr_is_null(target) != 0:
         return
     if is_tagged_int(target) != 0:
         return
-    if pcc_gc_backend() == 0:
-        _weakref_invalidate_gc0_target(target)
-        return
+    _weakref_invalidate_gc0_target(target)
+    return
     # PASS1 and the eventual object deallocator both invalidate refs again.
     # At a stop an exact negative plus an empty late list proves there is
     # no observer; don't rescan every unrelated ref for each dead object.
     # Outside a stop, or for a real matching observer, preserve the legacy
     # callback path and its ordering without borrowing a running-world list.
-    if (_target_directory_available() != 0
-            and pcc_thread_owns_stopped_world() != 0
-            and ptr_is_null(global_load_ptr("py_weakref_late_head")) != 0
-            and ptr_is_null(_target_directory_head(target)) != 0):
-        return
-    _invalidate_chain(global_load_ptr("py_weakref_head"), target)
-    _invalidate_chain(global_load_ptr("py_weakref_late_head"), target)
 
 
 @c_abi_export("py_dealloc_weakref")

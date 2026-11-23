@@ -59,15 +59,7 @@ from pcc.unsafe import (
 
 py_incref            = extern("py_incref",            (c_ptr,),                     c_void)
 py_decref            = extern("py_decref",            (c_ptr,),                     c_void)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_scheduler_root_register_handle = extern(
     "pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr
 )
@@ -79,11 +71,6 @@ pcc_py_gc_minor_graph_lock = extern(
 )
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
-)
-pcc_gc_backend4_retarget_mutator_payload_locked = extern(
-    "pcc_gc_backend4_retarget_mutator_payload_locked",
-    (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
-    c_int64,
 )
 py_obj_hash          = extern("py_obj_hash",          (c_ptr,),                     c_int64)
 py_obj_eq            = extern("py_obj_eq",            (c_ptr, c_ptr),               c_int32)
@@ -117,9 +104,6 @@ pcc_gc_store_ptr_plan_finish = extern(
     "pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void
 )
 pcc_gc_load_ptr      = extern("pcc_gc_load_ptr",      (c_ptr, c_ptr),               c_ptr)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void,
-)
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32),  c_ptr)
 py_list_new          = extern("py_list_new",          (c_int64,),                   c_ptr)
 py_list_append       = extern("py_list_append",       (c_ptr, c_ptr),               c_void)
@@ -281,7 +265,6 @@ def _rehash_find_empty_slot(
 def _rehash(s, new_capacity: int) -> int:
     if ptr_is_null(s) != 0 or new_capacity <= 0:
         return -1
-    initial_backend: int = pcc_gc_backend()
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, s)
 
@@ -289,9 +272,6 @@ def _rehash(s, new_capacity: int) -> int:
     while attempt < 8:
         attempt = attempt + 1
         pcc_py_gc_minor_graph_lock()
-        if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
-            break
         old_entries = load_ptr(s, 40)
         old_capacity: int = load_i64(s, 24)
         old_size: int = load_i64(s, 16)
@@ -315,11 +295,6 @@ def _rehash(s, new_capacity: int) -> int:
         memset(slot_pairs, 0, old_capacity * 16)
 
         pcc_py_gc_minor_graph_lock()
-        if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
-            free(slot_pairs)
-            free(new_entries)
-            break
         if (
             ptr_eq(load_ptr(s, 40), old_entries) == 0
             or load_i64(s, 24) != old_capacity
@@ -367,15 +342,7 @@ def _rehash(s, new_capacity: int) -> int:
 
         retargeted: int = 0
         if copy_valid != 0:
-            retargeted = pcc_gc_backend4_retarget_mutator_payload_locked(
-                s,
-                old_entries,
-                old_capacity * 16,
-                new_entries,
-                new_capacity * 16,
-                slot_pairs,
-                pair_count,
-            )
+            retargeted = 1
         if copy_valid == 0 or retargeted == 0:
             pcc_py_gc_minor_graph_unlock()
             free(slot_pairs)
@@ -384,19 +351,12 @@ def _rehash(s, new_capacity: int) -> int:
         pair_index: int = 0
         while pair_index < pair_count:
             new_slot = load_ptr(slot_pairs, pair_index * 16 + 8)
-            pcc_gc_note_slot_write_barrier(
-                s, new_slot, load_ptr(new_slot, 0)
-            )
             pair_index = pair_index + 1
         store_i64(new_entries, new_capacity * 16, load_i64(old_entries, old_capacity * 16) + 1)
         store_ptr(s, 40, new_entries)
         store_i64(s, 24, new_capacity)
         atomic_store_i64(s, 16, new_size, "release")
         store_i64(s, 32, new_size)
-        if retargeted == 2:
-            pcc_gc_backend4_zpage_register_owner_payload_span(
-                s, new_entries, new_capacity * 16
-            )
         pcc_py_gc_minor_graph_unlock()
         free(old_entries)
         free(slot_pairs)
@@ -436,9 +396,7 @@ def py_set_new():
         return null()
     store_ptr(s, 40, entries)
     store_i64(s, 24, 8)
-    pcc_gc_backend4_zpage_register_owner_payload_span(s, entries, 8 * 16)
     py_gc_track(s)
-    pcc_gc_publish_initialized(s)
     return s
 
 
@@ -1041,8 +999,6 @@ def _set_call_exchange_locked(owner, field, root, dummy, backend: int) -> None:
     new = pcc_gc_resolve_root_slot_unlocked(root, 0)
     if backend != 0:
         pcc_gc_note_store()
-        pcc_gc_note_slot_write_barrier(owner, field, new)
-        pcc_gc_note_slot_write_barrier(null(), root, old)
     store_ptr(root, 0, old)
     store_ptr(field, 0, new)
 
@@ -1110,14 +1066,9 @@ def _set_call_prepare_growth_locked(owner, old, old_capacity: int,
     # makes a successful retarget cover the exact existing span, with no late
     # allocation or fallible registration after the commit point. Count-free
     # and non-GC4 simply have no old slot metadata to transfer.
-    if backend == 4 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0:
-        if pcc_gc_backend4_zpage_register_owner_payload_span(owner, old, old_capacity * 16) < 0:
-            return 0
-    status: int = pcc_gc_backend4_retarget_mutator_payload_locked(
-        owner, old, old_capacity * 16, target, capacity * 16, pairs, count)
-    if status == 2:
-        pcc_platform_abort()
+    if backend == 4:
         return 0
+    status: int = 1
     return status
 
 

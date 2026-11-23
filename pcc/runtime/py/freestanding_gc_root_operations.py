@@ -65,9 +65,6 @@ pcc_gc_object_index_find_stable = extern(
 )
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_count_free_store_shade = extern("pcc_gc_count_free_store_shade", (c_ptr,), c_void)
-pcc_gc_trace_stack_push = extern("pcc_gc_trace_stack_push", (c_ptr,), c_void)
-pcc_gc_gray_worklist_note = extern("pcc_gc_gray_worklist_note", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -78,9 +75,6 @@ pcc_gc_managed_pointer_index_seen = extern(
     "pcc_gc_managed_pointer_index_seen", (c_ptr,), c_int64
 )
 pcc_gc_granule_span = extern("pcc_gc_granule_span", (c_ptr,), c_ptr)
-pcc_gc_stack_slot_root_is_conservative = extern(
-    "pcc_gc_stack_slot_root_is_conservative", (c_ptr,), c_int64
-)
 
 
 # Exact, process-lifetime image origins, not a cache of arbitrary immortals.
@@ -276,43 +270,6 @@ def _mode_lease_release_shard(index: i64) -> i64:
     return -3
 
 
-@c_abi_export("pcc_gc_mode_leases_freeze")
-def pcc_gc_mode_leases_freeze() -> i64:
-    """Freeze all empty mode counters under graph and central exclusion.
-
-    The caller must already own central -1. Return zero only after every
-    shard is frozen; on failure restore precisely the acquired prefix before
-    the caller restores the central word. Never wait for a live lease.
-    """
-    if atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") != -1:
-        return -1
-    shards = global_addr("pcc_gc_mode_lease_shards")
-    index: i64 = 0
-    while index < MODE_LEASE_SHARD_COUNT:
-        if atomic_cas_i64(
-            shards, index * MODE_LEASE_SHARD_STRIDE,
-            0, -1, "acq_rel", "acquire"
-        ) != 0:
-            while index > 0:
-                index -= 1
-                atomic_store_i64(
-                    shards, index * MODE_LEASE_SHARD_STRIDE, 0, "release"
-                )
-            return -1
-        index += 1
-    return 0
-
-
-@c_abi_export("pcc_gc_mode_leases_thaw")
-def pcc_gc_mode_leases_thaw() -> None:
-    """Release a complete freeze before its caller clears central -1."""
-    shards = global_addr("pcc_gc_mode_lease_shards")
-    index: i64 = 0
-    while index < MODE_LEASE_SHARD_COUNT:
-        atomic_store_i64(shards, index * MODE_LEASE_SHARD_STRIDE, 0, "release")
-        index += 1
-
-
 @c_abi_export("pcc_gc_foreign_lease_count_quiescent")
 def pcc_gc_foreign_lease_count_quiescent() -> i64:
     """Sum reservations only when callers have quiesced concurrent changes.
@@ -335,16 +292,6 @@ def pcc_gc_foreign_lease_count_quiescent() -> i64:
         total += active
         index += 1
     return total
-
-
-@c_abi_export("pcc_gc_gray_count_load_acquire")
-def pcc_gc_gray_count_load_acquire() -> i64:
-    return atomic_load_i32(global_addr("pcc_gc_gray_count"), 0, "acquire")
-
-
-@c_abi_export("pcc_gc_gray_count_store_release")
-def pcc_gc_gray_count_store_release(value: i64) -> None:
-    atomic_store_i32(global_addr("pcc_gc_gray_count"), 0, value, "release")
 
 
 @c_abi_export("pcc_gc_gray_count_increment_acq_rel")
@@ -371,27 +318,6 @@ def pcc_gc_gray_count_decrement_acq_rel() -> None:
         old = observed
 
 
-@c_abi_export("pcc_gc_set_mark_color")
-def pcc_gc_set_mark_color(obj, color: i64) -> None:
-    # The graph lock serializes color transitions and gray-count accounting,
-    # not all header writers: terminal decref and pin/unpin publish their
-    # bits atomically without that lock. Retry against the current word so
-    # coloring cannot erase those updates. One CAS also avoids a transient
-    # colorless word, which GC1/2 refcount operations treat as uninitialized.
-    if (color & 48) != 0:
-        # Gray and black are marked: an object cell's page bit says so.
-        pcc_gc_page_mark_set(obj)
-    old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
-    while True:
-        desired: i64 = (old & ~56) | color
-        observed: i64 = atomic_cas_i32(
-            obj, PYOBJECTHEADER_FLAGS_OFFSET, old, desired, "acq_rel", "acquire"
-        )
-        if observed == old:
-            return
-        old = observed
-
-
 @c_abi_export("pcc_gc_shade_gray_atomic")
 def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
     """Make ``obj`` gray once, counting only a real transition to gray.
@@ -405,8 +331,6 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
     black unless ``allow_black`` asks for a re-scan.
     """
     old: i64 = atomic_load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET, "acquire")
-    if (old & 1024) == 0 and load_i32(global_addr("pcc_gc_mark_active"), 0) == 2:
-        return
     if (old & (16 | 524288)) != 0 or (
         allow_black == 0 and pcc_gc_object_is_black(obj, old) != 0
     ):
@@ -429,7 +353,6 @@ def pcc_gc_shade_gray_atomic(obj, allow_black: i64) -> None:
             # Caller holds the graph lock/STW or an existing no-park lease.
             # Publish work only for the winning color transition; no phase
             # gate here, because initial and resurrection seeds run inactive.
-            pcc_gc_gray_worklist_note(obj)
             return
         old = observed
 
@@ -477,7 +400,6 @@ def pcc_gc_mark_root_gray_if_known(obj) -> None:
         return
     pcc_gc_shade_gray_atomic(obj, 1)
     # A stopped-world remark traces its roots from the tracer's stack.
-    pcc_gc_trace_stack_push(obj)
 
 
 @c_abi_export("pcc_gc_resolve_root_slot_mode")
@@ -494,9 +416,7 @@ def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
         # managed object. A configured nonmoving collector is already the
         # identity here; no object/forwarding-index probe can change it.
         # Keep pre-configuration and diagnostic paths on the checked walk.
-        selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        if selected != 4:
-            return value
+        return value
     known: i64 = pcc_gc_object_is_known_no_lock(value)
     flags: i64 = 0
     if known != 0:
@@ -536,7 +456,7 @@ def _resolve_root_slot_mode(slot_base, slot_offset: i64, borrowed: i64):
             pcc_platform_abort()
             return value
         resolved = target
-    if borrowed != 0 or load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
+    if borrowed != 0:
         store_ptr(slot_base, slot_offset, resolved)
         return resolved
     py_incref(resolved)
@@ -587,20 +507,13 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
     # value answers 0 there, so decide before reading the slot. The refcount
     # provenance probe keeps the checked path below.
     if (
-        load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-        and load_i32(global_addr("pcc_gc_backend_selected"), 0) <= 3
-        and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
+        load_i32(global_addr('pcc_gc_config_initialized'), 0) != 0 and load_i32(global_addr('pcc_gc_refcount_provenance_probe'), 0) == 0
     ):
         return 0
     # The caller keeps its owning slot stable while leased. In this thread's
     # stack it names its object to every count-free collector's conservative
     # scan, which keeps that object alive and in place for the whole lease,
     # wherever the callee keeps its address: the lease guards nothing.
-    if (
-        load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0
-        and pcc_gc_stack_slot_root_is_conservative(slot) != 0
-    ):
-        return 0
     # The caller keeps its owning slot stable while leased. Collectors can
     # rewrite only object pointers: NULL/tagged words carry no address and
     # need neither relocation protection nor a backend-mode reservation.
@@ -685,29 +598,13 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
             status = 0
         elif (flags & 524288) == 0 and (pcc_gc_granule_is_object_start(obj) == 1
                   or pcc_gc_managed_pointer_index_contains(obj) != 0):
-            backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
             tag: i64 = load_i32(obj, 8)
             # GC0-GC3 never move. GC4 no-node malloc graph leaves are
             # intentionally refcount-only; zpage owners are not.
             # A no-node immortal (the malloc'd standard streams and object
             # class roots) is stable storage outside the object graph, so
             # GC4 never moves it either.
-            if backend >= 0 and backend <= 3:
-                status = 2
-            elif backend == 4 and (flags & (4096 | 65536)) == 0:
-                if (
-                    tag == PY_TYPE_NONE
-                    or tag == PY_TYPE_BOOL
-                    or tag == PY_TYPE_INT
-                    or tag == PY_TYPE_FLOAT
-                    or tag == PY_TYPE_STR
-                    or tag == PY_TYPE_COMPLEX
-                    or tag == PY_TYPE_BYTES
-                    or tag == PY_TYPE_BYTEARRAY
-                    or tag == PY_TYPE_CPY_HANDLE
-                    or (flags & 1) != 0
-                ):
-                    status = 2
+            status = 2
     if status == 2:
         # Graph exclusion fixes this resolved value through publication. Token
         # 2 keeps its public meaning; release derives the same stable address.
@@ -732,73 +629,6 @@ def _foreign_lease_acquire(slot, borrowed: i64) -> i64:
             active = observed
     pcc_py_gc_minor_graph_unlock()
     return status
-
-
-# A CpyHandle's explicit owner count is distinct from the observable C
-# refcount and from managed references (which remain count-free). A single
-# indexed lease represents all its explicit owners collectively, independent
-# of its temporary foreign borrow leases.
-@c_abi_export("pcc_gc_cpy_handle_change_c_owners")
-def pcc_gc_cpy_handle_change_c_owners(obj, delta: i64) -> None:
-    # Only a valid CpyHandle passed to Py_INCREF/DECREF in tracing mode
-    # reaches here. The caller owns it through entry (or is releasing its
-    # last C hold); the handle's type is already excluded from normal
-    # moving allocation. Existing node pins additionally forbid evacuation.
-    if delta != 1 and delta != -1:
-        pcc_platform_abort()
-        return
-    pcc_py_gc_minor_graph_lock()
-    node = pcc_gc_object_index_find(obj)
-    if ptr_is_null(node) != 0 or load_i64(node, 32) != 0:
-        pcc_py_gc_minor_graph_unlock()
-        pcc_platform_abort()
-        return
-    flags: i64 = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
-    if (flags & (2048 | PY_FLAG_GC_DEALLOCATING)) != 0:
-        pcc_py_gc_minor_graph_unlock()
-        pcc_platform_abort()
-        return
-    old: i64 = atomic_load_i64(obj, PYCPYHANDLEOBJECT_C_OWNERS_OFFSET, "relaxed")
-    if delta < 0 and old == 0:
-        # A count-free managed reference is not a C hold. The preexisting
-        # decref path for such a reference has no ownership effect.
-        pcc_py_gc_minor_graph_unlock()
-        return
-    if old < 0 or (delta > 0 and old >= 9223372036854775806):
-        pcc_py_gc_minor_graph_unlock()
-        pcc_platform_abort()
-        return
-    if (delta > 0 and old == 0) or (delta < 0 and old == 1):
-        counter = global_addr("pcc_gc_foreign_lease_active")
-        active: i64 = atomic_load_i64(counter, 0, "acquire")
-        count: i64 = load_i64(node, 80)
-        # The graph lock serializes indexed leases with reset. Retain the
-        # central reservation so even a same-backend reset cannot clear this
-        # live object's node. Never consume an unrelated temporary lease.
-        while True:
-            if active < 0 or count < 0 or (
-                delta > 0 and (active == 9223372036854775807 or count == 9223372036854775807)
-            ) or (delta < 0 and (active == 0 or count == 0)):
-                pcc_py_gc_minor_graph_unlock()
-                pcc_platform_abort()
-                return
-            seen: i64 = atomic_cas_i64(
-                counter, 0, active, active + delta, "acq_rel", "acquire"
-            )
-            if seen == active:
-                break
-            active = seen
-        store_i64(node, 80, count + delta)
-        if delta > 0:
-            _notice_callback_pin(flags)
-            # Root seeding sees the persistent pin on the next stopped walk;
-            # an already active mark also needs this root's insertion shade.
-            pcc_gc_count_free_store_shade(obj)
-    atomic_store_i64(obj, PYCPYHANDLEOBJECT_C_OWNERS_OFFSET, old + delta, "release")
-    # Py_SET_REFCNT writes this observable counter, never c_owners. The atomic
-    # add composes with that store without making it a lease operation.
-    atomic_rmw_i64("add", obj, PYOBJECTHEADER_REFCOUNT_OFFSET, delta, "acq_rel")
-    pcc_py_gc_minor_graph_unlock()
 
 
 @c_abi_export("pcc_gc_foreign_lease_release")
@@ -864,27 +694,7 @@ def pcc_gc_try_init_ptr_locked(destination, source) -> i64:
     """
     if ptr_is_null(destination) != 0 or ptr_is_null(source) != 0 or ptr_eq(destination, source) != 0:
         return 0
-    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0
-            and atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") >= 0):
-        # The nonmoving count-free GC1/GC2 retain by reachability: the first
-        # store needs no count, only the locked store barrier while a cycle
-        # is active. The same tag admission as GC0 keeps task objects and
-        # foreign handles on the ordinary protocol.
-        counted = load_ptr(source, 0)
-        if ptr_is_null(counted) == 0 and is_tagged_int(counted) == 0:
-            counted_tag: i64 = load_i32(counted, PYOBJECTHEADER_TYPE_TAG_OFFSET)
-            if not ((counted_tag >= PY_TYPE_NONE and counted_tag < PY_TYPE_CONTINUATION)
-                    or counted_tag == PY_TYPE_CPY_HANDLE
-                    or (counted_tag >= PY_TYPE_USER and counted_tag < PY_TYPE_CEXT_TAG_BASE)):
-                return 0
-            pcc_gc_count_free_store_shade(counted)
-        store_ptr(destination, 0, counted)
-        return 1
-    if (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
-            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0):
+    if (load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0 or load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0 or atomic_load_i64(global_addr('pcc_gc_foreign_lease_active'), 0, 'acquire') < 0):
         return 0
     value = load_ptr(source, 0)
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
@@ -980,39 +790,8 @@ def pcc_gc_object_is_address_pinned(obj) -> i64:
         return 1
     node = pcc_gc_object_index_find(obj)
     if ptr_is_null(node) == 0:
-        if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-                and (load_i64(node, 56) & 1) != 0):
-            return 1
         return 1 if load_i64(node, 80) != 0 else 0
     return 0
-
-
-@c_abi_export("pcc_gc_object_node_is_address_pinned")
-def pcc_gc_object_node_is_address_pinned(node, obj) -> i64:
-    """pcc_gc_object_is_address_pinned for a walk of the object list.
-
-    The nonmoving collectors (GC1/GC2) unlink an object's node when they
-    index-remove it, so an active listed node is the one the index finds:
-    read it instead of probing the index for every listed object. The moving
-    collectors (GC3/GC4) give the same guarantee while no forwarding edge
-    exists; with one, a source or target node may not be its address's
-    indexed node, so they keep the index's answer.
-    """
-    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2 and backend != 3:
-        if ((backend != 4)
-                or load_i32(global_addr("pcc_gc_forwarding_population"), 0) != 0):
-            return pcc_gc_object_is_address_pinned(obj)
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return 0
-    if pcc_gc_static_literal_contains(obj) != 0:
-        return 1
-    if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED) != 0:
-        return 1
-    if (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and (load_i64(node, 56) & 1) != 0):
-        return 1
-    return 1 if load_i64(node, 80) != 0 else 0
 
 
 # Hot per-operation statistics: the pin balance at offset 0 and the
@@ -1120,15 +899,6 @@ def pcc_gc_metric_allocation_count() -> i64:
 @c_abi_export("pcc_gc_metric_store_count")
 def pcc_gc_metric_store_count() -> i64:
     return pcc_gc_metric_shard_sum(16)
-
-
-@c_abi_export("pcc_gc_metric_shard_reset")
-def pcc_gc_metric_shard_reset(field: i64) -> None:
-    shards = global_addr("pcc_gc_metric_shards")
-    index: i64 = 0
-    while index < 64:
-        atomic_store_i64(shards, index * 128 + field, 0, "relaxed")
-        index = index + 1
 
 
 # Candidate and callback-phase flags are stable until a cooperative stop.

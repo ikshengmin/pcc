@@ -106,14 +106,8 @@ py_user_special_dispatch = extern(
     (c_ptr, c_ptr, c_ptr, c_ptr, c_int64, c_int64, c_ptr, c_ptr),
     c_ptr,
 )
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_gc_track      = extern("py_gc_track",      (c_ptr,),                 c_void)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_alloc     = extern("pcc_gc_alloc",     (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_free_object_memory = extern(
     "pcc_gc_free_object_memory", (c_ptr,), c_void
@@ -162,7 +156,6 @@ def _iter_new(seq):
     store_ptr(it, 16, seq)
     store_i64(it, 24, 0)
     py_gc_track(it)
-    pcc_gc_publish_initialized(it)
     return it
 
 
@@ -198,7 +191,6 @@ def py_iter_callable_new(callable, sentinel):
     store_ptr(it, 16, pair)  # owned reference; dealloc decrefs it
     store_i64(it, 24, -1)    # PY_ITER_CALLABLE_ACTIVE
     py_gc_track(it)
-    pcc_gc_publish_initialized(it)
     return it
 
 
@@ -874,7 +866,6 @@ def _tuple_iter_adopt(slots, tokens, index: int) -> int:
         py_runtime_error_if_unset(cstr("tuple iterator"), cstr("result owner lease failed"))
         return -1
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     return 0
 
 
@@ -908,7 +899,6 @@ def _tuple_iter_body(slots, tokens, borrowed, create: int) -> int:
         iterator = load_ptr(result_slot, 0)
         pcc_gc_store_ptr(iterator, ptr_add(iterator, 16), load_ptr(input_slot, 0))
         py_gc_track(load_ptr(result_slot, 0))
-        pcc_gc_publish_initialized(load_ptr(result_slot, 0))
         if py_err_occurred() != 0:
             return -1
         return 0

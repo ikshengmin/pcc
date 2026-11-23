@@ -45,7 +45,6 @@ __pcc_freestanding__ = True
 pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 pcc_thread_no_park_enter = extern("pcc_thread_no_park_enter", (), c_void)
 pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
-pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
 pcc_current_thread_id = extern("pcc_current_thread_id", (), c_int64)
 pcc_current_native_thread_token = extern(
     "pcc_current_native_thread_token", (), c_ptr
@@ -58,9 +57,6 @@ pcc_allocator_object_cells_enumerate = extern(
 )
 pcc_gc_managed_pointer_index_enumerate = extern(
     "pcc_gc_managed_pointer_index_enumerate", (c_ptr, c_int64, c_int64), c_int64
-)
-pcc_gc_object_list_non_slab_enumerate = extern(
-    "pcc_gc_object_list_non_slab_enumerate", (c_ptr, c_int64, c_int64), c_int64
 )
 
 _SHARD_COUNT: i64 = 32
@@ -81,6 +77,12 @@ _NODE_NEXT: i64 = 32
 _NODE_BYTES: i64 = 40
 _POOL_LIMIT: i64 = 4096
 _TRACKED: i64 = 2
+# Node bit of a full collection in bounded stops
+# (freestanding_gc_backend0_incremental.py): the node lives in that cycle's
+# block, in no list, and is never recycled.
+_FULL_VIEW: i64 = 64
+
+pcc_gc_backend0_full_abort = extern("pcc_gc_backend0_full_abort", (), c_void)
 
 
 @c_abi_export("pcc_gc_tracked_shard_address")
@@ -383,8 +385,6 @@ def py_gc_track(obj: c_ptr) -> None:
         return
     if is_tagged_int(obj):
         return
-    if pcc_threads_enabled() != 0 and gc_backend_current() == 4:
-        return
     # The old shard entry admitted raw newcomers before touching the header.
     # Flag-only tracking needs that boundary too. An admitted caller's ID
     # lookup is TLS-only; a newcomer may wait for STW, so select the current
@@ -509,6 +509,13 @@ def _young_log_note(obj: c_ptr) -> None:
             store_ptr(chunk, 32 + used * 8, obj)
             store_i64(chunk, 8, used + 1)
             return
+        if load_i32(global_addr("pcc_gc_full_phase"), 0) != 0:
+            # A full chunk is the pace of a full collection in bounded
+            # stops: one stop for every 1020 containers this thread tracks.
+            atomic_store_i32(global_addr("pcc_gc_full_slice_pending"), 0, 1, "release")
+            atomic_store_i32(
+                global_addr("pcc_gc_backend4_auto_step_pending"), 0, 1, "release"
+            )
         following = load_ptr(chunk, 16)
         if ptr_is_null(following) == 0:
             # The thread fills its chain in order: the next chunk is empty.
@@ -620,9 +627,6 @@ def _tracked_growth(tracked: i64) -> None:
     # tracing collectors (GC3 included) run whole-heap marks paced by
     # allocation debt on the shared mark worker; a full stopped-world mark
     # every threshold0 tracked objects dominated GC3's run time.
-    backend: i64 = gc_backend_current()
-    if backend != 0:
-        return
     threshold: i64 = load_i32(global_addr("py_gc_threshold0"), 0)
     if threshold <= 0 or load_i32(global_addr("py_gc_enabled"), 0) == 0:
         return
@@ -646,14 +650,15 @@ def py_gc_untrack(obj: c_ptr) -> None:
         return
     if is_tagged_int(obj):
         return
-    if pcc_threads_enabled() != 0 and gc_backend_current() == 4:
-        return
     # Admission can wait across materialization/dematerialization. Never
     # retain a representation decision made before that wait.
     if pcc_current_thread_id() == 0:
         pcc_platform_abort()
         return
-    if _flag_only_tracking() != 0:
+    # While a full collection in bounded stops has its nodes in the index,
+    # the object may own one: take the node path, with the world running.
+    if (_flag_only_tracking() != 0
+            and atomic_load_i32(global_addr("pcc_gc_full_view_active"), 0, "acquire") == 0):
         previous: i64 = atomic_rmw_i32("and", obj, 12, ~_TRACKED, "acq_rel")
         if (previous & _TRACKED) != 0:
             _tracked_count_note(-1)
@@ -664,7 +669,8 @@ def py_gc_untrack(obj: c_ptr) -> None:
         _tracked_shard_lock(index)
         # A first freeze may have removed this object's node while we waited.
         # The flag/count transition still belongs to this call exactly once.
-        if _flag_only_tracking() != 0:
+        if (_flag_only_tracking() != 0
+                and atomic_load_i32(global_addr("pcc_gc_full_view_active"), 0, "acquire") == 0):
             previous: i64 = atomic_rmw_i32("and", obj, 12, ~_TRACKED, "acq_rel")
             if (previous & _TRACKED) != 0:
                 atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
@@ -676,11 +682,22 @@ def py_gc_untrack(obj: c_ptr) -> None:
             _tracked_shard_unlock(index)
         return
     node = py_gc_index_remove(obj)
-    if ptr_is_null(node) != 0 and load_i32(global_addr("pcc_gc_tracking_young_view"), 0) != 0:
-        # A young view holds nodes for young objects only: this tracked
-        # object is outside it, and unlinking a node is what counts.
+    if ptr_is_null(node) != 0:
+        # A young view holds nodes for young objects only, and the view of
+        # a full collection in bounded stops none for the objects tracked
+        # since its build: this tracked object is outside, and unlinking a
+        # node is what counts.
+        outside: i64 = load_i32(global_addr("pcc_gc_tracking_young_view"), 0)
+        if _flag_only_tracking() != 0:
+            outside = 1
+        if outside != 0:
+            atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
+    elif (load_i32(node, _NODE_REACHABLE) & _FULL_VIEW) != 0:
+        # The node stays in its cycle's block; without an object every pass
+        # of the cycle skips it.
+        store_ptr(node, _NODE_OBJECT, null())
         atomic_rmw_i32("sub", global_addr("py_gc_tracked_count"), 0, 1, "acq_rel")
-    if ptr_is_null(node) == 0:
+    else:
         pcc_gc_default_unlink_tracked_node(node)
         if merged != 0:
             store_ptr(node, _NODE_OBJECT, null())
@@ -726,6 +743,10 @@ def pcc_gc_tracked_materialize() -> i64:
         if young != 0:
             required = _TRACKED | young
             store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 1)
+    if required == _TRACKED and load_i32(global_addr("pcc_gc_full_phase"), 0) != 0:
+        # A complete view needs every tracked object as a node of its own:
+        # a full collection in bounded stops gives up its nodes first.
+        pcc_gc_backend0_full_abort()
     logged: i64 = 0
     if (required != _TRACKED
             and atomic_load_i32(global_addr("pcc_gc_young_log_lost"), 0, "acquire") == 0):
@@ -738,11 +759,9 @@ def pcc_gc_tracked_materialize() -> i64:
         small_cap = pcc_allocator_object_cells_enumerate(null(), 0, required)
         large_cap = pcc_gc_managed_pointer_index_enumerate(null(), 0, required)
     tracing_cap: i64 = 0
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        tracing_cap = pcc_gc_object_list_non_slab_enumerate(null(), 0, required)
     # Count/fill runs under STW. Reject invalid sizes or changed enumeration
     # rather than clamp away tracked objects and publish a partial snapshot.
-    if small_cap < 0 or large_cap < 0 or tracing_cap < 0:
+    if small_cap < 0 or large_cap < 0:
         return -1
     if small_cap > 1152921504606846975 - large_cap:
         return -1
@@ -778,13 +797,6 @@ def pcc_gc_tracked_materialize() -> i64:
         free(objects)
         return -1
     tracing: i64 = 0
-    if load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        tracing = pcc_gc_object_list_non_slab_enumerate(
-            ptr_add(objects, (small + large) * 8), tracing_cap, required
-        )
-    if tracing != tracing_cap:
-        free(objects)
-        return -1
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     added: i64 = 0
     index: i64 = 0
@@ -866,9 +878,8 @@ def pcc_gc_tracking_enter_flag_mode() -> None:
     pcc_gc_default_table_lock()
     atomic_store_i32(global_addr("pcc_gc_tracking_materialized"), 0, 1, "release")
     pcc_gc_tracked_dematerialize(1)
-    if gc_backend_current() == 0:
-        # The fused collector collects by generation (131072: its young bit).
-        store_i32(global_addr("pcc_gc_tracking_young_bit"), 0, 131072)
+    # The fused collector collects by generation (131072: its young bit).
+    store_i32(global_addr("pcc_gc_tracking_young_bit"), 0, 131072)
     # Publish only after old nodes/index entries are gone and materialized is
     # clear. A fast reader's acquire must never see flag mode before teardown.
     atomic_store_i32(global_addr("pcc_gc_tracking_flag_mode"), 0, 1, "release")

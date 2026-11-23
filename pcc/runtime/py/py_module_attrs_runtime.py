@@ -76,7 +76,6 @@ pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregist
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -243,7 +242,6 @@ def _sys_modules_cache_slot():
             if not py_err_occurred():
                 py_raise_owned(py_exc_new(19, cstr("sys.modules dictionary allocation failed")))
             return null()
-        pcc_gc_note_slot_write_barrier(null(), slot, value)
         if pcc_gc_foreign_lease_release(slot, token) < 0:
             pcc_platform_abort()
             return null()
@@ -563,7 +561,6 @@ def _threaded_cached_name_key(text):
         free(entry)
         return null()
     pcc_gc_pin(fresh)
-    pcc_gc_note_slot_write_barrier(null(), key_slot, fresh)
     store_ptr(entry, _NAME_CACHE_TEXT * C_POINTER_SIZE, text)
     store_ptr(entry, _NAME_CACHE_HANDLE * C_POINTER_SIZE, handle)
     prior = atomic_cas_i64(table, offset, 0, ptr_to_int(entry), "acq_rel", "acquire")

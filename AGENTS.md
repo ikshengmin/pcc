@@ -124,9 +124,9 @@ These are required outcomes, not assertions that migration is complete. See
   and fixed-width machine types are explicit. No package-specific shortcuts.
 - pcc has one collector (maintainer decision, 2026-11-24): reference
   counting with a generational cycle collector, the former GC0. The
-  tracing and relocating collectors 1-4 are removed and not selectable;
-  `PCC_GC_BACKEND` accepts only 0 and anything else is an error, never a
-  fallback. Do not add a second collector or a per-collector protocol. The
+  tracing and relocating collectors 1-4 are removed and there is no
+  selector: the runtime does not read `PCC_GC_BACKEND`. Do not add a second
+  collector or a per-collector protocol. The
   runtime is pcc-Python over owned intrinsics and the platform ABI.
 - The self-host chain is host pcc0 -> pcc1 -> pcc2 -> pcc3. A stage1 build is
   not a new-source fixed point. Distinguish host/native, self-backed/LLVM-backed,

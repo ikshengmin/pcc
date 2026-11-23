@@ -41,18 +41,13 @@ from pcc.unsafe import (
 
 __pcc_freestanding__ = True
 
-pcc_gc_backend3_revoke_closed_young_domain = extern(
-    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
-)
 
 
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern(
     "pcc_py_gc_minor_graph_unlock", (), c_void
 )
-pcc_thread_is_running = extern("pcc_thread_is_running", (), c_int64)
 pcc_thread_exit_unregisters = extern("pcc_thread_exit_unregisters", (), c_int64)
-pcc_thread_stack_high = extern("pcc_thread_stack_high", (), c_int64)
 
 
 # The scheduler-root list is changed only under this word, held for a few
@@ -174,22 +169,6 @@ def pcc_gc_cycle_requested_store_release(value: i64) -> None:
 @c_abi_export("pcc_gc_root_registry_note_mutation_locked")
 def pcc_gc_root_registry_note_mutation_locked() -> None:
     slot = global_addr("pcc_gc_root_registry_revision")
-    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (
-        load_i32(global_addr("pcc_gc_list_container_mode"), 0) == 0
-        and (backend == 1 or backend == 2 or backend == 3
-             or (backend == 4 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0))
-    ):
-        # Every root writer in these modes already holds the graph lock.
-        # Preserve their original serial increment instead of introducing an
-        # unnecessary atomic transaction inside that contended critical path.
-        serial_revision: i64 = load_i64(slot, 0)
-        if serial_revision == 9223372036854775807:
-            serial_revision = 1
-        else:
-            serial_revision = serial_revision + 1
-        store_i64(slot, 0, serial_revision)
-        return
     # GC0 and count-free GC4 scheduler handles, and in container mode the
     # continuation writers, change roots without the graph lock while frame
     # writers hold it. Preserve all of their invalidations.
@@ -206,24 +185,6 @@ def pcc_gc_root_registry_note_mutation_locked() -> None:
         if observed == revision:
             return
         revision = observed
-
-
-@c_abi_export("pcc_gc_scheduler_handle_needs_graph")
-def _scheduler_handle_needs_graph(backend: i64) -> i64:
-    if backend == 0:
-        return 0
-    if (backend == 4
-            and load_i32(global_addr("pcc_gc_config_initialized"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend_frozen"), 0) != 0
-            and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and pcc_thread_is_running() != 0):
-        # GC4's mark/remark/remap readers own STW; introspection holds the
-        # list word. This strict running-thread path cannot park while linking
-        # or unlinking. GC3's incremental root cursor keeps the graph protocol.
-        return 0
-    # A cold thread is admitted by graph acquire. Exited threads are never
-    # admitted by this fast path; their caller must restore its blocking state.
-    return 1
 
 
 @c_abi_export("pcc_gc_root_slot_count_from_map")
@@ -317,96 +278,52 @@ def _scheduler_root_unlink(node) -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_stack_slot_root_is_conservative")
-def pcc_gc_stack_slot_root_is_conservative(slot) -> i64:
-    """1 when a count-free collector already roots ``slot`` exactly as a
-    registration would.
-
-    The slot lies in this thread's own stack, between the caller's frames
-    and the thread's outermost frame. Every count-free stopped-world seed and
-    remark grays the conservative words of every thread's stack, a stopping
-    thread's own frames included, and what those words name stays in place:
-    GC3 promotes it without copying and GC4 never selects it. Both move an
-    object only while every other mutator waits at an application gate. So
-    the object a stack slot holds can neither die nor move while it does,
-    and the registration (and its global list word or graph lock) adds
-    nothing. Counted collectors scan no stack and keep registering.
-    """
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
-        return 0
-    high: i64 = pcc_thread_stack_high()
-    if high == 0:
-        return 0
-    address: i64 = ptr_to_int(slot)
-    if address < ptr_to_int(frame_address()) or address >= high:
-        return 0
-    return 1
-
-
 @c_abi_export("pcc_gc_scheduler_root_register_handle")
 def pcc_gc_scheduler_root_register_handle(slot) -> c_ptr:
-    backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return null()
-    if pcc_gc_stack_slot_root_is_conservative(slot) != 0:
-        return global_addr("pcc_py_gc_scheduler_root_stack_handle")
-    if (
-        backend == 0
-        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and _scheduler_handle_needs_graph(backend) == 0)
-    ):
-        cached = global_load_ptr("pcc_gc_scheduler_root_tls_cache")
-        if ptr_is_null(cached) == 0:
-            # Still linked with an empty slot: publishing the slot registers
-            # it. Every walker of this list stops the world or holds the list
-            # word, and no poll separates the pop from the store.
-            global_store_ptr("pcc_gc_scheduler_root_tls_cache", load_ptr(cached, 24))
-            store_i32(
-                global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0,
-                load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0) - 1,
-            )
-            store_ptr(cached, 24, null())
-            store_ptr(cached, 0, slot)
-            pcc_gc_cycle_requested_store_release(1)
-            return cached
-        # Reuse and publish under one list acquisition. Splitting these two
-        # tiny changes made the one global word bounce between carriers twice
-        # per registration even though no allocation was needed.
-        _scheduler_root_spin_acquire()
-        reused = global_load_ptr("pcc_py_gc_scheduler_root_free_head")
-        if ptr_is_null(reused) == 0:
-            global_store_ptr(
-                "pcc_py_gc_scheduler_root_free_head", load_ptr(reused, 8)
-            )
-            store_i32(
-                global_addr("pcc_py_gc_scheduler_root_free_count"),
-                0,
-                load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0) - 1,
-            )
-            store_ptr(reused, 0, slot)
-            # Linking initializes both remaining node words before unlock.
-            _scheduler_root_link(reused)
-            _scheduler_root_spin_release()
-            pcc_gc_cycle_requested_store_release(1)
-            return reused
+    cached = global_load_ptr("pcc_gc_scheduler_root_tls_cache")
+    if ptr_is_null(cached) == 0:
+        # Still linked with an empty slot: publishing the slot registers
+        # it. Every walker of this list stops the world or holds the list
+        # word, and no poll separates the pop from the store.
+        global_store_ptr("pcc_gc_scheduler_root_tls_cache", load_ptr(cached, 24))
+        store_i32(
+            global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0,
+            load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0) - 1,
+        )
+        store_ptr(cached, 24, null())
+        store_ptr(cached, 0, slot)
+        pcc_gc_cycle_requested_store_release(1)
+        return cached
+    # Reuse and publish under one list acquisition. Splitting these two
+    # tiny changes made the one global word bounce between carriers twice
+    # per registration even though no allocation was needed.
+    _scheduler_root_spin_acquire()
+    reused = global_load_ptr("pcc_py_gc_scheduler_root_free_head")
+    if ptr_is_null(reused) == 0:
+        global_store_ptr(
+            "pcc_py_gc_scheduler_root_free_head", load_ptr(reused, 8)
+        )
+        store_i32(
+            global_addr("pcc_py_gc_scheduler_root_free_count"),
+            0,
+            load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0) - 1,
+        )
+        store_ptr(reused, 0, slot)
+        # Linking initializes both remaining node words before unlock.
+        _scheduler_root_link(reused)
         _scheduler_root_spin_release()
+        pcc_gc_cycle_requested_store_release(1)
+        return reused
+    _scheduler_root_spin_release()
     # Empty pools allocate outside the list word. Recheck admission after
     # allocation through the same path used by cold/counting callers.
     node = _scheduler_root_node_take(slot)
     if ptr_is_null(node) != 0:
         # Unchecked wrappers can otherwise hide a missing persistent root.
-        pcc_gc_backend3_revoke_closed_young_domain()
         return null()
-    if (
-        backend == 0
-        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and _scheduler_handle_needs_graph(backend) == 0)
-    ):
-        pcc_gc_scheduler_root_link_locked(node)
-    else:
-        pcc_py_gc_minor_graph_lock()
-        pcc_gc_scheduler_root_link_locked(node)
-        pcc_py_gc_minor_graph_unlock()
+    pcc_gc_scheduler_root_link_locked(node)
     pcc_gc_cycle_requested_store_release(1)
     return node
 
@@ -418,45 +335,34 @@ def pcc_gc_scheduler_root_register(slot) -> None:
 
 @c_abi_export("pcc_gc_scheduler_root_unregister_handle")
 def pcc_gc_scheduler_root_unregister_handle(handle) -> None:
-    backend: i64 = gc_backend_current()
     if ptr_is_null(handle) != 0:
         return
     if ptr_eq(handle, global_addr("pcc_py_gc_scheduler_root_stack_handle")) != 0:
         return
-    if (
-        backend == 0
-        or (load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and _scheduler_handle_needs_graph(backend) == 0)
-    ):
-        cache_count: i64 = load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0)
-        if cache_count < 64 and pcc_thread_exit_unregisters() != 0:
-            # Empty the slot and keep the node linked for this thread's next
-            # registration (see pcc_gc_scheduler_root_tls_cache).
-            store_ptr(handle, 0, null())
-            store_ptr(handle, 24, global_load_ptr("pcc_gc_scheduler_root_tls_cache"))
-            global_store_ptr("pcc_gc_scheduler_root_tls_cache", handle)
-            store_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0, cache_count + 1)
-            pcc_gc_cycle_requested_store_release(1)
-            return
-        # Detach and recycle in the same critical section. Neither operation
-        # allocates or polls; a full pool frees only after dropping the word.
-        _scheduler_root_spin_acquire()
-        _scheduler_root_unlink(handle)
-        count: i64 = load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0)
-        dead = handle
-        if count < 4096:
-            store_ptr(handle, 8, global_load_ptr("pcc_py_gc_scheduler_root_free_head"))
-            global_store_ptr("pcc_py_gc_scheduler_root_free_head", handle)
-            store_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0, count + 1)
-            dead = null()
-        _scheduler_root_spin_release()
-        if ptr_is_null(dead) == 0:
-            free(dead)
-    else:
-        pcc_py_gc_minor_graph_lock()
-        pcc_gc_scheduler_root_unlink_locked(handle)
-        pcc_py_gc_minor_graph_unlock()
-        _scheduler_root_node_give(handle)
+    cache_count: i64 = load_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0)
+    if cache_count < 64 and pcc_thread_exit_unregisters() != 0:
+        # Empty the slot and keep the node linked for this thread's next
+        # registration (see pcc_gc_scheduler_root_tls_cache).
+        store_ptr(handle, 0, null())
+        store_ptr(handle, 24, global_load_ptr("pcc_gc_scheduler_root_tls_cache"))
+        global_store_ptr("pcc_gc_scheduler_root_tls_cache", handle)
+        store_i32(global_addr("pcc_gc_scheduler_root_tls_cache_count"), 0, cache_count + 1)
+        pcc_gc_cycle_requested_store_release(1)
+        return
+    # Detach and recycle in the same critical section. Neither operation
+    # allocates or polls; a full pool frees only after dropping the word.
+    _scheduler_root_spin_acquire()
+    _scheduler_root_unlink(handle)
+    count: i64 = load_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0)
+    dead = handle
+    if count < 4096:
+        store_ptr(handle, 8, global_load_ptr("pcc_py_gc_scheduler_root_free_head"))
+        global_store_ptr("pcc_py_gc_scheduler_root_free_head", handle)
+        store_i32(global_addr("pcc_py_gc_scheduler_root_free_count"), 0, count + 1)
+        dead = null()
+    _scheduler_root_spin_release()
+    if ptr_is_null(dead) == 0:
+        free(dead)
     pcc_gc_cycle_requested_store_release(1)
 
 
@@ -480,12 +386,9 @@ def pcc_gc_scheduler_root_tls_cache_drain() -> None:
 
 @c_abi_export("pcc_gc_scheduler_root_unregister")
 def pcc_gc_scheduler_root_unregister(slot) -> None:
-    backend: i64 = gc_backend_current()
     if ptr_is_null(slot) != 0:
         return
     dead = null()
-    if backend != 0:
-        pcc_py_gc_minor_graph_lock()
     _scheduler_root_spin_acquire()
     node = global_load_ptr("pcc_gc_scheduler_root_head")
     while ptr_is_null(node) == 0 and ptr_is_null(dead) != 0:
@@ -495,8 +398,6 @@ def pcc_gc_scheduler_root_unregister(slot) -> None:
         else:
             node = load_ptr(node, 8)
     _scheduler_root_spin_release()
-    if backend != 0:
-        pcc_py_gc_minor_graph_unlock()
     if ptr_is_null(dead) == 0:
         _scheduler_root_node_give(dead)
         pcc_gc_cycle_requested_store_release(1)
@@ -534,7 +435,6 @@ def pcc_gc_register_continuation_root_node(frame_map, slots):
     node = malloc(node_size)
     if ptr_is_null(node) != 0:
         # Unchecked wrappers can otherwise hide a missing persistent root.
-        pcc_gc_backend3_revoke_closed_young_domain()
         return null()
     memset(node, 0, node_size)
     store_ptr(node, 0, frame_map)
@@ -564,8 +464,6 @@ def pcc_gc_register_continuation_root_node(frame_map, slots):
 def pcc_gc_register_continuation_root(frame_map, slots) -> None:
     """Node-discarding form, retained for callers that do not keep it."""
     node = pcc_gc_register_continuation_root_node(frame_map, slots)
-    if ptr_is_null(node) != 0:
-        return
 
 
 @c_abi_export("pcc_gc_continuation_root_unlink_locked")

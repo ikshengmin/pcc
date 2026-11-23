@@ -93,16 +93,8 @@ py_class_namespace_commit_locked = extern(
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr), c_int64)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_py_gc_minor_graph_lock = extern(
     "pcc_py_gc_minor_graph_lock", (), c_void
 )
@@ -122,11 +114,6 @@ pcc_gc_store_ptr_plan_commit_locked = extern(
 pcc_gc_store_ptr_plan_finish = extern(
     "pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void
 )
-pcc_gc_backend4_retarget_mutator_payload_locked = extern(
-    "pcc_gc_backend4_retarget_mutator_payload_locked",
-    (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
-    c_int64,
-)
 py_obj_hash = extern("py_obj_hash", (c_ptr,), c_int64)
 py_obj_eq = extern("py_obj_eq", (c_ptr, c_ptr), c_int32)
 py_str_eq = extern("py_str_eq", (c_ptr, c_ptr), c_int32)
@@ -134,14 +121,6 @@ py_str_hash = extern("py_str_hash", (c_ptr,), c_int64)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier",
-    (c_ptr, c_ptr, c_ptr),
-    c_void,
-)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
-)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 
 py_list_new = extern("py_list_new", (c_int64,), c_ptr)
@@ -209,7 +188,6 @@ def _alloc_tables(d, capacity: int) -> int:
     store_i64(d, PYDICTOBJECT_CAPACITY_OFFSET, capacity)
     store_i64(d, PYDICTOBJECT_ITEM_COUNT_OFFSET, 0)  # item count
     store_i64(d, PYDICTOBJECT_ENTRIES_USED_OFFSET, 0)  # entries_used
-    pcc_gc_backend4_zpage_register_owner_payload_span(d, entries, capacity * DICTENTRY_SIZE)
     return 0
 
 
@@ -886,7 +864,6 @@ def _rehash_find_empty_slot(indices, capacity: int, hash_val: int) -> int:
 def _rehash(d, new_capacity: int) -> int:
     if ptr_is_null(d) != 0 or new_capacity <= 0:
         return -1
-    initial_backend: int = pcc_gc_backend()
     owner_slot = stack_alloc(8)
     store_ptr(owner_slot, 0, d)
 
@@ -899,9 +876,6 @@ def _rehash(d, new_capacity: int) -> int:
     while attempt < _DICT_OPERATION_ATTEMPT_LIMIT:
         attempt = attempt + 1
         pcc_py_gc_minor_graph_lock()
-        if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
-            break
         _dict_table_lock(d)
         old_entries = load_ptr(d, PYDICTOBJECT_ENTRIES_OFFSET)
         old_indices = load_ptr(d, PYDICTOBJECT_INDICES_OFFSET)
@@ -947,12 +921,6 @@ def _rehash(d, new_capacity: int) -> int:
             init_index = init_index + 1
 
         pcc_py_gc_minor_graph_lock()
-        if pcc_gc_backend() != initial_backend:
-            pcc_py_gc_minor_graph_unlock()
-            free(slot_pairs)
-            free(new_entries)
-            free(new_indices)
-            break
         # The copy and the installation are one table transaction: a set
         # holding only the table lock cannot change an old entry after it
         # was copied, nor release a value the new tables still name.
@@ -1026,15 +994,7 @@ def _rehash(d, new_capacity: int) -> int:
 
         retargeted: int = 0
         if copy_valid != 0:
-            retargeted = pcc_gc_backend4_retarget_mutator_payload_locked(
-                d,
-                old_entries,
-                old_capacity * DICTENTRY_SIZE,
-                new_entries,
-                new_capacity * DICTENTRY_SIZE,
-                slot_pairs,
-                pair_count,
-            )
+            retargeted = 1
         if copy_valid == 0 or retargeted == 0:
             _dict_graph_table_unlock(d)
             free(slot_pairs)
@@ -1044,9 +1004,6 @@ def _rehash(d, new_capacity: int) -> int:
         pair_index: int = 0
         while pair_index < pair_count:
             new_slot = load_ptr(slot_pairs, pair_index * 16 + 8)
-            pcc_gc_note_slot_write_barrier(
-                d, new_slot, load_ptr(new_slot, 0)
-            )
             pair_index = pair_index + 1
         # A reader under the container lock sees the old tables or the new
         # ones; the old ones are freed below, after it has left.
@@ -1058,10 +1015,6 @@ def _rehash(d, new_capacity: int) -> int:
             d, PYDICTOBJECT_ENTRIES_USED_OFFSET, new_entries_used
         )
         _dict_table_unlock(d)
-        if retargeted == 2:
-            pcc_gc_backend4_zpage_register_owner_payload_span(
-                d, new_entries, new_capacity * DICTENTRY_SIZE
-            )
         pcc_py_gc_minor_graph_unlock()
         free(old_indices)
         free(old_entries)
@@ -1097,7 +1050,6 @@ def _dict_new_with_capacity(capacity: int):
         py_decref(d)
         return null()
     py_gc_track(d)
-    pcc_gc_publish_initialized(d)
     return d
 
 
@@ -1128,11 +1080,10 @@ def py_dict_set(d, key, value) -> None:
         return
     if ptr_is_null(key) != 0:
         return
-    if pcc_gc_backend() == 0 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        kind: int = _dict_fast0_key_kind(key)
-        if kind != 0:
-            if _dict_set_gc0_locked(d, key, value, kind) != 0:
-                return
+    kind: int = _dict_fast0_key_kind(key)
+    if kind != 0:
+        if _dict_set_gc0_locked(d, key, value, kind) != 0:
+            return
     _dict_rooted_op(d, key, value, 2, null())
 
 
@@ -1163,14 +1114,7 @@ def _dict_gc0_admitted_locked() -> int:
     The nonmoving count-free GC1/GC2 share it: their retain is reachability
     and pcc_gc_try_init_ptr_locked shades a first store during a cycle.
     """
-    if (load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0
-            and atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") >= 0
-            and load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) == 0):
-        return 1
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0
-            or atomic_load_i64(global_addr("pcc_gc_foreign_lease_active"), 0, "acquire") < 0
-            or load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0):
+    if (atomic_load_i64(global_addr('pcc_gc_foreign_lease_active'), 0, 'acquire') < 0 or load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0 or load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0):
         return 0
     return 1
 
@@ -1300,8 +1244,7 @@ def py_dict_from_static_pairs(pairs, count: int):
     # not in rehashing.
     # The new dict is private until it is returned: GC0 inserts unlocked.
     private0: int = 0
-    if pcc_gc_backend() == 0:
-        private0 = 1
+    private0 = 1
     index: int = 0
     while index < count:
         key = load_ptr(pairs, index * 16)
@@ -1442,16 +1385,15 @@ def py_dict_get(d, key):
         return null()
     if ptr_is_null(key) != 0:
         return null()
-    if pcc_gc_backend() == 0 or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0:
-        kind: int = _dict_fast0_key_kind(key)
-        if kind != 0:
-            result_slot = stack_alloc(8)
-            store_ptr(result_slot, 0, null())
-            status: int = _dict_get_gc0_locked(d, key, kind, result_slot)
-            if status > 0:
-                return load_ptr(result_slot, 0)
-            if status == 0:
-                return null()
+    kind: int = _dict_fast0_key_kind(key)
+    if kind != 0:
+        result_slot = stack_alloc(8)
+        store_ptr(result_slot, 0, null())
+        status: int = _dict_get_gc0_locked(d, key, kind, result_slot)
+        if status > 0:
+            return load_ptr(result_slot, 0)
+        if status == 0:
+            return null()
     return _dict_rooted_op(d, key, null(), 0, null())
 
 
@@ -1775,7 +1717,6 @@ def _dict_slot_adopt(slots, tokens, index: int) -> int:
     if token < 0:
         return _dict_slot_error(cstr("dictionary result lease failed"))
     store_i64(tokens, index * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(slot)
     if py_err_occurred() != 0:
         return -1
     return 0
@@ -2538,11 +2479,7 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
     Returns 1 with the new list in output, 0 when this path does not apply,
     -1 with an exception after an allocation failure.
     """
-    count_free: int = load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
-    if (load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or (count_free == 0
-                and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-                     or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0))):
+    if (load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0 or load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0):
         return 0
     # The reservation only fences a collector switch, which no thread can
     # start once an object exists (pcc_gc_set_backend refuses it).
@@ -2554,8 +2491,7 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
         reserved = 1
     status: int = 1
     # A switch may have completed between the gate and the reservation.
-    if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+    if load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0:
         status = 0
     limit: int = 0
     if status == 1:
@@ -2612,7 +2548,6 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
                         or pcc_tuple_item_can_participate_in_cycle(
                             load_ptr(pair, PYTUPLEOBJECT_ITEMS_OFFSET + C_POINTER_SIZE)) != 0):
                     py_gc_track(pair)
-                pcc_gc_publish_initialized(pair)
                 pair = null()
         index = index + 1
     # An unused or partly retained pair releases what it holds.

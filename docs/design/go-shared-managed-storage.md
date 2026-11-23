@@ -2,24 +2,31 @@
 
 **Proposal, not approval or implementation.** Replace source-shape selection
 with ordinary typed lowering to PCC's shared runtime. The first release gate
-is Go slice and string behavior on GC0–4, not the number of source packages
-that a probe can parse. Keep all existing collectors and `PCC_GC_BACKEND`.
-This does not select a GC fusion path or change Python or C-API policy.
+is Go slice and string behavior on pcc's collector, not the number of source
+packages that a probe can parse. This does not change Python or C-API
+policy.
+
+Revised on 2026-11-24 (Claude, at the maintainer's request): pcc has one
+collector since that day, reference counting with a generational cycle
+collector, so every gate below that named five collectors names that one.
+Where the text asks a representation to survive relocation, the reason is
+now the relocation step planned for that collector.
 
 ## Current gap and decision
 
 The experimental shared-managed v1 envelope stores a GC0 tuple-shaped owner,
-with an opaque payload tail and stable external handles. It deliberately
-rejects GC1–4. Its bounded Go callers, CPUID consumers and native controls
-are experimental evidence; none is a production slice, string or map ABI.
-In particular, a tuple-specific size or slot walker cannot be assumed to
-describe that tail to a tracing or relocating collector.
+with an opaque payload tail and stable external handles. Its bounded Go
+callers, CPUID consumers and native controls are experimental evidence;
+none is a production slice, string or map ABI. In particular, a
+tuple-specific size or slot walker cannot be assumed to describe that tail
+to the cycle collector or to a relocation step, and a collector step that
+treats tuples specially would apply to these mutable objects.
 
 **Proposed choice:** use the existing PCC managed allocation, exact cell
-provenance, root registration, barriers and collector selection. Add a common
+provenance, root registration and counted stores. Add a common
 header/descriptor contract for non-Python layouts through those same owners.
-Do not add a Go heap, a second root registry, a GC0-only production mode,
-or native recognition based on package, function or source spellings.
+Do not add a Go heap, a second root registry, or native recognition based
+on package, function or source spellings.
 Keep existing Python layout tags unchanged unless a separately reviewed ABI
 migration is necessary. Share the layout representation with Java, but do not
 make Java frontend migration a prerequisite for the first Go semantic tests.
@@ -32,8 +39,9 @@ make Java frontend migration a prerequisite for the first Go semantic tests.
   Primitive byte/scalar arrays have no reference slots. A reference array
   or a mixed record describes every owned and relocatable reference; offsets
   are not guessed from a language name, a tagged integer or allocator size.
-  Enumerators, clearing, GC0 destruction and GC4 copy/forward/reclaim must
-  agree on the same extent and slot information.
+  Enumerators, clearing, destruction by count, the cycle collector's slot
+  visitor and a relocation step must agree on the same extent and slot
+  information.
 - Use the existing allocator/provenance and initialization-publication paths.
   New owned fields are initialized to null before collection can observe
   them. The new allocation is protected through initialization and becomes
@@ -55,9 +63,10 @@ make Java frontend migration a prerequisite for the first Go semantic tests.
   This contract supports embedded NUL and arbitrary bytes.
 - Store an owner and its scalar view fields, not a derived payload pointer,
   across safepoints. Read/resolve the owner via the shared root/slot path,
-  then derive a payload address for a bounded no-safepoint access. GC4
-  must either update or resolve precise owner slots; the implementation must
-  observe actual relocation in a test, not permanently pin every new object.
+  then derive a payload address for a bounded no-safepoint access. A
+  relocation step must either update or resolve precise owner slots; once
+  one exists, the implementation must observe actual relocation in a test,
+  not permanently pin every new object.
   A raw runtime or FFI export requires the existing explicit pin/lease and a
   specified release point. CpyHandle and foreign ownership remain intact.
 
@@ -77,8 +86,8 @@ make Java frontend migration a prerequisite for the first Go semantic tests.
   arguments, caller result slots and exceptional exits; record field
   stores and array element mutation; initialization, append, copy and
   overlap, clear/delete, captured/foreign values, and runtime registry
-  publication. GC0 uses the common counted store/drop protocol; GC1–4 use the
-  common tracing roots and write barrier. Scalar bytes are never interpreted
+  publication. Every such write uses the common counted store/drop
+  protocol. Scalar bytes are never interpreted
   as managed slots. Exception and cleanup edges must remove the precise slots
   that the success path would transfer rather than leaking an extra owner.
 - Map is a later consumer of this same contract. Hash tables, key equality,
@@ -90,14 +99,15 @@ make Java frontend migration a prerequisite for the first Go semantic tests.
 1. **Common backing and roots.** Specify the header and descriptor ABI,
    object lifecycle and concurrent publication, precise root/slot maps,
    destructor/clear and relocation hooks. Prove a pointer-free byte backing
-   and a reference-bearing control on every GC before a language frontend
-   depends on the representation. Test root lifetime, old/new element
-   visibility, cycles/reclamation, forced GC4 relocation and post-relocation
-   reload. If a collector cannot support the representation, stop and state
-   which required protocol is missing; rejecting four modes is not a pass.
+   and a reference-bearing control on the collector before a language
+   frontend depends on the representation. Test root lifetime, old/new
+   element visibility, and cycles and reclamation by a young collection, by
+   a full collection in bounded stops and by an explicit collection. If the
+   collector cannot support the representation, stop and state which
+   required protocol is missing.
 2. **Slice operations and then string copy.** Add generic lowering and tests
    first, with independently authored valid and negative programs. Run the
-   same unchanged sources under official Go and PCC with each of GC0–4:
+   same unchanged sources under official Go and PCC:
    nil/empty, several element widths, overflow, bounds, move/reuse, aliases
    and append overlap, failed growth, reference reachability, GC during
    construction, caller results and final release. For strings include
@@ -116,12 +126,12 @@ make Java frontend migration a prerequisite for the first Go semantic tests.
    native tests under existing resource guards, then the authorized Linux
    and macOS gates and affected full suites. Keep Mac measurements and
    bootstrap approval separate. Benchmark the same unchanged inputs with
-   normal Python and C-API controls, and retain all five backends. Do not
-   report performance or native pcc1 before those runs happen.
+   normal Python and C-API controls. Do not report performance or native
+   pcc1 before those runs happen.
 
 **Approval requested:** endorse one shared descriptor-backed allocation
-contract as above, with all five collectors required at the first usable
-frontend gate and no promotion of the GC0-only experimental ABI. Review
+contract as above, required on the collector at the first usable frontend
+gate, and no promotion of the experimental v1 ABI. Review
 size/tag ownership and the exact caller-result/root handoff before coding.
 The next separate design decisions are the C++ destructor exception contract
 and the general returned-reference ownership contract for issue #7.

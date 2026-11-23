@@ -36,10 +36,6 @@ define_global_ptr_null("pcc_debug_alloc_head")
 
 pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read", (c_ptr,), c_ptr
-)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
 pcc_gc_pointer_is_managed = extern(
     "pcc_gc_pointer_is_managed", (c_ptr,), c_int64
 )
@@ -156,7 +152,7 @@ def pcc_debug_check_release(name, obj) -> None:
         return
     if pcc_gc_pointer_is_managed(obj) == 0:
         _fatal(cstr("[BAD_RELEASE:unmanaged-pointer]\n"))
-    resolved = pcc_gc_note_relocation_read(obj)
+    resolved = obj
     if ptr_is_null(resolved) == 0:
         obj = resolved
     if pcc_capi_is_type_object_value(obj) != 0:
@@ -166,8 +162,6 @@ def pcc_debug_check_release(name, obj) -> None:
     flags = load_i32(obj, 12)
     # GC3 may retain an oldified minor-arena shell with a nonpositive
     # count while forwarding completes; the C oracle explicitly permits it.
-    if pcc_gc_backend() == 3 and (flags & 8) != 0 and (flags & 16) != 0:
-        return
     if refcount <= 0 or _valid_type_tag(tag) == 0:
         _fatal(cstr("[BAD_RELEASE]\n"))
 

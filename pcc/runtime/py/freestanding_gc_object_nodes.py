@@ -58,103 +58,6 @@ SPAN_CELL_COUNT = 24
 SPAN_NODE_RECORDS = 48
 SPAN_RECORD_NEXT = 56
 
-pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
-pcc_allocator_record_span_first = extern(
-    "pcc_allocator_record_span_first", (), c_ptr
-)
-pcc_thread_owns_stopped_world = extern("pcc_thread_owns_stopped_world", (), c_int64)
-pcc_gc_granule_is_object_start = extern("pcc_gc_granule_is_object_start", (c_ptr,), c_int64)
-
-
-@c_abi_export("pcc_gc_object_list_head")
-def pcc_gc_object_list_head() -> c_ptr:
-    return global_load_ptr("pcc_gc_object_head")
-
-
-@c_abi_export("pcc_gc_object_walk_records_at")
-def _object_walk_records_at(span: c_ptr, at: i64) -> c_ptr:
-    """The first registered record at address ``at`` or later in ``span``'s
-    record array, then in the record spans after it, or NULL. ``at`` is a
-    record address of ``span`` or its array's end."""
-    while ptr_is_null(span) == 0:
-        records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
-        end: i64 = records + load_i64(span, SPAN_CELL_COUNT) * OBJECT_NODE_RECORD_BYTES
-        while at < end:
-            record = int_to_ptr(at)
-            if atomic_load_i64(record, RECORD_INDEX_KEY, "acquire") != 0:
-                return record
-            at = at + OBJECT_NODE_RECORD_BYTES
-        span = load_ptr(span, SPAN_RECORD_NEXT)
-        if ptr_is_null(span) == 0:
-            at = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
-    return null()
-
-
-@c_abi_export("pcc_gc_object_walk_records_from")
-def _object_walk_records_from(span: c_ptr, cell: i64) -> c_ptr:
-    """The first registered record at or after ``cell`` of ``span``, then of
-    the record spans after it, or NULL."""
-    if ptr_is_null(span) != 0:
-        return null()
-    records: i64 = atomic_load_i64(span, SPAN_NODE_RECORDS, "acquire")
-    return _object_walk_records_at(span, records + cell * OBJECT_NODE_RECORD_BYTES)
-
-
-@c_abi_export("pcc_gc_object_walk_first")
-def pcc_gc_object_walk_first() -> c_ptr:
-    """The first node of a walk over every registered object: the object
-    list, then each registered cell record. Records are never freed, so a
-    walk may continue from a record whose object died meanwhile."""
-    head = pcc_gc_object_list_head()
-    if ptr_is_null(head) == 0:
-        return head
-    return _object_walk_records_from(pcc_allocator_record_span_first(), 0)
-
-
-@c_abi_export("pcc_gc_object_walk_next")
-def pcc_gc_object_walk_next(node: c_ptr) -> c_ptr:
-    """The node after ``node`` in its walk; see pcc_gc_object_walk_first."""
-    span = load_ptr(node, NODE_RECORD_SPAN)
-    if ptr_is_null(span) != 0:
-        nxt = load_ptr(node, 16)
-        if ptr_is_null(nxt) == 0:
-            return nxt
-        return _object_walk_records_from(pcc_allocator_record_span_first(), 0)
-    # A record's successor in its array is the next address to test.
-    return _object_walk_records_at(span, ptr_to_int(node) + OBJECT_NODE_RECORD_BYTES)
-
-
-@c_abi_export("pcc_gc_object_list_non_slab_enumerate")
-def pcc_gc_object_list_non_slab_enumerate(out: c_ptr, capacity: i64, required_flags: i64) -> i64:
-    """Count/fill flagged non-slab objects from the stopped active graph.
-
-    Successful ObjectNode publication removes these objects from the exact
-    managed-pointer set. Slab objects have their own LIVE-cell enumeration;
-    exact-set overlap during publication is deduplicated by the materializer.
-    Return every match, writing at most capacity pointers, or -1 without STW.
-
-    CMS joins the ordinary live-thread set before its entry, and graph-lock
-    holders cannot park. A completed stop therefore excludes graph mutation,
-    including scalar retirement. Pending nodes were detached at claim before
-    their links were reused; never enumerate the object index or pending chain.
-    Raw frees touch only retired/detached storage and remain running until a
-    poll. No graph lock, allocation or callback is needed during this walk.
-    """
-    if pcc_thread_owns_stopped_world() == 0:
-        return -1
-    total: i64 = 0
-    node = pcc_gc_object_list_head()
-    while ptr_is_null(node) == 0:
-        if load_i64(node, 32) == 0:
-            obj = load_ptr(node, 0)
-            if ptr_is_null(obj) == 0 and is_tagged_int(obj) == 0:
-                if ((load_i32(obj, 12) & required_flags) == required_flags
-                        and pcc_gc_granule_is_object_start(obj) != 1):
-                    if total < capacity:
-                        store_ptr(out, total * 8, obj)
-                    total = total + 1
-        node = load_ptr(node, 16)
-    return total
 
 
 @c_abi_export("pcc_gc_object_set_list_head")
@@ -176,8 +79,7 @@ def pcc_gc_object_list_revision_bump() -> None:
     cursor read it: GC1-GC3 skip the bump, which every allocating thread
     paid on one shared line, while no promotion is queued."""
     if (
-        load_i32(global_addr("pcc_gc_backend_selected"), 0) != 4
-        and ptr_is_null(global_load_ptr("pcc_gc_backend3_promotion_head")) != 0
+        ptr_is_null(global_load_ptr('pcc_gc_backend3_promotion_head')) != 0
     ):
         return
     atomic_rmw_i64(
@@ -243,21 +145,6 @@ def pcc_gc_object_node_set_prev(node: c_ptr, prev: c_ptr) -> None:
 @c_abi_export("pcc_gc_object_node_zpage")
 def pcc_gc_object_node_zpage(node: c_ptr) -> c_ptr:
     return load_ptr(node, 48)
-
-
-@c_abi_export("pcc_gc_object_node_set_zpage")
-def pcc_gc_object_node_set_zpage(node: c_ptr, zpage_node: c_ptr) -> None:
-    store_ptr(node, 48, zpage_node)
-
-
-@c_abi_export("pcc_gc_object_node_gc_refs")
-def pcc_gc_object_node_gc_refs(node: c_ptr) -> i64:
-    return load_i64(node, 56)
-
-
-@c_abi_export("pcc_gc_object_node_set_gc_refs")
-def pcc_gc_object_node_set_gc_refs(node: c_ptr, value: i64) -> None:
-    store_i64(node, 56, value)
 
 
 @c_abi_export("pcc_gc_object_node_young_next")
@@ -329,100 +216,6 @@ def pcc_gc_object_node_is_record(node: c_ptr) -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_object_node_take_record")
-def pcc_gc_object_node_take_record(record: c_ptr) -> c_ptr:
-    """Claim a cell's record as the node of the object now in that cell.
-
-    The caller holds the graph lock and has checked the record is not indexed
-    for this object already. The cell's previous object released the record
-    before its cell could be allocated again: unindexed and without leases.
-    """
-    if (
-        load_i64(record, RECORD_INDEX_KEY) != 0
-        or load_i64(record, 80) != 0
-    ):
-        pcc_platform_abort()
-        return null()
-    _clear_promotion_state(record)
-    return record
-
-
-@c_abi_export("pcc_gc_object_node_return_record")
-def pcc_gc_object_node_return_record(record: c_ptr) -> None:
-    """Return a detached cell record to its cell; nothing is freed.
-
-    The caller holds the graph lock, has removed the record's index key and
-    unlinked it. A record still keyed, leased or not a record at all aborts.
-    """
-    if (
-        pcc_gc_object_node_is_record(record) == 0
-        or load_i64(record, RECORD_INDEX_KEY) != 0
-        or load_i64(record, 80) != 0
-    ):
-        pcc_platform_abort()
-        return
-    _clear_promotion_state(record)
-
-
-@c_abi_export("pcc_gc_object_node_alloc")
-def pcc_gc_object_node_alloc() -> c_ptr:
-    head = global_load_ptr("pcc_gc_object_node_free_head")
-    if ptr_is_null(head) == 0:
-        global_store_ptr("pcc_gc_object_node_free_head", load_ptr(head, 16))
-        count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
-        if count > 0:
-            store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count - 1)
-        if load_i64(head, 80) != 0:
-            pcc_platform_abort()
-            return null()
-        _clear_promotion_state(head)
-        return head
-    node = malloc(88)
-    if ptr_is_null(node) == 0:
-        store_i64(node, 80, 0)
-    _clear_promotion_state(node)
-    return node
-
-
-@c_abi_export("pcc_gc_object_node_prepare")
-def pcc_gc_object_node_prepare() -> c_ptr:
-    node = malloc(88)
-    if ptr_is_null(node) == 0:
-        store_i64(node, 80, 0)
-    return node
-
-
-@c_abi_export("pcc_gc_object_node_plan_requires_prepare")
-def pcc_gc_object_node_plan_requires_prepare() -> i64:
-    if ptr_is_null(global_load_ptr("pcc_gc_object_node_free_head")) != 0:
-        return 1
-    return 0
-
-
-@c_abi_export("pcc_gc_object_node_take_prepared")
-def pcc_gc_object_node_take_prepared(prepared_io: c_ptr) -> c_ptr:
-    if ptr_is_null(prepared_io) != 0:
-        return null()
-    head = global_load_ptr("pcc_gc_object_node_free_head")
-    if ptr_is_null(head) == 0:
-        global_store_ptr("pcc_gc_object_node_free_head", load_ptr(head, 16))
-        count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
-        if count > 0:
-            store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count - 1)
-        if load_i64(head, 80) != 0:
-            pcc_platform_abort()
-            return null()
-        _clear_promotion_state(head)
-        return head
-    node = load_ptr(prepared_io, 0)
-    store_ptr(prepared_io, 0, null())
-    if ptr_is_null(node) == 0 and load_i64(node, 80) != 0:
-        pcc_platform_abort()
-        return null()
-    _clear_promotion_state(node)
-    return node
-
-
 @c_abi_export("pcc_gc_object_node_release")
 def pcc_gc_object_node_release(node: c_ptr) -> None:
     if ptr_is_null(node) != 0:
@@ -440,56 +233,6 @@ def pcc_gc_object_node_release(node: c_ptr) -> None:
     store_ptr(node, 16, global_load_ptr("pcc_gc_object_node_free_head"))
     global_store_ptr("pcc_gc_object_node_free_head", node)
     store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count + 1)
-
-
-@c_abi_export("pcc_gc_object_node_release_to_pool")
-def pcc_gc_object_node_release_to_pool(node: c_ptr) -> i64:
-    """Pool an already detached/index-retired node; never free under the lock.
-
-    Return zero to transfer the full pool's overflow node to the caller's raw
-    release chunk. The caller must not inspect a successfully pooled node again.
-    A cell's record returns to its cell instead and is never overflow.
-    """
-    if ptr_is_null(node) != 0 or load_i64(node, 80) != 0:
-        pcc_platform_abort()
-        return 0
-    if pcc_gc_object_node_is_record(node) != 0:
-        _clear_promotion_state(node)
-        return 1
-    count: i64 = load_i32(global_addr("pcc_gc_object_node_free_count"), 0)
-    if count >= 8192:
-        return 0
-    _clear_promotion_state(node)
-    store_ptr(node, 16, global_load_ptr("pcc_gc_object_node_free_head"))
-    global_store_ptr("pcc_gc_object_node_free_head", node)
-    store_i32(global_addr("pcc_gc_object_node_free_count"), 0, count + 1)
-    return 1
-
-
-@c_abi_export("pcc_gc_object_node_finish_detached")
-def pcc_gc_object_node_finish_detached(nodes: c_ptr) -> None:
-    while ptr_is_null(nodes) == 0:
-        node = nodes
-        nodes = load_ptr(node, 16)
-        if load_i64(node, 80) != 0:
-            pcc_platform_abort()
-            return
-        store_ptr(node, 16, null())
-        # Records are released before their chain is built; never free one.
-        if pcc_gc_object_node_is_record(node) == 0:
-            free(node)
-
-
-@c_abi_export("pcc_gc_backend3_young_link_head")
-def pcc_gc_backend3_young_link_head(node: c_ptr) -> None:
-    if ptr_is_null(node) != 0:
-        return
-    head = pcc_gc_backend3_young_list_head()
-    pcc_gc_object_node_set_young_prev(node, null())
-    pcc_gc_object_node_set_young_next(node, head)
-    if ptr_is_null(head) == 0:
-        pcc_gc_object_node_set_young_prev(head, node)
-    pcc_gc_backend3_young_set_head(node)
 
 
 @c_abi_export("pcc_gc_backend3_young_unlink")
@@ -538,16 +281,6 @@ def pcc_gc_object_node_unlink(node: c_ptr) -> None:
         pcc_gc_object_list_revision_bump()
     if ptr_is_null(nxt) == 0:
         pcc_gc_object_node_set_prev(nxt, prev)
-
-
-@c_abi_export("pcc_gc_object_known_size")
-def pcc_gc_object_known_size(obj: c_ptr) -> i64:
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return 0
-    node = pcc_gc_object_index_find(obj)
-    if ptr_is_null(node) == 0 and pcc_gc_object_node_freeing(node) == 0:
-        return pcc_gc_object_node_size(node)
-    return 0
 
 
 # Each thread publishes its live-byte changes to pcc_gc_live_bytes in batches

@@ -48,9 +48,6 @@ pcc_thread_no_park_exit = extern("pcc_thread_no_park_exit", (), c_void)
 pcc_thread_no_park_depth = extern("pcc_thread_no_park_depth", (), c_int64)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_cycle_requested_store_release = extern("pcc_gc_cycle_requested_store_release", (c_int64,), c_void)
-pcc_gc_backend3_revoke_closed_young_domain = extern(
-    "pcc_gc_backend3_revoke_closed_young_domain", (), c_void
-)
 
 pcc_gc_root_slot_count_from_map = extern("pcc_gc_root_slot_count_from_map", (c_ptr,), c_int64)
 pcc_gc_root_map_is_borrowed = extern("pcc_gc_root_map_is_borrowed", (c_ptr,), c_int64)
@@ -94,45 +91,15 @@ def pcc_gc_frame_slots_walked(slots) -> i64:
     return 1
 
 
-@c_abi_export("pcc_gc_frame_slots_conservative")
-def pcc_gc_frame_slots_conservative(slots) -> i64:
-    """Whether a count-free collector's stack scan already roots ``slots``.
-
-    The slots live in a caller frame on this registered thread's stack.
-    Every count-free collector reads each word of every thread's stack at
-    the stops that seed and finish its marks, and keeps in place what those
-    words name, so the frame needs no registry node: neither the node nor
-    the graph lock around its link adds a root. Counted collectors scan no
-    stack and keep registering. The answer depends only on the address and
-    on the collector, fixed before any frame enters (gc_backend_current), so
-    a frame's enter and leave agree.
-    """
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
-        return 0
-    address: i64 = ptr_to_int(slots)
-    if address <= ptr_to_int(frame_address()):
-        return 0
-    high: i64 = pcc_thread_stack_high()
-    if high == 0 or address >= high:
-        return 0
-    return 1
-
-
 @c_abi_export("pcc_gc_frame_roots_disabled_fast")
 def pcc_gc_frame_roots_disabled_fast() -> i64:
     if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        return 0
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
-        return 0
-    if load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) != 0:
         return 0
     return 1
 
 
 @c_abi_export("pcc_gc_should_track_frame_roots")
 def pcc_gc_should_track_frame_roots() -> i64:
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
-        return 1
     return load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0)
 
 
@@ -151,62 +118,10 @@ def pcc_gc_frame_node_size(root_count: i64) -> i64:
     return 64 + root_count * 8
 
 
-@c_abi_export("pcc_gc_frame_node_pool_heads_get")
-def pcc_gc_frame_node_pool_heads_get():
-    heads = global_load_ptr("pcc_gc_frame_node_pool_heads")
-    if ptr_is_null(heads) == 0:
-        return heads
-    heads = malloc(136)
-    if ptr_is_null(heads) != 0:
-        return heads
-    memset(heads, 0, 136)
-    global_store_ptr("pcc_gc_frame_node_pool_heads", heads)
-    return heads
-
-
-@c_abi_export("pcc_gc_frame_node_pool_counts_get")
-def pcc_gc_frame_node_pool_counts_get():
-    counts = global_load_ptr("pcc_gc_frame_node_pool_counts")
-    if ptr_is_null(counts) == 0:
-        return counts
-    counts = malloc(136)
-    if ptr_is_null(counts) != 0:
-        return counts
-    memset(counts, 0, 136)
-    global_store_ptr("pcc_gc_frame_node_pool_counts", counts)
-    return counts
-
-
 @c_abi_export("pcc_gc_frame_node_alloc")
 def pcc_gc_frame_node_alloc(root_count: i64):
     node_size: i64 = pcc_gc_frame_node_size(root_count)
     bucket: i64 = pcc_gc_frame_node_bucket(root_count)
-    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend == 4) and bucket >= 0:
-        heads = pcc_gc_frame_node_pool_heads_get()
-        counts = pcc_gc_frame_node_pool_counts_get()
-        if ptr_is_null(heads) == 0 and ptr_is_null(counts) == 0:
-            offset: i64 = bucket * 8
-            head = load_ptr(heads, offset)
-            if ptr_is_null(head) == 0:
-                nxt = load_ptr(head, 16)
-                store_ptr(heads, offset, nxt)
-                count: i64 = load_i64(counts, offset)
-                if count > 0:
-                    store_i64(counts, offset, count - 1)
-                total: i64 = load_i32(
-                    global_addr("pcc_gc_frame_node_pool_total"), 0
-                )
-                if total > 0:
-                    store_i32(
-                        global_addr("pcc_gc_frame_node_pool_total"),
-                        0,
-                        total - 1,
-                    )
-                # Release clears the entire exact-size node; the pool only
-                # overwrites next@16. Restore the fully zeroed return value.
-                store_ptr(head, 16, null())
-                return head
     node = malloc(node_size)
     if ptr_is_null(node) == 0:
         memset(node, 0, node_size)
@@ -269,27 +184,8 @@ def pcc_gc_frame_node_release(node) -> None:
         return
     root_count: i64 = load_i64(node, 40)
     bucket: i64 = pcc_gc_frame_node_bucket(root_count)
-    backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if (backend != 4) or bucket < 0:
-        free(node)
-        return
-    heads = pcc_gc_frame_node_pool_heads_get()
-    counts = pcc_gc_frame_node_pool_counts_get()
-    if ptr_is_null(heads) != 0 or ptr_is_null(counts) != 0:
-        free(node)
-        return
-    offset: i64 = bucket * 8
-    count: i64 = load_i64(counts, offset)
-    total: i64 = load_i32(global_addr("pcc_gc_frame_node_pool_total"), 0)
-    if total >= 1024:
-        free(node)
-        return
-    node_size: i64 = pcc_gc_frame_node_size(root_count)
-    memset(node, 0, node_size)
-    store_ptr(node, 16, load_ptr(heads, offset))
-    store_ptr(heads, offset, node)
-    store_i64(counts, offset, count + 1)
-    store_i32(global_addr("pcc_gc_frame_node_pool_total"), 0, total + 1)
+    free(node)
+    return
 
 
 @c_abi_export("pcc_gc_frame_node_tls_pool_cached_count")
@@ -332,8 +228,6 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         return
     if ptr_is_null(frame_map) != 0 or ptr_is_null(slots) != 0:
         return
-    if pcc_gc_frame_slots_conservative(slots) != 0:
-        return
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
@@ -346,7 +240,6 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
     if ptr_is_null(node) != 0:
         # Legacy module/global slots have no checked failure return.
         # Their absence invalidates the independent young-root closure.
-        pcc_gc_backend3_revoke_closed_young_domain()
         pcc_thread_no_park_exit()
         return
     prepared = null()
@@ -356,7 +249,6 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         pcc_py_gc_minor_graph_lock()
         required: i64 = pcc_gc_frame_index_plan_capacity(1)
         if required < 0:
-            pcc_gc_backend3_revoke_closed_young_domain()
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared) == 0:
                 free(prepared)
@@ -371,7 +263,6 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
                 free(prepared)
             prepared = malloc(required * pcc_gc_index_slot_size())
             if ptr_is_null(prepared) != 0:
-                pcc_gc_backend3_revoke_closed_young_domain()
                 pcc_gc_frame_node_release(node)
                 pcc_thread_no_park_exit()
                 return
@@ -400,7 +291,6 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         pcc_gc_root_registry_note_mutation_locked()
         duplicate = pcc_gc_frame_index_replace_preallocated(slots, node)
         if ptr_eq(duplicate, node) != 0:
-            pcc_gc_backend3_revoke_closed_young_domain()
             pcc_gc_frame_node_unlink(node)
             pcc_py_gc_minor_graph_unlock()
             if ptr_is_null(prepared) == 0:
@@ -421,8 +311,7 @@ def pcc_gc_note_frame_enter(frame_map, slots) -> None:
         # because its collector is C and registers no GC frames.  The world is
         # stopped for the whole explicit window, so a frame transition seen there is
         # always the collector's own.
-        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
-            pcc_gc_cycle_requested_store_release(1)
+        pcc_gc_cycle_requested_store_release(1)
         pcc_py_gc_minor_graph_unlock()
         if ptr_is_null(prepared) == 0:
             free(prepared)
@@ -492,8 +381,6 @@ def pcc_gc_note_frame_enter_lifo(frame_map, slots) -> None:
         return
     if ptr_is_null(frame_map) != 0 or ptr_is_null(slots) != 0:
         return
-    if pcc_gc_frame_slots_conservative(slots) != 0:
-        return
     root_count: i64 = pcc_gc_root_slot_count_from_map(frame_map)
     if root_count <= 0:
         return
@@ -510,11 +397,8 @@ def pcc_gc_note_frame_enter_lifo(frame_map, slots) -> None:
         pcc_gc_root_registry_note_mutation_locked()
         # Collector-internal frame transitions must not re-arm the cycle; see
         # the note on the first of these four sites.
-        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
-            pcc_gc_cycle_requested_store_release(1)
+        pcc_gc_cycle_requested_store_release(1)
         pcc_py_gc_minor_graph_unlock()
-    else:
-        pcc_gc_backend3_revoke_closed_young_domain()
     pcc_thread_no_park_exit()
 
 
@@ -529,9 +413,6 @@ def pcc_gc_note_frame_leave_lifo(slots) -> None:
         # No registry node exists at all, so this frame (walked or not)
         # has none to unlink: skip the graph lock.
         return
-    if pcc_gc_frame_slots_conservative(slots) != 0:
-        # Its enter registered no node.
-        return
     released = null()
     pcc_py_gc_minor_graph_lock()
     node = global_load_ptr("pcc_gc_frame_head")
@@ -540,8 +421,7 @@ def pcc_gc_note_frame_leave_lifo(slots) -> None:
             pcc_gc_frame_node_unlink(node)
             # Collector-internal frame transitions must not re-arm the cycle; see the
             # note on the first of these four sites.
-            if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
-                pcc_gc_cycle_requested_store_release(1)
+            pcc_gc_cycle_requested_store_release(1)
             released = node
             break
         node = load_ptr(node, 16)
@@ -553,18 +433,14 @@ def pcc_gc_note_frame_leave_lifo(slots) -> None:
 def pcc_gc_note_frame_leave(slots) -> None:
     if pcc_gc_frame_roots_disabled_fast() != 0:
         return
-    backend: i64 = gc_backend_current()
     if pcc_gc_should_track_frame_roots() == 0 or ptr_is_null(slots) != 0:
         return
     if ptr_is_null(global_load_ptr("pcc_gc_frame_head")) != 0:
         # No registry node exists (walked frames register none).
         return
-    if pcc_gc_frame_slots_conservative(slots) != 0:
-        # Its enter registered no node.
-        return
     released = null()
     pcc_py_gc_minor_graph_lock()
-    if backend == 0 and ptr_is_null(global_load_ptr("pcc_gc_frame_head")) != 0:
+    if ptr_is_null(global_load_ptr('pcc_gc_frame_head')) != 0:
         pcc_py_gc_minor_graph_unlock()
         return
     indexed = pcc_gc_frame_index_find(slots)
@@ -581,8 +457,7 @@ def pcc_gc_note_frame_leave(slots) -> None:
         released = indexed
         # Collector-internal frame transitions must not re-arm the cycle; see the
         # note on the first of these four sites.
-        if load_i32(global_addr("pcc_gc_explicit_collect_active"), 0) == 0:
-            pcc_gc_cycle_requested_store_release(1)
+        pcc_gc_cycle_requested_store_release(1)
     else:
         pcc_gc_frame_index_remove(slots)
         pcc_gc_frame_index_replace_preallocated(load_ptr(indexed, 8), indexed)

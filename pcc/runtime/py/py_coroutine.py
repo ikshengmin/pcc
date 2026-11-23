@@ -83,18 +83,10 @@ py_clear_exception = extern("py_clear_exception", (), c_void)
 py_obj_getattr = extern("py_obj_getattr", (c_ptr, c_ptr), c_ptr)
 py_obj_call = extern("py_obj_call", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 pcc_gc_register_continuation_root = extern(
     "pcc_gc_register_continuation_root",
     (c_ptr, c_ptr),
@@ -111,11 +103,6 @@ pcc_gc_unregister_continuation_root = extern(
     "pcc_gc_unregister_continuation_root",
     (c_ptr,),
     c_void,
-)
-pcc_gc_note_relocation_read = extern(
-    "pcc_gc_note_relocation_read",
-    (c_ptr,),
-    c_ptr,
 )
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 
@@ -214,7 +201,6 @@ def py_coroutine_new_native(name, entry, captures_tuple, args_tuple):
     if made_args != 0:
         py_decref(args_tuple)
     py_gc_track(coro)
-    pcc_gc_publish_initialized(coro)
     return coro
 
 
@@ -1134,7 +1120,7 @@ def _checked_continuation(cont):
     if is_tagged_int(cont):
         _raise_typeerror(cstr("object is not a continuation"))
         return null()
-    cont = pcc_gc_note_relocation_read(cont)
+    cont = cont
     if _type_of(cont) != PY_TYPE_CONTINUATION:
         _raise_typeerror(cstr("object is not a continuation"))
         return null()
@@ -1188,12 +1174,6 @@ def _py_continuation_new_with_abi(frame_map, slots, resume_pc, resume_abi: int):
     store_ptr(cont, 24, chunk)  # stack_chunk
     store_i64(cont, 32, 1)  # mounted
     store_i64(cont, 40, resume_abi)  # typed resume ABI
-    if n_slots > 0:
-        pcc_gc_backend4_zpage_register_owner_payload_span(
-            cont,
-            chunk_slots,
-            n_slots * 8,
-        )
 
     i: int = 0
     while i < n_slots:
@@ -1201,7 +1181,6 @@ def _py_continuation_new_with_abi(frame_map, slots, resume_pc, resume_abi: int):
         pcc_gc_store_ptr(cont, ptr_add(chunk_slots, i * 8), value)
         i = i + 1
     py_gc_track(cont)
-    pcc_gc_publish_initialized(cont)
     if py_continuation_unmount(cont, null(), resume_pc) != 0:
         py_decref(cont)
         return null()
@@ -1388,7 +1367,7 @@ def _checked_task(task):
     if is_tagged_int(task):
         _raise_typeerror(cstr("object is not a task"))
         return null()
-    task = pcc_gc_note_relocation_read(task)
+    task = task
     if _type_of(task) != PY_TYPE_TASK:
         _raise_typeerror(cstr("object is not a task"))
         return null()
@@ -1414,7 +1393,6 @@ def py_task_new(coro):
         coro = global_load_ptr("py_None")
     pcc_gc_store_ptr(task, ptr_add(task, 16), coro)
     py_gc_track(task)
-    pcc_gc_publish_initialized(task)
     return task
 
 

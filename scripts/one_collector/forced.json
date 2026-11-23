@@ -1,0 +1,22 @@
+{
+ "trivial_void": [
+  "pcc_gc_note_slot_write_barrier",
+  "pcc_gc_note_root_slot_barrier",
+  "pcc_gc_note_write_barrier",
+  "pcc_gc_note_object_allocated_sized",
+  "pcc_gc_backend3_revoke_closed_young_domain",
+  "pcc_gc_gray_worklist_flush",
+  "pcc_gc_trace_stack_push",
+  "pcc_gc_cms_note_alloc_flush",
+  "pcc_gc_refresh_read_barrier",
+  "pcc_gc_alloc_stage_enable"
+ ],
+ "trivial_const": {
+  "pcc_gc_alloc_stage_drain_stopped": 0,
+  "pcc_gc_alloc_stage_miss_drain": 0,
+  "pcc_gc_backend4_zpage_register_owner_payload_span": -1
+ },
+ "trivial_identity": {
+  "pcc_gc_note_relocation_read": 0
+ }
+}

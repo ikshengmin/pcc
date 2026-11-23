@@ -5,6 +5,7 @@ from pcc.ir import ir
 # p=raw pointer, i=explicit i64, d=double, v=void.
 _SIGNATURES = {
     "page_alloc": ("p", "i"), "page_free": ("i", "pi"),
+    "page_discard": ("i", "pi"),
     "read": ("i", "ipi"), "write": ("i", "ipi"), "close": ("i", "i"),
     "seek_file": ("i", "iii"), "open_readonly": ("i", "p"),
     "open_file": ("i", "pii"), "sync_file": ("i", "i"),

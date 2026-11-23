@@ -108,9 +108,6 @@ py_runtime_error_if_unset = extern(
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_gc_track = extern("py_gc_track", (c_ptr,), c_void)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
@@ -121,7 +118,6 @@ pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -190,7 +186,6 @@ def _func_metadata_set_text(
         )
         return -1
     store_i64(tokens, _FUNC_METADATA_VALUE_SLOT * C_POINTER_SIZE, token)
-    pcc_gc_note_root_slot_barrier(value_slot)
     if py_err_occurred() != 0 or ptr_is_null(load_ptr(value_slot, 0)) != 0:
         py_runtime_error_if_unset(
             cstr("function metadata"), cstr("metadata string allocation failed")
@@ -313,7 +308,6 @@ def _func_construction_lease_new(slot: c_ptr) -> int:
     if token < 0:
         py_runtime_error_if_unset(cstr("function construction"), cstr("result lease failed"))
         return token
-    pcc_gc_note_root_slot_barrier(slot)
     if ptr_is_null(load_ptr(slot, 0)) != 0:
         py_runtime_error_if_unset(cstr("function construction"), cstr("allocation failed"))
     return token
@@ -519,9 +513,6 @@ py_class_new_builtin = extern(
     "py_class_new_builtin",
     (c_ptr, c_ptr, c_int32, c_ptr, c_int32),
     c_ptr,
-)
-pcc_gc_note_root_slot_barrier = extern(
-    "pcc_gc_note_root_slot_barrier", (c_ptr,), c_void
 )
 py_instance_new = extern("py_instance_new", (c_ptr,), c_ptr)
 py_func_new_bound_raw = extern(
@@ -1137,7 +1128,6 @@ def _signature_diagnostic_adopt(slots, tokens) -> int:
     if token < 0:
         return -1
     store_i64(tokens, 0, token)
-    pcc_gc_note_root_slot_barrier(slots)
     return 0
 
 
@@ -1205,7 +1195,6 @@ def py_func_release_default_snapshot(snapshot: c_ptr) -> None:
     memset(slots, 0, _FUNC_SNAPSHOT_RELEASE_COUNT * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_func_snapshot_release_frame_map"), slots)
     store_ptr(slots, _FUNC_SNAPSHOT_RELEASE_VALUE * C_POINTER_SIZE, snapshot)
-    pcc_gc_note_root_slot_barrier(slots)
     error_slot = ptr_add(slots, _FUNC_SNAPSHOT_RELEASE_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(error_slot)
     pcc_gc_unpin(snapshot)
@@ -1304,7 +1293,6 @@ def _func_defaults_fill(slots, tokens, result_slot) -> int:
     result_token: int = pcc_gc_foreign_lease_acquire(result_slot)
     if result_token < 0:
         return -1
-    pcc_gc_note_root_slot_barrier(result_slot)
     status: int = -1
     if ptr_is_null(load_ptr(result_slot, 0)) == 0 and py_err_occurred() == 0:
         status = 0
@@ -2134,7 +2122,6 @@ def py_func_new_bound(entry, captures_tuple, name, self_obj):
     if made_captures != 0:
         py_decref(captures)
     py_gc_track(fn)
-    pcc_gc_publish_initialized(fn)
     return fn
 
 
@@ -2332,7 +2319,6 @@ def _builtin_function_cache_get(slots) -> None:
                         pcc_gc_load_ptr(null(), slots))
     # py_dict_get returns one owner. Transfer it directly into the frame.
     store_ptr(slots, 24, value)
-    pcc_gc_note_write_barrier(null(), value)
     _builtin_value_unpin_slot(slots, 0, key_pin)
     _builtin_value_unpin_slot(slots, 8, cache_pin)
 
@@ -2357,7 +2343,6 @@ def _builtin_function_cache_begin(slots, name):
     """
     key = py_str_new(name, strlen(name))
     store_ptr(slots, 0, key)
-    pcc_gc_note_write_barrier(null(), key)
     mutex = _builtin_function_cache_mutex()
     if ptr_is_null(key) or ptr_is_null(mutex) or pcc_mutex_lock(mutex) != 0:
         _func_runtime_error_if_unset(cstr("builtin value"), cstr("builtin cache initialization failed"))
@@ -2374,7 +2359,6 @@ def _builtin_function_cache_begin(slots, name):
     if ptr_is_null(load_ptr(slots, 8)):
         cache = py_dict_new()
         store_ptr(slots, 8, cache)
-        pcc_gc_note_write_barrier(null(), cache)
         if ptr_is_null(cache) or pcc_mutex_lock(mutex) != 0:
             _func_runtime_error_if_unset(cstr("builtin value"), cstr("builtin cache allocation failed"))
             return null()
@@ -2421,14 +2405,12 @@ def py_builtin_function_value(entry, name):
         return _builtin_value_finish(slots, 24)
     captures = py_tuple_new(0)
     store_ptr(slots, 16, captures)
-    pcc_gc_note_write_barrier(null(), captures)
     if ptr_is_null(captures):
         _func_runtime_error_if_unset(cstr("builtin value"), cstr("builtin captures allocation failed"))
         return _builtin_value_finish(slots, 24)
     captures_pin: int = _builtin_value_pin_slot(slots, 16)
     candidate = py_func_new_named(entry, pcc_gc_load_ptr(null(), ptr_add(slots, 16)), name)
     store_ptr(slots, 40, candidate)
-    pcc_gc_note_write_barrier(null(), candidate)
     _builtin_value_unpin_slot(slots, 16, captures_pin)
     pcc_gc_store_root(ptr_add(slots, 16), pcc_gc_load_ptr(null(), ptr_add(slots, 40)))
     pcc_gc_store_root(ptr_add(slots, 40), null())
@@ -2484,11 +2466,9 @@ def py_builtin_abs_entry(captures, args):
         return _builtin_value_finish(slots, 16)
     argument = py_tuple_get(pcc_gc_load_ptr(null(), slots), 0)
     store_ptr(slots, 8, argument)
-    pcc_gc_note_write_barrier(null(), argument)
     argument_pin: int = _builtin_value_pin_slot(slots, 8)
     result = py_obj_abs(pcc_gc_load_ptr(null(), ptr_add(slots, 8)))
     store_ptr(slots, 16, result)
-    pcc_gc_note_write_barrier(null(), result)
     _builtin_value_unpin_slot(slots, 8, argument_pin)
     if ptr_is_null(result):
         _func_runtime_error_if_unset(cstr("abs"), cstr("absolute result returned NULL without exception"))
@@ -2506,7 +2486,6 @@ def _func_keep_call_error(slots, pins, offset: int) -> None:
     py_incref(error)
     store_ptr(slots, offset, error)
     store_i64(pins, offset, prior_pin)
-    pcc_gc_note_write_barrier(null(), error)
 
 
 def _func_clear_call_root(slots, pins, offset: int) -> None:
@@ -2525,7 +2504,6 @@ def _func_call_pin_resolved(slots, pins, offset: int) -> None:
     if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
         store_i64(pins, offset, load_i32(value, 12) & 64)
         pcc_gc_pin(value)
-    pcc_gc_note_root_slot_barrier(ptr_add(slots, offset))
 
 
 def _func_call_adopt_owned(slots, pins, offset: int) -> int:
@@ -2813,7 +2791,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
             store_i64(pins, 48, load_i32(args, 12) & 64)
             pcc_gc_pin(args)
-            pcc_gc_note_write_barrier(null(), args)
         made_args = 1
         if ptr_is_null(args):
             _func_runtime_error_if_unset(
@@ -2829,7 +2806,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         pcc_gc_pin(captures)
     py_incref(captures)
     store_ptr(slots, 24, captures)
-    pcc_gc_note_write_barrier(null(), captures)
     actual_captures = captures
     sig = null()
     owns_actual_captures: int = 0
@@ -2843,14 +2819,12 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         if ptr_is_null(candidate) == 0 and is_tagged_int(candidate) == 0:
             store_i64(pins, 32, load_i32(candidate, 12) & 64)
             pcc_gc_pin(candidate)
-            pcc_gc_note_write_barrier(null(), candidate)
         if _signature_valid(candidate) != 0:
             inner = py_tuple_get(captures, 0)
             store_ptr(slots, 40, inner)
             if ptr_is_null(inner) == 0 and is_tagged_int(inner) == 0:
                 store_i64(pins, 40, load_i32(inner, 12) & 64)
                 pcc_gc_pin(inner)
-                pcc_gc_note_write_barrier(null(), inner)
             if ptr_is_null(inner):
                 _func_clear_call_root(slots, pins, 32)
                 if made_args != 0:
@@ -2885,7 +2859,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         if ptr_is_null(call_args) == 0 and is_tagged_int(call_args) == 0:
             store_i64(pins, 56, load_i32(call_args, 12) & 64)
             pcc_gc_pin(call_args)
-            pcc_gc_note_write_barrier(null(), call_args)
         if ptr_is_null(call_args):
             # Validate the binder's return before cleanup can run deallocators
             # and accidentally provide an unrelated pending exception.
@@ -2917,7 +2890,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
         store_i64(pins, output_offset, load_i32(result, 12) & 64)
         pcc_gc_pin(result)
-        pcc_gc_note_write_barrier(null(), result)
     # The result may alias a binder temporary. Restore the pin state from
     # before the earliest matching temporary lease, not that lease's own bit.
     if ptr_is_null(result) == 0:
@@ -2966,7 +2938,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
     if ptr_is_null(fn) == 0 and is_tagged_int(fn) == 0:
         store_i64(pins, 24, load_i32(fn, 12) & 64)
         pcc_gc_pin(fn)
-        pcc_gc_note_write_barrier(null(), fn)
     if ptr_is_null(fn):
         return
     bound = py_tuple_get(load_ptr(slots, 8), 1)
@@ -2974,7 +2945,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
     if ptr_is_null(bound) == 0 and is_tagged_int(bound) == 0:
         store_i64(pins, 32, load_i32(bound, 12) & 64)
         pcc_gc_pin(bound)
-        pcc_gc_note_write_barrier(null(), bound)
     if ptr_is_null(bound):
         return
     if has_kwargs:
@@ -2983,7 +2953,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
         if ptr_is_null(kwargs) == 0 and is_tagged_int(kwargs) == 0:
             store_i64(pins, 40, load_i32(kwargs, 12) & 64)
             pcc_gc_pin(kwargs)
-            pcc_gc_note_write_barrier(null(), kwargs)
         if ptr_is_null(kwargs):
             return
     nb: int = py_tuple_len(load_ptr(slots, 32))
@@ -2993,7 +2962,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
     if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
         store_i64(pins, 48, load_i32(full, 12) & 64)
         pcc_gc_pin(full)
-        pcc_gc_note_write_barrier(null(), full)
     if ptr_is_null(full):
         return
     i: int = 0
@@ -3006,7 +2974,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
         if ptr_is_null(item) == 0 and is_tagged_int(item) == 0:
             store_i64(pins, 56, load_i32(item, 12) & 64)
             pcc_gc_pin(item)
-            pcc_gc_note_write_barrier(null(), item)
         if ptr_is_null(item):
             return
         py_tuple_set_item(load_ptr(slots, 48), i, load_ptr(slots, 56))
@@ -3017,7 +2984,6 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
     if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
         store_i64(pins, 0, load_i32(result, 12) & 64)
         pcc_gc_pin(result)
-        pcc_gc_note_write_barrier(null(), result)
 
 
 def _partial_entry(captures, args, has_kwargs: int):

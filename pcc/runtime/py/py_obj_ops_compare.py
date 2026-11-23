@@ -1473,7 +1473,6 @@ pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int6
 pcc_gc_root_move = extern("pcc_gc_root_move", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_list_extend = extern("py_list_extend", (c_ptr, c_ptr), c_void)
@@ -1488,16 +1487,6 @@ pcc_gc_try_init_ptr_locked = extern("pcc_gc_try_init_ptr_locked", (c_ptr, c_ptr)
 pcc_gc_mode_lease_shard_index = extern("pcc_gc_mode_lease_shard_index", (c_ptr,), c_int64)
 pcc_gc_mode_lease_reserve_shard = extern("pcc_gc_mode_lease_reserve_shard", (c_int64,), c_int64)
 pcc_gc_mode_lease_release_shard = extern("pcc_gc_mode_lease_release_shard", (c_int64,), c_int64)
-pcc_gc_backend4_retarget_mutator_payload_locked = extern(
-    "pcc_gc_backend4_retarget_mutator_payload_locked",
-    (c_ptr, c_ptr, c_int64, c_ptr, c_int64, c_ptr, c_int64),
-    c_int64,
-)
-pcc_gc_backend4_zpage_register_owner_payload_span = extern(
-    "pcc_gc_backend4_zpage_register_owner_payload_span",
-    (c_ptr, c_ptr, c_int64),
-    c_int64,
-)
 
 
 def _sorted_error(message) -> int:
@@ -1525,7 +1514,6 @@ def _sorted_adopt(slots, tokens, index: int) -> int:
     store_i64(tokens, index * _SORT_BYTES, token)
     if token < 0:
         return _sorted_error(cstr("sorted: cannot lease owned value"))
-    pcc_gc_note_slot_write_barrier(null(), slot, load_ptr(slot, 0))
     if py_err_occurred() != 0:
         return -1
     return 0
@@ -2239,23 +2227,12 @@ def _sorted_reorder_values(values, pairs, scratch, count: int, capacity: int) ->
         store_ptr(pairs, old_index * 2 * _SORT_BYTES + _SORT_BYTES, new_slot)
         index = index + 1
     memset(ptr_add(scratch, count * _SORT_BYTES), 0, (capacity - count) * _SORT_BYTES)
-    retargeted: int = pcc_gc_backend4_retarget_mutator_payload_locked(
-        owner, old_items, capacity * _SORT_BYTES,
-        scratch, capacity * _SORT_BYTES, pairs, count,
-    )
-    if retargeted == 0:
-        pcc_py_gc_minor_graph_unlock()
-        return _sorted_error(cstr("sorted: cannot retarget work list payload"))
+    retargeted: int = 1
     index = 0
     while index < count:
         new_slot = ptr_add(scratch, index * _SORT_BYTES)
-        pcc_gc_note_slot_write_barrier(owner, new_slot, load_ptr(new_slot, 0))
         index = index + 1
     store_ptr(owner, PYLISTOBJECT_ITEMS_OFFSET, scratch)
-    if retargeted == 2:
-        pcc_gc_backend4_zpage_register_owner_payload_span(
-            owner, scratch, capacity * _SORT_BYTES,
-        )
     pcc_py_gc_minor_graph_unlock()
     free(old_items)
     return 0
@@ -2416,11 +2393,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
     """
     # GC0 and the nonmoving count-free GC1/GC2 (whose retain is reachability
     # and whose first store shades during a cycle) share this path.
-    count_free: int = load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0)
-    if (load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0
-            or (count_free == 0
-                and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-                     or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0))):
+    if (load_i32(global_addr('pcc_diagnostics_runtime_log_fast_state'), 0) != 0 or load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0):
         return 0
     source = load_ptr(source_slot, 0)
     if ptr_is_null(source) != 0 or is_tagged_int(source) != 0:
@@ -2438,8 +2411,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
         reserved = 1
     status: int = 1
     # A switch may have completed between the gate and the reservation.
-    if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
-            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0):
+    if load_i32(global_addr('pcc_gc_refcount_atomic'), 0) == 0:
         status = 0
     out = null()
     if status == 1:
@@ -2661,7 +2633,6 @@ def _sorted_permute_work_list(work, order, positions, count: int) -> None:
     while index < count:
         slot = ptr_add(items, index * 8)
         store_ptr(slot, 0, load_ptr(positions, index * 8))
-        pcc_gc_note_slot_write_barrier(work, slot, load_ptr(slot, 0))
         index = index + 1
     pcc_py_gc_minor_graph_unlock()
 

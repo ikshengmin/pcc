@@ -106,8 +106,6 @@ def pcc_gc_external_resource_register(
     ):
         return 0
     backend: i64 = gc_backend_current()
-    if backend < 0 or backend > 4:
-        return 0
 
     node = calloc(1, 80)
     if ptr_is_null(node) != 0:

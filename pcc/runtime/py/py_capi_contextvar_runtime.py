@@ -45,9 +45,6 @@ py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
-)
 PyType_GenericAlloc = extern("PyType_GenericAlloc", (c_ptr, c_int64), c_ptr)
 PyTuple_New = extern("PyTuple_New", (c_int64,), c_ptr)
 PyTuple_SetItem = extern("PyTuple_SetItem", (c_ptr, c_int64, c_ptr), c_int64)
@@ -222,13 +219,11 @@ def PyContextVar_Set(var, value) -> c_ptr:
     if not ptr_is_null(value):
         py_incref(value)
     store_ptr(var, 40, value)
-    pcc_gc_note_slot_write_barrier(var, ptr_add(var, 40), value)
     tok = PyTuple_New(3)
     if ptr_is_null(tok):
         if not ptr_is_null(value):
             py_decref(value)
         store_ptr(var, 40, prev)
-        pcc_gc_note_slot_write_barrier(var, ptr_add(var, 40), prev)
         return null()
     py_incref(var)
     PyTuple_SetItem(tok, 0, var)

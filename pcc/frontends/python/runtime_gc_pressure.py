@@ -65,7 +65,6 @@ pcc_gc_pressure_image_enter = extern("pcc_gc_pressure_image_enter", (), c_void)
 pcc_gc_pressure_image_leave = extern("pcc_gc_pressure_image_leave", (), c_void)
 pcc_gc_pressure_poll = extern("pcc_gc_pressure_poll", (), c_int64)
 pcc_gc_pressure_collection_completed = extern("pcc_gc_pressure_collection_completed", (), c_void)
-pcc_gc_pressure_tracing_completed = extern("pcc_gc_pressure_tracing_completed", (c_int64, c_int64), c_void)
 '''
     marker = "__pcc_freestanding__ = True" if "__pcc_freestanding__ = True" in source else "__pcc_runtime_port__ = True"
     source = _replace(source, marker, marker + "\n" + imports, owner=module)
@@ -94,12 +93,6 @@ pcc_gc_pressure_tracing_completed = extern("pcc_gc_pressure_tracing_completed", 
         source = _function(source, "pcc_gc_safepoint",
             "    pcc_thread_safepoint_gate()\n",
             "    pcc_thread_safepoint_gate()\n    pcc_gc_pressure_poll()\n")
-        source = _function(source, "pcc_gc_collect",
-            "        pcc_gc_begin_explicit_tracing_collect()\n",
-            "        pressure_commits: int = load_i64(global_addr(\"pcc_gc_tracing_finish_commits\"), 0)\n        pressure_had_sweep: int = pcc_gc_sweep_owed()\n        pcc_gc_begin_explicit_tracing_collect()\n")
-        source = _function(source, "pcc_gc_collect",
-            "        pcc_gc_end_explicit_tracing_collect()\n",
-            "        pcc_gc_pressure_tracing_completed(pressure_commits, pressure_had_sweep)\n        pcc_gc_end_explicit_tracing_collect()\n")
     elif module == "freestanding_gc_backend0_collector":
         source = _function(source, "_collect",
             "    if materialized < 0 or tracked <= 0:\n        _finish_subset()",

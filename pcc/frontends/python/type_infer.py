@@ -849,6 +849,7 @@ _UNSAFE_INTRINSIC_RETURN_TYPES: dict[str, Type] = {
     "linux_set_thread_pointer": TYPE_INT,
     "page_alloc": TYPE_DYN,
     "page_free": TYPE_INT,
+    "page_discard": TYPE_INT,
     "va_arg_i64": TYPE_INT,
     "va_arg_i32": TYPE_INT,
     "va_arg_u32": TYPE_INT,

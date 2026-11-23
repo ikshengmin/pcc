@@ -45,10 +45,6 @@ py_decref = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_release_nonterminal_tail = extern("pcc_gc_release_nonterminal_tail", (c_ptr, c_int64), c_int64)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)
-_backend4_sweep_deferred_recycles = extern(
-    "pcc_gc_backend4_sweep_deferred_recycles", (), c_void
-)
 py_dealloc_func = extern("py_dealloc_func", (c_ptr,), c_void)
 py_dealloc_iter = extern("py_dealloc_iter", (c_ptr,), c_void)
 py_dealloc_gen = extern("py_dealloc_gen", (c_ptr,), c_void)
@@ -164,10 +160,6 @@ def _debug_check_dict_dealloc_slot(
     flags: int = load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET)
     if (flags & PY_FLAG_IMMORTAL) != 0:
         return
-    if pcc_gc_backend() == 3:
-        if (flags & 4096) != 0 and (flags & 256) != 0:
-            if load_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
-                return
     if load_i64(obj, PYOBJECTHEADER_REFCOUNT_OFFSET) <= 0:
         pcc_debug_bad_dict_slot(dict_obj, index, offset, obj, load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET))
 
@@ -483,24 +475,12 @@ def pcc_dealloc_with_trash(o, tag: int) -> None:
     # on one line all carriers share; a cascade counts itself when it
     # starts under GC4 and uncounts exactly what it counted.
     counted: int = 0
-    if depth == 0 and load_i32(global_addr("pcc_gc_backend_selected"), 0) == 4:
-        atomic_rmw_i64("add", global_addr("pcc_dealloc_cascades_active"), 0, 1, "acq_rel")
-        counted = 1
     store_i32(depth_slot, 0, depth + 1)
     _dealloc_dispatch(o, tag)
     depth_after: int = load_i32(depth_slot, 0)
     if depth_after == 1:
         _trash_drain()
     store_i32(depth_slot, 0, depth_after - 1)
-    if depth_after == 1 and counted != 0:
-        # The last thread to leave a cascade completes the deferred page
-        # recycles; the sweep rechecks under the graph lock that no cascade
-        # began meanwhile (that thread then completes them instead).
-        left: int = atomic_rmw_i64(
-            "sub", global_addr("pcc_dealloc_cascades_active"), 0, 1, "acq_rel"
-        ) - 1
-        if left == 0 and pcc_gc_backend() == 4:
-            _backend4_sweep_deferred_recycles()
 
 
 @c_abi_export("py_dealloc_int")
@@ -522,10 +502,6 @@ def py_dealloc_str(o) -> None:
 def py_dealloc_list(o) -> None:
     length: int = load_i64(o, PYLISTOBJECT_LENGTH_OFFSET)
     items = load_ptr(o, PYLISTOBJECT_ITEMS_OFFSET)
-    if pcc_gc_backend() == 4:
-        store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
-        store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
-        store_ptr(o, PYLISTOBJECT_ITEMS_OFFSET, null())
     # Match list stack-unwind order: release the last element first.
     # Reload each child after earlier finalizers may have collected/moved it.
     i: int = length
@@ -538,10 +514,9 @@ def py_dealloc_list(o) -> None:
         item = pcc_gc_load_ptr(o, ptr_add(items, i * 8))
         if ptr_is_null(item) == 0:
             py_decref(item)
-    if pcc_gc_backend() != 4:
-        store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
-        store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
-        store_ptr(o, PYLISTOBJECT_ITEMS_OFFSET, null())
+    store_i64(o, PYLISTOBJECT_LENGTH_OFFSET, 0)
+    store_i64(o, PYLISTOBJECT_CAPACITY_OFFSET, 0)
+    store_ptr(o, PYLISTOBJECT_ITEMS_OFFSET, null())
     free(items)
     pcc_gc_free_object_memory(o)
 

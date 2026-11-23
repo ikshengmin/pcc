@@ -223,6 +223,7 @@ UNSAFE_INTRINSICS = frozenset(
         "linux_set_thread_pointer",
         "page_alloc",
         "page_free",
+        "page_discard",
         "va_arg_i64",
         "va_arg_i32",
         "va_arg_u32",
@@ -281,6 +282,7 @@ _UNSAFE_INTRINSIC_FAMILIES = (
     (
         'page_alloc',
         'page_free',
+        'page_discard',
         'syscall6',
         'linux_set_thread_pointer',
         'cstr',
@@ -2137,6 +2139,69 @@ class UnsafeIntrinsicMixin:
                 )
             raise NotImplementedError(
                 "pcc.unsafe.page_free supports Darwin libSystem and Linux x86_64 raw syscalls"
+            )
+        if intrinsic == "page_discard":
+            self._unsafe_expect_arity(intrinsic, expr, 2)
+            ptr = self._unsafe_address_arg(expr.args[0])
+            size = self._unsafe_i64_arg(expr.args[1])
+            platform_name = self._target_sys_platform_text()
+            machine = self._target_machine_text()
+            if platform_name == "darwin":
+                # Map fresh anonymous pages over the range (MAP_FIXED |
+                # MAP_ANON | MAP_PRIVATE). The kernel replaces the old pages
+                # in one step, so the range is never unmapped, and the
+                # resident size falls at once: madvise's MADV_FREE and
+                # MADV_FREE_REUSABLE leave the pages resident until the
+                # system is short of memory.
+                mmap_fn = self._declare_external_function(
+                    "mmap",
+                    _CSTR,
+                    [_CSTR, _I64, _I32, _I32, _I32, _I64],
+                )
+                mapped = self.builder.call(
+                    mmap_fn,
+                    [
+                        ptr,
+                        size,
+                        ir.Constant(_I32, 3),
+                        ir.Constant(_I32, 0x1012),
+                        ir.Constant(_I32, -1),
+                        ir.Constant(_I64, 0),
+                    ],
+                    name=self._fresh("unsafe.page.discard.mmap"),
+                )
+                same = self.builder.icmp_unsigned(
+                    "==",
+                    self.builder.ptrtoint(mapped, _I64, name=self._fresh("unsafe.page.discard.i64")),
+                    self.builder.ptrtoint(ptr, _I64, name=self._fresh("unsafe.page.discard.ptr")),
+                    name=self._fresh("unsafe.page.discard.same"),
+                )
+                return self.builder.select(
+                    same,
+                    ir.Constant(_I64, 0),
+                    ir.Constant(_I64, -1),
+                    name=self._fresh("unsafe.page.discard.status"),
+                )
+            if platform_name == "linux" and machine in ("x86_64", "aarch64", "arm64"):
+                zero = ir.Constant(_I64, 0)
+                ptr_i = self.builder.ptrtoint(
+                    ptr,
+                    _I64,
+                    name=self._fresh("unsafe.page.madvise.ptr"),
+                )
+                # madvise(MADV_DONTNEED): the next touch gets zero pages.
+                return self._unsafe_linux_syscall6(
+                    ir.Constant(_I64, 28),
+                    ptr_i,
+                    size,
+                    ir.Constant(_I64, 4),
+                    zero,
+                    zero,
+                    zero,
+                    name=self._fresh("unsafe.page.madvise.syscall"),
+                )
+            raise NotImplementedError(
+                "pcc.unsafe.page_discard supports Darwin libSystem and Linux raw syscalls"
             )
         if intrinsic == "linux_set_thread_pointer":
             self._unsafe_expect_arity(intrinsic, expr, 1)

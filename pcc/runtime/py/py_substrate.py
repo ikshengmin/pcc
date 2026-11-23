@@ -101,9 +101,6 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
-)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
@@ -113,9 +110,6 @@ pcc_thread_exit_unregisters = extern("pcc_thread_exit_unregisters", (), c_int64)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_pointer_register = extern(
     "pcc_gc_pointer_register", (c_ptr,), c_int64
-)
-pcc_gc_note_object_allocated_sized = extern(
-    "pcc_gc_note_object_allocated_sized", (c_ptr, c_int64), c_void
 )
 
 define_global_header("py_none_storage", 1, 0, PY_FLAG_IMMORTAL)
@@ -481,9 +475,6 @@ def py_tls_exc_set(exc) -> None:
                 pcc_platform_abort()
                 return
             global_store_ptr("py_tls_current_exc_root_handle", handle)
-        pcc_gc_note_slot_write_barrier(
-            null(), global_addr("py_tls_current_exc_storage"), exc
-        )
         global_store_ptr("py_tls_current_exc_storage", exc)
         _exc_pending_transition(was_set, 1)
         return
@@ -558,8 +549,6 @@ def py_tls_exc_swap_slot(slot) -> None:
         pcc_py_gc_minor_graph_lock()
     incoming = pcc_gc_load_ptr(null(), slot)
     previous = pcc_gc_load_ptr(null(), global_addr("py_tls_current_exc_storage"))
-    pcc_gc_note_slot_write_barrier(null(), global_addr("py_tls_current_exc_storage"), incoming)
-    pcc_gc_note_slot_write_barrier(null(), slot, previous)
     global_store_ptr("py_tls_current_exc_storage", incoming)
     store_ptr(slot, 0, previous)
     empty: int = ptr_is_null(incoming)
@@ -801,13 +790,6 @@ def py_subs_object_root():
     )
     store_i32(r, PYCLASSOBJECT_TYPE_TAG_ALLOC_OFFSET, PY_TYPE_INSTANCE)
 
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0:
-        # The permanent raw cache owns this class and its mutable namespace.
-        # Provenance alone does not trace its owning fields. Index the fully
-        # initialized owner and pin its stable address before publication.
-        store_i32(r, PYOBJECTHEADER_FLAGS_OFFSET,
-                  load_i32(r, PYOBJECTHEADER_FLAGS_OFFSET) | PY_FLAG_GC_PINNED)
-        pcc_gc_note_object_allocated_sized(r, PYCLASSOBJECT_SIZE)
     global_store_ptr("py_object_root_cache", r)
     return r
 

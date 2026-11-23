@@ -211,16 +211,11 @@ void pcc_vthread_effect_note_waiter_root_leave(void);
 
 /* ---- GC backend selector/telemetry internals ------------------------- */
 void pcc_gc_note_alloc(int64_t bytes);
-void *pcc_gc_backend4_try_zpage_alloc(int64_t bytes, int32_t flags);
-void pcc_gc_note_object_allocated(PyObject *o);
-void pcc_gc_note_object_allocated_sized(PyObject *o, int64_t size);
 void pcc_gc_note_object_freeing(PyObject *o);
 void pcc_gc_free_object_memory(PyObject *o);
 /* Internal compiler-issued closed-domain admission. Native embeddings and
  * reusable objects have no such proof. Revocation is permanent for a process;
  * a later generated entry must not reopen a dynamically loaded domain. */
-void pcc_gc_backend3_enable_closed_young_domain(void);
-void pcc_gc_backend3_revoke_closed_young_domain(void);
 int64_t pcc_capi_is_cext_type_tag(int64_t type_tag);
 int64_t pcc_capi_dealloc_cext_object(PyObject *o, int64_t type_tag);
 PyObject *pcc_capi_call_cext_object(
@@ -276,11 +271,9 @@ int64_t pcc_capi_is_type_object_value(PyObject *value);
 int64_t pcc_capi_type_object_issubclass(PyObject *derived, PyObject *cls);
 PyObject *pcc_capi_type_object_getattr(PyObject *type_object, const char *name);
 PyObject *pcc_capi_builtin_object_getattr(PyObject *o, const char *name);
-void pcc_gc_note_load(void);
 PyObject *pcc_gc_note_relocation_read(PyObject *o);
 void pcc_gc_note_store(void);
 void pcc_gc_note_safepoint(void);
-void pcc_gc_note_pin(int32_t delta);
 void pcc_gc_note_write_barrier(PyObject *owner, PyObject *value);
 void pcc_gc_note_slot_write_barrier(
     PyObject *owner,
@@ -330,26 +323,9 @@ int64_t pcc_gc_store_ptr_plan_commit_sentinel_aware_locked(
     PyObject *sentinel
 );
 void pcc_gc_store_ptr_plan_finish(PccGcStoreRootPlan *plan);
-int64_t pcc_gc_backend4_retarget_mutator_payload_locked(
-    PyObject *owner,
-    void *old_base,
-    int64_t old_size_bytes,
-    void *new_base,
-    int64_t new_size_bytes,
-    void *slot_pairs,
-    int64_t pair_count
-);
-int64_t pcc_gc_backend4_remap_and_retire_stopped_world(void);
-int64_t pcc_gc_backend4_step_remembered_roots(int64_t budget);
-int64_t pcc_gc_backend4_relocation_set_add(PyObject *obj);
 void pcc_gc_thread_unregister_buffers(void);
 int64_t pcc_gc_frame_node_tls_pool_cached_count(void);
 void pcc_gc_frame_node_tls_pool_drain(void);
-int64_t pcc_gc_has_tracing_sweep(void);
-int64_t pcc_gc_sweep_owed(void);
-int64_t pcc_gc_collect_tracing(void);
-void pcc_gc_begin_explicit_tracing_collect(void);
-void pcc_gc_end_explicit_tracing_collect(void);
 typedef void (*PccGcRootVisitor)(PyObject *root, void *ctx);
 void pcc_gc_note_frame_enter(const void *frame_map, PyObject **slots);
 /* Requires a plain outer no-park guard and no graph/container/scheduler lock.
@@ -489,17 +465,7 @@ PyGcNode *py_gc_index_remove(PyObject *obj);
 void *pcc_gc_object_index_find(PyObject *obj);
 /* Stable key/node pairing only; the caller separately owns node lifetime. */
 void *pcc_gc_object_index_find_stable(PyObject *obj);
-int64_t pcc_gc_object_index_insert(PyObject *obj, void *node);
-int64_t pcc_gc_object_index_plan_capacity(int64_t extra);
-int64_t pcc_gc_object_index_plan_commit(
-    void **prepared_slots_io, int64_t prepared_cap, int64_t extra
-);
-int64_t pcc_gc_object_index_insert_preallocated(PyObject *obj, void *node);
 void *pcc_gc_object_index_remove(PyObject *obj);
-void pcc_gc_object_index_clear(void);
-void *pcc_gc_object_node_prepare(void);
-int64_t pcc_gc_object_node_plan_requires_prepare(void);
-void *pcc_gc_object_node_take_prepared(void **prepared_io);
 int64_t pcc_gc_managed_pointer_index_contains(PyObject *obj);
 int64_t pcc_gc_managed_pointer_index_insert(PyObject *obj);
 int64_t pcc_gc_managed_pointer_index_remove(PyObject *obj);
@@ -538,36 +504,16 @@ int pcc_capi_visit_cext_object_slots_i64(
     void *ctx
 );
 void *pcc_gc_forwarding_index_find(PyObject *obj);
-int64_t pcc_gc_forwarding_index_insert(PyObject *obj, void *node);
-void *pcc_gc_forwarding_index_remove(PyObject *obj);
-void pcc_gc_forwarding_index_clear(void);
 void *pcc_gc_forwarding_target_index_find(PyObject *obj);
-int64_t pcc_gc_forwarding_target_index_insert(PyObject *obj, void *node);
-int64_t pcc_gc_forwarding_target_index_upsert(PyObject *obj, void *node);
-void *pcc_gc_forwarding_target_index_remove(PyObject *obj);
-void pcc_gc_forwarding_target_index_clear(void);
 void *pcc_gc_identity_index_find(PyObject *obj);
 int64_t pcc_gc_identity_index_insert(PyObject *obj, void *node);
 void *pcc_gc_identity_index_remove(PyObject *obj);
 void pcc_gc_identity_index_clear(void);
-int64_t pcc_gc_forwarding_plan_index_capacity(int64_t kind, int64_t extra);
 /* Graph-locked, allocation/free-free commit. For forwarding kinds 0/1,
  * metadata owns three independent allocations: reader record, old-record
  * retire node, old-slots retire node. Consumed cells become NULL; finish
  * releases only unused cells after unlock. Kind 2 ignores metadata and
  * hands its replaced identity table back through prepared_slots_io. */
-int64_t pcc_gc_forwarding_plan_index_commit(
-    int64_t kind,
-    void **prepared_slots_io,
-    int64_t prepared_cap,
-    int64_t extra,
-    void **prepared_metadata_io
-);
-int64_t pcc_gc_forwarding_plan_index_insert(
-    int64_t kind,
-    PyObject *obj,
-    void *node
-);
 void *pcc_gc_frame_index_find(void *slots);
 int64_t pcc_gc_frame_index_insert(void *slots, void *node);
 int64_t pcc_gc_frame_index_plan_capacity(int64_t extra);
@@ -582,51 +528,11 @@ void *pcc_gc_frame_index_remove(void *slots);
 void pcc_gc_frame_index_clear(void);
 extern int32_t pcc_gc_read_barrier_enabled;
 void *pcc_gc_zpage_owner_index_find(PyObject *obj);
-int64_t pcc_gc_zpage_owner_index_insert(PyObject *obj, void *node);
-int64_t pcc_gc_zpage_owner_index_upsert(PyObject *obj, void *node);
-int64_t pcc_gc_zpage_owner_index_plan_capacity(int64_t extra);
-int64_t pcc_gc_zpage_owner_index_plan_commit(
-    void **prepared_slots_io, int64_t prepared_cap, int64_t extra
-);
-int64_t pcc_gc_zpage_owner_index_upsert_preallocated(
-    PyObject *obj, void *node
-);
-void *pcc_gc_backend4_zpage_node_prepare(void);
-int64_t pcc_gc_backend4_zpage_node_plan_requires_prepare(void);
-void *pcc_gc_backend4_zpage_node_take_prepared(void **prepared_io);
-int64_t pcc_gc_backend4_zpage_link_node_preallocated(void *node);
-void *pcc_gc_backend4_zpage_track_page_prepare(
-    void *page, PyObject *owner, int64_t size
-);
-void *pcc_gc_backend4_zpage_track_alloc_preallocated(
-    PyObject *owner,
-    int64_t size,
-    void **prepared_node_io,
-    void **prepared_page_io,
-    int64_t prepared_page_from_free
-);
 /* Internal: selected page/offset remain valid under uninterrupted graph lock. */
-void *pcc_gc_backend4_zpage_track_alloc_selected(
-    PyObject *owner,
-    int64_t size,
-    void **prepared_node_io,
-    void **prepared_page_io,
-    int64_t prepared_page_from_free,
-    void *page,
-    int64_t existing_offset
-);
-void *pcc_gc_zpage_owner_index_remove(PyObject *obj);
-void pcc_gc_zpage_owner_index_clear(void);
-void *pcc_gc_zpage_page_index_find(void *page);
-int64_t pcc_gc_zpage_page_index_insert(void *page, void *node);
-int64_t pcc_gc_zpage_page_index_upsert(void *page, void *node);
-void *pcc_gc_zpage_page_index_remove(void *page);
-void pcc_gc_zpage_page_index_clear(void);
 int64_t pcc_gc_object_is_known(PyObject *obj);
 int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
 /* Rooted/leased no-park query, without graph exclusion. */
 int64_t pcc_gc_object_is_known_stable(PyObject *obj);
-int64_t pcc_gc_backend4_slot_needs_resolve(PyObject *value);
 int64_t pcc_gc_slot_is_runtime_root(PyObject **slot);
 
 /* ---- Tagged-int helpers ------------------------------------------------ */

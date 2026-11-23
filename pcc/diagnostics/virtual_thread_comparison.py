@@ -78,7 +78,6 @@ int main(int argc, char **argv) {
         iterations = atoll(argv[1]);
         if (iterations <= 0) iterations = 1;
     }
-    if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) return 2;
     printf("workload_iterations=%lld\n", (long long)iterations);
 
     int64_t rss0 = rss_kb();

@@ -168,6 +168,7 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         "free": ("free",),
         "page_alloc": ("mmap",),
         "page_free": ("munmap",),
+        "page_discard": ("mmap",),
         "strlen": ("strlen",),
         "memset": ("memset",),
         "memcpy": ("memcpy",),

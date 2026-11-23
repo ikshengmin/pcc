@@ -72,7 +72,6 @@ py_index_i64_checked = extern("py_index_i64_checked", (c_ptr,), c_int64)
 py_obj_truthy = extern("py_obj_truthy", (c_ptr,), c_int64)
 py_err_occurred = extern("py_err_occurred", (), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_note_root_slot_barrier = extern("pcc_gc_note_root_slot_barrier", (c_ptr,), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
@@ -479,7 +478,6 @@ def _int_bytes_snapshot_root(base_slot: c_ptr, snapshot_slot: c_ptr) -> c_ptr:
     if ptr_is_null(load_ptr(snapshot_slot, 0)):
         pcc_gc_scheduler_root_unregister_handle(handle)
         return null()
-    pcc_gc_note_root_slot_barrier(snapshot_slot)
     return handle
 
 

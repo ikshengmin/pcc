@@ -22,17 +22,9 @@ from pcc.unsafe import (
 __pcc_freestanding__ = True
 
 
-pcc_gc_backend4_remap_and_retire_stopped_world = extern(
-    "pcc_gc_backend4_remap_and_retire_stopped_world", (), c_int64
-)
 
 # Kept in this module so all accesses retain the TLS storage identity.
 define_thread_local_i32("pcc_gc_cms_worker_current", 0)
-
-
-@c_abi_export("pcc_gc_is_cms_worker")
-def pcc_gc_is_cms_worker() -> i64:
-    return load_i32(global_addr("pcc_gc_cms_worker_current"), 0)
 
 
 pcc_platform_getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
@@ -41,214 +33,12 @@ pcc_platform_write = extern(
 )
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_threads_enabled = extern("pcc_threads_enabled", (), c_int64)
-pcc_thread_start = extern("pcc_thread_start", (c_ptr, c_ptr, c_ptr), c_int64)
-pcc_thread_safepoint_gate = extern("pcc_thread_safepoint_gate", (), c_void)
 pcc_thread_enable_conservative_roots = extern("pcc_thread_enable_conservative_roots", (), c_void)
-pcc_platform_sleep_ns = extern("pcc_platform_sleep_ns", (c_int64,), c_int64)
-pcc_gc_tracing_step_cycle = extern(
-    "pcc_gc_tracing_step_cycle", (c_int64,), c_int64
-)
-pcc_gc_gray_count_load_acquire = extern(
-    "pcc_gc_gray_count_load_acquire", (), c_int64
-)
-pcc_gc_tracing_debt_threshold = extern(
-    "pcc_gc_tracing_debt_threshold", (), c_int64
-)
-pcc_stop_the_world = extern("pcc_stop_the_world", (), c_int64)
-pcc_resume_world = extern("pcc_resume_world", (), c_int64)
-pcc_gc_tracing_has_sweep_candidate = extern(
-    "pcc_gc_tracing_has_sweep_candidate", (), c_int64
-)
-pcc_gc_tracing_sweep_unreachable = extern(
-    "pcc_gc_tracing_sweep_unreachable", (c_int64,), c_int64
-)
-pcc_gc_refresh_read_barrier = extern("pcc_gc_refresh_read_barrier", (), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
-pcc_gc_scalar_sweep_drain = extern(
-    "pcc_gc_scalar_sweep_drain", (c_int64, c_int64, c_int64), c_int64
-)
-
-pcc_gc_deferred_free_worker_drain = extern(
-    "pcc_gc_deferred_free_worker_drain", (c_int64,), c_int64
-)
-pcc_gc_concurrent_sweep_slice = extern(
-    "pcc_gc_concurrent_sweep_slice", (c_int64,), c_int64
-)
-
-pcc_gc_tracing_discharge_debt = extern(
-    "pcc_gc_tracing_discharge_debt", (c_int64,), c_void
-)
 
 
-@c_abi_export("pcc_gc_cms_worker_main_py")
-def pcc_gc_cms_worker_main_py(arg):
-    """The tracing collector thread of GC1-GC4: marks while mutators run.
-
-    Marking is incremental-update (Dijkstra): mutator heap and root stores
-    shade the stored object while a cycle is active, and every traced batch
-    holds the object-graph lock that structural container changes take, so
-    batches interleave with mutator threads instead of stopping them. Only
-    the cycle's root seeding (the all-thread stack walk) and its final
-    remark/drain stop the world, briefly, inside the step itself. The
-    batch size bounds how long one batch holds the graph lock.
-
-    Cycles are paced: one begins once allocation debt reaches the
-    heap-proportional pacing threshold. A completed mark is swept by a mutator at
-    its next application gate (pcc_gc_safepoint), with the world stopped,
-    before another cycle begins.
-    """
-    store_i32(global_addr("pcc_gc_cms_worker_current"), 0, 1)
-    while atomic_load_i32(
-        global_addr("pcc_gc_cms_worker_stop_requested"), 0, "acquire"
-    ) == 0:
-        # Already-retired raw blocks are independent of mark pacing and of
-        # gc.disable()/threshold0. Consume them on the existing CMS thread.
-        retired: i64 = pcc_gc_scalar_sweep_drain(1, 0, 0)
-        pcc_gc_deferred_free_worker_drain(0)
-        # Dead objects an automatic GC1/GC2 sweep left to this thread come
-        # before any new mark: no cycle begins while they remain.
-        retired = retired + pcc_gc_concurrent_sweep_slice(256)
-        sweeping: i64 = atomic_load_i32(
-            global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire"
-        )
-        if sweeping != 0:
-            # A walk over live objects frees nothing yet is progress: keep
-            # going instead of sleeping between slices.
-            retired = retired + 1
-        pushes: i64 = atomic_load_i32(
-            global_addr("pcc_gc_cms_queue_pushes"), 0, "acquire"
-        )
-        drains: i64 = atomic_load_i32(
-            global_addr("pcc_gc_cms_worker_drains"), 0, "acquire"
-        )
-        backend: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-        marking: i64 = load_i32(global_addr("pcc_gc_mark_active"), 0)
-        # This thread is automatic collection: gc.disable() and threshold0 == 0
-        # pause it, an open cycle included (explicit steps and gc.collect()
-        # still run).
-        threshold0: i64 = load_i32(global_addr("py_gc_threshold0"), 0)
-        enabled: i64 = load_i32(global_addr("py_gc_enabled"), 0)
-        if threshold0 <= 0 or marking == 2:
-            enabled = 0
-        if enabled == 0 or marking == 0 or (backend != 1 and backend != 2 and backend != 3):
-            # Pausing automatic work must not leave every compiled poll on
-            # the slow path. No credit/token is removed: a resumed healthy
-            # CMS slice requests publication again if its queue is empty.
-            atomic_store_i32(
-                global_addr("pcc_gc_gray_worklist_flush_requested"),
-                0, 0, "release",
-            )
-        traced: i64 = 0
-        pending = global_addr("pcc_gc_backend4_auto_step_pending")
-        sweep_pending = global_addr("pcc_gc_cms_sweep_pending")
-        if (
-            enabled != 0
-            and (backend >= 1 and backend <= 4)
-            and atomic_load_i32(sweep_pending, 0, "acquire") != 0
-        ):
-            # A disabled application gate may consume its wakeup. Retain the
-            # completed mark and re-arm cleanup after enable/threshold restore,
-            # even when all allocation tickets have already been drained.
-            atomic_store_i32(pending, 0, 1, "release")
-        if (
-            enabled != 0
-            and (backend >= 1 and backend <= 4)
-            and sweeping == 0
-            and (drains < pushes or marking != 0)
-        ):
-            # Every allocation requests a cycle. A new one begins only once
-            # allocation debt reaches the heap-proportional pacing threshold,
-            # and never while a completed mark waits for its sweep. Each
-            # cycle marks and sweeps the whole heap, so GC0's generational
-            # object-count schedule (threshold0 tracked objects) would run a
-            # full-heap cycle every few thousand allocations; here threshold0
-            # only pauses automatic collection. A completed cycle pays the
-            # debt (pcc_gc_finish_tracing_cycle).
-            due: i64 = marking
-            if due == 0 and atomic_load_i32(sweep_pending, 0, "acquire") == 0:
-                debt_slot = global_addr("pcc_gc_debt_bytes")
-                if atomic_load_i64(debt_slot, 0, "acquire") >= pcc_gc_tracing_debt_threshold():
-                    due = 1
-            handoff: i64 = 0
-            if marking != 0 and pcc_gc_gray_count_load_acquire() == 0:
-                # The gray work is traced: a mutator finishes the mark and
-                # sweeps it in one stopped world (pcc_gc_cms_finish_pending).
-                # Gray objects shaded meanwhile are traced here first. A
-                # finish in this thread's own stopped world left GC3/GC4's
-                # sweep to re-mark the whole heap from every survivor.
-                handoff = 1
-                due = 0
-                atomic_store_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"),
-                    0, 0, "release",
-                )
-                atomic_store_i32(
-                    global_addr("pcc_gc_cms_finish_pending"), 0, 1, "release"
-                )
-                atomic_store_i32(pending, 0, 1, "release")
-            if due != 0:
-                # A dedicated thread marks at full speed; the batch bounds how
-                # long it holds the graph lock, not how much it traces.
-                commits: i64 = load_i64(
-                    global_addr("pcc_gc_tracing_finish_commits"), 0
-                )
-                traced = pcc_gc_tracing_step_cycle(512)
-                if traced > 0:
-                    pcc_gc_tracing_discharge_debt(traced)
-                    atomic_rmw_i32(
-                        "add",
-                        global_addr("pcc_gc_cms_worker_traces"),
-                        0,
-                        traced,
-                        "relaxed",
-                    )
-                if load_i64(global_addr("pcc_gc_tracing_finish_commits"), 0) != commits:
-                    # The mark completed. Reclaiming its unreachable objects
-                    # runs their finalizers, so a mutator does it at its next
-                    # application gate, with the world stopped
-                    # (pcc_gc_safepoint).
-                    atomic_store_i32(sweep_pending, 0, 1, "release")
-                    atomic_store_i32(pending, 0, 1, "release")
-            if drains < pushes:
-                atomic_store_i32(
-                    global_addr("pcc_gc_cms_worker_drains"), 0, pushes, "release"
-                )
-            if retired == 0 and traced == 0 and (
-                handoff != 0
-                or load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
-                or atomic_load_i32(
-                    global_addr("pcc_gc_gray_worklist_flush_requested"),
-                    0, "acquire",
-                ) != 0
-            ):
-                # A running producer may still own a short tail or reserved
-                # credit. Yield between retries instead of spinning on the
-                # graph lock; gray count remains the completion authority.
-                pcc_platform_sleep_ns(1000000)
-        elif retired == 0:
-            pcc_platform_sleep_ns(1000000)
-        # A completed batch leaves no raw managed address on this stack.
-        # Park as relocation-safe here; an in-batch runtime poll remains
-        # non-gated and continues to prevent unsafe movement.
-        pcc_thread_safepoint_gate()
-    # stop changed worker_started to 3 before requesting exit. The final
-    # unconditional graph-lock acquisition orders behind any admitted writer.
-    while atomic_load_i32(
-        global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire"
-    ) != 0:
-        pcc_gc_concurrent_sweep_slice(4096)
-    pcc_gc_scalar_sweep_drain(1, 1, 0)
-    pcc_gc_deferred_free_worker_drain(1)
-    atomic_store_i32(
-        global_addr("pcc_gc_gray_worklist_flush_requested"), 0, 0, "release"
-    )
-    atomic_rmw_i32(
-        "add", global_addr("pcc_gc_cms_worker_stops"), 0, 1, "relaxed"
-    )
-    store_i32(global_addr("pcc_gc_cms_worker_current"), 0, 0)
-    return null()
 
 
 @c_abi_export("pcc_gc_config_parse_env_i32")
@@ -285,77 +75,6 @@ def pcc_gc_config_parse_env_i32(
     return value
 
 
-@c_abi_export("pcc_gc_config_abort_bad_backend")
-def _pcc_gc_config_abort_bad_backend() -> None:
-    message = cstr(
-        "pcc runtime: invalid PCC_GC_BACKEND; pcc has one collector "
-        "(reference counting with a generational cycle collector), "
-        "selected by 0 or by leaving the variable unset\n"
-    )
-    length: i64 = 0
-    while load_i8(message, length) != 0:
-        length = length + 1
-    pcc_platform_write(2, message, length)
-    pcc_platform_abort()
-
-
-@c_abi_export("pcc_gc_config_parse_backend")
-def _pcc_gc_config_parse_backend(raw, default: i64) -> i64:
-    if ptr_is_null(raw) != 0:
-        return default
-    first: i64 = load_i8(raw, 0) & 255
-    # One collector: the former tracing and relocating collectors 1-4 are
-    # no longer selectable, and asking for one is an error, not a fallback.
-    if first == 48 and load_i8(raw, 1) == 0:
-        return 0
-    _pcc_gc_config_abort_bad_backend()
-    return default
-
-
-@c_abi_export("pcc_gc_maybe_start_cms_worker")
-def pcc_gc_maybe_start_cms_worker() -> None:
-    # All tracing backends mark here; moving phases retain their gate protocol.
-    selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected < 1 or selected > 4:
-        return
-    if pcc_threads_enabled() == 0:
-        return
-    # Lifecycle: 0 idle, 1 published worker, 2 starter owns publication,
-    # 3 join owner (also quarantined on join failure), 4 backend switch pause.
-    if atomic_cas_i32(
-        global_addr("pcc_gc_cms_worker_started"), 0, 0, 2,
-        "acq_rel", "acquire",
-    ) != 0:
-        return
-    # The backend may have changed after the optimistic read above.
-    selected = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if selected < 1 or selected > 4:
-        atomic_store_i32(
-            global_addr("pcc_gc_cms_worker_started"), 0, 0, "release"
-        )
-        return
-    # Only the admitted starter may clear a previous stop request.
-    atomic_store_i32(
-        global_addr("pcc_gc_cms_worker_stop_requested"), 0, 0, "release"
-    )
-    if pcc_thread_start(
-        global_addr("pcc_gc_cms_worker_handle"),
-        function_addr("pcc_gc_cms_worker_main_py"),
-        null(),
-    ) == 0:
-        atomic_rmw_i32(
-            "add", global_addr("pcc_gc_cms_worker_starts"), 0, 1, "relaxed"
-        )
-        # Publish the handle only after thread_start has written it.
-        atomic_store_i32(
-            global_addr("pcc_gc_cms_worker_started"), 0, 1, "release"
-        )
-        return
-    atomic_store_i32(
-        global_addr("pcc_gc_cms_worker_started"), 0, 0, "release"
-    )
-
-
 @c_abi_export("pcc_gc_config_ensure")
 def pcc_gc_config_ensure() -> i64:
     if atomic_load_i32(global_addr("pcc_gc_config_initialized"), 0, "acquire") != 0:
@@ -367,16 +86,8 @@ def pcc_gc_config_ensure() -> i64:
         selected: i64 = load_i32(global_addr("pcc_gc_backend_selected"), 0)
         pcc_py_gc_minor_graph_unlock()
         return selected
-    backend: i64 = _pcc_gc_config_parse_backend(
-        pcc_platform_getenv(cstr("PCC_GC_BACKEND")),
-        load_i32(global_addr("pcc_gc_backend_selected"), 0),
-    )
-    # Collector identity determines ownership: only GC0 counts references.
-    # No independent mode switch may make a tracing collector pay both costs.
-    tracing_only: i64 = 1 if backend != 0 else 0
-    if tracing_only != 0:
-        pcc_thread_enable_conservative_roots()
-    store_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0, tracing_only)
+    # pcc has one collector: there is nothing to select.
+    backend: i64 = 0
     pause: i64 = pcc_gc_config_parse_env_i32(
         pcc_platform_getenv(cstr("PCC_GC_PAUSE")), 1000, 50, 1000
     )
@@ -412,8 +123,7 @@ def pcc_gc_config_ensure() -> i64:
     # The configuration is initialized; publish the frame-registry word
     # from the backend just stored and the current frame-root switch.
     registry_inactive: i64 = 0
-    if backend == 0 and load_i32(global_addr("pcc_gc_backend0_frame_roots_enabled"), 0) == 0:
-        registry_inactive = 1
+    registry_inactive = 1
     store_i32(global_addr("pcc_gc_frame_registry_inactive"), 0, registry_inactive)
     store_i32(global_addr("pcc_gc_pause"), 0, pause)
     store_i32(global_addr("pcc_gc_stepmul"), 0, stepmul)
@@ -424,110 +134,18 @@ def pcc_gc_config_ensure() -> i64:
     # The allocator audits double frees at the same level, from its own word.
     store_i32(global_addr("pcc_allocator_double_free_audit"), 0, refcount_probe)
     refcount_fast: i64 = 0
-    if backend == 0 and refcount_probe == 0 and pcc_threads_enabled() == 0:
+    if refcount_probe == 0 and pcc_threads_enabled() == 0:
         refcount_fast = 1
     store_i32(global_addr("pcc_gc_refcount_fast"), 0, refcount_fast)
     refcount_atomic: i64 = 0
-    if backend == 0 and refcount_probe == 0:
+    if refcount_probe == 0:
         refcount_atomic = 1
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
     store_i32(global_addr("pcc_gc_pins_inert"), 0, refcount_atomic)
     leases_inert: i64 = 0
-    if backend <= 3 and refcount_probe == 0:
+    if refcount_probe == 0:
         leases_inert = 1
     store_i32(global_addr("pcc_gc_leases_inert"), 0, leases_inert)
-    if backend != 0:
-        store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     atomic_store_i32(global_addr("pcc_gc_config_initialized"), 0, 1, "release")
-    pcc_gc_refresh_read_barrier()
     pcc_py_gc_minor_graph_unlock()
-    pcc_gc_maybe_start_cms_worker()
     return backend
-
-
-@c_abi_export("pcc_gc_has_tracing_sweep")
-def pcc_gc_has_tracing_sweep() -> i64:
-    backend: i64 = 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        backend = pcc_gc_config_ensure()
-    else:
-        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2 and backend != 3 and backend != 4:
-        return 0
-    if pcc_gc_tracing_has_sweep_candidate() != 0:
-        return 1
-    return 0
-
-
-@c_abi_export("pcc_gc_collect_tracing")
-def pcc_gc_collect_tracing() -> i64:
-    backend: i64 = 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        backend = pcc_gc_config_ensure()
-    else:
-        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    if backend != 1 and backend != 2 and backend != 3 and backend != 4:
-        return 0
-    gc3_count_free: i64 = 1 if (backend == 3
-                              and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0) else 0
-    if pcc_gc_tracing_has_sweep_candidate() == 0:
-        if gc3_count_free == 0 or load_i32(global_addr("pcc_gc_forwarding_population"), 0) <= 0:
-            return 0
-    stw: i64 = pcc_stop_the_world()
-    if stw != 0:
-        return 0
-    # ``gc.collect()`` is the explicit full-heap boundary, not an incremental
-    # scheduler step.  The former 1024-object budget left every candidate
-    # after the first batch live until a later call, so a 10k two-node-cycle
-    # workload reported/reclaimed only 1024 objects and steadily grew RSS.
-    # PASS-0/PASS-1/PASS-2 already walk the candidate graph as one STW
-    # transaction; give that transaction the complete signed-i64 budget so
-    # finalizers run once and the returned count describes this collection.
-    reclaimed: i64 = 0
-    if gc3_count_free == 0:
-        reclaimed = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
-    elif (load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
-            and pcc_gc_tracing_has_sweep_candidate() != 0):
-        reclaimed = pcc_gc_tracing_sweep_unreachable(9223372036854775807)
-    if (backend == 3 and load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) != 0
-            and load_i32(global_addr("pcc_gc_mark_active"), 0) == 0
-            and pcc_gc_tracing_has_sweep_candidate() == 0
-            and load_i32(global_addr("pcc_gc_forwarding_population"), 0) > 0):
-        pcc_gc_backend4_remap_and_retire_stopped_world()
-    # Automatic tracing sweeps run after their mark's step and need not be
-    # followed by an idle step. Advance empty-page quarantine here, only after
-    # all per-object deallocators returned. The entry preserves the gate,
-    # active-cascade and relocation-set exclusions and the two list epochs.
-    if (
-        backend == 4
-        and load_i32(global_addr("pcc_gc_forwarding_population"), 0) == 0
-        and (
-            ptr_is_null(global_load_ptr("pcc_gc_backend4_parked_head")) == 0
-            or ptr_is_null(global_load_ptr("pcc_gc_backend4_retained_page_head")) == 0
-        )
-    ):
-        pcc_gc_backend4_remap_and_retire_stopped_world()
-    if stw == 0:
-        pcc_resume_world()
-    return reclaimed
-
-
-@c_abi_export("pcc_gc_begin_explicit_tracing_collect")
-def pcc_gc_begin_explicit_tracing_collect() -> None:
-    backend: i64 = 0
-    if load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0:
-        backend = pcc_gc_config_ensure()
-    else:
-        backend = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 1)
-    if backend != 0:
-        store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
-
-
-@c_abi_export("pcc_gc_end_explicit_tracing_collect")
-def pcc_gc_end_explicit_tracing_collect() -> None:
-    store_i32(global_addr("pcc_gc_explicit_collect_active"), 0, 0)
-    # The mutator owns the stopped world through this cleanup boundary.
-    # An unfinished cycle remains active and will publish its own completion.
-    if load_i32(global_addr("pcc_gc_mark_active"), 0) == 0:
-        atomic_store_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, 0, "release")

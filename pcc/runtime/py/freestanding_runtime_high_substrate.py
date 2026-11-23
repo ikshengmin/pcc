@@ -57,9 +57,6 @@ pcc_thread_graph_lock_release = extern(
     "pcc_thread_graph_lock_release", (c_ptr,), c_int64
 )
 pcc_thread_graph_lock_depth = extern("pcc_thread_graph_lock_depth", (), c_int64)
-pcc_thread_graph_lock_has_waiter = extern(
-    "pcc_thread_graph_lock_has_waiter", (c_ptr,), c_int64
-)
 pcc_thread_note_deferred_tripwire = extern(
     "pcc_thread_note_deferred_tripwire", (), c_void
 )
@@ -154,33 +151,6 @@ def pcc_py_gc_minor_graph_lock() -> None:
     # unlock look up one thread-local each (on Darwin every lookup is a
     # _tlv_get_addr call; the pair used to make seven).
     pcc_thread_graph_lock_acquire_for(global_addr("g_pcc_py_gc_minor_graph_lock"), 0)
-
-
-@c_abi_export("pcc_py_gc_minor_graph_lock_contended")
-def pcc_py_gc_minor_graph_lock_contended() -> i64:
-    """1 when another thread is queued for the graph lock this thread holds
-    (pcc_thread_graph_lock_has_waiter)."""
-    return pcc_thread_graph_lock_has_waiter(global_addr("g_pcc_py_gc_minor_graph_lock"))
-
-
-@c_abi_export("pcc_py_gc_minor_graph_lock_yield")
-def pcc_py_gc_minor_graph_lock_yield() -> None:
-    """Hand the graph lock this thread holds once to a queued thread, then
-    take it again after that thread.
-
-    An unlock followed at once by a lock barges: the fast CAS retakes the
-    free word before a queued head that polls it sees it free, so the
-    waiter waited out the holder's whole slice anyway. After the release
-    this waits until another thread has taken the word or no waiter is left;
-    the lock then queues behind the new holder."""
-    pcc_py_gc_minor_graph_unlock()
-    lock_word = global_addr("g_pcc_py_gc_minor_graph_lock")
-    while (
-        atomic_load_i32(lock_word, 0, "acquire") == 0
-        and pcc_thread_graph_lock_has_waiter(lock_word) != 0
-    ):
-        pass
-    pcc_py_gc_minor_graph_lock()
 
 
 @c_abi_export("pcc_py_gc_minor_graph_lock_for")

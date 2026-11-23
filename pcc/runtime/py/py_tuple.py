@@ -76,7 +76,6 @@ py_incref         = extern("py_incref",        (c_ptr,),                        
 py_decref         = extern("py_decref",        (c_ptr,),                             c_void)
 py_list_len       = extern("py_list_len",      (c_ptr,),                             c_int64)
 py_list_get       = extern("py_list_get",      (c_ptr, c_int64),                     c_ptr)
-py_list_copy      = extern("py_list_copy",     (c_ptr,),                             c_ptr)
 pcc_list_lock     = extern("pcc_list_lock",    (c_ptr,),                             c_void)
 pcc_list_unlock   = extern("pcc_list_unlock",  (c_ptr,),                             c_void)
 py_obj_len        = extern("py_obj_len",       (c_ptr,),                             c_int64)
@@ -104,9 +103,6 @@ pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_alloc      = extern("pcc_gc_alloc",      (c_int64, c_int32, c_int32),          c_ptr)
-pcc_gc_publish_initialized = extern(
-    "pcc_gc_publish_initialized", (c_ptr,), c_void
-)
 _pcc_debug_bad_incref = extern("pcc_debug_bad_incref", (c_ptr, c_int32), c_void)
 getenv = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 
@@ -131,7 +127,6 @@ pcc_gc_retain_plan_finish = extern("pcc_gc_retain_plan_finish", (c_ptr,), c_void
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_note_store = extern("pcc_gc_note_store", (), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
@@ -232,8 +227,6 @@ def py_tuple_new(n: int):
     if n > 0:
         items_ptr = ptr_add(t, PYTUPLEOBJECT_ITEMS_OFFSET)
         memset(items_ptr, 0, n * 8)
-    else:
-        pcc_gc_publish_initialized(t)
     return t
 
 
@@ -283,7 +276,6 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
     token: i64 = i64(pcc_gc_foreign_lease_acquire(output))
     if token < 0:
         return _tuple_owned_construction_failed(output, token)
-    pcc_gc_note_slot_write_barrier(null(), output, load_ptr(output, 0))
     stride: i64 = i64(C_POINTER_SIZE)
     items_offset: i64 = i64(PYTUPLEOBJECT_ITEMS_OFFSET)
     backend: i64 = i64(pcc_gc_backend())
@@ -308,7 +300,6 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
             destination = ptr_add(owner, items_offset + index * stride)
             if backend != 0:
                 pcc_gc_note_store()
-            pcc_gc_note_slot_write_barrier(owner, destination, value)
             if needs_track == 0 and _tuple_item_can_participate_in_cycle(value) != 0:
                 needs_track = 1
             # Both root and field views change under the graph transaction.
@@ -319,7 +310,6 @@ def pcc_tuple_from_owned_roots_lease(sources, count: i64, output) -> i64:
     owner = load_ptr(output, 0)
     if needs_track != 0:
         py_gc_track(owner)
-    pcc_gc_publish_initialized(owner)
     return token
 
 
@@ -594,20 +584,6 @@ def _tuple_from_list(seq):
     first (py_list_copy reads it under its lock) and fill the tuple from
     that private copy through the barriered py_tuple_set_item.
     """
-    if load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0:
-        private = py_list_copy(seq)
-        if ptr_is_null(private):
-            return null()
-        count: int = load_i64(private, PYLISTOBJECT_LENGTH_OFFSET)
-        copied = py_tuple_new(count)
-        if ptr_is_null(copied) == 0:
-            private_items = load_ptr(private, PYLISTOBJECT_ITEMS_OFFSET)
-            k: int = 0
-            while k < count:
-                py_tuple_set_item(copied, k, pcc_gc_load_ptr(private, ptr_add(private_items, k * 8)))
-                k = k + 1
-        py_decref(private)
-        return copied
     want: int = py_list_len(seq)
     out = null()
     done: int = 0

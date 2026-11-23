@@ -1159,8 +1159,15 @@ in the relevant section or issue and removes the entry.
    that Claude approved at the maintainer's request on 2026-11-22
    ([#13](https://github.com/ikshengmin/pcc/issues/13)): one described
    layout tag on the existing header, a pointer-free and a reference-bearing
-   control on GC0–4, then generic slices. New Go source-shape admissions stay
-   frozen and the GC0-only v1 envelope is not promoted. C++ (TinyXML2
+   control on the one collector (young collection, full collection, explicit
+   collection), then generic slices. The gate named GC0–4 until the
+   one-collector decision of 2026-11-24; Claude revised it and the design
+   document the same day, at the maintainer's request to resolve the
+   contradiction. New Go source-shape admissions stay frozen. The v1
+   envelope is not promoted (Claude's recommendation; the maintainer has not
+   decided promotion): it is a tuple-shaped owner, so a later tuple-specific
+   step of the collector, such as no longer tracking a tuple of immutable
+   items, would apply to mutable Go and Java objects. C++ (TinyXML2
    `1199:9`): destructor exception specifications and the non-throwing
    override rule instead of effect proofs, as approved in
    [#14](https://github.com/ikshengmin/pcc/issues/14); the project-only
@@ -1358,7 +1365,7 @@ collectors.
 
 Maintainer decisions later on 2026-11-24: slab evacuation is not built into
 the fused collector (it needs the pin, lease and read-barrier protocol that
-the fused protocol removes); the fused collector's pause must be very short
+the fused protocol removes; replaced the same day, see "Relocation" below); the fused collector's pause must be very short
 and independent of heap size, as ZGC's is; and the five-collector structure
 is to be deleted quickly so that one collector remains, which then gets the
 optimization work ("做完删除 5GC这种。然后主力优化融合GC。 只留一个gC").
@@ -1385,17 +1392,72 @@ select collectors 1-4 by name or by `(1, 2, 3, 4)`/`range(1, 5)` loops
 `test_slot_call_inert_leases.py`'s collector-switch case and
 `test_pcc_perf.py`'s five-collector expectations, which need the same
 rewrite. Stage 2: delete the runtime of collectors 1-4 and the protocol
-entries only they used. Stage 3: bounded-pause full collection (sliced view
-building and reachability, then an exact revalidation of the candidates).
+entries only they used. Stage 3: full collection in bounded stops (below).
 
-One collector, stage 2 (deletion; **not started**, dependency map by Claude,
-2026-11-24). After stage 1 no code of collectors 1-4 can run, so this is
-dead-code removal with no behaviour change. The 27 modules below are
-18,207 lines and are referenced about 830 times from 40 surviving files;
-`py_gc_backend.py` (7,000 lines) is the hub and is itself mostly their
-driver. They form one connected body (relocation calls the barrier
-dispatcher, forwarding retirement and oldification call relocation, the
-hub calls all), so a module cannot be removed alone.
+One collector, stage 2 (deletion; in progress, Claude, local Mac,
+2026-11-24, on `90f4345db`). The maintainer asked the same day for the
+redundant collectors and the selector to go, with no option left. Done so
+far, mechanically, by `scripts/one_collector/` (its `iterate.py` describes
+the procedure): every runtime module was folded under "the selected
+collector is 0" and under the words no remaining function writes, the
+functions nothing reaches were removed, and this repeated to a fixed point.
+`pcc_gc_set_backend` is deleted; nothing reads `PCC_GC_BACKEND` in the
+runtime any more; code generation no longer emits the closed-young-domain
+call. Result: 27,740 lines removed from `pcc/runtime/py`, 641 exported
+symbols gone, 696 ABI table entries, 176 header prototypes and 179 state
+words with them; fifteen of the 27 modules below are deleted
+(callback_layers, common_mark_cycle, conservative_roots,
+forwarding_retirement, generational_scheduler, object_root_seeding,
+relocation_copy/drain/payload/remap/selector, scalar_sweep,
+tracing_sweep_collector, zpage_allocation, zpage_mechanics);
+`py_gc_backend.py` went from 277 functions to 35. 107 test files that
+existed only for collectors 1-4 are deleted.
+
+Evidence: every changed module compiles alone (102 on this Mac;
+`freestanding_linux_elf_image.py` needs a Linux target); the collector's
+tests named under stage 3 and `test_gc0_object_slab_return.py` pass on the
+reduced runtime.
+
+Still open in stage 2:
+
+- Twelve of the 27 modules keep about 89 functions: object_nodes (27),
+  mapped_roots (21), generational_promotion (11), forwarding_identity (9),
+  page_marks (5), incremental_concurrent_scheduler (4), sweep_slots (3),
+  barrier_dispatcher (3), alloc_stage (2), zpage_lifecycle (2),
+  gray_worklist (1), generational_oldification (1). Some are what the one
+  collector uses (pause records, root visitors, `clear_referents`); the
+  rest is still called through `pcc_gc_shade_gray_atomic`, the
+  owner-payload-span calls of `py_class.py` and the telemetry.
+  `scripts/one_collector/sweep_one_collector.py entries` lists the callers.
+- `pcc_gc_backend()` still exists and answers 0 (it also initialises the
+  configuration); `PCC_GC_BACKEND` is still read on the compiler side for
+  cache keys and labels (`deferred_frontend_schedule.py`,
+  `pipeline_frontend_workers.py`, `package/runtime_profile.py`); the
+  closed-young analysis of the frontend (`closed_young_domain.py`,
+  `closed_young_closure.py`) has no consumer left.
+- Tests: `scripts/one_collector/prune_tests.py report` finds 77 more test
+  files in which every test names something removed, and 194 files in
+  which 955 tests do. Many of them test the one collector and only select
+  it through the removed setter or loop over removed entry points, so they
+  need a rewrite, not deletion; none was touched.
+- The pin, lease, relocation-read and write-barrier calls are still
+  emitted and dropped by the fused-protocol pass.
+- Comments and docstrings of folded functions still describe the removed
+  arms in places.
+- `PCC_RUNTIME_GC_STRESS_EVERY` (`runtime_gc_pressure.py`) matches source
+  text; its tracing hooks were removed with their targets, the remaining
+  ones were not run.
+
+Lesson recorded in the tool: a word counts as constant only when no
+function still in the sources writes it, reached or not. The first version
+looked at reached functions only and folded the collector thread's start
+away (its switch is written by a setter that only a test names); the
+`concurrent` case of the stage 3 test caught it.
+
+The map the deletion started from: after stage 1 no code of collectors 1-4
+could run, so this is dead-code removal with no behaviour change. The 27
+modules below were 18,207 lines, referenced about 830 times from 40
+surviving files; `py_gc_backend.py` (7,000 lines) was the hub.
 
     freestanding_gc_*: alloc_stage barrier_dispatcher callback_layers
     common_mark_cycle conservative_roots forwarding_identity
@@ -1406,34 +1468,120 @@ hub calls all), so a module cannot be removed alone.
     scalar_sweep sweep_slots tracing_sweep_collector zpage_allocation
     zpage_lifecycle zpage_mechanics
 
-Outside references, largest first: barrier_dispatcher 266 in 37 files (the
-store-barrier notes; the fused-protocol pass already drops the generated
-ones), forwarding_identity 170 in 20, object_nodes 80 (63 in the hub),
-incremental_concurrent_scheduler 46, page_marks 30, generational_scheduler
-26. `callback_layers` (19 references, all in `py_weakref.py`) and
-`mapped_roots` (9 in the GC0 collector) need a look before removal: the
-fused collector may use part of them.
+`py_shared_managed.py` (Go and Java managed storage) is outside the default
+runtime archive: `pcc/runtime/shared_managed_build.py` builds it separately.
+It calls `pcc_gc_backend`, `pcc_gc_publish_initialized` (work only on the
+former collector 4), `pcc_gc_store_ptr` and the root handle registration
+(`pcc_gc_scheduler_root_register_handle`). The archive build and the fused
+collector's suites do not reach it, so after each deleted group also run
+`tests/go/test_managed_contracts.py`,
+`tests/java/test_source_native_arrays.py`,
+`tests/runtime_shared/test_managed_owned.py` and
+`tests/runtime_shared/test_java_reference_abi.py`. Their cases that build
+and run `py_shared_managed` are integration cases gated on Linux x86_64 and
+`PCC_RUNTIME_ARCHIVE`; a Mac run executes only their source-level cases, so
+the native path is a Linux check:
 
-Procedure: in surviving files, replace each `backend != 0` branch by its
-GC0 arm and delete the externs it used; delete the modules and their
-entries in `pcc/runtime/Makefile`, `runtime_abi.py` and
-`py_runtime.h`; delete the tests that exist only for collectors 1-4
-(about 368 files name one) and the old failures recorded above with them;
-after each group, build the runtime archive and run the fused collector's
-focused suites. Then remove the now inert protocol entries (pin, lease,
-relocation read, write barrier) from the runtime and code generation and
-retire the fused-protocol pass, whose job disappears.
+    PCC_RUNTIME_ARCHIVE=<owned archive> gtimeout 1800s uv run pytest -x -v -n0 -m integration tests/runtime_shared/test_managed_owned.py tests/runtime_shared/test_java_reference_abi.py tests/go/test_managed_contracts.py tests/java/test_source_native_arrays.py
 
-Stage 3 (bounded-pause full collection; **not started**): keep a view
-across short stops. Each stop builds nodes for the next N tracked objects
-(a cursor over the allocator's slabs; track and untrack keep nodes exact
-while the view exists, as before flag mode), then subtracts internal
-references and propagates reachability N nodes at a time; the unreached
-remainder goes to `pcc_gc_backend0_collect_candidates`, which decides
-exactly within the candidate set in one stop proportional to that set.
-Acceptance: the probe of "gc0: generational cycle collection" (897ecfea0)
-at 20,000 / 80,000 / 320,000 long-lived containers shows a maximum stop
-that does not grow with the heap.
+Stage 3 (full collection in bounded stops; written by Claude on the local
+Mac, 2026-11-24, uncommitted on `90f4345db`).
+`freestanding_gc_backend0_incremental.py` replaces the stopped-world full
+collection of the automatic path. A cycle gives every old (not young)
+tracked container a node through a cursor over the allocator's cells
+(`pcc_allocator_object_cells_enumerate_slice`), subtracts internal
+references, marks what outside referrers reach and sweeps its view, a
+bounded part in every stop (`pcc_gc_full_slice_us`, 200 us of work by
+default), with the program running in between. The unreached objects become
+young again in one stop and the next young collection decides among them,
+so nothing is freed on stale counts and `pcc_gc_backend0_collect_candidates`
+is not used. A stop is requested by every automatic-collection request and
+by every 1020 containers a thread tracks. `py_gc_untrack` removes an
+object's node while the view exists; a complete stopped-world view
+(`gc.collect()`, `gc.get_objects()`) makes the cycle give up its nodes; with
+automatic collection off the cycle releases its view without candidates.
+
+Evidence (local Mac, 2026-11-24, working tree on `90f4345db`):
+`tests/python/test_gc0_incremental_full_collection.py` passed 5 of 5 and
+`test_gc0_generational_collection.py` passed, one run each: old cyclic
+garbage reclaimed in hundreds of stops; the object graph changed during
+every phase; snapshot, `gc.disable()` and `gc.collect()` during a cycle;
+weak references and resurrection; and the collector thread below with four
+allocating threads. The acceptance probe (maximum stop at 20,000 / 80,000 /
+320,000 long-lived containers) has not been run.
+
+    PCC_NO_AUTO_PCC1=1 gtimeout 900s uv run pytest -x -v -n0 tests/python/test_gc0_incremental_full_collection.py tests/python/test_gc0_generational_collection.py
+
+Handler throughput, same day and host (12 cores, load 5.1;
+`scripts/pcc_perf.py`, arm `gc0-head` = `90f4345db`, arm `gc0-stage3` = that
+tree with this section's runtime files): CPython asyncio 87,011 and 263,203
+req/s at one and four workers; `table gc0-stage3` 51,178 (59% of asyncio)
+and 121,566 (46%), 23.8 and 35.7 us of processor time a request, 1 ms
+stopped; `ab gc0-head gc0-stage3 --control-arm gc0-head-b`, five pairs:
++0.2% (4/5 pairs, floor 0.5%) and +0.1% (4/5, floor 2.4%), both within
+noise. The handler seldom reaches a full collection: this shows no cost on
+the request path, not the pause bound.
+
+Open, unverified: the young log is emptied only by a collection, and a
+collection is requested by net tracked growth, so a program that tracks and
+releases containers by reference count without net growth may grow the log
+without bound. Probe it before relying on either answer.
+
+Collector thread, the concurrent feature of the former GC2 (off by default:
+`pcc_gc_full_concurrent`, set through
+`pcc_gc_backend0_full_set_concurrent(1)`; its test case passed once). When a cycle begins in a threaded
+program with atomic counts and container locks, a detached thread does the
+passes with the world running. It holds the object-graph lock for a batch,
+scans a list or an instance under that object's container lock, reaches an
+object only from its node under the node's shard lock and keeps it alive
+with a reference while it scans it, never dereferences a child, and skips C
+extension objects. The large-object part of the build, the runtime's roots
+and the hand-over to the young generation take a stop. Mutators assist with
+a stop of their own when the work done is behind sixteen node visits per
+tracked container (`pcc_gc_backend0_full_step`). A reference the thread ends
+up owning is released by a mutator. The fifth case of the test file above
+(`concurrent`) exercises it with four threads. Not handled: the thread is
+not joined at process exit. The switch stays off until that case has run
+green three times (Claude's recommendation; the maintainer has not decided
+the default).
+
+Memory return, the purpose of the former GC4 (step 1 done, Claude, local
+Mac, 2026-11-24). The maintainer said in this session that the features of
+GC2 and GC4 are both to be done, which replaces the decision above not to
+build slab evacuation. What it buys is memory, not throughput: a 64 KiB
+object slab stayed resident for the life of the process once any object
+had lived in it.
+
+Step 1, done: empty object slabs go back to the system. An object span now
+keeps the free-cell count raw spans keep (its cells on the central lists).
+`pcc_allocator_trim_objects` rebuilds each object free list without the
+cells of fully free slabs and discards those slabs' pages through the new
+`pcc.unsafe.page_discard` intrinsic; the mapping and the span stay, because
+lock-free provenance readers read the state word of any candidate address,
+and the size class carves the slab again when it next needs cells
+(`_recarve_object_slab_locked`). A full collection, explicit or the end of
+one in bounded stops, ends with this trim and with the raw-slab trim, which
+nothing called before. `page_discard` maps fresh anonymous pages over the
+range on Darwin (`MADV_FREE_REUSABLE` left 6 of 9 MB resident), is
+`madvise(MADV_DONTNEED)` on Linux and `VirtualAlloc(MEM_RESET)` on Windows;
+only Darwin was executed.
+
+Evidence: `tests/python/test_gc0_object_slab_return.py` (a peak of 200,000
+objects with one in a thousand kept: more than 100 slabs returned, the
+resident size falls by more than half of their bytes, the kept objects are
+intact, the same size classes carve the slabs again, and five rounds over
+several size classes). A probe of the same shape: 34 MB at the peak, 23 MB
+after the collection, 141 slabs (9 MB) returned. Not measured: the cost of
+the free-cell count on the allocator's refill and drain paths (`pcc_perf
+ab` against `gc0-head`).
+
+Steps 2 and 3, not written: a sparse slab, one with a few live cells,
+still stays. Returning it needs its live objects moved, which needs (2)
+nodes for the untracked cells of chosen slabs and, per node, the objects
+that refer to it, recorded by the cycle's subtract pass, and (3) one stop
+that moves each chosen object whose count equals the slots found, that no
+stack word names (a conservative scan) and whose address was never exposed
+(`id()`, default hash, weak reference, C handle), and rewrites those slots.
 
 Claude's proposed mapping of the remaining features onto the counting base
 (a proposal; GC4's line is superseded by the decision above):

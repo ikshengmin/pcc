@@ -35,9 +35,6 @@ __pcc_freestanding__ = True
 pcc_gc_backend3_young_unlink = extern(
     "pcc_gc_backend3_young_unlink", (c_ptr,), c_void
 )
-pcc_gc_backend4_zpage_note_owner_promoted = extern(
-    "pcc_gc_backend4_zpage_note_owner_promoted", (c_ptr,), c_void
-)
 pcc_gc_config_ensure = extern("pcc_gc_config_ensure", (), c_int64)
 pcc_py_gc_defer_tripwire = extern(
     "pcc_py_gc_defer_tripwire", (c_ptr, c_ptr, c_int32), c_void
@@ -47,9 +44,6 @@ pcc_gc_generational_oldify_copy = extern(
     "pcc_gc_generational_oldify_copy", (c_ptr,), c_ptr
 )
 pcc_gc_object_index_find = extern("pcc_gc_object_index_find", (c_ptr,), c_ptr)
-pcc_gc_object_node_is_active = extern(
-    "pcc_gc_object_node_is_active", (c_ptr,), c_int64
-)
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock", (c_ptr,), c_int64
 )
@@ -62,17 +56,11 @@ pcc_gc_resolve_borrowed_root_slot_unlocked = extern(
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
 )
-pcc_gc_visit_object_slots_slice = extern("pcc_gc_visit_object_slots_slice", (c_ptr, c_int64, c_int64, c_ptr, c_ptr, c_ptr), c_int64)
 pcc_gc_memoryview_refresh_owned_buffer = extern(
     "pcc_gc_memoryview_refresh_owned_buffer", (c_ptr,), c_int64
 )
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern(
-    "pcc_py_gc_minor_graph_unlock", (), c_void
-)
-pcc_thread_safepoint = extern("pcc_thread_safepoint", (), c_void)
 
 
 @c_abi_export("pcc_gc_generational_pointer_can_have_header")
@@ -94,12 +82,6 @@ def pcc_gc_generational_promote_young_if_known(obj) -> None:
         pcc_gc_trace_referents_for_promotion(oldified)
         return
     backend: i64 = pcc_gc_config_ensure()
-    if backend == 3 and (load_i32(obj, 12) & 4096) != 0:
-        pcc_gc_backend3_young_unlink(pcc_gc_object_index_find(obj))
-        promoted_flags: i64 = load_i32(obj, 12)
-        store_i32(obj, 12, (promoted_flags & ~(128 | 512)) | 256)
-        pcc_gc_trace_referents_for_promotion(obj)
-        return
     promoted_flags: i64 = load_i32(obj, 12)
     if (promoted_flags & 256) != 0:
         # A YOUNG object can never already be OLD: promoting it again would
@@ -114,16 +96,7 @@ def pcc_gc_generational_promote_young_if_known(obj) -> None:
         )
         return
     pcc_gc_backend3_young_unlink(pcc_gc_object_index_find(obj))
-    if backend == 4 and (promoted_flags & 256) == 0:
-        # YOUNG and OLD are adjacent bits.  On the valid GC4 transition,
-        # adding YOUNG atomically clears it, carries into OLD, and preserves
-        # concurrently published unrelated header flags.
-        atomic_rmw_i32("add", obj, 12, 128, "acq_rel")
-        pcc_gc_backend4_zpage_note_owner_promoted(obj)
-        return
     store_i32(obj, 12, (promoted_flags & ~128) | 256)
-    if backend == 3:
-        pcc_gc_trace_referents_for_promotion(obj)
 
 
 @c_abi_export("pcc_gc_generational_retain_closed_young")
@@ -135,35 +108,8 @@ def pcc_gc_generational_retain_closed_young(obj) -> None:
     outgoing edge set. Other types and forwarding states keep the ordinary
     promotion contract. This entry is not used by budgeted promotion steps.
     """
-    if (load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
-            or load_i32(global_addr("pcc_gc_backend3_young_cut_active"), 0) == 0
-            or load_i32(global_addr("pcc_gc_backend3_oldify_suspended"), 0) == 0):
-        pcc_gc_generational_promote_young_if_known(obj)
-        return
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    node = pcc_gc_object_index_find(obj)
-    if pcc_gc_object_node_is_active(node) == 0:
-        return
-    flags: i64 = load_i32(obj, 12)
-    if (flags & 128) == 0:
-        return
-    tag: i64 = load_i32(obj, 8)
-    if ((flags & (256 | 2048)) != 0
-            or (tag != PY_TYPE_INT and tag != PY_TYPE_FLOAT
-                and tag != PY_TYPE_STR and tag != PY_TYPE_BYTES
-                and tag != PY_TYPE_COMPLEX)
-            or ptr_is_null(pcc_gc_forwarding_find(obj)) == 0):
-        pcc_gc_generational_promote_young_if_known(obj)
-        return
-    # Preserve pins, major colors, finalization/identity flags and ownership.
-    # Nursery promotion already clears its obsolete remembered bit. No pin
-    # lookup is necessary: this live scalar is retained at its current address.
-    pcc_gc_backend3_young_unlink(node)
-    if (flags & 4096) != 0:
-        store_i32(obj, 12, (flags & ~(128 | 512)) | 256)
-    else:
-        store_i32(obj, 12, (flags & ~128) | 256)
+    pcc_gc_generational_promote_young_if_known(obj)
+    return
 
 
 @c_abi_export("pcc_gc_generational_promote_owned_slot_mode")
@@ -218,19 +164,6 @@ def pcc_gc_generational_promote_borrowed_slot_mode(
     pcc_gc_generational_promote_young_if_known(child)
 
 
-@c_abi_export("pcc_gc_generational_promote_slot")
-def pcc_gc_generational_promote_slot(slot, role: i64, context) -> None:
-    if role == 1:
-        pcc_gc_generational_promote_owned_slot_mode(slot, 0, 1)
-    elif role == 3:
-        # Weak targets and derived class metadata are update-only aliases,
-        # not strong borrowed edges. Copying here would turn an unrooted
-        # WHITE young object into a GRAY live copy during active marking.
-        pcc_gc_resolve_borrowed_root_slot_unlocked(slot, 0)
-    else:
-        pcc_gc_generational_promote_borrowed_slot_mode(slot, 0, 1)
-
-
 @c_abi_export("pcc_gc_generational_promote_shallow_slot")
 def pcc_gc_generational_promote_shallow_slot(slot, role: i64, context) -> None:
     if role == 1:
@@ -242,268 +175,10 @@ def pcc_gc_generational_promote_shallow_slot(slot, role: i64, context) -> None:
         pcc_gc_generational_promote_borrowed_slot_mode(slot, 0, 0)
 
 
-# ObjectNode@56 remains raw gc_refs/cursor for counted collectors. In NoRC
-# it packs one independent conservative pin in bit0 and the promotion cursor
-# in bits1..62. Every stored cursor is range-checked before multiplication.
-@c_abi_export("pcc_gc_backend3_promotion_cursor")
-def _promotion_cursor(node) -> i64:
-    value: i64 = load_i64(node, 56)
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
-        return value
-    if value < 0:
-        pcc_py_gc_defer_tripwire(cstr("negative packed promotion cursor"),
-                                cstr("pcc/runtime/py/freestanding_gc_generational_promotion.py"), 0)
-        return 0
-    return value // 2
-
-
-@c_abi_export("pcc_gc_backend3_set_promotion_cursor")
-def _set_promotion_cursor(node, cursor: i64) -> i64:
-    if load_i32(global_addr("pcc_gc_backend4_no_refcounts"), 0) == 0:
-        store_i64(node, 56, cursor)
-        return 1
-    if cursor < 0 or cursor > 4611686018427387903:
-        pcc_py_gc_defer_tripwire(cstr("packed promotion cursor overflow"),
-                                cstr("pcc/runtime/py/freestanding_gc_generational_promotion.py"), 0)
-        return 0
-    store_i64(node, 56, cursor * 2 + (load_i64(node, 56) & 1))
-    return 1
-
-
-@c_abi_export("pcc_gc_backend3_promotion_worklist_unlink")
-def _promotion_unlink(node) -> None:
-    if ptr_is_null(node) != 0:
-        return
-    obj = load_ptr(node, 0)
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    if (load_i32(obj, 12) & 128) != 0:
-        return
-    prev = load_ptr(node, 72)
-    nxt = load_ptr(node, 64)
-    if (
-        ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_head"), node) == 0
-        and ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_tail"), node) == 0
-        and ptr_is_null(prev) != 0
-        and ptr_is_null(nxt) != 0
-    ):
-        return
-    if ptr_is_null(prev) == 0:
-        store_ptr(prev, 64, nxt)
-    elif ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_head"), node) != 0:
-        global_store_ptr("pcc_gc_backend3_promotion_head", nxt)
-    if ptr_is_null(nxt) == 0:
-        store_ptr(nxt, 72, prev)
-    elif ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_tail"), node) != 0:
-        global_store_ptr("pcc_gc_backend3_promotion_tail", prev)
-    store_ptr(node, 64, null())
-    store_ptr(node, 72, null())
-    _set_promotion_cursor(node, 0)
-
-
 @c_abi_export("pcc_gc_backend3_enqueue_promotion_owner")
 def _enqueue_promotion_owner(obj) -> None:
     backend: i64 = pcc_gc_config_ensure()
-    if backend != 4:
-        return
-    if ptr_is_null(obj) != 0 or is_tagged_int(obj) != 0:
-        return
-    node = pcc_gc_object_index_find(obj)
-    if ptr_is_null(node) != 0 or pcc_gc_object_node_is_active(node) == 0:
-        return
-    if ptr_eq(load_ptr(node, 0), obj) == 0:
-        return
-    if (load_i32(obj, 12) & 128) != 0:
-        return
-    if (
-        ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_head"), node) != 0
-        or ptr_eq(global_load_ptr("pcc_gc_backend3_promotion_tail"), node) != 0
-        or ptr_is_null(load_ptr(node, 64)) == 0
-        or ptr_is_null(load_ptr(node, 72)) == 0
-    ):
-        # A new GC3 remembered request can cover a slot behind this owner's
-        # in-flight cursor. Its existing queue entry must rescan that prefix
-        # before the remembered drain clears the dirty bit. Clean duplicate root
-        # visits keep their progress, and GC4 retains its own protocol.
-        if backend == 3 and (load_i32(obj, 12) & 512) != 0:
-            _set_promotion_cursor(node, 0)
-        return
-    tail = global_load_ptr("pcc_gc_backend3_promotion_tail")
-    store_ptr(node, 64, null())
-    store_ptr(node, 72, tail)
-    _set_promotion_cursor(node, 0)
-    store_i64(
-        global_addr("pcc_gc_backend3_promotion_revision"),
-        0,
-        load_i64(global_addr("pcc_gc_object_list_revision"), 0),
-    )
-    if ptr_is_null(tail) == 0:
-        store_ptr(tail, 64, node)
-    else:
-        global_store_ptr("pcc_gc_backend3_promotion_head", node)
-    global_store_ptr("pcc_gc_backend3_promotion_tail", node)
-
-
-@c_abi_export("pcc_gc_backend3_promote_cext_slot_transaction")
-def _promote_cext_slot_transaction(slot, role: i64, context) -> None:
-    pcc_py_gc_minor_graph_lock()
-    pcc_gc_generational_promote_slot(slot, role, context)
-    pcc_py_gc_minor_graph_unlock()
-
-
-@c_abi_export("pcc_gc_backend3_promote_cext_owner_referents")
-def _promote_cext_owner_referents(obj) -> None:
-    pcc_gc_visit_object_slots(
-        obj, _promote_cext_slot_transaction, null()
-    )
-
-
-@c_abi_export("pcc_gc_backend3_promotion_probe_config")
-def pcc_gc_backend3_promotion_probe_config(pause: i64) -> None:
-    atomic_store_i64(
-        global_addr("pcc_gc_backend3_promotion_probe_state_value"),
-        0,
-        0,
-        "release",
-    )
-    atomic_store_i64(
-        global_addr("pcc_gc_backend3_promotion_probe_pause"),
-        0,
-        pause,
-        "release",
-    )
-
-
-@c_abi_export("pcc_gc_backend3_promotion_probe_state")
-def pcc_gc_backend3_promotion_probe_state() -> i64:
-    return atomic_load_i64(
-        global_addr("pcc_gc_backend3_promotion_probe_state_value"),
-        0,
-        "acquire",
-    )
-
-
-@c_abi_export("pcc_gc_backend3_drain_promotion_worklist")
-def pcc_gc_backend3_drain_promotion_worklist(budget: i64) -> i64:
-    if budget <= 0:
-        return 0
-    state = stack_alloc(16)
-    total_examined: i64 = 0
-    while total_examined < budget:
-        batch_limit: i64 = budget - total_examined
-        if batch_limit > 16:
-            batch_limit = 16
-        batch_examined: i64 = 0
-        more_work: i64 = 0
-        callback_owner = null()
-        pcc_py_gc_minor_graph_lock()
-        while (
-            ptr_is_null(global_load_ptr("pcc_gc_backend3_promotion_head")) == 0
-            and batch_examined < batch_limit
-        ):
-            node = global_load_ptr("pcc_gc_backend3_promotion_head")
-            obj = load_ptr(node, 0)
-            if (
-                pcc_gc_object_node_is_active(node) == 0
-                or ptr_eq(pcc_gc_object_index_find(obj), node) == 0
-            ):
-                _promotion_unlink(node)
-                batch_examined = batch_examined + 1
-                total_examined = total_examined + 1
-                continue
-            revision: i64 = load_i64(
-                global_addr("pcc_gc_object_list_revision"), 0
-            )
-            if load_i64(
-                global_addr("pcc_gc_backend3_promotion_revision"), 0
-            ) != revision:
-                store_i64(
-                    global_addr("pcc_gc_backend3_promotion_revision"),
-                    0,
-                    revision,
-                )
-            store_i64(state, 0, -1)
-            store_i64(state, 8, 0)
-            handled: i64 = pcc_gc_visit_object_slots_slice(
-                obj,
-                _promotion_cursor(node),
-                batch_limit - batch_examined,
-                pcc_gc_generational_promote_slot,
-                null(),
-                state,
-            )
-            if handled == 0:
-                py_incref(obj)
-                callback_owner = obj
-                _promotion_unlink(node)
-                store_i64(state, 0, -1)
-                store_i64(state, 8, 1)
-            examined: i64 = load_i64(state, 8)
-            if examined <= 0:
-                examined = 1
-                store_i64(state, 0, -1)
-            batch_examined = batch_examined + examined
-            total_examined = total_examined + examined
-            next_cursor: i64 = load_i64(state, 0)
-            if next_cursor < 0:
-                _promotion_unlink(node)
-            else:
-                if _set_promotion_cursor(node, next_cursor) == 0:
-                    pcc_py_gc_minor_graph_unlock()
-                    return total_examined
-                store_i64(
-                    global_addr("pcc_gc_backend3_promotion_revision"),
-                    0,
-                    revision,
-                )
-            if ptr_is_null(callback_owner) == 0:
-                break
-        if ptr_is_null(global_load_ptr("pcc_gc_backend3_promotion_head")) == 0:
-            more_work = 1
-        pcc_py_gc_minor_graph_unlock()
-        if ptr_is_null(callback_owner) == 0:
-            _promote_cext_owner_referents(callback_owner)
-            py_decref(callback_owner)
-            pcc_py_gc_minor_graph_lock()
-            if ptr_is_null(
-                global_load_ptr("pcc_gc_backend3_promotion_head")
-            ) == 0:
-                more_work = 1
-            else:
-                more_work = 0
-            pcc_py_gc_minor_graph_unlock()
-        if (
-            more_work != 0
-            and total_examined >= 16
-            and atomic_load_i64(
-                global_addr("pcc_gc_backend3_promotion_probe_pause"),
-                0,
-                "acquire",
-            ) != 0
-        ):
-            atomic_store_i64(
-                global_addr("pcc_gc_backend3_promotion_probe_state_value"),
-                0,
-                1,
-                "release",
-            )
-            while atomic_load_i64(
-                global_addr("pcc_gc_backend3_promotion_probe_pause"),
-                0,
-                "acquire",
-            ) != 0:
-                pcc_thread_safepoint()
-            atomic_store_i64(
-                global_addr("pcc_gc_backend3_promotion_probe_state_value"),
-                0,
-                2,
-                "release",
-            )
-        if batch_examined > 0:
-            pcc_thread_safepoint()
-        if batch_examined == 0 or more_work == 0:
-            break
-    return total_examined
+    return
 
 
 @c_abi_export("pcc_gc_trace_referents_for_promotion_mode")
