@@ -733,8 +733,17 @@ in the relevant section or issue and removes the entry.
    tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
    and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
    into that slab: five native runs and 15 controls pass. No production
-   allocation. Next GC3: rebase the review on the landed #9 baseline and
-   prove the first production allocation path before measuring it.
+   allocation in those probes. The existing GC3 review now includes the
+   landed #9 baseline `1a083c619`, without rewriting published history:
+   [`3cf06a390`](https://github.com/ikshengmin/pcc/commit/3cf06a3904cf728e68b62262f494a72dcc460161).
+   Linux pcc0 rebuilt the exact owned archive: 26 native and 111 other
+   checks passed, nine legacy host-Clang cases unrun (Clang unavailable).
+   The dispatcher inventory now distinguishes its owned card word from
+   external dependencies and checks the existing bump-card export.
+   This did not enable the nursery on the production path or measure
+   throughput. Next GC3: prove a closed production allocation group on
+   that review under the #8 activation conditions, before a sealed Mac
+   comparison; no additional test-only admission slice.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -956,7 +965,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 integrate landed #9 baseline into nursery review: Codex, Linux, 2026-11-23T07:06Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
