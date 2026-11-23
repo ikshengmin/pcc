@@ -112,6 +112,8 @@ RAW_GLOBAL_IMPORTS = {
     # GC0's no-op pin gate.
     "pcc_gc_refcount_atomic", "pcc_diagnostics_runtime_log_fast_state",
     "pcc_gc_pins_inert",
+    # A frozen collector cannot be switched: no mode-lease reservation.
+    "pcc_gc_backend_frozen",
     # A pin on a pending callback candidate during the callback mark window
     # dirties the stopped remark (#9).
     "pcc_gc_mark_active", "pcc_gc_callback_candidate_pin_dirty",

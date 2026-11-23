@@ -5,8 +5,10 @@ receiver and every selected child into leased roots, builds each pair from
 owned roots and appends through the leased list protocol: about 30k
 instructions for list(d.items()) of two entries. GC0 never relocates and its
 cycle collector derives roots from reference counts, so a counted reference
-held by the runtime keeps a private partial result alive. One mode-lease
-reservation keeps a backend switch out; each entry is retained inside one
+held by the runtime keeps a private partial result alive. Before the first
+allocation fixes the collector, one mode-lease reservation keeps a backend
+switch out; once it is fixed no switch can start and none is taken. Each
+entry is retained inside one
 graph transaction by pcc_gc_try_init_ptr_locked, the GC0 list append's own
 retain. A retain miss releases everything and the general path starts over.
 
@@ -53,6 +55,8 @@ class Heap:
             "pcc_gc_backend_selected": 0,
             "pcc_gc_nonmoving_count_free": 0,
             "pcc_gc_list_container_mode": 1,
+            # The collector is not yet fixed: a switch can still start.
+            "pcc_gc_backend_frozen": 0,
         }
         self.rejected = set()
         self.fail_alloc = None
@@ -188,6 +192,7 @@ def _materializer(heap):
 
     namespace.update({
         "load_i32": heap.load, "load_i64": heap.load, "load_ptr": heap.load,
+        "atomic_load_i32": lambda address, offset, order: heap.load(address, offset),
         "store_ptr": heap.store, "store_i64": heap.store,
         "ptr_add": lambda pointer, offset: pointer + offset,
         "ptr_is_null": lambda pointer: pointer == 0,
@@ -265,6 +270,23 @@ def test_gc0_items_are_one_reservation_and_one_transaction_per_entry():
     assert [call[1] for call in heap.calls if call[0] == "publish"] == pairs
     for child in keys + values:
         assert heap.refs[child] == before[child] + 1
+    heap.decref(out)
+    assert _baseline(heap) == before
+
+
+def test_a_fixed_collector_takes_no_reservation():
+    # Once an object exists pcc_gc_set_backend refuses every other collector,
+    # so the mode lease would fence nothing.
+    heap = Heap()
+    heap.flags["pcc_gc_backend_frozen"] = 1
+    run = _materializer(heap)
+    receiver, keys, values = _sample(heap)
+    before = _baseline(heap)
+    status, out = run(receiver, "items")
+    assert status == 1
+    assert [heap.children(pair) for pair in heap.children(out)] == [
+        list(pair) for pair in zip(keys, values)]
+    assert not any(call[0] in ("reserve", "release") for call in heap.calls)
     heap.decref(out)
     assert _baseline(heap) == before
 

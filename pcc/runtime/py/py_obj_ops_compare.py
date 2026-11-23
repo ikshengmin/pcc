@@ -32,6 +32,7 @@ from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEME
 from pcc.runtime.py.py_abi_constants import PY_OBJ_CMP_UNORDERED, C_POINTER_SIZE, DICTENTRY_KEY_OFFSET, DICTENTRY_SIZE, DICTENTRY_VALUE_OFFSET, PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET, PYBYTEARRAYOBJECT_DATA_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET, PYDICTOBJECT_ENTRIES_OFFSET, PYDICTOBJECT_ENTRIES_USED_OFFSET, PYDICTOBJECT_ITEM_COUNT_OFFSET, PYFLOATOBJECT_VALUE_OFFSET, PYINTOBJECT_DIGITS_OFFSET, PYINTOBJECT_NDIGITS_OFFSET, PYINTOBJECT_SIGN_OFFSET, PYCLASSOBJECT_FIELD_NAMES_OFFSET, PYCLASSOBJECT_NAME_OFFSET, PYCLASSOBJECT_N_FIELDS_OFFSET, PYINSTANCEOBJECT_CLS_OFFSET, PYINSTANCEOBJECT_FIELDS_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYMEMORYVIEWOBJECT_BASE_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET, PYSTROBJECT_HASH_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_BOOL, PY_TYPE_BYTEARRAY, PY_TYPE_BYTES, PY_TYPE_DICT, PY_TYPE_FLOAT, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_MEMORYVIEW, PY_TYPE_NONE, PY_TYPE_SET, PY_TYPE_STR, PY_TYPE_TUPLE, PY_TYPE_VALUEBOX
 from pcc.runtime.py.py_abi_constants import PY_TYPE_CLASS, PY_TYPE_COMPLEX, PY_TYPE_INSTANCE, PY_TYPE_USER_CLASS_START, PY_TYPE_WEAKREF
 from pcc.unsafe import (
+    atomic_load_i32,
     cstr,
     define_global_i32,
     free,
@@ -2427,9 +2428,14 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
     kind: int = _type_of(source)
     if kind != PY_TYPE_LIST and kind != PY_TYPE_TUPLE:
         return 0
+    # The reservation only fences a collector switch, which no thread can
+    # start once an object exists (pcc_gc_set_backend refuses it).
     shard: int = pcc_gc_mode_lease_shard_index(source)
-    if pcc_gc_mode_lease_reserve_shard(shard) != 0:
-        return 0
+    reserved: int = 0
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
+        if pcc_gc_mode_lease_reserve_shard(shard) != 0:
+            return 0
+        reserved = 1
     status: int = 1
     # A switch may have completed between the gate and the reservation.
     if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
@@ -2492,7 +2498,7 @@ def _sorted_gc0(source_slot, reverse: int, result_slot) -> int:
         py_decref(out)
     if status < 0 and py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("sorted: out of memory")))
-    if pcc_gc_mode_lease_release_shard(shard) != 0:
+    if reserved != 0 and pcc_gc_mode_lease_release_shard(shard) != 0:
         pcc_platform_abort()
         return -1
     return status

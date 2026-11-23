@@ -922,14 +922,18 @@ def pcc_gc_release_nonterminal_tail(slots, count: i64) -> i64:
         return count
     if load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0) != 0:
         return count
-    # Reserve this owner array's mode-lease shard, not the central counter:
-    # every thread's list and tuple deallocations come here, and the shared
-    # word contended (a failed reservation sent the fields down the per-field
-    # path). A backend switch freezes every shard, so the reserved one keeps
-    # the raw field addresses nonmoving as the central reservation did.
+    # A mode-lease reservation only fences a collector switch. Once an
+    # object exists the collector is fixed (pcc_gc_set_backend refuses every
+    # other one) and GC0 never moves an object, so a destroyed owner's raw
+    # field addresses need no reservation; every list and tuple deallocation
+    # comes here. Before the freeze, reserve this owner array's shard (not
+    # the central counter): a switch freezes every shard.
     shard: i64 = _mode_lease_shard_index(slots)
-    if _mode_lease_reserve_shard(shard) != 0:
-        return count
+    reserved: i64 = 0
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
+        if _mode_lease_reserve_shard(shard) != 0:
+            return count
+        reserved = 1
     # A switch may have completed between the first gate and reservation.
     # Holding the reservation now keeps every raw field address nonmoving.
     remaining: i64 = count
@@ -960,7 +964,8 @@ def pcc_gc_release_nonterminal_tail(slots, count: i64) -> i64:
                 break
             remaining -= 1
             scanned += 1
-    _mode_lease_release_shard(shard)
+    if reserved != 0:
+        _mode_lease_release_shard(shard)
     return remaining
 
 

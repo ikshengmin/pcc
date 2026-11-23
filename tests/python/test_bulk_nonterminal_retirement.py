@@ -17,16 +17,21 @@ SHARDS = "pcc_gc_mode_lease_shards"
 
 
 class Model:
-    def __init__(self, *, fast=1, log=0, active=0, switch=False, contend=False, shard=0):
+    def __init__(self, *, fast=1, log=0, active=0, switch=False, contend=False, shard=0,
+                 frozen=0):
+        # frozen=0: before the first allocation fixes the collector, when a
+        # switch can still start and the batch reserves a mode-lease shard.
         self.memory = {"pcc_gc_refcount_atomic": fast,
                        "pcc_diagnostics_runtime_log_fast_state": log,
-                       "pcc_gc_foreign_lease_active": active}
+                       "pcc_gc_foreign_lease_active": active,
+                       "pcc_gc_backend_frozen": frozen}
         self.switch = switch
         self.contend = contend
         self.namespace = {"i64": int, "null": lambda: 0, "ptr_is_null": lambda p: p == 0,
                           "is_tagged_int": lambda p: p & 1, "global_addr": lambda n: n,
                           "ptr_to_int": lambda p: p,
                           "load_ptr": self.load, "load_i32": self.load,
+                          "atomic_load_i32": lambda p, o, order: self.load(p, o),
                           "atomic_load_i64": lambda p, o, order: self.load(p, o),
                           "atomic_cas_i64": self.cas,
                           "MODE_LEASE_SHARD_COUNT": 32, "MODE_LEASE_SHARD_STRIDE": 128}
@@ -103,6 +108,19 @@ def test_unadmitted_modes_do_not_consume_references(settings):
     assert m.run([shared]) == 1 and m.memory[shared] == 3
     assert m.memory["pcc_gc_foreign_lease_active"] == before
     assert m.shards_balanced(settings.get("shard", 0))
+
+
+def test_a_fixed_collector_retires_without_a_mode_lease():
+    # Once an object exists pcc_gc_set_backend refuses every other collector
+    # and GC0 never moves an object: the reservation would fence nothing, so
+    # even a saturated shard does not stop the batch, and no shard changes.
+    m = Model(frozen=1, shard=(1 << 63) - 1)
+    shared = m.object(2000, 3)
+    immortal = m.object(3000, 1, abi.PY_FLAG_IMMORTAL, abi.PY_TYPE_STR)
+    assert m.run([shared, immortal, 5]) == 0
+    assert m.memory[shared] == 2
+    assert m.memory["pcc_gc_foreign_lease_active"] == 0
+    assert m.shards_balanced((1 << 63) - 1)
 
 
 def test_batch_limit_and_cas_loss_leave_a_replayable_prefix():

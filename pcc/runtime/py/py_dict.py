@@ -2529,8 +2529,9 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
 
     GC0 never relocates and its cycle collector derives roots from reference
     counts, so the counted references held here keep the private partial
-    list and pairs alive across allocation. One mode-lease reservation keeps
-    a backend switch out until return. Each entry is retained inside one
+    list and pairs alive across allocation. Until the collector is fixed,
+    one mode-lease reservation keeps a backend switch out until return. Each
+    entry is retained inside one
     graph transaction by pcc_gc_try_init_ptr_locked, as a GC0 list append
     retains its item. A retain it refuses releases everything built so far
     and returns 0, and the caller runs the general protocol from the start.
@@ -2543,9 +2544,14 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
                 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
                      or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 0))):
         return 0
+    # The reservation only fences a collector switch, which no thread can
+    # start once an object exists (pcc_gc_set_backend refuses it).
     shard: int = pcc_gc_mode_lease_shard_index(receiver)
-    if pcc_gc_mode_lease_reserve_shard(shard) != 0:
-        return 0
+    reserved: int = 0
+    if atomic_load_i32(global_addr("pcc_gc_backend_frozen"), 0, "acquire") == 0:
+        if pcc_gc_mode_lease_reserve_shard(shard) != 0:
+            return 0
+        reserved = 1
     status: int = 1
     # A switch may have completed between the gate and the reservation.
     if count_free == 0 and (load_i32(global_addr("pcc_gc_refcount_atomic"), 0) == 0
@@ -2618,7 +2624,7 @@ def _dict_gc0_materialize(receiver, kind: int, output) -> int:
         py_decref(out)
     if status < 0 and py_err_occurred() == 0:
         py_raise_owned(py_exc_new(19, cstr("dictionary materialization: out of memory")))
-    if pcc_gc_mode_lease_release_shard(shard) != 0:
+    if reserved != 0 and pcc_gc_mode_lease_release_shard(shard) != 0:
         pcc_platform_abort()
         return -1
     return status
