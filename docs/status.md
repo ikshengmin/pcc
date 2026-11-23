@@ -1534,10 +1534,18 @@ stopped; `ab gc0-head gc0-stage3 --control-arm gc0-head-b`, five pairs:
 noise. The handler seldom reaches a full collection: this shows no cost on
 the request path, not the pause bound.
 
-Open, unverified: the young log is emptied only by a collection, and a
-collection is requested by net tracked growth, so a program that tracks and
-releases containers by reference count without net growth may grow the log
-without bound. Probe it before relying on either answer.
+Open, reproduced on Linux x86-64 at `cba826a9` with a PCC-built C probe:
+four batches of 100,000 `py_list_new(0)` / `py_decref` pairs kept the
+tracked count and pause count at zero, while the 8 KiB young-log chunks
+grew to 99, 197, 295 and 393. The log needs a bound that does not depend
+on an automatic collection triggered by net growth.
+
+The 200 us budget is not a pause bound. A Linux x86-64 screening run at
+the same revision, with one old list retaining 20k / 80k / 320k lists,
+observed per-step maxima of 1.18 / 7.98 / 27.76 ms; nesting the same
+children in lists of at most 256 gave 0.47 / 0.83 / 0.59 ms. The full
+collector checks the budget between objects, not between their slots.
+The next bound must include a high-fanout container as well as heap size.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through

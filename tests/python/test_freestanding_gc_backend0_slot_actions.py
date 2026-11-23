@@ -129,6 +129,8 @@ def test_backend0_slot_actions_have_exact_raw_object_closure(
 
 
 def _link_cycle_harness(tmp_path: Path, name: str, archive: Path) -> Path:
+    from tests.owned_runtime_c_fixture import link_c_harness_bounded
+
     source = tmp_path / (name + ".c")
     executable = tmp_path / name
     source.write_text(
@@ -138,7 +140,6 @@ def _link_cycle_harness(tmp_path: Path, name: str, archive: Path) -> Path:
 
 int main(void) {
     py_gc_init();
-    if (pcc_gc_set_backend(PCC_GC_KIND_REFCOUNT_CYCLE) != 0) return 2;
     PyObject *left = py_list_new(0);
     PyObject *right = py_list_new(0);
     if (left == NULL || right == NULL) return 3;
@@ -154,21 +155,7 @@ int main(void) {
 ''',
         encoding="utf-8",
     )
-    result = subprocess.run(
-        [
-            "clang",
-            "-std=c11",
-            f"-I{RUNTIME_DIR / 'include'}",
-            str(source),
-            str(archive),
-            "-pthread",
-            "-o",
-            str(executable),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
+    result = link_c_harness_bounded(source, executable, runtime_archive=archive)
     assert result.returncode == 0, result.stdout + result.stderr
     return executable
 
