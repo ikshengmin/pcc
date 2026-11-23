@@ -418,9 +418,13 @@ in the relevant section or issue and removes the entry.
      - Condition 2 publication coverage: existing and newly created
        module owners both preserve the rescued child in six native
        GC1–3 cases against the CPython module-store oracle. Each currently
-       needs one full refresh. Local regression tests exist, no production
-       fix or Mac claim; determine the exact reject reason in the shared
-       remark before treating these as candidate-local coverage.
+       needs one full refresh. A 15-run Linux probe identified the same
+       reject for both module stores, live dict store, and deliberately
+       withdrawn root: a prior barrier shade is not explained by candidate
+       reachability from current roots. The barrier did fire; its shade
+       alone cannot distinguish a persistent edge from a transient store.
+       Keep the full oracle for this ambiguous case, not a module special
+       case or unapproved journal. No production fix or Mac claim.
      - Condition 3, Linux sealed callback sweep: 270 runs, GC1–3,
        0/4 parked peers, n/4n/16n = 256/1,024/4,096. Medians in ms below,
        each triple is no ballast / +16,384 unrelated live objects /
@@ -557,7 +561,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 identify module-owner remark fallback: Codex, Linux x86-64, 2026-11-23 02:58 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
