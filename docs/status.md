@@ -1388,6 +1388,53 @@ rewrite. Stage 2: delete the runtime of collectors 1-4 and the protocol
 entries only they used. Stage 3: bounded-pause full collection (sliced view
 building and reachability, then an exact revalidation of the candidates).
 
+One collector, stage 2 (deletion; **not started**, dependency map by Claude,
+2026-11-24). After stage 1 no code of collectors 1-4 can run, so this is
+dead-code removal with no behaviour change. The 27 modules below are
+18,207 lines and are referenced about 830 times from 40 surviving files;
+`py_gc_backend.py` (7,000 lines) is the hub and is itself mostly their
+driver. They form one connected body (relocation calls the barrier
+dispatcher, forwarding retirement and oldification call relocation, the
+hub calls all), so a module cannot be removed alone.
+
+    freestanding_gc_*: alloc_stage barrier_dispatcher callback_layers
+    common_mark_cycle conservative_roots forwarding_identity
+    forwarding_retirement generational_oldification generational_promotion
+    generational_scheduler gray_worklist incremental_concurrent_scheduler
+    mapped_roots object_nodes object_root_seeding page_marks relocation_copy
+    relocation_drain relocation_payload relocation_remap relocation_selector
+    scalar_sweep sweep_slots tracing_sweep_collector zpage_allocation
+    zpage_lifecycle zpage_mechanics
+
+Outside references, largest first: barrier_dispatcher 266 in 37 files (the
+store-barrier notes; the fused-protocol pass already drops the generated
+ones), forwarding_identity 170 in 20, object_nodes 80 (63 in the hub),
+incremental_concurrent_scheduler 46, page_marks 30, generational_scheduler
+26. `callback_layers` (19 references, all in `py_weakref.py`) and
+`mapped_roots` (9 in the GC0 collector) need a look before removal: the
+fused collector may use part of them.
+
+Procedure: in surviving files, replace each `backend != 0` branch by its
+GC0 arm and delete the externs it used; delete the modules and their
+entries in `pcc/runtime/Makefile`, `runtime_abi.py` and
+`py_runtime.h`; delete the tests that exist only for collectors 1-4
+(about 368 files name one) and the old failures recorded above with them;
+after each group, build the runtime archive and run the fused collector's
+focused suites. Then remove the now inert protocol entries (pin, lease,
+relocation read, write barrier) from the runtime and code generation and
+retire the fused-protocol pass, whose job disappears.
+
+Stage 3 (bounded-pause full collection; **not started**): keep a view
+across short stops. Each stop builds nodes for the next N tracked objects
+(a cursor over the allocator's slabs; track and untrack keep nodes exact
+while the view exists, as before flag mode), then subtracts internal
+references and propagates reachability N nodes at a time; the unreached
+remainder goes to `pcc_gc_backend0_collect_candidates`, which decides
+exactly within the candidate set in one stop proportional to that set.
+Acceptance: the probe of "gc0: generational cycle collection" (897ecfea0)
+at 20,000 / 80,000 / 320,000 long-lived containers shows a maximum stop
+that does not grow with the heap.
+
 Claude's proposed mapping of the remaining features onto the counting base
 (a proposal; GC4's line is superseded by the decision above):
 
