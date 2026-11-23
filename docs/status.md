@@ -741,9 +741,23 @@ in the relevant section or issue and removes the entry.
    The dispatcher inventory now distinguishes its owned card word from
    external dependencies and checks the existing bump-card export.
    This did not enable the nursery on the production path or measure
-   throughput. Next GC3: prove a closed production allocation group on
-   that review under the #8 activation conditions, before a sealed Mac
-   comparison; no additional test-only admission slice.
+   throughput. Production activation remains blocked on the review:
+   in five Linux pcc0/self runs an interior pointer to the third tuple
+   was present in the initial frozen caller snapshot (two visitor hits),
+   yet the explicit-root-only bump cut rewound all three cells when its
+   explicit list was empty. This is a test-only API's boundary, not a
+   production regression. Reproduce from the bump-cut C fixture on
+   `3cf06a390`: before the first stop keep `(uintptr_t)third + 1` in a
+   volatile caller slot, enable conservative snapshots, and count that
+   word through `pcc_thread_visit_conservative_words` before the existing
+   no-explicit-root cut. Do not dereference after rewind. The same bump
+   path also keeps a whole mixed live/dead slab; the existing in-place
+   promotion requires ordinary allocator provenance, not bump cells.
+   Next GC3: route the frozen roots into the actual bump cut and give
+   live/mixed slabs a bounded, exact lifetime through the major cycle
+   before routing a measured closed handler allocation group. Keep
+   production off until both obligations hold; no isolated test-only
+   admission change and no Mac A/B yet.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -965,7 +979,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - GC3 first closed production nursery allocation under #8 gates: Codex, Linux, 2026-11-23T07:15Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
