@@ -652,7 +652,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - none
+   - #9 bound main-thread conservative roots below process entry: Codex, Linux, 2026-11-23T04:45Z, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
