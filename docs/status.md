@@ -847,12 +847,12 @@ in the relevant section or issue and removes the entry.
    same 35 or 1,366 slabs per arm: 512-byte median wall 1.69→2.86 ms
    (1/5 wins), 16,384-byte 54.33→75.07 ms (0/5). All 30 fixed runs
    passed but off-lock preparation did not improve work time. No code
-   push or Mac A/B for this candidate. Return to the GC3 major-marker
-   old-child liveness blocker before a further allocator candidate.
-   Shared-root cost stays open; seek a change that removes actual hot
-   entry work rather than just reducing the allocated frame size.
-   Next GC2 allocator fix must target a measured lock holder or remove
-   a round trip, not another gray-queue or raw-debit-only candidate.
+   push or Mac A/B for this candidate. The maintainer's next priority is to explain GC2 w4 unfinished marking
+   with assist counts and collector-thread work before any new allocator
+   tweaks. GC3 old-child liveness remains open (rooted bump depth 1 and 2
+   each red 5/5 on the exact review base; rooted indexed control green
+   5/5). For shared root-store, pin and container locks, eliminate work
+   actually executed at entry; frame-size changes alone do not qualify.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -1074,7 +1074,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Fix GC3 major trace of live bump owners: Codex, Linux, 2026-11-23T12:04Z, area runtime-gc
+   - Explain GC2 w4 unfinished marking with assist and collector phase accounting: Codex, Linux, 2026-11-23T12:25Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
