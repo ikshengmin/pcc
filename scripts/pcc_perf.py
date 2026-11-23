@@ -11,15 +11,19 @@
                         with --control GC or --control-arm NAME, the noise
                         floor and a verdict for every row
     table NAME          every collector with one and four workers, against
-                        GC0 and against the recorded asyncio figure
-    asyncio             measure the CPython asyncio counterpart and record it
+                        GC0 and against the recorded asyncio figure for the
+                        same worker count
+    asyncio             measure the CPython asyncio counterpart with one and
+                        four workers (one event loop per process, the same
+                        requests split over them) and record it
     prim NAME           what each primitive operation costs: CPython, every
                         collector with one worker, and four-worker scaling;
                         with --against OTHER, the change between two arms
     gap NAME            where a request's time goes, by category, per collector
     top NAME            the functions a request (or, with --primitive, one
                         operation) spends its time in; against another
-                        collector or arm, the functions that differ
+                        collector or arm, the functions that differ; with
+                        --callers F, F's own time split by who called it
     locks NAME          which callers wait for the graph lock
     layout A [B]        cache-line audit (scripts/pcc_hot_layout.py)
     pause prepare      make an opt-in tracing GC source overlay
@@ -739,31 +743,95 @@ def append_ledger(rows: list[dict]) -> None:
             ledger.write(json.dumps(row, sort_keys=True) + "\n")
 
 
-def measure_asyncio(rounds: int, repeats: int) -> float:
-    program = REPO_ROOT / "benchmarks/handler/asyncio_stats.py"
-    rates = []
+ASYNCIO_PROGRAM = REPO_ROOT / "benchmarks/handler/asyncio_stats.py"
+
+
+def asyncio_run(workers: int, rounds: int, concurrency: int = 100) -> dict:
+    """One CPython asyncio handler run with ``workers`` workers.
+
+    A compiled run's workers are carrier threads of one process sharing the
+    same ``concurrency`` requests per round. CPython runs one event loop per
+    process, so its counterpart is ``workers`` processes that split those
+    requests evenly. They warm up, then start together behind a file
+    barrier; the rate is all their requests over the time from the first
+    start to the last finish (perf_counter is monotonic system-wide).
+    """
+    if workers < 1 or concurrency % workers:
+        raise SystemExit(f"{concurrency} requests do not split over {workers} workers")
+    with tempfile.TemporaryDirectory(prefix="pcc-asyncio-") as scratch:
+        barrier = Path(scratch) / "start"
+        readies = [Path(scratch) / f"ready{index}" for index in range(workers)]
+        children = [
+            subprocess.Popen(
+                [sys.executable, str(ASYNCIO_PROGRAM), str(concurrency // workers), "0",
+                 str(rounds), "--summary", str(barrier), str(ready)],
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
+            )
+            for ready in readies
+        ]
+        try:
+            deadline = time.monotonic() + 600
+            while not all(ready.exists() for ready in readies):
+                if any(child.poll() is not None for child in children):
+                    break
+                if time.monotonic() > deadline:
+                    raise SystemExit(f"asyncio w{workers} did not reach its start barrier")
+                time.sleep(0.001)
+            barrier.write_text("start")
+            outputs = [child.communicate(timeout=600) for child in children]
+        finally:
+            for child in children:
+                if child.poll() is None:
+                    child.kill()
+                    child.communicate()
+    for child, (_, stderr) in zip(children, outputs):
+        if child.returncode != 0:
+            raise SystemExit(f"asyncio w{workers} failed: {stderr[-400:]}")
+    results = [json.loads(stdout) for stdout, _ in outputs]
+    requests = sum(result["requests"] for result in results)
+    if requests != concurrency * rounds:
+        raise SystemExit(f"asyncio w{workers} ran {requests} of {concurrency * rounds} requests")
+    started = min(result["started_at"] for result in results)
+    finished = max(result["finished_at"] for result in results)
+    return {"qps": requests / (finished - started), "requests": requests}
+
+
+def measure_asyncio(rounds: int, repeats: int) -> dict[int, float]:
+    """Record CPython asyncio's rate at every worker count ``table`` uses."""
+    runs: dict[int, list[float]] = {count: [] for count in WORKERS}
     for _ in range(repeats):
-        out = subprocess.run(
-            [sys.executable, str(program), "100", "0", str(rounds), "--summary"],
-            capture_output=True, text=True, timeout=600, check=True,
-        )
-        data = json.loads(out.stdout)
-        rates.append(data["requests"] / (data["finished_at"] - data["started_at"]))
-    rate = statistics.median(rates)
+        for count in WORKERS:
+            runs[count].append(asyncio_run(count, rounds)["qps"])
+    rates = {count: statistics.median(values) for count, values in runs.items()}
     HOME.mkdir(parents=True, exist_ok=True)
     (HOME / "asyncio.json").write_text(json.dumps({
-        "qps": rate, "runs": rates, "python": sys.version.split()[0],
+        "qps": rates[1],
+        "workers": {str(count): rate for count, rate in rates.items()},
+        "runs": {str(count): values for count, values in runs.items()},
+        "python": sys.version.split()[0],
         "requests": rounds * 100, "time": time.time(),
     }, indent=1) + "\n")
-    return rate
+    return rates
+
+
+def recorded_asyncio_rates() -> dict[int, float]:
+    """The recorded asyncio rate per worker count.
+
+    A record from before worker counts were measured holds one event loop's
+    rate only; it is the counterpart of one worker and of nothing else.
+    """
+    recorded = HOME / "asyncio.json"
+    if not recorded.is_file():
+        return {}
+    data = json.loads(recorded.read_text())
+    if "workers" in data:
+        return {int(count): rate for count, rate in data["workers"].items()}
+    return {1: data["qps"]}
 
 
 def print_table(name: str, rounds: int, repeats: int) -> None:
     binary = binary_of(name)
-    asyncio_rate = 0.0
-    recorded = HOME / "asyncio.json"
-    if recorded.is_file():
-        asyncio_rate = json.loads(recorded.read_text())["qps"]
+    asyncio_rates = recorded_asyncio_rates()
     base = {}
     print(load_note(os.getloadavg()[0]))
     print(f"{'':6s} {'req/s':>9s} {'of GC0':>7s} {'of asyncio':>10s} "
@@ -776,6 +844,7 @@ def print_table(name: str, rounds: int, repeats: int) -> None:
             rates[count] = rate
             if collector == 0:
                 base[count] = rate
+            asyncio_rate = asyncio_rates.get(count)
             against = f"{100 * rate / asyncio_rate:9.0f}%" if asyncio_rate else "         -"
             print(
                 f"gc{collector} w{count} {rate:9.0f} {100 * rate / base[count]:6.0f}% {against} "
@@ -1035,6 +1104,18 @@ def lock_callers(rows: list[list]) -> dict[str, int]:
     return dict(callers)
 
 
+def function_callers(rows: list[list], target: str, depth: int = 1) -> dict[str, int]:
+    """``target``'s self samples by the chain of its ``depth`` nearest
+    callers, nearest first ("a < b": called by a, which b called)."""
+    callers: collections.Counter = collections.Counter()
+    for names, function, own, _ in walk_sample(rows):
+        if function != target or not own:
+            continue
+        chain = list(reversed(names))[:depth]
+        callers[" < ".join(chain) or "?"] += own
+    return dict(callers)
+
+
 def function_shares(rows: list[list]) -> dict[str, int]:
     """Busy self samples of all threads by function."""
     shares: collections.Counter = collections.Counter()
@@ -1148,14 +1229,26 @@ def print_gap(name: str, collectors, workers: int, seconds: int, primitive: str)
 
 
 def print_top(name: str, collector: int, workers: int, seconds: int, primitive: str,
-              limit: int, inclusive: bool, other_arm: str, other_collector: int) -> None:
+              limit: int, inclusive: bool, other_arm: str, other_collector: int,
+              callers: tuple[str, ...] = (), depth: int = 1) -> None:
     def costs(arm: str, gc: int) -> tuple[dict[str, float], float, str]:
         rows, unit_time, unit = profile(arm, gc, workers, seconds, primitive)
         busy = sum(function_shares(rows).values())
+        if callers:
+            for target in callers:
+                shares = scaled(function_callers(rows, target, depth), busy, unit_time)
+                print(f"{arm} gc{gc} w{workers}: {target}, "
+                      f"{_cost(sum(shares.values()), unit).strip()} self per "
+                      f"{primitive or unit}, by caller")
+                for caller, cost, _, _ in top_rows(shares, None, limit):
+                    print(f"{_cost(cost, unit)}  {caller}")
+            return {}, unit_time, unit
         shares = inclusive_shares(rows) if inclusive else function_shares(rows)
         return scaled(shares, busy, unit_time), unit_time, unit
 
     first, first_time, unit = costs(name, collector)
+    if callers:
+        return
     label = "us" if unit == "request" else "ns"
     kind = "inclusive" if inclusive else "self"
     what = primitive or unit
@@ -1281,6 +1374,9 @@ def main(argv: list[str] | None = None) -> int:
     top.add_argument("--inclusive", action="store_true")
     top.add_argument("--against", default="", help="another arm")
     top.add_argument("--against-gc", type=int, default=-1, help="another collector")
+    top.add_argument("--callers", default="",
+                     help="comma-separated functions: their self time by caller")
+    top.add_argument("--depth", type=int, default=1, help="callers in each --callers chain")
 
     locks = commands.add_parser("locks")
     locks.add_argument("name")
@@ -1361,7 +1457,8 @@ def main(argv: list[str] | None = None) -> int:
             print_table(args.name, args.rounds, args.repeats)
         return 0
     if args.command == "asyncio":
-        print(f"asyncio {measure_asyncio(args.rounds, args.repeats):.0f} req/s")
+        for count, rate in measure_asyncio(args.rounds, args.repeats).items():
+            print(f"asyncio w{count} {rate:.0f} req/s")
         return 0
     if args.command == "prim":
         names = [name for name, _ in PRIMITIVES]
@@ -1391,7 +1488,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
     if args.command == "top":
         print_top(args.name, args.gc, args.workers, args.seconds, args.primitive,
-                  args.limit, args.inclusive, args.against, args.against_gc)
+                  args.limit, args.inclusive, args.against, args.against_gc,
+                  tuple(part for part in args.callers.split(",") if part), args.depth)
         return 0
     if args.command == "locks":
         print_locks(args.name, args.gc, args.workers, args.seconds, args.primitive)

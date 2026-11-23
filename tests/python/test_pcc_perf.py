@@ -251,6 +251,16 @@ def test_lock_waits_are_charged_to_the_function_that_asked():
     assert PERF.lock_callers(rows) == {"work": 25}
 
 
+def test_a_function_self_time_is_split_by_its_callers():
+    rows = PERF.parse_sample(SAMPLE, SYMBOLS, "bench")
+    assert PERF.function_callers(rows, WAIT) == {"pcc_thread_graph_lock_acquire_for": 25}
+    assert PERF.function_callers(rows, WAIT, 2) == {
+        "pcc_thread_graph_lock_acquire_for < work": 25}
+    # Only self samples count: work's time under its callees is theirs.
+    assert PERF.function_callers(rows, "work") == {"main": 25}
+    assert PERF.function_callers(rows, "absent") == {}
+
+
 def test_ledger_rows_are_one_json_object_per_line(tmp_path, monkeypatch):
     monkeypatch.setattr(PERF, "HOME", tmp_path)
     rows = [{"gc": 3, "workers": 4, "qps_a": 1.0, "qps_b": 2.0, "pairs": 5}]
@@ -402,6 +412,29 @@ def test_the_cpython_driver_runs_a_primitive(name):
     assert data["operations"] == 16
     assert data["checksum"] == (1376 if name == "json" else 16)
     assert data["seconds"] > 0
+
+
+@pytest.mark.parametrize("workers", PERF.WORKERS)
+def test_the_asyncio_counterpart_splits_the_requests_over_worker_processes(workers):
+    run = PERF.asyncio_run(workers, 2)
+    assert run["requests"] == 200
+    assert run["qps"] > 0
+
+
+def test_asyncio_is_recorded_and_compared_per_worker_count(tmp_path, monkeypatch):
+    monkeypatch.setattr(PERF, "HOME", tmp_path)
+    assert PERF.recorded_asyncio_rates() == {}
+    # A record from before worker counts holds one event loop's rate: it
+    # is the counterpart of one worker only, never of four.
+    (tmp_path / "asyncio.json").write_text(json.dumps({"qps": 87000.0}))
+    assert PERF.recorded_asyncio_rates() == {1: 87000.0}
+    rates = {1: [10.0, 30.0, 20.0], 4: [40.0, 60.0, 50.0]}
+    monkeypatch.setattr(
+        PERF, "asyncio_run",
+        lambda workers, rounds: {"qps": rates[workers].pop(0), "requests": rounds * 100})
+    assert PERF.measure_asyncio(100, 3) == {1: 20.0, 4: 50.0}
+    assert PERF.recorded_asyncio_rates() == {1: 20.0, 4: 50.0}
+    assert json.loads((tmp_path / "asyncio.json").read_text())["qps"] == 20.0
 
 
 def test_smoke_cases_expect_what_cpython_computes(tmp_path):
