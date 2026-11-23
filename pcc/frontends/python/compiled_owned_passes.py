@@ -8,6 +8,8 @@ the CFG builder refuses to read; both fail closed, so composing them cannot
 produce IR that neither would have produced alone.
 """
 
+import os
+
 from pcc.ir.optimization.mem2reg import mem2reg_text
 from pcc.ir.optimization.instsimplify import simplify_module_text
 from pcc.ir.optimization.simplifycfg import simplify_cfg_text
@@ -71,6 +73,10 @@ def run_owned_passes(text: str, names: list[str]) -> str:
     if _has_py_cpy_call(text):
         return text
     current = text
+    if os.environ.get("PCC_GC_FUSED_PROTOCOL", "") == "1":
+        from pcc.frontends.python.fused_protocol_pass import fused_protocol_text
+
+        current, _fused = fused_protocol_text(current)
     index = 0
     while index < len(names):
         name = names[index]
