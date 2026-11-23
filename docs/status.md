@@ -802,11 +802,19 @@ in the relevant section or issue and removes the entry.
    third role was not proven. One separate GC2 w4 instruction screen
    put 25.4% of all samples at the single allocator lock's direct and
    inlined wait loops (GC0 0.38%); this is not throughput validation.
-   Next shared candidate: keep root store semantics and dispatch but
-   move cold relocation/checked plan storage off the common entry
-   frame. Verify emitted prologue and native root/foreign/forwarding
-   controls, then qualify against an unchanged arm. GC2 still needs
-   a separate measured allocator hold/removal candidate.
+   The local shared root-store split moved checked plan scratch off
+   its common entry: owned x86-64 frame 432→288 bytes, but only two
+   of 28 pre-check zero stores disappeared. Ten native direct runs
+   across GC0–4 (checked/normal) and eight ABI chunk checks passed.
+   The forwarded control returns 9 (`shared_slot_registered`) on the
+   unchanged `2763d378` parent and first candidate, before it calls
+   the root store. Forwarding was not qualified. No throughput gain
+   shown; do not merge that split or spend a Mac A/B on it.
+   Next GC2: distinguish fresh raw-slab mapping/carving from trim and
+   same-slab magazine refill under the measured shared allocator lock.
+   Remove a measured long hold, not another gray batch/debit-only edit.
+   Shared-root cost stays open; seek a change that removes actual hot
+   entry work rather than just reducing the allocated frame size.
    Next GC2 allocator fix must target a measured lock holder or remove
    a round trip, not another gray-queue or raw-debit-only candidate.
    The first sparse remembered-set slice is a test-only serial model: seven
@@ -1030,7 +1038,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Shrink hot root-store entry by splitting its checked plan: Codex, Linux, 2026-11-23T09:38Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
