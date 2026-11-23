@@ -156,6 +156,11 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- **#9 macOS arm64 validation:** ready for the Mac owner/local agent; exact
+  refs, native tests and five-pair commands in item 1. Recommendation: run
+  this before considering any dependent performance work; no merge decision
+  until the evidence is available.
+
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -358,8 +363,31 @@ in the relevant section or issue and removes the entry.
    queries the sealed extent cache for a peer's interior root; 228 focused
    native assertions passed. The six 4096-node raw-root cells fell from
    941–1032 to 269–346 ms (5/5 beyond controls), still review-only.
-   Next: once exact Mac/HTTP qualification returns, review the #9 gate;
-   meanwhile GC2 Linux task-clock attribution (120,000 list allocations,
+   **Ready macOS unit: verify #9 before GC2/GC3.** Take on local arm64.
+   Compare `64d49ae568c8367e74aa6d765fd6b9e58ee36e64` (fork point)
+   with `b7845414cedc5d8fb435f7d448b4a90e25e0a8e9`, in detached
+   worktrees; use the existing project's uv environment in both.
+   Run the following with a common `PCC_PERF_HOME` (default
+   `$HOME/.cache/pcc/perf`) and fresh arm names:
+
+   ```sh
+   # At the base checkout:
+   uv run --no-sync python scripts/pcc_perf.py arm gc9-64d49-base
+   uv run --no-sync python scripts/pcc_perf.py arm gc9-64d49-control
+   # At b7845414:
+   uv run --no-sync python scripts/pcc_perf.py arm gc9-b784541
+   archive=$(uv run --no-sync python -c 'import json,os,pathlib; p=pathlib.Path(os.getenv("PCC_PERF_HOME","~/.cache/pcc/perf")).expanduser(); print(json.loads((p/"arms/gc9-b784541/build.json").read_text())["runtime"])')
+   PCC_RUNTIME_ARCHIVE="$archive" PCC_THREADED_RUNTIME_ARCHIVE="$archive" PCC_TEST_NO_NATIVE_PROVISIONING=1 PCC_NO_AUTO_PCC1=1 uv run --no-sync python -m pytest -q tests/python/test_gc_acyclic_singleton_production_native.py tests/python/test_gc_tracing_sweep_verdict_native.py
+   uv run --no-sync python scripts/pcc_perf.py ab gc9-64d49-base gc9-b784541 --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control-arm gc9-64d49-control --latency-receipts
+   uv run --no-sync python scripts/pcc_perf.py table gc9-b784541
+   ```
+
+   Return the source stamps, native receipts, and handler paired QPS,
+   maximum pause, peak RSS and p99 against the control. The handler bench
+   is not a socket C512 reproduction. This evidence does not waive the
+   remaining writer coverage, no-observer, scale, or integration checks.
+   Until then, pause new dependent performance slices.
+   Separately, GC2 Linux task-clock attribution (120,000 list allocations,
    five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
    allocator-lock owners, versus 3% in the explicit gray queue. Three of
    five w4 legs finish no marks under load; w1 finishes in all five.
@@ -482,8 +510,7 @@ in the relevant section or issue and removes the entry.
    tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
    and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
    into that slab: five native runs and 15 controls pass. No production
-   allocation. Next GC3: use the real initial root snapshot, then test the
-   first admitted caller and C sequence-array escape before sealed measurement.
+   allocation. GC3 follow-on is paused behind #9; no further review slices.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -705,7 +732,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-23 00:26 UTC), feed initial conservative and registered roots to the bump-span review cut; no auto-admission.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
