@@ -1344,6 +1344,37 @@ generations, 41 logical zpages, 2 other); the GC1 order case of
 (4, stale since #9 and GC4's stopped-world relocation) is fixed in
 `2c9e814eb`. Next: classify each as a code or a test defect and fix it.
 
+## One collector: GC0 is the fused collector (maintainer decision, 2026-11-24)
+
+Maintainer decision, in a question Claude put on 2026-11-24 (option chosen:
+"GC0, keep the other code"): the fused collector is GC0, reference counting
+with the cycle collector. GC1-4 stay in the repository and keep building,
+but receive no further identity or optimization work; tests and performance
+acceptance target the fused collector. This supersedes the plan in the next
+section ("optimize each collector before unifying"), whose GC1-4 steps stop.
+
+Evidence at the decision (local Mac): GC0 w1 48.8k req/s against 33k for
+GC1-3 and 26k for GC4; only GC0 runs finalizers when CPython does (on
+GC1-4 an object dropped in the current frame is finalized one collection
+late, `test_bulk_nonterminal_retirement.py`'s native order case).
+
+Work, in order, each step with an A/B and its ceiling recorded first:
+
+1. Borrowed temporaries in code generation: a value with a stable holder
+   for the duration of a call is neither rooted nor counted. One request
+   makes about 1,000 root-store and reference-count calls for 38 objects
+   (327 `pcc_gc_store_root`, of which 102 clear an empty slot and 178
+   release a temporary); that protocol is 24% of GC0's request CPU.
+2. Generator frame locals: fewer frame-slot round trips per suspension
+   (about 10% of request CPU).
+3. Owner-thread fast path for counts and container locks (biased
+   reference counting); atomics, locks and thread-locals are about 20%.
+
+Measured and rejected on 2026-11-24, not to be retried as is: inlining the
+count tests at every call site (IR grows 3.3x and the benchmark build
+exceeds its memory cap) and flattening the allocator's helper calls
+(handler +0.6%, 11/15 pairs; a call costs about 1 ns here).
+
 ## GC0–4: optimize each collector before unifying
 
 Maintainer decision: “我还是想GC0-4全部优化的不能优化之后，再融合。”
