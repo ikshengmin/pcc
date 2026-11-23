@@ -36,7 +36,7 @@ def test_native_threading_preserves_branch_string_owners(tmp_path, pcc_diagnosti
     expected = _thread_trampoline_branches(_SOURCE.splitlines())
     expected_fold = _fold_cond_branch_to_fallthrough(expected, [])
     expected_drop = _drop_fallthrough_uncond_branches(expected_fold)
-    for backend in range(5):
+    for backend in (0,):
         prefix = str(tmp_path / ("gc" + str(backend) + "-"))
         result = subprocess.run([str(binary), str(source), str(edges), prefix],
                                 capture_output=True, text=True, timeout=15,

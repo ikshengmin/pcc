@@ -42,7 +42,7 @@ _HEAVY_EXTERNAL_CORPUS_SUITES = (
 )
 
 _FULL_BOOTSTRAP_INTEGRATION_GATES = tuple(
-    f"tests/python/gc/test_pcc_bootstrap_full_gc{backend}.py" for backend in range(5)
+    f"tests/python/gc/test_pcc_bootstrap_full_gc{backend}.py" for backend in (0,)
 )
 
 _RUNTIME_SOURCE_COPY_SUITES = (

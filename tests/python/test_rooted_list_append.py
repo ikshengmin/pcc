@@ -122,7 +122,7 @@ class AppendRoots:
         return result
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_existing_append_roots_reload_after_lock_wait_and_remain_owned(backend):
     model = AppendRoots(backend)
     assert model.run() == 0
@@ -244,7 +244,7 @@ def test_concat_existing_roots_native_all_gc(tmp_path, monkeypatch, threaded_pcc
     binary = source.with_suffix('')
     compile_python(str(source), str(binary), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=40,
                              env=dict(os.environ, PATH='/nonexistent', PCC_GC_BACKEND=str(backend),
                                       PCC_GC_REFCOUNT_PROVENANCE_PROBE='2'))

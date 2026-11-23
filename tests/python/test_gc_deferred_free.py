@@ -219,7 +219,7 @@ class Runtime:
         return self.ns["pcc_gc_free_object_memory"]
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("reason", ("normal", "prior-stop", "running", "graph", "no-park", "counted"))
 def test_begin_admits_only_normal_count_free_nonmoving_owner(backend, reason):
     rt = Runtime(backend)
@@ -399,7 +399,7 @@ def test_close_fails_closed_after_disabling_scope_without_losing_queued_block(un
     assert not rt.freed
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("retirement_fails", (False, True))
 @pytest.mark.parametrize("already_noted", (False, True))
 def test_actual_terminal_boundary_defers_only_after_successful_retirement(backend, retirement_fails, already_noted):

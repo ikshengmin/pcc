@@ -114,7 +114,7 @@ def test_real_simplejson_extension_behavior_matches_cpython_under_all_gcs(
         "roundtrip True\n"
     )
     gc_stdout = {}
-    for backend in range(5):
+    for backend in (0,):
         env = os.environ.copy()
         env.pop("LC_ALL", None)
         env["PCC_PACKAGE_SITE"] = str(site)

@@ -92,7 +92,7 @@ main()
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
     expected = str(len(_build_string_table(["_symbol_" + str(i) for i in range(40000)])[1]))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert result.returncode == 0, (backend, result.stdout, result.stderr)
@@ -625,7 +625,7 @@ main()
     binary = tmp_path / "link_lifetime"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert result.returncode == 0, (backend, result.stdout, result.stderr)
@@ -766,7 +766,7 @@ main()
     binary = tmp_path / "fixed_pco_reads"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
@@ -830,7 +830,7 @@ def test_packed_relocation_native_link_executes_under_all_collectors(
             decode_packed_native_object(first.read_bytes()),
             decode_packed_native_object(second.read_bytes()),
         ], _consume_inputs=True)
-        for backend in range(5):
+        for backend in (0,):
             output = tmp_path / (case + "-program-" + str(backend))
             env = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
                        PCC_HOST_PYTHON="/usr/bin/false", PCC_HOST_PCC="/usr/bin/false")

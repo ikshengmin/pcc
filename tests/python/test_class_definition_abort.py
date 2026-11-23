@@ -184,7 +184,7 @@ class DefinitionAbort(Retirement):
         self.env['py_class_abort_definition_slots'](self.class_slot)
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('references', [0, 1, 2], ids=['empty', 'terminal', 'shared'])
 @pytest.mark.parametrize('relocate', [False, True], ids=['stationary', 'move-after-unlock'])
 def test_abort_actual_plans_preserve_error_structure_and_shared_namespace(backend, references, relocate):
@@ -259,7 +259,7 @@ def construct():
     assert '@py_class_abort_definition_slots(' not in body
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_abort_reloads_class_root_after_entry_safepoint(backend):
     model = DefinitionAbort(backend, 1, relocate_before=True)
     model.abort()
@@ -395,7 +395,7 @@ def test_native_original_failure_program(tmp_path, pcc_runtime_archive, python_p
     binary = tmp_path / 'ordinary_failure'
     python_program_compiler(str(ORIGINAL), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         environment.pop('LC_ALL', None)
         result = subprocess.run([str(binary)], capture_output=True, text=True,

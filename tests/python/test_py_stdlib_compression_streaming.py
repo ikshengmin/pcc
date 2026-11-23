@@ -544,7 +544,7 @@ def test_stream_writers_match_cpython_under_current_pcc1(
     expected_stdout = (
         "stream-writers True True True True True True True True True\n"
     )
-    for backend in range(5):
+    for backend in (0,):
         run_environment["PCC_GC_BACKEND"] = str(backend)
         result = subprocess.run(
             [str(executable)],

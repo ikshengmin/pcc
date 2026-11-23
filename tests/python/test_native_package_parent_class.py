@@ -162,7 +162,7 @@ def test_package_parent_class_execution_matches_cpython_on_five_collectors(
         sources[-1], str(binary), backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         actual = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

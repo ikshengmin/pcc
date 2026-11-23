@@ -200,7 +200,7 @@ def test_native_private_field_admission_and_retention_five_gc(tmp_path, pcc_runt
     source.write_text(C_PROBE)
     output = tmp_path / "field"
     compile_owned_c_with_runtime(source, output, runtime_archive=pcc_runtime_archive)
-    for gc in range(5):
+    for gc in (0,):
         for probe in ("0", "2"):
             ran = subprocess.run([str(output), str(gc)], capture_output=True, text=True, timeout=20,
                                  env=dict(os.environ, PATH="/nonexistent", PCC_GC_REFCOUNT_PROVENANCE_PROBE=probe))

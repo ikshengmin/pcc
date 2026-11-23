@@ -304,7 +304,7 @@ def test_production_packed_builder_executes_with_native_arenas_under_all_collect
         runtime_archive=str(pcc_runtime_archive),
     )
     receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
-    for backend in range(5):
+    for backend in (0,):
         completed = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

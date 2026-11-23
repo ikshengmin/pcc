@@ -192,7 +192,7 @@ def test_numpy_default_install_then_array_add_without_package_path(tmp_path):
         compile_process.stdout + compile_process.stderr
     )
 
-    for backend in ("0", "1", "2", "3", "4"):
+    for backend in ("0",):
         run_env = env.copy()
         run_env["PCC_GC_BACKEND"] = backend
         run_env["PCC_HOST_PYTHON"] = "/usr/bin/false"

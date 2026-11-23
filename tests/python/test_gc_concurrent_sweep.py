@@ -290,7 +290,7 @@ def test_slice_clears_each_object_right_before_its_teardown():
     assert heap.cleared == dead and heap.finalized == dead
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("count_free", (0, 1))
 @pytest.mark.parametrize("allowed", (0, 1))
 @pytest.mark.parametrize("worker", (0, 1, 3))

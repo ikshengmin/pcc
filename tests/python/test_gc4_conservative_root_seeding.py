@@ -62,7 +62,7 @@ def _configured(backend, *, tracing=0, legacy=0):
     return cells, events, namespace
 
 
-@pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("backend", (0,))
 def test_collector_identity_selects_counted_gc0_and_count_free_gc1_to_gc4(backend):
     cells, events, _ = _configured(backend)
     assert cells["pcc_gc_backend4_no_refcounts"] == int(backend != 0)

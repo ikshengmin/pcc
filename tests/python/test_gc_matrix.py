@@ -5,7 +5,7 @@ import textwrap
 import time
 import pytest
 
-@pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("backend", (0,))
 def test_gc_matrix(tmp_path, backend):
     from pcc.frontends.python.pipeline import compile_python
     source = """

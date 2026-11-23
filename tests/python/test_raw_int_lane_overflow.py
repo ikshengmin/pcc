@@ -82,7 +82,7 @@ def test_pow_result_keeps_the_exact_int_in_the_raw_lane(
         tmp_path, "raw_pow", _EXACT, python_program_compiler, pcc_runtime_archive,
     )
     expected = "-1 4611686018427387904 -9223372036854775808 -1 3909821048582988049\n"
-    for backend in range(5):
+    for backend in (0,):
         ran = _run(binary, backend)
         assert ran.returncode == 0, f"GC{backend}: {ran.stdout}; {ran.stderr}"
         assert ran.stdout == expected, f"GC{backend}"
@@ -95,7 +95,7 @@ def test_int_beyond_the_raw_lane_raises_instead_of_reading_zero(
         tmp_path, "raw_too_big", _TOO_BIG, python_program_compiler,
         pcc_runtime_archive,
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = _run(binary, backend)
         # The i64 return of ``factorial`` cannot hold 25!.  Either the value
         # is exact (a future object return) or the program must fail loudly;

@@ -610,7 +610,7 @@ def test_archive_owns_mapped_visitor_gc0_to_gc4(
         _mapped_harness_source(),
         pcc_runtime_archive,
     )
-    for backend in range(5):
+    for backend in (0,):
         output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert output == "mapped:3,0\nempty:0\n"
 
@@ -676,6 +676,6 @@ def test_mapped_root_visitor_survives_threaded_registry_mutation(
         _thread_harness_source(),
         threaded_pcc_python_archive,
     )
-    for backend in range(5):
+    for backend in (0,):
         output = _run_ok(implementation, {**os.environ, "PCC_GC_BACKEND": str(backend)})
         assert output == "final:0,0\n"

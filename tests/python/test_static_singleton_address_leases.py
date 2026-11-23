@@ -21,7 +21,7 @@ def test_only_exact_static_header_names_are_admitted_to_the_raw_boundary():
         )
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("active", (0, -1, 9223372036854775807))
 @pytest.mark.parametrize("storage", STORAGE)
 def test_image_static_lease_needs_no_header_probe_or_mode_guard(backend, active, storage):

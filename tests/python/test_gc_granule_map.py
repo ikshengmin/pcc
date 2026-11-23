@@ -92,7 +92,7 @@ def test_granule_cache_survives_raw_address_reuse(
         capture_output=True, text=True, timeout=60,
     )
     assert built.returncode == 0, built.stdout + built.stderr
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -197,7 +197,7 @@ def _run_python_probe(
         runtime_archive=str(runtime_archive),
     )
     outputs: list[list[str]] = []
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         done = subprocess.run(
             [str(exe)],
@@ -879,7 +879,7 @@ def test_granule_live_publication_exposes_complete_header_to_real_pthreads(
     exe = _build_threaded_object_publication_harness(
         tmp_path, granule_runtime_archives["threaded"]
     )
-    for backend in range(5):
+    for backend in (0,):
         done = subprocess.run(
             [str(exe)],
             capture_output=True,
@@ -1194,7 +1194,7 @@ def test_granule_object_lifecycle_races_real_pthread_readers(
     exe = _build_threaded_object_lifecycle_harness(
         tmp_path, granule_runtime_archives["threaded"]
     )
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         done = subprocess.run(
             [str(exe)],
@@ -2266,7 +2266,7 @@ def test_granule_single_writer_races_real_pthread_readers_through_grow(
     exe = _build_threaded_granule_harness(
         tmp_path, granule_runtime_archives["threaded"]
     )
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         done = subprocess.run(
             [str(exe)],

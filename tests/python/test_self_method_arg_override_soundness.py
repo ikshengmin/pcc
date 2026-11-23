@@ -105,7 +105,7 @@ def test_dyn_starred_and_keyword_calls_keep_parameters_dynamic(
         str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

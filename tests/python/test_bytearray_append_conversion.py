@@ -18,7 +18,7 @@ def compare_with_cpython(tmp_path, pcc_runtime_archive, case):
     ).stdout
     output = tmp_path / case
     compile_python(str(source), str(output), backend="self", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

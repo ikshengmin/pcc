@@ -635,7 +635,7 @@ def test_graph_wait_native_five_gc_handoff_stop_registration_and_reuse(
         "runtime_sha256": hashlib.sha256(threaded_pcc_runtime_archive.read_bytes()).hexdigest(),
         "runs": [],
     }
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=45,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_THREADS="1", PCC_REFCOUNT_KIND="atomic"),

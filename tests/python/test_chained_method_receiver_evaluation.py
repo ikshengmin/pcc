@@ -203,7 +203,7 @@ def receiver_binaries(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 @pytest.mark.parametrize("shape", ("ownership", "side_effects"))
 def test_chained_method_receivers_match_python(receiver_binaries, shape, collector):
     binary, expected = receiver_binaries[shape]

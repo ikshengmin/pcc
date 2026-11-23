@@ -591,7 +591,7 @@ def test_exact_writer_releases_native_scratch_under_all_collectors(
         evidence["route_receipts"] = _route_receipts(route_log, route_offset, compile_test)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
-    for collector in range(5):
+    for collector in (0,):
         completed = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),

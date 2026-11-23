@@ -79,7 +79,7 @@ def test_os_kill_native_zero_signal_and_checked_arguments(
         ir_scaffold_mode="on",
     )
     expected = "True\nTrue\nTrue\nmissing\noverflow\noverflow\noverflow\noverflow\ntype\ntype\n"
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], env=dict(os.environ, PCC_GC_BACKEND=str(gc)),
             capture_output=True, text=True, timeout=30,
@@ -174,7 +174,7 @@ def test_os_kill_roots_direct_temporaries_and_releases_error_operands(
         "['bad-pid', 'bad-signal', 'factory-pid', 'good-pid', "
         "'good-signal', 'type-pid', 'type-signal']\n"
     )
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], env=dict(os.environ, PCC_GC_BACKEND=str(gc)),
             capture_output=True, text=True, timeout=30,

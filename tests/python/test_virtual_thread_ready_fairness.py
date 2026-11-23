@@ -106,7 +106,7 @@ def _run_cohort(fairness_binary, collector, carriers):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_one_carrier_does_not_starve_ready_local_or_overflow_work(fairness_binary, collector):
     started, first_all, steps, published_at = _run_cohort(fairness_binary, collector, 1)
     assert started == 400 and steps == 400 * 64
@@ -114,7 +114,7 @@ def test_one_carrier_does_not_starve_ready_local_or_overflow_work(fairness_binar
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_two_carriers_preserve_every_cohort_owner(fairness_binary, collector):
     # Steps on another CPU do not measure a queued task's scheduler turns:
     # one CPU can keep running while another is descheduled or collecting.

@@ -221,7 +221,7 @@ class TupleFactoryMemory:
         self.boundary()
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('values', [('a',), ('a', 'b', 'a'), ('a',) * 8, ('a',) * 17, ('cycle', 'a')])
 def test_tuple_factory_transfers_each_owner_with_movement_and_tracking(values, backend):
     m = TupleFactoryMemory(values, backend)
@@ -236,7 +236,7 @@ def test_tuple_factory_transfers_each_owner_with_movement_and_tracking(values, b
     assert m.frames == m.initial_frames and not m.leases and m.pending is None
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('failure', ['header', 'lease'])
 @pytest.mark.parametrize('pending', [None, 'selected-error'])
 def test_tuple_factory_failure_preserves_sources_and_selected_exception(backend, failure, pending):
@@ -350,7 +350,7 @@ def test_tuple_transfer_preserves_aliases_finalizers_and_reachable_cycles(
     binary = tmp_path / 'tuple_transfer'
     python_program_compiler(str(source), str(binary), backend='self',
                             ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH='/nonexistent', PCC_GC_BACKEND=str(backend),
@@ -361,7 +361,7 @@ def test_tuple_transfer_preserves_aliases_finalizers_and_reachable_cycles(
         assert (result.returncode, result.stdout, result.stderr) == (0, expected + '\n', ''), backend
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_tuple_factory_can_handoff_its_existing_output_lease(backend):
     m = TupleFactoryMemory(('a', 'cycle'), backend)
     token = m.ns['pcc_tuple_from_owned_roots_lease'](m.sources, 2, m.output)

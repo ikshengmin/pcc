@@ -163,7 +163,7 @@ class Retirement:
         self.events.append(('deallocate', value))
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('references', [0, 1, 2], ids=['empty', 'terminal', 'survives-and-moves'])
 def test_metaclass_retirement_uses_actual_transaction_and_deferred_finish(backend, references):
     model = Retirement(backend, references)

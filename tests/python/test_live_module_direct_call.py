@@ -177,7 +177,7 @@ def test_live_module_calls_native(tmp_path, pcc_runtime_archive):
     output = tmp_path / "guardcall_main"
     compile_python(str(main), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)),
             capture_output=True, text=True, timeout=20,

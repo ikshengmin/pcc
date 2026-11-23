@@ -87,7 +87,7 @@ class GeneratorRuntime(ScalarRuntime):
         return before
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("tracked", (False, True))
 @pytest.mark.parametrize("merged", (False, True))
 def test_complete_generator_claim_untracks_before_seal_without_graph_shard_nesting(backend, tracked, merged):

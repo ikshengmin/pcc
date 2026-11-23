@@ -304,7 +304,7 @@ def test_native_starred_unpack_into_captured_and_attribute_targets(
         str(src), str(exe), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         run = subprocess.run(
             [str(exe)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc)),

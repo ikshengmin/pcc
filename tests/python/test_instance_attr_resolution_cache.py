@@ -121,7 +121,7 @@ def test_cached_attribute_outcomes_follow_mutation(
     tmp_path: Path,
     pcc_runtime_archive: Path,
 ) -> None:
-    for backend in range(5):
+    for backend in (0,):
         backend_source = SOURCE.replace("CACHE_BACKEND", str(backend))
         for runtime_name, archive in (
             ("pcc_py", pcc_runtime_archive),
@@ -253,7 +253,7 @@ def test_absent_descriptor_and_field_store_outcomes_follow_mutation(
     tmp_path: Path,
     pcc_runtime_archive: Path,
 ) -> None:
-    for backend in range(5):
+    for backend in (0,):
         backend_source = ABSENT_AND_DESCRIPTOR_SOURCE.replace(
             "CACHE_BACKEND", str(backend)
         )

@@ -140,7 +140,7 @@ def test_level_two_gate_is_one_hostless_owned_build_and_five_gc_chain():
     assert '"PCC_HOST_PYTHON": str(deny / "python3")' in source
     assert '"--python-libpython' not in source
     assert '"--backend",\n            "self"' in source
-    assert "for backend in range(5):" in source
+    assert "for backend in (0,):" in source
     assert 'assert actual == expected' in source
     assert 'assert telemetry["pin_balance"] == 0' in source
     assert "PCC_CPYTHON_3132_ORACLE" in source

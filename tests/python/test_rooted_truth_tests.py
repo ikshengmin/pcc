@@ -146,7 +146,7 @@ print(from_global(), from_call([[]]))
         assert "@py_obj_truthy_rooted(" not in _function(text, name), name
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 def test_rooted_truth_tests_match_cpython(tmp_path, backend):
     source = tmp_path / "truth.py"
     source.write_text(_PROGRAM, encoding="utf-8")

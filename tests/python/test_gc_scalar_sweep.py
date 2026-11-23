@@ -147,7 +147,7 @@ class ScalarRuntime(Runtime):
         return self.scalar_call("drain", 1, 0, 0)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_native_mode_admission_boundary(backend):
     rt = ScalarRuntime(backend)
     pair = rt.object()
@@ -490,7 +490,7 @@ def test_nonmoving_object_family_admission_does_not_require_moving_origin_flag()
     assert rt.drain() == 1
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_actual_allocation_fallback_sets_origin_bit_only_on_moving_backends(backend):
     tree = ast.parse((RUNTIME / "py_obj.py").read_text())
     allocation = next(node for node in tree.body

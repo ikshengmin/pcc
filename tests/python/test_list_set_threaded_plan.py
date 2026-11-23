@@ -89,7 +89,7 @@ class StoreModel:
         return status
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_threaded_store_revalidates_and_commits_under_graph_lock(backend):
     model = StoreModel(backend, 1)
     assert model.run() == 0

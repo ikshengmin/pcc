@@ -254,7 +254,7 @@ def test_list_extended_slice_size_mismatch_raises_value_error(tmp_path):
         backend="self",
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run(
             [str(exe)],
             capture_output=True,

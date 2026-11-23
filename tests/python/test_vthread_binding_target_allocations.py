@@ -381,7 +381,7 @@ def test_native_binding_analysis_matches_frozen_helper_and_cpython(
         str(source), str(executable), backend="self",
         runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on",
     )
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         wire = tmp_path / f"native_gc{collector}.wire"
         result = subprocess.run(
             [str(executable), str(wire)], cwd=tmp_path,

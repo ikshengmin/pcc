@@ -1363,6 +1363,31 @@ and independent of heap size, as ZGC's is; and the five-collector structure
 is to be deleted quickly so that one collector remains, which then gets the
 optimization work ("做完删除 5GC这种。然后主力优化融合GC。 只留一个gC").
 
+One collector, stage 1 (Claude, 2026-11-24, **not executed**: the maintainer
+assigned testing to Codex, "不测。我交给codex去测了"). The runtime selects
+only collector 0: `PCC_GC_BACKEND` other than 0 aborts with a message and
+`pcc_gc_set_backend(n != 0)` returns -1. The fused-protocol pass runs for
+every program and runtime module (no `PCC_GC_FUSED_PROTOCOL` switch).
+`pcc_perf` measures one collector. A script rewrote the collector loops of
+698 test files to one collector (`for backend|gc|collector|gc_backend|col|
+requested_backend in range(5)` and the equivalent tuples and
+`parametrize` lists; other `range(5)` loops are untouched). AGENTS.md states
+the one-collector contract.
+
+For Codex to execute: the runtime archive build; the focused suites of the
+fused collector (`test_gc0_generational_collection.py`,
+`test_fused_protocol_pass.py`, `test_gc_tracking_*.py`,
+`test_freestanding_gc_tracking.py`, `test_freestanding_gc_control.py`,
+`test_slot_call_inert_leases.py`, `test_pcc_perf.py`); then the Python
+language gate. Expected to fail until stage 2 deletes them: tests that
+select collectors 1-4 by name or by `(1, 2, 3, 4)`/`range(1, 5)` loops
+(about 368 files name a tracing or relocating collector), and
+`test_slot_call_inert_leases.py`'s collector-switch case and
+`test_pcc_perf.py`'s five-collector expectations, which need the same
+rewrite. Stage 2: delete the runtime of collectors 1-4 and the protocol
+entries only they used. Stage 3: bounded-pause full collection (sliced view
+building and reachability, then an exact revalidation of the candidates).
+
 Claude's proposed mapping of the remaining features onto the counting base
 (a proposal; GC4's line is superseded by the decision above):
 

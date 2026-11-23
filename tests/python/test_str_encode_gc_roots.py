@@ -344,7 +344,7 @@ main()
     binary = tmp_path / "encoder_direct"
     compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_diagnostic_runtime_archive), link_args=(str(helper),))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_MINOR_ALLOC_MAX="4096",
                      PATH="", PCC_HOST_PYTHON="/nonexistent/host-python"))

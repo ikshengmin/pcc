@@ -170,7 +170,7 @@ def test_live_import_calls_native(tmp_path, pcc_runtime_archive):
     output = tmp_path / "sicall_main"
     compile_python(str(main), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",
                            PCC_HOST_PCC="/usr/bin/false", PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)

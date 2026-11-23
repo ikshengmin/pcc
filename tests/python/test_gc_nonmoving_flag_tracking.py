@@ -50,7 +50,7 @@ class NonmovingRuntime(SnapshotRuntime):
         return obj
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("no_refcounts", (0, 1))
 @pytest.mark.parametrize("probe", (0, 1))
 def test_backend_freeze_selects_only_gc0_or_count_free_nonmoving_tracking(

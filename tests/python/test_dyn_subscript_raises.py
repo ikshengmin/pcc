@@ -114,7 +114,7 @@ def _build(tmp_path):
 
 
 def _run_all_backends(exe):
-    for backend in ("0", "1", "2", "3", "4"):
+    for backend in ("0",):
         env = os.environ.copy()
         env.pop("LC_ALL", None)
         env["PCC_GC_BACKEND"] = backend

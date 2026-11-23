@@ -212,7 +212,7 @@ def test_nested_snapshots_keep_outer_nodes_and_finalizer_cursors(
     }
     receipt_path = tmp_path / 'snapshot-owner.json'
     receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_THREADS='1',

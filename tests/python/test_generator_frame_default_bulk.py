@@ -82,7 +82,7 @@ def test_default_factory_preserves_closures_aliases_and_finalization(tmp_path, p
     binary = tmp_path / 'factory'
     compile_python(str(source), str(binary), backend='self',
                    ir_scaffold_mode='on', runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent')
         environment.pop('PCC_DISABLE_BULK_GENERATOR_FRAME_INIT', None)
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20, env=environment)

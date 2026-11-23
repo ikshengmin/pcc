@@ -101,7 +101,7 @@ def test_classinfo_callbacks_failures_and_operand_lifetimes_native(tmp_path, pcc
     binary = tmp_path / "borrowed_isinstance"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend),
                      PCC_GC_MINOR_HEAP_SIZE="4096", PCC_GC_MINOR_ALLOC_MAX="128"))

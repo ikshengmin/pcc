@@ -152,7 +152,7 @@ main()
     output = tmp_path / "address_result"
     compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         run = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)))
         assert (run.returncode, run.stdout, run.stderr) == (0, "True True 4\n", ""), gc

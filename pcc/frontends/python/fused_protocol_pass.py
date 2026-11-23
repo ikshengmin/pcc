@@ -14,8 +14,8 @@ pcc_gc_load_ptr and pcc_gc_resolve_owned_ptr stay: the backend's precise
 stack-map analysis reads a value's root provenance from those calls.
 
 Each is removed or replaced by its answer. No block is split, so the
-control-flow graph and every phi are unchanged. A program compiled this way
-runs only on the fused collector.
+control-flow graph and every phi are unchanged. pcc has one collector, so
+this runs for every program and runtime module.
 """
 from __future__ import annotations
 

@@ -493,7 +493,7 @@ class Worker:
         ir_scaffold_mode="on",
     )
     expected_wire = reference_path.read_bytes()
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         actual_path = tmp_path / f"native_gc{collector}.wire"
         result = subprocess.run(
             [str(executable), str(actual_path)],

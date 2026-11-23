@@ -255,7 +255,7 @@ def test_counted_gc4_keeps_its_existing_single_owner_pin_protocol():
     assert [state.load(node, 56) for _, node in objects] == [1, 0, 0]
 
 
-@pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("counted", [False, True])
 def test_no_forwardings_keep_cycle_pins_separate_from_other_node_metadata(backend, counted):
     state = MovingRoots(backend, counted=counted)

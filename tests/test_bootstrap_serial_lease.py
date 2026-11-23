@@ -52,7 +52,7 @@ def _load(root):
 
 
 def _assert_nonmac_dispatch():
-    for gc in range(5):
+    for gc in (0,):
         path = ROOT / f"tests/python/gc/test_pcc_bootstrap_full_gc{gc}.py"
         tree = ast.parse(path.read_text())
         function = next(node for node in tree.body if isinstance(node, ast.FunctionDef))

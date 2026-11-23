@@ -253,7 +253,7 @@ def test_method_calls_match_cpython_on_every_collector(tmp_path, pcc_runtime_arc
     expected = subprocess.run([sys.executable, str(source)], capture_output=True, text=True,
                               timeout=120)
     assert expected.returncode == 0, expected.stderr
-    for backend in range(5):
+    for backend in (0,):
         run = _run(binary, backend)
         assert (run.returncode, run.stdout, run.stderr) == (0, expected.stdout, ""), backend
 
@@ -264,7 +264,7 @@ def test_vector_method_call_allocates_no_argument_tuple(tmp_path, pcc_runtime_ar
     _source, binary = _compile(tmp_path, "method_vector_allocations", ALLOCATION_PROGRAM,
                                pcc_runtime_archive)
     expected_total = str(sum(4 * r + 14 for r in range(2500)))
-    for backend in range(5):
+    for backend in (0,):
         run = _run(binary, backend)
         assert run.returncode == 0, (backend, run.stderr)
         rows = {label: (total, float(per_call))

@@ -96,7 +96,7 @@ def dict_subclass_program(tmp_path_factory):
     return executable
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 def test_dict_subclass_protocols_match_cpython(dict_subclass_program, backend):
     run = subprocess.run(
         [str(dict_subclass_program)], capture_output=True, text=True, timeout=60,

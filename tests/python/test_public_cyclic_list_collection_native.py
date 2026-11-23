@@ -146,7 +146,7 @@ def test_public_cyclic_list_collection_matches_cpython(
         backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)), timeout=10,
         )

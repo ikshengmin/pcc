@@ -68,7 +68,7 @@ def test_function_local_class_has_per_call_identity_capture_and_errors(
         backend="self",
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         run_env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(exe)],
@@ -169,7 +169,7 @@ def test_function_local_class_super_uses_the_class_of_each_execution(
         backend="self",
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         run_env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(exe)],

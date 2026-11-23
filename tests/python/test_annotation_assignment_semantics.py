@@ -347,7 +347,7 @@ def test_annotation_assignment_native(source, expected, tmp_path, pcc_runtime_ar
     python_program_compiler(str(path), str(output), backend='self',
                             ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
         assert result.returncode == 0, (gc, result.stdout, result.stderr)
@@ -382,7 +382,7 @@ main()
                          entry_module='annotation_consumer', backend='self',
                          ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
         assert result.returncode == 0, (gc, result.stderr)
@@ -532,7 +532,7 @@ def test_imported_dataclass_defaults_native(tmp_path, pcc_runtime_archive, pytho
     python_program_compiler(str(consumer), str(output), backend='self',
                             ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
         assert result.returncode == 0, (gc, result.stdout, result.stderr)

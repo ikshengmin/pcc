@@ -8956,7 +8956,7 @@ def _five_backend_result(
                 workload_id=workload_id,
                 env_label_only=env_label_only,
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
 
@@ -9021,7 +9021,7 @@ def test_level6_classifier_requires_fence_deferred_native_release():
         "whole_program_gpu": False,
         "backend_results": [
             _level5_lifetime_backend_record(backend)
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     result["backend_results"][3]["native_release_after_fence"] = False
@@ -9040,7 +9040,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_lifetime_matrix():
         "whole_program_gpu": False,
         "backend_results": [
             _level5_lifetime_backend_record(backend)
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result("tilelang_scalar_gemm", result)
@@ -9060,7 +9060,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_metallib_matrix():
         "whole_program_gpu": False,
         "backend_results": [
             _level5_metallib_lifetime_backend_record(backend)
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result("simdgroup_gemm_8x8", result)
@@ -9085,7 +9085,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_two_n_metalli
                 backend,
                 workload_id="simdgroup_gemm_two_n_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9113,7 +9113,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_two_m_metalli
                 backend,
                 workload_id="simdgroup_gemm_two_m_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9141,7 +9141,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_metal
                 backend,
                 workload_id="simdgroup_gemm_four_2d_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9169,7 +9169,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_edge_
                 backend,
                 workload_id="simdgroup_gemm_four_2d_edge_tail_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9197,7 +9197,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_trans
                 backend,
                 workload_id="simdgroup_gemm_four_2d_transpose_ab_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9225,7 +9225,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_trans
                 backend,
                 workload_id="simdgroup_gemm_four_2d_transpose_ab_edge_tail_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9253,7 +9253,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_split
                 backend,
                 workload_id="simdgroup_gemm_four_2d_splitk_atomic_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9281,7 +9281,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_split
                 backend,
                 workload_id="simdgroup_gemm_four_2d_splitk_atomic_edge_tail_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9311,7 +9311,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_four_2d_trans
                     "simdgroup_gemm_four_2d_transpose_ab_splitk_atomic_edge_tail_metallib"
                 ),
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9341,7 +9341,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_eight_n_trans
                     "simdgroup_gemm_eight_n_transpose_ab_splitk_atomic_edge_tail_metallib"
                 ),
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9371,7 +9371,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_sixteen_trans
                     "simdgroup_gemm_sixteen_transpose_ab_splitk_atomic_edge_tail_metallib"
                 ),
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9401,7 +9401,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_simdgroup_thirty_two_tr
                     "simdgroup_gemm_thirty_two_transpose_ab_splitk_atomic_edge_tail_metallib"
                 ),
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9429,7 +9429,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_metallib_matri
                 backend,
                 workload_id="tilelang_scalar_gemm_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9475,7 +9475,7 @@ def test_gpu_level6_five_gc_tilelang_metallib_lifetime_real_or_skipped(
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_scalar_gemm_metallib",
@@ -9507,7 +9507,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_local_tilelang_metal_be
                 backend,
                 workload_id="tilelang_local_metal_benchmark_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9553,7 +9553,7 @@ def test_gpu_level6_five_gc_local_tilelang_metal_benchmark_metallib_lifetime_rea
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         workload_id,
@@ -9585,7 +9585,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_local_tilelang_matmul_n
                 backend,
                 workload_id="tilelang_local_matmul_nonroller_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9633,7 +9633,7 @@ def test_gpu_level6_five_gc_local_tilelang_matmul_nonroller_metallib_lifetime_re
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         workload_id,
@@ -9665,7 +9665,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_transpose_a_me
                 backend,
                 workload_id="tilelang_transpose_a_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9711,7 +9711,7 @@ def test_gpu_level6_five_gc_tilelang_transpose_a_metallib_lifetime_real_or_skipp
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_transpose_a_metallib",
@@ -9743,7 +9743,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_transpose_b_me
                 backend,
                 workload_id="tilelang_transpose_b_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9789,7 +9789,7 @@ def test_gpu_level6_five_gc_tilelang_transpose_b_metallib_lifetime_real_or_skipp
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_transpose_b_metallib",
@@ -9821,7 +9821,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_transpose_ab_m
                 backend,
                 workload_id="tilelang_transpose_ab_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9867,7 +9867,7 @@ def test_gpu_level6_five_gc_tilelang_transpose_ab_metallib_lifetime_real_or_skip
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_transpose_ab_metallib",
@@ -9899,7 +9899,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_splitk_atomic_
                 backend,
                 workload_id="tilelang_splitk_atomic_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -9945,7 +9945,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_atomic_metallib_lifetime_real_or_ski
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_atomic_metallib",
@@ -9977,7 +9977,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_splitk_atomic_
                 backend,
                 workload_id="tilelang_splitk_atomic_vectorized_c_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10026,7 +10026,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_atomic_vectorized_c_metallib_lifetim
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_atomic_vectorized_c_metallib",
@@ -10058,7 +10058,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_splitk_atomic_
                 backend,
                 workload_id="tilelang_splitk_atomic_ceildiv_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10106,7 +10106,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_atomic_ceildiv_metallib_lifetime_rea
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_atomic_ceildiv_metallib",
@@ -10138,7 +10138,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_splitk_floor_p
                 backend,
                 workload_id="tilelang_splitk_floor_plus_one_ceildiv_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10188,7 +10188,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_floor_plus_one_ceildiv_metallib_life
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_floor_plus_one_ceildiv_metallib",
@@ -10220,7 +10220,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_output_staged_
                 backend,
                 workload_id="tilelang_output_staged_gemm_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10266,7 +10266,7 @@ def test_gpu_level6_five_gc_tilelang_output_staged_gemm_metallib_lifetime_real_o
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_output_staged_gemm_metallib",
@@ -10298,7 +10298,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_output_staged_
                 backend,
                 workload_id="tilelang_output_staged_f16_transpose_b_gemm_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10344,7 +10344,7 @@ def test_gpu_level6_five_gc_tilelang_output_staged_f16_transpose_b_gemm_metallib
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         workload_id,
@@ -10376,7 +10376,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_gemmwarp_polic
                 backend,
                 workload_id="tilelang_gemmwarp_policy_alias_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10422,7 +10422,7 @@ def test_gpu_level6_five_gc_tilelang_gemmwarp_policy_alias_metallib_lifetime_rea
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         workload_id,
@@ -10454,7 +10454,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_local_tilelang_matmul_s
                 backend,
                 workload_id="tilelang_local_matmul_static_roller_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10502,7 +10502,7 @@ def test_gpu_level6_five_gc_local_tilelang_matmul_static_roller_metallib_lifetim
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         workload_id,
@@ -10534,7 +10534,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_swizzled_padde
                 backend,
                 workload_id="tilelang_swizzled_padded_annotate_layout_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10585,7 +10585,7 @@ def test_gpu_level6_five_gc_tilelang_swizzled_padded_annotate_layout_metallib_li
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_swizzled_padded_annotate_layout_metallib",
@@ -10617,7 +10617,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_enabled_swizzl
                 backend,
                 workload_id="tilelang_enabled_swizzle_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10663,7 +10663,7 @@ def test_gpu_level6_five_gc_tilelang_enabled_swizzle_metallib_lifetime_real_or_s
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_enabled_swizzle_metallib",
@@ -10695,7 +10695,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_nonzero_step_p
                 backend,
                 workload_id="tilelang_nonzero_step_pipelined_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10744,7 +10744,7 @@ def test_gpu_level6_five_gc_tilelang_nonzero_step_pipelined_metallib_lifetime_re
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_nonzero_step_pipelined_metallib",
@@ -10776,7 +10776,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_vectorized_ann
                 backend,
                 workload_id="tilelang_vectorized_annotations_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10804,7 +10804,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_vectorized_abc
                 backend,
                 workload_id="tilelang_vectorized_abc_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10832,7 +10832,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_vectorized_a_c
                 backend,
                 workload_id="tilelang_vectorized_a_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10881,7 +10881,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_a_copy_metallib_lifetime_real_or
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_a_copy_metallib",
@@ -10913,7 +10913,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_vectorized_b_c
                 backend,
                 workload_id="tilelang_vectorized_b_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -10962,7 +10962,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_b_copy_metallib_lifetime_real_or
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_b_copy_metallib",
@@ -10994,7 +10994,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_vectorized_c_c
                 backend,
                 workload_id="tilelang_vectorized_c_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11043,7 +11043,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_c_copy_metallib_lifetime_real_or
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_c_copy_metallib",
@@ -11096,7 +11096,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_abc_copy_metallib_lifetime_real_
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_abc_copy_metallib",
@@ -11149,7 +11149,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_annotations_metallib_lifetime_re
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_annotations_metallib",
@@ -11181,7 +11181,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_parallel_a_cop
                 backend,
                 workload_id="tilelang_parallel_a_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11230,7 +11230,7 @@ def test_gpu_level6_five_gc_tilelang_parallel_a_copy_metallib_lifetime_real_or_s
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_parallel_a_copy_metallib",
@@ -11262,7 +11262,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_parallel_b_cop
                 backend,
                 workload_id="tilelang_parallel_b_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11311,7 +11311,7 @@ def test_gpu_level6_five_gc_tilelang_parallel_b_copy_metallib_lifetime_real_or_s
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_parallel_b_copy_metallib",
@@ -11343,7 +11343,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_parallel_c_cop
                 backend,
                 workload_id="tilelang_parallel_c_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11392,7 +11392,7 @@ def test_gpu_level6_five_gc_tilelang_parallel_c_copy_metallib_lifetime_real_or_s
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_parallel_c_copy_metallib",
@@ -11424,7 +11424,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_parallel_ab_co
                 backend,
                 workload_id="tilelang_parallel_ab_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11473,7 +11473,7 @@ def test_gpu_level6_five_gc_tilelang_parallel_ab_copy_metallib_lifetime_real_or_
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_parallel_ab_copy_metallib",
@@ -11505,7 +11505,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_parallel_abc_c
                 backend,
                 workload_id="tilelang_parallel_abc_copy_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11554,7 +11554,7 @@ def test_gpu_level6_five_gc_tilelang_parallel_abc_copy_metallib_lifetime_real_or
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_parallel_abc_copy_metallib",
@@ -11586,7 +11586,7 @@ def test_level6_classifier_accepts_complete_pcc1_five_gc_tilelang_nonzero_step_s
                 backend,
                 workload_id="tilelang_nonzero_step_serial_metallib",
             )
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     evidence = classify_five_gc_gpu_lifetime_result(
@@ -11635,7 +11635,7 @@ def test_gpu_level6_five_gc_tilelang_nonzero_step_serial_metallib_lifetime_real_
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_nonzero_step_serial_metallib",
@@ -11685,7 +11685,7 @@ def test_gpu_level6_five_gc_simdgroup_metallib_lifetime_real_or_skipped(
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_8x8",
@@ -11735,7 +11735,7 @@ def test_gpu_level6_five_gc_simdgroup_two_n_metallib_lifetime_real_or_skipped(
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_two_n",
@@ -11785,7 +11785,7 @@ def test_gpu_level6_five_gc_simdgroup_two_m_metallib_lifetime_real_or_skipped(
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_two_m",
@@ -11835,7 +11835,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_metallib_lifetime_real_or_skipped(
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d",
@@ -11887,7 +11887,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_edge_tail_metallib_lifetime_real_o
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_edge_tail",
@@ -11939,7 +11939,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_metallib_lifetime_rea
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab",
@@ -11993,7 +11993,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_edge_tail_metallib_li
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab_edge_tail",
@@ -12045,7 +12045,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_splitk_atomic_metallib_lifetime_re
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_splitk_atomic",
@@ -12100,7 +12100,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_splitk_atomic_edge_tail_metallib_l
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_splitk_atomic_edge_tail",
@@ -12157,7 +12157,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_splitk_atomic_edge_ta
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab_splitk_atomic_edge_tail",
@@ -12214,7 +12214,7 @@ def test_gpu_level6_five_gc_simdgroup_eight_n_transpose_ab_splitk_atomic_edge_ta
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_eight_n_transpose_ab_splitk_atomic_edge_tail",
@@ -12271,7 +12271,7 @@ def test_gpu_level6_five_gc_simdgroup_sixteen_transpose_ab_splitk_atomic_edge_ta
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_sixteen_transpose_ab_splitk_atomic_edge_tail",
@@ -12328,7 +12328,7 @@ def test_gpu_level6_five_gc_simdgroup_thirty_two_transpose_ab_splitk_atomic_edge
             backend,
             workload_id=workload_id,
         )
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_thirty_two_transpose_ab_splitk_atomic_edge_tail",
@@ -12374,7 +12374,7 @@ def test_gpu_level6_five_gc_tilelang_step_serial_lifetime_real_or_skipped(
     exe = _build_pcc1_tilelang_step_serial_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_step_serial",
@@ -12418,7 +12418,7 @@ def test_gpu_level6_five_gc_tilelang_nonzero_step_serial_lifetime_real_or_skippe
     exe = _build_pcc1_tilelang_nonzero_step_serial_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_nonzero_step_serial",
@@ -12462,7 +12462,7 @@ def test_gpu_level6_five_gc_tilelang_step_pipelined_lifetime_real_or_skipped(
     exe = _build_pcc1_tilelang_step_pipelined_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_step_pipelined",
@@ -12506,7 +12506,7 @@ def test_gpu_level6_five_gc_tilelang_nonzero_step_pipelined_lifetime_real_or_ski
     exe = _build_pcc1_tilelang_nonzero_step_pipelined_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_nonzero_step_pipelined",
@@ -12546,7 +12546,7 @@ def test_gpu_level6_five_gc_lifetime_real_or_skipped(tmp_path):
     exe = _build_pcc1_tilelang_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend)
-        for backend in range(5)
+        for backend in (0,)
     ]
     owner_result = {
         **pcc_metal_owner_identity_fields(launcher_links_libpython=False),
@@ -12606,7 +12606,7 @@ def test_gpu_level6_five_gc_copy_owner_lifetime_real_or_skipped(tmp_path):
     exe = tmp_path / "pcc1_real_metal_runtime_source_copy"
     assert exe.is_file()
     backend_results = []
-    for backend in range(5):
+    for backend in (0,):
         env = os.environ.copy()
         env.pop("LC_ALL", None)
         env["PCC_GC_BACKEND"] = str(backend)
@@ -12703,7 +12703,7 @@ def test_gpu_level6_five_gc_simdgroup_lifetime_real_or_skipped(tmp_path):
     exe = _build_pcc1_simdgroup_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_8x8",
@@ -12745,7 +12745,7 @@ def test_gpu_level6_five_gc_simdgroup_two_n_lifetime_real_or_skipped(tmp_path):
     exe = _build_pcc1_simdgroup_two_n_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_two_n",
@@ -12787,7 +12787,7 @@ def test_gpu_level6_five_gc_simdgroup_two_m_lifetime_real_or_skipped(tmp_path):
     exe = _build_pcc1_simdgroup_two_m_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_two_m",
@@ -12829,7 +12829,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_lifetime_real_or_skipped(tmp_path)
     exe = _build_pcc1_simdgroup_four_2d_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d",
@@ -12873,7 +12873,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_lifetime_real_or_skip
     exe = _build_pcc1_simdgroup_four_2d_transpose_ab_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab",
@@ -12917,7 +12917,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_edge_tail_lifetime_real_or_skipped
     exe = _build_pcc1_simdgroup_four_2d_edge_tail_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_edge_tail",
@@ -12963,7 +12963,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_edge_tail_lifetime_re
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab_edge_tail",
@@ -13007,7 +13007,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_splitk_atomic_lifetime_real_or_ski
     exe = _build_pcc1_simdgroup_four_2d_splitk_atomic_gemm_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_splitk_atomic",
@@ -13054,7 +13054,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_splitk_atomic_edge_tail_lifetime_r
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_splitk_atomic_edge_tail",
@@ -13105,7 +13105,7 @@ def test_gpu_level6_five_gc_simdgroup_four_2d_transpose_ab_splitk_atomic_edge_ta
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_four_2d_transpose_ab_splitk_atomic_edge_tail",
@@ -13156,7 +13156,7 @@ def test_gpu_level6_five_gc_simdgroup_eight_n_transpose_ab_splitk_atomic_edge_ta
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_eight_n_transpose_ab_splitk_atomic_edge_tail",
@@ -13207,7 +13207,7 @@ def test_gpu_level6_five_gc_simdgroup_sixteen_transpose_ab_splitk_atomic_edge_ta
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_sixteen_transpose_ab_splitk_atomic_edge_tail",
@@ -13258,7 +13258,7 @@ def test_gpu_level6_five_gc_simdgroup_thirty_two_transpose_ab_splitk_atomic_edge
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "simdgroup_gemm_thirty_two_transpose_ab_splitk_atomic_edge_tail",
@@ -13302,7 +13302,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_nonzero_serial_lifetime_real_or_
     exe = _build_pcc1_tilelang_vectorized_nonzero_serial_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_nonzero_serial",
@@ -13346,7 +13346,7 @@ def test_gpu_level6_five_gc_tilelang_vectorized_annotations_lifetime_real_or_ski
     exe = _build_pcc1_tilelang_vectorized_annotations_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_vectorized_annotations",
@@ -13390,7 +13390,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_atomic_lifetime_real_or_skipped(
     exe = _build_pcc1_tilelang_splitk_atomic_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_atomic",
@@ -13434,7 +13434,7 @@ def test_gpu_level6_five_gc_tilelang_splitk_atomic_ceildiv_tail_lifetime_real_or
     exe = _build_pcc1_tilelang_splitk_atomic_ceildiv_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_splitk_atomic_ceildiv_tail",
@@ -13478,7 +13478,7 @@ def test_gpu_level6_five_gc_tilelang_transpose_ab_lifetime_real_or_skipped(
     exe = _build_pcc1_tilelang_transpose_ab_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_transpose_ab",
@@ -13524,7 +13524,7 @@ def test_gpu_level6_five_gc_tilelang_swizzled_padded_annotate_layout_lifetime_re
     )
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_swizzled_padded_annotate_layout",
@@ -13568,7 +13568,7 @@ def test_gpu_level6_five_gc_tilelang_enabled_swizzle_lifetime_real_or_skipped(
     exe = _build_pcc1_tilelang_enabled_swizzle_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_enabled_swizzle",
@@ -13612,7 +13612,7 @@ def test_gpu_level6_five_gc_tilelang_nonzero_start_pipelined_lifetime_real_or_sk
     exe = _build_pcc1_tilelang_nonzero_start_pipelined_lifetime_probe(tmp_path)
     backend_results = [
         _run_lifetime_probe_backend(exe, backend, workload_id=workload_id)
-        for backend in range(5)
+        for backend in (0,)
     ]
     evidence = classify_five_gc_gpu_lifetime_result(
         "tilelang_nonzero_start_pipelined",

@@ -1341,7 +1341,7 @@ def test_cross_module_may_park_import_keeps_call_semantics(tmp_path: Path) -> No
         "4001",
         "40001",
     ]
-    for backend in ("0", "1", "2", "3", "4"):
+    for backend in ("0",):
         ran = subprocess.run(
             [str(executable)],
             text=True,

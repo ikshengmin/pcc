@@ -45,7 +45,7 @@ main()
     binary = tmp_path / "callback_owner"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert run.returncode == 0, (backend, run.stdout, run.stderr)
@@ -78,7 +78,7 @@ main()
     binary = tmp_path / "expression_result"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=15,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert run.returncode == 0, (backend, run.stdout, run.stderr)

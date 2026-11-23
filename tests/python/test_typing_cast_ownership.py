@@ -48,7 +48,7 @@ main()
     binary = tmp_path / "cast_tuple_owner"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, (backend, ran.stdout, ran.stderr)
@@ -103,7 +103,7 @@ main()
     binary = tmp_path / "cast_owner"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, (backend, ran.stdout, ran.stderr)
@@ -173,7 +173,7 @@ main()
     binary = tmp_path / "cast_raw_run"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, "41 True\n", ""), backend

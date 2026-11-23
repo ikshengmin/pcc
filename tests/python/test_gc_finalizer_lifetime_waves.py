@@ -76,7 +76,7 @@ def test_native_two_wave_finalizers_respect_strong_owners_all_gcs(
         str(SOURCE), str(output), backend="self",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         label = f"gc{backend}"
         result = _record_execution(
             tmp_path, label, [str(output)],

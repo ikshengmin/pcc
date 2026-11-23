@@ -129,7 +129,7 @@ def test_native_subprocess_run_captures_like_cpython(tmp_path):
         str(exe),
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         native = subprocess.run(
             [str(exe), str(workdir)], capture_output=True, text=True, timeout=120,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

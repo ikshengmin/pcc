@@ -197,7 +197,7 @@ def mixed_binaries(tmp_path_factory):
 @pytest.mark.integration
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("carriers", (1, 2))
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_native_and_virtual_waiters_make_progress(mixed_binaries, kind, carriers, collector):
     result = subprocess.run([str(mixed_binaries[kind]), str(carriers)],
                             capture_output=True, text=True, timeout=12,
@@ -224,7 +224,7 @@ def retry_binaries(tmp_path_factory):
 @pytest.mark.integration
 @pytest.mark.parametrize("kind", KINDS)
 @pytest.mark.parametrize("mode", ("queued", "notified", "spurious"))
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_cancelled_or_spuriously_woken_waiter_keeps_progress(retry_binaries, kind, mode, collector):
     result = subprocess.run([str(retry_binaries[kind]), mode], capture_output=True,
                             text=True, timeout=10,

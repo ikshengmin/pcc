@@ -40,7 +40,7 @@ def observer_programs(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("gc_backend", range(5))
+@pytest.mark.parametrize("gc_backend", (0,))
 def test_generator_observer_matches_cpython(observer_programs, gc_backend):
     oracle = run_process_group_timeout(
         [sys.executable, str(SOURCES / "gc_observer_generator_oracle.py")], timeout=15,

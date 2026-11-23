@@ -227,7 +227,7 @@ def test_compiler_admitted_young_cut_activation(
     record_property("binary_sha256", binary_sha256)
     # One compile and one integration node preserve ordinary xdist scheduling.
     # The last two rows leave the max unset to execute the unchanged default 16.
-    cases = [(backend, revoked, 128) for backend in range(5) for revoked in (False, True)]
+    cases = [(backend, revoked, 128) for backend in (0,) for revoked in (False, True)]
     cases += [(3, revoked, None) for revoked in (False, True)]
     for backend, revoked, alloc_max in cases:
         output, counters = _run_native(

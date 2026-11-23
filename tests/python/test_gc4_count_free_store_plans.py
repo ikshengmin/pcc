@@ -255,7 +255,7 @@ def test_idle_heap_field_keeps_its_generation_barrier(kind):
     assert model.events == ['note', ('barrier', model.OWNER, model.VALUE), ('publish', model.VALUE)]
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('kind', ['root', 'field', 'sentinel'])
 def test_five_counted_collectors_keep_prepare_and_finish(backend, kind):
     model = Store(backend=backend, count_free=False)
@@ -294,7 +294,7 @@ def test_store_plan_mode_checks_emit_scalar_ir_without_boxed_comparison(tmp_path
         assert '.modvar.py_obj._STORE_PLAN_' not in body
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('count_free', [False, True])
 @pytest.mark.parametrize('kind', ['root', 'field', 'sentinel'])
 def test_locked_heap_barrier_dispatch_is_gc4_heap_only(backend, count_free, kind):

@@ -98,7 +98,7 @@ def test_class_protocols_dispatch_to_the_metaclass(tmp_path):
         str(exe),
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         native = subprocess.run(
             [str(exe)], capture_output=True, text=True, timeout=60,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

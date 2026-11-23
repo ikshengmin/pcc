@@ -58,7 +58,7 @@ def test_sized_bytes_constructors_match_cpython(tmp_path, pcc_diagnostic_runtime
     binary = tmp_path / "bytes_count"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_diagnostic_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent", PCC_HOST_PYTHON="/usr/bin/false", PCC_RUNTIME_CC="/usr/bin/false"))
         assert result.returncode == 0, result.stdout + result.stderr

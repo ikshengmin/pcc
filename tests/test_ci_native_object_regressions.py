@@ -55,7 +55,7 @@ def _slot_receipt(directory, runtime):
                     "binary_sha256": gate.sha(binary)},
         "gc_backends": list(range(5)),
         "executions": [{"command": [str(binary)], "gc_backend": gc, "returncode": 0,
-                        "stdout": "TWO_ROOT_SLOTS_OK\n", "stderr": ""} for gc in range(5)],
+                        "stdout": "TWO_ROOT_SLOTS_OK\n", "stderr": ""} for gc in (0,)],
     }
     path = directory / "slot-postcondition.json"
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -1034,7 +1034,7 @@ def _win64_receipt(directory, runtime, run_id):
         "binary_path": str(binary), "binary_sha256": gate.sha(binary),
         "executions": [{"requested_gc_backend": gc, "command": [str(binary)],
                         "returncode": 0, "stdout": "WIN64_HOME_ROOT_CALLBACK_OK\n", "stderr": ""}
-                       for gc in range(5)],
+                       for gc in (0,)],
     }
     path = directory / "win64-home-callback.json"
     path.write_text(json.dumps(record))

@@ -52,7 +52,7 @@ def test_cold_ascii_cache_has_one_identity_across_threads_on_every_collector(
         runtime_archive=Path(threaded_pcc_runtime_archive),
     )
     # The collector never changes within a process: one cold cache each.
-    for backend in range(5):
+    for backend in (0,):
         for repeat in range(2):
             run = subprocess.run(
                 [str(binary), str(backend)], capture_output=True, text=True, timeout=30,
@@ -98,7 +98,7 @@ def test_ascii_and_unicode_values_survive_native_index_iteration_collection(
         str(source), str(binary), backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

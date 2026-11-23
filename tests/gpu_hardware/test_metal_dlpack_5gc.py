@@ -16,7 +16,7 @@ def test_pcc1_dlpack_real_metal_device_lifetime_under_gc0_through_gc4(
     tmp_path,
     monkeypatch,
 ):
-    for backend in range(5):
+    for backend in (0,):
         backend_dir = tmp_path / f"gc{backend}"
         backend_dir.mkdir()
         monkeypatch.setenv("PCC_GC_BACKEND", str(backend))

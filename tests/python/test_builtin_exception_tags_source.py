@@ -71,7 +71,7 @@ main()
         str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(output)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
             capture_output=True, text=True, timeout=15,

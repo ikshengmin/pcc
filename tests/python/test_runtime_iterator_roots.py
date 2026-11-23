@@ -162,7 +162,7 @@ def test_sequence_next_reloads_length_owner_and_teardown_result(backend, gate, a
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("callable_iterator", (False, True))
 @pytest.mark.parametrize("prior_pin", (False, True))
 def test_iterator_owned_return_restores_existing_pin_and_reference(backend, callable_iterator, prior_pin):
@@ -198,7 +198,7 @@ def test_callable_iterator_cleanup_keeps_live_addresses(backend, gate, outcome, 
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_tagged_iterator_result_needs_no_pin(backend):
     memory = _IteratorMemory(backend=backend, gate=4)
     memory.items.fields[0] = 85
@@ -275,7 +275,7 @@ def test_iterator_handoff_executes_all_collectors(tmp_path, monkeypatch,
     python_program_compiler(str(source), str(binary), backend="self",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True,
             timeout=30, env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                                  PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))
@@ -357,7 +357,7 @@ class _EnumerateMemory(_IteratorMemory):
         self.pins -= 1
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("gate", (1, 2, 3))
 @pytest.mark.parametrize("after_unlink", (False, True))
 @pytest.mark.parametrize("fail", ("", "list", "next", "pair", "index", "append"))

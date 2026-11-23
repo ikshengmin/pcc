@@ -221,7 +221,7 @@ def test_timestamp_range_native_all_gc(
                "provider_body_sha256": hashlib.sha256(_provider_body().encode()).hexdigest(),
                "runtime_sha256": hashlib.sha256(explicit_owned_runtime.read_bytes()).hexdigest(),
                "executions": executions}
-    for collector in range(5):
+    for collector in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(collector),

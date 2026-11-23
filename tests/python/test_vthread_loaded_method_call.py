@@ -172,7 +172,7 @@ def loaded_binaries(tmp_path_factory):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("program", ("semantic", "parking"))
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_loaded_deferred_methods_preserve_semantics(loaded_binaries, program, collector):
     binary, expected = loaded_binaries[program]
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

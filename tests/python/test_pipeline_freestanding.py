@@ -128,7 +128,7 @@ main()
     pipeline.compile_python(str(path), str(output), backend="self",
                             ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         environment = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",
                            PCC_HOST_PCC="/usr/bin/false", PCC_GC_BACKEND=str(collector))
         result = subprocess.run([str(output)], env=environment, capture_output=True,

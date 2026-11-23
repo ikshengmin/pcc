@@ -195,7 +195,7 @@ def class_cleanup_native_program(
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
 def test_native_class_lookup_cleanup_restores_error(
     class_cleanup_native_program, backend
 ):

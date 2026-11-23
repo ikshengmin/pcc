@@ -55,7 +55,7 @@ def moving_read_binary(tmp_path_factory, pcc_runtime_archive):
 
 @pytest.mark.integration
 @pytest.mark.xdist_group('moving_read_barrier')
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_idle_to_forwarded_to_retired_native(moving_read_binary, backend):
     result = subprocess.run([str(moving_read_binary)], capture_output=True, text=True, timeout=30,
         env=dict(os.environ, PATH='/nonexistent', PCC_GC_BACKEND=str(backend), PCC_GC4_TRACING_ONLY='0', PCC_GC_TRACING_ONLY='0', PCC_GC_MINOR_ALLOC_MAX='1024'))

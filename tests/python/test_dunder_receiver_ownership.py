@@ -112,7 +112,7 @@ def dunder_binary(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_direct_special_calls_retire_owned_receivers(dunder_binary, collector):
     binary, expected = dunder_binary
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

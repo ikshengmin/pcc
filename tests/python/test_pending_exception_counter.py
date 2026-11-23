@@ -32,7 +32,7 @@ def pending_exception_program(tmp_path_factory):
     return executable
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 def test_threads_see_their_own_pending_exceptions(pending_exception_program, backend):
     run = subprocess.run(
         [str(pending_exception_program)], capture_output=True, text=True, timeout=120,

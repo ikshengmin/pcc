@@ -398,7 +398,7 @@ main()
     binary = tmp_path / "join_wakeup_event"
     compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(collector),
                                          PATH="/nonexistent"))

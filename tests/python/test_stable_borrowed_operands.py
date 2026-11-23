@@ -39,7 +39,7 @@ def test_rebound_global_and_cell_receivers_keep_independent_owners(source):
     assert not any("value.addr" in call or "shared" in call for call in leases)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_borrowed_lease_preserves_owner_counts_and_blocks_mode_reset(backend):
     model = Model(backend)
     slot = model.object(flags=262144)

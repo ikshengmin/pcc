@@ -137,7 +137,7 @@ def slice_delete_program(request, tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 def test_slice_delete_consumes_operands(slice_delete_program, collector):
     name, binary, expected = slice_delete_program
     result = subprocess.run(

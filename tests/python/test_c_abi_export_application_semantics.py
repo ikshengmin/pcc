@@ -89,7 +89,7 @@ def test_application_export_exceptions_execute_all_collectors(tmp_path, pcc_runt
     source.write_text(SOURCE)
     compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         env = dict(os.environ, PATH="", PCC_HOST_PYTHON="/usr/bin/false",
                    PCC_HOST_PCC="/usr/bin/false", PCC_GC_BACKEND=str(collector))
         result = subprocess.run([str(output)], env=env, capture_output=True,

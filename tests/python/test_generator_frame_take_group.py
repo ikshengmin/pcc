@@ -339,7 +339,7 @@ int main(void) {
 @pytest.mark.integration
 def test_native_group_declines_without_mutation_and_scalar_handoff_survives(tmp_path, pcc_runtime_archive):
     executable = _native(tmp_path, pcc_runtime_archive, "frame_group_shapes", NATIVE_SHAPES)
-    for backend in range(5):
+    for backend in (0,):
         result = _run(executable, backend)
         assert (result.returncode, result.stdout, result.stderr) == (0, "FRAME_GROUP_SHAPES_OK\n", ""), backend
     for backend in (3, 4):
@@ -414,7 +414,7 @@ def test_no_log_generator_group_finalization_and_cleanup_matches_reference(tmp_p
     for case in ("normal", "early", "close", "exception", "weakref", "resurrection", "alias", "small"):
         reference = run_process_group_timeout([sys.executable, str(_SOURCE), case], timeout=20)
         assert reference.returncode == 0 and not reference.stderr
-        for backend in range(5):
+        for backend in (0,):
             env = dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_LOG="", PCC_GC_REFCOUNT_PROVENANCE_PROBE="0")
             result = run_process_group_timeout([str(executable), case], timeout=20, env=env)
             assert (result.returncode, result.stdout, result.stderr) == (

@@ -205,7 +205,7 @@ def test_indexed_receipts_execute_owned_protocol_five_gc(
     python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                             runtime_archive=str(explicit_owned_runtime))
     assert inspect_owned_image(binary.read_bytes())["libpython"] == "off"
-    for backend in range(5):
+    for backend in (0,):
         root = tmp_path / ("gc" + str(backend))
         root.mkdir()
         dump = root / "dump"

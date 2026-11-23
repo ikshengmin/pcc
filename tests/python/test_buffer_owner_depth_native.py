@@ -59,7 +59,7 @@ def buffer_owner_depth_binary(tmp_path_factory, pcc_runtime_archive):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_buffer_owner_depth_owned_native(buffer_owner_depth_binary, backend):
     result = subprocess.run(
         [str(buffer_owner_depth_binary)], capture_output=True, text=True, timeout=30,
@@ -176,7 +176,7 @@ def test_export_leaf_copy_native(tmp_path, explicit_owned_runtime, python_progra
     python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                             runtime_archive=str(explicit_owned_runtime), object_inputs=(str(helper),))
     assert inspect_owned_image(binary.read_bytes())["libpython"] == "off"
-    for backend in range(5):
+    for backend in (0,):
         result = _record_execution(tmp_path, f"gc{backend}", [str(binary)],
                                    dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert (result["returncode"], result["stdout"], result["stderr"]) == (

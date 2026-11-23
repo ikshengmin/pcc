@@ -567,7 +567,7 @@ def test_exact_batch_boundary_with_native_owners_all_collectors(
         evidence["route_receipts"] = _route_receipts(route_log, route_offset, compile_test)
         save_receipt()
     receipt["binary"] = _file_identity(binary)
-    for collector in range(5):
+    for collector in (0,):
         completed = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),

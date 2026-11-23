@@ -214,7 +214,7 @@ def test_pe_fixed_point_does_not_ignore_metadata_bytes():
 
 
 @pytest.mark.parametrize("capture", [None, "0", "1"])
-@pytest.mark.parametrize("gc_backend", range(5))
+@pytest.mark.parametrize("gc_backend", (0,))
 def test_stage_environment_enables_capture_for_direct_output(monkeypatch, capture, gc_backend):
     if capture is None:
         monkeypatch.delenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", raising=False)

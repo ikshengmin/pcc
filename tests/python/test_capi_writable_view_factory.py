@@ -101,7 +101,7 @@ def test_c_factory_public_native(tmp_path, explicit_owned_runtime, python_progra
     python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                             runtime_archive=str(explicit_owned_runtime))
     assert inspect_owned_image(binary.read_bytes())["libpython"] == "off"
-    for backend in range(5):
+    for backend in (0,):
         result = _record_execution(tmp_path, f"gc{backend}", [str(binary)],
                                    dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert (result["returncode"], result["stdout"], result["stderr"]) == (

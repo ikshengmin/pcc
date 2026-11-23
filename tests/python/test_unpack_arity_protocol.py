@@ -191,7 +191,7 @@ def test_unpack_checks_boundary_before_target_stores(
     python_program_compiler(str(source), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
     (tmp_path / 'expected.stdout').write_text(expected)
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent',

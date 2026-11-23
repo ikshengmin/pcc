@@ -33,8 +33,8 @@ def test_executable_scheduled_loop_real_metal_readback(tmp_path, kind: str):
             prim_func="add_kernel",
             constants={"M": 3, "N": 5, "threads": 8},
         )
-        a = tuple(tuple(float(row * 5 + col) for col in range(5)) for row in range(3))
-        b = tuple(tuple(float(20 - row - col) for col in range(5)) for row in range(3))
+        a = tuple(tuple(float(row * 5 + col) for col in (0,)) for row in range(3))
+        b = tuple(tuple(float(20 - row - col) for col in (0,)) for row in range(3))
         inputs = {"A": a, "B": b}
         shape = (3, 5)
         buffer_count = 3

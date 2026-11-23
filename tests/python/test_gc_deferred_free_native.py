@@ -73,7 +73,7 @@ def _execute(outputs, kind, backend, args):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
 @pytest.mark.parametrize("mode", (1, 2, 3, 4, 5),
                          ids=("block-cap", "usable-cap", "carrier-resume", "excluded-flags", "terminal-provenance"))
 def test_terminal_queue_native(deferred_binaries, backend, mode):
@@ -139,7 +139,7 @@ def test_leaf_batch_collection_owner_native(deferred_binaries, backend, route):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
 @pytest.mark.parametrize("mode", (1, 2, 3), ids=("disabled", "zero-threshold", "stop-race"))
 def test_existing_cms_worker_consumes_retired_blocks_native(deferred_binaries, backend, mode):
     output = _execute(deferred_binaries, "worker", backend, (mode,))

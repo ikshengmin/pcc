@@ -275,7 +275,7 @@ def test_shared_lists_stay_consistent_under_four_carriers(tmp_path, threaded_pcc
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         for run in range(2):
             ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
                                  env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
@@ -319,10 +319,10 @@ def test_list_lock_is_the_container_lock_without_the_probe(tmp_path, pcc_runtime
     # GC0 and the count-free GC1-GC4 (pcc_gc_fix_backend sets
     # pcc_gc_nonmoving_count_free for every tracing collector) lock lists
     # themselves.
-    cases = [(backend, "0", "1 0\n") for backend in range(5)]
+    cases = [(backend, "0", "1 0\n") for backend in (0,)]
     # The provenance probe's checked lease path takes the graph lock inside
     # a transaction, so probed lists keep the graph lock on every collector.
-    cases.extend((backend, "1", "0 1\n") for backend in range(5))
+    cases.extend((backend, "1", "0 1\n") for backend in (0,))
     for backend, probe, expected in cases:
         ran = subprocess.run([str(binary), str(backend)], capture_output=True, text=True, timeout=60,
                              env=dict(os.environ, PATH="/nonexistent",

@@ -288,7 +288,7 @@ def test_raw_pthreads_match_c_oracle_for_exception_tls_isolation(tmp_path: Path)
         archive=implementation_runtime / "libpy_runtime_pcc_py.a",
         expect_registered_tls_roots=True,
     )
-    for backend in range(5):
+    for backend in (0,):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         oracle_result = subprocess.run(
             [str(oracle)], env=env, capture_output=True, text=True, timeout=30

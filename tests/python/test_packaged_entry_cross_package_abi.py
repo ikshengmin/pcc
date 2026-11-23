@@ -89,7 +89,7 @@ def test_packaged_entry_abi_provider_executes_all_collectors(
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     executions = []
-    for collector in range(5):
+    for collector in (0,):
         environment = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),
                            PCC_HOST_PYTHON="/usr/bin/false", PCC_RUNTIME_CC="/usr/bin/false")
         result = subprocess.run(
@@ -232,7 +232,7 @@ def test_fstring_literal_import_and_resource_calls_execute_all_collectors(
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
     executions = []
-    for collector in range(5):
+    for collector in (0,):
         environment = dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),
                            PCC_HOST_PYTHON="/usr/bin/false", PCC_RUNTIME_CC="/usr/bin/false")
         result = subprocess.run(

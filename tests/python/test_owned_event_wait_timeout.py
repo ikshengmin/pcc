@@ -82,7 +82,7 @@ def test_event_wait_provider_matches_cpython(tmp_path):
     reference = PROGRAM.replace("from pcc.stdlib.threading import Event", "from threading import Event")
     expected = subprocess.run([sys.executable, "-c", reference], capture_output=True, timeout=10, check=True)
     _compile(tmp_path, exe)
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run([str(exe)], capture_output=True, timeout=10,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert run.returncode == 0, (backend, run.stderr)

@@ -214,7 +214,7 @@ def _run(executable, backend, **extra):
 @pytest.mark.integration
 def test_native_take_shapes_and_diagnostic_fallbacks(tmp_path, pcc_runtime_archive):
     executable = _native(tmp_path, pcc_runtime_archive, "frame_shapes", SHAPES)
-    for backend in range(5):
+    for backend in (0,):
         ran = _run(executable, backend)
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, "FRAME_TAKE_SHAPES_OK\n", ""), backend
     for backend in (3, 4):
@@ -303,6 +303,6 @@ def test_resumed_take_preserves_finalizers_weakrefs_and_resurrection(tmp_path, m
     executable = tmp_path / "frame_finalizers"
     compile_python(str(path), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = _run(executable, backend)
         assert (ran.returncode, ran.stdout, ran.stderr) == (0, reference.stdout, ""), backend

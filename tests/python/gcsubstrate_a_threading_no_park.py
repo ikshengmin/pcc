@@ -783,7 +783,7 @@ def test_strict_thread_unregister_cleanup_reentry_fails_stop(tmp_path: Path) -> 
             }
         ''',
     )
-    for backend in range(5):
+    for backend in (0,):
         modes = ("cleanup", "guard") if backend == 0 else ("cleanup", "guard", "delayed")
         for mode in modes:
             run = subprocess.run(

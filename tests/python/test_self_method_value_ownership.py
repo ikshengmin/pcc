@@ -186,7 +186,7 @@ def self_method_binaries(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("collector", range(5))
+@pytest.mark.parametrize("collector", (0,))
 @pytest.mark.parametrize("shape", ("lifetime", "binding", "parking"))
 def test_self_method_values_preserve_binding_and_lifetimes(self_method_binaries, shape, collector):
     binary, expected = self_method_binaries[shape]

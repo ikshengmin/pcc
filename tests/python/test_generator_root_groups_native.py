@@ -138,7 +138,7 @@ def test_generator_root_groups_repository_native(tmp_path):
         "compile": {"status": "UNRUN"}, "actual_group_contract": {"status": "UNRUN"},
         "cases": {case: {"reference": {"status": "UNRUN"}, "executions": [
             {"requested_backend": backend, "status": "UNRUN", "observed_backends": []}
-            for backend in range(5)]} for case in _CASES},
+            for backend in (0,)]} for case in _CASES},
         "relocation_witness": {
             "status": "UNPROVEN",
             "reason": "Collector start/stop and alias survival do not identify an object relocation",

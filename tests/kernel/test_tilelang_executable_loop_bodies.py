@@ -90,11 +90,11 @@ def test_scheduled_assignment_reuses_indexed_ir_and_metal_lowering(
 
 
 def test_parallel_add_and_vectorized_scale_cpu_oracles():
-    a = tuple(tuple(float(row * 5 + col) for col in range(5)) for row in range(3))
-    b = tuple(tuple(float(20 - row - col) for col in range(5)) for row in range(3))
+    a = tuple(tuple(float(row * 5 + col) for col in (0,)) for row in range(3))
+    b = tuple(tuple(float(20 - row - col) for col in (0,)) for row in range(3))
     add = execute_static_indexed_reference(_import_parallel(), {"A": a, "B": b})
     assert add.outputs["C"] == tuple(
-        tuple(a[row][col] + b[row][col] for col in range(5)) for row in range(3)
+        tuple(a[row][col] + b[row][col] for col in (0,)) for row in range(3)
     )
     vector = ((-2.0, -1.5, 0.0, 1.25, 2.5, 3.0, 9.0),)
     scale = execute_static_indexed_reference(_import_vectorized(), {"A": vector})

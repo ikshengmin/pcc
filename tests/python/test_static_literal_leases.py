@@ -48,7 +48,7 @@ class StaticModel(Model):
         return self.ns["pcc_gc_static_literal_contains"](value)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_static_literal_lease_needs_no_mode_or_graph_transaction(backend):
     model = StaticModel(backend)
     slot = model.object(4096, flags=1, node=False, proven=False)
@@ -106,7 +106,7 @@ def test_native_static_origins_survive_collection_and_backend_transitions(
         runtime_archive=Path(threaded_pcc_runtime_archive),
     )
     # The collector is fixed by the first managed allocation: one run each.
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary), str(backend)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

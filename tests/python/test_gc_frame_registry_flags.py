@@ -152,7 +152,7 @@ def _run(executable, backend, **extra):
     return [int(word) for word in lines[1].split()]
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 def test_published_frame_flags_match_their_components(frame_flag_program, backend):
     initialized, selected, roots, inactive, walk_state = _run(frame_flag_program, backend)
     assert (initialized, selected) == (1, backend)

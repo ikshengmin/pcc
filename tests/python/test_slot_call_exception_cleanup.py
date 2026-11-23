@@ -325,7 +325,7 @@ class CleanupModel(CallObjectLoweringMixin):
 def test_real_cleanup_preserves_exception_and_retires_owners(owners, callback, move, pending):
     # Keep the existing pytest node matrix while exercising both production
     # invalidation branches for every pending-exception/relocation scenario.
-    for backend in range(5):
+    for backend in (0,):
         model = CleanupModel(owners, callback, move, pending, backend=backend)
         model._slot_call_cleanup_block(owners, "handler")
         assert model.pending == model.original, "root disposal lost the selecting exception"
@@ -762,7 +762,7 @@ def test_cleanup_callback_program_native_five_gc(tmp_path):
     result = _run_native(tmp_path, PROGRAM)
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout == "SLOT_CLEANUP_EXCEPTION_OK\n"
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(tmp_path / "prog.out")],
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

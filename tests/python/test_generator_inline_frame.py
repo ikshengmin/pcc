@@ -47,7 +47,7 @@ def test_inline_factory_preserves_python_lifetimes(tmp_path, monkeypatch, pcc_ru
     binary = tmp_path / "lifetimes"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent"))
         assert (run.returncode, run.stdout, run.stderr) == (0, "BULK_FRAME_DEFAULT_OK\n", ""), backend

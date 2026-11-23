@@ -111,7 +111,7 @@ class _PortMemory:
             monkeypatch.setattr(self.module, name, value)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("initialized", [True, False])
 def test_python_port_completion_reads_and_publication_order(monkeypatch, backend, initialized):
     from pcc.runtime.py import py_tuple
@@ -144,7 +144,7 @@ def test_python_port_completion_reads_and_publication_order(monkeypatch, backend
     assert memory.publications == ([(owner, (child,) * 4)] if backend == 4 else [])
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_python_port_empty_null_and_invalid_stores_keep_publication_guards(monkeypatch, backend):
     from pcc.runtime.py import py_tuple
 
@@ -318,7 +318,7 @@ def tuple_publication_probe(tmp_path_factory, pcc_runtime_archive):
     return executable
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_tuple_completion_publication_and_relocation_eligibility(
     tuple_publication_probe, backend
 ):

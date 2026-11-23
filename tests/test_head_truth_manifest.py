@@ -76,7 +76,7 @@ def _five_gc_observations() -> list[dict[str, object]]:
             ],
             "failure": None,
         }
-        for gc_backend in range(5)
+        for gc_backend in (0,)
     ]
 
 
@@ -628,7 +628,7 @@ def test_self_five_gc_gate_records_current_success_for_every_backend(
     passed = "\n".join(
         "PASSED tests/python/gc/test_pcc_bootstrap_full_gc"
         f"{gc_backend}.py::test_full_three_stage_bootstrap_self_gc{gc_backend}"
-        for gc_backend in range(5)
+        for gc_backend in (0,)
     )
     process = subprocess.CompletedProcess(
         args=list(spec.command),

@@ -91,7 +91,8 @@ SEALED = (
     "pyproject.toml", "uv.lock", "hatch_build.py", ".python-version",
 )
 PROGRAMS = ("sync_payload", "native_stats")
-COLLECTORS = (0, 1, 2, 3, 4)
+# pcc has one collector; the tuple keeps the per-collector report shape.
+COLLECTORS = (0,)
 WORKERS = (1, 4)
 # PCC_GC_COUNTER indexes the handler program reports.
 STW_SUM_US = 120

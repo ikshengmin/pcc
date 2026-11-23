@@ -182,7 +182,7 @@ def test_max_first_collection_native_all_gc(tmp_path: Path, explicit_owned_runti
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(explicit_owned_runtime))
     assert inspect_owned_image(executable.read_bytes())["libpython"] == "off"
-    for backend in range(5):
+    for backend in (0,):
         log = tmp_path / f"gc{backend}.jsonl"
         ran = run_process_group_timeout(
             [str(executable), "normal"],

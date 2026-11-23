@@ -23,7 +23,7 @@ def test_guarded_regex_fullmatch_threads_and_all_collectors(
     python_program_compiler(str(source), str(executable), backend='self',
                             ir_scaffold_mode='on',
                             runtime_archive=str(explicit_owned_runtime))
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='',
                            PCC_HOST_PYTHON='/nonexistent/host-python')
         result = run_process_group_timeout([str(executable)], env=environment, timeout=20)

@@ -477,7 +477,7 @@ run()
         ir_scaffold_mode="on", backend="self",
         recursive_stdlib=False, target_triple="arm64-apple-darwin23.6.0",
     )
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend),

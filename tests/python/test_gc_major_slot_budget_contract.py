@@ -191,7 +191,7 @@ def test_major_workstack_child_uses_the_same_whole_owner_contract(backend, conta
     assert state.gray == len(children)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("budget", [1, 4, 16])
 def test_current_layout_visitor_bounds_positions_without_completing_owner(backend, budget):
     state = _SlotBoundary(backend)

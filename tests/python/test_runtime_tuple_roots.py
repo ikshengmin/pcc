@@ -225,7 +225,7 @@ def test_tuple_from_list_reloads_owners_at_each_moving_gate(backend, phase, afte
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("prior_pin", (False, True))
 @pytest.mark.parametrize("count", (0, 1, 3))
 def test_tuple_conversion_keeps_ownership_and_existing_pins(backend, prior_pin, count):
@@ -240,7 +240,7 @@ def test_tuple_conversion_keeps_ownership_and_existing_pins(backend, prior_pin, 
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_tuple_conversion_accepts_tagged_elements_and_null_input(backend):
     memory = _TupleMemory(backend=backend)
     memory.items.fields.update({0: 85, 8: 87})
@@ -251,7 +251,7 @@ def test_tuple_conversion_accepts_tagged_elements_and_null_input(backend):
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("fail", ("allocation", "get", "set"))
 @pytest.mark.parametrize("phase", ("unregister", "graph_unlock", "decref"))
 def test_tuple_conversion_releases_partial_output_and_preserves_error(backend, fail, phase):
@@ -266,7 +266,7 @@ def test_tuple_conversion_releases_partial_output_and_preserves_error(backend, f
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("prior_pin", (False, True))
 @pytest.mark.parametrize("resurrect", (False, True))
 def test_tuple_conversion_release_transfers_owner_before_finalizer(backend, prior_pin, resurrect):
@@ -298,7 +298,7 @@ def test_tuple_conversion_release_transfers_owner_before_finalizer(backend, prio
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_tuple_conversion_error_survives_reentrant_cleanup(backend):
     memory = _TupleMemory(backend=backend, phase="decref", fail="get")
     memory.cleanup_error = True
@@ -309,7 +309,7 @@ def test_tuple_conversion_error_survives_reentrant_cleanup(backend):
     memory.assert_balanced()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_tuple_conversion_owned_return_restores_preexisting_output_pin(backend):
     memory = _TupleMemory(backend=backend)
     original_new = memory.namespace["py_tuple_new"]
@@ -380,7 +380,7 @@ def test_tuple_conversion_executes_all_collectors(tmp_path, monkeypatch,
     python_program_compiler(str(source), str(binary), backend="self",
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True,
             timeout=30, env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                                  PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))

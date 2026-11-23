@@ -498,7 +498,7 @@ def test_refresh_never_writes_internal_even_temporarily(malformed):
     model.assert_no_resources()
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
+@pytest.mark.parametrize("backend", (0,))
 def test_malformed_public_export_never_frees_uninitialized_internal(backend):
     model = BufferModel(backend=backend)
     model.store(model.INNER, 16, 0)

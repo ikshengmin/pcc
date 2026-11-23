@@ -291,7 +291,7 @@ def assert_two_root_slots_native(compiler, compiler_mode, archive, directory, ca
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         raise
     receipt["binary_sha256"] = receipt["linkage"]["binary_sha256"]
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(
             os.environ, PCC_GC_BACKEND=str(backend),
             PCC_GC_REFCOUNT_PROVENANCE_PROBE="2",

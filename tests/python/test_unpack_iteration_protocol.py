@@ -43,7 +43,7 @@ def unpack_programs(tmp_path_factory):
     return built
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 @pytest.mark.parametrize("program", sorted(_PROGRAMS))
 def test_matches_cpython_output(unpack_programs, program, backend):
     executable, expected = unpack_programs[program]

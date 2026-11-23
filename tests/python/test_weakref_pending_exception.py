@@ -215,7 +215,7 @@ class CallbackBoundaryModel:
             assert not self.registrations
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("conservative", (False, True))
 @pytest.mark.parametrize("raises", (False, True))
 @pytest.mark.parametrize("pending", (False, True))
@@ -237,7 +237,7 @@ def test_callback_success_or_error_preserves_original_exception(backend, conserv
     assert model.refcounts.get(CALLBACK_ERROR, 0) == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("conservative", (False, True))
 def test_tuple_allocation_failure_restores_outer_error(backend, conservative):
     model = CallbackBoundaryModel(backend, conservative=conservative)
@@ -247,7 +247,7 @@ def test_tuple_allocation_failure_restores_outer_error(backend, conservative):
     assert model.calls == [] and model.refcounts[CALLBACK_ERROR] == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_missing_callback_does_not_touch_pending_error(backend):
     model = CallbackBoundaryModel(backend)
     model.store(WEAKREF, 24, 0)
@@ -256,7 +256,7 @@ def test_missing_callback_does_not_touch_pending_error(backend):
     assert not model.stack_slots and not model.released and not model.calls
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("conservative", (False, True))
 @pytest.mark.parametrize("reentry", ("callback", "result-drop", "tuple-drop"))
 def test_nested_callbacks_restore_each_enclosing_exception(backend, conservative, reentry):
@@ -290,7 +290,7 @@ def test_nested_callbacks_restore_each_enclosing_exception(backend, conservative
     assert model.refcounts[MIDDLE] == model.refcounts[INNER_ERROR] == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("conservative", (False, True))
 def test_callback_error_destruction_reenters_with_empty_tls(backend, conservative):
     model = CallbackBoundaryModel(backend, conservative=conservative)

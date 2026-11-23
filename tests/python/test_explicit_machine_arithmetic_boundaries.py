@@ -314,7 +314,7 @@ def _run_native_all_gc(tmp_path, monkeypatch, archive, compiler, program, expect
     source.write_text(program)
     compiler(str(source), str(executable), backend="self",
              ir_scaffold_mode="on", runtime_archive=str(archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(executable)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

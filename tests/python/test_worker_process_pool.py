@@ -151,7 +151,7 @@ main()
         entry_module="pool_parent", recursive_stdlib=True,
         backend="self", runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         pid_file = tmp_path / f"child-{gc}.pid"
         marker = tmp_path / f"later-{gc}"
         result = subprocess.run([str(parent), str(child), str(pid_file), str(marker)],

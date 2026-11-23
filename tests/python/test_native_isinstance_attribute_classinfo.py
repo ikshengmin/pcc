@@ -79,7 +79,7 @@ def test_attribute_classinfo_matches_cpython(tmp_path, mode):
         str(src), str(exe),
         ir_scaffold_mode=mode, backend="self",
     )
-    for backend in ("0", "1", "2", "3", "4"):
+    for backend in ("0",):
         run = subprocess.run(
             [str(exe)], capture_output=True, text=True, timeout=60,
             env={"PCC_GC_BACKEND": backend, "PATH": "/usr/bin:/bin"},

@@ -72,7 +72,7 @@ int main(int argc, char **argv) {
     compile_owned_c_with_runtime(
         src, binary, runtime_archive=Path(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run(
             [str(binary), str(backend)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

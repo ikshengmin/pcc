@@ -165,7 +165,7 @@ def test_native_providers_print_the_cpython_3150_output(tmp_path, pcc_runtime_ar
                    runtime_archive=str(pcc_runtime_archive))
     work = tmp_path / "work"
     work.mkdir()
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output), str(work)], capture_output=True, text=True, timeout=60,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc), PATH="",

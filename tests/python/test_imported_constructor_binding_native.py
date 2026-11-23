@@ -94,7 +94,7 @@ def test_imported_constructor_binding_native_five_gc(tmp_path, monkeypatch, pcc_
                          module_names=['binding_provider', 'entry'], entry_module='entry',
                          backend='self', ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PATH='/nonexistent', PCC_GC_BACKEND=str(backend)))
         assert result.returncode == 0, (backend, result.stdout, result.stderr)

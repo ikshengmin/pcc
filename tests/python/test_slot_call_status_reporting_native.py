@@ -159,7 +159,7 @@ def test_generated_status_helper_matches_inline_real_runtime_all_gc(
         "baseline_ir_sha256": hashlib.sha256((tmp_path / "baseline_probe.ll").read_bytes()).hexdigest(),
         "candidate_ir_sha256": hashlib.sha256((tmp_path / "candidate_probe.ll").read_bytes()).hexdigest(),
     }, indent=2) + "\n")
-    for backend in range(5):
+    for backend in (0,):
         _run_native(executable, [str(backend)], tmp_path, backend, "slot-status-runtime-equal\n")
 
 
@@ -423,7 +423,7 @@ def test_production_callsite_temporaries_exception_and_gc(
         "binary_sha256": hashlib.sha256(executable.read_bytes()).hexdigest(),
         "generated_ir_sha256": hashlib.sha256(text.encode()).hexdigest(),
     }, indent=2) + "\n")
-    for backend in range(5):
+    for backend in (0,):
         _run_native(executable, [], tmp_path, backend, "slot-status-owned-callsite-ok\n")
 
 

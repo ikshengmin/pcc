@@ -20,10 +20,10 @@ def test_ci_weakset_explicit_owners(tmp_path, pcc_runtime_archive, owner, progra
     if program_name == "weakset_order":
         program = peer.PROGRAM
         cases = [(backend, mode, peer._expected(backend, mode))
-                 for backend in range(5) for mode in ((), ("cyclic",))]
+                 for backend in (0,) for mode in ((), ("cyclic",))]
     else:
         program = peer.DYNAMIC_SET_PROGRAM
-        cases = [(backend, (), peer.EXPECTED_DYNAMIC_SET) for backend in range(5)]
+        cases = [(backend, (), peer.EXPECTED_DYNAMIC_SET) for backend in (0,)]
     coverage.run_case(tmp_path, pcc_runtime_archive, owner, program_name, program, cases)
 
 
@@ -73,7 +73,7 @@ def test_ci_weakset_environment_rejects_an_unknown_owner():
         coverage.compiler_environment({}, Path("runtime.a"), "label-only")
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_ci_weakset_requires_observed_collector_and_semantic_output(backend):
     correct = SimpleNamespace(returncode=0, stdout=f"semantic\nPCC_OBSERVED_GC {backend}\n", stderr="")
     coverage.check_output(correct, "semantic\n", backend)

@@ -258,7 +258,7 @@ def test_queued_graph_native_handoff_stop_registration_and_reuse(tmp_path, threa
     compile_owned_c_with_runtime(source, binary, runtime_archive=threaded_pcc_runtime_archive)
     receipt = {'source_sha256': hashlib.sha256(source.read_bytes()).hexdigest(),
                'binary_sha256': hashlib.sha256(binary.read_bytes()).hexdigest(), 'runs': []}
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=45,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_THREADS='1', PCC_REFCOUNT_KIND='atomic'),

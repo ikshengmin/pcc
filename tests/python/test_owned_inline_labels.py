@@ -42,7 +42,7 @@ def test_native_inliner_keeps_callback_and_exact_global_tokens(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc),
                            PCC_GC_REFCOUNT_PROVENANCE_PROBE="2")
         environment.pop("LC_ALL", None)

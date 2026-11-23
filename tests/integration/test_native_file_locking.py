@@ -169,7 +169,7 @@ def _contender(command, gc):
                           env=dict(os.environ, PCC_GC_BACKEND=str(gc), PATH="/nonexistent"), timeout=10)
 
 
-@pytest.mark.parametrize("gc", range(5))
+@pytest.mark.parametrize("gc", (0,))
 @pytest.mark.parametrize("ending", ["unlock", "close", "crash"])
 def test_real_mutex_and_automatic_release(executable, tmp_path, gc, ending):
     path = tmp_path / "stable-lockfile"
@@ -270,7 +270,7 @@ def test_native_lock_argument_errors_and_retry_after_exception(executable, tmp_p
     path = tmp_path / "argument-lockfile"
     path.write_bytes(b"a")
     command = _invoke(executable, path, tmp_path / "ready", tmp_path / "finish", action="arguments")
-    for gc in range(5):
+    for gc in (0,):
         result = _contender(command, gc)
         assert result.returncode == 0 and result.stdout == "arguments-ok\n", (gc, result.stdout, result.stderr)
 

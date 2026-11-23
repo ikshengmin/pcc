@@ -28,7 +28,7 @@ def default_header_binary(tmp_path_factory, pcc_runtime_archive):
 
 @pytest.mark.integration
 @pytest.mark.xdist_group('default_gc_header')
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_default_collector_owns_expected_header_protocol(default_header_binary, backend):
     run = subprocess.run([str(default_header_binary), str(backend)], capture_output=True,
                          text=True, timeout=20, env=default_environment(backend))
@@ -71,7 +71,7 @@ identity_and_exception()
 
 @pytest.mark.integration
 @pytest.mark.xdist_group('default_gc_lifecycle')
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_default_values_identity_exceptions_and_lifecycle_match_reference(default_lifecycle_program, backend):
     binary, expected = default_lifecycle_program
     run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,

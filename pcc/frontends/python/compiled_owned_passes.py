@@ -73,10 +73,11 @@ def run_owned_passes(text: str, names: list[str]) -> str:
     if _has_py_cpy_call(text):
         return text
     current = text
-    if os.environ.get("PCC_GC_FUSED_PROTOCOL", "") == "1":
-        from pcc.frontends.python.fused_protocol_pass import fused_protocol_text
+    # The one collector answers these calls without work
+    # (pcc/frontends/python/fused_protocol_pass.py).
+    from pcc.frontends.python.fused_protocol_pass import fused_protocol_text
 
-        current, _fused = fused_protocol_text(current)
+    current, _fused = fused_protocol_text(current)
     index = 0
     while index < len(names):
         name = names[index]

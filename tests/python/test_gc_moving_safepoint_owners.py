@@ -324,7 +324,7 @@ def test_native_moving_generator_iterator_and_finalizer_owners(tmp_path, pcc_run
     python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         environment.pop("LC_ALL", None)
         run = subprocess.run([str(binary)], capture_output=True, text=True,

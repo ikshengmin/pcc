@@ -274,7 +274,7 @@ main()
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive),
                    link_args=link_args)
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_WITH_THREADS="1", PCC_GC_BACKEND=str(backend),
                            PCC_GC_MINOR_ALLOC_MAX="4096", PATH="",
                            PCC_HOST_PYTHON="/nonexistent/host-python", PCC_HOST_PCC="/nonexistent/host-pcc")

@@ -357,7 +357,7 @@ def test_batch_layout_exports_and_storage_owners_are_explicit():
 
 # GC3 runs the count-free nonmoving protocol with GC1/GC2 (03cbd1849): with
 # the mode on only GC0 is unselected.
-@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in range(5)] + [(0, 1)])
+@pytest.mark.parametrize("backend,enabled", [(backend, 0) for backend in (0,)] + [(0, 1)])
 def test_unselected_collectors_do_not_allocate_or_take(backend, enabled):
     memory = _BatchMemory()
     memory.set_scalar(BACKEND, backend)

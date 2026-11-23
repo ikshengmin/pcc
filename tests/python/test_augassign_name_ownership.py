@@ -113,7 +113,7 @@ def test_generic_augassign_owns_results_and_parameter_branches(
         str(source), str(binary), backend='self',
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=45,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent',

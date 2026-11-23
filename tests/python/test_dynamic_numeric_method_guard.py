@@ -120,7 +120,7 @@ def compiled_numeric_guard(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_native_dynamic_numeric_methods_match_cpython(compiled_numeric_guard, backend):
     binary, expected = compiled_numeric_guard
     result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,

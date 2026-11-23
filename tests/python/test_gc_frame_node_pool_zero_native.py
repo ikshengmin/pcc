@@ -67,7 +67,7 @@ def frame_pool_binary(tmp_path_factory):
     }
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
 def test_owned_native_frame_pool_returns_fully_zeroed_reused_nodes(frame_pool_binary, backend):
     binary, identity = frame_pool_binary
     command = [str(binary)]

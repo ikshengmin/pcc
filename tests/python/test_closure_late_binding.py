@@ -374,7 +374,7 @@ def test_lambda_captures_bind_late_under_every_collector(
         str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

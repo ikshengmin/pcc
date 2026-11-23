@@ -334,7 +334,7 @@ def test_owned_os_path_provider_native_five_gc(
     receipt["binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
     receipt["binary_format"] = _native_format(binary)
     assert receipt["binary_format"] is not None, "Compiler output is not a native executable"
-    for backend in range(5):
+    for backend in (0,):
         root = tmp_path / ("gc" + str(backend))
         root.mkdir()
         log_path = root / "gc.jsonl"

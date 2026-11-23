@@ -80,7 +80,7 @@ def test_completed_transition_rechecks_mode_before_published_lookup():
     assert model.release(slot, 1) == 0 and model.active() == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_moving_or_checked_modes_keep_existing_indexed_path(backend):
     model = Model(backend)
     slot = model.object(flags=1, proven=False)

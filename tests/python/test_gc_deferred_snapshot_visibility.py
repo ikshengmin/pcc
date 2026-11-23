@@ -198,7 +198,7 @@ def test_public_snapshot_after_death_and_resurrection(tmp_path, threaded_pcc_run
     binary = tmp_path / "lifecycle"
     compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=30, env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                                                PCC_THREADS="1", PCC_REFCOUNT_KIND="atomic"),

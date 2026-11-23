@@ -8,7 +8,7 @@ from tests.python.test_explicit_machine_arithmetic_boundaries import (
 from tests.python.test_foreign_address_leases import Model
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('word', (0, 1, 3, -1, 9223372036854775807))
 @pytest.mark.parametrize('active', (0, -1, 9223372036854775807))
 def test_immediate_lease_avoids_object_and_mode_protocol(backend, word, active):

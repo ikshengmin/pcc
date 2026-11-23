@@ -72,7 +72,7 @@ def test_host_compile_executes_c_obj_contract_on_all_gc_backends(
         "runs": [],
     }
     receipt_path = tmp_path / "native-execution.json"
-    for gc_backend in range(5):
+    for gc_backend in (0,):
         result = subprocess.run(
             [str(executable)],
             env=dict(os.environ, PCC_GC_BACKEND=str(gc_backend), PATH="/nonexistent"),

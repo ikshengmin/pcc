@@ -78,7 +78,7 @@ def test_original_compiler_dataclass_defaults_native(module_name, program, expec
                          entry_module='default_consumer', backend='self',
                          ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(collector),
                                          PCC_GC_REFCOUNT_PROVENANCE_PROBE='2'))

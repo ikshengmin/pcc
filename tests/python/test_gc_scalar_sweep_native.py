@@ -47,7 +47,7 @@ def scalar_binary(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
 @pytest.mark.parametrize(
     "mode", range(1, 16),
     ids=("disabled", "threshold0", "stop-race", "same-backend-reset",

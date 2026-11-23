@@ -374,7 +374,7 @@ def test_native_real_parser_and_both_mergers_match_cpython(
     assert reference.stdout.endswith("REEXPORT_ROUND_CONVERGENCE_OK\n")
     python_program_compiler(str(source), str(executable), backend="self",
                             runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on")
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         result = subprocess.run([str(executable)], cwd=tmp_path,
                                 env={**os.environ, "PCC_GC_BACKEND": collector},
                                 capture_output=True, text=True, timeout=30)
@@ -406,7 +406,7 @@ def test_real_redefined_import_package_matches_cpython(
     assert reference.stdout == "2\n"
     python_program_compiler(str(source), str(executable), backend="self",
                             runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on")
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         result = subprocess.run([str(executable)], cwd=tmp_path,
                                 env={**os.environ, "PCC_GC_BACKEND": collector},
                                 capture_output=True, text=True, timeout=30)

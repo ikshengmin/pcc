@@ -295,7 +295,7 @@ def test_tuple_hash_rechecks_later_slots_after_user_hash_starts_forwarding(backe
     if backend==0:assert ('slow-load',) not in m.events
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_actual_configuration_initializes_the_idle_gate(backend):
     m=Moving(backend)
     m.store('pcc_gc_config_initialized',0,0)

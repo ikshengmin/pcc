@@ -259,7 +259,7 @@ def test_user_builder_names_execute_natively(tmp_path, pcc_runtime_archive):
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(binary)],
             capture_output=True,

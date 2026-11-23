@@ -2777,7 +2777,8 @@ def _publish_frame_registry_inactive() -> None:
 @c_abi_export("pcc_gc_set_backend")
 def pcc_gc_set_backend(backend: int) -> int:
     _init_config()
-    if backend < 0 or backend > 4:
+    # One collector: only the fused collector (0) can be selected.
+    if backend != 0:
         return -1
     # The collector is selected before the first managed allocation, by
     # PCC_GC_BACKEND or by one call here, and never changes afterwards: code

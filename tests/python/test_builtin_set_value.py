@@ -72,7 +72,7 @@ def test_native_set_value_and_factory_all_gcs(tmp_path, pcc_runtime_archive,
     source.write_text(PROGRAM)
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
         result = subprocess.run([str(binary)], env=environment, capture_output=True,

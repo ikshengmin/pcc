@@ -282,7 +282,7 @@ def test_native_ordering_matches_cpython(tmp_path):
             runtime_archive=str(archive),
         )
         record["binary_sha256"] = sha(exe)
-        for backend in range(5):
+        for backend in (0,):
             # Revalidate the exact archive/provenance/inventory for EACH launch;
             # neither a request nor a GC0-only artifact counts as five backends.
             before = runtime_identity(archive)

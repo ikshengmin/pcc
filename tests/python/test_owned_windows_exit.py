@@ -436,7 +436,7 @@ main()
         (tmp_path / "compile.stdout").write_text(captured.out)
         (tmp_path / "compile.stderr").write_text(captured.err)
     executions = []
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(executable)],
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)), timeout=10,

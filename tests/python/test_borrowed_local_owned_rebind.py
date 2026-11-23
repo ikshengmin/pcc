@@ -29,7 +29,7 @@ def test_owned_rebind_preserves_borrowed_source_on_all_gc_backends(tmp_path, pcc
     binary = tmp_path / "borrowed_rebind"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, (backend, result.stdout, result.stderr)
@@ -61,7 +61,7 @@ main()
     binary = tmp_path / "borrowed_loop"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                      PCC_GC_REFCOUNT_PROVENANCE_PROBE="3", PCC_GC_KNOWN_REF_CHECKS="1"))
@@ -101,7 +101,7 @@ main()
     binary = tmp_path / "loop_finalizers"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert result.returncode == 0, (backend, result.stdout, result.stderr)

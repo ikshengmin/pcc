@@ -37,7 +37,7 @@ def test_forwarded_borrow_returns_and_pins_terminal(borrowed_item_probe, kind, m
     _check(borrowed_item_probe, 4, kind, mode)
 
 
-@pytest.mark.parametrize("gc", range(5))
+@pytest.mark.parametrize("gc", (0,))
 @pytest.mark.parametrize("kind", tuple("ltdes"), ids=["list", "tuple", "dict", "dict-error", "dict-string"])
 def test_unforwarded_borrow_preserves_pin_and_refcount(borrowed_item_probe, gc, kind):
     _check(borrowed_item_probe, gc, kind, "b")

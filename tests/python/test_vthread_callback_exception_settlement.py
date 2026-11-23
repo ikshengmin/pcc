@@ -207,7 +207,7 @@ def test_callback_settlement_native_all_gc(tmp_path: Path, pcc_runtime_archive: 
         source.write_bytes(_PROGRAM.encode("utf-8"))
         compile_python(str(source), str(executable), backend="self",
                        ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         for arm in _ARMS:
             log = tmp_path / f"gc{backend}-{arm}.jsonl"
             ran = run_process_group_timeout(

@@ -181,7 +181,7 @@ def test_completed_transition_pointer_change_never_debits_rewritten_slot(collide
     assert value.release(source, 2) == 0 and value.active() == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("target", range(5))
 def test_mode_and_same_mode_reset_refuse_live_mode_token(backend, target):
     value = model(backend)

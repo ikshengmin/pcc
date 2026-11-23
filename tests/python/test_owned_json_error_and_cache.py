@@ -48,7 +48,7 @@ main()
         module_names=["owned_json", "json_errors"], entry_module="json_errors",
         backend="self", runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=10,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc)),

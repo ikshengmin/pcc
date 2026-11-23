@@ -66,7 +66,7 @@ def test_urljoin_owned_native_result_handoff(tmp_path, monkeypatch, pcc_runtime_
     )
     binary_hash = hashlib.sha256(executable.read_bytes()).hexdigest()
     receipts = []
-    for collector in range(5):
+    for collector in (0,):
         log = tmp_path / ("urljoin-gc" + str(collector) + ".jsonl")
         env = dict(os.environ, PCC_GC_BACKEND=str(collector), PCC_LOG="gc",
                    PCC_LOG_FORMAT="json", PCC_LOG_FILE=str(log))

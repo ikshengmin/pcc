@@ -95,7 +95,7 @@ def main():
 main()
 '''
     output, env = _compile(tmp_path, source)
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], env=dict(env, PCC_GC_BACKEND=str(gc)),
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, (gc, result.stdout, result.stderr)
@@ -152,7 +152,7 @@ def main():
     print("mtime-ok")
 main()
 ''')
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], env=dict(env, PCC_GC_BACKEND=str(gc)),
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, (gc, result.stdout, result.stderr)

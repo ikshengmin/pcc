@@ -45,7 +45,7 @@ main()
     compile_python_multi([str(owner), str(source)], str(binary),
                          module_names=['type_names', 'type_name_entry'], entry_module='type_name_entry',
                          backend='self', runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
         assert result.returncode == 0, f'GC{gc}: {result.stderr}'

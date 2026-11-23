@@ -247,7 +247,7 @@ def test_retirement_native_wire_merger_matches_same_source_cpython(
         str(source), str(executable), backend="self",
         runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on",
     )
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         prefix = tmp_path / f"native_{collector}_"
         result = subprocess.run(
             [str(executable), str(prefix)], cwd=tmp_path,

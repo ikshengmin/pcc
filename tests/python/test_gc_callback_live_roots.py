@@ -143,7 +143,7 @@ def _compile_native_with_owner(tmp_path, runtime, body):
 def test_native_callback_live_roots(tmp_path, explicit_owned_runtime):
     binary = _compile_native_with_owner(tmp_path, explicit_owned_runtime, BODY)
     for mode in ("ordinary", "pcc-reentry"):
-        for backend in range(5):
+        for backend in (0,):
             env = dict(os.environ, PCC_GC_BACKEND=str(backend))
             result = _record_execution(
                 tmp_path, f"{mode}-gc{backend}", [str(binary), mode], env,

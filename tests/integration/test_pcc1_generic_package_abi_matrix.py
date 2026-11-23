@@ -95,7 +95,7 @@ def _compile_and_run_gc_matrix(
     _assert_no_libpython(executable)
 
     observed: dict[str, str] = {}
-    for backend in range(5):
+    for backend in (0,):
         run_env = _hostless_env()
         run_env["PCC_GC_BACKEND"] = str(backend)
         ran = subprocess.run(

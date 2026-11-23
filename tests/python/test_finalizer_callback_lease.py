@@ -119,7 +119,7 @@ class FinalizerModel(Model):
         self.pending = 6000  # A finalizer error must not replace caller TLS.
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('scenario', ('dealloc', 'resurrect', 'cycle', 'pending-error'))
 def test_actual_finalizer_body_preserves_owner_leases_flags_and_exception(backend, scenario):
     m = FinalizerModel(backend, terminal=scenario != 'cycle',

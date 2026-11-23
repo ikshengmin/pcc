@@ -432,7 +432,7 @@ def test_weakset_and_weakref_order_native_five_gc(
     binary = tmp_path / "weakset_order"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         for mode in ((), ("cyclic",)):
             result = _run([str(binary), *mode],
                           dict(os.environ, PCC_GC_BACKEND=str(backend)))
@@ -451,7 +451,7 @@ def test_dynamic_set_methods_native_five_gc(
     binary = tmp_path / "dynamic_set"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = _run([str(binary)], dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert (result.returncode, result.stdout, result.stderr) == (
             0, EXPECTED_DYNAMIC_SET, ""), f"GC{backend}"

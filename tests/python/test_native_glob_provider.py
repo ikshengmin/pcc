@@ -53,7 +53,7 @@ def test_glob_imports_and_matches_cpython_natively(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         root = tmp_path / ("native" + str(backend))
         root.mkdir()
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))

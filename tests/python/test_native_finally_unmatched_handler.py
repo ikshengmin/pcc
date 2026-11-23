@@ -125,7 +125,7 @@ def test_finally_preserves_exception_across_cleanup(tmp_path, monkeypatch):
         str(src), str(exe),
         ir_scaffold_mode="on", backend="self",
     )
-    for backend in range(5):
+    for backend in (0,):
         monkeypatch.setenv("PCC_GC_BACKEND", str(backend))
         result = subprocess.run(
             [str(exe)], capture_output=True, text=True, timeout=30,

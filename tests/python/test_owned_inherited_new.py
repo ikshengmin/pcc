@@ -246,7 +246,7 @@ def test_native_inherited_new(tmp_path, pcc_runtime_archive,
     source.write_text(source_text)
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         environment.pop("LC_ALL", None)
         result = subprocess.run([str(binary)], capture_output=True, text=True,

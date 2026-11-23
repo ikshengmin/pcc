@@ -158,7 +158,7 @@ def test_native_concurrent_append_preserves_all_values_and_growth_all_gcs(
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
-    for gc_backend in range(5):
+    for gc_backend in (0,):
         for mode, expected in (("original", "NEW_THREAD_IDENTITY_OK\n"),
                                ("capacity", "CONCURRENT_APPEND_CONTENT_OK\n")):
             result = subprocess.run(

@@ -24,7 +24,7 @@ main()
         runtime_archive=str(pcc_runtime_archive),
     )
     expected = compiler_identity.native_executable_identity(str(output)) + "\n"
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], env=dict(os.environ, PCC_GC_BACKEND=str(gc)),
                                 capture_output=True, text=True, timeout=10)
         assert result.returncode == 0, result.stderr

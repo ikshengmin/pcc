@@ -47,7 +47,7 @@ def _nonmac_paths():
                 and isinstance(node.args[0], ast.Constant)}
     assert set(suffixes) == {".resources.jsonl", ".windows-job.json"}
     paths = []
-    for gc in range(5):
+    for gc in (0,):
         for stage in (2, 3):
             log = eval(expression, {"__builtins__": {}},
                        {"out_dir": Path("build/platform-bootstrap") / ("gc" + str(gc)), "stage": stage})
@@ -73,7 +73,7 @@ def _macos_paths():
                              *deepcopy(functions)], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), "<actual path-only helpers>", "exec"), namespace)
     paths = []
-    for gc in range(5):
+    for gc in (0,):
         profile = namespace["_bootstrap_out_dir"](str(gc)) / "profile"
         for stage in (2, 3):
             argv, stdout, stderr = namespace["_bootstrap_stage_sampler_command"](

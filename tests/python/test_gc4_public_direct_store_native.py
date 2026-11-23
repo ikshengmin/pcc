@@ -190,7 +190,7 @@ def test_gc4_public_direct_store_policy(public_store_binary, mode):
 
 @pytest.mark.integration
 @pytest.mark.xdist_group(name="gc4_public_direct_store_native")
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_public_store_five_backend_compatibility(public_store_binary, backend):
     result = subprocess.run(
         [str(public_store_binary), "c", str(backend)], capture_output=True, text=True,

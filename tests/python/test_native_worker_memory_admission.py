@@ -64,7 +64,7 @@ def test_native_rss_selects_budget_and_refuses_an_unfit_worker(
         backend="self", ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in (0, 1, 2, 3, 4):
+    for backend in (0,):
         env = dict(os.environ)
         env.pop("LC_ALL", None)
         env["PCC_GC_BACKEND"] = str(backend)

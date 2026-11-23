@@ -154,7 +154,7 @@ def test_implicit_context_overwrite_self_and_indirect_cycles():
 
 
 def test_same_object_context_skips_graph_only_on_nonmoving_backends():
-    for backend in range(5):
+    for backend in (0,):
         chain, state = _implicit_chainer(backend=backend)
         previous = {8: 8, 40: None}
         error = {8: 8, 40: previous}

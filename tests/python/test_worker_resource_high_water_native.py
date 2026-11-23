@@ -94,7 +94,7 @@ def test_committed_high_water_native_five_collectors(
         "executions": [],
     }
     receipt_path = tmp_path / "high-water-execution.json"
-    for collector in range(5):
+    for collector in (0,):
         directory = tmp_path / ("gc" + str(collector))
         directory.mkdir()
         environment = os.environ.copy()

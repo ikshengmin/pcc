@@ -244,7 +244,7 @@ def test_threaded_gc0_copy_leaves_a_dying_or_foreign_header_to_the_locked_form(c
     assert model.graph_locked() == [("lock", 1), ("unlock", 0)]
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 def test_locked_copy_does_not_lease_the_destination(backend, entry):
     # The graph-locked forms (an unfixed collector, the split entry) lease
@@ -261,7 +261,7 @@ def test_locked_copy_does_not_lease_the_destination(backend, entry):
     assert model.release(destination, 0) == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 def test_two_stack_roots_keep_noop_token(backend, entry):
     model = DestinationLeaseModel(backend)
@@ -274,7 +274,7 @@ def test_two_stack_roots_keep_noop_token(backend, entry):
     assert model.release(destination, 0) == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 @pytest.mark.parametrize("probe", (1, 2))
 @pytest.mark.parametrize("node,expected", ((True, 1), (False, 2)))
@@ -331,7 +331,7 @@ def test_failed_source_acquire_never_publishes_or_acquires_destination(entry):
     assert model.references[1000] == 1 and model.active() == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("entry", ("ordinary", "split"))
 def test_failed_publication_does_not_attempt_destination_acquire(backend, entry):
     model = DestinationLeaseModel(backend)

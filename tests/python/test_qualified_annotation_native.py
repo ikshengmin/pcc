@@ -81,7 +81,7 @@ def test_provider_private_qualified_return_executes_natively(tmp_path, pcc_runti
         entry_module="consumer", backend="self",
         ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(executable)], cwd=tmp_path, capture_output=True, text=True,
             timeout=20, env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH=""),

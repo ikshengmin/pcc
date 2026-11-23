@@ -305,7 +305,7 @@ def test_native_retirement_matches_same_source_cpython(
             expected_wires[index] = Path(str(reference_prefix) + "_" + str(index) + ".wire").read_bytes()
     python_program_compiler(str(source), str(executable), backend="self",
                             runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on")
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         prefix = tmp_path / ("native_gc" + collector)
         result = subprocess.run([str(executable), str(prefix)], cwd=tmp_path,
                                 env={**os.environ, "PCC_GC_BACKEND": collector},

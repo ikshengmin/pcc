@@ -29,7 +29,7 @@ def _receipt_model():
                 "returncode": 0, "stderr": "",
                 "stdout": f"PCC_ORDERING_GC {backend}\nsemantic output\n",
             }
-            for backend in range(5)
+            for backend in (0,)
         ],
     }
     return runtime, record
@@ -113,7 +113,7 @@ def test_source_fingerprints_include_the_changed_owners_and_probe():
     assert "_verify_collector_output" in calls
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_collector_output_preserves_every_semantic_line(backend):
     expected = "first\n\nlast\n"
     assert native._verify_collector_output(

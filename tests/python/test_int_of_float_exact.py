@@ -94,7 +94,7 @@ def test_boxed_int_of_float_matches_cpython(
         tmp_path, "boxed_int_float", _BOXED, python_program_compiler,
         pcc_runtime_archive,
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=60,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

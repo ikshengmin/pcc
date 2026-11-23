@@ -123,7 +123,7 @@ main()
         entry_module="chained_parent", recursive_stdlib=True,
         backend="self", runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         case = tmp_path / f"gc{gc}"
         case.mkdir()
         primaries, followups, paths, log = _scenario(case)

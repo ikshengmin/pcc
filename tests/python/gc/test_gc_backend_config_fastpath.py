@@ -169,7 +169,7 @@ def test_hot_gc_paths_reuse_init_config_backend_value() -> None:
 
 
 @pytest.mark.parametrize("initialized", (False, True))
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_note_alloc_reuses_ready_config_and_initializes_once(initialized, backend):
     memory = {
         "pcc_gc_config_initialized": int(initialized),

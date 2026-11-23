@@ -90,7 +90,7 @@ def test_real_managed_module_imports_and_sibling_globals(tmp_path, monkeypatch, 
             assert profile["counters"]["multi_frontend_chunks"] > 0
             assert profile["counters"]["multi_frontend_ast_wire_enabled"] == 1
         record_property("frontend_" + str(frontend_jobs), json.dumps(profile["counters"], sort_keys=True))
-        for backend in range(5):
+        for backend in (0,):
             for alloc_max in (16, 128):
                 env = {key: value for key, value in os.environ.items()
                        if not key.startswith("PCC_GC_") and key not in (

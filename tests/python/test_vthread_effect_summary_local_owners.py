@@ -298,7 +298,7 @@ def test_summary_owner_program_matches_same_source_cpython(
         runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on",
     )
     expected_wire = reference_path.read_bytes()
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         actual_path = tmp_path / f"native_gc{collector}.wire"
         result = subprocess.run(
             [str(executable), str(actual_path)], cwd=tmp_path,

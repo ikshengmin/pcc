@@ -442,7 +442,7 @@ def test_native_registry_union_and_analyzers_match_same_source_cpython(tmp_path,
     expected_wire = wire.read_bytes()
     python_program_compiler(str(source), str(executable), backend="self",
                             runtime_archive=str(pcc_runtime_archive), ir_scaffold_mode="on")
-    for collector in ("0", "1", "2", "3", "4"):
+    for collector in ("0",):
         wire = tmp_path / f"native_gc{collector}.wire"
         result = subprocess.run([str(executable), str(wire)], cwd=tmp_path,
                                 env={**os.environ, "PCC_GC_BACKEND": collector},

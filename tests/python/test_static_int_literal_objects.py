@@ -74,7 +74,7 @@ def test_static_int_literals_match_cpython_under_every_collector(tmp_path, pcc_r
     binary = tmp_path / "int_literals"
     compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)))
         assert result.returncode == 0, f"GC{gc}: {result.stderr}"
@@ -115,7 +115,7 @@ def test_static_int_literals_are_registered_managed_objects(tmp_path):
     binary = tmp_path / "module_ints"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on")
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc),
                                          PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))

@@ -379,7 +379,7 @@ def test_wide_shift_counts_native_all_gc(tmp_path, monkeypatch, pcc_runtime_arch
     source.write_text(PROGRAM)
     python_program_compiler(str(source), str(executable), backend="self",
                             ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=30,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         (tmp_path / ("gc" + str(backend) + ".stdout")).write_text(ran.stdout)

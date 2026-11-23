@@ -163,7 +163,7 @@ def test_bounded_mpsc_oneshot_select2_sequential_contract(
         str(executable),
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(executable)],
             text=True,
@@ -213,7 +213,7 @@ def test_current_pcc1_self_no_libpython_channels(
     assert built.returncode == 0, built.stdout + built.stderr
     assert executable.is_file()
 
-    for gc_backend in range(5):
+    for gc_backend in (0,):
         run_environment = dict(environment)
         run_environment["PCC_GC_BACKEND"] = str(gc_backend)
         ran = subprocess.run(

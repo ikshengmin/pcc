@@ -1344,7 +1344,7 @@ def test_aggregate_ownership_native_five_gc(
 
     receipt["status"] = "NATIVE_RUNNING"
     _write_receipt(receipt_path, receipt)
-    for backend in range(5):
+    for backend in (0,):
         log_path = tmp_path / f"gc{backend}.gc.jsonl"
         environment = dict(
             os.environ,

@@ -198,7 +198,7 @@ main()
         recursive_stdlib=False, target_triple=host_target_triple(),
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(executable)], text=True, capture_output=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

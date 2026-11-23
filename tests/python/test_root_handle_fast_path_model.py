@@ -179,7 +179,7 @@ class RootState:
         return result
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("tracing", [0, 1])
 @pytest.mark.parametrize("initialized,frozen", [(0, 0), (0, 1), (1, 0), (1, 1)])
 @pytest.mark.parametrize("running", ["cold", "running", "exited"])
@@ -278,7 +278,7 @@ def test_recycled_handle_pair_needs_only_one_list_acquisition_per_change(backend
     assert state.list_entries - entries == (2 if backend == 0 or (backend == 4 and tracing) else 4)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_counted_handle_operations_skip_tracing_admission_queries(backend):
     state = RootState(backend, 0)
     state.ns["_scheduler_handle_needs_graph"] = lambda unused: pytest.fail(

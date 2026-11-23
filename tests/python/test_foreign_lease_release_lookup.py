@@ -580,7 +580,7 @@ def test_release_guard_ast_preserves_common_tail_and_short_circuit_dominance():
     assert ast.dump(actual) == ast.dump(reference)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_mode_token_keeps_shard_balance_after_node_registration(backend):
     def setup(model):
         slot = model.object(node=False, flags=262144)

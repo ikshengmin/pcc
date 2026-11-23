@@ -26,7 +26,7 @@ main()
     output = tmp_path / "remove_dir"
     compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         directory = tmp_path / ("directory-" + str(gc))
         result = subprocess.run([str(output), str(directory)], capture_output=True, text=True,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(gc)), timeout=10)

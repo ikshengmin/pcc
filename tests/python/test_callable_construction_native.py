@@ -255,6 +255,6 @@ def test_constructor_default(constructor_program):
 
 
 @pytest.mark.parametrize("constructor_program", _GC_CASES, indirect=True, scope="module")
-@pytest.mark.parametrize("collector", range(5), ids=lambda value: "gc" + str(value))
+@pytest.mark.parametrize("collector", (0,), ids=lambda value: "gc" + str(value))
 def test_constructor_observed_gc(constructor_program, collector):
     _assert_execution(constructor_program, collector)

@@ -57,7 +57,7 @@ class ListRuntime(GeneratorRuntime):
         return super().free(value)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("tracking", ("flags", "nodes", "merged"))
 @pytest.mark.parametrize("tracked", (False, True))
 @pytest.mark.parametrize("capacity", (4, 17, 1024))

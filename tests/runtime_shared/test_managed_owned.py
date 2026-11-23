@@ -360,7 +360,7 @@ def _run_managed_fixture(tmp_path, monkeypatch, fixture_name, *, extra_object=No
         import resource
         resource.setrlimit(resource.RLIMIT_AS, (64 * 1024 * 1024, 64 * 1024 * 1024))
 
-    for collector in range(5):
+    for collector in (0,):
         # GC1-4 are *rejection tests*, never collection qualification.
         result = subprocess.run([str(binary)], env={**os.environ, "PCC_GC_BACKEND": str(collector)},
                                 capture_output=True, timeout=10, preexec_fn=limit_native_address_space)

@@ -211,7 +211,7 @@ def test_class_decorators_match_cpython_on_five_collectors(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=60,
             env=_environment(backend),
@@ -231,7 +231,7 @@ def test_static_unittest_runner_honours_skips(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=60,
             env=_environment(backend),

@@ -42,7 +42,7 @@ def test_stack_root_registration_contract_all_five_backends(tmp_path):
                 "hashes": hashes, "binary_sha256": _digest(binary),
                 "runtime_provisioning": False, "gc_policy_changed": False}
     (tmp_path / "build.json").write_text(json.dumps(identity, indent=2) + "\n")
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend),
                            PCC_TEST_NO_NATIVE_PROVISIONING="1", PCC_NO_AUTO_PCC1="1")
         environment.pop("LC_ALL", None)

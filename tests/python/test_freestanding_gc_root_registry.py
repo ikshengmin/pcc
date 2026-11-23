@@ -397,7 +397,7 @@ def test_production_archive_uniquely_owns_registry(
     implementation = _link_harness(
         tmp_path, "gc_registry_pcc_python", pcc_runtime_archive
     )
-    for backend in range(5):
+    for backend in (0,):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
@@ -418,7 +418,7 @@ def test_root_registry_survives_pthread_mutation_and_observation(
         threaded_pcc_python_archive,
         concurrent=True,
     )
-    for backend in range(5):
+    for backend in (0,):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30

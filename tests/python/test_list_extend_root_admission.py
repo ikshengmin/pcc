@@ -59,7 +59,7 @@ def test_extend_bind_preserves_the_existing_map_admissions():
                   if isinstance(node, ast.FunctionDef) and node.name == name)
         fn.decorator_list = []
         exec(compile(ast.Module(body=[fn], type_ignores=[]), filename, "exec"), ns)
-    for backend in range(5):
+    for backend in (0,):
         for initialized in (0, 1):
             for tracking in (0, 1):
                 for nonmoving in (0, 1):
@@ -149,7 +149,7 @@ def test_list_extend_public_collection_native(tmp_path, explicit_owned_runtime):
     binary = tmp_path / "extend_callbacks"
     compile_python(str(source), str(binary), backend="self",
                    runtime_archive=str(explicit_owned_runtime))
-    for backend in range(5):
+    for backend in (0,):
         result = _record_execution(
             tmp_path, f"gc{backend}", [str(binary)], dict(os.environ, PCC_GC_BACKEND=str(backend)),
         )

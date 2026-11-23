@@ -182,7 +182,7 @@ def test_module_reads_on_four_carriers_and_five_collectors(tmp_path, threaded_pc
                    ir_scaffold_mode="on",
                    runtime_archive=str(threaded_pcc_runtime_archive))
     expected = str([2000 * (seed * 3 + 50) for seed in range(6)]) + "\nb 21\n"
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable)], capture_output=True, text=True, timeout=120,
                              cwd=str(tmp_path),
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))

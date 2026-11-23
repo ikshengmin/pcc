@@ -60,7 +60,7 @@ print(sum_ints([1, 2, 3, 4]))
     binary = tmp_path / "scalar_consumer"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = run_process_group_timeout(
             [str(binary)], timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

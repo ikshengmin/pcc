@@ -433,7 +433,7 @@ main()
     monkeypatch.chdir(snapshot)
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         restored = tmp_path / ("restored-" + str(backend) + ".pidx")
         ran = subprocess.run([str(binary), str(sidecar), str(restored)],
                              capture_output=True, text=True, timeout=30,
@@ -857,7 +857,7 @@ def test_native_read_private_ownership_under_all_collectors(
     receipt["binary"] = identity(binary)
     expected = ("legacy|ok\nempty|ok\npartial|ok\ninvalid-fd|ok\n"
                 "success|ok\nzero|ok\ninvalid-observer|rejected\n")
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector),
@@ -1375,7 +1375,7 @@ main()
     receipt["binary"] = identity(binary)
     expected = "".join("closed-21\nmalformed|" + str(case) + "\n" for case in range(12))
     expected += "closed-21\nsuccess-transfer|ok\n"
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
@@ -1939,7 +1939,7 @@ def test_private_value_columns_native_boundary_all_collectors(
                         receipt["route_records"].append(record)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     receipt["binary"] = identity(binary)
-    for collector in range(5):
+    for collector in (0,):
         for case in cases:
             result = subprocess.run(
                 [str(binary), case, str(inputs[case])], capture_output=True, text=True, timeout=30,
@@ -2308,7 +2308,7 @@ def test_kernel_private_acquisition_rollback_native_boundary_all_collectors(
                         receipt["route_records"].append(record)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     receipt["binary"] = identity(binary)
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),
@@ -2720,7 +2720,7 @@ def test_block_fact_shape_native_boundary_all_collectors(
                         receipt["route_records"].append(record)
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     receipt["binary"] = identity(binary)
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)),

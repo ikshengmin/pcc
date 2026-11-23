@@ -190,7 +190,7 @@ def test_native_immortals_mutable_counts_and_terminal_lifetimes(tmp_path, pcc_ru
     binary = tmp_path / 'immortal_refs'
     runtime = Path(__file__).resolve().parents[2] / 'pcc/runtime'
     link_c_harness(source, binary, extra_include_dirs=(str(runtime / 'src'),))
-    for backend in range(5):
+    for backend in (0,):
         for probe in (0, 1, 2):
             env = dict(os.environ, PCC_GC_BACKEND=str(backend),
                        PCC_GC_REFCOUNT_PROVENANCE_PROBE=str(probe), PATH='/nonexistent')

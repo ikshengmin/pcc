@@ -237,7 +237,7 @@ def test_imported_intercepted_result_pcc0_emitted_five_gc(tmp_path, explicit_own
                          module_names=["hook_provider", "entry"], entry_module="entry",
                          backend="self", ir_scaffold_mode="on",
                          runtime_archive=str(explicit_owned_runtime))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(executable)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                                          PCC_GC_REFCOUNT_PROVENANCE_PROBE="2"))

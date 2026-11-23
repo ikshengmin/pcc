@@ -103,7 +103,7 @@ def test_dynamic_dict_protocol_executes_natively(tmp_path, pcc_runtime_archive, 
     output = tmp_path / name
     compile_python(str(source), str(output), backend="self",
                    runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         environment["PCC_GC_BACKEND"] = str(collector)
         environment["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = "2"
         ran = subprocess.run([str(output)], env=environment, capture_output=True,

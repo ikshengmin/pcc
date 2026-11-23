@@ -124,7 +124,7 @@ def assert_no_directory(runtime, root):
     assert runtime.global_load('pcc_tempdir_records') is None
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('threads', (0, 1))
 def test_list_capacity_is_not_length_and_internal_access_is_nonraising(backend, threads):
     runtime = Runtime()
@@ -150,7 +150,7 @@ def test_list_capacity_is_not_length_and_internal_access_is_nonraising(backend, 
 
 
 @pytest.mark.parametrize('platform', ('posix', 'windows'))
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('threads', (0, 1))
 def test_constructor_publishes_four_real_list_items(tmp_path, platform, backend, threads):
     runtime, lists, root = make_runtime(platform, tmp_path, backend, threads)

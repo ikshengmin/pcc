@@ -143,7 +143,7 @@ def test_static_and_heap_operands_preserve_lifetimes_native_five_gc(tmp_path, pc
     output = tmp_path / "static_inputs"
     compile_python(str(source), str(output), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)))
         assert (result.returncode, result.stdout, result.stderr) == (0, reference.stdout, ""), gc
@@ -219,7 +219,7 @@ def test_permanent_runtime_inputs_match_cpython_five_gc(tmp_path, pcc_runtime_ar
     output = tmp_path / "permanent_runtime_inputs"
     compile_python(str(source), str(output), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)))
         assert (result.returncode, result.stdout, result.stderr) == (0, reference.stdout, ""), gc

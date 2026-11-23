@@ -227,7 +227,7 @@ def test_native_ast_wire_uses_shared_contract_all_gcs(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
         result = subprocess.run(

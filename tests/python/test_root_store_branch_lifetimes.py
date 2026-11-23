@@ -60,7 +60,7 @@ def test_root_replacement_finalizers_and_resurrection_all_gc(tmp_path, pcc_runti
     output = tmp_path / "root_replacement"
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         for probe in ("0", "2"):
             result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                     env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc),
@@ -138,7 +138,7 @@ def test_field_replacement_finalizers_and_resurrection_all_gc(tmp_path, pcc_runt
     output = tmp_path / "field_replacement"
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         for probe in ("0", "2"):
             result = subprocess.run([str(output)], capture_output=True, text=True, timeout=20,
                                     env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc),

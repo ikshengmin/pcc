@@ -354,7 +354,7 @@ def test_generator_close_created_refs_stay_silent_across_budget_slices(backend):
 
 
 @pytest.mark.parametrize("entry", ("py_gen_finalize", "py_user_del_dispatch"))
-@pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
+@pytest.mark.parametrize("backend", (0,))
 def test_explicit_generator_finalization_still_invalidates_before_close(entry, backend):
     model = GeneratorLateWeakBatch(backend, count_free=False)
     model.refs = [model.weak(model.gen), model.weak(model.gen, 0x8000)]
@@ -373,7 +373,7 @@ def test_explicit_generator_finalization_still_invalidates_before_close(entry, b
     assert model.silent_clears == []
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
+@pytest.mark.parametrize("backend", (0,))
 def test_counted_sweep_does_not_enter_the_tracing_candidate_finalizer(backend):
     # Backend 0 normally owns its own collector. This also checks the shared
     # sweep's counted branch without claiming a native GC0 sweep entry.

@@ -259,7 +259,7 @@ def test_ordinary_int_boundaries_native(tmp_path, monkeypatch, pcc_runtime_archi
     source.write_text(PROGRAMS[name])
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                              env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)))
         (tmp_path / f"gc{backend}.stdout").write_text(ran.stdout)

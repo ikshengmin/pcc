@@ -165,7 +165,7 @@ def test_list_literal_owned_construction_native_all_gc(
     binary = source.with_suffix('')
     python_program_compiler(str(source), str(binary), backend='self',
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent'),
@@ -244,7 +244,7 @@ def test_list_construction_concurrent_native_all_gc(
     binary = source.with_suffix("")
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH="/nonexistent"),

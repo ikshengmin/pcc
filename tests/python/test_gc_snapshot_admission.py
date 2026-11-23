@@ -138,7 +138,7 @@ def test_snapshot_rejects_terminal_owners_but_keeps_finalized_live_objects(
     receipt = {"source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
                "binary_sha256": hashlib.sha256(binary.read_bytes()).hexdigest(),
                "runtime": str(threaded_pcc_runtime_archive), "runs": []}
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_THREADS="1",

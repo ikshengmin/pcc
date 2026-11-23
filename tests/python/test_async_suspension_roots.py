@@ -431,7 +431,7 @@ def _assert_native_async_program_matches_cpython(
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for requested_backend in range(5):
+    for requested_backend in (0,):
         log = tmp_path / ("gc" + str(requested_backend) + ".jsonl")
         ran = subprocess.run(
             [str(executable)],

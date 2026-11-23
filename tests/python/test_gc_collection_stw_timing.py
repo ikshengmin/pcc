@@ -296,7 +296,7 @@ class CollectionWindow:
         assert not self.world
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("retries", [0, 2])
 def test_explicit_collection_counts_one_complete_window_on_five_backends(backend, retries):
     state = CollectionWindow(backend, retries=retries)
@@ -343,7 +343,7 @@ def test_gc0_early_exits_count_the_acquired_stop_once(exit_kind):
     assert state.memory.get("py_gc_collecting") == 0
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_reentrant_collection_does_not_add_a_nested_window(backend):
     state = CollectionWindow(backend)
     if backend == 0:

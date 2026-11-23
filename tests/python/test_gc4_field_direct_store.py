@@ -200,7 +200,7 @@ def test_field_commit_uses_mode_captured_before_logging_and_lock(count_free, cha
     assert before.snapshot() == after.snapshot()
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('count_free', (False, True))
 @pytest.mark.parametrize('change_at', ('log', 'lock'))
 def test_field_commit_uses_backend_captured_before_logging_and_lock(

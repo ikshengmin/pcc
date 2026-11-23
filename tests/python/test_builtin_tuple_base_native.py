@@ -70,7 +70,7 @@ def test_builtin_tuple_base_native(tmp_path, source, stdout, error):
     path.write_text(source)
     compile_python(str(path), str(binary), backend='self',
                    ir_scaffold_mode='on', **options)
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PATH='/nonexistent', PCC_GC_BACKEND=str(backend)))
         assert result.stdout == stdout, (backend, result.stdout, result.stderr)

@@ -73,7 +73,7 @@ int main(void) {
 """
 
 
-@pytest.mark.parametrize("backend", [0, 1, 2, 3, 4])
+@pytest.mark.parametrize("backend", (0,))
 def test_pause_telemetry_counters_consistent(tmp_path, backend):
     work_runtime = _build_runtime(tmp_path)
     src = tmp_path / "pause_probe.c"

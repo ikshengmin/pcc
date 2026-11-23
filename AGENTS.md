@@ -100,12 +100,12 @@ These are required outcomes, not assertions that migration is complete. See
   fallible-streaming-iterator. Fix each project's first observed blocker;
   feature counts and component fixtures are not project acceptance. Go/Java
   managed objects share allocator/header/type-descriptor design with the
-  count-free collectors. Reuse existing scheduling owners and develop the
+  one collector. Reuse existing scheduling owners and develop the
   shared owned unwinding design.
   Python interoperability starts with same-executable pcc.extern scalar calls,
   then buffers, GC handles and extension modules. Keep status pages to current
   facts; tests and ledgers carry detailed obligations and results.
-  Native self-host, all five GC backends and public CLI parity remain mandatory
+  Native self-host, the one collector and public CLI parity remain mandatory
   non-regression contracts, but legacy bootstrap/CI cleanup must not displace
   this frontend work. Small source/code/test work continues independently;
   serialize only heavy gates and shared runtime/backend publication. Each
@@ -122,7 +122,11 @@ These are required outcomes, not assertions that migration is complete. See
 - Preserve ordinary Python/C semantics, arbitrary-precision Python integers,
   identity, exceptions, finalizers, weakrefs and resurrection. Value layouts
   and fixed-width machine types are explicit. No package-specific shortcuts.
-- Preserve all five GC backends and their shared slot/root contract. The
+- pcc has one collector (maintainer decision, 2026-11-24): reference
+  counting with a generational cycle collector, the former GC0. The
+  tracing and relocating collectors 1-4 are removed and not selectable;
+  `PCC_GC_BACKEND` accepts only 0 and anything else is an error, never a
+  fallback. Do not add a second collector or a per-collector protocol. The
   runtime is pcc-Python over owned intrinsics and the platform ABI.
 - The self-host chain is host pcc0 -> pcc1 -> pcc2 -> pcc3. A stage1 build is
   not a new-source fixed point. Distinguish host/native, self-backed/LLVM-backed,
@@ -229,7 +233,7 @@ These are required outcomes, not assertions that migration is complete. See
 - Fix a subsystem's known correctness failures before stacking optimizations
   on it, and commit a change together with its tests rather than as a chain of
   test-only follow-ups.
-- Execute emitted programs and preserve the five-GC/ownership contracts.
+- Execute emitted programs and preserve the collector's ownership contract.
   Instruction counts, byte equality and QPS support different claims.
   The [memory-pass audit](docs/knowledge/2026-09-08-optimizer-pipeline-audit.md)
   is a dated example, not extra mandatory startup reading.
@@ -242,12 +246,12 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
 
 - `arm NAME` seals the tracked tree, builds the runtime and the benchmark
   program under the process-tree guard, and accepts the build only when every
-  primitive gives CPython's result on all five collectors. Measure sealed
+  primitive gives CPython's result. Measure sealed
   arms, never the working tree.
 - Localize before profiling by hand. `prim NAME` gives, per primitive
   operation ([one source](benchmarks/handler/primitive_ops.py) for CPython
-  and for compiled code), the cost against CPython and GC0 under every
-  collector, the four-worker scaling and the objects allocated;
+  and for compiled code), the cost against CPython, the four-worker
+  scaling and the objects allocated;
   `prim A --against B` is the per-primitive A/B. `top`, `gap`, `locks` and
   `layout` then name the functions, the category, the lock callers and the
   cache-line neighbours.
@@ -265,12 +269,12 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
   change; revert it unless it is a correctness or simplification change
   named as such.
 - `ab A B` is the result: five alternating pairs, medians, pair wins and an
-  unchanged control (`--control GC`, or `--control-arm` for a change every
-  collector sees); fewer pairs is a screen. A change is a gain or a loss
+  unchanged control (`--control-arm`: a second build of the base arm);
+  fewer pairs is a screen. A change is a gain or a loss
   only beyond the control's noise floor; inside a floor of 5% or more it is
-  inconclusive and is not a result. `table` reports every
-  collector with one and four workers against GC0 and the recorded asyncio
-  figure. Four workers below one worker is a defect for any collector.
+  inconclusive and is not a result. `table` reports one and four workers
+  against the recorded asyncio figure for the same worker count. Four
+  workers below one worker is a defect.
 - Extend the tool instead of writing a one-off script. A newly found hot
   operation becomes a primitive with its CPython sum in
   `tests/python/test_pcc_perf.py`; a hot shared word joins the table of
@@ -323,7 +327,7 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
   require a tree-RSS cap, frozen inputs and isolated outputs. Do not edit their
   input closure or run contending bootstrap/runtime builds during measurement.
 - Whole affected-language suites run before publication. Whole-project
-  legacy sweeps/five-GC bootstrap are final qualification after focused checks
+  legacy sweeps/bootstrap are final qualification after focused checks
   and source stability, not diagnosis. Build dependent stages in order and stop
   at the first failure. Do not repeatedly widen timeouts to hide a regression.
 - Critical parser/frontend/codegen/runtime/bootstrap changes need the relevant

@@ -80,7 +80,7 @@ def test_gc3_private_sorted_publication_during_active_mark(tmp_path, indexed_all
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_inline_generator_factory_uses_selected_layout(tmp_path, indexed_allocation_binary, backend):
     result = _record_execution(
         tmp_path, f"gc{backend}-layout", [str(indexed_allocation_binary), "layout"],

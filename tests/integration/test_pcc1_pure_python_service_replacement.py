@@ -454,7 +454,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_pproxy_service(
             origin_port=origin.port,
             startup_timeout=30.0,
         )
-        for backend in ("0", "1", "2", "3", "4"):
+        for backend in ("0",):
             run_env = dict(pcc_env)
             run_env["PCC_GC_BACKEND"] = backend
             actual = _exercise_service(

@@ -54,7 +54,7 @@ def test_enumerate_counters_are_owned_across_iteration_and_resume(
         str(source), str(binary), backend='self',
         ir_scaffold_mode=scaffold, runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent',

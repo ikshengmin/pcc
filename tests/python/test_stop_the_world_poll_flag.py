@@ -100,7 +100,7 @@ ALLOCATING_PROBE = PROBE.replace(
 ).replace("#include <unistd.h>\n", "#include <stdlib.h>\n#include <unistd.h>\n")
 
 
-@pytest.mark.parametrize("backend", (0, 1, 2, 3, 4))
+@pytest.mark.parametrize("backend", (0,))
 def test_allocating_worker_parks_for_every_stop(tmp_path: Path, backend: int):
     assert ALLOCATING_PROBE != PROBE and "pcc_thread_safepoint();\n    }" not in ALLOCATING_PROBE
     executable = _compile_runtime_probe(

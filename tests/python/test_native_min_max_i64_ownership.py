@@ -219,7 +219,7 @@ def test_i64_min_max_releases_boxed_items(python_program_compiler,
     captured = capfd.readouterr()
     (tmp_path / 'compiler.stdout').write_text(captured.out)
     (tmp_path / 'compiler.stderr').write_text(captured.err)
-    for backend in range(5):
+    for backend in (0,):
         result = run_process_group_timeout(
             [str(binary)], timeout=10,
             env=dict(os.environ, PATH='', PCC_GC_BACKEND=str(backend),

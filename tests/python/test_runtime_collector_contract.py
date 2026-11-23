@@ -17,7 +17,7 @@ _ConfiguredIterator = _IteratorMemory
 _ConfiguredTuple = _TupleMemory
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("requested_count_free", (False, True))
 @pytest.mark.parametrize("provenance", (0, 2))
 def test_collector_configuration_normalizes_ownership(

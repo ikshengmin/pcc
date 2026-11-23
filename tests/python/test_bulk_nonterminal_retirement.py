@@ -182,7 +182,7 @@ def test_owned_c_batch_admission_and_balance_five_gc(tmp_path, pcc_runtime_archi
     source.write_text(PROBE)
     output = tmp_path / "batch"
     compile_owned_c_with_runtime(source, output, runtime_archive=pcc_runtime_archive)
-    for gc in range(5):
+    for gc in (0,):
         for probe in ("0", "2"):
             result = subprocess.run([str(output), str(gc)], capture_output=True, text=True,
                                     timeout=20, env=dict(os.environ, PATH="/nonexistent",
@@ -237,7 +237,7 @@ def test_native_terminal_order_reentry_and_resurrection_five_gc(tmp_path, pcc_ru
     output = tmp_path / "lifetime"
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)))
         assert (result.returncode, result.stdout, result.stderr) == (0, reference.stdout, ""), gc

@@ -23,7 +23,7 @@ def process_entry_root_words(tmp_path_factory):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize(
     "args,mask",
     [((), 4), (("two",), 4), (("worker", "full"), 8), (("peer",), 4)],

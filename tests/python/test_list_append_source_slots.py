@@ -96,7 +96,7 @@ def test_threaded_growth_and_argument_lifetimes_native_five_gc(tmp_path, pcc_run
     output = tmp_path / "source_slot_append"
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=40,
                                 env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc),
                                          PCC_GC_REFCOUNT_PROVENANCE_PROBE=probe))

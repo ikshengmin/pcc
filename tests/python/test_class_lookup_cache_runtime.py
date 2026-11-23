@@ -139,7 +139,7 @@ def test_class_lookup_preserves_shadowing_and_delete_epoch(
             return 0;
         }
         '''
-    for backend in range(5):
+    for backend in (0,):
         backend_source = source.replace("CACHE_BACKEND", str(backend))
         for runtime_name, archive in (
             ("pcc_py", pcc_runtime_archive),
@@ -190,7 +190,7 @@ def test_exposing_mutable_class_attrs_invalidates_field_cache_epoch(
             return 0;
         }
     '''
-    for backend in range(5):
+    for backend in (0,):
         for runtime_name, archive in (
             ("pcc_py", pcc_runtime_archive),
         ):
@@ -245,7 +245,7 @@ def test_instance_field_cache_reloads_values_after_class_dict_exposure(
             return 0;
         }
     '''
-    for backend in range(5):
+    for backend in (0,):
         for runtime_name, archive in (
             ("pcc_py", pcc_runtime_archive),
         ):
@@ -294,7 +294,7 @@ def test_user_instance_getattr_keeps_field_and_class_attrs(
             return 0;
         }
     '''
-    for backend in range(5):
+    for backend in (0,):
         for runtime_name, archive in (
             ("pcc_py", pcc_runtime_archive),
         ):

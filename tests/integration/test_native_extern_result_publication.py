@@ -36,7 +36,7 @@ def test_extern_owned_result_publication_executes_all_collectors(
         ir_scaffold_mode='on', runtime_archive=str(explicit_owned_runtime),
     )
     receipt['executable_sha256'] = hashlib.sha256(output.read_bytes()).hexdigest()
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='',
                            PCC_HOST_PYTHON='/nonexistent/host-python',
                            PCC_GC_REFCOUNT_PROVENANCE_PROBE='2')

@@ -208,7 +208,7 @@ def test_literal_dynamic_classinfo_executes_all_collectors(
     python_program_compiler(str(source), str(output), backend='self',
                             ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True,
                                 timeout=30, env=dict(os.environ,
                                     PATH='/nonexistent', PCC_GC_BACKEND=str(backend)))
@@ -289,7 +289,7 @@ def test_dynamic_tuple_keeps_qualified_module_class_identity(
     compile_python_multi(paths, str(binary), module_names=names, entry_module='tuple_main',
                          backend='self', ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                                 env=dict(os.environ, PATH='/nonexistent',
                                          PCC_GC_BACKEND=str(backend)))

@@ -41,7 +41,7 @@ main()
     binary = tmp_path / "nullable_container"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, f"GC{backend}: {ran.stdout}{ran.stderr}"
@@ -131,7 +131,7 @@ main()
     binary = tmp_path / "literal_errors"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
                              capture_output=True, text=True, timeout=20)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
@@ -178,7 +178,7 @@ main()
     binary = tmp_path / "set_errors"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(binary)], env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
                              capture_output=True, text=True, timeout=20)
         assert ran.returncode == 0, f"GC{backend}: {ran.stdout}{ran.stderr}"

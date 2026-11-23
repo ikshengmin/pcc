@@ -47,7 +47,7 @@ def test_live_import_namespace_native_five_gc(tmp_path, monkeypatch, pcc_runtime
         backend='self', ir_scaffold_mode='on',
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend), PATH='/nonexistent')
         environment.pop('LC_ALL', None)
         result = subprocess.run(

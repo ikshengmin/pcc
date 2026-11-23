@@ -79,7 +79,7 @@ def test_mkdtemp_public_binding_all_collectors(tmp_path,monkeypatch,
     monkeypatch.setenv('PCC_PYTHON_IR_PASSES','off')
     python_program_compiler(str(source),str(binary),backend='self',
         ir_scaffold_mode='on',runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         root=tmp_path/('gc'+str(backend));root.mkdir()
         result=subprocess.run([str(binary),str(root)],capture_output=True,text=True,
             timeout=30,env=dict(os.environ,PCC_GC_BACKEND=str(backend),

@@ -13,7 +13,7 @@ from pcc.runtime.py import py_abi_constants as abi
 
 
 @pytest.mark.parametrize("kind", ("list", "tuple"))
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("count", (0, 1, 3))
 def test_retirement_reverses_owners_and_reloads_remaining_children(kind, backend, count):
     owner, array = 1000, 2000
@@ -148,7 +148,7 @@ def test_sequence_retirement_native_all_gc(tmp_path, threaded_pcc_runtime_archiv
     binary = source.with_suffix("")
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(threaded_pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend),
                                       PCC_GC_MINOR_ALLOC_MAX="4096", PATH="/nonexistent"))

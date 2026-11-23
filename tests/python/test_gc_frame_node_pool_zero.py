@@ -177,7 +177,7 @@ def test_cached_nodes_restore_every_byte_without_a_second_zero_fill(backend, cou
     memory.call("tls_pool_drain")
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("count", (0, 1, 16, 17, 31))
 def test_fresh_zeroing_oversize_and_nonmoving_bypass(backend, count):
     memory = PoolMemory(backend)

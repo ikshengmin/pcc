@@ -13,7 +13,7 @@ def test_native_address_shards_public_tokens_five_gc(tmp_path, threaded_pcc_runt
     source = Path(__file__).resolve().parents[1] / "fixtures/native/address_sharded_leases.c"
     output = tmp_path / "address_sharded_leases"
     compile_owned_c_with_runtime(source, output, runtime_archive=threaded_pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         for different in (0, 1):
             for probe in ("0", "2"):
                 result = subprocess.run(

@@ -680,7 +680,7 @@ def test_current_pcc1_replaces_cpython_for_frozen_scientific_build_corpus(
     _assert_no_libpython(executable)
 
     gc_reports: dict[str, object] = {}
-    for backend in range(5):
+    for backend in (0,):
         run_root = tmp_path / f"gc{backend}"
         run_root.mkdir()
         run_env, run_forbidden_log = _hostless_env(

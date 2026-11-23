@@ -109,7 +109,7 @@ def _run(fixture, backend: int, scenario: int, workers: int):
     return fields, receipt
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 def test_native_tracking_origins_and_introspection(nonmoving_tracking_binary, backend):
     fields, receipt = _run(nonmoving_tracking_binary, backend, 0, 1)
     assert fields["origins"] == 4 and fields["raw_calls"] == fields["pending"] == 0, receipt

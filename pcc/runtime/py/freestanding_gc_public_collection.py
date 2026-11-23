@@ -288,7 +288,9 @@ def pcc_gc_config_parse_env_i32(
 @c_abi_export("pcc_gc_config_abort_bad_backend")
 def _pcc_gc_config_abort_bad_backend() -> None:
     message = cstr(
-        "pcc runtime: invalid PCC_GC_BACKEND; expected one of 0,1,2,3,4\n"
+        "pcc runtime: invalid PCC_GC_BACKEND; pcc has one collector "
+        "(reference counting with a generational cycle collector), "
+        "selected by 0 or by leaving the variable unset\n"
     )
     length: i64 = 0
     while load_i8(message, length) != 0:
@@ -302,8 +304,10 @@ def _pcc_gc_config_parse_backend(raw, default: i64) -> i64:
     if ptr_is_null(raw) != 0:
         return default
     first: i64 = load_i8(raw, 0) & 255
-    if first >= 48 and first <= 52 and load_i8(raw, 1) == 0:
-        return first - 48
+    # One collector: the former tracing and relocating collectors 1-4 are
+    # no longer selectable, and asking for one is an error, not a fallback.
+    if first == 48 and load_i8(raw, 1) == 0:
+        return 0
     _pcc_gc_config_abort_bad_backend()
     return default
 

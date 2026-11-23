@@ -311,7 +311,7 @@ def test_production_archive_uniquely_owns_root_introspection(
     implementation = _link_harness(
         tmp_path, "gc_roots_pcc_python", pcc_runtime_archive
     )
-    for backend in range(5):
+    for backend in (0,):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30
@@ -332,7 +332,7 @@ def test_root_introspection_survives_pthread_registry_contention(
         threaded_pcc_python_archive,
         concurrent=True,
     )
-    for backend in range(5):
+    for backend in (0,):
         env = {**os.environ, "PCC_GC_BACKEND": str(backend)}
         result = subprocess.run(
             [str(implementation)], env=env, capture_output=True, text=True, timeout=30

@@ -251,7 +251,7 @@ def test_sequential_tcp_gc_matrix(
         str(executable),
         ir_scaffold_mode="on",
     )
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ)
         environment.pop("LC_ALL", None)
         environment["PCC_GC_BACKEND"] = str(backend)
@@ -303,7 +303,7 @@ def test_current_pcc1_self_no_libpython_sequential_tcp_echo(
         timeout=600,
     )
     assert built.returncode == 0, built.stdout + built.stderr
-    for backend in range(5):
+    for backend in (0,):
         run_environment = dict(environment)
         run_environment["PCC_GC_BACKEND"] = str(backend)
         ran = subprocess.run(

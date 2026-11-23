@@ -1579,7 +1579,7 @@ def test_bootstrap_gc_parallel_slots_grouped_files_use_one_slot():
                 "tests/python/gc/test_pcc_bootstrap_full_gc"
                 f"{backend}.py::test_x@gc_full_bootstrap"
             )
-            for backend in range(5)
+            for backend in (0,)
         )
     )
 

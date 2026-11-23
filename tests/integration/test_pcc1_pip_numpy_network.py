@@ -121,7 +121,7 @@ def test_pcc1_pip_install_numpy_from_network_then_array_add(tmp_path):
     )
     assert compile_proc.returncode == 0, compile_proc.stdout + compile_proc.stderr
 
-    for backend in ("0", "1", "2", "3", "4"):
+    for backend in ("0",):
         run_env = os.environ.copy()
         run_env.pop("LC_ALL", None)
         run_env["PCC_GC_BACKEND"] = backend

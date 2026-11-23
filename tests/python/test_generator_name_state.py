@@ -153,7 +153,7 @@ def test_local_imports_restore_generator_classification_in_native_program(
     libraries = linked_libraries(binary.read_bytes())
     assert libraries
     assert not any("libpython" in name.lower() or "llvm" in name.lower() for name in libraries)
-    for collector in range(5):
+    for collector in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(environment, PCC_GC_BACKEND=str(collector)),

@@ -133,7 +133,7 @@ def test_path_protocol_executes_natively(tmp_path, pcc_runtime_archive):
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_PATH_PROTOCOL_CONTROL="intrinsic-ok",
@@ -192,7 +192,7 @@ def test_diagnostic_span_original_shape_is_not_stubbed(tmp_path):
 def test_diagnostic_span_original_shape_executes_natively(tmp_path, pcc_runtime_archive):
     output = _compile_diagnostic_entry(tmp_path, emit_llvm_only=False,
                                        runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc), PATH="",
@@ -227,7 +227,7 @@ def check():
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc), PATH="",

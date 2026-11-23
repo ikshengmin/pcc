@@ -793,7 +793,7 @@ def test_native_prepared_layout_projection(tmp_path, pcc_runtime_archive):
     compile_python_multi([str(app), str(model)], str(binary), module_names=["app", "model"],
                          entry_module="app", backend="self",
                          ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
         result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True, timeout=20)
@@ -830,7 +830,7 @@ def main():
 main()
 ''')
     compile_python_multi([str(app), str(model)], str(binary), module_names=["app", "model"], entry_module="app", backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
         result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True, timeout=20)
@@ -845,7 +845,7 @@ def test_native_factory_binding(tmp_path, pcc_runtime_archive, python_program_co
     binary = tmp_path / "factory"
     source.write_text(PROGRAMS[name][0])
     python_program_compiler(str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(gc))
         environment.pop("LC_ALL", None)
         result = subprocess.run([str(binary)], env=environment, capture_output=True, text=True, timeout=20)

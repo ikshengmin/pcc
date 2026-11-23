@@ -30,7 +30,7 @@ def test_replace_resolves_user_definitions(tmp_path, pcc_runtime_archive):
     output = tmp_path / "replace_names"
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True, timeout=15,
                                 env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(gc)))
         assert (result.returncode, result.stdout, result.stderr) == (0, reference.stdout, ""), gc

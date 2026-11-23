@@ -73,5 +73,5 @@ def test_weakref_failed_outer_hash_native_five_gc(
     binary = tmp_path / "weakref_hash_reentry"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         _check([str(binary)], dict(os.environ, PCC_GC_BACKEND=str(backend)))

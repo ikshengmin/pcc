@@ -49,7 +49,7 @@ print(sorted(events))
     executable = tmp_path / "frame_finalizers"
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
@@ -100,7 +100,7 @@ def test_resumed_generator_frame_does_not_keep_rebound_locals(tmp_path, pcc_runt
     executable = tmp_path / "resumed_rebind"
     compile_python(str(source), str(executable), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable)], text=True, capture_output=True, timeout=15,
                              env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
@@ -181,7 +181,7 @@ int main(int argc, char **argv) {
     ran = subprocess.run([str(executable), "0"], capture_output=True, text=True, timeout=15)
     assert ran.returncode == 2, "the ordinary retaining getter must leave the frame slot occupied"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout.strip() == "frame-owner-roundtrip-ok"
@@ -252,7 +252,7 @@ int main(int argc, char **argv) {
 ''')
     executable = tmp_path / "frame_owners"
     compile_owned_c_with_runtime(source, executable, runtime_archive=pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         ran = subprocess.run([str(executable), str(backend)], capture_output=True, text=True, timeout=15)
         assert ran.returncode == 0, f"GC{backend}: " + ran.stdout + ran.stderr
         assert ran.stdout.strip() == "frame-owner-transfer-ok"

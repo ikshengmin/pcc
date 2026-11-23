@@ -164,7 +164,7 @@ main()
     compile_python_multi(paths, str(binary), module_names=names, entry_module='entry',
                          backend='self', ir_scaffold_mode='on',
                          runtime_archive=str(pcc_runtime_archive))
-    for collector in range(5):
+    for collector in (0,):
         log = tmp_path / ('gc' + str(collector) + '.jsonl')
         environment = dict(os.environ, PCC_GC_BACKEND=str(collector), PATH='/nonexistent',
                            PCC_HOST_PYTHON='/unavailable/host-python', PCC_LOG='gc',

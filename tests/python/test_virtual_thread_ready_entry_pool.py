@@ -89,7 +89,7 @@ def test_completed_steps_drop_continuations_after_the_callback_returns(
             return 0;
         }
     ''', threaded_pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(exe), str(backend)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),
@@ -284,7 +284,7 @@ def test_local_deque_overflow_and_queued_roots_on_five_collectors(
             return 0;
         }
     ''', threaded_pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(exe), str(backend)], capture_output=True,
                                 text=True, timeout=30)
         assert (result.returncode, result.stdout, result.stderr) == (

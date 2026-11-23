@@ -44,7 +44,7 @@ def test_float_typed_object_call_results_match_cpython(tmp_path, pcc_runtime_arc
         str(source), str(output), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for gc in range(5):
+    for gc in (0,):
         ran = subprocess.run(
             [str(output)], capture_output=True, text=True, timeout=60,
             env=dict(os.environ, PCC_GC_BACKEND=str(gc)),

@@ -185,7 +185,7 @@ def test_failed_granule_retirement_preserves_exact_provenance_and_storage(backen
     assert rt.kinds().count("find") == (1 if noted else 2)
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("noted", (False, True))
 @pytest.mark.parametrize("origin", ("live", "reserved", "free", "raw"))
 def test_only_nonmoving_already_noted_path_fuses_transactions(backend, noted, origin):

@@ -91,7 +91,7 @@ int main(void) {
 '''
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_gilstate_attaches_and_save_thread_detaches_on_five_collectors(
     tmp_path: Path, backend: int
 ):

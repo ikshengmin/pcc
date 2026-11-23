@@ -141,7 +141,7 @@ def test_comprehension_binding_flags_native(
     python_program_compiler(str(path), str(output), backend='self',
                             ir_scaffold_mode='on',
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(output)], capture_output=True, text=True,
                                 timeout=20, env=dict(os.environ, PATH='',
                                                     PCC_GC_BACKEND=str(backend)))

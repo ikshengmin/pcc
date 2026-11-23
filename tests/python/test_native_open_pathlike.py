@@ -97,7 +97,7 @@ def test_native_open_accepts_pathlike_like_cpython(tmp_path, pcc_runtime_archive
     compile_python(str(source), str(output), backend="self",
                    ir_scaffold_mode="on", recursive_stdlib=True,
                    runtime_archive=str(pcc_runtime_archive))
-    for gc in range(5):
+    for gc in (0,):
         work = tmp_path / ("work" + str(gc))
         work.mkdir()
         result = subprocess.run(

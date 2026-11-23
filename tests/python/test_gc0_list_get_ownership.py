@@ -39,7 +39,7 @@ def test_getter_owners_preserve_finalizers_weakrefs_and_index_errors(
         backend="self", ir_scaffold_mode="on",
         runtime_archive=str(threaded_pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         for probe in ("0", "2"):
             run = run_process_group_timeout(
                 [str(binary)], timeout=45,

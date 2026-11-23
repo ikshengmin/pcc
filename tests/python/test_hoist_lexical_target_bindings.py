@@ -199,7 +199,7 @@ def test_shadowed_callable_local_targets_execute_all_collectors(tmp_path, monkey
     binary = tmp_path / stem
     monkeypatch.setenv("PCC_PYTHON_IR_PASSES", "off")
     python_program_compiler(str(source), str(binary), backend="self", ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend), PCC_GC_REFCOUNT_PROVENANCE_PROBE="2", PATH="/nonexistent"))
         assert result.returncode == 0 and result.stdout == "HOIST_LOCAL_" + stem.upper() + "_OK\n" and result.stderr == "", (backend, result.returncode, result.stdout, result.stderr)

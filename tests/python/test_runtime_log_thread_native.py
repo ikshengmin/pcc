@@ -334,7 +334,7 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
         assert magic in (b'\x7fELF', b'\xcf\xfa\xed\xfe', b'\xca\xfe\xba\xbe', b'\xca\xfe\xba\xbf') or magic[:2] == b'MZ'
         receipt['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
         selections = [None, '', 'threaded', 'gc', 'thread', 'thread,gc', 'all', '1']
-        for backend in range(5):
+        for backend in (0,):
             for index, (selection, format_name) in enumerate([(value, 'json') for value in selections] + [('thread', 'text')]):
                 label = f'gc{backend}-{index}'
                 log = tmp_path / (label + '.log')
@@ -366,7 +366,7 @@ def test_native_thread_lifecycle_logging_five_gc(python_program_compiler, reques
                 if selection == 'thread':
                     assert all(event['category'] == 'thread' for event in events)
                     assert log.stat().st_size < len(events) * 512
-        for backend in range(5):
+        for backend in (0,):
             for mode in ('1', '2', '3'):
                 label = f'gc{backend}-tripwire-{mode}'
                 environment = dict(os.environ, PCC_GC_BACKEND=str(backend),

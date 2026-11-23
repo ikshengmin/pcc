@@ -160,7 +160,7 @@ def test_success_receipt_does_not_add_exception_context(
     assert receipt["status"] == "PASS" and len(receipt["executions"]) == 10
     assert "exception_context" not in receipt and "error" not in receipt
     assert calls == [(case, collector, "pcc", "pcc0")
-                     for collector in range(5) for case in prior.CASES]
+                     for collector in (0,) for case in prior.CASES]
 
 
 @pytest.mark.parametrize("depth", [0, 14, 15, 40])

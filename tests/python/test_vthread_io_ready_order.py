@@ -201,7 +201,7 @@ def test_native_late_io_readiness_overtakes_an_already_ready_cohort(
             return fresh_at >= 0 && fresh_at < 2 && oldest_at >= 0 && oldest_at < 2 ? 0 : 15;
         }
     ''', threaded_pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         for count in (64, 256, 1024):
             result = subprocess.run(
                 [str(binary), str(backend), str(count), str(int(mixed))],
@@ -222,7 +222,7 @@ def test_native_new_fd_wait_interrupts_a_preselected_compute_batch(
         / "fixtures/native/vthread_new_fd_wait.c"
     ).read_text()
     binary = _compile(tmp_path, source, threaded_pcc_runtime_archive)
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary), str(backend)],
             env=dict(os.environ, PCC_GC_BACKEND=str(backend)),

@@ -45,7 +45,7 @@ def test_call_node_score_executes_natively_under_all_collectors(
         str(source), str(binary), backend="self",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),
@@ -387,7 +387,7 @@ def test_frontend_and_pco_admission_execute_natively_under_all_collectors(
     for budget_gib in (1, 6, 8):
         for cpus in (1, 12, 64):
             budget = budget_gib * 1073741824
-            for gc_backend in range(5):
+            for gc_backend in (0,):
                 cases.append((budget, cpus, gc_backend, scheduler.pco_groups(sizes, budget, cpus, gc_backend)))
                 frontend_cases.append((
                     budget, cpus, gc_backend,
@@ -420,7 +420,7 @@ main()
     binary = tmp_path / "pco_admission"
     python_program_compiler(str(source), str(binary), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=20,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

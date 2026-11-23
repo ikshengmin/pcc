@@ -176,7 +176,7 @@ def test_frame_factory_rejects_invalid_size_before_allocation(count, pending):
 
 
 @pytest.mark.parametrize('count', (0, 1, 33))
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 def test_inline_entry_uses_one_local_pair_including_delegated_collectors(count, backend):
     model = InlineFrameFactoryModel(count, backend)
     result = model.ns['py_gen_inline_frame_new'](count)

@@ -356,7 +356,7 @@ def test_host_source_stack_diff_callback_requires_table_and_opt_in(
     assert calls == ([1] if table_present and diff_requested else [])
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("budget", [-1, 0, 1])
 @pytest.mark.parametrize("explicit_collect", [0, 1])
 @pytest.mark.parametrize("remap_active", [0, 1])
@@ -508,7 +508,7 @@ def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates
     )
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 @pytest.mark.parametrize("stopped", (0, -1))
 def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped):
     # pcc_thread_all_stopped_at_gates answers only for a stopped world. A
@@ -620,7 +620,7 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
 
     # Entire public functions run; work providers are intentionally idle.
     # Both direct writers execute, with no claim about collector work policy.
-    for backend in range(5):
+    for backend in (0,):
         memory.set("pcc_gc_backend_selected", backend)
         memory.set("pcc_gc_metric_step", (1 << 32) + 13)
         assert functions["pcc_gc_step"](0) == 0

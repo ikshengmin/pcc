@@ -109,7 +109,7 @@ def global_source(key, consume):
     assert "@pcc_gc_foreign_lease_acquire(" in local.group()
 
 
-@pytest.mark.parametrize("backend", range(5))
+@pytest.mark.parametrize("backend", (0,))
 def test_private_copy_native_owners_and_mode_transitions(
     tmp_path, threaded_pcc_runtime_archive, backend,
 ):
@@ -181,7 +181,7 @@ def test_private_copy_native_callbacks_exceptions_and_finalizers(
     python_program_compiler(str(source), str(binary), backend="self",
                             ir_scaffold_mode="on",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         run = subprocess.run(
             [str(binary)], capture_output=True, text=True, timeout=30,
             env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(backend)),

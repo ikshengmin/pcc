@@ -39,7 +39,7 @@ def items_loop_programs(tmp_path_factory):
     return built
 
 
-@pytest.mark.parametrize("backend", range(5), ids=lambda backend: f"gc{backend}")
+@pytest.mark.parametrize("backend", (0,), ids=lambda backend: f"gc{backend}")
 @pytest.mark.parametrize("program", sorted(_PROGRAMS))
 def test_matches_cpython_output(items_loop_programs, program, backend):
     executable, expected = items_loop_programs[program]

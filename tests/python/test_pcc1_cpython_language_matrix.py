@@ -262,7 +262,7 @@ def compiled_language_case(
 
 
 @pytest.mark.pcc_gate(probe="pcc1")
-@pytest.mark.parametrize("gc_backend", range(5), ids=lambda value: f"gc{value}")
+@pytest.mark.parametrize("gc_backend", (0,), ids=lambda value: f"gc{value}")
 def test_current_pcc1_self_no_libpython_language_matrix_gc0_to_gc4(
     compiled_language_case: tuple[LanguageCase, Path, bytes],
     gc_backend: int,

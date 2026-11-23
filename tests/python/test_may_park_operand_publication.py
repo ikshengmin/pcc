@@ -192,7 +192,7 @@ def test_may_park_completion_native_preserves_prior_argument_and_finalizer(
         ir_scaffold_mode="on",
         runtime_archive=str(pcc_runtime_archive),
     )
-    for requested_backend in range(5):
+    for requested_backend in (0,):
         log = tmp_path / ("gc" + str(requested_backend) + ".jsonl")
         ran = subprocess.run(
             [str(executable)],

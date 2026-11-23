@@ -17,7 +17,7 @@ def marker_binary(tmp_path, explicit_owned_runtime):
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", range(5), ids=[f"gc{i}" for i in range(5)])
+@pytest.mark.parametrize("backend", (0,), ids=[f"gc{i}" for i in range(5)])
 def test_current_gc_marker_startup_and_root_lifetime(tmp_path, marker_binary, backend):
     result = _record_execution(
         tmp_path, "marker-baseline", [str(marker_binary)],

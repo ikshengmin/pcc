@@ -52,7 +52,7 @@ print(events)
                    ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
     expected = ["[1]", "[8]", "[1, 2]", "[8, 9]", "stop", "[1, 8]"]
-    for backend in range(5):
+    for backend in (0,):
         environment = dict(os.environ, PCC_GC_BACKEND=str(backend))
         ran = subprocess.run([str(executable)], env=environment, text=True,
                              capture_output=True, timeout=20)

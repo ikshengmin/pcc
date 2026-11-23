@@ -84,7 +84,7 @@ def test_native_recursion_unwinds_methods_generators_and_errors(
     output = tmp_path / "native"
     python_program_compiler(str(source), str(output), backend="self",
                             runtime_archive=str(pcc_runtime_archive))
-    for backend in range(5):
+    for backend in (0,):
         result = subprocess.run([str(output)], timeout=30, capture_output=True, text=True,
                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
         assert result.returncode == 0, result.stdout + result.stderr

@@ -106,7 +106,7 @@ class DeallocationModel(FinalizerModel):
         self.ns['_py_decref_finish'](prepared)
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('pending', (False, True))
 def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
     model = DeallocationModel(backend, pending=pending)
@@ -119,7 +119,7 @@ def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
     assert model.count() == model.active() == model.depth == 0
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('pending', (False, True))
 def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     model = DeallocationModel(backend, resurrect=True, pending=pending)
@@ -140,7 +140,7 @@ def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     assert model.pending == (4000 if pending else 0)
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('tag', (5, 65536))
 def test_builtin_and_extension_keep_generic_invalidation(backend, tag):
     model = DeallocationModel(backend, tag=tag)
@@ -149,7 +149,7 @@ def test_builtin_and_extension_keep_generic_invalidation(backend, tag):
     assert model.lifecycle.index('weakref') < model.lifecycle.index('generic-dealloc')
 
 
-@pytest.mark.parametrize('backend', range(5))
+@pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('resurrect', (False, True))
 def test_builtin_payload_owner_is_detached_only_on_terminal_deallocation(backend, resurrect):
     model = DeallocationModel(backend, resurrect=resurrect)
