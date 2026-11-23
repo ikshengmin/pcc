@@ -407,9 +407,12 @@ in the relevant section or issue and removes the entry.
        One integration run ended with an active mark and 278 gray
        objects; standalone summary repeats had a zero-window run on
        each arm. Thus poor four-carrier completion predates #9; a
-       #9-induced difference is not yet proved. Isolate the local fix
-       bundle against the original #9 arm before changing GC2 code.
-       No throughput or macOS pass. The split opt-in Linux probe on
+       #9-induced difference is not yet proved. Against the unmodified
+       #9 arm, the fix bundle's pinned 5-pair/50k GC2-w4 median was
+       -2.5% (3/5 candidate wins), GC3-w4 -1.9% (4/5 wins), and the
+       GC0 control floor was 20.4%. Do not tune GC2 from this result.
+       Throughput must be retried on a quieter Linux host or session
+       before requesting a final macOS comparison; no merge. The split opt-in Linux probe on
        `b7845414c` ran 9 times (40k requests each) and reconciled to
        counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
        median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
@@ -580,7 +583,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 isolate local fix bundle against its review parent: Codex, Linux x86-64, 2026-11-23 03:26 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
