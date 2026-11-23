@@ -4,6 +4,8 @@ from pcc import i64
 from pcc.extern import c_abi_export, c_int64, c_ptr, c_void, extern
 from pcc.unsafe import (
     abi_constant,
+    call_void_ptr2,
+    define_global_ptr_null,
     cstr,
     frame_address,
     function_addr,
@@ -80,6 +82,13 @@ py_subs_exc_cache_slot = extern(
     "py_subs_exc_cache_slot", (c_int64,), c_ptr
 )
 
+# A test-invoked collector can visit the existing precise/registered roots
+# without attempting to mark them through the old object's index. Only its
+# stopped owner binds this observer, and ordinary modes never read it.
+define_global_ptr_null("pcc_raw_gc3_review_root_visitor")
+define_global_ptr_null("pcc_raw_gc3_review_root_context")
+_GC3_REVIEW_ROOT_VISIT_MODE = 8
+
 
 @c_abi_export("pcc_gc_visit_mapped_root_slot")
 def pcc_gc_visit_mapped_root_slot(
@@ -136,6 +145,12 @@ def pcc_gc_visit_mapped_root_slot(
         if _pcc_registered_roots_hold(value) != 0:
             return 0
         return 1
+    if mode == _GC3_REVIEW_ROOT_VISIT_MODE:
+        visitor = global_load_ptr("pcc_raw_gc3_review_root_visitor")
+        if ptr_is_null(visitor) == 0:
+            call_void_ptr2(visitor, load_ptr(slot_base, slot_offset),
+                           global_load_ptr("pcc_raw_gc3_review_root_context"))
+            return 1
     return 0
 
 
@@ -533,6 +548,20 @@ def pcc_gc_visit_registered_root_slots(mode: i64, resolve: i64) -> i64:
 
     result = result + pcc_gc_visit_scheduler_root_slots(mode, resolve)
     result = result + pcc_gc_visit_builtin_exception_cache_slots(mode, resolve)
+    return result
+
+
+@c_abi_export("pcc_gc3_review_visit_root_values_stopped")
+def pcc_gc3_review_visit_root_values_stopped(visitor, context) -> i64:
+    if (gc_backend_current() != 3 or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(visitor) != 0
+            or ptr_is_null(global_load_ptr("pcc_raw_gc3_review_root_visitor")) == 0):
+        return -1
+    global_store_ptr("pcc_raw_gc3_review_root_context", context)
+    global_store_ptr("pcc_raw_gc3_review_root_visitor", visitor)
+    result: i64 = pcc_gc_visit_registered_root_slots(_GC3_REVIEW_ROOT_VISIT_MODE, 0)
+    global_store_ptr("pcc_raw_gc3_review_root_visitor", null())
+    global_store_ptr("pcc_raw_gc3_review_root_context", null())
     return result
 
 

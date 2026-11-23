@@ -603,3 +603,19 @@ are protected by one no-park lease. The prototype does not discover
 caller stack, mapped, foreign or scheduler roots and is not called by
 an ordinary collector. It uses per-cell retirement, not slab rewind
 or a performance claim.
+
+The next review variant binds the existing mapped/registered value
+walker for this stopped cut and uses the thread snapshots made at the
+initial stop. It does not refresh the stop owner's stack after reading
+cohort metadata. An interior machine word inside an admitted list/tuple
+payload can retain that object; no ordinary collector invokes this mode.
+
+On Linux x86-64, three fresh runs of each of three controls retained a
+real caller's odd interior pointer, an independent registered scheduler
+slot, or both respectively. Omitting either source reclaimed just its
+target and a dead value loaded into scratch only after the stop. The
+closed-graph regression also passed three times. The C fixture does not
+qualify native Python mapped-frame coverage, caller-register capture as
+a separate control, or raw list backing exposure. Conservative snapshot
+precision across automatic entries, full root admission and bump/slab
+recycling remain open.

@@ -63,6 +63,8 @@ INTERNAL_SYMBOLS = {
     "pcc_gc_gray_mapped_roots",
     "pcc_gc_rewrite_mapped_roots",
 }
+REVIEW_SYMBOLS = {"pcc_gc3_review_visit_root_values_stopped"}
+REVIEW_STORAGE = {"pcc_raw_gc3_review_root_visitor", "pcc_raw_gc3_review_root_context"}
 STACKMAP_HELPER_SYMBOLS = {
     "pcc_gc_stackmap_range_fits",
     "pcc_gc_stackmap_u32",
@@ -245,7 +247,7 @@ def test_mapped_roots_have_one_strict_visitor_and_split_providers():
 
     assert "__pcc_freestanding__ = True" in strict
     assert _exported_symbols(strict) == (
-        PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | STACKMAP_HELPER_SYMBOLS
+        PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | STACKMAP_HELPER_SYMBOLS | REVIEW_SYMBOLS
     )
     assert _exported_symbols(managed).isdisjoint(PUBLIC_SYMBOLS | INTERNAL_SYMBOLS)
     assert ROOT_OPS_PROVIDER_SYMBOLS <= _exported_symbols(root_ops)
@@ -292,7 +294,9 @@ def test_mapped_root_object_has_exact_raw_closure(tmp_path: Path, emitter: str):
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | STACKMAP_HELPER_SYMBOLS
+    assert defined == (
+        PUBLIC_SYMBOLS | INTERNAL_SYMBOLS | STACKMAP_HELPER_SYMBOLS | REVIEW_SYMBOLS | REVIEW_STORAGE
+    )
 
 
 def _mapped_harness_source() -> str:

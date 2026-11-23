@@ -60,7 +60,9 @@ from pcc.runtime.py.py_abi_constants import (
     PYLISTOBJECT_CAPACITY_OFFSET,
     PYLISTOBJECT_ITEMS_OFFSET,
     PYLISTOBJECT_LENGTH_OFFSET,
+    PYLISTOBJECT_SIZE,
     PYTUPLEOBJECT_LEN_OFFSET,
+    PYTUPLEOBJECT_SIZE,
 )
 from pcc.unsafe import (
     cstr,
@@ -3054,6 +3056,12 @@ pcc_gc_visit_object_slots = extern(
 pcc_gc3_review_scan_owner_cards_stopped = extern(
     "pcc_gc3_review_scan_owner_cards_stopped", (c_ptr, c_ptr), c_int64
 )
+pcc_thread_visit_conservative_words = extern(
+    "pcc_thread_visit_conservative_words", (c_ptr, c_ptr), c_int64
+)
+pcc_gc3_review_visit_root_values_stopped = extern(
+    "pcc_gc3_review_visit_root_values_stopped", (c_ptr, c_ptr), c_int64
+)
 
 _CLOSED_YOUNG_COUNT = 0
 _CLOSED_YOUNG_CELLS = 8
@@ -3073,8 +3081,17 @@ _CLOSED_FRONTIER_FAILED = 32
 _CLOSED_FRONTIER_ITEMS = 40
 
 
-def _gc3_closed_young_add(cut, value) -> None:
-    if ptr_is_null(value) != 0 or is_tagged_int(value) != 0:
+def _gc3_closed_young_mark_index(cut, mid: int) -> None:
+    marks = load_ptr(cut, _CLOSED_YOUNG_MARKS)
+    if load_i64(marks, mid * 8) == 0:
+        store_i64(marks, mid * 8, 1)
+        next_slot: int = load_i64(cut, _CLOSED_YOUNG_ENQUEUED)
+        store_i64(load_ptr(cut, _CLOSED_YOUNG_QUEUE), next_slot * 8, mid)
+        store_i64(cut, _CLOSED_YOUNG_ENQUEUED, next_slot + 1)
+
+
+def _gc3_closed_young_add(cut, value, interior: int) -> None:
+    if ptr_is_null(value) != 0 or (interior == 0 and is_tagged_int(value) != 0):
         return
     bits: int = ptr_to_int(value)
     cells = load_ptr(cut, _CLOSED_YOUNG_CELLS)
@@ -3088,12 +3105,17 @@ def _gc3_closed_young_add(cut, value) -> None:
         elif address > bits:
             hi = mid
         else:
-            marks = load_ptr(cut, _CLOSED_YOUNG_MARKS)
-            if load_i64(marks, mid * 8) == 0:
-                store_i64(marks, mid * 8, 1)
-                next_slot: int = load_i64(cut, _CLOSED_YOUNG_ENQUEUED)
-                store_i64(load_ptr(cut, _CLOSED_YOUNG_QUEUE), next_slot * 8, mid)
-                store_i64(cut, _CLOSED_YOUNG_ENQUEUED, next_slot + 1)
+            _gc3_closed_young_mark_index(cut, mid)
+            return
+    if interior != 0 and lo > 0:
+        previous = load_ptr(cells, (lo - 1) * 8)
+        length: int = PYLISTOBJECT_SIZE
+        if load_i32(previous, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_TUPLE:
+            length = PYTUPLEOBJECT_SIZE + load_i64(previous, PYTUPLEOBJECT_LEN_OFFSET) * 8
+        # The cohort preflight validated all typed extents. Only the first
+        # cut treats untrusted interior machine words as possible roots.
+        if bits - ptr_to_int(previous) < length:
+            _gc3_closed_young_mark_index(cut, lo - 1)
             return
     # Old and immediate roots do not expand the young cut. A genuine young
     # cell outside the explicit cohort means the proof is incomplete.
@@ -3105,7 +3127,7 @@ def _gc3_closed_young_add(cut, value) -> None:
 @c_abi_export("pcc_gc3_review_closed_young_slot")
 def pcc_gc3_review_closed_young_slot(slot, role: int, cut) -> None:
     if role == _CLOSED_YOUNG_STRONG_ROLE:
-        _gc3_closed_young_add(cut, load_ptr(slot, 0))
+        _gc3_closed_young_add(cut, load_ptr(slot, 0), 0)
 
 
 @c_abi_export("pcc_gc3_review_validate_reclaim_slot")
@@ -3147,12 +3169,43 @@ def pcc_gc3_review_collect_closed_young_stopped(
     # Suppress compiler entry/backedge polls while the verified stopped cut
     # walks its raw arrays. The public wrapper does not discover roots.
     pcc_thread_no_park_enter()
-    result: int = _gc3_collect_closed_young_in_cut(cut, roots, root_count, cards, frontier)
+    result: int = _gc3_collect_closed_young_in_cut(cut, roots, root_count, cards, frontier, 0)
     pcc_thread_no_park_exit()
     return result
 
 
-def _gc3_collect_closed_young_in_cut(cut, roots, root_count: int, cards, frontier) -> int:
+@c_abi_export("pcc_gc3_review_young_root_value")
+def pcc_gc3_review_young_root_value(word, cut) -> None:
+    _gc3_closed_young_add(cut, word, 0)
+
+
+@c_abi_export("pcc_gc3_review_young_machine_word")
+def pcc_gc3_review_young_machine_word(word, cut) -> None:
+    _gc3_closed_young_add(cut, word, 1)
+
+
+@c_abi_export("pcc_gc3_review_collect_young_with_initial_snapshot_stopped")
+def pcc_gc3_review_collect_young_with_initial_snapshot_stopped(cut, cards, frontier) -> int:
+    """Use the initial stop, before the owner loaded the candidate objects.
+
+    The caller owns this fresh stop and the closed fixture allocation cohort;
+    this is not an automatic collection entry. Never refresh the owner's
+    snapshot over the subsequent collector frames.
+    """
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(cut) != 0 or ptr_is_null(frontier) != 0):
+        return -1
+    pcc_thread_no_park_enter()
+    result: int = _gc3_collect_closed_young_in_cut(cut, null(), 0, cards, frontier, 1)
+    pcc_thread_no_park_exit()
+    return result
+
+
+def _gc3_collect_closed_young_in_cut(
+    cut, roots, root_count: int, cards, frontier, initial_snapshot: int
+) -> int:
     if (atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
             or atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") != 0
             or atomic_load_i32(global_addr("pcc_gc_concurrent_sweep_state"), 0, "acquire") != 0):
@@ -3204,13 +3257,20 @@ def _gc3_collect_closed_young_in_cut(cut, roots, root_count: int, cards, frontie
 
     store_i64(cut, _CLOSED_YOUNG_ENQUEUED, 0)
     store_i64(cut, _CLOSED_YOUNG_INVALID, 0)
+    if initial_snapshot != 0:
+        root_visitor = function_addr("pcc_gc3_review_young_root_value")
+        if pcc_thread_visit_conservative_words(
+                function_addr("pcc_gc3_review_young_machine_word"), cut) <= 0:
+            return -1
+        if pcc_gc3_review_visit_root_values_stopped(root_visitor, cut) < 0:
+            return -1
     index = 0
     while index < root_count:
-        _gc3_closed_young_add(cut, load_ptr(roots, index * 8))
+        _gc3_closed_young_add(cut, load_ptr(roots, index * 8), 0)
         index = index + 1
     index = 0
     while index < frontier_count:
-        _gc3_closed_young_add(cut, load_ptr(frontier, _CLOSED_FRONTIER_ITEMS + index * 8))
+        _gc3_closed_young_add(cut, load_ptr(frontier, _CLOSED_FRONTIER_ITEMS + index * 8), 0)
         index = index + 1
     visitor = function_addr("pcc_gc3_review_closed_young_slot")
     index = 0
