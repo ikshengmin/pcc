@@ -415,8 +415,22 @@ in the relevant section or issue and removes the entry.
        and nested collection instead of the injected callback arm.
        242 focused native assertions passed on Linux x86-64; no Mac run.
        Keep the cleanup together with the replacement coverage.
-     - Put the 16n and heap-independence rows in the receipt itself
-       (condition 3).
+     - Condition 3, Linux sealed callback sweep: 270 runs, GC1–3,
+       0/4 parked peers, n/4n/16n = 256/1,024/4,096. Medians in ms below,
+       each triple is no ballast / +16,384 unrelated live objects /
+       +16,384 unrelated weakrefs. Timed only the sealed sweep; did not
+       count fixture allocation or claim public-collect work is heap-free.
+       - GC1, 0 peers: 4.6/4.4/4.2; 17.2/17.5/18.0; 68.4/70.3/68.6.
+       - GC1, 4 peers: 41.8/33.8/42.4; 169.0/155.7/144.7; 669.1/611.8/642.4.
+       - GC2, 0 peers: 4.6/4.6/4.3; 16.7/16.9/16.6; 69.3/68.5/72.8.
+       - GC2, 4 peers: 42.3/40.2/38.8; 164.4/167.1/170.6; 650.8/597.9/637.5.
+       - GC3, 0 peers: 4.4/4.5/4.5; 16.8/17.8/17.1; 74.4/67.5/71.3.
+       - GC3, 4 peers: 46.6/44.0/41.8; 175.4/153.5/175.1; 655.0/630.6/653.4.
+       Every run checked exact finalizer/weakref alternation, reclamation,
+       zero full rechecks/weak-registry scans. Base-to-16n growth was
+       14–17×; the largest paired median ballast shifts were +6.6% live
+       and +10.0% weakrefs, not proportional to ballast. Parked peers
+       still raise the per-callback cost; this did not pass HTTP or Mac.
      - Iterate on the Linux host with the same handler measurement,
        `pcc_perf ab` (five pairs, GC0 control, w1 and w4), plus `locks` and
        `top` on both arms. Do not wait for the Mac between iterations.
@@ -537,7 +551,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 complete 16n and unrelated-heap scale receipt: Codex, Linux x86-64, 2026-11-23 02:59 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
