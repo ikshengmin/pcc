@@ -1011,7 +1011,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - none
+   - Attribute same-handler CPU per request across GC0 through GC3: Codex, Linux, 2026-11-23T08:59Z, area runtime-gc
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
