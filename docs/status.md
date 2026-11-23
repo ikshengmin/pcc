@@ -267,6 +267,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (0b) high-fanout stop slicing: Codex, Linux x86-64, 2026-11-23 21:05 UTC, area runtime-gc
+   - (a) throughput of what landed on 2026-11-24: Claude, local Mac, 2026-11-23 21:10 UTC, area runtime-gc (measurement only; touches no source file)
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
