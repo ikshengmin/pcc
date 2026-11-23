@@ -480,9 +480,10 @@ in the relevant section or issue and removes the entry.
    passed five mode lanes and five extra GC3 runs; 92 prior allocator
    bodies are unchanged. Reviews only: `94ceb2116` uses a real marked, closed
    tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
-   and closed-cohort controls. No production allocation. Next GC3: include
-   real old-to-bump dirty edges, then test the first admitted caller and C
-   sequence-array escape before sealed measurement.
+   and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
+   into that slab: five native runs and 15 controls pass. No production
+   allocation. Next GC3: use the real initial root snapshot, then test the
+   first admitted caller and C sequence-array escape before sealed measurement.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -704,7 +705,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-23 00:19 UTC), preserve actual old-to-bump tuple edges through the stopped sparse owner frontier; no normal admission.
+   - pccDot (2026-11-23 00:26 UTC), feed initial conservative and registered roots to the bump-span review cut; no auto-admission.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
