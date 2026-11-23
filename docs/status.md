@@ -783,11 +783,18 @@ in the relevant section or issue and removes the entry.
    stock repeat. Median lock-spin sample shares were 56.62% stock,
    51.02% candidate and 48.06% unchanged control. CPU and pause did not
    improve consistently. Do not publish that code as an improvement.
-   Next GC performance diagnostic: attribute the same handler's actual
-   CPU/request for GC0–3 at w1/w4 before selecting a shared candidate
-   (root stores, pins, locks, TLS). Separate mutator and collector and
-   distinguish absolute CPU from worker-count/throughput estimates and
-   wall pause. Mac same-input asyncio remains the throughput reference.
+   Linux handler CPU on `336879392`, pinned gateway `b1490486`: one
+   source-matched native binary, C100, delay 0, 150 timed rounds plus
+   2 warmup, five alternating sets and an unchanged GC0 repeat.
+   `wait4` median CPU µs/request w1/w4: GC0 62/94, GC1 131/186,
+   GC2 133/408, GC3 128/207. GC2's w4 paired excess was +132 to
+   +462 µs, positive in 5/5 vs GC0 (max absolute GC0 A/A 19 µs).
+   This confirms the w4 CPU gap on the handler, not a Linux throughput
+   qualification or a diagnosis of which threads spend it.
+   Next: split mutator and collector CPU and rank shared root stores,
+   pins, locks and TLS by actual handler sample ownership; the current
+   `top` worker-count/throughput estimate is not CPU accounting.
+   Mac same-input asyncio remains the throughput reference.
    Next GC2 allocator fix must target a measured lock holder or remove
    a round trip, not another gray-queue or raw-debit-only candidate.
    The first sparse remembered-set slice is a test-only serial model: seven
@@ -1011,7 +1018,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - Attribute same-handler CPU per request across GC0 through GC3: Codex, Linux, 2026-11-23T08:59Z, area runtime-gc
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
