@@ -1156,6 +1156,9 @@ def pcc_gc_reassert_pin(obj) -> None:
 # Keep this existing header/metric protocol in the strict primitive owner.
 @c_abi_export("pcc_gc_pin")
 def pcc_gc_pin(o) -> None:
+    # GC0 never moves an object and reads no pin (pcc_gc_pins_inert).
+    if load_i32(global_addr("pcc_gc_pins_inert"), 0) != 0:
+        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
@@ -1182,6 +1185,8 @@ def pcc_gc_pin(o) -> None:
 
 @c_abi_export("pcc_gc_unpin")
 def pcc_gc_unpin(o) -> None:
+    if load_i32(global_addr("pcc_gc_pins_inert"), 0) != 0:
+        return
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:

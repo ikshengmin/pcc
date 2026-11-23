@@ -40,6 +40,11 @@ OWNED_DATA_SYMBOLS = {
 }
 OWNED_SYMBOLS = PIN_SYMBOLS | TRANSFER_SYMBOLS | LEASE_SYMBOLS | HANDLED_SYMBOLS | WALK_SYMBOLS | {
     "pcc_gc_release_nonterminal_tail",
+    # The header pin restore of the nonparking return/exception paths and
+    # the stopped callback remark's pin notice (#9).
+    "pcc_gc_reassert_pin", "pcc_gc_notice_callback_pin",
+    # Counted CpyHandle C owners rooted for the tracing collectors.
+    "pcc_gc_cpy_handle_change_c_owners",
     "pcc_gc_mode_leases_freeze",
     "pcc_gc_mode_leases_thaw",
     "pcc_gc_foreign_lease_count_quiescent",
@@ -103,8 +108,13 @@ RAW_GLOBAL_IMPORTS = {
     # A lease on a non-moving collector is a no-op once the configuration
     # is known, unless the provenance probe checks it.
     "pcc_gc_config_initialized", "pcc_gc_refcount_provenance_probe",
-    # The atomic refcount mode admitted by the pin and lease paths.
+    # The atomic refcount mode admitted by the pin and lease paths, and
+    # GC0's no-op pin gate.
     "pcc_gc_refcount_atomic", "pcc_diagnostics_runtime_log_fast_state",
+    "pcc_gc_pins_inert",
+    # A pin on a pending callback candidate during the callback mark window
+    # dirties the stopped remark (#9).
+    "pcc_gc_mark_active", "pcc_gc_callback_candidate_pin_dirty",
     # Exact static singleton addresses; no header or object-index read.
     "py_none_storage", "py_true_storage", "py_false_storage",
     "py_notimplemented_storage", "py_ellipsis_storage",
@@ -173,6 +183,14 @@ def test_root_operations_have_one_strict_source_owner():
             caller = strict
         elif symbol in ("pcc_gc_set_mark_color", "pcc_gc_shade_gray_atomic", "pcc_gc_slot_lease_acquire", "pcc_gc_metric_shard_sum"):
             caller = strict
+        elif symbol == "pcc_gc_notice_callback_pin":
+            # Strict direct calls from the pin paths, by the Python name.
+            assert len(re.findall(r"\b_notice_callback_pin\(", strict)) > 1
+            caller = strict
+        elif symbol == "pcc_gc_reassert_pin":
+            caller = (RUNTIME_DIR / "py/py_gen.py").read_text()
+        elif symbol == "pcc_gc_cpy_handle_change_c_owners":
+            caller = (RUNTIME_DIR / "py/py_capi_core_runtime.py").read_text()
         elif symbol == "pcc_gc_resolve_root_slot_mode":
             assert len(re.findall(r"\b_resolve_root_slot_mode\(", strict)) == 3
             caller = strict
@@ -270,6 +288,7 @@ extern int64_t pcc_gc_object_is_known_no_lock(PyObject *obj);
 extern PyObject *pcc_gc_resolve_root_slot_unlocked(PyObject **base, int64_t offset);
 extern int64_t pcc_gc_object_node_is_address_pinned(void *node, PyObject *obj);
 extern int32_t pcc_gc_forwarding_population;
+extern int64_t pcc_gc_alloc_stage_drain_stopped(void);
 
 typedef struct {
     PyObjectHeader h;
@@ -278,8 +297,19 @@ typedef struct {
     PyObject **items;
 } ProbeListObject;
 
-int main(void) {
-    if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+static ProbeListObject *probe_obj;
+static int64_t probe_gray;
+static int64_t probe_known;
+
+/* GC4 follows the nonmoving protocol: it selects and copies only inside a
+ * stopped world, after pinning what any thread's stack or registers name.
+ * Build the object in its own frame, keep it only in a registered root,
+ * and clear the stack below main before stopping, as the GC4 production
+ * harnesses do. */
+__attribute__((noinline)) static int probe_build(void) {
+    py_gc_disable();
+    probe_obj = NULL;
+    pcc_gc_scheduler_root_register((PyObject **)&probe_obj);
     ProbeListObject *obj = (ProbeListObject *)pcc_gc_alloc(64, PY_TYPE_LIST, 0);
     if (obj == NULL) return 3;
     obj->length = 0;
@@ -287,33 +317,48 @@ int main(void) {
     obj->items = NULL;
     /* Publish like a real constructor: GC4 never relocates FRESH_ALLOC objects. */
     pcc_gc_publish_initialized((PyObject *)obj);
+    probe_obj = obj;
+    /* The tracing collectors register allocations in batches: register the
+     * staged object before asking whether it is known. */
+    pcc_gc_alloc_stage_drain_stopped();
 
     pcc_gc_gray_count_store_release(0);
     pcc_gc_mark_root_gray_if_known((PyObject *)obj);
     pcc_gc_mark_root_gray_if_known((PyObject *)obj);
-    int64_t gray = pcc_gc_gray_count_load_acquire();
-    int64_t known = pcc_gc_object_is_known_no_lock((PyObject *)obj);
+    probe_gray = pcc_gc_gray_count_load_acquire();
+    probe_known = pcc_gc_object_is_known_no_lock((PyObject *)obj);
+    return 0;
+}
 
+__attribute__((noinline)) static void probe_scrub_stack(void) {
+    volatile unsigned char words[65536];
+    for (int i = 0; i < (int)sizeof(words); i++) words[i] = 0;
+}
+
+int main(void) {
+    if (pcc_gc_set_backend(PCC_GC_KIND_COLORED_RELOCATING) != 0) return 2;
+    int built = probe_build();
+    if (built != 0) return built;
+    probe_scrub_stack();
+    if (pcc_stop_the_world() != 0) return 90;
     if (pcc_gc_select_relocation_set(1) != 1) return 4;
-    PyObject *moved = pcc_gc_relocate_copy((PyObject *)obj, 64);
+    PyObject *source = (PyObject *)probe_obj;
+    PyObject *moved = pcc_gc_relocate_copy(source, 64);
     if (moved == NULL) return 5;
-    PyObject *slot[1] = {(PyObject *)obj};
+    PyObject *slot[1] = {source};
     PyObject *resolved = pcc_gc_resolve_root_slot_unlocked(slot, 0);
-    printf("root:%lld,%lld,%lld,%lld\n",
-           (long long)gray,
-           (long long)known,
-           (long long)(slot[0] != (PyObject *)obj),
-           (long long)(resolved == moved));
+    int64_t slot_rewritten = slot[0] != source;
+    int64_t resolved_moved = resolved == moved;
 
     /* With a forwarding edge, the source and its copy each keep their own
      * indexed node, and a walk's node answer equals the index's answer,
      * unpinned and lease-pinned (node offset 80). */
-    void *source_node = pcc_gc_object_index_find((PyObject *)obj);
+    void *source_node = pcc_gc_object_index_find(source);
     void *moved_node = pcc_gc_object_index_find(moved);
     int64_t distinct = source_node != NULL && moved_node != NULL
         && source_node != moved_node;
     int64_t agree = distinct;
-    PyObject *edge_objects[2] = {(PyObject *)obj, moved};
+    PyObject *edge_objects[2] = {source, moved};
     void *edge_nodes[2] = {source_node, moved_node};
     for (int i = 0; distinct && i < 2; ++i) {
         int64_t *lease = (int64_t *)((char *)edge_nodes[i] + 80);
@@ -326,8 +371,15 @@ int main(void) {
             && pcc_gc_object_is_address_pinned(edge_objects[i]) == 1;
         *lease = saved;
     }
+    int64_t forwarding = pcc_gc_forwarding_population > 0;
+    if (pcc_resume_world() != 0) return 91;
+    printf("root:%lld,%lld,%lld,%lld\n",
+           (long long)probe_gray,
+           (long long)probe_known,
+           (long long)slot_rewritten,
+           (long long)resolved_moved);
     printf("edge:%lld,%lld,%lld\n",
-           (long long)(pcc_gc_forwarding_population > 0),
+           (long long)forwarding,
            (long long)distinct,
            (long long)agree);
 
@@ -338,9 +390,6 @@ int main(void) {
     pcc_gc_gray_count_decrement_acq_rel();
     pcc_gc_gray_count_decrement_acq_rel();
     printf("counter:%lld\n", (long long)pcc_gc_gray_count_load_acquire());
-
-    pcc_gc_release((PyObject *)obj);
-    pcc_gc_release(moved);
     return 0;
 }
 '''
@@ -447,6 +496,56 @@ def _link_harness(tmp_path: Path, name: str, source_text: str, archive: Path) ->
     )
     assert result.returncode == 0, result.stdout + result.stderr
     return executable
+
+
+def _pin_protocol_harness_source() -> str:
+    from pcc.runtime.py.py_abi_constants import PY_FLAG_GC_PINNED
+
+    return f"#define PROBE_FLAG_GC_PINNED {PY_FLAG_GC_PINNED}\n" + r"""
+#include "py_runtime.h"
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+extern int64_t pcc_gc_metric_pin_balance(void);
+
+static int pinned(PyObject *obj) {
+    return (((PyObjectHeader *)obj)->flags & PROBE_FLAG_GC_PINNED) != 0;
+}
+
+int main(int argc, char **argv) {
+    if (argc != 2 || pcc_gc_set_backend(atoi(argv[1])) != 0) return 2;
+    py_gc_disable();
+    PyObject *obj = py_list_new(0);
+    if (obj == NULL) return 3;
+    int64_t balance = pcc_gc_metric_pin_balance();
+    pcc_gc_pin(obj);
+    int after_pin = pinned(obj);
+    int64_t pin_delta = pcc_gc_metric_pin_balance() - balance;
+    pcc_gc_unpin(obj);
+    printf("%d %lld %d %lld\n", after_pin, (long long)pin_delta, pinned(obj),
+           (long long)(pcc_gc_metric_pin_balance() - balance));
+    return 0;
+}
+"""
+
+
+def test_pins_are_inert_on_gc0_and_set_the_header_bit_on_tracers(
+    tmp_path: Path, pcc_runtime_archive: Path
+):
+    """GC0 never moves an object and reads no pin: pin and unpin return at
+    once (pcc_gc_pins_inert). Every tracing collector still sets and clears
+    the header bit and keeps the balance metric."""
+    executable = _link_harness(
+        tmp_path, "pin_protocol", _pin_protocol_harness_source(), pcc_runtime_archive
+    )
+    for backend in range(5):
+        result = subprocess.run(
+            [str(executable), str(backend)], capture_output=True, text=True, timeout=30
+        )
+        assert result.returncode == 0, (backend, result.stdout + result.stderr)
+        expected = "0 0 0 0\n" if backend == 0 else "1 1 0 0\n"
+        assert result.stdout == expected, (backend, result.stdout)
 
 
 def test_archive_owns_root_operations_and_executes_semantics(

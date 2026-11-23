@@ -427,6 +427,7 @@ def pcc_gc_config_ensure() -> i64:
     if backend == 0 and refcount_probe == 0:
         refcount_atomic = 1
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
+    store_i32(global_addr("pcc_gc_pins_inert"), 0, refcount_atomic)
     if backend != 0:
         store_i32(global_addr("pcc_gc_cycle_requested"), 0, 1)
     atomic_store_i32(global_addr("pcc_gc_config_initialized"), 0, 1, "release")

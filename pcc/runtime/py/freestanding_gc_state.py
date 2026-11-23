@@ -155,6 +155,11 @@ define_global_i32("pcc_gc_refcount_fast", 0)
 # atomic reference-count updates (any number of threads), and only a
 # count that would reach zero takes the full release path.
 define_global_i32("pcc_gc_refcount_atomic", 0)
+# Backend 0 without the provenance probe: pcc_gc_pin/pcc_gc_unpin return at
+# once. GC0 never moves an object and its cycle collector reads no pin; only
+# the tracing and relocating collectors (GC1-4) consult the pin bit. Set
+# with pcc_gc_refcount_atomic; 0 before configuration keeps the full path.
+define_global_i32("pcc_gc_pins_inert", 0)
 # Effective ownership mode, derived only from the selected collector:
 # GC0 counts references; GC1-4 trace. The exported ABI name is retained.
 # Configuration runs before the first managed allocation publishes a header.

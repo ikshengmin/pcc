@@ -2911,6 +2911,7 @@ def pcc_gc_set_backend(backend: int) -> int:
     if backend == 0 and load_i32(global_addr("pcc_gc_refcount_provenance_probe"), 0) == 0:
         refcount_atomic = 1
     store_i32(global_addr("pcc_gc_refcount_atomic"), 0, refcount_atomic)
+    store_i32(global_addr("pcc_gc_pins_inert"), 0, refcount_atomic)
     # All admission checks above precede this single ownership-policy commit.
     # Count-free roots are enabled before any tracing allocation can publish.
     if backend != 0:
