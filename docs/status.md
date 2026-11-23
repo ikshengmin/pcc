@@ -230,10 +230,18 @@ in the relevant section or issue and removes the entry.
    `uv run pytest -x -v tests/python/test_gc0_young_log_bound.py` and
    seal the (0a) commit, its parent, and a second parent arm for
    `pcc_perf.py ab --control-arm` followed by `table`. Platform macOS.
-   (a) Throughput of what landed on 2026-11-24 (`2498f19ff`, `5c20d934b`):
-       `arm` for `90f4345db` and for master, `ab` with `--control-arm`,
-       `table`. A loss beyond the noise floor is located before any other
-       unit of this item. Platform macOS.
+   (a) Throughput of what landed on 2026-11-24. Measured by Claude on the
+       local Mac at `4792d314d` against `90f4345db`, with a second build of
+       the base as control, five pairs: w1 51,791 to 51,491 req/s (-0.6%,
+       noise floor 26.5%), w4 120,000 to 121,972 (+1.6%, floor 11.7%):
+       inconclusive, the host's load was 6.8 on 12 cores. Processor time a
+       request, which load barely moves: 24.1 to 23.8 us at w1, 35.8 to
+       35.2 us at w4, so no added cost shows. `table` gave 52,094 (60% of
+       asyncio) at w1 and 86,098 at w4 under load 7.3, while the A/B median
+       of the same arm was 121,972: the w4 table figure is not a result.
+       Next: the same `ab` with `--pairs 10` on an idle host (arms
+       `gc0-head`, `gc0-head-b`, `gc0-master` exist under `PCC_PERF_HOME`).
+       Platform macOS.
    (b) Tests that still name removed entry points.
        `scripts/one_collector/prune_tests.py report` lists them from the
        tracked `removed.json` (what the removal took, against `90f4345db`),
@@ -269,7 +277,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (0b) attribute and bound residual mark tail: Codex, Linux x86-64, 2026-11-23 21:13 UTC, area runtime-gc
-   - (a) throughput of what landed on 2026-11-24: Claude, local Mac, 2026-11-23 21:10 UTC, area runtime-gc (measurement only; touches no source file)
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
