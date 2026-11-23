@@ -16,9 +16,11 @@ macOS.
 Who set the order: the GC order is the maintainer's decision of 2026-11-21
 (next section); self-host last and its completion bar, "推进" authorizing
 commit and push, and the round and claim rules below are the maintainer's
-decisions of 2026-11-22. The relative order of items 3 to 6 is the agent's
-recommendation of 2026-11-22, which the maintainer adjusted only by moving
-self-host last; ask before trading one of them against another. Targeted
+decisions of 2026-11-22. Item 3 (pcc-gateway throughput) is the
+maintainer's addition of 2026-11-23, placed after the GC item. The relative
+order of items 4 to 7 is the agent's recommendation of 2026-11-22, which the
+maintainer adjusted only by moving self-host last; ask before trading one of
+them against another. Targeted
 rounds, rules 13 to 16, the GC measurement rules and the inert-slice rule
 were the agent's recommendations after a risk review on 2026-11-22; the
 maintainer approved them and asked for targeted rounds the same day.
@@ -26,8 +28,8 @@ maintainer approved them and asked for targeted rounds the same day.
 **Targeted round.** The advance message followed by a target skips the
 queue order: the target names one item by its number, an issue, or words
 naming an item or project. For example "advance 3" means item 3,
-"advance Go" the Go project in item 3, "advance #6" issue #6 in item 1,
-and "advance numpy" item 4.
+"advance gateway" item 3, "advance Go" the Go project in item 4,
+"advance #6" issue #6 in item 1, and "advance numpy" item 5.
 Take the first unit of that target that rule 1 allows; if none is free,
 report that and stop rather than fall back to another item. Everything else
 still applies: claims, areas, a regression's stopped area (rule 13),
@@ -1087,7 +1089,64 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-3. **Source-language frontends**, in parallel with item 2 (different files;
+   - none
+3. **pcc-gateway throughput: handler against asyncio, server against
+   aiohttp.** Maintainer addition of 2026-11-23: the native request path as
+   a whole, beyond what one collector owns, at two levels. Collector-specific
+   work stays in item 2. Every change keeps the five collectors' CPython
+   results (finalizers, weakrefs, resurrection) and the gateway's HTTP,
+   server and streaming checks. Gains come from generic compiled-code and
+   runtime costs (call paths, ownership protocol, allocation, syscalls),
+   never from route- or module-specific paths. Platform: any for code;
+   numbers come from the local Mac (labeled local Mac evidence) or Linux.
+   - Lower level, the in-process handler against its CPython asyncio
+     counterpart (`benchmarks/handler/`): beat asyncio on every collector
+     with one worker and with four; four workers are never slower than one.
+     Measure with `scripts/pcc_perf.py`: `asyncio` records the reference,
+     `arm` seals each build, `table` reports GC0–4 at one and four workers
+     against it, `ab --control` decides a change, and `prim`, `gap`, `top`
+     and `locks` localize. Current (2026-11-22, `fd567f664`, asyncio 88,674
+     req/s): GC0 49,168 / 103,898 (one / four workers; 55% / 117%), GC1
+     34,855 / 69,097, GC2 36,382 / 49,208, GC3 34,411 / 69,706, GC4
+     27,045 / 37,985.
+   - Upper level, the native `pcc-gateway` server against unchanged
+     upstream aiohttp on the same host: beat it with one carrier against one
+     aiohttp process and with four carriers against four processes. Build
+     with `uv run pcc --backend self ../pcc-gateway/web_frameworks_app.py
+     -o <bin>` and run `uv run python benchmarks/webserver.py --output <dir>
+     --native <bin> --build-receipt <receipt> --python <aiohttp python>
+     --zrk <zrk> --threads 3` with the RSpec options in the gateway's
+     `benchmarks/web-frameworks.md`: GET /, GET /user/<id> and POST /user
+     at C512, five-second warmup, 15 seconds per route; `--screen-route
+     root` screens one route. The entry holds the performance lock,
+     process-tree watchdog and RSS cap. For a change, add
+     `--reference-native <base binary> --reference-build-receipt <base
+     receipt>` (both arms built by the same command), an even `--repeats`
+     giving at least five alternating pairs, and an unchanged control (a
+     collector the change cannot reach, or a second build of the base);
+     report medians, pair wins and the control's deviation. As in item 2, a
+     change within a control floor of 5% or more is inconclusive. Current
+     (local Mac, GET / C512, one carrier, 2026-11-16, `b7e97763`): GC0 6,182
+     and GC3 4,167 QPS against aiohttp ~27,500 (22% and 15%). Since the
+     handler already passes asyncio at four workers, most of the gap is in
+     the server path; GC0 request CPU by mechanism (2026-11-15 census):
+     reference counting, allocation, free, root stores, pins and leases
+     about 53%, syscalls 8.7%, calls and frames 8.7%, attribute lookup 6.4%.
+   Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
+   fixes `carrier_count=1` and the runner records one carrier, so add a
+   carrier count to the app and runner and a four-process aiohttp
+   reference (pcc-gateway only); (b) the largest owner of the C512 request
+   path from a fresh busy-carrier profile (`scripts/run_process_tree_sample.py`),
+   starting with the GC0 ownership protocol (reference-count chains,
+   allocation and free, root stores, pins and leases); (c) the handler's
+   one-worker gap to asyncio on GC0 (55%), localized with `prim` and `gap`;
+   (d) per-site attribute lookup caches.
+   Area: the pcc area of the unit's files (`runtime-codegen`, `runtime-gc`,
+   `backend`); a unit that changes only pcc-gateway holds none.
+
+   Claims:
+   - none
+4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
    [multi-language status](multilanguage-status.md). Platform: any.
@@ -1114,7 +1173,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - none
-4. **NumPy extension chain (Linux first) and the value model.** NumPy: the
+5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
    Linux first for NumPy, any for the value model. Next: not yet assessed in
@@ -1123,7 +1182,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - none
-5. **Maintainer-selected branches**, after the items above unless the
+6. **Maintainer-selected branches**, after the items above unless the
    maintainer names one:
    - Local-model mode and GPU
      ([architecture](design/pcc-local-model-architecture.md), milestones M0
@@ -1154,24 +1213,24 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - none
-6. **Long-standing CPython-replacement and standard-library issues**
+7. **Long-standing CPython-replacement and standard-library issues**
    (allstoalls#157 to #170): advanced through the items above; take one
    directly only when the maintainer names it.
 
    Claims:
    - none
-7. **Last: self-host fixed point and public CLI parity** (allstoalls#199,
+8. **Last: self-host fixed point and public CLI parity** (allstoalls#199,
    #200; section "Self-host fixed point: the final convergence step" below),
    together with every result that needs a current pcc1 (GPU M2, proof-checker
    stage 3). Bootstrap runs need the maintainer's explicit OK.
 
    Claims:
    - none
-8. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
+9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
    completion bar (Stage2 and Stage3 pass, Stage2 wall time not above
-   Stage1), even if the pcc1-dependent results of item 7 (CLI parity, GPU M2,
+   Stage1), even if the pcc1-dependent results of item 8 (CLI parity, GPU M2,
    proof-checker stage 3) are still open. From then on an agent told "推进"
    starts no new item; it reports that the review is due and waits.
 
