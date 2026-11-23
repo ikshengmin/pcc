@@ -241,6 +241,39 @@ def py_gen_frame_get(frame, index: int):
     return pcc_gc_retain_known(load_ptr(items, index * C_POINTER_SIZE))
 
 
+@c_abi_export("py_gen_frame_move")
+def py_gen_frame_move(frame, index: int, slot, owned: int) -> None:
+    """Save a local into its frame cell at a suspension.
+
+    ``owned`` says the slot holds one counted reference. Then, on the fused
+    collector (GC0) with a compiler-private inline frame, that reference
+    moves into the cell and the slot is emptied: the copy's retain and the
+    activation cleanup's release of the same value cancel. The caller clears
+    its owned flag. Every other case stores a retained copy and, when owned,
+    releases the slot as the cleanup would have.
+    """
+    value = load_ptr(slot, 0)
+    if (owned != 0 and ptr_is_null(frame) == 0
+            and load_i32(global_addr("pcc_gc_refcount_atomic"), 0) != 0
+            and load_i32(frame, 8) == PY_TYPE_GEN
+            and (load_i32(frame, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GEN_INLINE_FRAME) != 0
+            and index >= 0 and index < load_i64(frame, PYINLINEGENOBJECT_LENGTH_OFFSET)):
+        cell = ptr_add(frame, PYINLINEGENOBJECT_ITEMS_OFFSET + index * C_POINTER_SIZE)
+        old = load_ptr(cell, 0)
+        store_ptr(cell, 0, value)
+        store_ptr(slot, 0, null())
+        if ptr_eq(old, value) == 0 or ptr_is_null(old) != 0:
+            pcc_gc_release_known(old)
+        else:
+            # The cell already named this object with its own reference:
+            # the slot's reference is the surplus one.
+            pcc_gc_release_known(value)
+        return
+    py_gen_frame_set(frame, index, value)
+    if owned != 0:
+        pcc_gc_store_root(slot, null())
+
+
 @c_abi_export("py_gen_frame_take")
 def py_gen_frame_take(frame, index: int):
     """Move the owner out of a compiler-private frame cell, emptying it.

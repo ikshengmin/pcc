@@ -3015,8 +3015,27 @@ class GeneratorLoweringMixin:
         # The cpy for lowering proves the name is not read across a
         # suspension before registering it here.
         skip_names = ctx.get("cpy_skip_save_names", ())
+        move_owned = self._generator_frame_helper("set").name == "py_gen_frame_set"
         for name, (idx, slot) in ctx["frame_slots"].items():
             if name in skip_names:
+                continue
+            flag = (self._owned_local_flag_slots.get(name)
+                    if (move_owned and name in self._owned_local_names
+                        and name in self._owned_local_has_value
+                        and self._owned_local_flag_allocas.get(name) is slot) else None)
+            if flag is not None:
+                # The activation cleanup that follows would release this
+                # owned local: move its reference into the frame instead of
+                # a retained copy plus that release.
+                owned = self.builder.zext(
+                    self.builder.load(flag, name=self._fresh("gen.save.owned")),
+                    _I64, name=self._fresh("gen.save.owned.i64"),
+                )
+                self.builder.call(
+                    self.runtime["py_gen_frame_move"],
+                    [frame, ir.Constant(_I64, idx), self._as_gc_ptr(slot), owned],
+                )
+                self.builder.store(ir.Constant(ir.IntType(1), 0), flag)
                 continue
             value = self.builder.load(slot, name=self._fresh("gen.save"))
             self.builder.call(
