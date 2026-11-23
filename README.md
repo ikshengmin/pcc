@@ -8,26 +8,35 @@
 
 pcc compiles Python and C source into native executables. Compiled Python
 programs keep Python's syntax and behavior but run on pcc's own runtime and the
-platform C library instead of libpython. pcc is experimental; see [Status and scope](#status-and-scope).
+platform C library instead of libpython. Source frontends for C++, Rust, Java
+and Go are in progress. pcc is experimental; see [Status and scope](#status-and-scope).
 
 ## What makes pcc different
 
 - **Its own toolchain.** Python and C go through pcc's own optimizer, code
-  generator, object writers and linkers. The IR uses LLVM syntax, but no
-  external LLVM is involved.
+  generator, object writers and linkers, and the newer frontends emit the same
+  PCC IR. The IR uses LLVM syntax, but no external LLVM is involved.
 - **Python and C together.** The Python frontend covers type inference,
   classes, closures, generators and `async`. The C frontend covers C99-style
   code, pointers, aggregates, function pointers and multi-file builds.
+- **C++, Rust, Java and Go, in progress.** Each frontend parses and checks its
+  language itself and emits PCC IR. Each is driven by one unchanged upstream
+  project and that project's own tests: TinyXML2, fallible-streaming-iterator,
+  Commons Numbers Primes and Go's `math/bits`. None of them builds and passes
+  those tests yet, and the Rust frontend still admits some features only after
+  a check by an external `rustc`. See
+  [multi-language status](docs/multilanguage-status.md).
 - **Python semantics, opt-in value types.** Integers keep arbitrary precision
   and ordinary objects keep their identity. `@pcc.valueclass` marks immutable,
   identity-free types whose values can stay unboxed.
-- **Five garbage collectors** behind one runtime contract, chosen per run.
-- **Native concurrency.** An optional threaded runtime, `async`/`await` and
-  virtual threads.
+- **One garbage collector:** reference counting with a generational cycle
+  collector, the model CPython uses. See [Garbage collection](#garbage-collection).
+- **Native threads, no GIL.** Every native runtime is threaded, with atomic
+  reference counts. `async`/`await` and virtual threads are supported too.
 - **Interop.** Call compiled C from CPython with `import pcc`, or declare C
   functions for compiled Python with `pcc.extern`.
-- **Self-hosting.** pcc builds itself into a native compiler; see
-  [What is pcc1?](#what-is-pcc1)
+- **Self-hosting.** pcc builds itself into a native compiler; the self-host
+  fixed point is not reached yet. See [What is pcc1?](#what-is-pcc1)
 
 ## Install
 
@@ -139,18 +148,20 @@ compiled binary's format and dependencies, and `pcc.generate_bindings`
 (`pcc bindgen`) turns C prototypes into `pcc.extern` declarations; see
 [inspection and binding tools](docs/developer-reference.md#python-library-and-inspection-tools-in-progress).
 
-## Five garbage collectors
+## Garbage collection
 
-| `PCC_GC_BACKEND` | Collector |
-|---|---|
-| `0` | Reference counting with cycle collection (default) |
-| `1` | Incremental tricolor mark-and-sweep |
-| `2` | Concurrent mark-and-sweep |
-| `3` | Generational young/old collection |
-| `4` | Colored, relocating collection |
+pcc has one collector: reference counting with a generational cycle collector,
+the model CPython uses. An object outside a reference cycle is freed when its
+last reference goes. Newly tracked containers are young, and most automatic
+cycle collections examine only the young ones. A full collection follows once
+the tracked population has grown. It runs in bounded steps with the program
+running in between, instead of one stop over the whole heap, and it ends by
+returning the pages of empty object slabs to the system. An optional collector
+thread, off by default, can run those steps while the program runs.
 
-Choose one when starting a compiled program, for example
-`PCC_GC_BACKEND=4 ./hello`.
+There is no collector selection. The tracing and relocating collectors that
+earlier versions offered as backends `1` to `4` have been removed, and the
+runtime no longer reads `PCC_GC_BACKEND`.
 
 ## What is pcc1?
 
@@ -162,7 +173,8 @@ The numbers count **compiler generations**, not Python versions:
 - **pcc2** and **pcc3** are rebuilt from the same source by pcc1 and pcc2. When
   they agree byte for byte under the
   [bootstrap checks](docs/developer-reference.md#bootstrap), the compiler has
-  reached a fixed point.
+  reached a fixed point. pcc has not reached it yet; the Stage2 blockers are
+  tracked in [allstoalls/pcc#200](https://github.com/allstoalls/pcc/issues/200).
 
 Build pcc1 from the checkout (about 35 minutes on an Apple-silicon Mac); the
 result is `build/bootstrap/pcc1`:
@@ -227,18 +239,27 @@ See the [qualification catalog](docs/compat/pcc1-cpython-replacement-workloads.j
 - [pcc-gui](https://github.com/allstoalls/pcc-gui): an experimental declarative
   GUI framework; native windows need macOS on Apple silicon and Xcode.
 
-## Experimental GPU work
+## Experimental work
 
-`@gpu.kernel` markers, Kernel IR and a bounded Metal compile-and-launch path
-target macOS with the Xcode Metal toolchain. General Python GPU acceleration is
-not supported. See the [GPU scope](docs/design/pcc-gpu-next-work.md).
+**GPU.** `@gpu.kernel` and `gpu.launch` compile annotated kernels through
+Kernel IR into Metal shader source that pcc generates. On macOS with Apple
+silicon, the compiled program hands that source to the system Metal framework
+at run time, calling it directly through the Objective-C runtime, without
+Xcode's offline Metal tools. Older routes that use Xcode's `metal`/`metallib`
+or `xcrun clang` remain only as labeled reference routes. General Python GPU
+acceleration is not supported. See the
+[GPU scope](docs/design/pcc-gpu-next-work.md) and the
+[local-model architecture](docs/design/pcc-local-model-architecture.md).
+
+**Proof checking.** An Agda-class proof checker runs on host CPython; see the
+[exploration and implementation state](docs/research/agda-class-proof-checker-exploration.md).
 
 ## Status and scope
 
 The examples above run on macOS arm64 and Linux x86_64, except
 [calling C from Python](#call-c-from-python), which needs macOS arm64. Python
-and standard-library coverage, self-hosting, package compatibility and other
-platforms are still in progress.
+and standard-library coverage, the C++, Rust, Java and Go frontends,
+self-hosting, package compatibility and other platforms are still in progress.
 
 See [current work and blockers](docs/status.md),
 [verification results by revision](docs/verification-status.md), and the
@@ -250,14 +271,18 @@ See [current work and blockers](docs/status.md),
 - [Architecture](docs/architecture/01-overview.md): pipeline and source map
 - [Developer reference](docs/developer-reference.md): modes, APIs and runtime controls
 - [Compiling C](docs/c-howto.md): files, directories, Makefile projects and libpq
+- [Multi-language status](docs/multilanguage-status.md): the C++, Rust, Java
+  and Go projects and their current first blockers
 - [Compiler contracts](docs/compiler-contract.md): dependency and execution ownership
 - [Runtime and GC](docs/developer-reference.md#garbage-collection),
   [virtual threads](docs/developer-reference.md#virtual-threads-effects-and-proof-checks),
   and [environment controls](docs/developer-reference.md#environment-controls)
 - [GPU scope](docs/design/pcc-gpu-next-work.md) and
   [Kernel IR](docs/design/pcc-kernel-ir.md): experimental accelerator design
-- [Contributing](AGENTS.md), [validation workflow](docs/validation-workflow.md),
-  and [development tools](docs/development-tools.md): changing and checking pcc
+- [Contributing](AGENTS.md), the [work order](docs/status.md#work-order) that
+  maintainers and agents take work from, the
+  [validation workflow](docs/validation-workflow.md) and
+  [development tools](docs/development-tools.md): changing and checking pcc
 - [Investigation index](docs/investigations/INDEX.md) and
   [knowledge index](docs/knowledge/README.md): dated experiments and corrections
 
