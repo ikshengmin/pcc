@@ -623,6 +623,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - #9 validate safe callback-window batching boundary: Codex, Linux x86-64, 2026-11-23 04:03 UTC, area runtime-gc
+   - #9 scale-test early stop, diagnosis only (no source edits until the files are named here): Claude, macOS arm64, 2026-11-23 04:05 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
