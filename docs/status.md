@@ -474,8 +474,13 @@ in the relevant section or issue and removes the entry.
    Nine Linux controls distinguish a caller interior word, separate
    scheduler slot, and post-stop scratch; prior cohort regression passed.
    No automatic entry or complete precise/foreign root qualification.
-   Next GC3: native bump span publication and reuse, then link actual
-   layout/admission to a measured minor and seal the handler arm.
+   [GC3 bump review c3f7b47](https://github.com/ikshengmin/pcc/commit/c3f7b4716f07feab7d0bb09aafe4803293626286)
+   registers one 64 KiB slab once: 2,048 cells, zero tracing records.
+   Peer publication, ownership, cancellation and stopped empty rewind
+   passed five mode lanes and five extra GC3 runs; 92 prior allocator
+   bodies are unchanged. No production allocation. Next GC3: drive rewind
+   with actual young liveness, refuse mixed/live spans, then test first
+   admitted caller and C sequence-array escape before sealed measurement.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -697,7 +702,7 @@ in the relevant section or issue and removes the entry.
    ready units.
 
    Claims:
-   - pccDot (2026-11-23 00:02 UTC), native GC3 bump span allocation and reuse boundary: reserve once, prove staged and committed exact cells, no per-object tracing records; no automatic caller yet.
+   - none
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
