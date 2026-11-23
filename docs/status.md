@@ -1347,11 +1347,26 @@ generations, 41 logical zpages, 2 other); the GC1 order case of
 ## One collector: GC0 is the fused collector (maintainer decision, 2026-11-24)
 
 Maintainer decision, in a question Claude put on 2026-11-24 (option chosen:
-"GC0, keep the other code"): the fused collector is GC0, reference counting
-with the cycle collector. GC1-4 stay in the repository and keep building,
-but receive no further identity or optimization work; tests and performance
-acceptance target the fused collector. This supersedes the plan in the next
-section ("optimize each collector before unifying"), whose GC1-4 steps stop.
+"GC0, keep the other code"): the fused collector is built on GC0, reference
+counting with the cycle collector, and GC1-4 stay in the repository and
+keep building. The maintainer added the same day that the characteristic
+feature of each of GC1-4 must enter the fused collector; they are not
+dropped. Tests and performance acceptance target the fused collector. This
+supersedes the order of the next section ("optimize each collector before
+unifying"): its GC1-4 identities are no longer built as separate
+collectors.
+
+Claude's proposed mapping of those features onto the counting base, for the
+maintainer to confirm or change (a proposal, not a decision):
+
+- GC1, incremental: the cycle collector runs in bounded mutator-paced steps
+  instead of one stop per collection (bounded pause).
+- GC2, concurrent with assists and a pacer: cycle detection marks in the
+  background, paced by allocation, with mutator assists.
+- GC3, generational: cycle candidates are aged, and a young pass examines
+  only recent containers (as CPython's generations do).
+- GC4, relocating: sparse object slabs are evacuated in a stopped world to
+  return memory (compaction), with the existing slab evacuation.
 
 Evidence at the decision (local Mac): GC0 w1 48.8k req/s against 33k for
 GC1-3 and 26k for GC4; only GC0 runs finalizers when CPython does (on
