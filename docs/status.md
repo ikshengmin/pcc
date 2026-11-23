@@ -505,6 +505,30 @@ in the relevant section or issue and removes the entry.
        `87ae55217`, so this is a pre-existing review-branch defect
        (condition 1 parity), not caused by `eff808bf3`. Single-pass
        Linux and Mac runs missed it.
+     - Cause of the scale-test early stop (Claude, local Mac, probe on
+       `eff808bf3`, sealed 256-node case with zero peers, 4 failures
+       captured): the rescuing word is in the main thread's frames above
+       `main` (dyld `start`, at fp+0x80, +0x150, +0x680), and in every
+       failure it already held that value at `main` entry, before any
+       candidate existed. The allocator later placed item 119/174/231 at
+       that address, or the item straddles that page base. The main
+       thread's conservative range ends at `_outermost_frame_pointer()`
+       + 16 (`_thread_record_link`, `_thread_snapshot_roots`, and the
+       owner branch of `pcc_thread_visit_conservative_callback_words`),
+       so pre-main process-entry words become roots. ASLR makes it
+       intermittent (about 4% of runs). Not #9-specific: any conservative
+       scan on GC1–4 can retain an object this way; the chain only
+       amplifies one hit into the whole tail. The same rate with 0 and 1
+       peers rules out peer stacks.
+     - Fix (recommendation, mine): end the main thread's conservative
+       range at `main`'s own frame record, excluding process-entry
+       frames (one on Darwin, `start`; up to two on glibc). Compute it
+       from the live frame chain when the thread snapshots itself or
+       scans its own stack, not at registration (registration may run
+       before `main`'s frame exists). Keep the full outermost range for
+       every other thread, since a foreign caller's frame above a
+       registration point can hold a returned object. This changes the
+       shared root contract, so validate all five collectors.
      - Next #9: fix that early stop before merge. Repro on any host: loop
        the 256-node cases 30 times, e.g. `-k 256` on
        `test_gc_acyclic_singleton_production_native.py::test_callback_chain_scale_matches_cpython`
@@ -629,7 +653,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - none
-   - #9 scale-test early stop, diagnosis only (no source edits until the files are named here): Claude, macOS arm64, 2026-11-23 04:05 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
