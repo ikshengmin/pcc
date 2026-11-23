@@ -580,7 +580,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - none
+   - #9 isolate local fix bundle against its review parent: Codex, Linux x86-64, 2026-11-23 03:26 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
