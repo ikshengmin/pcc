@@ -251,6 +251,19 @@ ledger live under `PCC_PERF_HOME`, outside the repository.
   `prim A --against B` is the per-primitive A/B. `top`, `gap`, `locks` and
   `layout` then name the functions, the category, the lock callers and the
   cache-line neighbours.
+- No optimization that cannot pay (maintainer rule, 2026-11-23). Before
+  writing a candidate, record its ceiling on the target workload, not on a
+  primitive: the share of the targeted functions in one request
+  (`top --callers`, `gap`) times the fraction the change removes. Do not
+  implement a candidate whose ceiling is below the host's noise floor (in
+  practice below 3%); combine candidates on one path into one change
+  instead. When the mechanism is uncertain (a call, an atomic, a library
+  routine in place of a loop), confirm it with a microbenchmark first. A
+  number of requested rounds is a budget, not a quota: when the profile is
+  flat and only structural work remains, report that instead of filling
+  rounds. A merged change whose `ab` shows no gain is not a performance
+  change; revert it unless it is a correctness or simplification change
+  named as such.
 - `ab A B` is the result: five alternating pairs, medians, pair wins and an
   unchanged control (`--control GC`, or `--control-arm` for a change every
   collector sees); fewer pairs is a screen. A change is a gain or a loss
