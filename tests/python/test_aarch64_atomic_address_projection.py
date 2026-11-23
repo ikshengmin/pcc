@@ -92,8 +92,8 @@ entry:
 '''
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("width", (8, 16, 32, 64))
 @pytest.mark.parametrize("callee_saved", ("0", "1"))
 @pytest.mark.parametrize("thread_local", (False, True))

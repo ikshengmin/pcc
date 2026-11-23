@@ -3,6 +3,7 @@ import pytest
 
 from pcc.frontends.rust import RustError, compile_rust
 from pcc.frontends.rust.syntax import lex
+from tests.rust.str_execution import HOST_TARGET as OWNED_HOST_TARGET
 
 
 @pytest.mark.parametrize(('literal','value'), [
@@ -90,9 +91,10 @@ def test_program_emits_real_i8_and_cross_target_objects():
 
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(probe=lambda: OWNED_HOST_TARGET is not None)
 def test_real_byte_loads_branches_wrap_casts_and_patterns_on_host(tmp_path, monkeypatch):
     from tests.rust.str_execution import HOST_TARGET,UNAVAILABLE,run_owned_u64_function
-    if HOST_TARGET is None: pytest.skip(UNAVAILABLE)
+    if HOST_TARGET is None: pytest.fail(UNAVAILABLE)
     assert run_owned_u64_function(PROGRAM,'answer',tmp_path,monkeypatch,
                                   experimental_rustc_checked=False) == EXPECTED
 

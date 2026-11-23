@@ -3,6 +3,7 @@ import pytest
 
 from pcc.frontends.rust import RustError,compile_rust
 from pcc.frontends.rust.syntax import lex,Parser
+from tests.rust.str_execution import HOST_TARGET as OWNED_HOST_TARGET
 
 
 @pytest.mark.parametrize('source,value',[
@@ -66,10 +67,11 @@ pub fn f()->u32{let a=S{value:C};let b=a;if a==b && less('a',C){b.value as u32}e
 
 @pytest.mark.integration
 @pytest.mark.xdist_group(name='rust-native-reference')
+@pytest.mark.pcc_gate(probe=lambda: OWNED_HOST_TARGET is not None)
 def test_machine_result_observes_scalar_value_unsigned_order_and_copy(tmp_path,monkeypatch):
     from tests.rust.str_execution import HOST_TARGET,UNAVAILABLE,run_owned_u64_function
     if HOST_TARGET is None:
-        pytest.skip(UNAVAILABLE)
+        pytest.fail(UNAVAILABLE)
     source = """fn less(c:char,d:char)->bool{c<d}
 pub fn value()->u64{let c='📦';let copy=c;if less('中',copy) && c==copy{copy as u64}else{1}}"""
     assert run_owned_u64_function(source,'value',tmp_path,monkeypatch)==0x1f4e6

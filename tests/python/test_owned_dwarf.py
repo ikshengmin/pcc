@@ -21,11 +21,16 @@ from pcc.backend.self_backend_indexed_codec import (
 from pcc.backend.self_backend_parse import parse_self_backend_module
 from tests.python.test_owned_source_debug_info import METADATA, program
 
+# Independent consumers of the emitted DWARF. A test that needs one is
+# deselected where it is missing; reaching it anyway is a failure.
+NEEDS_DWARFDUMP = pytest.mark.pcc_gate(probe=lambda: shutil.which('dwarfdump') is not None)
+NEEDS_LLDB = pytest.mark.pcc_gate(probe=lambda: shutil.which('lldb') is not None)
+
 
 def _dump(tmp_path, data):
     tool = shutil.which('dwarfdump')
     if tool is None:
-        pytest.skip('independent dwarfdump consumer unavailable')
+        pytest.fail('independent dwarfdump consumer unavailable')
     path = tmp_path / 'debug.o'
     path.write_bytes(data)
     verify = subprocess.run([tool, '--verify', str(path)], capture_output=True, text=True, timeout=15)
@@ -47,6 +52,7 @@ def _rows(dump):
 
 @pytest.mark.parametrize('structured', [True, False])
 @pytest.mark.parametrize('indexed_cache', [True, False])
+@NEEDS_DWARFDUMP
 def test_native_dwarf_tracks_final_instruction_addresses_and_cache(tmp_path, structured, indexed_cache):
     module = parse_self_backend_module(program())
     if indexed_cache:
@@ -77,6 +83,7 @@ def test_native_dwarf_tracks_final_instruction_addresses_and_cache(tmp_path, str
     assert code[frame_start:frame_start + 8] == bytes.fromhex('fd7bbfa9fd030091')
 
 
+@NEEDS_DWARFDUMP
 def test_text_and_structured_debug_objects_have_identical_code_and_dwarf(tmp_path):
     text = program()
     structured = emit_owned_object(text, 'arm64-apple-darwin')
@@ -87,6 +94,7 @@ def test_text_and_structured_debug_objects_have_identical_code_and_dwarf(tmp_pat
     assert _dump(tmp_path, rendered)
 
 
+@NEEDS_DWARFDUMP
 def test_multiple_functions_lexical_files_discriminators_and_sequence_ends(tmp_path):
     metadata = METADATA.replace('scope: !2)', 'scope: !7)') + r'''
 !5 = !DIFile(filename: "caf\C3\A9.py", directory: "/tmp/other")
@@ -113,6 +121,7 @@ entry:
     assert any(row[0] >= first_end and row[1] == 22 and row[2] == 3 for row in rows)
 
 
+@NEEDS_DWARFDUMP
 def test_reachable_blocks_and_multiline_switch_debug_dwarf(tmp_path):
     source = program('''entry:
   switch i64 %a, label %other [
@@ -128,6 +137,8 @@ other:
     assert dump.count('end_sequence') == 1
 
 
+@NEEDS_DWARFDUMP
+@NEEDS_LLDB
 def test_actual_python_frontend_debug_object_is_consumed_by_lldb(tmp_path):
     from tests.python.test_py_debug_info import _compile_ll
     source = _compile_ll(tmp_path, debug=True)
@@ -138,7 +149,7 @@ def test_actual_python_frontend_debug_object_is_consumed_by_lldb(tmp_path):
     assert {row[1] for row in _rows(dump)} >= {2, 3}
     debugger = shutil.which('lldb')
     if debugger is None:
-        pytest.skip('independent LLDB consumer unavailable')
+        pytest.fail('independent LLDB consumer unavailable')
     line_address = next(row[0] for row in _rows(dump) if row[1] == 2)
     result = subprocess.run([
         debugger, '-b', '-o', 'target create ' + str(tmp_path / 'debug.o'),

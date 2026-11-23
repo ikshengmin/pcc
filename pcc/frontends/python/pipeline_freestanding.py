@@ -371,7 +371,9 @@ def freestanding_allowed_external_symbols(source: str) -> set[str]:
         freestanding_module_scope_extern_bindings(source)
     ):
         expected = process_entry_abis.get(symbol)
-        if expected == (compact_params, return_name):
+        if expected == (compact_params, return_name) or (
+            symbol == "main" and (compact_params, return_name) == ("(c_int,c_ptr,c_ptr,c_ptr)", "c_int")
+        ):
             allowed.add(symbol)
         expected = freestanding_machine_abis.get(symbol)
         if expected == (compact_params, return_name):

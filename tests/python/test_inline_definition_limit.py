@@ -71,8 +71,8 @@ def test_wide_limit_inlines_bodies_the_general_limit_keeps():
     assert _calls(run_owned_passes(too_large, ["inline-defined-wide"])) == 1
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_wide_inlined_module_runs(tmp_path):
     steps = 40
     text = run_owned_passes(_module(steps), ["inline-defined-wide"])

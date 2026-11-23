@@ -148,8 +148,8 @@ int main(void) {
 '''
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="requires native Darwin arm64 execution")
+# requires native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("indexed", (False, True))
 def test_protected_tls_executes_with_owned_c_driver(tmp_path, monkeypatch, indexed):
     monkeypatch.delenv("PCC_SELF_BRANCH_PROTECTION", raising=False)

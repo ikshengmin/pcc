@@ -58,7 +58,8 @@ def runtime_build_config() -> dict:
 # list; the owned builder mirrors both settings.
 _THREAD_KERNEL_MODULE = "freestanding_thread_kernel_pthread"
 _NO_IMPLICIT_POLL_MODULES = (
-    _THREAD_KERNEL_MODULE, "py_runtime_log", "py_tempfile", "py_os_mkdir",
+    _THREAD_KERNEL_MODULE, "freestanding_process_main", "freestanding_darwin_main",
+    "py_runtime_log", "py_tempfile", "py_os_mkdir",
     "py_cleanup_runtime", "py_exc_traceback", "py_re_bridge_entry",
     "py_capi_method_entry", "py_list_native_entry",
     "freestanding_gc_pressure",
@@ -105,6 +106,8 @@ def runtime_modules(runtime_dir: str, target: str, threads: bool = True,
         names.extend(("freestanding_linux_libc", "freestanding_linux_time", "freestanding_time_format", "freestanding_posix_timezone", "freestanding_linux_directory", "freestanding_linux_signal", "freestanding_linux_static_loader", "freestanding_signal_set"))
         if target.startswith(("arm64-", "aarch64-")):
             names.append("freestanding_linux_aarch64")
+    elif target_os_name(target) == "darwin":
+        names.append("freestanding_darwin_main")
     if gc_stress_every:
         names.append("freestanding_gc_pressure")
     return names

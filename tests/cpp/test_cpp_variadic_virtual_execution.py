@@ -26,9 +26,9 @@ CASES = ('zero-int-dispatch', 'floating-promotion', 'mixed-overflow', 'abi_sites
          'protected_format_hook', 'qualified_order')
 TARGET = 'x86_64-unknown-linux-gnu'
 EXPECTED = Execution(42, b'\x2a\x00\x00\x00', b'')
+# Host Linux x86_64 SysV execution only.
 pytestmark = [pytest.mark.integration,
-              pytest.mark.skipif(sys.platform != 'linux' or platform.machine() not in ('x86_64', 'AMD64'),
-                                 reason='host Linux x86_64 SysV execution only')]
+              pytest.mark.pcc_gate(platforms=('linux',), machines=('x86_64', 'amd64'))]
 
 # A fresh Python process owns each cold compile. Spawning is forbidden INSIDE
 # it; the parent independently enforces the wall timeout. No external fallback.

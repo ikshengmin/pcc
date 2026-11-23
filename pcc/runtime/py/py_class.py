@@ -3066,36 +3066,6 @@ def py_instance_set_field(inst, idx: int, value) -> None:
     pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
 
 
-@c_abi_export("pcc_gc_tracing_callback_store_instance_field")
-def pcc_gc_tracing_callback_store_instance_field(inst, idx: int, value, owner_cell) -> int:
-    """Opt-in one-owner receipt for a checked store in the #9 reference arm.
-
-    The caller owns a private unmanaged cell and keeps the instance alive
-    throughout this window. No ordinary setter calls this entry. An exact
-    owner receipt does not establish callback-window coverage or root identity.
-    """
-    backend: int = pcc_gc_backend()
-    if (
-        backend < 1 or backend > 3
-        or load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) == 0
-        or pcc_thread_world_stop_epoch_held() >= 0
-        or ptr_is_null(owner_cell) != 0 or idx < 0 or not _ptr_is_instance(inst)
-        or ptr_is_null(value) != 0 or is_tagged_int(value) != 0
-    ):
-        return 0
-    recorded = load_ptr(owner_cell, 0)
-    if ptr_is_null(recorded) == 0 and ptr_eq(recorded, inst) == 0:
-        return 0
-    cls = pcc_gc_load_ptr(inst, ptr_add(inst, PYINSTANCEOBJECT_CLS_OFFSET))
-    n_fields: int = load_i32(cls, PYCLASSOBJECT_N_FIELDS_OFFSET)
-    if idx >= n_fields:
-        return 0
-    # Same locked store transaction as py_instance_set_field, with no opt-in
-    # check in that path. The count-free plan has no retaining refusal.
-    fields_base = ptr_add(inst, PYINSTANCEOBJECT_FIELDS_OFFSET)
-    pcc_gc_store_field_ptr(inst, ptr_add(fields_base, idx * C_POINTER_SIZE), value)
-    store_ptr(owner_cell, 0, inst)
-    return 1
 
 
 @c_abi_export("py_valuebox_new")

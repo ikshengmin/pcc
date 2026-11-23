@@ -22,8 +22,8 @@ ROOT = Path(__file__).resolve().parents[2]
 FIXTURE = ROOT / "tests/fixtures/native/callback_capture_pin/capture_pin.c"
 pytestmark = [
     pytest.mark.integration,
-    pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                       reason="this owned C/runtime ABI gate selects macOS arm64"),
+    # This owned C/runtime ABI gate selects macOS arm64.
+    pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",)),
 ]
 
 

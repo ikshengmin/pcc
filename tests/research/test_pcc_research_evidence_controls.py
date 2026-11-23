@@ -62,11 +62,12 @@ def test_same_oracle_rejects_actual_bad_candidate_source():
     assert reject_wrong_candidate(source, namespace[TARGET], cases) is True
 
 
+@pytest.mark.pcc_gate(env="PCC_RESEARCH_SOURCE")
 def test_actual_pinned_rewrite_negative_control():
     import os
     root = os.environ.get("PCC_RESEARCH_SOURCE")
     if not root:
-        pytest.skip("set PCC_RESEARCH_SOURCE to the frozen integer-fold source")
+        pytest.fail("set PCC_RESEARCH_SOURCE to the frozen integer-fold source")
     _, candidate_source, (reference, candidate) = load_pair(Path(root))
     cases = [("eq", 8, 1, 1), ("ne", 8, 1, 0), ("slt", 8, -1, 1)]
     assert check_equivalence(reference[TARGET], candidate[TARGET], cases) == 3

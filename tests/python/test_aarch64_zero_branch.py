@@ -59,8 +59,8 @@ def test_narrow_and_escaping_comparisons_keep_the_value_path(kind, escaped):
         assert "cset " in emitted
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("registers", ("0", "1"))
 @pytest.mark.parametrize("indexed", (False, True))
 @pytest.mark.parametrize("kind,predicate,swapped,layout,escaped", (

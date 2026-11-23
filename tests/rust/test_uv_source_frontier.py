@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.rust.str_execution import HOST_TARGET as OWNED_HOST_TARGET
+
 ROOT = Path(__file__).resolve().parents[2]
 PROJECT = ROOT / "projects" / "uv-0.13.7"
 LOCK_SHA256 = "c6ea2cf2f3acdd33fa8aee8673adc48e7bcfd9ee7779ad0ab7e9b41090f1d60c"
@@ -122,22 +124,35 @@ def test_uv_rust_root_stops_at_its_recorded_first_blocker(name, blocker):
             pytest.fail(name + " passed its recorded blocker; record the next one")
 
 
-@pytest.mark.xdist_group(name="rust-native-reference")
-def test_uv_version_compiles_and_runs_natively(tmp_path, monkeypatch):
-    """The unchanged root, its release cfg and Cargo environment, compiled by
-    PCC (with the value-only attestation) and run natively where possible."""
-    from tests.rust.str_execution import HOST_TARGET, run_owned_str_function
+def _uv_version_source():
     name = "crates/uv-version/src/lib.rs"
     source = (PROJECT / name).read_text(encoding="utf-8")
     options = dict(edition=2024, cfg=release_cfg(name), env=crate_environment(name), module_name="uv_version")
+    return source, options
+
+
+@pytest.mark.xdist_group(name="rust-native-reference")
+def test_uv_version_compiles_for_both_owned_targets():
+    """The unchanged root, its release cfg and Cargo environment, compiled by
+    PCC (with the value-only attestation) for both owned targets."""
+    source, options = _uv_version_source()
     from pcc.frontends.rust import compile_rust
     for target in ("x86_64-unknown-linux-gnu", "arm64-apple-darwin"):
         result = compile_rust(source, experimental_rustc_checked=True, target_triple=target, **options)
         assert set(result.symbols) == {"version"} and result.emit_object()
         disabled, = result.conditional_items
         assert not disabled.enabled and disabled.item == ()  # `#[cfg(test)] mod tests`, skipped
+
+
+# Owned execution needs an arm64 Darwin or x86-64 Linux host.
+@pytest.mark.xdist_group(name="rust-native-reference")
+@pytest.mark.pcc_gate(probe=lambda: OWNED_HOST_TARGET is not None)
+def test_uv_version_compiles_and_runs_natively(tmp_path, monkeypatch):
+    """The same compiled root, run natively by PCC's own observer and linker."""
+    from tests.rust.str_execution import HOST_TARGET, run_owned_str_function
     if HOST_TARGET is None:
-        pytest.skip("owned execution needs an arm64 Darwin or x86-64 Linux host")
+        pytest.fail("owned execution needs an arm64 Darwin or x86-64 Linux host")
+    source, options = _uv_version_source()
     assert run_owned_str_function(source, "version", tmp_path, monkeypatch, **options) == b"0.13.7"
 
 

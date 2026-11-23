@@ -19,9 +19,8 @@ import sys
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    sys.platform != "darwin", reason="loads /usr/lib/libz.1.dylib"
-)
+# Loads /usr/lib/libz.1.dylib.
+pytestmark = pytest.mark.pcc_gate(platforms=("darwin",))
 
 
 RAW_PROGRAM = '''from pcc.extern import c_int64, c_obj, c_rawptr, extern

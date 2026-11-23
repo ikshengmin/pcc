@@ -133,6 +133,14 @@ define_global_i32("pcc_thread_conservative_roots_enabled", 0)
 # The handle a native root binding answers when the conservative scan
 # already roots its slots (_native_slots_conservative): nothing is bound.
 define_global_i64("pcc_thread_native_root_stack_handle", 0)
+# Layout of the borrowed, thread-owned descriptor in freestanding_process_main.
+_PROCESS_MAIN_FRAME: int = 0
+_PROCESS_MAIN_LIMIT: int = 8
+pcc_process_main_boundary = extern("pcc_process_main_boundary", (), c_ptr)
+
+_THREAD_OUTERMOST_FRAME: int = 32
+_THREAD_FRAME_RECORD_BYTES: int = 16
+_THREAD_MAX_STACK_SNAPSHOT_BYTES: int = 1073741824
 _THREAD_ROOT_DATA: int = 48
 _THREAD_ROOT_BYTES: int = 56
 _THREAD_ROOT_CAPACITY: int = 64
@@ -681,7 +689,7 @@ def _thread_record_link(thread_id: int) -> None:
     store_i64(record, 8, thread_id)
     store_i64(record, 16, 0)
     store_ptr(record, 24, null())
-    store_i64(record, 32, _outermost_frame_pointer())
+    store_i64(record, _THREAD_OUTERMOST_FRAME, _outermost_frame_pointer())
     store_i64(record, 40, 0)
     store_ptr(record, _THREAD_ROOT_DATA, null())
     store_i64(record, _THREAD_ROOT_BYTES, 0)
@@ -725,6 +733,39 @@ def _thread_record_unlink() -> None:
     free(record)
 
 
+def _thread_conservative_stack_high(record, low: int) -> int:
+    outer: int = load_i64(record, _THREAD_OUTERMOST_FRAME)
+    fallback: int = outer + _THREAD_FRAME_RECORD_BYTES
+    anchor = pcc_process_main_boundary()
+    if ptr_is_null(anchor) != 0:
+        return fallback
+    entry: int = ptr_to_int(load_ptr(anchor, _PROCESS_MAIN_FRAME))
+    # The startup constructor that registered us may have run from a
+    # different extent of the stack. Use today's anchored chain, not its
+    # saved end, to validate an application start boundary.
+    if entry == 0 or (entry & 7) != 0:
+        return fallback
+    limit: int = ptr_to_int(load_ptr(anchor, _PROCESS_MAIN_LIMIT))
+    # A copied stack, a foreign carrier or a call outside main must not
+    # use a boundary merely because an address has been published.
+    if limit < low or limit > entry or (limit & 7) != 0:
+        return fallback
+    frame = frame_address()
+    current: int = ptr_to_int(frame)
+    if entry < current or entry - current > _THREAD_MAX_STACK_SNAPSHOT_BYTES:
+        return fallback
+    steps: int = 0
+    while current < entry and steps < 100000:
+        caller = load_ptr(frame, 0)
+        next_frame: int = ptr_to_int(caller)
+        if next_frame <= current or next_frame > entry or (next_frame & 7) != 0:
+            return fallback
+        frame = caller
+        current = next_frame
+        steps = steps + 1
+    return limit if current == entry else fallback
+
+
 def _thread_snapshot_roots(record) -> None:
     """Freeze machine words before publishing a parked or exited state.
 
@@ -734,7 +775,7 @@ def _thread_snapshot_roots(record) -> None:
     have not been spilled. The world lock protects snapshot replacement.
     """
     low = capture_gc_registers(ptr_add(record, _THREAD_ROOT_REGISTERS))
-    high: int = load_i64(record, 32) + 16
+    high: int = _thread_conservative_stack_high(record, ptr_to_int(low))
     size: int = high - ptr_to_int(low)
     if (ptr_to_int(low) & 7) != 0 or size <= 0 or size > 1073741824:
         pcc_platform_abort()
@@ -828,7 +869,7 @@ def pcc_thread_visit_conservative_callback_words(visitor, context, caller) -> in
     while ptr_is_null(node) == 0:
         if ptr_is_null(caller) == 0 and ptr_to_int(node) == ptr_to_int(owner):
             lower: int = ptr_to_int(caller)
-            upper: int = load_i64(node, 32) + 16
+            upper: int = _thread_conservative_stack_high(node, lower)
             if (lower & 7) != 0 or upper < lower or upper - lower > 1073741824:
                 return -1
             read_at: int = 0

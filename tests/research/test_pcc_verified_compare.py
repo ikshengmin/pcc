@@ -11,10 +11,11 @@ def test_rewrite_refuses_unfrozen_source():
         rewrite("def fold_llvm_integer_compare(): return 0\n")
 
 
+@pytest.mark.pcc_gate(env="PCC_RESEARCH_SOURCE")
 def test_pinned_source_copy_and_boundary_results():
     root = os.environ.get("PCC_RESEARCH_SOURCE")
     if not root:
-        pytest.skip("set PCC_RESEARCH_SOURCE to the frozen 85b0 source snapshot")
+        pytest.fail("set PCC_RESEARCH_SOURCE to the frozen 85b0 source snapshot")
     before, after, (reference, candidate) = load_pair(Path(root))
     assert before != after
     for case in (("eq", 8, 1, 1), ("ne", 64, -1, 0),

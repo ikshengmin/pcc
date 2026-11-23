@@ -51,8 +51,8 @@ def test_tls_resolver_protects_live_x0_alias_and_return_address(monkeypatch):
     assert "blr x16" in pool and "paciasp" in pool and "autiasp" in pool
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="executes Darwin TLV resolver")
+# executes Darwin TLV resolver
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("indexed", [False, True])
 @pytest.mark.parametrize("registers", ["0", "1"])
 def test_tls_pool_and_x0_alias_survive_cold_resolver_on_two_threads(tmp_path, monkeypatch, indexed, registers):

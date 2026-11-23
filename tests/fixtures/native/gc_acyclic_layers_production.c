@@ -18,6 +18,8 @@ extern int64_t pcc_gc_tracing_finish_commits, pcc_gc_tracing_finish_stop_epoch;
 extern int64_t pcc_gc_metric_layer_weak_registry_scans;
 extern int PyDict_SetItem(PyObject *, PyObject *, PyObject *);
 extern int PyList_Append(PyObject *, PyObject *);
+extern int64_t py_module_attr_set(const char *, const char *, PyObject *);
+extern PyObject *py_module_attr_get(const char *, const char *);
 extern int PyObject_SetAttrString(PyObject *, const char *, PyObject *);
 extern void pcc_gc_cms_stop_worker(void);
 extern void pcc_gc_reassert_pin(PyObject *);
@@ -27,7 +29,7 @@ extern void pcc_gc_end_explicit_tracing_collect(void);
 extern int64_t pcc_thread_start(void **, void *(*)(void *), void *);
 extern int64_t pcc_thread_join(void *, void **);
 
-enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, WIDE_LOW, ROOTS };
+enum { CLASS_A, CLASS_B, CLASS_TAIL, WEAK_A, WEAK_B, WEAK_NEW, HOLD, EXT_TYPE, WIDE_LOW, MIXED_EARLIER, MIXED_LATER, ROOTS };
 static PyObject *roots[ROOTS];
 enum {
     WIDE_FIRST_EDGE = 63, WIDE_FIRST_WORD = 64, WIDE_SECOND_EDGE = 65,
@@ -43,6 +45,8 @@ static void *peer_thread;
 static PyObject *volatile *caller_hold;
 static int events[6], event_count;
 static int ext_edge_visits;
+static int mixed_order, mixed_order_trace, mixed_order_del, mixed_discarded;
+static int nested_collect, nested_collect_calls;
 
 struct ExtensionHolder { PyObject_HEAD PyObject *edge; };
 
@@ -74,6 +78,10 @@ static PyObject *new_extension_holder(void) {
 static void note(int event) {
     if (event_count >= 6 || pcc_thread_world_stop_epoch_held() >= 0) error = 5;
     else events[event_count++] = event;
+    if (nested_collect && event >= 1 && event <= 4) {
+        ++nested_collect_calls;
+        if (py_gc_collect() != 0 || py_err_occurred()) error = 64;
+    }
 }
 static PyObject *weak_event(PyObject *captures, PyObject *args);
 static PyObject *finish_a(PyObject *self) {
@@ -113,6 +121,9 @@ static PyObject *finish_a(PyObject *self) {
             pcc_gc_unpin(roots[HOLD]);
             pcc_gc_pin(target);
             if (pcc_gc_metric_pin_balance() != balance) error = 49;
+        }
+        else if (rescue == 21 || rescue == 22) {
+            if (py_module_attr_set("pcc_gc9_owner", "kept", target) != 0) error = 60;
         }
         else if (rescue == 6 || rescue == 8) py_dict_set(roots[HOLD], py_int_from_i64(7), target);
         else if (rescue == 7) py_instance_set_field((PyInstanceObject *)roots[HOLD], 0, target);
@@ -159,6 +170,10 @@ static PyObject *finish_b(PyObject *self) {
 }
 static PyObject *finish_tail(PyObject *self) {
     (void)self;
+    if (mixed_order) {
+        if (mixed_order_trace != 21 || pcc_thread_world_stop_epoch_held() >= 0) error = 60;
+        ++mixed_order_del;
+    }
     note(7);
     return py_int_from_i64(0);
 }
@@ -169,6 +184,19 @@ static PyObject *weak_event(PyObject *captures, PyObject *args) {
     else if (ref == roots[WEAK_B]) note(4);
     else if (ref == roots[WEAK_NEW]) note(8);
     else error = 7;
+    if (ref) py_decref(ref);
+    return py_int_from_i64(0);
+}
+
+static PyObject *mixed_order_observe(PyObject *captures, PyObject *args) {
+    (void)captures;
+    PyObject *ref = py_tuple_get(args, 0);
+    int marker = ref == roots[MIXED_EARLIER] ? 1 : ref == roots[MIXED_LATER] ? 2 : 3;
+    if (pcc_thread_world_stop_epoch_held() >= 0 ||
+        py_weakref_call(roots[MIXED_EARLIER]) != py_None ||
+        py_weakref_call(roots[MIXED_LATER]) != py_None) error = 61;
+    if (marker == 3) ++mixed_discarded;
+    else mixed_order_trace = mixed_order_trace * 10 + marker;
     if (ref) py_decref(ref);
     return py_int_from_i64(0);
 }
@@ -192,7 +220,11 @@ static void *seal_on_departing_thread(void *unused) {
     PyObject *b = py_instance_new(b_cls);
     PyObject *callback = (silent && silent != 5) || finalizer_only ? NULL : py_func_new((void *)weak_event, NULL);
     if (!a || !b || (!silent && !finalizer_only && !callback)) { error = 10; return NULL; }
-    if (rescue == 3 || rescue >= 6) {
+    if (rescue == 21 && py_module_attr_set("pcc_gc9_owner", "kept", py_None) != 0) {
+        error = 61;
+        return NULL;
+    }
+    if (rescue == 3 || (rescue >= 6 && rescue <= 20)) {
         PyObject *holder = rescue == 3 || rescue == 9 || rescue == 12 || rescue == 15 || rescue == 18 ? py_list_new(0) :
                            rescue == 6 || rescue == 8 || rescue == 11 || rescue == 14 ? py_dict_new() :
                            rescue == 7 || rescue == 16 ? py_instance_new(a_cls) :
@@ -253,9 +285,27 @@ static void *seal_on_departing_thread(void *unused) {
         pcc_gc_store_root(&roots[WEAK_A], wa);
         pcc_gc_store_root(&roots[WEAK_B], wb);
     }
+    PyObject *discarded = NULL;
+    if (mixed_order) {
+        PyObject *cb = py_func_new((void *)mixed_order_observe, NULL);
+        PyObject *earlier = cb ? py_weakref_new(tail, cb) : NULL;
+        PyObject *later = cb ? py_weakref_new(tail, cb) : NULL;
+        discarded = cb ? py_weakref_new(tail, cb) : NULL;
+        if (!earlier || !later || !discarded) { error = 62; return NULL; }
+        pcc_gc_store_root(&roots[MIXED_EARLIER], earlier);
+        pcc_gc_store_root(&roots[MIXED_LATER], later);
+        pcc_gc_unpin(discarded);
+    }
     pcc_gc_unpin(a);
     pcc_gc_unpin(b);
     pcc_py_gc_minor_graph_lock();
+    if (discarded) {
+        nodes[3] = pcc_gc_object_index_find(discarded);
+        if (!nodes[3]) error = 63;
+        pcc_gc_set_mark_color(discarded, PY_FLAG_GC_WHITE);
+        __atomic_fetch_and(&py_header(discarded)->flags, ~PY_FLAG_GC_FRESH_ALLOC, __ATOMIC_RELEASE);
+        __atomic_fetch_or(&py_header(discarded)->flags, PY_FLAG_GC_SWEEP_CANDIDATE, __ATOMIC_RELEASE);
+    }
     PyObject *items[] = {a, b, tail};
     for (int i = 0; i < (want_tail || bulk ? 3 : 2); ++i) {
         PyObject *obj = items[i];
@@ -343,6 +393,7 @@ int main(int argc, char **argv) {
     int prior_live = argc > 1 && strcmp(argv[1], "prior-live") == 0;
     rescue = argc > 1 && strcmp(argv[1], "rescue") == 0;
     late_new = argc > 1 && strcmp(argv[1], "late-new") == 0;
+    nested_collect = argc > 1 && strcmp(argv[1], "nested-collect") == 0;
     idle_worker = argc > 1 && strcmp(argv[1], "worker") == 0;
     if (argc > 1 && strcmp(argv[1], "peer-hold") == 0) peer_mode = 1;
     if (argc > 1 && strcmp(argv[1], "peer-depart") == 0) peer_mode = 2;
@@ -372,6 +423,8 @@ int main(int argc, char **argv) {
     if (argc > 1 && strcmp(argv[1], "extension-field") == 0) rescue = 17;
     if (argc > 1 && strcmp(argv[1], "caller-old-holder") == 0) rescue = 18;
     if (argc > 1 && strcmp(argv[1], "interior") == 0) rescue = 5;
+    if (argc > 1 && strcmp(argv[1], "module-existing") == 0) rescue = 21;
+    if (argc > 1 && strcmp(argv[1], "module-new") == 0) rescue = 22;
     pin_withdraw = argc > 1 && strcmp(argv[1], "pin-withdraw") == 0;
     withdrawn = pin_withdraw || (argc > 1 && strcmp(argv[1], "withdrawn") == 0);
     if (argc > 2 && (strcmp(argv[1], "wide-keep") == 0 || strcmp(argv[1], "wide-drop") == 0)) {
@@ -387,6 +440,7 @@ int main(int argc, char **argv) {
     }
     mixed = argc > 1 && strcmp(argv[1], "mixed") == 0;
     if (argc > 1 && strcmp(argv[1], "mixed-tail") == 0) mixed = 2;
+    if (argc > 1 && strcmp(argv[1], "mixed-weak-order") == 0) { mixed = 2; mixed_order = 1; }
     if (argc > 1 && strcmp(argv[1], "mixed-rescue") == 0) { mixed = 1; rescue = 1; }
     // Unregistered storage in the suspended owner’s caller frame. This slot
     // starts empty; the fixture or callback publishes through its saved address.
@@ -413,7 +467,7 @@ int main(int argc, char **argv) {
     pcc_gc_begin_explicit_tracing_collect();
     pcc_py_gc_minor_graph_lock();
     pcc_gc_tracing_candidates_reset();
-    int candidate_count = wide_size ? wide_size :
+    int candidate_count = mixed_order ? 4 : wide_size ? wide_size :
         (mixed == 2 || rescue == 4 || rescue == 19 || rescue == 20 ||
          (rescue >= 11 && rescue <= 13) ? 3 : 2);
     for (int i = 0; i < candidate_count; ++i) pcc_gc_tracing_candidates_note(nodes[i]);
@@ -445,6 +499,10 @@ int main(int argc, char **argv) {
         __atomic_store_n(&worker_done, 1, __ATOMIC_RELEASE);
         if (pcc_thread_join(peer_thread, NULL) || !peer_live_after) return 41;
     }
+    if (mixed_order) {
+        printf("mixed %d %d %d\n", mixed_order_trace, mixed_order_del, mixed_discarded);
+        return error || mixed_order_trace != 21 || mixed_order_del != 1 || mixed_discarded != 0;
+    }
     if (silent || finalizer_only) {
         printf("legacy=%lld reclaimed=%lld callbacks=%d recheck=%lld\n",
                (long long)pass0, (long long)reclaimed, event_count, (long long)full);
@@ -460,7 +518,13 @@ int main(int argc, char **argv) {
     if (rescue == 17 && (!b || b == py_None || !ext_edge_visits ||
                          ((struct ExtensionHolder *)roots[HOLD])->edge != b)) error = 34;
     if (rescue == 18 && (roots[HOLD] != NULL || !raw || !b || b == py_None)) error = 36;
+    if (rescue == 21 || rescue == 22) {
+        PyObject *stored = py_module_attr_get("pcc_gc9_owner", "kept");
+        if (stored == NULL || stored == py_None || stored != b) error = 62;
+        if (stored) py_decref(stored);
+    }
     note(b == py_None ? 5 : 6);
+    if (nested_collect && nested_collect_calls != 4) error = 65;
     const char *names[] = {"", "a-del", "a-weak", "b-del", "b-weak", "b-dead", "b-live", "tail-del", "b-new"};
     for (int i = 0; i < event_count; ++i)
         printf("%s%s", i ? " " : "", names[events[i]]);

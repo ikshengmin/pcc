@@ -221,7 +221,8 @@ def _bootstrap_fixture(tmp_path, monkeypatch, *, measured, external):
     return tool, options
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX sampler wiring")
+# POSIX sampler wiring
+@pytest.mark.pcc_gate(probe=lambda: os.name != "nt")
 @pytest.mark.parametrize("measured,external", [(False, False), (False, True), (True, True)])
 @pytest.mark.parametrize("returncode", [0, 7, 124, 125])
 def test_bootstrap_guard_preserves_outer_contract_paths_and_status(
@@ -266,7 +267,8 @@ def test_bootstrap_guard_preserves_outer_contract_paths_and_status(
     assert "compile stdout" in captured.out and "compile stderr" in captured.err
 
 
-@pytest.mark.skipif(os.name == "nt", reason="POSIX sampler wiring")
+# POSIX sampler wiring
+@pytest.mark.pcc_gate(probe=lambda: os.name != "nt")
 @pytest.mark.parametrize("compile_rc,barrier_rc", [(0, 0), (7, 0), (124, 0), (125, 0), (0, 9)])
 def test_bootstrap_stage_runs_barrier_and_publication_outside_compile_sampler(
     tmp_path, monkeypatch, compile_rc, barrier_rc,

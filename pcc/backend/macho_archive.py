@@ -26,6 +26,8 @@ from .macho_parallel import ParallelLinkError, ordered_parallel_map
 
 ARMAG = b"!<arch>\n"
 _HEADER_SIZE = 60
+RUNTIME_MAIN_ENTRY = "_pcc_darwin_runtime_main"
+_RUNTIME_ROOT_SCANNER = "_pcc_thread_visit_conservative_words"
 _SYMDEF_NAMES = (b"__.SYMDEF", b"__.SYMDEF SORTED", b"__.SYMDEF_64",
                  b"__.SYMDEF_64 SORTED")
 
@@ -144,6 +146,7 @@ def select_members(
     *,
     already_defined: set[str] | frozenset[str] = frozenset(),
     selected_members: list[Member] | None = None,
+    runtime_main: bool = False,
 ) -> tuple[list[bytes], set[str]]:
     """Pull members that satisfy pending undefined symbols, repeatedly.
 
@@ -163,9 +166,15 @@ def select_members(
     # valid link into a spurious duplicate-definition failure.
     provided: set[str] = set(already_defined)
 
+    # The startup adapter is an archive companion of the root scanner,
+    # not a dependency of ordinary C executables or shared libraries.
+    pick_main = runtime_main and any(RUNTIME_MAIN_ENTRY in member.defines for member in members)
     changed = True
     while changed:
         changed = False
+        if (pick_main and "_main" in provided and _RUNTIME_ROOT_SCANNER in provided
+                and RUNTIME_MAIN_ENTRY not in provided):
+            pending.add(RUNTIME_MAIN_ENTRY)
         for index, member in enumerate(members):
             if index in taken:
                 continue

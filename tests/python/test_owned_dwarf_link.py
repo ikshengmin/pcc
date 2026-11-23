@@ -15,7 +15,7 @@ from pcc.backend.macho_link import LinkError, link_relocatable, link_relocatable
 from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
 from pcc.backend.self_backend_parse import parse_self_backend_module
 from tests.python.test_macho_windowed_parity import _budget, _prepared_state, _write_pcos
-from tests.python.test_owned_dwarf import _dump, _rows
+from tests.python.test_owned_dwarf import NEEDS_DWARFDUMP, NEEDS_LLDB, _dump, _rows
 from tests.python.test_owned_source_debug_info import program
 
 
@@ -51,7 +51,7 @@ def _assert_sources_and_addresses(tmp_path, data, count=2):
         assert any(row[0] == symbols['_third'] + relative and row[1] == 42 for row in rows)
     debugger = shutil.which('lldb')
     if debugger is None:
-        pytest.skip('LLDB unavailable')
+        pytest.fail('LLDB unavailable')
     result = subprocess.run([
         debugger, '-b', '-o', 'target create ' + str(tmp_path / 'debug.o'),
         '-o', 'breakpoint set --file two.py --line 22',
@@ -64,6 +64,8 @@ def _assert_sources_and_addresses(tmp_path, data, count=2):
 
 
 @pytest.mark.parametrize('kind', ['macho', 'native', 'packed'])
+@NEEDS_DWARFDUMP
+@NEEDS_LLDB
 def test_debug_merge_rebases_sections_and_survives_partial_relink(tmp_path, kind):
     objects = [_object('first', 'one.py', 2), _object('second', 'two.py', 22)]
     if kind == 'macho':
@@ -79,10 +81,15 @@ def test_debug_merge_rebases_sections_and_survives_partial_relink(tmp_path, kind
 
 
 @pytest.mark.parametrize('staged', [False, True])
+@NEEDS_DWARFDUMP
+@NEEDS_LLDB
 def test_windowed_debug_merge_matches_ordinary_and_releases_budget(tmp_path, staged):
     objects = [_object('first', 'one.py', 2), _object('second', 'two.py', 22)]
     paths = _write_pcos(tmp_path, objects)
-    expected = link_relocatable_native(objects, _source_view=True)
+    # The windowed route always prepares an executable, so its stack-map
+    # table takes the runtime format; compare with the ordinary merge of an
+    # executable, not with a relocatable merge (which keeps version 2).
+    expected = link_relocatable_native(objects, _source_view=True, _final_executable=True)
     budget = _budget()
     result = host.prepare_executable_from_paths(paths, compact_budget=budget, _staged_rows=staged)
     try:

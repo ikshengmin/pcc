@@ -84,7 +84,8 @@ def reference_compiler():
 
 
 @pytest.mark.integration
-@pytest.mark.skipif(reference_compiler() is None, reason="no reference C compiler")
+# no reference C compiler
+@pytest.mark.pcc_gate(probe=lambda: reference_compiler() is not None)
 def test_constructor_order_matches_the_reference_compiler(tmp_path):
     unit = tmp_path / "original.c"
     unit.write_text(PROGRAM)

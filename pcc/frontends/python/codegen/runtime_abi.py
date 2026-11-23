@@ -2015,6 +2015,7 @@ FREESTANDING_GC_I64_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_tracing_candidate_count',
         'pcc_gc_tracing_candidate_capacity',
         'pcc_gc_tracing_candidate_commit',
+        'pcc_gc_tracing_candidate_no_pending_gen_commit',
         'pcc_gc_tracing_seed_stop_epoch',
         'pcc_gc_user_finalizer_runs',
         'pcc_gc_object_list_revision',
@@ -2123,6 +2124,7 @@ FREESTANDING_GC_PTR_GLOBALS: frozenset[str] = frozenset(
 
 FREESTANDING_GC_THREAD_LOCAL_GLOBALS: frozenset[str] = frozenset(
     {
+        "pcc_process_main_anchor",
         "pcc_gc_scalar_sweep_producer_token",
         "pcc_gc_deferred_free_active",
         "pcc_gc_deferred_free_head",
@@ -3327,6 +3329,8 @@ def _cross_object_signatures_part_14():
 
 def _cross_object_signatures_part_15():
     return {
+    "pcc_process_main_boundary": ((), "c_ptr"),
+    "pcc_process_call_main": (("c_ptr", "c_int64", "c_ptr", "c_ptr", "c_ptr"), "c_int64"),
     'pcc_gc_callback_layers_build': (('c_ptr', 'c_int64', 'c_int64'), 'c_ptr'),
     'pcc_gc_callback_layers_release': (('c_ptr',), 'c_void'),
     'pcc_gc_callback_layers_count': (('c_ptr',), 'c_int64'),

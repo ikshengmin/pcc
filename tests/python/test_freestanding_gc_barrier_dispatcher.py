@@ -36,6 +36,7 @@ OWNED_SYMBOLS = PUBLIC_SYMBOLS | {
     "pcc_gc3_review_owner_cards_set_stopped",
     "pcc_gc3_review_note_owner_card",
     "pcc_gc3_review_scan_owner_cards_stopped",
+    "pcc_gc3_review_scan_owner_cards_with_bump_stopped",
     "pcc_gc3_review_append_young_slot",
     # Heap StorePlans already hold the graph lock on GC4.
     # GC1/GC2's lock-free container stores shade through the barrier's
@@ -133,6 +134,9 @@ def _export_body(source: str, symbol: str) -> str:
     )[0]
 
 
+RAW_DEFINED_GLOBALS = {"pcc_raw_gc3_owner_cards"}
+
+
 def _literal_global_imports() -> set[str]:
     globals_: set[str] = set()
     tree = ast.parse(STRICT_SOURCE.read_text(encoding="utf-8"))
@@ -145,7 +149,7 @@ def _literal_global_imports() -> set[str]:
             value = node.args[0].value
             if isinstance(value, str):
                 globals_.add(value)
-    return globals_
+    return globals_ - RAW_DEFINED_GLOBALS
 
 
 def test_barrier_dispatcher_has_one_strict_source_owner() -> None:
@@ -230,7 +234,7 @@ def test_barrier_dispatcher_has_exact_strict_object_closure(
         for line in symbols_result.stdout.splitlines()
         if line.strip() and " U " not in line
     }
-    assert defined == OWNED_SYMBOLS | {"pcc_raw_gc3_owner_cards"}
+    assert defined == OWNED_SYMBOLS | RAW_DEFINED_GLOBALS
 
 
 def test_barrier_dispatcher_preserves_backend_order_and_lock_contract() -> None:

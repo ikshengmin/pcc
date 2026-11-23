@@ -88,8 +88,8 @@ entry:
     assert not re.search(r"\b(?:str|stur) x11,", body)
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("width", (8, 16, 32, 64))
 @pytest.mark.parametrize("field", (0, 1))
 @pytest.mark.parametrize("success", (False, True))
@@ -102,8 +102,8 @@ def test_cas_result_and_memory_native(tmp_path, width, field, success):
     assert (ran.returncode, ran.stdout, ran.stderr) == (0, "", "")
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("shape", ("gap", "block", "both"))
 def test_cas_fallbacks_native(tmp_path, shape):
     data = emit_owned_object(_cas_program(64, 0, False, shape), "arm64-apple-darwin")
@@ -113,8 +113,8 @@ def test_cas_fallbacks_native(tmp_path, shape):
     assert subprocess.run([str(output)], timeout=10).returncode == 0
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("width", (8, 16, 32, 64))
 def test_used_and_unused_rmw_results_keep_memory_effects(tmp_path, width):
     high_bit = 1 << (width - 1)

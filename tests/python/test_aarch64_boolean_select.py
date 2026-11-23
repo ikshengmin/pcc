@@ -80,8 +80,8 @@ def test_boolean_select_needs_no_csel_or_byte_spill(arms, monkeypatch):
     assert "sturb " not in body, body
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("arms", ARMS)
 @pytest.mark.parametrize("indexed", (False, True))
 @pytest.mark.parametrize("lowering", ("0", "1"))
@@ -98,8 +98,8 @@ def test_boolean_truth_tables_phi_edges_and_call_clobbers_execute(tmp_path, monk
     assert (result.returncode, result.stdout, result.stderr) == (0, "", "")
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("operator", ("and", "or", "xor"))
 @pytest.mark.parametrize("indexed", (False, True))
 def test_materialized_comparisons_and_boolean_logic_execute(tmp_path, monkeypatch, operator, indexed):
@@ -126,8 +126,8 @@ def test_materialized_comparisons_and_boolean_logic_execute(tmp_path, monkeypatc
     assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("literal", (0, 1, 2, 3, -1, -2))
 def test_boolean_numeric_masks_execute_with_direct_capture(tmp_path, literal):
     source = ('target triple = "arm64-apple-darwin"\n'
@@ -144,8 +144,8 @@ def test_boolean_numeric_masks_execute_with_direct_capture(tmp_path, literal):
     assert (run.returncode, run.stdout, run.stderr) == (0, "", "")
 
 
-@pytest.mark.skipif(platform.system() != "Darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_new_boolean_value_crosses_phi_with_direct_capture(tmp_path):
     source = '''target triple = "arm64-apple-darwin"
 define i64 @choose(i1 %condition, i1 %other) {

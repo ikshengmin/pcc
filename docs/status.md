@@ -139,7 +139,9 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. Pending: none.
+That run is a red baseline. Pending: none. The 2026-11-23 checkpoint
+is due; dispatch was not admitted because the Linux GitHub CLI has no
+authenticated host. No run ID was issued.
 [Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
 at `0f638af5b` completed red and did not replace it. The
 [checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
@@ -156,37 +158,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- #9 shared sweep production policy: review the
-  [callback ordering and bounded refresh options](investigations/gc-tracing-acyclic-weakref-resurrection.md#review-options).
-  Agent recommendation: review the now-executable disabled full-recheck
-  reference; use it as the correctness oracle and test a bounded candidate
-  on a review branch before activating production. Choose how to handle GC4's
-  existing closed window separately. The reference does not justify paying
-  a full-heap pass after every callback by default.
-
-- Go general managed storage: review the [shared descriptor/owner design](design/go-shared-managed-storage.md).
-  Agent recommendation: use the same allocator and root protocol on GC0–4;
-  do not implement another source-shape admission or promote the GC0-only envelope.
-  Open review points: descriptor/header extent, complete write-path coverage,
-  and allocation/caller-result root transfer.
-
-- TinyXML2 open virtual destruction: earlier project-only proof
-  recommendation withdrawn. Agent recommendation: infer C++ destructor
-  exception specifications from declarations and subobjects, enforce
-  nonthrowing override contracts, and preserve ordinary virtual destructor
-  dispatch and terminate behavior. [Cross-TU evidence](investigations/tinyxml2-explicit-virtual-destructor-effects.md)
-  remains a regression target; a project name or closed build list is not
-  an effect certificate.
-
-- Whether the operating system's Metal shader compiler is an accepted platform
-  boundary under the pcc1 ownership contract (item 5; open point in the
-  [local-model architecture](design/pcc-local-model-architecture.md)). The
-  owned device runtime already relies on it.
-- Whether to schedule the existing failure of
-  `tests/test_no_skip_doctrine.py::test_no_executed_skip_mechanism_anywhere`,
-  which reports `unittest.SkipTest` in
-  `scripts/cpython_conformance/support/__init__.py`.
-
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -197,9 +168,9 @@ in the relevant section or issue and removes the entry.
    rather than requiring empty syntax metadata; 4,486 local ordinary
    cases and one Linux owned native case passed. The CI-only reference
    lane was not run locally. #12 tracks Windows collection independently.
-   Platform: any; Next: #9 (GC1–4 weak
-   callbacks and finalizers run too early under acyclic resurrection; filed
-   by Claude on 2026-11-22 from the
+   #9's production correction for GC1–3 is integrated; the GC4 part is
+   separate. Historical cause: weak callbacks and finalizers ran too early
+   under acyclic resurrection (filed by Claude on 2026-11-22; see the
    [investigation](investigations/gc-tracing-acyclic-weakref-resurrection.md)).
    The inert Linux pcc0 reference arm now classifies the exact stopped
    cohort and dispatches one selected acyclic head on GC1–3. It rejects
@@ -215,8 +186,458 @@ in the relevant section or issue and removes the entry.
    preserving the cyclic leaf's early callback and the acyclic child's
    rescue or terminal order. The mixed reference now matches CPython's
    newest-first live weakref callbacks with no callback for a discarded ref.
-   Next #9: review the shared sweep policy before production wiring; see the
-   waiting list. Native Linux GC2 now reproduces zero mark completions
+   Next #9: the production candidate on a review branch, in the shape and
+   under the six conditions Claude approved on #9 at the maintainer's
+   request on 2026-11-22
+   ([review](https://github.com/ikshengmin/pcc/issues/9#issuecomment-7081477887)):
+   layered acyclic order computed once, a barrier remark after each window
+   instead of the full re-mark, and the full recheck kept as oracle and
+   fallback. First report how many HTTP-workload collections run user code.
+   No further inert or dormant #9 slices.
+   [Review commit b6bd012](https://github.com/ikshengmin/pcc/commit/b6bd012021a79fdca767c5e82041c2e1eab1be12)
+   routes the sealed acyclic singleton through actual sweep on GC1/3. Linux
+   pcc0 passed 41 focused tests including four CPython comparisons: zero full
+   rechecks for terminal death and one fallback on publication in the rescue
+   fixture. No master runtime change. The
+   [Linux HTTP observation](investigations/gc-tracing-acyclic-weakref-resurrection.md#http-callback-observation)
+   saw no weakref/finalizer log events in six legs and 160 completed marks;
+   exact per-sweep counters remain unmeasured.
+   [Review commit 07b5ebb](https://github.com/ikshengmin/pcc/commit/07b5ebb918413e4672dc4168b32297b7f15762ac)
+   uses one stopped root cut for bounded remark and fallback. Linux pcc0
+   passed 49 focused tests; actual registration avoids a full recheck and
+   withdrawn publication uses one fallback without creating a collector
+   self-root. A raw C thread's unwound stack can still contain the referent:
+   the dropped-reader control explicitly clears that residue, so it does
+   not qualify arbitrary raw stack lifetimes.
+   [Review commit 1e1c90f](https://github.com/ikshengmin/pcc/commit/1e1c90f606631c1767dd99de3b064907af2a7f07)
+   routes up to 64 sealed acyclic candidates through the real GC1/3
+   layered sweep. Linux pcc0: 55 focused checks passed, including six
+   native CPython comparisons (chain, registered sibling rescue, suspended
+   caller-slot sibling rescue). The owner cut excludes collector scratch,
+   not the live caller stack or parked mutator snapshots. Legacy root
+   regression lane: 111 passed; three GC3 forwarding-model failures
+   reproduced on the review parent. No master runtime change.
+   [Review commit 23e730f](https://github.com/ikshengmin/pcc/commit/23e730f23b1cba88c461668961004188b30bbe73)
+   resolves barrier shades against current roots and candidate edges before
+   the oracle. Linux: 59 focused checks passed. Both GC1/3 preserve a
+   registered sibling rescue with zero full rechecks. Withdrawn publication
+   and an indirect write through an old live list use one full recheck and
+   match CPython's observable outcome.
+   [Review commit d6d79fc](https://github.com/ikshengmin/pcc/commit/d6d79fc3319a2b12cf593a47fd1fcd1d3485f846)
+   runs the original cyclic weak/finalizer ordering on the mixed graph's
+   residue, including nodes downstream of a cycle. Linux: 65 focused checks
+   passed, with native CPython comparisons for independent acyclic/cyclic
+   parts, a cyclic downstream node, and resurrection of the cycle by the
+   acyclic finalizer. Master runtime unchanged.
+   [Review commit 89da256](https://github.com/ikshengmin/pcc/commit/89da25675c1e1f1810b95f2a1be72346df09f342)
+   skips topology allocation when no weakref is registered and no listed
+   candidate can finalize. Linux passed 71 focused plus six native
+   generator checks. No-observer and finalizer-only fixtures prove the
+   selected path, not the zero-overhead performance gate.
+   [Review commit b708d89](https://github.com/ikshengmin/pcc/commit/b708d891bf83ed395081251b8b3d1e280af08fc2)
+   walks the weakref registry once for a stable multi-layer sweep with one
+   registered mutator at the initial stop. A link mutation invalidates the
+   borrowed snapshot; a mutator already registered at entry keeps the
+   per-layer scan. Linux: 75 focused plus 53 weakref regression checks,
+   including native insertion in a callback and pre-existing worker
+   fallback. One initial registry walk remains; no unrelated-size or
+   general multi-mutator performance claim.
+   [Native chain scaling screen](https://github.com/ikshengmin/pcc/blob/87ae55217a8a5dc3dfe15274a74b2aea7eb92294/docs/investigations/gc-tracing-acyclic-weakref-resurrection.md#native-layered-chain-scaling-screen):
+   90 real Linux GC1/3 sweeps at 4/16/64 candidates and 0/4,096/16,384
+   unrelated live lists completed with no full recheck. All used one
+   callback stop per candidate. The 16→64 step with no extra heap took
+   5.8×/4.5× for 4× the candidates. Linear scaling is not qualified.
+   [Review commit 3d2bc28](https://github.com/ikshengmin/pcc/commit/3d2bc2870422a438049f3576629c6448a03376e8)
+   rejects a raw root cut outside all known candidate extents and retires
+   the candidates reached from actual roots during draining, avoiding a
+   second vector walk. Linux: 79 focused checks passed. The new pinned
+   candidate descendant check failed on the parent and passed fixed in
+   GC1/3; an interior pointer in the caller still rescues its owner.
+   Seven native A/B pairs at 64 candidates without extra heap gave
+   39%/18% lower median paired GC1/3 time (7/7 and 5/7 wins).
+   Explicit-pin visits and per-callback stops remain. No general scale
+   or official A/B qualification and no master runtime change.
+   [Review commit acb2b7c](https://github.com/ikshengmin/pcc/commit/acb2b7c6f3416ff3e3f90b2cece92cd1e35def24)
+   brings the Linux focused suite to 83 passes. The native old-owner
+   dictionary insertion and instance field writes preserve a sibling
+   through one same-cut fallback and match CPython, as did old list
+   append. This is not a complete shared-store audit.
+   [Review commit badf3e9](https://github.com/ikshengmin/pcc/commit/badf3e913355c87bdc48eff6093dffb0bcb23495)
+   adds old dictionary/list replacements and set insertion. Linux 89
+   focused checks passed; all six covered native old-owner writers now
+   match CPython, each with the expected ambiguous-publication fallback.
+   [Review commit c04f245](https://github.com/ikshengmin/pcc/commit/c04f245908531bda28baa67f97e4e66e40fb6c7b)
+   adds native dict update, list slice replacement, and set update;
+   source containers are in the sealed dead graph, so no source-building
+   store in the callback can hide a missing destination shade. Linux
+   passed 95 focused checks. Nine internal writer forms are now covered.
+   [Review commit 28aa693](https://github.com/ikshengmin/pcc/commit/28aa693ee115fada587497a5687e9c8ea3023cbf)
+   exercises public C `PyDict_SetItem`, `PyList_Append` and
+   `PyObject_SetAttrString` during the actual callback. Linux passed 101
+   checks; all three preserve the candidate with the expected fallback.
+   [Review commit a5c9a6a](https://github.com/ikshengmin/pcc/commit/a5c9a6ab905694b7e761c6540e8724b487eb846e)
+   checks independent CpyHandle ownership acquired during a real layered
+   finalizer. With an unregistered C owner the exact payload remains usable
+   without full recheck; withdrawing that owner in the callback triggers
+   one fallback and releases the payload exactly once. Linux 105 focused
+   checks passed.
+   [Review commit 210ac7b](https://github.com/ikshengmin/pcc/commit/210ac7b74252927071fff1907988efce915dd8ff)
+   verifies an actual GC-capable native extension field written via the
+   shared barrier and visited by Py_VISIT (107 focused Linux checks).
+   Arbitrary raw native assignments remain outside this evidence.
+   [Review commit a35b791](https://github.com/ikshengmin/pcc/commit/a35b791e73097c70e87c3c2333c2092d9cc9ec85)
+   bounds the layered stack copy to candidate address ranges and gives any
+   full oracle a fresh unfiltered snapshot. Linux: 109 focused checks;
+   64-candidate chain time fell 27%/31% for GC1/3 (7/7 pairs each).
+   [Review commit d08f401](https://github.com/ikshengmin/pcc/commit/d08f401b8653c1607fdfc0e14f7f076ca35df96b)
+   verifies a same-layer sibling held solely on a parked peer’s C stack,
+   and terminal death when that peer exits first (113 Linux checks).
+   Maintainer clarification, 2026-11-22 (“可以”): check event counts and
+   per-object ordering for independent same-layer siblings; keep exact
+   CPython order for dependencies. No batching safety claim.
+   [Review commit 2471dbf](https://github.com/ikshengmin/pcc/commit/2471dbf0af11a0daf2617fd9fa637948e37b517e)
+   reuses weakref groups with parked peers, with fallback on mutation.
+   At 64 candidates and 16,384 unrelated live weakrefs, Linux scans fell
+   from 64 to 1 and paired medians fell 47%/56% on GC1/3 (5/5 each).
+   [Review commit 47ed14d](https://github.com/ikshengmin/pcc/commit/47ed14ddeea0d4c8963b2d465bbf9f03dac386c1)
+   indexes actual weakrefs by target and skips exact stopped misses at
+   terminal invalidation. 74 final native assertions and 62 model/ABI
+   checks. In the n64 callback-free probe with 16,384 unrelated refs,
+   GC1/3 fell from ~13 ms to ~2 ms (5/5 pairs each). No HTTP/Mac gate claim.
+   [Review commit d239b5c](https://github.com/ikshengmin/pcc/commit/d239b5c4d5d800da323bca4c7a52ed823c6261f5)
+   fixes the 64-user-node public collection ordering failure (65 candidates,
+   129 reclaimed managed objects): four shade words, 256-record review bound. Linux 180
+   callback-bearing runs and 68 assertions passed, with sealed and public
+   timing separated. Larger cohorts, strict scaling, Mac and HTTP unqualified.
+   [Review commit a2b1e44](https://github.com/ikshengmin/pcc/commit/a2b1e44f397812bfc4e11b32aaf6951412949a65)
+   keeps a provably unobservable batch out of the graph despite unrelated
+   live weakrefs. Linux: 80 focused native assertions, six models and 180
+   callback-bearing reruns; no zero-overhead or Mac acceptance claim.
+   [Review commit a54db49](https://github.com/ikshengmin/pcc/commit/a54db49f3013d02d4aecb990817e83af4fad614b)
+   allocates raw shade scratch from the sealed cohort before callbacks.
+   Public Linux GC1/3 at 256 observed nodes / 257 candidates match CPython;
+   112 focused assertions and 180 callback reruns passed. No scaling claim.
+   Rejected stopped pin-batch micro-optimization: 112 native assertions
+   passed, but two paired Linux screens did not repeat a result beyond
+   duplicate-parent noise. No runtime changes from this trial were pushed.
+   Sparse prior-gray trial passed correctness (112 native cases; exact
+   rooted callback publication plus six malformed-queue controls), but
+   retest was inside host noise; do not carry the optimization forward.
+   Linux guarded phase probe at 256 callbacks per kind: world reopen/
+   reacquire ~52%, stopped stack cut ~24%, candidate matching ~7–8%.
+   Exact observed order retained; measurement instrumentation not shipped.
+   Early stack word filter trial passed 112 native checks plus bounds/ABI;
+   aggregate change 0–3% within duplicate-parent noise. Not shipped.
+   Stop-owner copy was only ~0.16 ms total across 512 Linux windows;
+   waiting for peer rendezvous took 7.4–7.7 ms, so keep all snapshots.
+   [Review commit ceafbf0](https://github.com/ikshengmin/pcc/commit/ceafbf09ed51ee4cc04f85938425dbd1141aa0f2)
+   separates callback owner readiness from peer resume. Four-peer Linux
+   chain time fell 23–29% (three 5/5 series); five-GC native lifecycle
+   checks passed. One-peer, HTTP and macOS remain unqualified.
+   [Review commit 685f228](https://github.com/ikshengmin/pcc/commit/685f2281ff4866ffd25b0db4d2ed51495ecd991b)
+   only signals the private condition when the stop owner can proceed.
+   Five-GC lifecycle and 112 native assertions passed; 256-node four-peer
+   GC3 was 21.7% faster (7/7), narrowly outside control. GC1 remains noisy.
+   [Review commit 1e7b72a](https://github.com/ikshengmin/pcc/commit/1e7b72a9382c3e0224fa2515a116d08d8d5385db)
+   routes GC2 through the nonmoving same-stop callback handoff. Linux:
+   192 focused native assertions, five-GC rendezvous lifecycle, and public
+   GC2 at 257 candidates with CPython order and no full callback recheck.
+   [Review commit 7569122](https://github.com/ikshengmin/pcc/commit/7569122898726b841370ba0f19d6ae619305e0dd)
+   uses the still-dead sealed cohort after the necessary previous-stop
+   refresh. GC1–3 match CPython after intervening live publication, with
+   one rather than three full rechecks; Linux 198 focused assertions passed.
+   Real Linux CMS-to-automatic-sweep handoff: 18/18 exact callback traces
+   on GC1–3 (4/16/64 nodes, 1/4 peers), one committed mark per run, zero
+   full callback rechecks; probe only, no runtime fix needed.
+   #9 large-chain gate is red: native Linux GC1–3 at 1024→4096 nodes
+   takes ~34→376–395 ms; 33,554,432 candidate root/pin checks account
+   for 75–77%, with no raw hull hits. 16,384 unrelated live objects do not
+   explain it. [Review 01f62d94](https://github.com/ikshengmin/pcc/commit/01f62d944e3c4fb63e36f61702090536a0f9d279)
+   makes the exact pin-owner publication guard that walk; Linux 210 focused
+   native assertions and five-GC lifecycle passed. At 4096 nodes the serial
+   cases fell from 365–399 ms to 71–76 ms, all six cells 5/5 beyond control.
+   [Review b784541](https://github.com/ikshengmin/pcc/commit/b7845414cedc5d8fb435f7d448b4a90e25e0a8e9)
+   queries the sealed extent cache for a peer's interior root; 228 focused
+   native assertions passed. The six 4096-node raw-root cells fell from
+   941–1032 to 269–346 ms (5/5 beyond controls), still review-only.
+   **macOS verification of `b7845414c` (Claude, local Mac, 2026-11-23,
+   [review](https://github.com/ikshengmin/pcc/issues/9#issuecomment-7088533910)):
+   not ready for master.**
+   - Arms: base master `445df0662` (identical to fork point `64d49ae56`
+     outside `tests/`) and the candidate. Both passed the primitive oracle
+     on five collectors.
+   - Native: both #9 native files passed 265 of 265 on arm64. They are
+     marked `integration`, so the command needs `-m integration`; without
+     it pytest selects 0 tests.
+   - Handler A/B: `ab --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0
+     --latency-receipts`, at load 6.7.
+     - GC3 w4 −2.5% (0/5 pair wins), a loss beyond the 2.4% floor. Other
+       rows are inside noise.
+     - The candidate won 7 of 40 GC1–4 pairs.
+     - Stopped time per run rose by 3–9 ms on GC1–3. Maximum STW rose by
+       1.6–2.6 ms on GC1/GC3.
+     - Graph-lock waits rose from 18 to 631 (GC1 w4) and from 0 to 640
+       (GC2 w1).
+   - Condition 5: Mac handler counters reported 0 user finalizers and
+     0 full post-callback rechecks; those counters alone do not exclude
+     bounded weakref callbacks. On exact Linux handler arms (GC1–3, w1/w4,
+     40k timed + 200 warmup each), direct event logs found no weakref
+     callbacks or finalizer events in any of the 12 untimed runs. A
+     weakref-only positive control logged both callbacks despite 0 full
+     rechecks. Together with the Linux phase probe this identifies a
+     callback-free handler cost; no socket C512 or Mac event-log claim.
+   - Next #9, in order:
+     - Keep the same-stop negative observer hint a local candidate: it
+       removes the redundant handler census in nine Linux diagnostic runs
+       (GC3 w4 40.6 ms to 10 µs median). The new regression is red before and
+       passes all five cases after; 249 focused native checks passed, with
+       the same ten cleared-generator failures reproduced on the preimage.
+       The exact non-instrumented 5-pair GC1/GC3 w4 effect changed sign
+       across 20k/50k-request runs; unchanged GC0 floors were 19.3% and
+       14.5%. These are historical Linux data, not a throughput decision.
+       A local integration of the census fix, ABI cleanup, and module
+       tests passed all 295 sealed checks, 248 native and 5 model cases.
+       Its four-worker GC3 median changes sign again (-9.6% all CPUs,
+       +8.2% with affinity 1–8); unchanged-path GC0 floors are 31.2% and
+       18.2%. Identical-binary GC0 A/A confirms host swing up to 19.0%
+       (8.1% under affinity); the cross-arm pin fast path also differs.
+       GC2 w4 was down in two official comparisons (-16.4%, -14.6%,
+       unqualified), but a direct replay showed the reverse sign. An
+       owned read of exact mark state after five 50k-request pairs
+       confirms 9 completed marks with one carrier on both arms, versus
+       1–3 at four carriers on both (median 2 stock, 1 integration).
+       One integration run ended with an active mark and 278 gray
+       objects; standalone summary repeats had a zero-window run on
+       each arm. Thus poor four-carrier completion predates #9; a
+       #9-induced difference is not yet proved. Against the unmodified
+       #9 arm, the fix bundle's pinned 5-pair/50k GC2-w4 median was
+       -2.5% (3/5 candidate wins), GC3-w4 -1.9% (4/5 wins), and the
+       GC0 control floor was 20.4%. Do not tune GC2 from this result.
+       Throughput qualification is now Mac-only by maintainer direction;
+       no merge is implied. The split opt-in Linux probe on
+       `b7845414c` ran 9 times (40k requests each) and reconciled to
+       counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
+       median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
+       layer construction both measured zero in those runs. GC3 w4 median
+       screening in the longest pause was 12.9 ms. Fix that scan, not the
+       planner or graph lock, before repeating the Linux comparison.
+       Linux `64d49ae56` vs `b7845414c`: three alternating 40k-request
+       pairs per cell, all 18 exclusive reports reconcile to metrics
+       119–121. Aggregate `sweep_other` paired median increases: GC1 w4
+       +38.0 ms, GC2 w1 +45.0 ms, GC3 w4 +41.6 ms; all 9 pairs increased,
+       stopped-window counts unchanged. In GC3 w4's longest window the
+       same bucket increased by a paired median 11.6 ms. No callback-window
+       time or full recheck was observed. Initial and longer Linux
+       throughput A/B still inconclusive (GC0 w4 noise floors 43.7% and
+       19.6%). Linux `top`/`locks` currently require macOS `sample`; the
+       direct lock buckets did not reproduce the GC1/GC2 wait-count spikes.
+       A native pending-generator regression now matches CPython across
+       GC0–4 and reads the hint inside the finalizer on GC1–3: the active
+       commit never carries a negative, while the later clean commit
+       does. Eight focused Linux cases passed; no source was changed by
+       this test unit.
+     - Linux-validated independent condition-6 cleanup, not merged: the
+       four prototype-only entries and two private refresh helpers are
+       absent from a rebuilt owned archive. Two CPython-oracle cases now
+       exercise real cyclic weakref order (including an unreachable ref)
+       and nested collection instead of the injected callback arm.
+       242 focused native assertions passed on Linux x86-64; no Mac run.
+       Keep the cleanup together with the replacement coverage.
+     - Condition 2 publication coverage: existing and newly created
+       module owners both preserve the rescued child in six native
+       GC1–3 cases against the CPython module-store oracle. Each currently
+       needs one full refresh. A 15-run Linux probe identified the same
+       reject for both module stores, live dict store, and deliberately
+       withdrawn root: a prior barrier shade is not explained by candidate
+       reachability from current roots. The barrier did fire; its shade
+       alone cannot distinguish a persistent edge from a transient store.
+       Keep the full oracle for this ambiguous case, not a module special
+       case or unapproved journal. No production fix or Mac claim.
+     - Condition 3, Linux sealed callback sweep: 270 runs, GC1–3,
+       0/4 parked peers, n/4n/16n = 256/1,024/4,096. Medians in ms below,
+       each triple is no ballast / +16,384 unrelated live objects /
+       +16,384 unrelated weakrefs. Timed only the sealed sweep; did not
+       count fixture allocation or claim public-collect work is heap-free.
+       - GC1, 0 peers: 4.6/4.4/4.2; 17.2/17.5/18.0; 68.4/70.3/68.6.
+       - GC1, 4 peers: 41.8/33.8/42.4; 169.0/155.7/144.7; 669.1/611.8/642.4.
+       - GC2, 0 peers: 4.6/4.6/4.3; 16.7/16.9/16.6; 69.3/68.5/72.8.
+       - GC2, 4 peers: 42.3/40.2/38.8; 164.4/167.1/170.6; 650.8/597.9/637.5.
+       - GC3, 0 peers: 4.4/4.5/4.5; 16.8/17.8/17.1; 74.4/67.5/71.3.
+       - GC3, 4 peers: 46.6/44.0/41.8; 175.4/153.5/175.1; 655.0/630.6/653.4.
+       Every run checked exact finalizer/weakref alternation, reclamation,
+       zero full rechecks/weak-registry scans. Base-to-16n growth was
+       14–17×; the largest paired median ballast shifts were +6.6% live
+       and +10.0% weakrefs, not proportional to ballast. Parked peers
+       multiplied measured unit callback cost by roughly 10×, despite
+       near-linear growth. Maintainer: separate follow-up, non-blocking.
+       A separate Linux diagnostic build from the review candidate
+       measured 60 runs (GC1–3, 256/1,024 candidates, 0/4 peers).
+       The extra time came mainly from re-parking peers (35–42% of the
+       increase; included in window-close), window-open (31–35%) and
+       root snapshot/cut capture (20–28%), not remark drain or the
+       collector's own stack copy. A separate correctness probe rules out
+       deferring all sibling remarks to the end of a layer: in 18 Linux
+       runs, all three GC1–3 retaining-peer arms finalized a still-live
+       sibling only when the per-finalizer check was removed. Ordinary
+       chains and departing peers were insensitive. Keep the intermediate
+       reachability boundary; optimize stop/resume or capture without
+       discarding it. No code on the review branch; no handler throughput
+       claim.
+     - **macOS verification of `eff808bf3` (Claude, local Mac,
+       2026-11-23): throughput passes; not mergeable while the scale
+       test below is intermittently red.** Same `master-445df066` base
+       arm and gateway as the `b7845414c` run; candidate arm sealed from
+       a detached `eff808bf3` checkout, primitive oracle green on five
+       collectors. `ab --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0
+       --latency-receipts` at load 6.0: GC0 floors 5.2% (w1) and 4.2%
+       (w4); GC1–4 all inside noise (GC1 −0.4%/+1.5%, GC2 −3.4%/+0.6%,
+       GC3 −0.3%/+1.1% with 4/5 wins, GC4 +0.2%/−0.6%). Medians of max
+       STW, peak RSS and p99 are unchanged or lower on every row; stopped
+       time is equal except GC2 w1 25 -> 28 ms. The previous GC3 w4 loss
+       is gone. Graph-lock wait counts are now ~640 on both arms (the
+       earlier 18 -> 631 was not a candidate effect).
+     - Native on the same archive: 226 passed with
+       `test_callback_chain_scale_matches_cpython` deselected; that test
+       (30 cases) is intermittently red on both arms. Interleaved 30 runs
+       per arm of its six 256-node cases: base `b7845414c` 4/30 runs
+       failed, candidate 2/30. Failures hit GC1, GC2 and GC3, sealed and
+       public. Signature: exit 26 (a candidate weakref still returns its
+       target), `del` 119, 174 or 231 of 256, `windows` = 2 x `del`, the
+       same cut-off points on both arms. The fixture is unchanged since
+       `87ae55217`, so this is a pre-existing review-branch defect
+       (condition 1 parity), not caused by `eff808bf3`. Single-pass
+       Linux and Mac runs missed it.
+     - Cause of the scale-test early stop (Claude, local Mac, probe on
+       `eff808bf3`, sealed 256-node case with zero peers, 4 failures
+       captured): the rescuing word is in the main thread's frames above
+       `main` (dyld `start`, at fp+0x80, +0x150, +0x680), and in every
+       failure it already held that value at `main` entry, before any
+       candidate existed. The allocator later placed item 119/174/231 at
+       that address, or the item straddles that page base. The main
+       thread's conservative range ends at `_outermost_frame_pointer()`
+       + 16 (`_thread_record_link`, `_thread_snapshot_roots`, and the
+       owner branch of `pcc_thread_visit_conservative_callback_words`),
+       so pre-main process-entry words become roots. ASLR makes it
+       intermittent (about 4% of runs). Not #9-specific: any conservative
+       scan on GC1–4 can retain an object this way; the chain only
+       amplifies one hit into the whole tail. The same rate with 0 and 1
+       peers rules out peer stacks.
+     - Fix (recommendation, mine): end the main thread's conservative
+       range at `main`'s own frame record, excluding process-entry
+       frames (one on Darwin, `start`; up to two on glibc). Compute it
+       from the live frame chain when the thread snapshots itself or
+       scans its own stack, not at registration (registration may run
+       before `main`'s frame exists). Keep the full outermost range for
+       every other thread, since a foreign caller's frame above a
+       registration point can hold a returned object. This changes the
+       shared root contract, so validate all five collectors.
+     - **macOS verification of [`aac63c5c1`](https://github.com/ikshengmin/pcc/commit/aac63c5c1e0d1db352280a1d4aabae58f9b320ca)
+       (Claude, local Mac, 2026-11-23): correctness and w1 pass; w4 is
+       inconclusive.** Sealed arm `gc9-main-aac63c5c`, primitive oracle
+       green on five collectors, every test on that arm's archive:
+       - Process-entry root test: 20 passed.
+       - `test_macho_runtime_main_entry.py`: 5 passed.
+       - The six 256-node sealed/public GC1–3 scale cases, 30 rounds:
+         180/180 passed, against a base rate of about 4%.
+       - Both #9 native files: 256 passed, scale test included.
+       - Machine code: `pcc_process_call_main` saves x19–x28 above the
+         bound and overwrites all ten before the call. So loader values
+         in callee-saved registers do not reach `main`'s spills. Register
+         allocation provides this, not an explicit rule.
+       - Two `ab master-445df066 gc9-main-aac63c5c --pairs 5 --gc 0,1,2,3,4
+         --workers 1,4 --control 0 --latency-receipts` runs at load
+         7.7–9.5. The second run's w1 floor is 1.4%: GC1 −0.3%, GC3
+         +1.0% and GC4 0.0% are within noise, and GC2 +2.5% is a gain.
+       - The w4 floors are 56.8% and 6.5%, so every w4 row is
+         inconclusive. Medians range from −4.0% to +2.7%, and processor
+         time per request moves by at most 2%, with no consistent sign.
+       - Max STW stays within 1 ms, except GC2 w1, which is 2–3 ms lower.
+         Peak RSS stays within 6 MiB. w1 p99 swings both ways with
+         whether a pause lands in the tail.
+       Details are in the #9 comment.
+     - The maintainer confirmed the remaining macOS w4 gate on `aac63c5c1`
+       in chat on 2026-11-23: “通过了继续吧”. No final numeric receipt was
+       supplied; the earlier noisy w4 runs remain inconclusive. The
+       maintainer replied “批准” to removing the two superseded test files
+       in this integration. The production-path tests replace that oracle.
+       The combined Linux tree passed 268 focused native cases and 77
+       model/inventory/owned-link checks (one deselected); runtime and
+       benchmark scripts are byte-identical to the accepted candidate.
+       Next: rebase the GC3 follow-on on this integrated #9 baseline.
+       Linux evidence for the same commit: pcc0 rebuilt the owned runtime
+       and passed 20 deterministic root-range cases across GC0–4, 248 production-sweep cases, 180/180
+       strict 256-node repetitions, and eight separately built/rerun
+       generator programs. Five Mach-O cross-link and eight ABI-inventory
+       checks passed. The active process-entry scope excludes its caller's
+       startup words while retaining true application and foreign-thread
+       roots, including when main is a parked peer. The regular and
+       windowed owned Mach-O paths pick the adapter only if the conservative
+       thread runtime is linked. The final Linux test groups ran at the
+       90-second/1-GiB cap;
+       the combined test invocation hit its time limit before compiling
+       both generator fixtures, which completed as separate stages.
+     - Linux memory preflight: the Linux check requires `MemAvailable` of
+       at least `--max-tree-rss` plus `--preflight-reserve`. The defaults,
+       6 GiB plus 8 GiB, suit a large Mac only. The tool's own comment says
+       a smaller host names a smaller reserve, and the tree cap is still
+       enforced.
+       - Mac arm builds peaked at 2.55 GiB and 1.37 GiB tree RSS. Build
+         with `--max-tree-rss 4294967296 --preflight-reserve 2147483648`
+         (6 GiB in total).
+       - If a build hits the 4 GiB cap, retry at 4.5 GiB.
+       - Use `--control 0` rather than a third control arm. Two arms plus
+         the object cache took about 1.3 GiB of disk on the Mac.
+     - Mac lock buckets (Claude, from direct `--summary` runs of the two
+       existing arms, one run per cell):
+       - Every graph-lock wait on both arms is in the `other` bucket. The
+         barrier, allocation and store buckets are zero.
+       - Counts match within 2% between arms, for example GC1 w4 at 5.83M
+         against 5.83M.
+       - The A/B rows' "18 -> 631" lock-wait figure comes from
+         `--latency-receipts` runs. It is not reproduced here, so treat it
+         as unconfirmed rather than as the cause.
+   - Linux observer-free check: exact stock and `b7845414c` reclaimed all
+     1,024/4,096/16,384 plain lists on GC1–3 with zero user finalizers.
+     Previous-stop sweep kept exactly one mandatory refresh. A local trial
+     deferred candidate compaction until after the observer check; 33 native
+     cases passed, including previous-stop finalizer-only and live rescue.
+     Seven paired 16,384/32,768-list cuts were within duplicate-parent noise.
+     No code pushed; this does not explain the Mac four-thread loss. Next
+     compare the per-bucket graph-lock counters and request call sites on
+     the two existing Mac arms before changing the hot path.
+   - Dependent GC2/GC3 review slices stay paused.
+   Separately, GC2 Linux task-clock attribution (120,000 list allocations,
+   five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
+   allocator-lock owners, versus 3% in the explicit gray queue. Three of
+   five w4 legs finish no marks under load; w1 finishes in all five.
+   Exact Linux instruction attribution: the read/test/back-edge on the
+   single allocator lock accounts for median 61.25% of w4 CMS+mutator user
+   CPU versus 5.66% w1 (five pairs). Inline magazine lock waits and the
+   direct allocator acquire hit the same lock; this is not HTTP evidence.
+   Holder profiles locate the indirect source: raw refill is 64–83% of
+   instrumented w4 hold samples (four pairs). Three matched allocation
+   probes identify 19.7k/116.1k/115.7k gray allocations versus essentially
+   identical 1 KiB reserves, almost every publication a singleton. The
+   544-byte full batch rounds to 1 KiB. A 64-byte compact batch passed
+   46 model/ABI checks and native GC1–4 queue tests, but no production
+   patch was published: 48k allocations w1 five pairs inside drift; w4
+   three complete pairs, no stable gain or mark recovery. Two more w4
+   attempts failed memory preflight; the one complete 120k w4 pair was
+   worse. Four-slot raw reuse passed 47 queue model/ABI checks and all
+   four Linux GC1–4 native queue modes. Five matched 48k pairs per worker
+   count did not qualify it: time −4.6%/−13.4% at w1/w4 within duplicate-
+   parent drift; w4 finished no mark in 3/5 candidate vs 2/5 parent legs.
+   No runtime change from reuse. [GC2 review 1b64385](https://github.com/ikshengmin/pcc/commit/1b643852ca1f06e7457bf833b3857ed486e6b949)
+   allows a capped assist from gray backlog even after byte debt has
+   been paid. In 48k-list Linux w4 screens, progress was 0/5→3/5 and
+   2/5→5/5 in-load completions; RSS fell in 9/10 pairs, while time and
+   maximum stops were unqualified. Eight held-producer native comparisons
+   preserve GC1 and the original debt path. No master runtime change.
+   Next GC2: Mac controlled handler A/B on this review, after #9 review;
+   do not call the native completion screen an HTTP gain.
+   Four-peer throughput is noisy; HTTP, macOS and master remain unqualified. Arbitrary raw stack lifetimes, HTTP exact timings and
+   no-observable performance remain unqualified.
+   Native Linux GC2 now reproduces zero mark completions
    during a four-worker allocation load. An extended native control finds
    published gray work rather than a missing flush or finish signal; a
    delayed cycle completes when allocation stops with all four workers
@@ -231,7 +652,8 @@ in the relevant section or issue and removes the entry.
    paired QPS −0.2% / −4.3% at w1/w4 and a worse w4 worst pause/RSS
    despite better medians. Keep it review-only; next locate the GC2 w4
    gray-work owners and estimate the ceiling before the per-worker design.
-   GC1–4 performance candidates do not merge before #9 is fixed. Keep #7 open for
+   GC1–4 performance candidates still need their own validation against
+   the landed #9 baseline. Keep #7 open for
    a new concrete native ownership witness outside the tested forms; do
    not widen on annotations alone. The direct dynamic `int(value)` now
    transfers the actual conversion result. String and heap-int alias
@@ -269,15 +691,50 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - Issue 9 prove sibling resurrection and per-callback full recheck: Codex, Linux x86-64, 2026-11-22 15:36 UTC, area runtime-gc
+   - none
+
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
    macOS numbers come from the macOS verification units (rule 14).
-   Measure with `scripts/pcc_perf.py`. Next for GC3: the dormant, test-invoked
-   runtime entry that Claude approved on #8 on 2026-11-22
-   ([answer](https://github.com/ikshengmin/pcc/issues/8#issuecomment-7078942435)):
-   no production caller, no new witnesses of current production behavior,
-   and then a measurable review-branch candidate.
+   Measure with `scripts/pcc_perf.py`. [GC3 review e955661](https://github.com/ikshengmin/pcc/commit/e955661bb8674c4ea425b70ed6b12762821a70f5)
+   wires the test-invoked stopped promotion approved on #8: exact slab
+   provenance, record and card preflight, in-place no-park commit.
+   Linux: eight native cases, including two subsequent GC3 collections;
+   20 existing emitted bodies unchanged. No production caller or nursery.
+   [GC3 census 39e1b8b](https://github.com/ikshengmin/pcc/commit/39e1b8bbfeec1b98af5afac92dac64fe1db7e1e0):
+   tuples and lists account for 53.5–55.2% of logged allocations in two
+   sequential single-carrier gateway controls. This is not sealed handler
+   throughput or an admitted share. [GC3 review d47a368](https://github.com/ikshengmin/pcc/commit/d47a368ecd5ac5e0534a6d642d76b2a74481af89)
+   carries the actual old receiver through ordinary direct and planned
+   stores, verified with real off-object list and inline tuple slots on
+   Linux; roots are ownerless and the bounded observer flags overflow.
+   No real minor reads the buffer. [GC3 review b2a6508](https://github.com/ikshengmin/pcc/commit/b2a65080db00de0a7c0a2f8cba86b95467c0548f)
+   covers native locked list first stores into spare storage and a new
+   backing array: exact parent fails, five backend lanes and 18 host
+   models pass fixed. Ordinary tuple construction already passes the
+   owner; exclude the raw dictionary materializer and foreign paths.
+   [GC3 sparse cut bbcfa4a](https://github.com/ikshengmin/pcc/commit/bbcfa4a77da42432d1a884df4c6524573fc4a212)
+   retains live dirty cards and drops cleared/retired ones. Fifteen Linux
+   runs at 64/256/1024 unrelated old lists visited exactly two dirty owners
+   and zero clean old per cut; incomplete input/frontier is rejected.
+   [GC3 closed young review 7d745c3](https://github.com/ikshengmin/pcc/commit/7d745c310ada9f7c1ff6bda713d5f41004b31b22)
+   closes a real explicit-root and dirty-edge cohort. Five Linux runs
+   each preserved four young cells and retired one, rejecting four
+   incomplete cuts. [GC3 root review 0da03b2](https://github.com/ikshengmin/pcc/commit/0da03b22694fadd9370a64c1448a110cebfc75a5)
+   uses the initial frozen threads' root cut and registered value walker.
+   Nine Linux controls distinguish a caller interior word, separate
+   scheduler slot, and post-stop scratch; prior cohort regression passed.
+   No automatic entry or complete precise/foreign root qualification.
+   [GC3 bump review c3f7b47](https://github.com/ikshengmin/pcc/commit/c3f7b4716f07feab7d0bb09aafe4803293626286)
+   registers one 64 KiB slab once: 2,048 cells, zero tracing records.
+   Peer publication, ownership, cancellation and stopped empty rewind
+   passed five mode lanes and five extra GC3 runs; 92 prior allocator
+   bodies are unchanged. Reviews only: `94ceb2116` uses a real marked, closed
+   tuple cohort to rewind an empty slab; 5/5 Linux native runs, plus 12 root
+   and closed-cohort controls. `d825cf334` adds actual dirty old-list edges
+   into that slab: five native runs and 15 controls pass. No production
+   allocation. Next GC3: rebase the review on the landed #9 baseline and
+   prove the first production allocation path before measuring it.
    The first sparse remembered-set slice is a test-only serial model: seven
    guarded Linux host tests exercised the missed-writer oracle, zero clean-old
    enumeration at 32/128/512 old owners, persistent cards, promotion and
@@ -358,8 +815,7 @@ in the relevant section or issue and removes the entry.
    it out of the stopped major walk; retry reused the mapping, and commit
    exposed exactly one entry. A Linux native promoted-owner probe also
    found its indexless child through the real strong-slot visitor.
-   Next GC3 runtime slice: see review question above. Production promotion
-   and nursery activation are still untested. The GC0 atomic CPU-share
+   GC3 production promotion and nursery activation are still untested. The GC0 atomic CPU-share
    measurement lacks a sealed gateway arm; no percentage was reported.
    Linux `pcc_perf profile-preflight` now gets real task-clock instruction
    samples for its own thread and the Linux probe now captures a directly
@@ -504,10 +960,22 @@ in the relevant section or issue and removes the entry.
 3. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
-   [multi-language status](multilanguage-status.md). Platform: any. Next:
-   review the proposed [shared Go/Java managed storage](design/go-shared-managed-storage.md)
-   before implementation. Agent recommendation: freeze new source-shape
-   admissions; do not qualify on the GC0-only prototype. Existing probes
+   [multi-language status](multilanguage-status.md). Platform: any.
+   Before pushing a frontend result, run the affected language's whole
+   ordinary suite (AGENTS.md: whole affected-language validation).
+   Checkpoint regression #10 came from two Go commits (`d9735bfdd`,
+   `feef5185c`) that changed diagnostics without it. Next,
+   in order. Go/Java: the first gate of the
+   [shared managed storage](design/go-shared-managed-storage.md) contract
+   that Claude approved at the maintainer's request on 2026-11-22
+   ([#13](https://github.com/ikshengmin/pcc/issues/13)): one described
+   layout tag on the existing header, a pointer-free and a reference-bearing
+   control on GC0–4, then generic slices. New Go source-shape admissions stay
+   frozen and the GC0-only v1 envelope is not promoted. C++ (TinyXML2
+   `1199:9`): destructor exception specifications and the non-throwing
+   override rule instead of effect proofs, as approved in
+   [#14](https://github.com/ikshengmin/pcc/issues/14); the project-only
+   effect domain is rejected. Existing probes
    are not native upstream acceptance. The opt-in source probe reached
    `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
@@ -536,6 +1004,19 @@ in the relevant section or issue and removes the entry.
      `@gpu.kernel` beyond loop-free kernels (loops, reductions, threadgroup
      memory) before M5. M3, the Harness route, waits for the TAG-translated
      Harness in its own repositories.
+     Maintainer decision of 2026-11-23, approving Claude's recommendation in
+     chat: the operating system's Metal framework, called in-process through
+     the Objective-C runtime (`newLibraryWithSource:` / `newLibraryWithData:`,
+     as `pcc/gpu_runtime/metal_device.py` does), is an accepted platform
+     boundary under the pcc1 ownership contract. Xcode tooling is not:
+     `xcrun metal`/`metallib` (`pcc/kernel_ir/metal_finalize.py`) and the
+     `xcrun clang` builds of Objective-C in `pcc/backend/metal.py`
+     (`gpu_metal_runtime.m` and the generated runtime bridge) remain labeled
+     reference routes and cannot satisfy a pcc1 claim. The MSL handed to the
+     framework must be generated by pcc; results name the OS shader compiler
+     and record the macOS build. Open unit: move those `xcrun clang` routes
+     onto the owned Objective-C runtime path, or retire them by name with the
+     maintainer's OK.
    - Agda-class proof checker
      ([exploration and implementation state](research/agda-class-proof-checker-exploration.md)).
      Platform: any (host CPython). Next: stage 2 (`with`, `rewrite`, records,

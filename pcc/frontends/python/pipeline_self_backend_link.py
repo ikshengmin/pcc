@@ -362,32 +362,38 @@ def _owned_macho_link_in_process(
                 if coordinator_timing is None:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                         required_symbols=export_symbols,
                     )]
                 else:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                         required_symbols=export_symbols, coordinator_timing=coordinator_timing,
                     )]
             elif compact_budget is None:
                 if coordinator_timing is None:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                     )]
                 else:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                         coordinator_timing=coordinator_timing,
                     )]
             else:
                 if coordinator_timing is None:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                         compact_budget=compact_budget,
                     )]
                 else:
                     pending = [prepare_executable_object(
                         objects, archives=archives, _consume_inputs=True, _source_view=True,
+                        runtime_main=True,
                         compact_budget=compact_budget, coordinator_timing=coordinator_timing,
                     )]
             if coordinator_timing is not None:

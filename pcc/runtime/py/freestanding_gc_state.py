@@ -439,6 +439,7 @@ define_global_ptr_null("pcc_gc_tracing_candidate_nodes")
 define_global_i64("pcc_gc_tracing_candidate_count", 0)
 define_global_i64("pcc_gc_tracing_candidate_capacity", 0)
 define_global_i64("pcc_gc_tracing_candidate_commit", -1)
+define_global_i64("pcc_gc_tracing_candidate_no_pending_gen_commit", -1)
 # The stopped-world epoch the last mark finished in (-1: the world ran).
 define_global_i64("pcc_gc_tracing_finish_stop_epoch", -1)
 # The stopped-world epoch the current mark's roots were seeded in. A final

@@ -20,13 +20,15 @@ ALLOCATOR = ROOT / "pcc/runtime/py/freestanding_allocator.py"
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("emitter", ("self", "llvm_o2_oracle"))
+# A standalone POSIX platform-ABI driver; the LLVM arm needs its external oracle.
+@pytest.mark.pcc_gate(probe=lambda: sys.platform != "win32")
+@pytest.mark.parametrize("emitter", (
+    "self",
+    pytest.param("llvm_o2_oracle",
+                 marks=pytest.mark.pcc_gate(probe=lambda: shutil.which("clang") is not None)),
+))
 def test_cold_granule_lookup_preserves_numeric_pointer_provenance(tmp_path, emitter):
     """LLVM is a labeled development oracle, never the production emitter."""
-    if emitter != "self" and shutil.which("clang") is None:
-        pytest.skip("external LLVM optimization oracle is unavailable")
-    if sys.platform == "win32":
-        pytest.skip("standalone POSIX platform-ABI driver")
     target = host_target_triple()
     ir = tmp_path / "allocator.ll"
     compile_python(str(ALLOCATOR), str(ir), emit_llvm_only=True,

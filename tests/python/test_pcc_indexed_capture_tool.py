@@ -231,11 +231,20 @@ def modules(monkeypatch):
     return ab, capture, rank
 
 
+def _posix_no_follow_dir_fd() -> bool:
+    return (os.name == "posix" and hasattr(os, "O_DIRECTORY")
+            and hasattr(os, "O_NOFOLLOW") and os.mkdir in os.supports_dir_fd)
+
+
+# Every test that takes the harness carries this gate; the fixture fails if
+# reached without it.
+POSIX_NO_FOLLOW_DIR_FD = pytest.mark.pcc_gate(probe=_posix_no_follow_dir_fd)
+
+
 @pytest.fixture
 def harness(tmp_path, monkeypatch, modules):
-    if (os.name != "posix" or not hasattr(os, "O_DIRECTORY")
-            or not hasattr(os, "O_NOFOLLOW") or os.mkdir not in os.supports_dir_fd):
-        pytest.skip("POSIX no-follow/dir_fd orchestration only; native Darwin boundary remains UNRUN")
+    if not _posix_no_follow_dir_fd():
+        pytest.fail("POSIX no-follow/dir_fd orchestration only; native Darwin boundary remains UNRUN")
     ab, capture, rank = modules
     h = Harness(tmp_path, ab, capture)
     h.rank = rank
@@ -376,6 +385,7 @@ def _assert_live_failure(h, result, monkeypatch, descriptors, *, original=None):
 
 
 @pytest.mark.parametrize("timing", [False, True])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_public_capture_runs_three_commands_and_seals_input_only(harness, timing):
     h = harness
     h.timing = timing
@@ -402,6 +412,7 @@ def test_public_capture_runs_three_commands_and_seals_input_only(harness, timing
 @pytest.mark.parametrize("fault", ["context", "ordinal", "name", "source", "artifact",
     "target", "debug", "truncated", "missing", "extra", "result-index", "ir-length",
     "nonzero", "timeout", "expired", "mutation"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_public_capture_rejects_boundary_failures_and_releases_budget(harness, fault):
     h = harness
     h.fault = fault
@@ -419,6 +430,7 @@ def test_public_capture_rejects_boundary_failures_and_releases_budget(harness, f
 
 
 @pytest.mark.parametrize("fault", ["no-token", "wrong-module", "nested-budget"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_real_public_admission_rejects_without_process(harness, monkeypatch, fault):
     h = harness
     previous = None
@@ -438,6 +450,7 @@ def test_real_public_admission_rejects_without_process(harness, monkeypatch, fau
 
 @pytest.mark.parametrize("fault", ["copy", "json", "mutate-result", "mutate-pidx",
                                     "mutate-ast", "mutate-source", "mutate-evidence", "expire", "lock"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_live_verification_rejects_forgery_and_dependency_changes(harness, fault, monkeypatch):
     h = harness
     result = h.rank.capture_indexed_input_guarded(h.args, **h.owner)
@@ -468,6 +481,7 @@ def test_live_verification_rejects_forgery_and_dependency_changes(harness, fault
 
 
 @pytest.mark.parametrize("alias", ["symlink", "hardlink", "escape", "relative"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_path_parser_rejects_aliases_and_nonowned_paths(harness, alias):
     h = harness
     path = h.root / "alias"
@@ -484,11 +498,13 @@ def test_path_parser_rejects_aliases_and_nonowned_paths(harness, alias):
 
 
 @pytest.mark.parametrize("raw", ["01", "-1", "+1", " 1", "1.0", "\u0661", ""])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_ordinal_parser_requires_canonical_ascii(harness, raw):
     with pytest.raises(harness.capture.IndexedCaptureError):
         harness.capture._integer(raw)
 
 
+@POSIX_NO_FOLLOW_DIR_FD
 def test_duplicate_json_keys_rejected(harness):
     path = harness.root / "duplicate.json"
     path.write_text('{"schema":1,"schema":2}')
@@ -496,6 +512,7 @@ def test_duplicate_json_keys_rejected(harness):
         harness.capture._json(path)
 
 
+@POSIX_NO_FOLLOW_DIR_FD
 def test_invalidation_storage_failure_preserves_original_exception(harness, monkeypatch):
     h = harness
     original = h.capture._persist
@@ -514,6 +531,7 @@ def test_invalidation_storage_failure_preserves_original_exception(harness, monk
 
 
 @pytest.mark.parametrize("fault", ["symlink-parent", "input-overlap"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_capture_rejects_output_alias_or_input_overlap(harness, fault):
     h = harness
     if fault == "symlink-parent":
@@ -530,6 +548,7 @@ def test_capture_rejects_output_alias_or_input_overlap(harness, fault):
     assert h.ab._ACTIVE_WORKER_BUDGET is None
 
 
+@POSIX_NO_FOLLOW_DIR_FD
 def test_input_only_manifest_cannot_enter_standalone_rank(harness):
     h = harness
     result = h.rank.capture_indexed_input_guarded(h.args, **h.owner)
@@ -539,6 +558,7 @@ def test_input_only_manifest_cannot_enter_standalone_rank(harness):
 
 
 @pytest.mark.parametrize("fault", ["final-input-validation", "registry-canonicalization"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_failure_after_prepared_publication_revokes_all_success_receipts(harness, monkeypatch, fault):
     h = harness
     persist = h.capture._persist
@@ -611,6 +631,7 @@ def test_public_entry_rejects_unsupported_platform_before_filesystem_capture(
 
 
 @pytest.mark.parametrize("fault", ["unknown-source", "changed-hash"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_public_capture_rejects_unadmitted_source_manifest(harness, fault):
     h = harness
     if fault == "unknown-source":
@@ -649,6 +670,7 @@ def test_current_source_files_hashes_every_enumerated_member(modules, tmp_path, 
     assert before["nested/second.py"] != after["nested/second.py"]
 
 
+@POSIX_NO_FOLLOW_DIR_FD
 def test_invalidation_preserves_exception_with_broken_string_conversion(harness, monkeypatch):
     h = harness
 
@@ -679,6 +701,7 @@ def test_invalidation_preserves_exception_with_broken_string_conversion(harness,
 @pytest.mark.parametrize("target", ["output", "parent", "corpus"])
 @pytest.mark.parametrize("replacement", ["symlink", "directory"])
 @pytest.mark.parametrize("failure", ["ownership-check", "original-exception"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_replaced_capture_directories_revoke_without_touching_either_tree(
         harness, monkeypatch, directory_descriptors, target, replacement, failure):
     h = harness
@@ -721,6 +744,7 @@ def test_replaced_capture_directories_revoke_without_touching_either_tree(
 
 
 @pytest.mark.parametrize("failure", ["ownership-check", "original-exception"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_replaced_parent_is_rejected_even_when_owned_output_inode_returns(
         harness, monkeypatch, directory_descriptors, failure):
     h = harness
@@ -750,6 +774,7 @@ def test_replaced_parent_is_rejected_even_when_owned_output_inode_returns(
 @pytest.mark.parametrize("name", ["capture.json", "corpus/manifest.json"])
 @pytest.mark.parametrize("replacement", ["symlink", "hardlink", "regular"])
 @pytest.mark.parametrize("failure", ["ownership-check", "original-exception"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_replaced_owned_publications_revoke_without_removal_or_overwrite(
         harness, monkeypatch, directory_descriptors, name, replacement, failure):
     h = harness
@@ -786,6 +811,7 @@ def test_replaced_owned_publications_revoke_without_removal_or_overwrite(
     assert sentinel.read_bytes() == original_bytes
 
 
+@POSIX_NO_FOLLOW_DIR_FD
 def test_legacy_fixed_temporary_aliases_are_never_opened_or_removed(
         harness, monkeypatch, directory_descriptors):
     h = harness
@@ -823,6 +849,7 @@ def test_legacy_fixed_temporary_aliases_are_never_opened_or_removed(
 
 @pytest.mark.parametrize("directory,name", [("", "capture.json"), ("corpus", "manifest.json")])
 @pytest.mark.parametrize("replacement", ["symlink", "hardlink", "regular"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_exclusive_random_temporary_collisions_preserve_foreign_entries_and_error(
         harness, monkeypatch, directory_descriptors, directory, name, replacement):
     h = harness
@@ -873,6 +900,7 @@ def test_exclusive_random_temporary_collisions_preserve_foreign_entries_and_erro
 
 @pytest.mark.parametrize("directory,name", [("", "capture.json"), ("corpus", "manifest.json")])
 @pytest.mark.parametrize("replacement", ["symlink", "hardlink", "regular", "shared-inode"])
+@POSIX_NO_FOLLOW_DIR_FD
 def test_replaced_transient_temporary_inode_is_not_published_or_cleaned(
         harness, monkeypatch, directory_descriptors, directory, name, replacement):
     h = harness

@@ -107,8 +107,8 @@ def test_inlined_acyclic_poll_is_dropped_and_loop_poll_kept():
     assert _body(text, "no_entry_poll").count(STOP_LOAD) == 1
 
 
-@pytest.mark.skipif(sys.platform != "darwin" or platform.machine() != "arm64",
-                    reason="native Darwin arm64 execution")
+# native Darwin arm64 execution
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_transformed_module_runs(tmp_path):
     text, _changed = inline_module(MODULE, include_definitions=True)
     executable = tmp_path / "polls"

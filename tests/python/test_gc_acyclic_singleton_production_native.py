@@ -340,3 +340,43 @@ def test_callback_chain_preserves_the_peers_interior_owner(_callback_scale_sweep
         rf"events={expected.stdout.strip()} callbacks={count} public=0 cohort={count + 1}\n",
         actual.stdout,
     )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 2, 3))
+@pytest.mark.parametrize("mode", ("mixed-weak-order", "nested-collect"))
+def test_production_sweep_replaces_the_injected_callback_oracle(_layered_sweep, backend, mode):
+    fixtures = ROOT / "tests/fixtures/native/constructor"
+    oracle = ([str(fixtures / "mixed_weakref_order_oracle.py")] if mode == "mixed-weak-order" else
+              [str(fixtures / "acyclic_layers_weakref_oracle.py"), "chain"])
+    expected = run_process_group_timeout([sys.executable, *oracle], timeout=15)
+    assert expected.returncode == 0 and expected.stderr == ""
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), mode], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        0, expected.stdout, "" if mode == "mixed-weak-order" else "full=0 scans=0\n",
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.parametrize("backend", (1, 2, 3))
+@pytest.mark.parametrize("mode", ("module-existing", "module-new"))
+def test_callback_publication_into_module_preserves_resurrected_target(_layered_sweep, backend, mode):
+    oracle = ROOT / "tests/fixtures/native/constructor/acyclic_layers_weakref_oracle.py"
+    expected = run_process_group_timeout([sys.executable, str(oracle), mode], timeout=15)
+    assert (expected.returncode, expected.stdout, expected.stderr) == (
+        0, "a-del a-weak b-live\n", "",
+    )
+    actual = run_process_group_timeout(
+        [str(_layered_sweep), mode], timeout=15,
+        env=dict(os.environ, PCC_GC_BACKEND=str(backend),
+                 PCC_GC_DEBT_THRESHOLD="1099511627776"),
+    )
+    # Both published values are safe. Currently each accepts the conservative
+    # full refresh because this publication is not yet proved candidate-local.
+    assert (actual.returncode, actual.stdout, actual.stderr) == (
+        0, expected.stdout, "full=1 scans=0\n",
+    )
