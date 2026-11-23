@@ -767,17 +767,6 @@ define_global_i32("pcc_allocator_double_free_reported", 0)
 define_global_i32("pcc_allocator_double_free_audit", 0)
 define_global_ptr_null("pcc_allocator_trim_queue")
 define_global_ptr_null("pcc_allocator_free_16")
-define_global_ptr_null("pcc_allocator_free_obj_16")
-define_global_ptr_null("pcc_allocator_free_obj_32")
-define_global_ptr_null("pcc_allocator_free_obj_64")
-define_global_ptr_null("pcc_allocator_free_obj_128")
-define_global_ptr_null("pcc_allocator_free_obj_256")
-define_global_ptr_null("pcc_allocator_free_obj_512")
-define_global_ptr_null("pcc_allocator_free_obj_1024")
-define_global_ptr_null("pcc_allocator_free_obj_2048")
-define_global_ptr_null("pcc_allocator_free_obj_4096")
-define_global_ptr_null("pcc_allocator_free_obj_8192")
-define_global_ptr_null("pcc_allocator_free_obj_16384")
 define_global_ptr_null("pcc_allocator_free_32")
 define_global_ptr_null("pcc_allocator_free_64")
 define_global_ptr_null("pcc_allocator_free_128")
@@ -1072,17 +1061,40 @@ define_global_ptr_null("pcc_allocator_record_span_head")
 # count@32 (raw slabs), side-word array@40 and object-node record array@48
 # (object slabs, both allocated on first use), and @56 the next object span
 # that has a record array (pcc_allocator_record_span_first).
-SPAN_BYTES = 64
+SPAN_BYTES = 96
 SPAN_NODE_RECORDS_OFFSET = 48
 SPAN_RECORD_NEXT_OFFSET = 56
-# An object span's free-cell count is its cells on the central object
-# lists, kept as a raw span's is. A negative count marks a slab whose pages
-# were given back to the system (pcc_allocator_trim_objects): its cells are
-# on no list, its mapping and span stay, and the count links the span into
-# pcc_allocator_discarded_object_spans (_discarded_link) until its size
-# class needs cells again (_recarve_object_slab_locked).
+# The central free cells of the object family. Every object slab keeps its
+# own free cells: the span counts them (SPAN_FREE_CELLS_OFFSET) and heads
+# their list (SPAN_FREE_HEAD_OFFSET; a cell links through its first word).
+# Each size class keeps its spans that have free cells in lists by how full
+# the slab is:
+#   SPAN_LIST_DENSE      fewer than half of the cells are free
+#   SPAN_LIST_SPARSE     half or more are free
+#   SPAN_LIST_EMPTY      all are free
+#   SPAN_LIST_DISCARDED  all were free and the pages were given back
+# A cell is taken from a dense slab first, then a sparse one, then an empty
+# one. New objects so fill the slabs that are nearly full, and a sparse
+# slab is left to empty as its objects die: nothing is moved, and a slab
+# that only short-lived objects shared returns to the system. A slab that
+# holds one long-lived object stays.
 SPAN_FREE_CELLS_OFFSET = 32
-define_global_ptr_null("pcc_allocator_discarded_object_spans")
+SPAN_FREE_HEAD_OFFSET = 64
+SPAN_LIST_NEXT_OFFSET = 72
+SPAN_LIST_PREV_OFFSET = 80
+SPAN_LIST_OFFSET = 88
+SPAN_LIST_DENSE = 1
+SPAN_LIST_SPARSE = 2
+SPAN_LIST_EMPTY = 3
+SPAN_LIST_DISCARDED = 4
+# List heads: eleven size classes, four lists each (class * 4 + list - 1).
+define_global_i64_array(
+    "pcc_allocator_object_span_lists",
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+)
 # Object slabs given back so far, carved again so far, and the bytes
 # given back at the moment.
 define_global_i64("pcc_allocator_object_slabs_discarded", 0)
@@ -1169,6 +1181,10 @@ def _span_new(kind: i64, stride: i64, base) -> c_ptr:
     # pcc_allocator_object_node_record_ensure).
     store_ptr(span, SPAN_NODE_RECORDS_OFFSET, null())
     store_ptr(span, SPAN_RECORD_NEXT_OFFSET, null())
+    store_ptr(span, SPAN_FREE_HEAD_OFFSET, null())
+    store_ptr(span, SPAN_LIST_NEXT_OFFSET, null())
+    store_ptr(span, SPAN_LIST_PREV_OFFSET, null())
+    store_i64(span, SPAN_LIST_OFFSET, 0)
     return span
 
 
@@ -1708,83 +1724,123 @@ def pcc_allocator_trim() -> i64:
     return reclaimed
 
 
-@c_abi_export("pcc_allocator_discarded_link")
-def _discarded_link(next_span) -> i64:
-    """The free-cell word of a discarded span: negative, and naming the
-    next discarded span (NULL for the last)."""
-    return -ptr_diff(next_span, null()) - 1
+@c_abi_export("pcc_allocator_object_span_list_slot")
+def _span_list_slot(index: i64, which: i64) -> c_ptr:
+    return ptr_add(
+        global_addr("pcc_allocator_object_span_lists"), (index * 4 + which - 1) * 8
+    )
 
 
-@c_abi_export("pcc_allocator_discarded_next")
-def _discarded_next(span) -> c_ptr:
-    return int_to_ptr(-(load_i64(span, SPAN_FREE_CELLS_OFFSET) + 1))
+@c_abi_export("pcc_allocator_object_span_unlink")
+def _span_unlink(span, index: i64) -> None:
+    which: i64 = load_i64(span, SPAN_LIST_OFFSET)
+    if which == 0:
+        return
+    previous = load_ptr(span, SPAN_LIST_PREV_OFFSET)
+    following = load_ptr(span, SPAN_LIST_NEXT_OFFSET)
+    if ptr_is_null(previous) != 0:
+        store_ptr(_span_list_slot(index, which), 0, following)
+    else:
+        store_ptr(previous, SPAN_LIST_NEXT_OFFSET, following)
+    if ptr_is_null(following) == 0:
+        store_ptr(following, SPAN_LIST_PREV_OFFSET, previous)
+    store_ptr(span, SPAN_LIST_NEXT_OFFSET, null())
+    store_ptr(span, SPAN_LIST_PREV_OFFSET, null())
+    store_i64(span, SPAN_LIST_OFFSET, 0)
 
 
-@c_abi_export("pcc_allocator_trim_rebuild_object_list_locked")
-def _trim_rebuild_object_list_locked(head) -> c_ptr:
-    """Rebuild one object free list without the cells of the slabs whose
-    every cell is on it, and queue those slabs' spans as discarded. The
-    first cell seen of such a slab marks its span; the later ones find the
-    mark. No cell of a slab discarded earlier can be on a list."""
-    kept_head = null()
-    cursor = head
-    while ptr_is_null(cursor) == 0:
-        nxt = load_ptr(cursor, 0)
-        drop: i64 = 0
-        span = pcc_gc_granule_span(cursor)
-        if ptr_is_null(span) == 0 and load_i64(span, 0) == 1:
-            free_cells: i64 = load_i64(span, SPAN_FREE_CELLS_OFFSET)
-            if free_cells < 0:
-                drop = 1
-            elif free_cells == load_i64(span, 24):
-                drop = 1
-                store_i64(
-                    span,
-                    SPAN_FREE_CELLS_OFFSET,
-                    _discarded_link(global_load_ptr("pcc_allocator_discarded_object_spans")),
-                )
-                global_store_ptr("pcc_allocator_discarded_object_spans", span)
-        if drop == 0:
-            store_ptr(cursor, 0, kept_head)
-            kept_head = cursor
-        cursor = nxt
-    return kept_head
+@c_abi_export("pcc_allocator_object_span_link")
+def _span_link(span, index: i64, which: i64) -> None:
+    slot = _span_list_slot(index, which)
+    head = load_ptr(slot, 0)
+    store_ptr(span, SPAN_LIST_PREV_OFFSET, null())
+    store_ptr(span, SPAN_LIST_NEXT_OFFSET, head)
+    if ptr_is_null(head) == 0:
+        store_ptr(head, SPAN_LIST_PREV_OFFSET, span)
+    store_ptr(slot, 0, span)
+    store_i64(span, SPAN_LIST_OFFSET, which)
+
+
+@c_abi_export("pcc_allocator_object_span_place")
+def _span_place(span, index: i64) -> None:
+    """Move the span to the list its free-cell count asks for."""
+    free_cells: i64 = load_i64(span, SPAN_FREE_CELLS_OFFSET)
+    cells: i64 = load_i64(span, 24)
+    wanted: i64 = 0
+    if free_cells >= cells:
+        wanted = SPAN_LIST_EMPTY
+    elif free_cells * 2 >= cells:
+        wanted = SPAN_LIST_SPARSE
+    elif free_cells > 0:
+        wanted = SPAN_LIST_DENSE
+    if load_i64(span, SPAN_LIST_OFFSET) != wanted:
+        _span_unlink(span, index)
+        if wanted != 0:
+            _span_link(span, index, wanted)
+
+
+@c_abi_export("pcc_allocator_take_small_object")
+def pcc_allocator_take_small_object(usable: i64) -> c_ptr:
+    """Take one central free cell of this size class, from the fullest kind
+    of slab that has one; NULL when the class has none. Allocator lock
+    held."""
+    index: i64 = _object_magazine_class(usable)
+    span = load_ptr(_span_list_slot(index, SPAN_LIST_DENSE), 0)
+    if ptr_is_null(span) != 0:
+        span = load_ptr(_span_list_slot(index, SPAN_LIST_SPARSE), 0)
+    if ptr_is_null(span) != 0:
+        span = load_ptr(_span_list_slot(index, SPAN_LIST_EMPTY), 0)
+    if ptr_is_null(span) != 0:
+        return null()
+    cell = load_ptr(span, SPAN_FREE_HEAD_OFFSET)
+    store_ptr(span, SPAN_FREE_HEAD_OFFSET, load_ptr(cell, 0))
+    store_i64(span, SPAN_FREE_CELLS_OFFSET, load_i64(span, SPAN_FREE_CELLS_OFFSET) - 1)
+    _span_place(span, index)
+    store_i64(cell, 8, 0)
+    return cell
+
+
+@c_abi_export("pcc_allocator_put_small_object")
+def pcc_allocator_put_small_object(ptr, usable: i64) -> None:
+    """Return one cell to its slab's central free list. Allocator lock held."""
+    # Only the successful object-slab carve and kind-1 free route reach this
+    # list. Preserve that origin in the allocator prefix for later frees.
+    store_i64(ptr, GRANULE_MAPPING_SIZE_OFFSET, -1)
+    # Retire the slot before the payload becomes a free-list link.  Managed
+    # readers acquire-load this state, so none can observe overwritten object
+    # bytes while the slot still advertises LIVE.
+    atomic_store_i64(ptr, GRANULE_STATE_OFFSET, GC_STATE_FREE, "release")
+    store_i64(ptr, 8, FREE_LIST_POISON)
+    span = pcc_gc_granule_span(ptr)
+    if ptr_is_null(span) != 0:
+        # Not a cell of an object slab: nothing can take it back.
+        return
+    store_ptr(ptr, 0, load_ptr(span, SPAN_FREE_HEAD_OFFSET))
+    store_ptr(span, SPAN_FREE_HEAD_OFFSET, ptr)
+    store_i64(span, SPAN_FREE_CELLS_OFFSET, load_i64(span, SPAN_FREE_CELLS_OFFSET) + 1)
+    _span_place(span, _object_magazine_class(usable))
 
 
 @c_abi_export("pcc_allocator_trim_object_class_locked")
-def _trim_object_class_locked(usable: i64) -> i64:
-    """Give back the fully free slabs of one object size class; returns how
-    many. The pages go only after the list is rebuilt: until then the
-    slab's cells are links of that list."""
-    before = global_load_ptr("pcc_allocator_discarded_object_spans")
-    if usable == 16:
-        global_store_ptr("pcc_allocator_free_obj_16", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_16")))
-    elif usable == 32:
-        global_store_ptr("pcc_allocator_free_obj_32", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_32")))
-    elif usable == 64:
-        global_store_ptr("pcc_allocator_free_obj_64", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_64")))
-    elif usable == 128:
-        global_store_ptr("pcc_allocator_free_obj_128", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_128")))
-    elif usable == 256:
-        global_store_ptr("pcc_allocator_free_obj_256", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_256")))
-    elif usable == 512:
-        global_store_ptr("pcc_allocator_free_obj_512", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_512")))
-    elif usable == 1024:
-        global_store_ptr("pcc_allocator_free_obj_1024", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_1024")))
-    elif usable == 2048:
-        global_store_ptr("pcc_allocator_free_obj_2048", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_2048")))
-    elif usable == 4096:
-        global_store_ptr("pcc_allocator_free_obj_4096", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_4096")))
-    elif usable == 8192:
-        global_store_ptr("pcc_allocator_free_obj_8192", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_8192")))
-    elif usable == 16384:
-        global_store_ptr("pcc_allocator_free_obj_16384", _trim_rebuild_object_list_locked(global_load_ptr("pcc_allocator_free_obj_16384")))
+def _trim_object_class_locked(index: i64) -> i64:
+    """Give back the pages of this size class's empty slabs, all but the
+    one emptied last, which the class may need again at once. Returns how
+    many slabs went. The mapping and the span stay: lock-free provenance
+    readers may still read a cell's state word, which then holds zero or
+    stale FREE bytes, never LIVE."""
     discarded: i64 = 0
-    span = global_load_ptr("pcc_allocator_discarded_object_spans")
-    while ptr_is_null(span) == 0 and ptr_eq(span, before) == 0:
+    span = load_ptr(_span_list_slot(index, SPAN_LIST_EMPTY), 0)
+    if ptr_is_null(span) == 0:
+        span = load_ptr(span, SPAN_LIST_NEXT_OFFSET)
+    while ptr_is_null(span) == 0:
+        following = load_ptr(span, SPAN_LIST_NEXT_OFFSET)
+        _span_unlink(span, index)
+        store_ptr(span, SPAN_FREE_HEAD_OFFSET, null())
+        store_i64(span, SPAN_FREE_CELLS_OFFSET, 0)
+        _span_link(span, index, SPAN_LIST_DISCARDED)
         page_discard(load_ptr(span, 16), 65536)
         discarded = discarded + 1
-        span = _discarded_next(span)
+        span = following
     if discarded > 0:
         atomic_rmw_i64(
             "add", global_addr("pcc_allocator_object_slabs_discarded"), 0, discarded, "relaxed"
@@ -1797,15 +1853,14 @@ def _trim_object_class_locked(usable: i64) -> i64:
 
 @c_abi_export("pcc_allocator_trim_objects")
 def pcc_allocator_trim_objects() -> i64:
-    """Give the pages of every fully free object slab back to the system;
+    """Give the pages of the fully free object slabs back to the system;
     returns the slabs given back.
 
-    A slab qualifies when all of its cells are on the central list of its
-    size class, so the calling thread's cached cells go there first; cells
-    other threads cache keep their slabs. The mapping and the span stay:
-    lock-free provenance readers may still read a cell's state word, which
-    then holds stale FREE or zero bytes, never LIVE. The allocator lock is
-    taken once per size class.
+    A slab is fully free when all of its cells are on its central list, so
+    the calling thread's cached cells go there first; cells other threads
+    cache keep their slabs. The work follows the number of empty slabs, not
+    the number of free cells, and the allocator lock is taken once per size
+    class.
     """
     state = global_load_ptr("pcc_allocator_object_magazine")
     discarded: i64 = 0
@@ -1815,11 +1870,42 @@ def pcc_allocator_trim_objects() -> i64:
         pcc_allocator_lock_acquire()
         if ptr_is_null(state) == 0:
             _object_magazine_drain_locked(state, index, usable, 0)
-        discarded = discarded + _trim_object_class_locked(usable)
+        discarded = discarded + _trim_object_class_locked(index)
         pcc_allocator_lock_release()
         usable = usable * 2
         index = index + 1
     return discarded
+
+
+@c_abi_export("pcc_allocator_recarve_object_slab_locked")
+def _recarve_object_slab_locked(span, usable: i64, stride: i64, count: i64) -> c_ptr:
+    """Carve a discarded slab again: its pages hold unspecified bytes, so
+    every cell header is written anew. The span was never unpublished; a
+    lock-free reader meanwhile sees FREE, zero or stale FREE state words.
+    Returns the first cell, as a fresh carve does; the others go to the
+    slab's free list."""
+    index: i64 = _object_magazine_class(usable)
+    _span_unlink(span, index)
+    slab = load_ptr(span, 16)
+    first = ptr_add(slab, 48)
+    cursor = first
+    initialized: i64 = 0
+    while initialized < count:
+        pcc_allocator_initialize_small(cursor, slab, usable)
+        cursor = ptr_add(cursor, stride)
+        initialized = initialized + 1
+    store_i64(first, GRANULE_MAPPING_SIZE_OFFSET, -1)
+    cursor = first
+    position: i64 = 1
+    while position < count:
+        cursor = ptr_add(cursor, stride)
+        pcc_allocator_put_small_object(cursor, usable)
+        position = position + 1
+    atomic_rmw_i64("add", global_addr("pcc_allocator_object_slabs_reused"), 0, 1, "relaxed")
+    atomic_rmw_i64(
+        "sub", global_addr("pcc_allocator_object_discarded_bytes"), 0, 65536, "relaxed"
+    )
+    return first
 
 
 @c_abi_export("pcc_allocator_object_slab_counter")
@@ -1834,143 +1920,6 @@ def pcc_allocator_object_slab_counter(which: i64) -> i64:
         return atomic_load_i64(global_addr("pcc_allocator_object_discarded_bytes"), 0, "relaxed")
     return 0
 
-
-@c_abi_export("pcc_allocator_take_small_object")
-def pcc_allocator_take_small_object(usable: i64) -> c_ptr:
-    """Pop one cell from an object free list (allocator lock held) and take
-    it out of its slab's free-cell count."""
-    cell = _take_small_object_list(usable)
-    if ptr_is_null(cell) == 0:
-        span = pcc_gc_granule_span(cell)
-        if ptr_is_null(span) == 0:
-            store_i64(span, SPAN_FREE_CELLS_OFFSET, load_i64(span, SPAN_FREE_CELLS_OFFSET) - 1)
-    return cell
-
-
-@c_abi_export("pcc_allocator_take_small_object_list")
-def _take_small_object_list(usable: i64) -> c_ptr:
-    if usable == 16:
-        head = global_load_ptr("pcc_allocator_free_obj_16")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_16", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 32:
-        head = global_load_ptr("pcc_allocator_free_obj_32")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_32", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 64:
-        head = global_load_ptr("pcc_allocator_free_obj_64")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_64", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 128:
-        head = global_load_ptr("pcc_allocator_free_obj_128")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_128", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 256:
-        head = global_load_ptr("pcc_allocator_free_obj_256")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_256", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 512:
-        head = global_load_ptr("pcc_allocator_free_obj_512")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_512", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 1024:
-        head = global_load_ptr("pcc_allocator_free_obj_1024")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_1024", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 2048:
-        head = global_load_ptr("pcc_allocator_free_obj_2048")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_2048", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 4096:
-        head = global_load_ptr("pcc_allocator_free_obj_4096")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_4096", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    if usable == 8192:
-        head = global_load_ptr("pcc_allocator_free_obj_8192")
-        if ptr_is_null(head) == 0:
-            global_store_ptr("pcc_allocator_free_obj_8192", load_ptr(head, 0))
-            store_i64(head, 8, 0)
-        return head
-    head = global_load_ptr("pcc_allocator_free_obj_16384")
-    if ptr_is_null(head) == 0:
-        global_store_ptr("pcc_allocator_free_obj_16384", load_ptr(head, 0))
-        store_i64(head, 8, 0)
-    return head
-
-
-@c_abi_export("pcc_allocator_put_small_object")
-def pcc_allocator_put_small_object(ptr, usable: i64) -> None:
-    # Only the successful object-slab carve and kind-1 free route reach this
-    # list. Preserve that origin in the allocator prefix for later frees.
-    store_i64(ptr, GRANULE_MAPPING_SIZE_OFFSET, -1)
-    # Retire the slot before the payload becomes a free-list link.  Managed
-    # readers acquire-load this state, so none can observe overwritten object
-    # bytes while the slot still advertises LIVE.
-    atomic_store_i64(ptr, GRANULE_STATE_OFFSET, GC_STATE_FREE, "release")
-    store_i64(ptr, 8, FREE_LIST_POISON)
-    span = pcc_gc_granule_span(ptr)
-    if ptr_is_null(span) == 0:
-        store_i64(span, SPAN_FREE_CELLS_OFFSET, load_i64(span, SPAN_FREE_CELLS_OFFSET) + 1)
-    if usable == 16:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_16"))
-        global_store_ptr("pcc_allocator_free_obj_16", ptr)
-        return
-    if usable == 32:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_32"))
-        global_store_ptr("pcc_allocator_free_obj_32", ptr)
-        return
-    if usable == 64:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_64"))
-        global_store_ptr("pcc_allocator_free_obj_64", ptr)
-        return
-    if usable == 128:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_128"))
-        global_store_ptr("pcc_allocator_free_obj_128", ptr)
-        return
-    if usable == 256:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_256"))
-        global_store_ptr("pcc_allocator_free_obj_256", ptr)
-        return
-    if usable == 512:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_512"))
-        global_store_ptr("pcc_allocator_free_obj_512", ptr)
-        return
-    if usable == 1024:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_1024"))
-        global_store_ptr("pcc_allocator_free_obj_1024", ptr)
-        return
-    if usable == 2048:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_2048"))
-        global_store_ptr("pcc_allocator_free_obj_2048", ptr)
-        return
-    if usable == 4096:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_4096"))
-        global_store_ptr("pcc_allocator_free_obj_4096", ptr)
-        return
-    if usable == 8192:
-        store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_8192"))
-        global_store_ptr("pcc_allocator_free_obj_8192", ptr)
-        return
-    store_ptr(ptr, 0, global_load_ptr("pcc_allocator_free_obj_16384"))
-    global_store_ptr("pcc_allocator_free_obj_16384", ptr)
 
 @c_abi_export("pcc_allocator_refill_small")
 def pcc_allocator_refill_small(usable: i64) -> c_ptr:
@@ -2037,54 +1986,6 @@ def pcc_allocator_refill_small(usable: i64) -> c_ptr:
     return first
 
 
-@c_abi_export("pcc_allocator_discarded_object_span_take_locked")
-def _discarded_object_span_take_locked(stride: i64) -> c_ptr:
-    """Unlink and return a discarded span of this stride, or NULL."""
-    previous = null()
-    span = global_load_ptr("pcc_allocator_discarded_object_spans")
-    while ptr_is_null(span) == 0:
-        following = _discarded_next(span)
-        if load_i64(span, 8) == stride:
-            if ptr_is_null(previous) != 0:
-                global_store_ptr("pcc_allocator_discarded_object_spans", following)
-            else:
-                store_i64(previous, SPAN_FREE_CELLS_OFFSET, _discarded_link(following))
-            return span
-        previous = span
-        span = following
-    return null()
-
-
-@c_abi_export("pcc_allocator_recarve_object_slab_locked")
-def _recarve_object_slab_locked(span, usable: i64, stride: i64, count: i64) -> c_ptr:
-    """Carve a discarded slab again: its pages hold unspecified bytes, so
-    every cell header is written anew. The span was never unpublished; a
-    lock-free reader meanwhile sees FREE, zero or stale FREE state words.
-    Returns the first cell, as a fresh carve does; the others go to the
-    free list, which counts them."""
-    slab = load_ptr(span, 16)
-    first = ptr_add(slab, 48)
-    cursor = first
-    initialized: i64 = 0
-    while initialized < count:
-        pcc_allocator_initialize_small(cursor, slab, usable)
-        cursor = ptr_add(cursor, stride)
-        initialized = initialized + 1
-    store_i64(span, SPAN_FREE_CELLS_OFFSET, 0)
-    store_i64(first, GRANULE_MAPPING_SIZE_OFFSET, -1)
-    cursor = first
-    index: i64 = 1
-    while index < count:
-        cursor = ptr_add(cursor, stride)
-        pcc_allocator_put_small_object(cursor, usable)
-        index = index + 1
-    atomic_rmw_i64("add", global_addr("pcc_allocator_object_slabs_reused"), 0, 1, "relaxed")
-    atomic_rmw_i64(
-        "sub", global_addr("pcc_allocator_object_discarded_bytes"), 0, 65536, "relaxed"
-    )
-    return first
-
-
 @c_abi_export("pcc_allocator_refill_small_object")
 def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
     """Object-family slab refill (ARCH-P0-PROVENANCE-GRANULE-MAP, S1).
@@ -2129,7 +2030,9 @@ def pcc_allocator_refill_small_object(usable: i64) -> c_ptr:
 
     # A slab of this size class whose pages were given back comes first:
     # its mapping and span already exist.
-    discarded = _discarded_object_span_take_locked(stride)
+    discarded = load_ptr(
+        _span_list_slot(_object_magazine_class(usable), SPAN_LIST_DISCARDED), 0
+    )
     if ptr_is_null(discarded) == 0:
         return _recarve_object_slab_locked(discarded, usable, stride, count)
     slab = page_alloc(65536)
@@ -2721,7 +2624,7 @@ def pcc_allocator_object_cells_enumerate(out, capacity: i64, required_flags: i64
         key: i64 = atomic_load_i64(keys, index * 8, "acquire")
         if key > 0:
             span = int_to_ptr(load_i64(spans, index * 8))
-            if load_i64(span, 0) == 1 and load_i64(span, SPAN_FREE_CELLS_OFFSET) >= 0:
+            if load_i64(span, 0) == 1 and load_i64(span, SPAN_LIST_OFFSET) != SPAN_LIST_DISCARDED:
                 base = load_ptr(span, 16)
                 if logical_shift_right_i64(ptr_diff(base, null()), 12) == key:
                     stride: i64 = load_i64(span, 8)
@@ -2785,7 +2688,7 @@ def pcc_allocator_object_cells_enumerate_slice(
         key: i64 = atomic_load_i64(keys, slot * 8, "acquire")
         if key > 0:
             span = int_to_ptr(load_i64(spans, slot * 8))
-            if load_i64(span, 0) == 1 and load_i64(span, SPAN_FREE_CELLS_OFFSET) >= 0:
+            if load_i64(span, 0) == 1 and load_i64(span, SPAN_LIST_OFFSET) != SPAN_LIST_DISCARDED:
                 base = load_ptr(span, 16)
                 if logical_shift_right_i64(ptr_diff(base, null()), 12) == key:
                     stride: i64 = load_i64(span, 8)

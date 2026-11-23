@@ -7,6 +7,14 @@ trim: a slab whose every cell is free keeps its mapping and its span and
 gives its pages back, and its size class carves it again when it next
 needs cells.
 
+Nothing is moved, so a slab with a live object stays. The allocator keeps
+such slabs few instead: every slab has its own free cells, and a size class
+takes a cell from a slab that is more than half full before it takes one
+from a sparse slab. The third program leaves a heap of sparse slabs, churns
+short-lived objects of which a few stay, and then frees the first
+survivors: the stragglers sit in the dense slabs, so the sparse ones empty
+and return.
+
 The programs read the allocator's counters through ``pcc.extern``, so their
 expected output is stated here.
 """
@@ -153,10 +161,48 @@ ROUNDS_OUTPUT = textwrap.dedent("""
     """).lstrip()
 
 
+SPARSE = PRELUDE + textwrap.dedent("""
+
+    def main():
+        first = build(200000, 0)
+        survivors = first[::10]
+        first = None
+        gc.collect()
+        # One object in ten is left in every slab: none is empty.
+        print("sparse heap returns nothing", slab_counter(0) < 3)
+        # Short-lived objects, of which one in two hundred stays.
+        stragglers = []
+        round_number = 0
+        while round_number < 100:
+            batch = build(20000, 1000000)
+            stragglers.extend(batch[::200])
+            batch = None
+            round_number += 1
+        gc.collect()
+        print("stragglers", len(stragglers), total(survivors))
+        survivors = None
+        gc.collect()
+        print("sparse slabs emptied and returned", slab_counter(0) > 150)
+        print("stragglers intact", total(stragglers))
+        print("bytes given back", slab_counter(2) == (slab_counter(0) - slab_counter(1)) * 65536)
+
+
+    main()
+    """)
+
+SPARSE_OUTPUT = textwrap.dedent("""
+    sparse heap returns nothing True
+    stragglers 10000 1999900000
+    sparse slabs emptied and returned True
+    stragglers intact 10099000000
+    bytes given back True
+    """).lstrip()
+
+
 @pytest.mark.parametrize(
     ("name", "program", "expected"),
-    [("peak", PEAK, PEAK_OUTPUT), ("rounds", ROUNDS, ROUNDS_OUTPUT)],
-    ids=["peak", "rounds"],
+    [("peak", PEAK, PEAK_OUTPUT), ("rounds", ROUNDS, ROUNDS_OUTPUT), ("sparse", SPARSE, SPARSE_OUTPUT)],
+    ids=["peak", "rounds", "sparse"],
 )
 def test_empty_object_slabs_return_to_the_system(tmp_path, name, program, expected):
     from pcc.frontends.python.pipeline import compile_python

@@ -1545,20 +1545,18 @@ not joined at process exit. The switch stays off until that case has run
 green three times (Claude's recommendation; the maintainer has not decided
 the default).
 
-Memory return, the purpose of the former GC4 (step 1 done, Claude, local
-Mac, 2026-11-24). The maintainer said in this session that the features of
+Memory return, the purpose of the former GC4 (done without relocation,
+Claude, local Mac, 2026-11-24). The maintainer said in this session that the features of
 GC2 and GC4 are both to be done, which replaces the decision above not to
 build slab evacuation. What it buys is memory, not throughput: a 64 KiB
 object slab stayed resident for the life of the process once any object
 had lived in it.
 
-Step 1, done: empty object slabs go back to the system. An object span now
-keeps the free-cell count raw spans keep (its cells on the central lists).
-`pcc_allocator_trim_objects` rebuilds each object free list without the
-cells of fully free slabs and discards those slabs' pages through the new
-`pcc.unsafe.page_discard` intrinsic; the mapping and the span stay, because
-lock-free provenance readers read the state word of any candidate address,
-and the size class carves the slab again when it next needs cells
+Step 1, done: empty object slabs go back to the system.
+`pcc_allocator_trim_objects` discards the pages of fully free slabs through
+the new `pcc.unsafe.page_discard` intrinsic; the mapping and the span stay,
+because lock-free provenance readers read the state word of any candidate
+address, and the size class carves the slab again when it next needs cells
 (`_recarve_object_slab_locked`). A full collection, explicit or the end of
 one in bounded stops, ends with this trim and with the raw-slab trim, which
 nothing called before. `page_discard` maps fresh anonymous pages over the
@@ -1566,22 +1564,31 @@ range on Darwin (`MADV_FREE_REUSABLE` left 6 of 9 MB resident), is
 `madvise(MADV_DONTNEED)` on Linux and `VirtualAlloc(MEM_RESET)` on Windows;
 only Darwin was executed.
 
-Evidence: `tests/python/test_gc0_object_slab_return.py` (a peak of 200,000
-objects with one in a thousand kept: more than 100 slabs returned, the
-resident size falls by more than half of their bytes, the kept objects are
-intact, the same size classes carve the slabs again, and five rounds over
-several size classes). A probe of the same shape: 34 MB at the peak, 23 MB
-after the collection, 141 slabs (9 MB) returned. Not measured: the cost of
-the free-cell count on the allocator's refill and drain paths (`pcc_perf
-ab` against `gc0-head`).
+Steps 2 and 3, done differently: nothing is moved. Moving an object means
+rewriting every pointer to it, and this runtime holds uncounted raw
+pointers (borrowed temporaries across calls, internal caches) with no
+protocol left to find them in a stop, while `id()` and the default hash
+are the address; a missed pointer would be silent corruption (Claude's
+judgment). The allocator keeps sparse slabs from forming instead. The
+central free cells of the object family are no longer one list per size
+class: every slab keeps its own (span words 64 to 88), and a size class
+keeps its slabs in lists by occupancy (dense: fewer than half of the cells
+free; sparse; empty; discarded). A cell comes from a dense slab first, so
+new objects fill the slabs that are nearly full and a sparse slab empties
+as its objects die. The trim then takes the empty list, all but the slab
+emptied last, so its work follows the number of empty slabs, not of free
+cells. What stays: a slab that holds one long-lived object.
 
-Steps 2 and 3, not written: a sparse slab, one with a few live cells,
-still stays. Returning it needs its live objects moved, which needs (2)
-nodes for the untracked cells of chosen slabs and, per node, the objects
-that refer to it, recorded by the cycle's subtract pass, and (3) one stop
-that moves each chosen object whose count equals the slots found, that no
-stack word names (a conservative scan) and whose address was never exposed
-(`id()`, default hash, weak reference, C handle), and rewrites those slots.
+Evidence (local Mac): `tests/python/test_gc0_object_slab_return.py`, three
+programs: a peak of 200,000 objects with one in a thousand kept (more than
+100 slabs returned, the resident size falls by more than half of their
+bytes, the same size classes carve the slabs again); five rounds over
+several size classes; and a heap of sparse slabs (one object in ten left
+in every slab), two million short-lived objects of which 10,000 stay, then
+the first survivors freed: 284 slabs (17 MB) returned, resident size 51 MB
+before and 33 MB after. Not run: the same program on the previous
+last-in-first-out lists, and an A/B of the handler (the central lists are
+on the magazines' refill and drain paths, not on the allocation fast path).
 
 Claude's proposed mapping of the remaining features onto the counting base
 (a proposal; GC4's line is superseded by the decision above):
