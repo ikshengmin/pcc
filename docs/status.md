@@ -519,7 +519,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - none
+   - #9 Linux split observer-free sweep costs: Codex, Linux x86-64, 2026-11-23 02:24 UTC, area runtime-gc
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
