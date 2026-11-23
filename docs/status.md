@@ -381,9 +381,15 @@ in the relevant section or issue and removes the entry.
      the layered path, and the cost above comes from collections that have
      no observable candidate. Cause not attributed.
    - Next #9, in order:
-     - Split `sweep_other` into the prior-stop cohort compaction, observer
-       selection and layer-plan work in the opt-in pause diagnostic; then
-       remove any unnecessary work on the no-observer path (condition 4).
+     - Remove the redundant observer census on the common no-observer
+       handler path while keeping the weakref, pending generator, and
+       finalizer semantics (condition 4). The split opt-in Linux probe on
+       `b7845414c` ran 9 times (40k requests each) and reconciled to
+       counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
+       median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
+       layer construction both measured zero in those runs. GC3 w4 median
+       screening in the longest pause was 12.9 ms. Fix that scan, not the
+       planner or graph lock, before repeating the Linux comparison.
        Linux `64d49ae56` vs `b7845414c`: three alternating 40k-request
        pairs per cell, all 18 exclusive reports reconcile to metrics
        119–121. Aggregate `sweep_other` paired median increases: GC1 w4
@@ -519,7 +525,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 Linux split observer-free sweep costs: Codex, Linux x86-64, 2026-11-23 02:24 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
