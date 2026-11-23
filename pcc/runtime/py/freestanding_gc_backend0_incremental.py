@@ -17,8 +17,11 @@ many short stops and leaves the decision to a young collection:
 The world runs between two stops, so the counts and edges the cycle read
 may be stale. That only changes which objects become candidates: a young
 collection frees an object only when every reference to it comes from its
-own view, whatever put the object there. Garbage that existed when the
-build passed it cannot change any more, so it always ends as a candidate.
+own view, whatever put the object there. A resumed interior scan stores an
+ordinal, not an address in a container: insertions or removals may change
+the approximate discovery, not the final decision. A stable unreachable
+component still has every slot examined; a mutator cannot change it without
+acquiring a reference to it first.
 
 A node of this cycle carries _FULL_VIEW and belongs to no stopped-world
 view. It lives in a block and is never recycled: untrack clears its object
@@ -95,6 +98,10 @@ py_gc_index_remove = extern("py_gc_index_remove", (c_ptr,), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_visit_object_slots = extern(
     "pcc_gc_visit_object_slots", (c_ptr, c_ptr, c_ptr), c_int64
+)
+pcc_gc_visit_object_slots_slice = extern(
+    "pcc_gc_visit_object_slots_slice",
+    (c_ptr, c_int64, c_int64, c_ptr, c_ptr, c_ptr), c_int64
 )
 pcc_gc_backend0_mark_runtime_roots = extern(
     "pcc_gc_backend0_mark_runtime_roots", (), c_void
@@ -177,7 +184,9 @@ _STATE_CANDIDATE_COUNT: i64 = 120
 _STATE_CANDIDATE_CAPACITY: i64 = 128
 _STATE_ROOTS_SCANNED: i64 = 136
 _STATE_DISCARD: i64 = 144       # release the view without candidates
-_STATE_BYTES: i64 = 152
+_STATE_SLOT_CURSOR: i64 = 152   # an ordinal in the current object's current layout
+_STATE_MARK_NODE: i64 = 160     # block-owned node, never a retained raw slot
+_STATE_BYTES: i64 = 168
 
 _PHASE_BUILD: i64 = 1
 _PHASE_SUBTRACT: i64 = 2
@@ -186,6 +195,10 @@ _PHASE_SWEEP: i64 = 4
 _PHASE_DEMOTE: i64 = 5
 
 _BATCH: i64 = 64
+_SLOT_BATCH: i64 = 128
+_SLOT_DONE: i64 = -1
+_SLOT_SLICE_CURSOR: i64 = 0
+_SLOT_SLICE_BYTES: i64 = 16
 # Outcome of a pass: out of time, complete, or at a step that needs the
 # world stopped (a pass on the collector thread only).
 _PASS_MORE: i64 = 0
@@ -325,6 +338,8 @@ def _time_up(deadline: i64) -> i64:
 def _enter(state, phase: i64) -> None:
     store_ptr(state, _STATE_BLOCK, load_ptr(state, _STATE_BLOCKS))
     store_i64(state, _STATE_INDEX, 0)
+    store_i64(state, _STATE_SLOT_CURSOR, 0)
+    store_ptr(state, _STATE_MARK_NODE, null())
     store_i32(global_addr("pcc_gc_full_phase"), 0, phase)
 
 
@@ -452,45 +467,53 @@ def _subtract_slot(slot, role: i64, context) -> None:
 
 
 @c_abi_export("pcc_gc_backend0_full_scan")
-def _scan(state, node, marking: i64, concurrent: i64) -> None:
-    """Visit the slots of a node's object for the subtract or the mark
-    pass. The visitors get ``state`` as their context when the world runs
-    and NULL in a stop."""
+def _scan(state, node, cursor: i64, marking: i64, concurrent: i64) -> i64:
+    """Visit one slice of the node's current slots; return the next ordinal
+    or _SLOT_DONE. Reacquire all object ownership for each slice."""
     obj = load_ptr(node, _NODE_OBJECT)
     if ptr_is_null(obj) != 0:
-        return
-    if concurrent == 0:
-        if marking != 0:
-            pcc_gc_visit_object_slots(obj, _mark_slot, null())
-        else:
-            pcc_gc_visit_object_slots(obj, _subtract_slot, null())
-        return
-    held: i64 = _hold(node, obj)
-    if held == 0:
-        # Unscanned, its references stay outside referrers of its children.
-        return
-    tag: i64 = load_i32(obj, 8)
-    # A C extension's traversal is its own code: only in a stop.
-    if pcc_capi_is_cext_type_tag(tag) == 0:
-        locked: i64 = 0
+        return _SLOT_DONE
+    context = null()
+    held: i64 = 0
+    locked: i64 = 0
+    if concurrent != 0:
+        held = _hold(node, obj)
+        if held == 0:
+            # Unscanned references remain outside referrers.
+            return _SLOT_DONE
+        context = state
+        tag: i64 = load_i32(obj, 8)
+        if pcc_capi_is_cext_type_tag(tag) != 0:
+            if held == 1:
+                _release(obj)
+            return _SLOT_DONE
         if (
             tag == abi_constant("object.type.list")
             or tag == abi_constant("object.type.instance")
             or tag >= abi_constant("object.type.user_class_start")
         ):
-            # A list's items and an instance's fields change under the
-            # object's own container lock; a replaced item array is freed
-            # only after the writer unlocks.
             pcc_container_lock(obj)
             locked = 1
-        if marking != 0:
-            pcc_gc_visit_object_slots(obj, _mark_slot, state)
-        else:
-            pcc_gc_visit_object_slots(obj, _subtract_slot, state)
-        if locked != 0:
-            pcc_container_unlock(obj)
+
+    visitor = function_addr("pcc_gc_backend0_full_subtract_slot")
+    if marking != 0:
+        visitor = function_addr("pcc_gc_backend0_full_mark_slot")
+    slice_out = stack_alloc(_SLOT_SLICE_BYTES)
+    handled: i64 = pcc_gc_visit_object_slots_slice(
+        obj, cursor, _SLOT_BATCH, visitor, context, slice_out
+    )
+    following: i64 = _SLOT_DONE
+    if handled != 0:
+        following = load_i64(slice_out, _SLOT_SLICE_CURSOR)
+    elif concurrent == 0:
+        # A C extension's traverse callback has no resumable ABI. Keep its
+        # existing stopped traversal; do not run it on the background worker.
+        pcc_gc_visit_object_slots(obj, visitor, null())
+    if locked != 0:
+        pcc_container_unlock(obj)
     if held == 1:
         _release(obj)
+    return following
 
 
 @c_abi_export("pcc_gc_backend0_full_subtract")
@@ -501,15 +524,24 @@ def _subtract(state, deadline: i64, concurrent: i64) -> i64:
     while ptr_is_null(block) == 0:
         count: i64 = load_i64(block, _BLOCK_COUNT)
         while index < count:
-            _scan(state, ptr_add(block, _BLOCK_FIRST + index * _NODE_BYTES), 0, concurrent)
-            index = index + 1
+            cursor: i64 = load_i64(state, _STATE_SLOT_CURSOR)
+            next_slot: i64 = _scan(
+                state, ptr_add(block, _BLOCK_FIRST + index * _NODE_BYTES),
+                cursor, 0, concurrent
+            )
+            if next_slot == _SLOT_DONE:
+                store_i64(state, _STATE_SLOT_CURSOR, 0)
+                index = index + 1
+            else:
+                store_i64(state, _STATE_SLOT_CURSOR, next_slot)
             units = units + 1
             if (units & 31) == 0:
                 _work(32)
-                if _time_up(deadline) != 0:
-                    store_ptr(state, _STATE_BLOCK, block)
-                    store_i64(state, _STATE_INDEX, index)
-                    return _PASS_MORE
+            if (next_slot != _SLOT_DONE or (units & 31) == 0) and _time_up(deadline) != 0:
+                _work(units & 31)
+                store_ptr(state, _STATE_BLOCK, block)
+                store_i64(state, _STATE_INDEX, index)
+                return _PASS_MORE
         block = load_ptr(block, _BLOCK_NEXT)
         index = 0
     _work(units & 31)
@@ -588,10 +620,20 @@ def _mark(state, deadline: i64, concurrent: i64) -> i64:
     while outcome < 0:
         gray: i64 = load_i64(state, _STATE_GRAY_COUNT)
         block = load_ptr(state, _STATE_BLOCK)
-        if gray > 0:
-            gray = gray - 1
-            store_i64(state, _STATE_GRAY_COUNT, gray)
-            _scan(state, load_ptr(load_ptr(state, _STATE_GRAY), gray * 8), 1, concurrent)
+        scanning = load_ptr(state, _STATE_MARK_NODE)
+        next_slot: i64 = _SLOT_DONE
+        if ptr_is_null(scanning) == 0 or gray > 0:
+            if ptr_is_null(scanning) != 0:
+                gray = gray - 1
+                store_i64(state, _STATE_GRAY_COUNT, gray)
+                scanning = load_ptr(load_ptr(state, _STATE_GRAY), gray * 8)
+            next_slot = _scan(state, scanning, load_i64(state, _STATE_SLOT_CURSOR), 1, concurrent)
+            if next_slot == _SLOT_DONE:
+                store_ptr(state, _STATE_MARK_NODE, null())
+                store_i64(state, _STATE_SLOT_CURSOR, 0)
+            else:
+                store_ptr(state, _STATE_MARK_NODE, scanning)
+                store_i64(state, _STATE_SLOT_CURSOR, next_slot)
         elif ptr_is_null(block) == 0:
             index: i64 = load_i64(state, _STATE_INDEX)
             if index < load_i64(block, _BLOCK_COUNT):
@@ -620,7 +662,8 @@ def _mark(state, deadline: i64, concurrent: i64) -> i64:
         units = units + 1
         if (units & 31) == 0:
             _work(32)
-            if outcome < 0 and _time_up(deadline) != 0:
+        if outcome < 0 and (next_slot != _SLOT_DONE or (units & 31) == 0):
+            if _time_up(deadline) != 0:
                 outcome = _PASS_MORE
     _work(units & 31)
     return outcome

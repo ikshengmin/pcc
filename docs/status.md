@@ -218,12 +218,14 @@ in the relevant section or issue and removes the entry.
    section below):
    (0a) Done on Linux: the young log is process-wide bounded without
        changing collection admission; see the regression evidence below.
-   (0b) The bounded stop is not bounded for a high-fanout container: one
-       old list holding 320k lists gave a 27.76 ms step. The passes check
-       the budget between objects; a large object's slots need a cursor
-       (`pcc_gc_visit_object_slots_slice` exists). Its acceptance probe
-       includes a high-fanout container as well as heap size; this
-       replaces (f).
+   (0b) Slot slicing landed: current-layout ordinals bound each built-in
+       scan to 128 positions; mutation regression passes. Next: attribute
+       the remaining mark-phase tail at 320k, then bound the remaining
+       single-stop work. The complete pause target is not met; see below.
+   macOS verification of (0b) slot slicing: run
+   `uv run pytest -x -v tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_incremental_full_collection.py`,
+   seal the result, its parent and a second parent arm, then run
+   `pcc_perf.py ab --control-arm` and `table`. Platform macOS.
    macOS verification of (0a) young-log cap: run
    `uv run pytest -x -v tests/python/test_gc0_young_log_bound.py` and
    seal the (0a) commit, its parent, and a second parent arm for
@@ -266,7 +268,6 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0b) high-fanout stop slicing: Codex, Linux x86-64, 2026-11-23 21:05 UTC, area runtime-gc
    - (a) throughput of what landed on 2026-11-24: Claude, local Mac, 2026-11-23 21:10 UTC, area runtime-gc (measurement only; touches no source file)
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
@@ -620,6 +621,24 @@ observed per-step maxima of 1.18 / 7.98 / 27.76 ms; nesting the same
 children in lists of at most 256 gave 0.47 / 0.83 / 0.59 ms. The full
 collector checks the budget between objects, not between their slots.
 The next bound must include a high-fanout container as well as heap size.
+
+The (0b) slot slice resumes by ordinal, not a pointer into container
+storage. Candidate discovery is still approximate across slices and the
+existing young collection decides reclamation. A native regression resizes
+and shifts the old list during subtract and mark and checks both live
+references and collection of an old, unreachable, high-fanout self-cycle.
+It failed on the parent without slot slicing; 17 focused Linux cases passed
+with the change. Three runs of the live high-fanout probe gave median
+per-run maxima 0.50 / 0.52 / 6.50 ms at 20k / 80k / 320k (320k maximum
+7.29 ms); this is not a strict pause bound or a throughput A/B. A further
+run using `tests/python/fixtures/gc_full_high_fanout_scaling.c`, linked
+via `tests.owned_runtime_c_fixture.link_c_harness`, gave 0.25 / 1.82 /
+5.59 ms. Pass the heap size as argv[1] and optionally `grouped` to use
+256-slot intermediate lists. This excludes the initial aging collection,
+and attributes a step by its starting phase (it may cross phases).
+Remaining tail: attribute mark growth or root work at 320k; candidate
+handover, extension traversal and explicit collection are not bounded
+by this slot cut.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through
