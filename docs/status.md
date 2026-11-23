@@ -218,10 +218,13 @@ in the relevant section or issue and removes the entry.
    section below):
    (0a) Done on Linux: the young log is process-wide bounded without
        changing collection admission; see the regression evidence below.
-   (0b) Slot slicing landed: current-layout ordinals bound each built-in
-       scan to 128 positions; mutation regression passes. Next: attribute
-       the remaining mark-phase tail at 320k, then bound the remaining
-       single-stop work. The complete pause target is not met; see below.
+   (0b) Slot slicing and allocation-free gray links landed. The 320k
+       live-container probe improves on Linux; the complete pause target
+       is not met. Next: reproduce a large unreachable component, then
+       bound candidate-buffer growth and handover in separate slices.
+   macOS verification of (0b) gray links: focused high-fanout and incremental
+   full tests, plus a sealed A/B against its parent with a duplicate parent
+   control arm and `table`. Platform macOS.
    macOS verification of (0b) slot slicing: run
    `uv run pytest -x -v tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_incremental_full_collection.py`,
    seal the result, its parent and a second parent arm, then run
@@ -276,7 +279,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0b) attribute and bound residual mark tail: Codex, Linux x86-64, 2026-11-23 21:13 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
@@ -644,9 +647,19 @@ via `tests.owned_runtime_c_fixture.link_c_harness`, gave 0.25 / 1.82 /
 5.59 ms. Pass the heap size as argv[1] and optionally `grouped` to use
 256-slot intermediate lists. This excludes the initial aging collection,
 and attributes a step by its starting phase (it may cross phases).
-Remaining tail: attribute mark growth or root work at 320k; candidate
-handover, extension traversal and explicit collection are not bounded
-by this slot cut.
+The largest mark steps in three 320k traces began before root scanning
+and coincided with gray-array growth from 262,144 to 524,288 entries.
+Newly allocated 4 KiB gray chunks lost all five initial pairs and were
+discarded. The landed version instead links the full-view nodes already
+owned by the collector, with no separate queue allocation or copying.
+Linux native: 10 focused tests passed, including a wide two-level graph
+that checks descendants are not lost. Ten CPU-pinned alternating 320k
+pairs against `c9162e9c`: median per-run longest step 6.52 → 0.69 ms;
+mark-start step 6.52 → 0.44 ms (10/10 lower for both); candidate worst
+1.44 ms. The unchanged grouped-list control was noisy. This is a
+targeted pause probe, not a 200 us end-to-end bound or a throughput
+verdict. Candidate buffer growth and handover, root and extension
+traversal, and explicit collection remain separate.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through

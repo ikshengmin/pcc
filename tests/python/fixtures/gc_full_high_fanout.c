@@ -13,9 +13,37 @@ static PyObject *self_cycle(void) {
     return list;
 }
 
-int main(void) {
+static int wide_gray_frontier(void) {
+    const int width = 4096;
+    PyObject *root = py_list_new(0);
+    if (!root) return 30;
+    for (int i = 0; i < width; i++) {
+        PyObject *parent = py_list_new(0);
+        PyObject *grandchild = self_cycle();
+        if (!parent || !grandchild) return 31;
+        py_list_append(parent, grandchild);
+        py_list_append(root, parent);
+        py_decref(grandchild);
+        py_decref(parent);
+    }
+    py_gc_collect();
+    pcc_gc_backend0_full_set_slice_us(0);
+    if (!pcc_gc_backend0_full_begin()) return 32;
+    for (int i = 0; i < 10000 && pcc_gc_backend0_full_counter(3) != 0; i++) {
+        pcc_gc_backend0_full_step();
+    }
+    if (pcc_gc_backend0_full_counter(0) != 1) return 33;
+    /* Dropping a queued parent would leave its grandchild unreached. */
+    if (pcc_gc_backend0_full_counter(2) != 0) return 34;
+    py_decref(root);
+    if (py_gc_collect() != width) return 35;
+    return 0;
+}
+
+int main(int argc, char **argv) {
     const int fanout = 32768;
     py_gc_init();
+    if (argc > 1) return wide_gray_frontier();
     PyObject *owner = py_list_new(0);
     PyObject *child = self_cycle();
     PyObject *dead = self_cycle();

@@ -150,7 +150,9 @@ _NODE_GC_REFS: i64 = 8
 _NODE_BITS: i64 = 16
 _NODE_SHARD: i64 = 20
 _NODE_PREV: i64 = 24
-_NODE_NEXT: i64 = 32
+# Full-view nodes are not in the tracked list. Its next-link word belongs
+# to the gray worklist; untrack only clears _NODE_OBJECT on a full-view node.
+_NODE_GRAY_NEXT: i64 = 32
 _NODE_BYTES: i64 = 40
 # Node bits of this cycle; the stopped-world collector owns bits 1 to 32.
 _FULL_VIEW: i64 = 64
@@ -176,9 +178,8 @@ _STATE_CELLS: i64 = 32          # cursor over object cells (four words)
 _STATE_CELLS_DONE: i64 = 56
 _STATE_LARGE: i64 = 64          # cursor over large objects (three words)
 _STATE_LARGE_DONE: i64 = 80
-_STATE_GRAY: i64 = 88           # reached nodes whose slots are unscanned
+_STATE_GRAY: i64 = 88           # head of reached but unscanned block-owned nodes
 _STATE_GRAY_COUNT: i64 = 96
-_STATE_GRAY_CAPACITY: i64 = 104
 _STATE_CANDIDATES: i64 = 112    # unreached objects, as addresses only
 _STATE_CANDIDATE_COUNT: i64 = 120
 _STATE_CANDIDATE_CAPACITY: i64 = 128
@@ -340,13 +341,16 @@ def _enter(state, phase: i64) -> None:
     store_i64(state, _STATE_INDEX, 0)
     store_i64(state, _STATE_SLOT_CURSOR, 0)
     store_ptr(state, _STATE_MARK_NODE, null())
+    if phase == _PHASE_SWEEP:
+        store_ptr(state, _STATE_GRAY, null())
+        store_i64(state, _STATE_GRAY_COUNT, 0)
     store_i32(global_addr("pcc_gc_full_phase"), 0, phase)
 
 
 @c_abi_export("pcc_gc_backend0_full_push")
-def _push(state, items_offset: i64, item) -> None:
-    """Append to the gray stack or to the candidates (items, count, capacity
-    at ``items_offset``). Without memory the cycle releases its view."""
+def _push_candidate(state, item) -> None:
+    """Append a candidate; without memory the cycle releases its view."""
+    items_offset: i64 = _STATE_CANDIDATES
     count: i64 = load_i64(state, items_offset + 8)
     capacity: i64 = load_i64(state, items_offset + 16)
     items = load_ptr(state, items_offset)
@@ -391,7 +395,7 @@ def _add(state, obj) -> None:
     store_i32(node, _NODE_BITS, _FULL_VIEW)
     store_i32(node, _NODE_SHARD, 0)
     store_ptr(node, _NODE_PREV, null())
-    store_ptr(node, _NODE_NEXT, null())
+    store_ptr(node, _NODE_GRAY_NEXT, null())
     # 0: the object has a node already (the cell cursor started over on a
     # grown table). Below 0: no index entry could be made. Either way the
     # slot is reused and the object stays an outside referrer.
@@ -551,7 +555,11 @@ def _subtract(state, deadline: i64, concurrent: i64) -> i64:
 @c_abi_export("pcc_gc_backend0_full_reach")
 def _reach(state, node) -> None:
     store_i32(node, _NODE_BITS, load_i32(node, _NODE_BITS) | _FULL_REACHED)
-    _push(state, _STATE_GRAY, node)
+    # The node is already owned by a cycle block. One link per reached
+    # node suffices, even when a single object reaches the entire heap.
+    store_ptr(node, _NODE_GRAY_NEXT, load_ptr(state, _STATE_GRAY))
+    store_ptr(state, _STATE_GRAY, node)
+    store_i64(state, _STATE_GRAY_COUNT, load_i64(state, _STATE_GRAY_COUNT) + 1)
 
 
 @c_abi_export("pcc_gc_backend0_full_mark_child")
@@ -626,7 +634,8 @@ def _mark(state, deadline: i64, concurrent: i64) -> i64:
             if ptr_is_null(scanning) != 0:
                 gray = gray - 1
                 store_i64(state, _STATE_GRAY_COUNT, gray)
-                scanning = load_ptr(load_ptr(state, _STATE_GRAY), gray * 8)
+                scanning = load_ptr(state, _STATE_GRAY)
+                store_ptr(state, _STATE_GRAY, load_ptr(scanning, _NODE_GRAY_NEXT))
             next_slot = _scan(state, scanning, load_i64(state, _STATE_SLOT_CURSOR), 1, concurrent)
             if next_slot == _SLOT_DONE:
                 store_ptr(state, _STATE_MARK_NODE, null())
@@ -702,7 +711,7 @@ def _sweep(state, deadline: i64, concurrent: i64) -> i64:
                     and (load_i32(node, _NODE_BITS) & _FULL_REACHED) == 0
                     and load_i64(state, _STATE_DISCARD) == 0
                 ):
-                    _push(state, _STATE_CANDIDATES, obj)
+                    _push_candidate(state, obj)
             index = index + 1
             units = units + 1
             if (units & 31) == 0:
@@ -758,9 +767,7 @@ def _demote(state) -> i64:
 
 @c_abi_export("pcc_gc_backend0_full_finish")
 def _finish(state) -> None:
-    gray = load_ptr(state, _STATE_GRAY)
-    if ptr_is_null(gray) == 0:
-        free(gray)
+    # Gray links belong to the node blocks, discarded during sweep/abort.
     candidates = load_ptr(state, _STATE_CANDIDATES)
     if ptr_is_null(candidates) == 0:
         free(candidates)
