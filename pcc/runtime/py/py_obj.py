@@ -3062,6 +3062,16 @@ pcc_thread_visit_conservative_words = extern(
 pcc_gc3_review_visit_root_values_stopped = extern(
     "pcc_gc3_review_visit_root_values_stopped", (c_ptr, c_ptr), c_int64
 )
+pcc_allocator_gc3_review_bump_lookup = extern(
+    "pcc_allocator_gc3_review_bump_lookup", (c_ptr,), c_ptr
+)
+pcc_allocator_gc3_review_bump_snapshot_stopped = extern(
+    "pcc_allocator_gc3_review_bump_snapshot_stopped", (c_ptr, c_ptr), c_int64
+)
+pcc_allocator_gc3_review_bump_reset_stopped = extern(
+    "pcc_allocator_gc3_review_bump_reset_stopped",
+    (c_ptr, c_int64, c_int64, c_int64), c_int64,
+)
 
 _CLOSED_YOUNG_COUNT = 0
 _CLOSED_YOUNG_CELLS = 8
@@ -3079,6 +3089,11 @@ _CLOSED_FRONTIER_CAPACITY = 0
 _CLOSED_FRONTIER_COUNT = 8
 _CLOSED_FRONTIER_FAILED = 32
 _CLOSED_FRONTIER_ITEMS = 40
+_BUMP_CUT_CARDS_USED = 8
+_BUMP_CUT_SNAPSHOT_BASE = 0
+_BUMP_CUT_SNAPSHOT_STRIDE = 8
+_BUMP_CUT_SNAPSHOT_GENERATION = 16
+_BUMP_CUT_SNAPSHOT_BYTES = 24
 
 
 def _gc3_closed_young_mark_index(cut, mid: int) -> None:
@@ -3119,8 +3134,9 @@ def _gc3_closed_young_add(cut, value, interior: int) -> None:
             return
     # Old and immediate roots do not expand the young cut. A genuine young
     # cell outside the explicit cohort means the proof is incomplete.
-    if (pcc_gc_granule_is_object_start(value) == 1
-            and (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & _CLOSED_YOUNG_FLAGS) != 0):
+    if ((pcc_gc_granule_is_object_start(value) == 1
+            and (load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & _CLOSED_YOUNG_FLAGS) != 0)
+            or ptr_is_null(pcc_allocator_gc3_review_bump_lookup(value)) == 0):
         store_i64(cut, _CLOSED_YOUNG_INVALID, 1)
 
 
@@ -3139,7 +3155,8 @@ def pcc_gc3_review_validate_reclaim_slot(slot, role: int, cut) -> None:
     child = load_ptr(slot, 0)
     if ptr_is_null(child) != 0 or is_tagged_int(child) != 0:
         return
-    if pcc_gc_granule_is_object_start(child) != 1:
+    if (pcc_gc_granule_is_object_start(child) != 1
+            and ptr_is_null(pcc_allocator_gc3_review_bump_lookup(child)) != 0):
         store_i64(cut, _CLOSED_YOUNG_INVALID, 1)
         return
     tag: int = load_i32(child, PYOBJECTHEADER_TYPE_TAG_OFFSET)
@@ -3169,7 +3186,9 @@ def pcc_gc3_review_collect_closed_young_stopped(
     # Suppress compiler entry/backedge polls while the verified stopped cut
     # walks its raw arrays. The public wrapper does not discover roots.
     pcc_thread_no_park_enter()
-    result: int = _gc3_collect_closed_young_in_cut(cut, roots, root_count, cards, frontier, 0)
+    result: int = _gc3_collect_closed_young_in_cut(
+        cut, roots, root_count, cards, frontier, 0, null(), 0, 0,
+    )
     pcc_thread_no_park_exit()
     return result
 
@@ -3198,13 +3217,64 @@ def pcc_gc3_review_collect_young_with_initial_snapshot_stopped(cut, cards, front
             or ptr_is_null(cut) != 0 or ptr_is_null(frontier) != 0):
         return -1
     pcc_thread_no_park_enter()
-    result: int = _gc3_collect_closed_young_in_cut(cut, null(), 0, cards, frontier, 1)
+    result: int = _gc3_collect_closed_young_in_cut(
+        cut, null(), 0, cards, frontier, 1, null(), 0, 0,
+    )
     pcc_thread_no_park_exit()
     return result
 
 
+@c_abi_export("pcc_gc3_review_collect_bump_span_stopped")
+def pcc_gc3_review_collect_bump_span_stopped(
+    span, cut, roots, root_count: int, cards, frontier,
+) -> int:
+    """Link actual marking to rewind for a closed, tuple-only review slab.
+
+    Until the old-to-bump barrier and raw export controls are admitted,
+    even one dirty owner makes this particular route incomplete.
+    """
+    if (load_i32(global_addr("pcc_gc_config_initialized"), 0) == 0
+            or load_i32(global_addr("pcc_gc_backend_selected"), 0) != 3
+            or pcc_thread_owns_stopped_world() == 0
+            or ptr_is_null(cut) != 0 or ptr_is_null(cards) != 0
+            or ptr_is_null(frontier) != 0 or load_i64(cards, _BUMP_CUT_CARDS_USED) != 0
+            or root_count < 0 or root_count > _CLOSED_YOUNG_LIMIT
+            or (root_count > 0 and ptr_is_null(roots) != 0)):
+        return -1
+    pcc_thread_no_park_enter()
+    result: int = _gc3_collect_bump_span_in_cut(span, cut, roots, root_count, cards, frontier)
+    pcc_thread_no_park_exit()
+    return result
+
+
+def _gc3_collect_bump_span_in_cut(span, cut, roots, root_count: int, cards, frontier) -> int:
+    snapshot = stack_alloc(_BUMP_CUT_SNAPSHOT_BYTES)
+    count: int = pcc_allocator_gc3_review_bump_snapshot_stopped(span, snapshot)
+    cells = load_ptr(cut, _CLOSED_YOUNG_CELLS)
+    marks = load_ptr(cut, _CLOSED_YOUNG_MARKS)
+    queue = load_ptr(cut, _CLOSED_YOUNG_QUEUE)
+    if (count < 0 or count > load_i64(cut, _CLOSED_YOUNG_COUNT)
+            or ptr_is_null(cells) != 0 or ptr_is_null(marks) != 0 or ptr_is_null(queue) != 0
+            or ptr_eq(cells, marks) != 0 or ptr_eq(cells, queue) != 0 or ptr_eq(marks, queue) != 0):
+        return -1
+    if count == 0:
+        return 0
+    base = load_ptr(snapshot, _BUMP_CUT_SNAPSHOT_BASE)
+    stride: int = load_i64(snapshot, _BUMP_CUT_SNAPSHOT_STRIDE)
+    generation: int = load_i64(snapshot, _BUMP_CUT_SNAPSHOT_GENERATION)
+    index: int = 0
+    while index < count:
+        store_ptr(cells, index * 8, ptr_add(base, index * stride))
+        index = index + 1
+    store_i64(cut, _CLOSED_YOUNG_COUNT, count)
+    return _gc3_collect_closed_young_in_cut(
+        cut, roots, root_count, cards, frontier, 0, span, stride, generation,
+    )
+
+
 def _gc3_collect_closed_young_in_cut(
-    cut, roots, root_count: int, cards, frontier, initial_snapshot: int
+    cut, roots, root_count: int, cards, frontier, initial_snapshot: int,
+    bump_span, bump_stride: int, generation: int,
 ) -> int:
     if (atomic_load_i32(global_addr("pcc_gc_mark_active"), 0, "acquire") != 0
             or atomic_load_i32(global_addr("pcc_gc_cms_sweep_pending"), 0, "acquire") != 0
@@ -3233,7 +3303,12 @@ def _gc3_collect_closed_young_in_cut(
     while index < count:
         obj = load_ptr(cells, index * 8)
         bits: int = ptr_to_int(obj)
-        if bits <= previous or pcc_gc_granule_is_object_start(obj) != 1:
+        if bits <= previous:
+            return -1
+        if ptr_is_null(bump_span) == 0:
+            if ptr_eq(pcc_allocator_gc3_review_bump_lookup(obj), bump_span) == 0:
+                return -1
+        elif pcc_gc_granule_is_object_start(obj) != 1:
             return -1
         if (load_i32(obj, PYOBJECTHEADER_FLAGS_OFFSET) != _CLOSED_YOUNG_FLAGS
                 or pcc_gc_object_index_seen_stable(obj) != 0):
@@ -3241,6 +3316,8 @@ def _gc3_collect_closed_young_in_cut(
         previous = bits
         tag: int = load_i32(obj, PYOBJECTHEADER_TYPE_TAG_OFFSET)
         if tag == PY_TYPE_LIST:
+            if bump_stride != 0:
+                return -1
             length: int = load_i64(obj, PYLISTOBJECT_LENGTH_OFFSET)
             capacity: int = load_i64(obj, PYLISTOBJECT_CAPACITY_OFFSET)
             if (length < 0 or length > capacity or capacity > _CLOSED_YOUNG_SLOT_LIMIT
@@ -3248,7 +3325,8 @@ def _gc3_collect_closed_young_in_cut(
                 return -1
         elif tag == PY_TYPE_TUPLE:
             length = load_i64(obj, PYTUPLEOBJECT_LEN_OFFSET)
-            if length < 0 or length > _CLOSED_YOUNG_SLOT_LIMIT:
+            if (length < 0 or length > _CLOSED_YOUNG_SLOT_LIMIT
+                    or (bump_stride != 0 and PYTUPLEOBJECT_SIZE + length * 8 > bump_stride)):
                 return -1
         else:
             return -1
@@ -3284,6 +3362,9 @@ def _gc3_collect_closed_young_in_cut(
     if load_i64(cut, _CLOSED_YOUNG_INVALID) != 0:
         return -1
 
+    if bump_stride != 0 and load_i64(cut, _CLOSED_YOUNG_ENQUEUED) != 0:
+        # No mixed-span retirement until there is a hole/promotion map.
+        return 0
     validator = function_addr("pcc_gc3_review_validate_reclaim_slot")
     index = 0
     while index < count:
@@ -3293,6 +3374,11 @@ def _gc3_collect_closed_young_in_cut(
                     or load_i64(cut, _CLOSED_YOUNG_INVALID) != 0):
                 return -1
         index = index + 1
+
+    if bump_stride != 0:
+        if pcc_allocator_gc3_review_bump_reset_stopped(bump_span, generation, count, 0) != 1:
+            return -1
+        return count
 
     reclaimed: int = 0
     index = 0

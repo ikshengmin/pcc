@@ -642,3 +642,23 @@ ran all five mode lanes and five additional GC3 processes. All 92
 existing allocator LLVM function bodies were byte-identical. This is
 not ordinary tuple/list allocation, a complete minor, or a throughput
 result: real liveness/promotion must supply the proof before rewind.
+
+### Let an actual empty young mark authorize slab rewind
+
+The next review cut builds its transient cohort from the allocator's
+committed prefix and generation, not from a list supplied by a caller.
+It walks real strong tuple slots to close cycles. It leaves a mixed
+slab alone, even if one cell is dead; without a hole/promotion map it
+cannot expose reusable cells safely. A complete empty mark checks
+ordinary payload ownership, then rewinds the whole span and invalidates
+every previously committed start. No per-cell free or registration
+occurs in the bump path.
+
+Five Linux x86-64 pcc0/self processes tested a rooted two-tuple cycle and
+a separate dead tuple in one slab. The rooted cut deferred rewind, the
+empty cut reclaimed all three allocations at once, and the next bump
+returned the same address. A non-stopped call, an unresolved dirty
+owner, and a root in another young span did not rewind. Only closed
+tuple cohorts are admitted by this API. The real old-to-bump writer/
+root integration, list backing traffic, foreign ownership and automatic
+admission are still excluded. No sealed handler or pause result.

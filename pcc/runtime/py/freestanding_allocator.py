@@ -3396,3 +3396,23 @@ def pcc_allocator_gc3_review_bump_reset_stopped(
     atomic_store_i64(span, _GC3_BUMP_COMMITTED, 0, "release")
     atomic_store_i64(span, _GC3_BUMP_GENERATION, generation + 1, "release")
     return 1
+
+
+# Shared with the closed young cut in py_obj.
+_GC3_BUMP_SNAPSHOT_BASE = 0
+_GC3_BUMP_SNAPSHOT_STRIDE = 8
+_GC3_BUMP_SNAPSHOT_GENERATION = 16
+
+
+@c_abi_export("pcc_allocator_gc3_review_bump_snapshot_stopped")
+def pcc_allocator_gc3_review_bump_snapshot_stopped(span, out) -> i64:
+    """Return a complete committed prefix and its generation in one stop."""
+    if ptr_is_null(out) != 0 or pcc_thread_owns_stopped_world() == 0:
+        return -1
+    generation: i64 = pcc_allocator_gc3_review_bump_generation(span)
+    if generation <= 0 or load_i64(span, _GC3_BUMP_STAGED) != 0:
+        return -1
+    store_ptr(out, _GC3_BUMP_SNAPSHOT_BASE, load_ptr(span, _GC3_BUMP_BASE))
+    store_i64(out, _GC3_BUMP_SNAPSHOT_STRIDE, load_i64(span, _GC3_BUMP_STRIDE))
+    store_i64(out, _GC3_BUMP_SNAPSHOT_GENERATION, generation)
+    return atomic_load_i64(span, _GC3_BUMP_COMMITTED, "acquire")
