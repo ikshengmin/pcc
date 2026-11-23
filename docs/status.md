@@ -393,8 +393,15 @@ in the relevant section or issue and removes the entry.
        The exact non-instrumented 5-pair GC1/GC3 w4 effect changed sign
        across 20k/50k-request runs; unchanged GC0 floors were 19.3% and
        14.5%. Do not call the throughput gate passed or request Mac A/B.
-       Move to condition 6 and 3 independently; retry throughput only
-       with a quieter Linux session or a stable unchanged control. The split opt-in Linux probe on
+       A local integration of the census fix, ABI cleanup, and module
+       tests passed all 295 sealed checks, 248 native and 5 model cases.
+       Its four-worker GC3 median changes sign again (-9.6% all CPUs,
+       +8.2% with affinity 1–8); unchanged-path GC0 floors are 31.2% and
+       18.2%. Identical-binary GC0 A/A confirms host swing up to 19.0%
+       (8.1% under affinity); the cross-arm pin fast path also differs.
+       GC2 w4 trends down in both comparisons (-16.4%, -14.6%,
+       unqualified); prioritize checking its mark/finish activity in
+       #9 on these sealed binaries. No throughput or macOS pass. The split opt-in Linux probe on
        `b7845414c` ran 9 times (40k requests each) and reconciled to
        counters 119–121 each time. Observer screening cost 38.7/42.8/40.6 ms
        median per run for GC1 w4/GC2 w1/GC3 w4; prior-stop compaction and
@@ -565,7 +572,7 @@ in the relevant section or issue and removes the entry.
    executed.
 
    Claims:
-   - #9 integrate validated Linux corrections locally: Codex, Linux x86-64, 2026-11-23 03:04 UTC, area runtime-gc
+   - none
 
 2. **GC0–4 optimization, then one collector.** The next section is the plan
    and its stopping rule. Platform: any for code and Linux measurements;
