@@ -156,11 +156,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- **#9 macOS arm64 validation:** ready for the Mac owner/local agent; exact
-  refs, native tests and five-pair commands in item 1. Recommendation: run
-  this before considering any dependent performance work; no merge decision
-  until the evidence is available.
-
 1. **GC correctness.** Open issues
    [#9](https://github.com/ikshengmin/pcc/issues/9),
    [#4](https://github.com/ikshengmin/pcc/issues/4),
@@ -363,30 +358,38 @@ in the relevant section or issue and removes the entry.
    queries the sealed extent cache for a peer's interior root; 228 focused
    native assertions passed. The six 4096-node raw-root cells fell from
    941–1032 to 269–346 ms (5/5 beyond controls), still review-only.
-   **Ready macOS unit: verify #9 before GC2/GC3.** Take on local arm64.
-   Compare `64d49ae568c8367e74aa6d765fd6b9e58ee36e64` (fork point)
-   with `b7845414cedc5d8fb435f7d448b4a90e25e0a8e9`, in detached
-   worktrees; use the existing project's uv environment in both.
-   Run the following with a common `PCC_PERF_HOME` (default
-   `$HOME/.cache/pcc/perf`) and fresh arm names:
-
-   ```sh
-   # At the base checkout:
-   uv run --no-sync python scripts/pcc_perf.py arm gc9-64d49-base
-   uv run --no-sync python scripts/pcc_perf.py arm gc9-64d49-control
-   # At b7845414:
-   uv run --no-sync python scripts/pcc_perf.py arm gc9-b784541
-   archive=$(uv run --no-sync python -c 'import json,os,pathlib; p=pathlib.Path(os.getenv("PCC_PERF_HOME","~/.cache/pcc/perf")).expanduser(); print(json.loads((p/"arms/gc9-b784541/build.json").read_text())["runtime"])')
-   PCC_RUNTIME_ARCHIVE="$archive" PCC_THREADED_RUNTIME_ARCHIVE="$archive" PCC_TEST_NO_NATIVE_PROVISIONING=1 PCC_NO_AUTO_PCC1=1 uv run --no-sync python -m pytest -q tests/python/test_gc_acyclic_singleton_production_native.py tests/python/test_gc_tracing_sweep_verdict_native.py
-   uv run --no-sync python scripts/pcc_perf.py ab gc9-64d49-base gc9-b784541 --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control-arm gc9-64d49-control --latency-receipts
-   uv run --no-sync python scripts/pcc_perf.py table gc9-b784541
-   ```
-
-   Return the source stamps, native receipts, and handler paired QPS,
-   maximum pause, peak RSS and p99 against the control. The handler bench
-   is not a socket C512 reproduction. This evidence does not waive the
-   remaining writer coverage, no-observer, scale, or integration checks.
-   Until then, pause new dependent performance slices.
+   **macOS verification of `b7845414c` (Claude, local Mac, 2026-11-23,
+   [review](https://github.com/ikshengmin/pcc/issues/9#issuecomment-7088533910)):
+   not ready for master.**
+   - Arms: base master `445df0662` (identical to fork point `64d49ae56`
+     outside `tests/`) and the candidate. Both passed the primitive oracle
+     on five collectors.
+   - Native: both #9 native files passed 265 of 265 on arm64. They are
+     marked `integration`, so the command needs `-m integration`; without
+     it pytest selects 0 tests.
+   - Handler A/B: `ab --pairs 5 --gc 0,1,2,3,4 --workers 1,4 --control 0
+     --latency-receipts`, at load 6.7.
+     - GC3 w4 −2.5% (0/5 pair wins), a loss beyond the 2.4% floor. Other
+       rows are inside noise.
+     - The candidate won 7 of 40 GC1–4 pairs.
+     - Stopped time per run rose by 3–9 ms on GC1–3. Maximum STW rose by
+       1.6–2.6 ms on GC1/GC3.
+     - Graph-lock waits rose from 18 to 631 (GC1 w4) and from 0 to 640
+       (GC2 w1).
+   - Condition 5: handler runs on both arms run 0 user finalizers and
+     0 post-callback rechecks on GC1–4. The workload therefore never takes
+     the layered path, and the cost above comes from collections that have
+     no observable candidate. Cause not attributed.
+   - Next #9, in order:
+     - Profile both arms with `pcc_perf locks` and `top`, and remove that
+       cost, so a sweep with no observable candidate costs what the parent
+       costs (condition 4).
+     - Fold into the production path, or remove, the four caller-less
+       inert exports named in the review (condition 6).
+     - Put the 16n and heap-independence rows in the receipt itself
+       (condition 3).
+     - Then request the same macOS A/B again in the waiting list.
+   - Dependent GC2/GC3 review slices stay paused.
    Separately, GC2 Linux task-clock attribution (120,000 list allocations,
    five 1-vs-4 pairs) finds median 55% of w4 user CPU in magazine refill/
    allocator-lock owners, versus 3% in the explicit gray queue. Three of
