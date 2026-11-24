@@ -402,6 +402,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (d) compiler reads of PCC_GC_BACKEND: Claude, local Mac, 2026-11-24 15:54Z, area runtime-codegen
+   - (b) weakref native lifetime test migration: Codex, Linux, 2026-11-24 16:04Z, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
