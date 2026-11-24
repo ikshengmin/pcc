@@ -20,7 +20,6 @@ from tests.python.test_slot_call_lexical_roots import _emit
 ROOT = Path(__file__).resolve().parents[2]
 ROOT_HELPER = 'py_cleanup_one_root_preserving_exception'
 TWO_ROOT_HELPER = 'py_cleanup_two_roots_preserving_exception'
-LEASE_HELPER = 'py_cleanup_one_lease_preserving_exception'
 FRAME_SUFFIXES = ('', '_local', '_mapped', '_local_mapped')
 
 
@@ -127,7 +126,6 @@ def test_actual_runtime_helper_abi_and_synchronous_body(tmp_path, monkeypatch, t
     for name, signature, disposal in (
         (ROOT_HELPER, r'ptr %slot', ['pcc_gc_store_root']),
         (TWO_ROOT_HELPER, r'ptr %first, ptr %second', ['pcc_gc_store_root'] * 2),
-        (LEASE_HELPER, r'ptr %slot, i64 %acquired', ['pcc_gc_foreign_lease_release']),
     ):
         match = re.search(r'^define[^\n]*void @' + name + r'\(' + signature + r'\)[^\n]*\{\n(.*?)^}', text, re.M | re.S)
         assert match
@@ -147,7 +145,6 @@ def test_actual_runtime_helper_abi_and_synchronous_body(tmp_path, monkeypatch, t
         assert 'pcc_thread_' not in body
         # Ordinary safepoint-capable call; never a hidden caller-frame transition.
         assert classify_call_flags(name, False, False) == 0
-    assert 'i64 %acquired)' in text
     assert 'py_cleanup_runtime' in runtime_modules(str(ROOT / 'pcc/runtime'), 'x86_64-unknown-linux-gnu', threads=True)
     assert re.search(r'py_cleanup_runtime.o:.*\n\t[^\n]*PCC_IMPLICIT_THREAD_SAFEPOINTS=0', (ROOT / 'pcc/runtime/Makefile').read_text())
     assert __import__('os').environ['PCC_WITH_THREADS'] == threads
@@ -157,10 +154,6 @@ def test_exact_single_shapes_have_no_caller_exception_alloca():
     model, first, second, target = setup_roots()
     model._slot_call_cleanup_block((first,), target)
     assert model.events == [(ROOT_HELPER, (first,)), ('leave', first), ('branch', target)]
-    model.events.clear()
-    token = IdentityOnly()
-    model._slot_call_cleanup_block((), target, ((second, token),))
-    assert model.events == [(LEASE_HELPER, (second, token)), ('branch', target)]
     _assert_real_frame_abi_calls()
 
 
@@ -193,20 +186,17 @@ def test_two_root_helper_preserves_exceptional_return_convention(annotation, val
 
 
 @pytest.mark.parametrize('shape', [
-    'three-roots', 'multiple-leases', 'mixed', 'two-roots-with-lease',
+    'three-roots',
     'flagged', 'non-lifo', 'flagged-first', 'flagged-second',
     'non-lifo-first', 'non-lifo-second',
 ])
 def test_ineligible_shapes_keep_inline_tls_protocol(shape):
     model, first, second, target = setup_roots()
-    roots, leases = (first,), ()
+    roots = (first,)
     if shape == 'three-roots':
         third = IdentityOnly()
         model._slot_call_root_records.append((third, None, True))
         roots = (first, second, third)
-    if shape == 'multiple-leases': roots, leases = (), ((first, IdentityOnly()), (second, IdentityOnly()))
-    if shape == 'mixed': leases = ((second, IdentityOnly()),)
-    if shape == 'two-roots-with-lease': roots, leases = (first, second), ((second, IdentityOnly()),)
     if shape == 'flagged': model._slot_call_root_records[0] = (first, IdentityOnly(), True)
     if shape == 'non-lifo': model._slot_call_root_records[0] = (first, None, False)
     if shape in ('flagged-first', 'flagged-second', 'non-lifo-first', 'non-lifo-second'):
@@ -216,10 +206,10 @@ def test_ineligible_shapes_keep_inline_tls_protocol(shape):
             roots[index], IdentityOnly() if shape.startswith('flagged') else None,
             shape.startswith('flagged'),
         )
-    model._slot_call_cleanup_block(roots, target, leases)
+    model._slot_call_cleanup_block(roots, target)
     calls = [event[0] for event in model.events]
     assert calls.count('swap') == 2
-    assert not any(helper in calls for helper in (ROOT_HELPER, TWO_ROOT_HELPER, LEASE_HELPER))
+    assert not any(helper in calls for helper in (ROOT_HELPER, TWO_ROOT_HELPER))
 
 
 @pytest.mark.parametrize('source', [
@@ -255,8 +245,5 @@ def test_real_caller_cleanup_root_provenance_and_stackmaps(source):
                     assert enters[resolve(slot)] == {symbol.replace('_leave_', '_enter_', 1)}
                     assert block.index('@' + helper) < block.index('@' + symbol)
                 assert '@py_tls_exc_swap_slot(' not in block
-                assert '@pcc_gc_store_root(' not in block
-            if '@' + LEASE_HELPER + '(' in block:
-                assert not leaves
                 assert '@pcc_gc_store_root(' not in block
     assert checked

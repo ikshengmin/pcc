@@ -275,9 +275,15 @@ in the relevant section or issue and removes the entry.
    existing CPython weakref comparison passed under the usual guard.
    The native whole-language gate is unqualified locally; run it in
    GitHub CI. This is test-only and changes no compiler or runtime.
-   Next: fix the obsolete lease-call expectation in the Linux cleanup
-   helper IR gate, then continue the (b) inventory. Use GitHub CI for
-   cross-platform failures; do not wait for the maintainer's local Mac.
+   Linux worker preflight [run 45427972345, job 138565316142](https://github.com/ikshengmin/pcc/actions/runs/45427972345/job/138565316142):
+   the cleanup helper check required a lease release already absent from
+   generated IR. Removed lease-only expectations; actual one- and two-root
+   release ordering, exception save/restore, and stack maps are tested.
+   Linux: 18 IR tests and both native/CPython callback witnesses passed.
+   Whole-language qualification is pending GitHub CI.
+   Next: migrate the float callback gate without the former GC4 movement
+   witness, and continue the remaining (b) inventory. Do not wait for the
+   maintainer's local Mac; use GitHub CI for platform failures.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -420,7 +426,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) Python cleanup helper IR test migration: Codex, Linux, 2026-11-24 17:07Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
