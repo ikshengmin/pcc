@@ -1,15 +1,15 @@
 """Focused width proofs for existing GC step/pause telemetry.
 
 Host tests execute complete source-extracted production functions with exact
-signed 32/64-bit memory doubles and inert collector/configuration providers.
+signed 32/64-bit memory doubles and isolated configuration providers.
 The ELF test uses host pcc, its owned self emitter, assembler and linker; it
-executes production pause/increment bodies and source-derived telemetry/reset
+executes production explicit-pause and increment bodies and telemetry getter
 slices against the real state object. Only legacy ``int`` annotations in the
 managed helpers are normalized to ``i64`` for that freestanding slice, and
 the two private helpers receive test-only C-ABI export decorators. Their
 production bodies are unchanged.
 
-This is neither a full-runtime/five-GC integration gate nor native-pcc1,
+This is neither a full-runtime integration gate nor native-pcc1,
 concurrency, scheduler-policy, timing-accuracy or performance evidence.
 """
 from __future__ import annotations
@@ -35,8 +35,6 @@ RUNTIME = ROOT / "pcc/runtime/py"
 STATE = RUNTIME / "freestanding_gc_state.py"
 BACKEND = RUNTIME / "py_gc_backend.py"
 SCHEDULER = RUNTIME / "freestanding_gc_incremental_concurrent_scheduler.py"
-DISPATCHER = RUNTIME / "freestanding_gc_barrier_dispatcher.py"
-MAPPED_ROOTS = RUNTIME / "freestanding_gc_mapped_roots.py"
 TELEMETRY = RUNTIME / "py_gc_telemetry.py"
 ROOT_OPERATIONS = RUNTIME / "freestanding_gc_root_operations.py"
 WIDE_METRICS = {
@@ -50,9 +48,6 @@ NARROW_COUNTERS = (
     "pcc_gc_metric_safepoint",
 )
 NARROW_METRIC_IDS = (2, 3)
-# Allocation (metric 0), stores (metric 1) and pin balance (metric 4) are i64 fields
-# of the root-operations shard table, summed over its 64 shards.
-SHARDED_METRICS = {0: 8, 1: 16, 4: 0}
 HISTOGRAM = tuple(f"pcc_gc_metric_pause_hist{i}" for i in range(4))
 
 
@@ -113,7 +108,10 @@ def test_phase_counter_definitions_registry_and_metric_ids_agree():
 
 def test_phase_counter_direct_accesses_use_declared_width():
     accesses = {name: set() for name in WIDE_METRICS}
-    for path in (BACKEND, SCHEDULER, DISPATCHER, TELEMETRY):
+    # The step increment resolves a slot through _counter_global rather than
+    # directly naming it in a load/store. Its full-width write is exercised
+    # by both execution tests below.
+    for path in (BACKEND, SCHEDULER, TELEMETRY):
         for node in ast.walk(_tree(path)):
             if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
                 continue
@@ -126,6 +124,7 @@ def test_phase_counter_direct_accesses_use_declared_width():
                 path.name, node.lineno, name, node.func.id,
             )
             accesses[name].add(node.func.id)
+    assert accesses.pop("pcc_gc_metric_step") == {"load_i64"}
     assert all(kinds == {"load_i64", "store_i64"} for kinds in accesses.values())
 
 
@@ -133,8 +132,6 @@ class _Memory:
     """Exact signed loads and truncating stores, with declared object bounds."""
 
     def __init__(self):
-        # Reset also clears a few registered counters owned by other modules.
-        # Their initial values are irrelevant here; retain their ABI widths.
         self.cells = {name: bytearray(4) for name in FREESTANDING_GC_I32_GLOBALS}
         self.cells.update({name: bytearray(8) for name in FREESTANDING_GC_I64_GLOBALS})
         for name, (kind, initial) in _definitions().items():
@@ -142,14 +139,6 @@ class _Memory:
             self.cells[name] = bytearray(width)
             self.store(name, 0, initial, width)
         self.cells["pcc_gc_metric_shards"] = bytearray(64 * 128)
-        # Pointer heads used by the extracted dispatcher are separate from the
-        # exact-width integer cells. Unknown pointer names must fail closed.
-        self.pointers = {
-            # GC4 objects are allocator cells: no logical zpage is registered.
-            "pcc_gc_backend4_zpage_head": None,
-            "pcc_gc_backend4_parked_head": None,
-            "pcc_gc_backend4_retained_page_head": None,
-        }
 
     def load(self, name, offset, width):
         cell = self.cells[name]
@@ -175,18 +164,12 @@ class _Memory:
         self.store(name, 0, value, len(self.cells[name]))
 
 
-def _host_functions(*, other_mutators=()):
+def _host_functions():
     memory = _Memory()
     noop = lambda *args: None
-    # Model the registered records consumed by the thread-kernel providers:
-    # the caller is live, and even an exited (blocking) thread stays registered.
-    # Only another mutator parked at an application gate permits relocation;
-    # a runtime park, running thread or exited thread is not sufficient.
     namespace = {
         "i64": int,
         "global_addr": lambda name: name,
-        "global_load_ptr": memory.pointers.__getitem__,
-        "ptr_is_null": lambda value: int(value is None),
         "load_i32": lambda name, offset: memory.load(name, offset, 4),
         "load_i64": lambda name, offset: memory.load(name, offset, 8),
         "atomic_load_i64": lambda name, offset, order: memory.load(name, offset, 8),
@@ -194,36 +177,8 @@ def _host_functions(*, other_mutators=()):
         "store_i64": lambda name, offset, value: memory.store(name, offset, value, 8),
         "atomic_store_i64": lambda name, offset, value, order: memory.store(name, offset, value, 8),
         "_atomic_i32_store": lambda name, value: memory.store(name, 0, value, 4),
-        "gc_backend_current": lambda: memory.get("pcc_gc_backend_selected"),
-        "_selected_backend": lambda: memory.get("pcc_gc_backend_selected"),
-        "pcc_thread_live_count": lambda: 1 + len(other_mutators),
-        "pcc_thread_all_stopped_at_gates": lambda: int(all(
-            state == "parked" and at_gate for state, at_gate in other_mutators
-        )),
-        # Explicit collects and the automatic GC4 step own the stopped world
-        # before they step; a direct call is modeled separately below.
-        "pcc_thread_owns_stopped_world": lambda: 1,
-        "_init_config": noop,
-        "_object_graph_lock": noop,
-        "_object_graph_unlock": noop,
-        "_backend3_clear_remembered_owners": lambda: None,
-        "_backend3_finish_detached_remembered_owners": noop,
-        "_backend4_reset_store_buffer_epoch_state": noop,
-        "_backend4_reset_remembered_set_epoch_state": noop,
-        "_backend4_reseed_relocation_epoch_state": noop,
-        "_backend4_clear_large_deferred_flags": noop,
-        "pcc_platform_monotonic_us": lambda: 100,
-        "pcc_gc_tracing_step_cycle": lambda budget: 0,
-        "pcc_gc_tracing_discharge_debt": noop,
-        # These width tests publish no stack map and do not opt into the
-        # differential walk. The real callback is inert in that configuration.
-        "pcc_gc_precise_stack_diff_if_requested": lambda: None,
-        "pcc_gc_backend3_drain_promotion_worklist": lambda budget: 0,
-        "pcc_gc_backend4_step_remembered_roots": lambda budget: 0,
-        "pcc_gc_backend4_step_generation_aging": lambda budget: 0,
-        "pcc_gc_backend4_evacuation_page_drain": lambda budget: 0,
-        "pcc_gc_backend4_select_relocation_pages": lambda budget: 0,
-        "_tracing_work_pending": lambda: 0,
+        "gc_backend_current": lambda: 0,
+        "pcc_gc_live_bytes_flush": noop,
         "pcc_gc_metric_allocation_count": lambda: sum(
             memory.load("pcc_gc_metric_shards", index * 128 + 8, 8)
             for index in range(64)
@@ -244,9 +199,8 @@ def _host_functions(*, other_mutators=()):
         ],
     }
     groups = (
-        (BACKEND, ("_counter_global", "_counter_inc", "pcc_gc_telemetry_reset")),
-        (SCHEDULER, ("pcc_gc_tracing_record_pause", "pcc_gc_incremental_concurrent_step")),
-        (DISPATCHER, ("pcc_gc_step",)),
+        (BACKEND, ("_counter_global", "_counter_inc")),
+        (SCHEDULER, ("pcc_gc_record_explicit_pause",)),
         (TELEMETRY, ("pcc_gc_telemetry",)),
     )
     for path, names in groups:
@@ -254,308 +208,9 @@ def _host_functions(*, other_mutators=()):
     return memory, namespace
 
 
-def test_host_source_stack_diff_callback_has_declared_production_provider():
-    symbol = "pcc_gc_precise_stack_diff_if_requested"
-    declarations = [
-        node.value for node in _tree(DISPATCHER).body
-        if isinstance(node, ast.Assign)
-        and any(isinstance(target, ast.Name) and target.id == symbol
-                for target in node.targets)
-    ]
-    assert len(declarations) == 1
-    declaration = declarations[0]
-    assert isinstance(declaration, ast.Call)
-    assert isinstance(declaration.func, ast.Name)
-    assert declaration.func.id == "extern"
-    assert len(declaration.args) == 3 and not declaration.keywords
-    assert ast.literal_eval(declaration.args[0]) == symbol
-    assert ast.literal_eval(declaration.args[1]) == ()
-    assert isinstance(declaration.args[2], ast.Name)
-    assert declaration.args[2].id == "c_void"
-    provider = _function(MAPPED_ROOTS, symbol)
-    assert any(
-        isinstance(decorator, ast.Call)
-        and isinstance(decorator.func, ast.Name)
-        and decorator.func.id == "c_abi_export"
-        and len(decorator.args) == 1
-        and ast.literal_eval(decorator.args[0]) == symbol
-        for decorator in provider.decorator_list
-    )
-
-
-def test_host_source_dispatcher_pointer_providers_have_registered_null_defaults():
+def test_host_source_explicit_pause_accumulation_and_max_keep_high_bits():
     memory, functions = _host_functions()
-    declarations = {
-        ast.literal_eval(statement.value.args[0])
-        for statement in _tree(STATE).body
-        if isinstance(statement, ast.Expr)
-        and isinstance(statement.value, ast.Call)
-        and isinstance(statement.value.func, ast.Name)
-        and statement.value.func.id == "define_global_ptr_null"
-    }
-    assert set(memory.pointers) <= declarations
-    assert all(functions["ptr_is_null"](functions["global_load_ptr"](name)) == 1
-               for name in memory.pointers)
-    assert functions["ptr_is_null"](object()) == 0
-    with pytest.raises(KeyError):
-        functions["global_load_ptr"]("unregistered_test_pointer")
-
-
-@pytest.mark.parametrize("heads", [
-    (), ("pcc_gc_backend4_parked_head",), ("pcc_gc_backend4_retained_page_head",),
-    ("pcc_gc_backend4_parked_head", "pcc_gc_backend4_retained_page_head"),
-])
-@pytest.mark.parametrize("explicit_collect", [0, 1])
-def test_host_source_gc4_idle_step_observes_parked_and_retained_pointer_heads(heads, explicit_collect):
-    memory, functions = _host_functions()
-    memory.set("pcc_gc_backend_selected", 4)
-    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
-    assert memory.get("pcc_gc_forwarding_population") == 0
-    for name in heads:
-        memory.pointers[name] = object()
-    calls = []
-    functions["pcc_gc_backend4_remap_and_retire_stopped_world"] = lambda: calls.append(1) or 1
-    assert functions["pcc_gc_step"](1) == int(bool(heads))
-    assert calls == ([1] if heads else [])
-
-
-@pytest.mark.parametrize("table_present", [False, True])
-@pytest.mark.parametrize("diff_requested", [False, True])
-def test_host_source_stack_diff_callback_requires_table_and_opt_in(
-    table_present, diff_requested,
-):
-    calls = []
-    lookups = []
-    tables = []
-
-    def table_pointer(name):
-        tables.append(name)
-        return 1 if table_present else None
-
-    def getenv(name):
-        lookups.append(name)
-        return 1 if diff_requested else None
-
-    def compare(report):
-        calls.append(report)
-        return 0
-
-    namespace = {
-        "i64": int,
-        "global_load_ptr": table_pointer,
-        "ptr_is_null": lambda value: int(value is None),
-        "cstr": lambda value: value,
-        "pcc_platform_getenv": getenv,
-        "pcc_gc_precise_stack_diff": compare,
-    }
-    symbol = "pcc_gc_precise_stack_diff_if_requested"
-    load_functions(MAPPED_ROOTS, (symbol,), namespace)
-    assert namespace[symbol]() is None
-    assert tables == ["pcc_gc_precise_stackmap_table"]
-    assert lookups == (["PCC_GC_STACKMAP_DIFF"] if table_present else [])
-    assert calls == ([1] if table_present and diff_requested else [])
-
-
-@pytest.mark.parametrize("backend", (0,))
-@pytest.mark.parametrize("budget", [-1, 0, 1])
-@pytest.mark.parametrize("explicit_collect", [0, 1])
-@pytest.mark.parametrize("remap_active", [0, 1])
-def test_host_source_step_stack_diff_callback_routing(
-    backend, budget, explicit_collect, remap_active,
-):
-    memory, functions = _host_functions()
-    calls = []
-    functions["pcc_gc_precise_stack_diff_if_requested"] = lambda: calls.append(1)
-    memory.set("pcc_gc_backend_selected", backend)
-    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
-    memory.set("pcc_gc_backend4_remap_active", remap_active)
-    assert functions["pcc_gc_step"](budget) == 0
-    automatic_step = (
-        budget > 0 and not explicit_collect and backend in (0, 4)
-        and not (backend == 4 and remap_active)
-    )
-    assert calls == ([1] if automatic_step else [])
-
-
-@pytest.mark.parametrize("backend", (1, 2, 3))
-@pytest.mark.parametrize("budget", (-1, 0, 7))
-@pytest.mark.parametrize("explicit_collect", (0, 1))
-@pytest.mark.parametrize("mark_active,cycle_requested", ((0, 0), (1, 0), (0, 1), (1, 1)))
-def test_host_source_nonmoving_steps_share_scheduler_and_wide_telemetry(
-    backend, budget, explicit_collect, mark_active, cycle_requested,
-):
-    # Execute both production entries: GC1/2/3 dispatch to the shared mark
-    # scheduler. Its tracing result pays debt and its step/pause writers own
-    # the counters exactly once, without the dispatcher's moving work.
-    memory, functions = _host_functions()
-    memory.set("pcc_gc_backend_selected", backend)
-    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
-    memory.set("pcc_gc_mark_active", mark_active)
-    memory.set("pcc_gc_cycle_requested", cycle_requested)
-    before = (1 << 32) + 13
-    debt = (1 << 40) + 7
-    memory.set("pcc_gc_metric_step", before)
-    memory.set("pcc_gc_metric_pause_count", before)
-    memory.set("pcc_gc_metric_pause_sum_us", before)
-    memory.set("pcc_gc_debt_bytes", debt)
-    events = []
-    functions["pcc_gc_tracing_step_cycle"] = (
-        lambda amount: events.append(("trace", amount)) or 3
-    )
-    functions["pcc_gc_tracing_discharge_debt"] = (
-        lambda amount: events.append(("discharge", amount))
-    )
-
-    def unexpected(*args):
-        pytest.fail("nonmoving step reached a moving/stack-diff provider")
-
-    for symbol in (
-        "pcc_thread_owns_stopped_world", "pcc_stop_the_world", "pcc_resume_world",
-        "pcc_gc_precise_stack_diff_if_requested",
-        "pcc_gc_backend3_drain_promotion_worklist",
-        "pcc_gc_backend4_step_remembered_roots",
-        "pcc_gc_backend4_step_generation_aging",
-        "pcc_gc_backend4_evacuation_page_drain",
-        "pcc_gc_backend4_select_relocation_pages",
-        "pcc_gc_backend4_remap_and_retire_stopped_world",
-    ):
-        functions[symbol] = unexpected
-
-    stepped = int(budget > 0)
-    assert functions["pcc_gc_step"](budget) == 3 * stepped
-    assert events == ([("trace", budget), ("discharge", 3)] if stepped else [])
-    telemetry = functions["pcc_gc_telemetry"]
-    assert telemetry(5) == telemetry(32) == telemetry(33) == before + stepped
-    assert telemetry(7) == stepped
-    assert memory.get("pcc_gc_debt_bytes") == (
-        0 if stepped and not mark_active and not cycle_requested else debt
-    )
-
-
-@pytest.mark.parametrize("other_mutators,may_relocate", [
-    pytest.param((), True, id="caller-only"),
-    pytest.param((("parked", True),), True, id="application-gate"),
-    pytest.param((("parked", True), ("parked", True)), True, id="all-gated"),
-    pytest.param((("running", False),), False, id="running"),
-    pytest.param((("running", True),), False, id="gate-not-yet-parked"),
-    pytest.param((("parked", False),), False, id="runtime-parked"),
-    pytest.param((("exited", False),), False, id="exited"),
-    pytest.param((("exited", True),), False, id="exited-not-parked"),
-    pytest.param((("parked", True), ("parked", False)), False, id="mixed-parks"),
-])
-@pytest.mark.parametrize("explicit_collect", [0, 1])
-@pytest.mark.parametrize("selection_due", [False, True])
-def test_host_source_gc4_relocation_requires_other_mutators_at_application_gates(
-    other_mutators, may_relocate, explicit_collect, selection_due,
-):
-    memory, functions = _host_functions(other_mutators=other_mutators)
-    memory.set("pcc_gc_backend_selected", 4)
-    memory.set("pcc_gc_explicit_collect_active", explicit_collect)
-    memory.set("pcc_gc_forwarding_population", 1)
-    marks_finished = (1 << 32) + 9
-    selection_commit = marks_finished - int(selection_due)
-    memory.set("pcc_gc_tracing_finish_commits", marks_finished)
-    memory.set("pcc_gc_backend4_selection_commit", selection_commit)
-    # Selection scores logical zpages; a due selection needs one to exist.
-    memory.pointers["pcc_gc_backend4_zpage_head"] = 0x2000
-    calls = []
-
-    def work(name, result=0):
-        def record(*args):
-            calls.append((name, args))
-            return result
-        return record
-
-    for symbol in (
-        "pcc_gc_backend4_step_remembered_roots",
-        "pcc_gc_backend4_step_generation_aging",
-        "pcc_gc_backend4_evacuation_page_drain",
-        "pcc_gc_backend4_select_relocation_pages",
-        "pcc_gc_backend3_drain_promotion_worklist",
-        "pcc_gc_tracing_step_cycle",
-    ):
-        functions[symbol] = work(symbol)
-    retire = "pcc_gc_backend4_remap_and_retire_stopped_world"
-    functions[retire] = work(retire, 1)
-
-    assert functions["pcc_thread_live_count"]() == 1 + len(other_mutators)
-    assert functions["pcc_thread_all_stopped_at_gates"]() == int(may_relocate)
-    assert functions["pcc_gc_step"](7) == int(may_relocate)
-    if explicit_collect:
-        expected = [
-            ("pcc_gc_backend3_drain_promotion_worklist", (7,)),
-            ("pcc_gc_tracing_step_cycle", (7,)),
-        ]
-    else:
-        expected = [
-            ("pcc_gc_backend4_step_remembered_roots", (7,)),
-            ("pcc_gc_backend4_step_generation_aging", (7,)),
-        ]
-        if may_relocate:
-            expected.append(("pcc_gc_backend4_evacuation_page_drain", (7,)))
-            if selection_due:
-                expected.append(("pcc_gc_backend4_select_relocation_pages", (7,)))
-    if may_relocate:
-        expected.append((retire, ()))
-    # Unsafe records block every moving operation, not the non-moving work.
-    # This executes the production dispatcher body, including both retirement
-    # paths, rather than replacing its quiescence condition in the test.
-    assert calls == expected
-    # Selection is owed once per finished mark, and only an automatic step
-    # allowed to relocate consumes it. Preserve the full-width commit value.
-    assert memory.get("pcc_gc_backend4_selection_commit") == (
-        marks_finished if not explicit_collect and may_relocate else selection_commit
-    )
-
-
-@pytest.mark.parametrize("backend", (0,))
-@pytest.mark.parametrize("stopped", (0, -1))
-def test_host_source_direct_moving_step_owns_its_stopped_world(backend, stopped):
-    # pcc_thread_all_stopped_at_gates answers only for a stopped world. A
-    # direct GC4 step (no stopped world of its caller) stops it for the
-    # step and resumes it after; a refused stop does no work. GC0 and the
-    # shared GC1/2/3 mark-step dispatcher take no world of their own.
-    memory, functions = _host_functions(other_mutators=(("parked", 1),))
-    memory.set("pcc_gc_backend_selected", backend)
-    memory.set("pcc_gc_forwarding_population", 1)
-    events = []
-    functions["pcc_thread_owns_stopped_world"] = lambda: int("stop" in events and "resume" not in events)
-    functions["pcc_stop_the_world"] = lambda: events.append("stop") or stopped
-    functions["pcc_resume_world"] = lambda: events.append("resume") or 0
-    retire = "pcc_gc_backend4_remap_and_retire_stopped_world"
-    functions[retire] = lambda: events.append("retire") or 1
-    result = functions["pcc_gc_step"](7)
-    if backend != 4:
-        assert events == [] and result == 0
-    elif stopped != 0:
-        assert events == ["stop"] and result == 0
-    else:
-        assert events == ["stop", "retire", "resume"] and result == 1
-
-
-@pytest.mark.parametrize("auto_step", (0, 1))
-def test_host_source_gc4_automatic_step_leaves_a_due_mark_to_its_gate(auto_step):
-    # The gate runs or finishes the mark and sweeps it in one stopped world
-    # (py_obj's _gc4_maybe_auto_step); the gate's own step does GC4's other
-    # work. A mark finished in the step's stop was swept at a later one,
-    # after a whole-heap re-mark. Other callers keep marking in the step.
-    memory, functions = _host_functions()
-    memory.set("pcc_gc_backend_selected", 4)
-    memory.set("pcc_gc_cycle_requested", 1)
-    memory.set("pcc_gc_in_auto_step", auto_step)
-    traced = []
-    functions["pcc_thread_owns_stopped_world"] = lambda: 0
-    functions["pcc_stop_the_world"] = lambda: 0
-    functions["pcc_resume_world"] = lambda: 0
-    functions["_tracing_work_pending"] = lambda: 1
-    functions["pcc_gc_tracing_step_cycle"] = lambda budget: traced.append(budget) or 0
-    functions["pcc_gc_step"](7)
-    assert traced == ([] if auto_step else [7])
-
-
-def test_host_source_pause_accumulation_max_and_full_reset_keep_high_bits():
-    memory, functions = _host_functions()
-    record = functions["pcc_gc_tracing_record_pause"]
+    record = functions["pcc_gc_record_explicit_pause"]
     telemetry = functions["pcc_gc_telemetry"]
     memory.set("pcc_gc_metric_pause_count", (1 << 31) - 1)
     memory.set("pcc_gc_metric_pause_sum_us", (1 << 32) + 11)
@@ -577,24 +232,8 @@ def test_host_source_pause_accumulation_max_and_full_reset_keep_high_bits():
     record(20, 19)
     assert {name: memory.get(name) for name in WIDE_METRICS} == before
 
-    # Nonzero upper words make a mistaken i32 reset observable.
-    for name in WIDE_METRICS:
-        memory.set(name, (1 << 40) + 31)
-    for name in NARROW_COUNTERS:
-        memory.set(name, 37)
-    for metric, field in SHARDED_METRICS.items():
-        memory.store("pcc_gc_metric_shards", 5 * 128 + field, (1 << 40) + 3, 8)
-        assert telemetry(metric) == (1 << 40) + 3
-    functions["pcc_gc_telemetry_reset"]()
-    for name, (metric, _) in WIDE_METRICS.items():
-        assert memory.get(name) == telemetry(metric) == 0
-    assert all(memory.get(name) == 0 for name in NARROW_COUNTERS + HISTOGRAM)
-    assert all(telemetry(metric) == 0 for metric in SHARDED_METRICS)
-    record(10, 12)
-    assert (telemetry(7), telemetry(32), telemetry(33)) == (2, 1, 2)
 
-
-def test_host_source_generic_and_direct_step_writers_keep_high_bits():
+def test_host_source_generic_counter_writers_keep_high_bits():
     memory, functions = _host_functions()
     increment = functions["_counter_inc"]
     telemetry = functions["pcc_gc_telemetry"]
@@ -617,19 +256,6 @@ def test_host_source_generic_and_direct_step_writers_keep_high_bits():
     increment(5, -2)
     assert telemetry(5) == (1 << 31) + 3 * (1 << 32) + 7
     assert [memory.get(name) for name in NARROW_COUNTERS] == [19, 20]
-
-    # Entire public functions run; work providers are intentionally idle.
-    # Both direct writers execute, with no claim about collector work policy.
-    for backend in (0,):
-        memory.set("pcc_gc_backend_selected", backend)
-        memory.set("pcc_gc_metric_step", (1 << 32) + 13)
-        assert functions["pcc_gc_step"](0) == 0
-        assert telemetry(5) == (1 << 32) + 13
-        assert functions["pcc_gc_step"](1) == 0
-        assert telemetry(5) == (1 << 32) + 14
-    memory.set("pcc_gc_backend4_remap_active", 1)
-    assert functions["pcc_gc_step"](1) == 0
-    assert telemetry(5) == (1 << 32) + 14
 
 
 def _raw_annotations(function):
@@ -664,13 +290,14 @@ def _native_slice_source():
         _function(ROOT_OPERATIONS, name) for name in (
             "pcc_gc_metric_shard_sum", "pcc_gc_metric_pin_balance",
             "pcc_gc_metric_allocation_count", "pcc_gc_metric_store_count",
-            "pcc_gc_metric_shard", "pcc_gc_metric_shard_reset",
+            "pcc_gc_metric_shard",
         )
     ]
     functions = [
         _raw_annotations(_function(BACKEND, "_counter_global")),
         _raw_annotations(_function(BACKEND, "_counter_inc")),
         _function(SCHEDULER, "pcc_gc_tracing_record_pause"),
+        _function(SCHEDULER, "pcc_gc_record_explicit_pause"),
     ]
     for helper in functions[:2]:
         assert not helper.decorator_list
@@ -701,21 +328,6 @@ def _native_slice_source():
     telemetry.body = branches + [ast.Return(value=ast.Constant(value=-1))]
     functions.append(telemetry)
 
-    reset = _raw_annotations(_function(BACKEND, "pcc_gc_telemetry_reset"))
-    starts = [
-        index for index, statement in enumerate(reset.body)
-        if isinstance(statement, ast.AnnAssign)
-        and isinstance(statement.target, ast.Name) and statement.target.id == "i"
-    ]
-    ends = [
-        index for index, statement in enumerate(reset.body)
-        if any(_global_name(node) == HISTOGRAM[-1] for node in ast.walk(statement))
-    ]
-    assert len(starts) == len(ends) == 1 and starts[0] < ends[0], "reset slice changed"
-    # Keep the real loop and all counter-reset statements through hist3.
-    # Remembered-set/epoch cleanup before and after this slice is not tested.
-    reset.body = reset.body[starts[0]:ends[0] + 1]
-    functions.append(reset)
     module = ast.fix_missing_locations(ast.Module(
         body=shards + shard_functions + functions, type_ignores=[],
     ))
@@ -748,7 +360,7 @@ def gc_phase_width_probe() -> i64:
     if pcc_gc_telemetry(5) != 4294967312:
         return 5
     # Seed distinct real shard fields: these metrics no longer use
-    # _counter_inc. Keep the existing getter/reset expectations unchanged.
+    # _counter_inc. Check multi-shard reads, without relying on a reset API.
     store_i64(global_addr("pcc_gc_metric_shards"), 63 * 128 + 8, 31)
     _counter_inc(1, 32)
     _counter_inc(2, 33)
@@ -762,39 +374,33 @@ def gc_phase_width_probe() -> i64:
         return 8
     store_i64(global_addr("pcc_gc_metric_pause_count"), 0, 2147483647)
     store_i64(global_addr("pcc_gc_metric_pause_sum_us"), 0, 4294967307)
-    pcc_gc_tracing_record_pause(10, 2147483667)
+    pcc_gc_record_explicit_pause(10, 2147483667)
     if pcc_gc_telemetry(32) != 2147483648:
         return 9
     if pcc_gc_telemetry(33) != 6442450964 or pcc_gc_telemetry(7) != 2147483657:
         return 10
-    pcc_gc_tracing_record_pause(10, 60)
+    pcc_gc_record_explicit_pause(10, 60)
     if pcc_gc_telemetry(7) != 2147483657:
         return 11
-    pcc_gc_tracing_record_pause(10, 4294967329)
-    pcc_gc_tracing_record_pause(10, 10)
+    pcc_gc_record_explicit_pause(10, 4294967329)
+    pcc_gc_record_explicit_pause(10, 10)
     if pcc_gc_telemetry(7) != 4294967319 or pcc_gc_telemetry(32) != 2147483651:
         return 12
     if pcc_gc_telemetry(33) != 10737418334:
         return 13
     if pcc_gc_telemetry(34) != 2 or pcc_gc_telemetry(37) != 2:
         return 14
-    pcc_gc_tracing_record_pause(0, 100)
-    pcc_gc_tracing_record_pause(20, 19)
+    pcc_gc_record_explicit_pause(0, 100)
+    pcc_gc_record_explicit_pause(20, 19)
     if pcc_gc_telemetry(32) != 2147483651:
         return 15
-    store_i64(global_addr("pcc_gc_metric_pause_count"), 0, 1099511627807)
-    pcc_gc_telemetry_reset()
-    if pcc_gc_telemetry(5) != 0 or pcc_gc_telemetry(7) != 0:
+    store_i64(global_addr("pcc_gc_metric_shards"), 5 * 128 + 8, 1099511627779)
+    store_i64(global_addr("pcc_gc_metric_shards"), 5 * 128, 1099511627779)
+    _counter_inc(1, 1099511627779)
+    if pcc_gc_telemetry(0) != 1099511627810 or pcc_gc_telemetry(1) != 1099511627811:
         return 16
-    if pcc_gc_telemetry(32) != 0 or pcc_gc_telemetry(33) != 0:
+    if pcc_gc_telemetry(4) != 1099511627814:
         return 17
-    if pcc_gc_telemetry(0) != 0 or pcc_gc_telemetry(4) != 0:
-        return 18
-    if pcc_gc_telemetry(34) != 0 or pcc_gc_telemetry(37) != 0:
-        return 19
-    pcc_gc_tracing_record_pause(10, 12)
-    if pcc_gc_telemetry(7) != 2 or pcc_gc_telemetry(32) != 1 or pcc_gc_telemetry(33) != 2:
-        return 20
     return 0
 '''
 
