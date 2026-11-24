@@ -104,6 +104,9 @@ DATA_PLANE_CLASS_CONTRACT = {
     # instruction/provenance records and returned spans stay fragment-owned.
     "self_backend_aarch64_typed_pass_context.py:TypedPassContext": "phase_shell",
     "self_backend_aarch64_typed_peepholes.py:_Pass": "phase_shell",
+    # One carrier per private emission, not a value per span/record. The
+    # grant borrows the old arena and releases it on transfer or revocation.
+    "self_backend_aarch64_typed_peepholes.py:_SpanOwnerTransfer": "phase_shell",
     "self_backend_module_symbols.py:PreparedModuleSymbols": "phase_shell",
     "self_backend_prepare.py:PreparedSelfBackendModule": "phase_shell",
     # Text legalization owners: one module scope for lines/type/helper tables

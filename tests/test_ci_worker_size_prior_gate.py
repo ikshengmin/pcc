@@ -4118,6 +4118,7 @@ else:
         "self_backend_aarch64_semantics.py:AArch64InstructionSemantics": "native_arena",
         "self_backend_aarch64_typed_pass_context.py:TypedPassContext": "phase_shell",
         "self_backend_aarch64_typed_peepholes.py:_Pass": "phase_shell",
+        "self_backend_aarch64_typed_peepholes.py:_SpanOwnerTransfer": "phase_shell",
     }
     for class_key, classification in typed_classifications.items():
         assert contract[class_key] == classification
