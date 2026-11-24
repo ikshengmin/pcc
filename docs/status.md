@@ -183,6 +183,11 @@ in the relevant section or issue and removes the entry.
   slice to land explicitly unqualified for the maintainer's Mac checkpoint.
   Codex's recommendation: the tests-only checkpoint, without mixing in
   compiler or pressure instrumentation changes.
+  Maintainer's answer, 2026-11-24, in chat to Claude on the local Mac,
+  asked "同意 Codex 先合入只改测试的 (b) 修复吗？" ("approve Codex landing
+  the tests-only (b) fix first?"): "同意合入" ("approved, land it"). The
+  agent holding `c1b34833` lands it labelled unqualified, then removes this
+  entry; Claude then dispatches the due checkpoint from the Mac (rule 13).
 
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
@@ -263,7 +268,9 @@ in the relevant section or issue and removes the entry.
    > 记录要求：在 work order 里用原话引用这条维护者指示。其他规则照旧：每个结果推送前跑受影响语言的整套测试，遵守检查点规则，macOS 的数字归 rule 14 的 macOS 验证单元。
 
    Next: (b) first, with the smallest test-migration slice that restores
-   Python ordinary-suite collection. On unchanged `06e375f9`,
+   Python ordinary-suite collection. The maintainer approved landing the
+   tests-only candidate `c1b34833` unqualified ("同意合入", 2026-11-24; see
+   "Waiting on maintainer"): land it as is, labelled unqualified. On unchanged `06e375f9`,
    `uv run pytest --collect-only -n0 -q tests/python` collected 48,242
    ordinary nodes and stopped with 24 collection errors: 22 imports of
    deleted test helpers/modules, plus stale five-entry parameter ID lists in
