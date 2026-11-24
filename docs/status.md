@@ -281,9 +281,16 @@ in the relevant section or issue and removes the entry.
    release ordering, exception save/restore, and stack maps are tested.
    Linux: 18 IR tests and both native/CPython callback witnesses passed.
    Whole-language qualification is pending GitHub CI.
-   Next: migrate the float callback gate without the former GC4 movement
-   witness, and continue the remaining (b) inventory. Do not wait for the
-   maintainer's local Mac; use GitHub CI for platform failures.
+   The float-callback CI node now checks the single collector: both
+   direct and threaded native pcc0 runs match CPython event-by-event for
+   nested success, invalid-result destruction before receiver destruction,
+   and restoration of the outer exception. The receipt retains both
+   results. The original GC4 relocation symbols are no longer required.
+   Linux: 102 passing focused checks; the existing legacy sweep-trigger
+   assertion still fails on both this patch and its unmodified parent.
+   The hosted float gate and whole-language qualification are pending CI.
+   Next: reconcile the remaining (b) tests with CI selectors, starting
+   with the stale sweep selectors. Do not wait for the maintainer's local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -426,7 +433,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) float callback native and CI test migration: Codex, Linux, 2026-11-24 17:16Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific

@@ -122,9 +122,9 @@ GATES = (
         "tests/python/test_native_class_docstrings.py::"
         "test_class_docstrings_native_five_gc[pcc0]",
     )),
-    ("float-callback-movement", (
+    ("float-callback-cleanup", (
         "tests/python/test_native_float_callback_movement.py::"
-        "test_canonical_float_callback_movement_gc4[pcc0]",
+        "test_canonical_float_callback_cleanup[pcc0]",
     )),
 )
 PROFILES = {
@@ -136,7 +136,7 @@ PROFILES = {
         "indexed-worker-lifetime", "indexed-split", "indexed-handoff-closure",
     ),
     "float-doc": (
-        "runtime-build", "float-protocol", "class-docstrings", "float-callback-movement",
+        "runtime-build", "float-protocol", "class-docstrings", "float-callback-cleanup",
     ),
 }
 EVIDENCE_LIMIT = 16 * 1024 * 1024
@@ -144,7 +144,7 @@ RECEIPT_NAMES = {
     "qualification.json", "command.json", "result.json", "runtime-identity.json",
     "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
-    "float-callback-movement.json", "build.json",
+    "float-callback-cleanup.json", "build.json",
     *(f"gc{backend}-{mode}.json" for backend in (2, 1, 3, 4) for mode in GC_SWEEP_MODES),
     "indexed-process-split.json", "indexed-handoff-closed-world.json",
     *(f"gc{backend}.json" for backend in range(5)),
@@ -355,9 +355,8 @@ def run(out, profile="default"):
         )
     else:
         receipt["collector_scope"] = (
-            "float protocol and class docstrings request GC0-4 without collector-selection telemetry; "
-            "float callback movement asserts actual GC4 and positive selection/relocation "
-            "in both callback and cleanup"
+            "float protocol and class docstrings retain legacy labels without collector-selection telemetry; "
+            "float callback cleanup compares direct and threaded single-collector execution with CPython"
         )
     receipt_path = out / "work" / "qualification.json"
     _save(receipt_path, receipt)

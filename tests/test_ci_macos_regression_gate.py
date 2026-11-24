@@ -391,9 +391,9 @@ FLOAT_DOC_NODES = {
         "tests/python/test_native_class_docstrings.py::"
         "test_class_docstrings_native_five_gc[pcc0]",
     ),
-    "float-callback-movement": (
+    "float-callback-cleanup": (
         "tests/python/test_native_float_callback_movement.py::"
-        "test_canonical_float_callback_movement_gc4[pcc0]",
+        "test_canonical_float_callback_cleanup[pcc0]",
     ),
 }
 
@@ -439,7 +439,7 @@ def test_profiles_preserve_default_order_and_bind_only_three_float_doc_nodes():
             "worker-handles", "root-joins",
         ),
         "float-doc": (
-            "runtime-build", "float-protocol", "class-docstrings", "float-callback-movement",
+            "runtime-build", "float-protocol", "class-docstrings", "float-callback-cleanup",
         ),
         "indexed-split": (
             "indexed-worker-lifetime", "indexed-split", "indexed-handoff-closure",
@@ -480,7 +480,7 @@ def test_float_doc_profile_builds_own_runtime_and_executes_exact_nodes(tmp_path,
     assert set(receipt["gates"]) == set(gate.PROFILES["float-doc"])
     assert "clock_scope" not in receipt
     assert "without collector-selection telemetry" in receipt["collector_scope"]
-    assert "actual GC4" in receipt["collector_scope"]
+    assert "direct and threaded single-collector execution with CPython" in receipt["collector_scope"]
     for name, nodes in FLOAT_DOC_NODES.items():
         assert receipt["gates"][name] == {
             "status": "PASS", "expected_nodes": list(nodes), "executed_nodes": list(nodes),
@@ -555,20 +555,26 @@ def test_cli_selects_profile_without_changing_default(tmp_path, monkeypatch, pro
     assert seen == [(tmp_path.resolve(), {"profile": profile})]
 
 
-def test_movement_receipt_is_collected_complete(tmp_path):
-    work = tmp_path / "work/float-callback-movement/tests"
+def test_float_cleanup_receipt_is_collected_complete(tmp_path):
+    work = tmp_path / "work/float-callback-cleanup/tests"
     work.mkdir(parents=True)
-    original = '{"status": "PASS", "gc_backend": 4}\n'
-    (work / "float-callback-movement.json").write_text(original)
+    original = json.dumps({
+        "status": "PASS",
+        "executions": [
+            {"execution_mode": "direct", "status": "PASS"},
+            {"execution_mode": "threaded", "status": "PASS"},
+        ],
+    }) + "\n"
+    (work / "float-callback-cleanup.json").write_text(original)
     (work / "program.out").write_bytes(b"native binary must remain on runner")
     gate.collect_evidence(tmp_path)
     evidence = tmp_path / "evidence"
-    path = evidence / "float-callback-movement/tests/float-callback-movement.json.gz"
+    path = evidence / "float-callback-cleanup/tests/float-callback-cleanup.json.gz"
     assert gzip.decompress(path.read_bytes()).decode() == original
     index = json.loads((evidence / "index.json").read_text())
     assert index["status"] == "COMPLETE"
     assert [row["source"] for row in index["files"]] == [
-        "float-callback-movement/tests/float-callback-movement.json",
+        "float-callback-cleanup/tests/float-callback-cleanup.json",
     ]
 
 
