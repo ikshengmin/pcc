@@ -228,13 +228,20 @@ in the relevant section or issue and removes the entry.
    code changed. The hosted run and whole-language qualification are pending.
    The separate late-weakref host model needs current collector primitives
    (`pcc_gc_tracked_count_flush`, user-code window) before it can run again.
-   Next: #20 active frame-registration and frame-rooted ownership tests;
+   #20 checked frame registration: five red model cases now execute the
+   current registry and unlink bodies, preserving an unrelated live frame.
+   With node/capacity/allocation/insertion failures they verify no park,
+   cleanup before the inner guard exits, and no published frame or cycle
+   request. The raw status ABI check remains. Linux: 19 focused tests pass;
+   no runtime code changed. No new CI run for this test-only slice while
+   the sweep CI run is queued; whole-language qualification is pending.
+   Next: #20 frame-rooted ownership tests;
    then the native CI receipt/bootstrap assertions as separate units.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 checked frame registration fault cases: Codex, Linux, 2026-11-24 18:15 UTC, area runtime-gc
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
