@@ -548,14 +548,20 @@ def test_actual_dispatch_ir_uses_counted_string_leases_and_original_posix_call(t
     foreign = body.index("@pcc_worker_resource_replace_detailed(")
     assert "alloca [24 x i8]" in body
     projection = body.index("@py_str_utf8(")
-    leases = list(re.finditer(
-        r"(%extern\.lease\.acquire[\w.]*) = call i64 \(ptr\) @pcc_gc_foreign_lease_acquire\(",
-        body[:foreign]))
+    # The extern lowering leases both string owners before either UTF-8
+    # projection and releases them after the call. The one collector never
+    # moves an object, so the fused-protocol pass answers every lease with its
+    # inert 0 token (pcc/frontends/python/fused_protocol_pass.py): the sites
+    # and their order remain, the runtime calls do not.
+    assert "@pcc_gc_foreign_lease_acquire(" not in body
+    assert "@pcc_gc_foreign_lease_release(" not in body
+    leases = list(re.finditer(r"%extern\.lease\.acquire[\w.]* = add i64 0, 0", body[:foreign]))
     assert len(leases) == 2 and max(match.start() for match in leases) < projection < foreign
     assert body[:foreign].count("@py_str_utf8(") == 2
-    for lease in leases:
-        assert re.search(r"@pcc_gc_foreign_lease_release\([^\n]*i64 "
-                         + re.escape(lease.group(1)) + r"\)", body[foreign:])
+    after = body[foreign:]
+    releases = re.findall(r"%extern\.lease\.release[\w.]* = add i64 0, 0",
+                          after[:after.index("extern.lease.cleanup")])
+    assert len(releases) == 2
     call = re.search(r"@pcc_worker_resource_replace_detailed\(ptr (%[\w.]+), ptr (%[\w.]+), i64 (%[\w.]+)\)", body)
     assert call
     traced_call, tagged_bits = _assert_diagnostic_address_lane(body)
