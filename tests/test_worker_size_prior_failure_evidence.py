@@ -35,7 +35,7 @@ def _write_receipt(tmp_path, archive, compiler, capfd, owner="pcc0"):
     request = SimpleNamespace(node=SimpleNamespace(callspec=SimpleNamespace(
         params={"python_program_compiler": owner},
     )))
-    prior.test_size_prior_native_processes_five_collectors(
+    prior.test_size_prior_native_processes_single_collector(
         tmp_path, archive, compiler, request, capfd,
     )
 
@@ -81,7 +81,7 @@ def test_compile_failure_retains_context_and_original_exception(
     context = receipt["exception_context"]
     assert context["type"] == "PermissionError"
     assert [frame["name"] for frame in context["traceback"]] == [
-        "test_size_prior_native_processes_five_collectors", "compiler", "denied",
+        "test_size_prior_native_processes_single_collector", "compiler", "denied",
     ]
     assert context["traceback"][-1]["filename"] == __file__
     traceback = error.__traceback__
@@ -114,7 +114,7 @@ def test_compile_base_exception_keeps_existing_classification(
     assert (tmp_path / "compile.stderr").read_text() == ""
 
 
-@pytest.mark.parametrize(("kind", "failed_index"), [(TimeoutError, 0), (KeyboardInterrupt, 3)])
+@pytest.mark.parametrize(("kind", "failed_index"), [(TimeoutError, 0), (KeyboardInterrupt, 1)])
 def test_execution_failure_retains_partial_receipt_without_reclassification(
     tmp_path, reporting_inputs, capfd, monkeypatch, kind, failed_index,
 ):
@@ -140,7 +140,7 @@ def test_execution_failure_retains_partial_receipt_without_reclassification(
     context = receipt["exception_context"]
     assert context["type"] == kind.__name__
     assert [frame["name"] for frame in context["traceback"]] == [
-        "test_size_prior_native_processes_five_collectors", "run",
+        "test_size_prior_native_processes_single_collector", "run",
     ]
     assert context["frames_truncated"] is context["text_truncated"] is False
 
@@ -157,7 +157,7 @@ def test_success_receipt_does_not_add_exception_context(
     monkeypatch.setattr(prior, "_run", run)
     _write_receipt(tmp_path, reporting_inputs, _synthetic_compile, capfd)
     receipt = _receipt(tmp_path)
-    assert receipt["status"] == "PASS" and len(receipt["executions"]) == 10
+    assert receipt["status"] == "PASS" and len(receipt["executions"]) == len(prior.CASES)
     assert "exception_context" not in receipt and "error" not in receipt
     assert calls == [(case, collector, "pcc", "pcc0")
                      for collector in (0,) for case in prior.CASES]
@@ -291,7 +291,7 @@ def test_compile_cleanup_failure_keeps_original_exception_chain(
     context = receipt["exception_context"]
     assert context["type"] == "PermissionError"
     assert [frame["name"] for frame in context["traceback"]] == [
-        "test_size_prior_native_processes_five_collectors", "compiler",
+        "test_size_prior_native_processes_single_collector", "compiler",
         "run_process_group_timeout", "_run_process_group",
         "_finish_after_process_group_kill", "_kill_process_group", "denied",
     ]
@@ -450,7 +450,7 @@ def test_compile_receipt_preserves_error_with_raising_chain_attribute_hooks(
     context = receipt["exception_context"]
     assert context["type"] == "ChainAttributeError"
     assert [frame["name"] for frame in context["traceback"]] == [
-        "test_size_prior_native_processes_five_collectors", "compiler",
+        "test_size_prior_native_processes_single_collector", "compiler",
     ]
     assert context["chain"][0]["relation"] == "context"
     assert context["chain"][0]["type"] == "KeyboardInterrupt"

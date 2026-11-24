@@ -24,8 +24,8 @@ sys.path.insert(0, str(ROOT))
 # allowance; this does not extend native canaries or later-stage compiles.
 STAGE1_TIMEOUT_S = 7200
 PLATFORM_COMPILE_TIMEOUT_S = 6000
-# Prior-worker native gate: one compile of the fixture plus its ten
-# collector/case executions, under one watchdog. 400 s by the maintainer's
+# Prior-worker native gate: one compile of the fixture plus both policy
+# cases on the single collector, under one watchdog. 400 s by the maintainer's
 # decision (2026-10-20, was 300 s): pass first, then keep optimizing.
 NATIVE_GATE_TIMEOUT_S = 400
 # The 45-minute macOS job target. Recorded in the Stage1 receipt; not met
@@ -335,7 +335,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3810 ordinary raw nodes.
+# Expected default-marker inventory: 87 modules, 3819 ordinary raw nodes.
 # Single-collector migration replaces 117 retired relocation tests with one
 # live Stage1 input inventory regression. Historical counts below predate it.
 # Source-matched 87b58370 AArch64 CI collected all 3957: 3956 passed and
@@ -346,7 +346,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
 # Reconcile source hashes and node identities before updating this receipt;
 # collection is not execution evidence and UNRUN is never counted as PASS.
 HOST_COUNTS = (
-    106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
+    106, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
     4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55,
     89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
@@ -595,7 +595,7 @@ def runtime_identity(archive):
 
 
 def native_gate(out, owner, env):
-    node = PROCESS_TEST + "::test_size_prior_native_processes_five_collectors[" + owner + "]"
+    node = PROCESS_TEST + "::test_size_prior_native_processes_single_collector[" + owner + "]"
     name = "native-" + owner
     # The small changed-shape program shares the existing pcc0 invocation and
     # watchdog. Give it selection priority; the unchanged xdist scheduler may
@@ -610,15 +610,34 @@ def native_gate(out, owner, env):
     assert receipt["status"] == "PASS" and receipt["compiler_parameter"] == owner
     assert receipt["source_sha256"] == sha(ROOT / "tests/fixtures/native/worker_size_priors.py")
     assert receipt["runtime_archive_sha256"] == sha(env["PCC_RUNTIME_ARCHIVE"])
-    assert len(receipt["executions"]) == 10
-    assert {(row["case"], row["requested_collector"]) for row in receipt["executions"]} == {
-        (case, gc) for case in ("width", "growth") for gc in range(5)}
     from scripts.verify_nolibpython import linked_libraries
     binary = files[0].parent / ("prior-worker.exe" if sys.platform == "win32" else "prior-worker.out")
     assert sha(binary) == receipt["binary_sha256"]
+    verify_native_prior_executions(receipt["executions"], binary)
     assert not any("python" in name.lower() or "llvm" in name.lower()
                    for name in linked_libraries(binary.read_bytes()))
     return receipt["binary_sha256"]
+
+
+def verify_native_prior_executions(executions, binary):
+    assert [row["case"] for row in executions] == ["width", "growth"], (
+        "expected one width run and one growth run"
+    )
+    for row, expected_attempts in zip(executions, (3, 4), strict=True):
+        case = row["case"]
+        assert type(row["requested_collector"]) is int and row["requested_collector"] == 0
+        collectors = row["observed_child_collectors"]
+        assert len(collectors) == expected_attempts and all(
+            type(collector) is int and collector == 0 for collector in collectors
+        ), "child collector witness mismatch"
+        pids = row["child_pids"]
+        assert len(pids) == len(set(pids)) == expected_attempts
+        assert all(type(pid) is int and pid > 0 for pid in pids)
+        assert row["command"] == [str(binary), case, str(binary.parent / ("gc0-" + case))]
+        assert row["status"] == "PASS" and row["native_execution"] is True
+        assert (row["returncode"], row["stdout"], row["stderr"]) == (
+            0, "WORKER_SIZE_PRIOR_OK " + case + "\n", "",
+        )
 
 
 def admission_metrics(text, compile_wall):

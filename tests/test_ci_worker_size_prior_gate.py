@@ -60,7 +60,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -131,41 +131,41 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
-    assert sum(gate.HOST_COUNTS) == 3810 and sum(gate.HOST_COUNTS[:85]) == 3750
-    assert sum(gate.HOST_COUNTS[:72]) == 3384
-    assert sum(gate.HOST_COUNTS[:70]) == 3326
-    assert sum(gate.HOST_COUNTS[:65]) == 3113
-    assert sum(gate.HOST_COUNTS[:63]) == 3075
-    assert sum(gate.HOST_COUNTS[:62]) == 3066
-    assert sum(gate.HOST_COUNTS[:61]) == 2834
-    assert sum(gate.HOST_COUNTS[:60]) == 2681
-    assert sum(gate.HOST_COUNTS[:59]) == 2670
-    assert sum(gate.HOST_COUNTS[:58]) == 2669
-    assert sum(gate.HOST_COUNTS[:57]) == 2661
-    assert sum(gate.HOST_COUNTS[:53]) == 2548
-    assert sum(gate.HOST_COUNTS[:52]) == 2523
-    assert sum(gate.HOST_COUNTS[:51]) == 2492
-    assert sum(gate.HOST_COUNTS[:50]) == 2450 and sum(gate.HOST_COUNTS[:49]) == 2404
-    assert sum(gate.HOST_COUNTS[:48]) == 2363
-    assert sum(gate.HOST_COUNTS[:47]) == 2320
-    assert sum(gate.HOST_COUNTS[:43]) == 2228
-    assert sum(gate.HOST_COUNTS[:42]) == 2112
-    assert sum(gate.HOST_COUNTS[:40]) == 2103
-    assert sum(gate.HOST_COUNTS[:38]) == 2093
-    assert sum(gate.HOST_COUNTS[:36]) == 2084
-    assert sum(gate.HOST_COUNTS[:34]) == 2066
-    assert sum(gate.HOST_COUNTS[:32]) == 2031
-    assert sum(gate.HOST_COUNTS[:30]) == 1871
-    assert sum(gate.HOST_COUNTS[:28]) == 1770
-    assert sum(gate.HOST_COUNTS[:27]) == 1715
-    assert sum(gate.HOST_COUNTS[:25]) == 1575
-    assert sum(gate.HOST_COUNTS[:23]) == 1420
-    assert sum(gate.HOST_COUNTS[:22]) == 1404
-    assert sum(gate.HOST_COUNTS[:21]) == 1349
-    assert sum(gate.HOST_COUNTS[:20]) == 1249
-    assert sum(gate.HOST_COUNTS[:18]) == 1212
-    assert sum(gate.HOST_COUNTS[:17]) == 1145 and sum(gate.HOST_COUNTS[:16]) == 1084
-    assert sum(gate.HOST_COUNTS[:14]) == 1075
+    assert sum(gate.HOST_COUNTS) == 3819 and sum(gate.HOST_COUNTS[:85]) == 3759
+    assert sum(gate.HOST_COUNTS[:72]) == 3393
+    assert sum(gate.HOST_COUNTS[:70]) == 3335
+    assert sum(gate.HOST_COUNTS[:65]) == 3122
+    assert sum(gate.HOST_COUNTS[:63]) == 3084
+    assert sum(gate.HOST_COUNTS[:62]) == 3075
+    assert sum(gate.HOST_COUNTS[:61]) == 2843
+    assert sum(gate.HOST_COUNTS[:60]) == 2690
+    assert sum(gate.HOST_COUNTS[:59]) == 2679
+    assert sum(gate.HOST_COUNTS[:58]) == 2678
+    assert sum(gate.HOST_COUNTS[:57]) == 2670
+    assert sum(gate.HOST_COUNTS[:53]) == 2557
+    assert sum(gate.HOST_COUNTS[:52]) == 2532
+    assert sum(gate.HOST_COUNTS[:51]) == 2501
+    assert sum(gate.HOST_COUNTS[:50]) == 2459 and sum(gate.HOST_COUNTS[:49]) == 2413
+    assert sum(gate.HOST_COUNTS[:48]) == 2372
+    assert sum(gate.HOST_COUNTS[:47]) == 2329
+    assert sum(gate.HOST_COUNTS[:43]) == 2237
+    assert sum(gate.HOST_COUNTS[:42]) == 2121
+    assert sum(gate.HOST_COUNTS[:40]) == 2112
+    assert sum(gate.HOST_COUNTS[:38]) == 2102
+    assert sum(gate.HOST_COUNTS[:36]) == 2093
+    assert sum(gate.HOST_COUNTS[:34]) == 2075
+    assert sum(gate.HOST_COUNTS[:32]) == 2040
+    assert sum(gate.HOST_COUNTS[:30]) == 1880
+    assert sum(gate.HOST_COUNTS[:28]) == 1779
+    assert sum(gate.HOST_COUNTS[:27]) == 1724
+    assert sum(gate.HOST_COUNTS[:25]) == 1584
+    assert sum(gate.HOST_COUNTS[:23]) == 1429
+    assert sum(gate.HOST_COUNTS[:22]) == 1413
+    assert sum(gate.HOST_COUNTS[:21]) == 1358
+    assert sum(gate.HOST_COUNTS[:20]) == 1258
+    assert sum(gate.HOST_COUNTS[:18]) == 1221
+    assert sum(gate.HOST_COUNTS[:17]) == 1154 and sum(gate.HOST_COUNTS[:16]) == 1093
+    assert sum(gate.HOST_COUNTS[:14]) == 1084
     # Exercise the complete fixed inventory through its real consumer. These
     # are synthetic all-passed report controls, not collection/run evidence.
     inventory_nodes = [path + "::test_inventory[" + str(index) + "]"
@@ -193,7 +193,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3810, "selected_passed_count": 3810,
+        "universe_count": 3819, "selected_passed_count": 3819,
         "platform_unrun": [], "worker_witnesses": 6,
     }
     # A complete report cannot pass stale counts or omit the new module. Dropping
@@ -755,14 +755,14 @@ def test_integration_selects_one_owner_without_changing_workers(tmp_path):
     for owner in ("pcc0", "pcc1"):
         scope = {"PROCESS_TEST": gate.PROCESS_TEST, "X87_NATIVE_TEST": gate.X87_NATIVE_TEST, "owner": owner}
         exec(compile(ast.Module(body=setup, type_ignores=[]), "<native-node-selection-only>", "exec"), scope)
-        worker = gate.PROCESS_TEST + "::test_size_prior_native_processes_five_collectors[" + owner + "]"
+        worker = gate.PROCESS_TEST + "::test_size_prior_native_processes_single_collector[" + owner + "]"
         expected = ([gate.X87_NATIVE_TEST + "::test_x87_tables_native_five_gc[pcc0]", worker]
                     if owner == "pcc0" else [worker])
         assert scope["nodes"] == expected
         command = gate.pytest_command(tmp_path, expected, integration=True)
         assert command[-len(expected) - 2:] == ["-m", "integration", *expected]
         assert "-n0" not in command and "-o" not in command
-    # One watchdog covers the compile and its ten executions: 400 s
+    # One watchdog covers the compile and both case executions: 400 s
     # (maintainer decision 2026-10-20; was 300 s).
     assert gate.NATIVE_GATE_TIMEOUT_S == 400
     calls = [node for node in ast.walk(function) if isinstance(node, ast.Call)
@@ -771,6 +771,44 @@ def test_integration_selects_one_owner_without_changing_workers(tmp_path):
     assert {keyword.arg: ast.unparse(keyword.value) for keyword in calls[0].keywords} == {
         "integration": "True", "timeout": "NATIVE_GATE_TIMEOUT_S",
     }
+
+
+@pytest.mark.parametrize("corruption", (
+    None, "missing", "duplicate-case", "wrong-request", "mixed-child",
+    "boolean-child", "reused-child", "wrong-binary", "wrong-case-output",
+))
+def test_native_prior_verifier_requires_both_real_single_collector_cases(tmp_path, corruption):
+    binary = tmp_path / "prior-worker.out"
+    rows = []
+    for case, attempts in (("width", 3), ("growth", 4)):
+        rows.append({
+            "case": case, "requested_collector": 0, "observed_child_collectors": [0] * attempts,
+            "child_pids": list(range(100, 100 + attempts)),
+            "command": [str(binary), case, str(tmp_path / ("gc0-" + case))],
+            "status": "PASS", "native_execution": True, "returncode": 0,
+            "stdout": "WORKER_SIZE_PRIOR_OK " + case + "\n", "stderr": "",
+        })
+    if corruption is None:
+        gate.verify_native_prior_executions(rows, binary)
+        return
+    if corruption == "missing":
+        rows.pop()
+    elif corruption == "duplicate-case":
+        rows[1] = rows[0]
+    elif corruption == "wrong-request":
+        rows[1]["requested_collector"] = 4
+    elif corruption == "mixed-child":
+        rows[0]["observed_child_collectors"][1] = 2
+    elif corruption == "boolean-child":
+        rows[0]["observed_child_collectors"][1] = False
+    elif corruption == "reused-child":
+        rows[1]["child_pids"][1] = rows[1]["child_pids"][0]
+    elif corruption == "wrong-binary":
+        rows[1]["command"][0] = "/different/binary"
+    elif corruption == "wrong-case-output":
+        rows[1]["stdout"] = rows[0]["stdout"]
+    with pytest.raises(AssertionError):
+        gate.verify_native_prior_executions(rows, binary)
 
 
 @pytest.mark.parametrize(("nodes", "summary"), [
@@ -2289,7 +2327,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23) + (36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 327, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23) + (36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

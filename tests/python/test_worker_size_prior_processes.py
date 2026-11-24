@@ -614,7 +614,7 @@ main()
     or (sys.platform == "darwin" and platform.machine().lower() == "arm64")
     or (sys.platform == "win32" and platform.machine().lower() in ("amd64", "x86_64"))
 ))
-def test_size_prior_native_processes_five_collectors(
+def test_size_prior_native_processes_single_collector(
     tmp_path, explicit_owned_runtime, python_program_compiler, request, capfd,
 ):
     """Execute the actual policy and same-binary children on each host target.
@@ -680,6 +680,6 @@ def test_size_prior_native_processes_five_collectors(
                 raise
             receipt["executions"].append(result)
             save()
-    assert len(receipt["executions"]) == 10
+    assert [row["case"] for row in receipt["executions"]] == list(CASES)
     receipt["status"] = "PASS"
     save()
