@@ -31,31 +31,26 @@ OWNERSHIP_NODE = (
     "tests/python/test_valueclass_aggregate_ownership_native.py::"
     "test_aggregate_ownership_native_five_gc"
 )
-GC_SWEEP_MODES = (
-    "live-transitive", "dead-self-cycle", "self-resurrection",
-    "resurrected-finalizer-batch", "gc-start-callback", "nonpositive-budget",
-    "partial-budget-finalizer-once",
-)
+# The single collector's actual graph and callback contracts, not a replay of
+# retired tracing backends. Keep native execution and model coverage distinct.
 GC_SWEEP_NATIVE_NODES = (
-    "tests/python/test_gc_relocation_sweep_verdict.py::"
-    "test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]",
-    *("tests/python/test_gc_tracing_sweep_verdict_native.py::"
-      f"test_pending_verdict_native[gc{backend}-{mode}]"
-      for backend in (2, 1, 3, 4) for mode in GC_SWEEP_MODES),
+    "tests/python/test_gc0_candidate_revalidation.py::"
+    "test_native_candidate_revalidation_preserves_current_roots_and_resurrection",
+    "tests/python/test_gc_cycle_weakref_sync_native.py::test_gc_cycle_weakref_sync_native[pcc0]",
+    "tests/python/test_gc0_late_weakref_native.py::"
+    "test_gc0_late_weakref_owned_native[host-pcc0-probe0]",
 )
-GC_SWEEP_HOST_NODES = tuple(
-    "tests/python/test_gc_tracing_sweep_verdict.py::" + name for name in (
-        "test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref",
-        "test_dead_cycle_finalizes_before_clear_and_reclaims_once",
-        "test_post_finalizer_recheck_preserves_resurrected_graph_and_weakref",
-        "test_finalizers_keep_isolated_batch_semantics_when_one_resurrects_peer",
-        "test_nonpositive_budget_does_not_mark_finalize_or_clear[0]",
-        "test_nonpositive_budget_does_not_mark_finalize_or_clear[-1]",
-        "test_budget_limits_reclamation_without_repeating_finalizers",
-        "test_pinned_and_cext_finalizer_exclusions_are_preserved",
-        "test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept",
-        "test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims",
-    )
+GC_SWEEP_HOST_NODES = (
+    *("tests/python/test_gc0_weakref_batch.py::" + name for name in (
+        "test_directory_invalidation_visits_only_the_dying_targets_refs",
+        "test_directory_stays_exact_through_callback_reentry_and_ref_deaths",
+        "test_batch_and_late_clear_leave_only_records_a_later_death_retires",
+        "test_gc0_batch_requires_stopped_world_before_touching_refs",
+    )),
+    "tests/python/test_gc0_weakref_batch.py::"
+    "test_all_candidate_targets_clear_before_callback_and_dead_weakref_is_silent",
+    "tests/python/test_gc0_weakref_batch.py::"
+    "test_counted_queue_holds_survive_callbacks_dropping_refs_and_mutating_chain",
 )
 GATES = (
     ("gc-sweep", GC_SWEEP_NATIVE_NODES + GC_SWEEP_HOST_NODES),
@@ -145,7 +140,7 @@ RECEIPT_NAMES = {
     "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
     "float-callback-cleanup.json", "build.json",
-    *(f"gc{backend}-{mode}.json" for backend in (2, 1, 3, 4) for mode in GC_SWEEP_MODES),
+    "gc0-late-weakref-owned.json", "candidate-revalidation.json",
     "indexed-process-split.json", "indexed-handoff-closed-world.json",
     *(f"gc{backend}.json" for backend in range(5)),
 }
@@ -215,7 +210,7 @@ def verify_gc_sweep_xdist(directory, expected):
 def _pytest_gate(name, nodes, out, environment):
     directory = out / "work" / name
     if name == "gc-sweep":
-        # Admit the unmarked host models/relocation probe and integration matrix,
+        # Admit both the unmarked host models and the native integration nodes,
         # without overriding the project's six-worker/loadgroup defaults.
         options = ["-x", "-m", "integration or not integration", "--color=no"]
         environment = dict(environment, PYTEST_ADDOPTS="", PCC_PYTEST_AUTO_CLEAN="0")

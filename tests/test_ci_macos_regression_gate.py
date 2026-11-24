@@ -885,35 +885,34 @@ def test_handoff_default_xdist_workflow_is_bounded_without_stage1_dependency():
     assert has_only_validation_plan_dependency(_workflow_job(workflow, "pcc1-package-parity"))
 
 
-def test_gc_sweep_gate_selects_twenty_nine_native_and_ten_host_cases():
+SWEEP_NATIVE = (
+    "tests/python/test_gc0_candidate_revalidation.py::"
+    "test_native_candidate_revalidation_preserves_current_roots_and_resurrection",
+    "tests/python/test_gc_cycle_weakref_sync_native.py::test_gc_cycle_weakref_sync_native[pcc0]",
+    "tests/python/test_gc0_late_weakref_native.py::"
+    "test_gc0_late_weakref_owned_native[host-pcc0-probe0]",
+)
+SWEEP_HOST = (
+    *("tests/python/test_gc0_weakref_batch.py::" + name for name in (
+        "test_directory_invalidation_visits_only_the_dying_targets_refs",
+        "test_directory_stays_exact_through_callback_reentry_and_ref_deaths",
+        "test_batch_and_late_clear_leave_only_records_a_later_death_retires",
+        "test_gc0_batch_requires_stopped_world_before_touching_refs",
+    )),
+    "tests/python/test_gc0_weakref_batch.py::"
+    "test_all_candidate_targets_clear_before_callback_and_dead_weakref_is_silent",
+    "tests/python/test_gc0_weakref_batch.py::"
+    "test_counted_queue_holds_survive_callbacks_dropping_refs_and_mutating_chain",
+)
+
+
+def test_gc_sweep_gate_selects_live_single_collector_contracts():
     nodes = dict(gate.GATES)["gc-sweep"]
-    expected = (
-        "tests/python/test_gc_relocation_sweep_verdict.py::"
-        "test_relocation_copy_clears_stale_sweep_verdict_backend4[pcc_python]",
-        *("tests/python/test_gc_tracing_sweep_verdict_native.py::"
-          f"test_pending_verdict_native[gc{backend}-{mode}]"
-          for backend in (2, 1, 3, 4) for mode in (
-              "live-transitive", "dead-self-cycle", "self-resurrection",
-              "resurrected-finalizer-batch", "gc-start-callback", "nonpositive-budget",
-              "partial-budget-finalizer-once",
-          )),
-    )
-    assert gate.GC_SWEEP_NATIVE_NODES == expected and len(set(expected)) == 29
-    host_names = (
-        "test_live_pending_candidate_is_rechecked_before_finalizer_or_weakref",
-        "test_dead_cycle_finalizes_before_clear_and_reclaims_once",
-        "test_post_finalizer_recheck_preserves_resurrected_graph_and_weakref",
-        "test_finalizers_keep_isolated_batch_semantics_when_one_resurrects_peer",
-        "test_nonpositive_budget_does_not_mark_finalize_or_clear[0]",
-        "test_nonpositive_budget_does_not_mark_finalize_or_clear[-1]",
-        "test_budget_limits_reclamation_without_repeating_finalizers",
-        "test_pinned_and_cext_finalizer_exclusions_are_preserved",
-        "test_gc4_forwarding_shell_is_excluded_while_unrelated_dead_object_is_swept",
-        "test_gc4_selected_but_unforwarded_candidate_still_finalizes_and_reclaims",
-    )
-    host = tuple("tests/python/test_gc_tracing_sweep_verdict.py::" + name for name in host_names)
-    assert gate.GC_SWEEP_HOST_NODES == host and len(set(host)) == 10
-    assert nodes == expected + host and len(set(nodes)) == 39
+    assert gate.GC_SWEEP_NATIVE_NODES == SWEEP_NATIVE
+    assert gate.GC_SWEEP_HOST_NODES == SWEEP_HOST
+    assert nodes == SWEEP_NATIVE + SWEEP_HOST
+    assert len(set(nodes)) == len(nodes)
+    assert all((ROOT / node.split("::")[0]).is_file() for node in nodes)
     assert gate.PROFILES["default"][:3] == ("clock", "runtime-build", "gc-sweep")
     assert "gc-sweep" not in gate.PROFILES["float-doc"] + gate.PROFILES["indexed-split"]
 
@@ -954,7 +953,7 @@ def test_gc_sweep_command_keeps_default_xdist_and_owned_runtime(tmp_path, monkey
     args, = seen
     assert args[:7] == [gate.sys.executable, "-m", "pytest", "-x", "-m",
                         "integration or not integration", "--color=no"]
-    assert args[-39:] == list(nodes)
+    assert args[-len(nodes):] == list(nodes)
     assert not any(arg in {"-o", "--override-ini", "-c", "--dist", "--collect-only"}
                    or arg.startswith(("-n", "--numprocesses", "--dist=", "addopts=")) for arg in args)
     assert environment["PYTEST_ADDOPTS"] == "-n0 -o addopts="
@@ -971,7 +970,7 @@ def test_gc_sweep_rejects_weakened_xdist_defaults(tmp_path, change):
     if change == "no-workers":
         stdout.write_text(stdout.read_text().replace("created: 6/6 workers", "created: 5/5 workers"))
     elif change == "partial-collection":
-        stdout.write_text(stdout.read_text().replace("6 workers [39 items]", "collecting: 5/6 workers"))
+        stdout.write_text(stdout.read_text().replace(f"6 workers [{len(nodes)} items]", "collecting: 5/6 workers"))
     elif change == "wrong-scheduler":
         stdout.write_text(stdout.read_text().replace("LoadGroupScheduling", "LoadScheduling"))
     elif change == "override-defaults":
@@ -1001,7 +1000,7 @@ def test_default_profile_runs_gc_after_verified_runtime_and_stops_on_failure(tmp
             assert environment["PCC_WITH_THREADS"] == "1"
             assert environment["PCC_REFCOUNT_KIND"] == "atomic"
             assert environment["PCC_TEST_NO_NATIVE_PROVISIONING"] == "1"
-            assert len(nodes) == 39
+            assert nodes == SWEEP_NATIVE + SWEEP_HOST
             if fail_gc:
                 raise AssertionError("original GC sweep failure")
         return list(nodes)
@@ -1017,8 +1016,8 @@ def test_default_profile_runs_gc_after_verified_runtime_and_stops_on_failure(tmp
     receipt = json.loads((tmp_path / "work/qualification.json").read_text())
     assert receipt["status"] == ("FAIL" if fail_gc else "PASS")
     assert receipt["gates"]["gc-sweep"]["status"] == receipt["status"]
-    assert receipt["gates"]["gc-sweep"]["native_case_count"] == 29
-    assert receipt["gates"]["gc-sweep"]["host_case_count"] == 10
+    assert receipt["gates"]["gc-sweep"]["native_case_count"] == len(SWEEP_NATIVE)
+    assert receipt["gates"]["gc-sweep"]["host_case_count"] == len(SWEEP_HOST)
     assert receipt["gates"]["runtime-build"]["status"] == "PASS"
     if fail_gc:
         assert all(receipt["gates"][name]["status"] == "NOT_RUN"
@@ -1031,8 +1030,8 @@ def test_default_profile_runs_gc_after_verified_runtime_and_stops_on_failure(tmp
 def test_gc_receipts_are_retained_without_native_artifacts(tmp_path):
     work = tmp_path / "work/gc-sweep/tests"
     work.mkdir(parents=True)
-    names = ["build.json", *(f"gc{backend}-{mode}.json"
-             for backend in (2, 1, 3, 4) for mode in gate.GC_SWEEP_MODES)]
+    names = ["ownership-regression.json", "gc0-late-weakref-owned.json",
+             "candidate-revalidation.json"]
     for name in names:
         (work / name).write_text('{"returncode": 0}\n')
     (work / "sweep_verdict.out").write_bytes(b"native executable stays on runner")
@@ -1048,16 +1047,18 @@ def test_gc_receipts_are_retained_without_native_artifacts(tmp_path):
 def test_gc_workflow_triggers_cover_fixtures_and_keep_existing_job_budgets():
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     for path in (
-        "tests/python/test_gc_relocation_sweep_verdict.py",
-        "tests/python/test_gc_tracing_sweep_verdict_native.py",
-        "tests/fixtures/native/gc_tracing_pending_verdict.c",
-        "tests/owned_runtime_c_fixture.py",
-        "tests/python/test_gc_tracing_sweep_verdict.py",
-        "tests/python/test_freestanding_gc_tracing_sweep_collector.py",
+        *dict.fromkeys(node.split("::")[0] for node in SWEEP_NATIVE + SWEEP_HOST),
+        "tests/python/fixtures/gc0_late_weakref.py",
+        "tests/python/owned_regression_support.py",
+        "tests/owned_c_execution.py",
         "tests/runtime_fixture_provenance.py",
         "pcc/**",
     ):
         assert workflow.count('      - "' + path + '"') == 2
+    assert all(not marker in workflow for marker in (
+        "test_gc_tracing_sweep_verdict", "gc_tracing_pending_verdict",
+        "test_freestanding_gc_tracing_sweep_collector", "test_gc_relocation_sweep_verdict",
+    ))
     job = _workflow_job(workflow, "macos-pcc0-regressions")
     assert "timeout-minutes: 25" in job and "--timeout 1200" in job
     assert "--auto-tree-rss-ceiling-bytes 4294967296" in job

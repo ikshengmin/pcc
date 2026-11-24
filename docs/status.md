@@ -215,16 +215,26 @@ in the relevant section or issue and removes the entry.
    above still matches CPython. A full collection with 64k weakly referenced
    live objects is 36 ms against CPython's 4.9 ms: collector traversal cost,
    item 2's throughput work, not this pass.
-   Next: fix the exact [#20](https://github.com/ikshengmin/pcc/issues/20)
-   test/CI regressions from checkpoint 45427972345, starting with the
-   single-collector sweep selector, then active frame/ownership witnesses
-   and the native CI receipt/bootstrap assertions as separate units.
-   No weakening the CI resource guards or skipping live contracts.
+   [#20](https://github.com/ikshengmin/pcc/issues/20), sweep CI:
+   the Darwin focused gate selects three current native cases (retained
+   roots and subset resurrection, cyclic weakref/finalizer synchronization,
+   and post-finalizer weakref clearing) and six weakref model cases,
+   replacing removed GC1–4 verdict paths. The C subset probe now matches
+   CPython 3.15: a callback-free ref survives resurrection and clears on
+   eventual death; the native late-weakref case tests an early callback ref
+   separately. Kept six-worker defaults, exact execution receipts, and all
+   job guards. Linux: 106 focused checks passed and the actual gate executed
+   all 9 nodes with six workers (663 MB peak tree RSS). No compiler/runtime
+   code changed. The hosted run and whole-language qualification are pending.
+   The separate late-weakref host model needs current collector primitives
+   (`pcc_gc_tracked_count_flush`, user-code window) before it can run again.
+   Next: #20 active frame-registration and frame-rooted ownership tests;
+   then the native CI receipt/bootstrap assertions as separate units.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
-   collect the corresponding hosted receipt before calling it green.
+   matching hosted evidence is still pending.
 
    Claims:
-   - #20 single-collector sweep CI selectors: Codex, Linux, 2026-11-24 18:09 UTC, area runtime-gc
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

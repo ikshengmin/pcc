@@ -1,4 +1,5 @@
 """Native safety of GC0 candidate revalidation; discovery is not concurrent yet."""
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -67,7 +68,7 @@ static PyObject *finalize(PyObject *self) {
 }
 
 int main(void) {
-    if (pcc_gc_backend() != 0 || pcc_threads_enabled() != 1) return fail(2);
+    if (pcc_threads_enabled() != 1) return fail(2);
     py_gc_disable();
     if (pcc_gc_backend0_collect_candidates(0, 0) != 0 || !clean_context()) return fail(3);
     /* A reference from an excluded owner is external to the selected graph. */
@@ -124,8 +125,8 @@ int main(void) {
     pending[1] = record(child);
     if (pcc_gc_backend0_collect_candidates(pending + 1, 1) != 1) return fail(17);
 
-    /* Weakrefs are cleared before finalization. Resurrection preserves the
-     * instance, but must not revive an already cleared weak reference. */
+    /* As in CPython 3.15, an existing callback-free weakref survives
+     * resurrection and clears on a subsequent death. */
     const char *fields[1] = { "self" };
     PyClassObject *cls = py_class_new("CandidateResurrection", 0, 0, fields, 1);
     if (cls == 0) return fail(18);
@@ -140,7 +141,7 @@ int main(void) {
     if (pcc_gc_backend0_collect_candidates(&resurrection, 1) != 0) return fail(21);
     if (finalized != 1 || saved != instance || !clean_context()) return fail(22);
     PyObject *seen = py_weakref_call(weak);
-    if (seen != py_None) return fail(23);
+    if (seen != instance) return fail(23);
     py_decref(seen);
     py_decref(saved); saved = 0;
     resurrection = record(instance);
@@ -169,7 +170,10 @@ def test_native_candidate_revalidation_preserves_current_roots_and_resurrection(
     binary = tmp_path / 'candidate_revalidation'
     compile_owned_c_with_runtime(source, binary, runtime_archive=pcc_runtime_archive)
     run = subprocess.run([str(binary)], capture_output=True, text=True, timeout=30,
-                         env=dict(os.environ, PCC_GC_BACKEND='0', PATH='/nonexistent'))
+                         env=dict(os.environ, PATH='/nonexistent'))
     (tmp_path / 'native.stdout').write_text(run.stdout)
     (tmp_path / 'native.stderr').write_text(run.stderr)
+    (tmp_path / 'candidate-revalidation.json').write_text(json.dumps({
+        'returncode': run.returncode, 'stdout': run.stdout, 'stderr': run.stderr,
+    }) + '\n')
     assert (run.returncode, run.stdout, run.stderr) == (0, 'GC0_CANDIDATE_REVALIDATION_OK\n', '')
