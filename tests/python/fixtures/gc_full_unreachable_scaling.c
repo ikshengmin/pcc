@@ -1,4 +1,4 @@
-/* n [grouped|sliced|racing-young|disabled]: native full-to-young handover. */
+/* n [grouped|sliced|racing-young|disabled|abort-sweep]: native full-to-young handover. */
 #include "py_runtime.h"
 #include <stdint.h>
 #include <stdio.h>
@@ -13,7 +13,7 @@ extern int32_t pcc_gc_young_log_lost;
 extern int32_t pcc_gc_full_slice_pending;
 extern int32_t pcc_gc_backend4_auto_step_pending;
 /* pcc_gc_backend0_full_counter(3) reports the internal phase ordinal. */
-enum { HANDOVER_PHASE = 5 };
+enum { SWEEP_PHASE = 4, HANDOVER_PHASE = 5 };
 static int mixed_cycle(void) {
     py_gc_init();
     py_gc_disable();
@@ -46,7 +46,8 @@ int main(int argc, char **argv) {
     const int grouped = strcmp(mode, "grouped") == 0;
     const int racing = strcmp(mode, "racing-young") == 0;
     const int disabled = strcmp(mode, "disabled") == 0;
-    const int slices = racing || disabled || strcmp(mode, "sliced") == 0;
+    const int abort_sweep = strcmp(mode, "abort-sweep") == 0;
+    const int slices = abort_sweep || racing || disabled || strcmp(mode, "sliced") == 0;
     int n = atoi(argv[1]);
     py_gc_init();
     py_gc_disable();
@@ -76,6 +77,7 @@ int main(int argc, char **argv) {
     int count = 0;
     int64_t handover = 0;
     int demote_steps = 0;
+    int sweep_steps = 0;
     while (pcc_gc_backend0_full_counter(3) != 0 && count < 100000) {
         int64_t phase = pcc_gc_backend0_full_counter(3);
         int64_t before = pcc_gc_telemetry(PCC_GC_COUNTER_COLLECTION_STW_SUM_US);
@@ -83,6 +85,20 @@ int main(int argc, char **argv) {
         int64_t delta = pcc_gc_telemetry(PCC_GC_COUNTER_COLLECTION_STW_SUM_US) - before;
         if (phase > 0 && phase < 10 && delta > peak[phase]) peak[phase] = delta;
         if (pcc_gc_backend0_full_counter(3) == 0) handover = delta;
+        if (abort_sweep && phase == SWEEP_PHASE && ++sweep_steps == 45) {
+            /* Past one complete node block and well into the next one. An
+             * explicit full collection must release both representations
+             * of the approximate cycle and still see the complete graph. */
+            if (pcc_gc_backend0_full_counter(3) != SWEEP_PHASE) return 18;
+            if (py_gc_collect() != n + 1 || py_gc_get_count(0) != 0
+                || pcc_gc_backend0_full_counter(3) != 0) return 19;
+            /* A subsequent allocation and exact cycle may reuse storage. */
+            PyObject *next = py_list_new(0);
+            if (!next) return 20;
+            py_list_append(next, next);
+            py_decref(next);
+            return py_gc_collect() != 1 || py_gc_get_count(0) != 0;
+        }
         if (phase == HANDOVER_PHASE) {
             demote_steps++;
             if (slices && pcc_gc_backend0_full_counter(3) == HANDOVER_PHASE && demote_steps == 1) {
@@ -112,7 +128,7 @@ int main(int argc, char **argv) {
     }
     printf("demote steps %d\n", demote_steps);
     if (slices && demote_steps <= 1) return 14;
-    if (racing) return 15;
+    if (racing || abort_sweep) return 15;
     if (disabled) {
         if (py_gc_get_count(0) != n + 1) return 16;
         py_gc_enable();

@@ -20,7 +20,7 @@ def test_large_old_list_is_scanned_in_multiple_stops(
     assert run.returncode == 0, (run.returncode, run.stdout, run.stderr)
 
 
-@pytest.mark.parametrize("layout", ["flat", "grouped", "mixed", "sliced", "racing-young", "disabled"])
+@pytest.mark.parametrize("layout", ["flat", "grouped", "mixed", "sliced", "racing-young", "disabled", "abort-sweep"])
 def test_large_unreachable_component_survives_handover_until_exact_reclaim(
     tmp_path: Path, pcc_runtime_archive: Path, layout: str,
 ) -> None:

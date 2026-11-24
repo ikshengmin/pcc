@@ -9,8 +9,8 @@ many short stops and leaves the decision to a young collection:
 2. subtract: every node's object subtracts the references it holds to other
    nodes, so a node keeps the count of its referrers outside the view;
 3. mark: nodes with outside referrers, and what they reach, are reached;
-4. sweep: the nodes leave the index and the unreached objects are kept as
-   candidates;
+4. sweep: the nodes leave the index. Detached blocks store unreached
+   candidate addresses in their already retired prefix;
 5. demote: candidate ages are updated across stops. Young collection waits
    for the whole handover; if admission raced it, a full view decides instead.
 
@@ -67,7 +67,6 @@ from pcc.unsafe import (
     load_i64,
     load_ptr,
     malloc,
-    memmove,
     null,
     ptr_add,
     ptr_diff,
@@ -180,9 +179,9 @@ _STATE_LARGE: i64 = 64          # cursor over large objects (three words)
 _STATE_LARGE_DONE: i64 = 80
 _STATE_GRAY: i64 = 88           # head of reached but unscanned block-owned nodes
 _STATE_GRAY_COUNT: i64 = 96
-_STATE_CANDIDATES: i64 = 112    # unreached objects, as addresses only
-_STATE_CANDIDATE_COUNT: i64 = 120
-_STATE_CANDIDATE_CAPACITY: i64 = 128
+_STATE_CANDIDATES: i64 = 112    # retired blocks holding packed candidate addresses
+_STATE_CANDIDATE_TAIL: i64 = 120
+_STATE_SWEEP_SAVED: i64 = 128   # packed entries in the current sweep block
 _STATE_ROOTS_SCANNED: i64 = 136
 _STATE_DISCARD: i64 = 144       # release the view without candidates
 _STATE_SLOT_CURSOR: i64 = 152   # an ordinal in the current object's current layout
@@ -348,31 +347,6 @@ def _enter(state, phase: i64) -> None:
     if phase == _PHASE_DEMOTE:
         atomic_store_i32(global_addr("pcc_gc_full_handover_active"), 0, 1, "release")
     store_i32(global_addr("pcc_gc_full_phase"), 0, phase)
-
-
-@c_abi_export("pcc_gc_backend0_full_push")
-def _push_candidate(state, item) -> None:
-    """Append a candidate; without memory the cycle releases its view."""
-    items_offset: i64 = _STATE_CANDIDATES
-    count: i64 = load_i64(state, items_offset + 8)
-    capacity: i64 = load_i64(state, items_offset + 16)
-    items = load_ptr(state, items_offset)
-    if count == capacity:
-        wider: i64 = 1024
-        if capacity > 0:
-            wider = capacity * 2
-        grown = malloc(wider * 8)
-        if ptr_is_null(grown) != 0:
-            store_i64(state, _STATE_DISCARD, 1)
-            return
-        if ptr_is_null(items) == 0:
-            memmove(grown, items, count * 8)
-            free(items)
-        items = grown
-        store_ptr(state, items_offset, items)
-        store_i64(state, items_offset + 16, wider)
-    store_ptr(items, count * 8, item)
-    store_i64(state, items_offset + 8, count + 1)
 
 
 @c_abi_export("pcc_gc_backend0_full_add")
@@ -689,6 +663,7 @@ def _sweep(state, deadline: i64, concurrent: i64) -> i64:
     it when its block is freed."""
     block = load_ptr(state, _STATE_BLOCKS)
     index: i64 = load_i64(state, _STATE_INDEX)
+    saved: i64 = load_i64(state, _STATE_SWEEP_SAVED)
     units: i64 = 0
     while ptr_is_null(block) == 0:
         count: i64 = load_i64(block, _BLOCK_COUNT)
@@ -714,20 +689,38 @@ def _sweep(state, deadline: i64, concurrent: i64) -> i64:
                     and (load_i32(node, _NODE_BITS) & _FULL_REACHED) == 0
                     and load_i64(state, _STATE_DISCARD) == 0
                 ):
-                    _push_candidate(state, obj)
+                    # saved <= index: this word lies in a node already
+                    # detached from the index, never a future live node.
+                    store_ptr(block, _BLOCK_FIRST + saved * 8, obj)
+                    saved = saved + 1
             index = index + 1
             units = units + 1
             if (units & 31) == 0:
                 _work(32)
                 if _time_up(deadline) != 0:
                     store_i64(state, _STATE_INDEX, index)
+                    store_i64(state, _STATE_SWEEP_SAVED, saved)
                     return _PASS_MORE
         following = load_ptr(block, _BLOCK_NEXT)
-        free(block)
+        if saved == 0 or load_i64(state, _STATE_DISCARD) != 0:
+            free(block)
+        else:
+            # The whole block has left the index. Its count and link now
+            # describe the packed candidate block, not full-view nodes.
+            store_i64(block, _BLOCK_COUNT, saved)
+            store_ptr(block, _BLOCK_NEXT, null())
+            tail = load_ptr(state, _STATE_CANDIDATE_TAIL)
+            if ptr_is_null(tail) != 0:
+                store_ptr(state, _STATE_CANDIDATES, block)
+            else:
+                store_ptr(tail, _BLOCK_NEXT, block)
+            store_ptr(state, _STATE_CANDIDATE_TAIL, block)
         block = following
         index = 0
+        saved = 0
         store_ptr(state, _STATE_BLOCKS, block)
         store_i64(state, _STATE_INDEX, 0)
+        store_i64(state, _STATE_SWEEP_SAVED, 0)
     store_ptr(state, _STATE_TAIL, null())
     store_ptr(state, _STATE_BLOCK, null())
     atomic_store_i32(global_addr("pcc_gc_full_view_active"), 0, 0, "release")
@@ -740,29 +733,41 @@ def _demote(state, deadline: i64) -> i64:
     """Visit candidates in bounded batches under the stopped world.
     Young collection cannot use the partial age changes. A candidate
     address counts only while it is a live tracked object."""
-    if load_i64(state, _STATE_DISCARD) != 0:
-        return _PASS_DONE
+    discard: i64 = load_i64(state, _STATE_DISCARD)
     young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
-    items = load_ptr(state, _STATE_CANDIDATES)
-    count: i64 = load_i64(state, _STATE_CANDIDATE_COUNT)
+    block = load_ptr(state, _STATE_CANDIDATES)
     demoted: i64 = load_i64(state, _STATE_DEMOTED)
     index: i64 = load_i64(state, _STATE_INDEX)
-    while index < count:
-        obj = load_ptr(items, index * 8)
-        live: i64 = 0
-        if pcc_gc_granule_is_object_start(obj) == 1:
-            live = 1
-        elif pcc_gc_managed_pointer_index_contains(obj) != 0:
-            live = 1
-        if live != 0:
-            flags: i64 = load_i32(obj, 12)
-            if (flags & _TRACKED) != 0 and (flags & young) == 0:
-                atomic_rmw_i32("or", obj, 12, young, "acq_rel")
-                pcc_gc_young_log_note(obj)
-                demoted = demoted + 1
-        index = index + 1
-        if index < count and (index & (_BATCH - 1)) == 0 and _time_up(deadline) != 0:
-            store_i64(state, _STATE_INDEX, index)
+    units: i64 = 0
+    while ptr_is_null(block) == 0:
+        count: i64 = load_i64(block, _BLOCK_COUNT)
+        while discard == 0 and index < count:
+            obj = load_ptr(block, _BLOCK_FIRST + index * 8)
+            live: i64 = 0
+            if pcc_gc_granule_is_object_start(obj) == 1:
+                live = 1
+            elif pcc_gc_managed_pointer_index_contains(obj) != 0:
+                live = 1
+            if live != 0:
+                flags: i64 = load_i32(obj, 12)
+                if (flags & _TRACKED) != 0 and (flags & young) == 0:
+                    atomic_rmw_i32("or", obj, 12, young, "acq_rel")
+                    pcc_gc_young_log_note(obj)
+                    demoted = demoted + 1
+            index = index + 1
+            units = units + 1
+            if (units & (_BATCH - 1)) == 0 and _time_up(deadline) != 0:
+                store_i64(state, _STATE_INDEX, index)
+                store_i64(state, _STATE_DEMOTED, demoted)
+                return _PASS_MORE
+        following = load_ptr(block, _BLOCK_NEXT)
+        free(block)
+        block = following
+        index = 0
+        store_ptr(state, _STATE_CANDIDATES, block)
+        store_i64(state, _STATE_INDEX, 0)
+        # Freeing blocks also counts against the deadline (including discard).
+        if ptr_is_null(block) == 0 and _time_up(deadline) != 0:
             store_i64(state, _STATE_DEMOTED, demoted)
             return _PASS_MORE
     atomic_rmw_i64(
@@ -775,8 +780,10 @@ def _demote(state, deadline: i64) -> i64:
 def _finish(state) -> None:
     # Gray links belong to the node blocks, discarded during sweep/abort.
     candidates = load_ptr(state, _STATE_CANDIDATES)
-    if ptr_is_null(candidates) == 0:
+    while ptr_is_null(candidates) == 0:
+        following = load_ptr(candidates, _BLOCK_NEXT)
         free(candidates)
+        candidates = following
     free(state)
     global_store_ptr("pcc_gc_full_state", null())
     atomic_store_i32(global_addr("pcc_gc_full_marking"), 0, 0, "release")
@@ -794,9 +801,12 @@ def pcc_gc_backend0_full_abort() -> None:
     if ptr_is_null(state) != 0:
         return
     block = load_ptr(state, _STATE_BLOCKS)
+    index: i64 = 0
+    if load_i32(global_addr("pcc_gc_full_phase"), 0) == _PHASE_SWEEP:
+        # The current block's swept prefix is no longer in the index.
+        index = load_i64(state, _STATE_INDEX)
     while ptr_is_null(block) == 0:
         count: i64 = load_i64(block, _BLOCK_COUNT)
-        index: i64 = 0
         while index < count:
             obj = load_ptr(ptr_add(block, _BLOCK_FIRST + index * _NODE_BYTES), _NODE_OBJECT)
             if ptr_is_null(obj) == 0:
@@ -805,6 +815,7 @@ def pcc_gc_backend0_full_abort() -> None:
         following = load_ptr(block, _BLOCK_NEXT)
         free(block)
         block = following
+        index = 0
     _finish(state)
 
 
@@ -845,7 +856,7 @@ def _advance(deadline: i64, concurrent: i64) -> i64:
         # An in-flight handover can finish publishing the complete batch;
         # the mutator still checks enablement before it starts collection.
         if (load_i32(global_addr("pcc_gc_full_phase"), 0) != _PHASE_DEMOTE
-                or load_i64(state, _STATE_INDEX) == 0):
+                or load_i64(state, _STATE_DEMOTED) == 0):
             store_i64(state, _STATE_DISCARD, 1)
     running: i64 = 1
     while running != 0:

@@ -225,8 +225,16 @@ in the relevant section or issue and removes the entry.
        already-cleared built-in containers; the 320k Linux pause fell from
        a median 226 to 173 ms. The full-to-young handover now also yields
        between batches, without admitting a young view over a partial batch.
-       Next: remove candidate-buffer growth copies, then split the exact
-       reclaim phases; the complete pause is still not bounded.
+       Sweep now packs candidates into retired node blocks, with no
+       growing buffer. Next: split exact reclamation, beginning with
+       storage that is already detached from observably live objects.
+       The complete pause is still not bounded.
+   macOS verification of (0b) candidate blocks: run the high-fanout and
+   incremental full tests named below. On the parent build `pcc_perf.py arm
+   blocks-base` and `pcc_perf.py arm blocks-control`, and on the result
+   `pcc_perf.py arm blocks-new`. Run `pcc_perf.py ab blocks-base blocks-new
+   --control-arm blocks-control` and `pcc_perf.py table blocks-new`.
+   Platform macOS.
    macOS verification of (0b) handover: run the high-fanout and
    incremental full tests named below. On the parent seal `pcc_perf.py arm
    handover-base` and `pcc_perf.py arm handover-control`; on the result seal
@@ -290,7 +298,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0b) candidate storage without growth copies: Codex, Linux x86-64, 2026-11-24 01:02 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
@@ -699,6 +707,18 @@ about 166 ms median; this is not a bound on the complete collection or
 a throughput result. 16 focused native and 7 ABI-chunk checks passed.
 The extra port ABI suite stopped on a baseline test that opens removed
 `freestanding_gc_relocation_payload.py`. macOS and hosted CI were not run.
+
+Sweep no longer allocates or resizes an array of candidate addresses. The
+first retired words in each full-view node block hold the packed addresses;
+handover frees the retained blocks as it goes. An exact collection that
+interrupts sweep releases the packed prefix separately from the indexed
+suffix. Linux native: 17 focused cases passed, including that abort path,
+resume/disable, races, and exact reclamation. Ten pinned 320k pairs
+against `d94ccf0c`: median of each run's longest sweep-start pause 1.076
+to 0.390 ms, 10/10 lower (candidate worst 0.604 ms). The handover medians
+were 0.370 and 0.367 ms; peak RSS was about 119.5 MiB on both arms; exact
+reclaim varied, medians 179.6 and 177.3 ms. This is a pause probe, not a
+throughput claim; macOS and hosted CI were not run.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through
