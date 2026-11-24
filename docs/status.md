@@ -384,7 +384,8 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (d) emitted protocol, in parallel with (b) at the maintainer's request
+     ("派发并做 (d)"): Claude, local Mac, 2026-11-24 15:39Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
