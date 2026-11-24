@@ -93,6 +93,8 @@ define_global_ptr_null("pcc_gc_full_state")
 define_global_i32("pcc_gc_full_concurrent", 0)
 define_global_i32("pcc_gc_full_worker", 0)
 define_global_i32("pcc_gc_full_finished", 0)
+# Defer young collection while an incomplete full-candidate batch ages.
+define_global_i32("pcc_gc_full_handover_active", 0)
 define_global_i64("pcc_gc_full_work_done", 0)
 define_global_i64("pcc_gc_full_work_due", 0)
 define_global_i64("pcc_gc_full_worker_batches", 0)

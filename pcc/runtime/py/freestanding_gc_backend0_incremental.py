@@ -11,8 +11,8 @@ many short stops and leaves the decision to a young collection:
 3. mark: nodes with outside referrers, and what they reach, are reached;
 4. sweep: the nodes leave the index and the unreached objects are kept as
    candidates;
-5. demote: the candidates become young again, in one stop, and the caller
-   runs a young collection, which decides exactly among them.
+5. demote: candidate ages are updated across stops. Young collection waits
+   for the whole handover; if admission raced it, a full view decides instead.
 
 The world runs between two stops, so the counts and edges the cycle read
 may be stale. That only changes which objects become candidates: a young
@@ -187,7 +187,8 @@ _STATE_ROOTS_SCANNED: i64 = 136
 _STATE_DISCARD: i64 = 144       # release the view without candidates
 _STATE_SLOT_CURSOR: i64 = 152   # an ordinal in the current object's current layout
 _STATE_MARK_NODE: i64 = 160     # block-owned node, never a retained raw slot
-_STATE_BYTES: i64 = 168
+_STATE_DEMOTED: i64 = 168       # publish the count only for a complete handover
+_STATE_BYTES: i64 = 176
 
 _PHASE_BUILD: i64 = 1
 _PHASE_SUBTRACT: i64 = 2
@@ -344,6 +345,8 @@ def _enter(state, phase: i64) -> None:
     if phase == _PHASE_SWEEP:
         store_ptr(state, _STATE_GRAY, null())
         store_i64(state, _STATE_GRAY_COUNT, 0)
+    if phase == _PHASE_DEMOTE:
+        atomic_store_i32(global_addr("pcc_gc_full_handover_active"), 0, 1, "release")
     store_i32(global_addr("pcc_gc_full_phase"), 0, phase)
 
 
@@ -733,18 +736,17 @@ def _sweep(state, deadline: i64, concurrent: i64) -> i64:
 
 
 @c_abi_export("pcc_gc_backend0_full_demote")
-def _demote(state) -> i64:
-    """Make every candidate young again, all in this stop: a young
-    collection that saw only part of a dead cycle would keep all of it. A
-    candidate is an address: it counts only while it is a live tracked
-    object, as an entry of the young log does."""
+def _demote(state, deadline: i64) -> i64:
+    """Visit candidates in bounded batches under the stopped world.
+    Young collection cannot use the partial age changes. A candidate
+    address counts only while it is a live tracked object."""
     if load_i64(state, _STATE_DISCARD) != 0:
-        return 0
+        return _PASS_DONE
     young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
     items = load_ptr(state, _STATE_CANDIDATES)
     count: i64 = load_i64(state, _STATE_CANDIDATE_COUNT)
-    demoted: i64 = 0
-    index: i64 = 0
+    demoted: i64 = load_i64(state, _STATE_DEMOTED)
+    index: i64 = load_i64(state, _STATE_INDEX)
     while index < count:
         obj = load_ptr(items, index * 8)
         live: i64 = 0
@@ -759,10 +761,14 @@ def _demote(state) -> i64:
                 pcc_gc_young_log_note(obj)
                 demoted = demoted + 1
         index = index + 1
+        if index < count and (index & (_BATCH - 1)) == 0 and _time_up(deadline) != 0:
+            store_i64(state, _STATE_INDEX, index)
+            store_i64(state, _STATE_DEMOTED, demoted)
+            return _PASS_MORE
     atomic_rmw_i64(
         "add", global_addr("pcc_gc_full_candidates_found"), 0, demoted, "relaxed"
     )
-    return demoted
+    return _PASS_DONE
 
 
 @c_abi_export("pcc_gc_backend0_full_finish")
@@ -776,6 +782,7 @@ def _finish(state) -> None:
     atomic_store_i32(global_addr("pcc_gc_full_marking"), 0, 0, "release")
     atomic_store_i32(global_addr("pcc_gc_full_view_active"), 0, 0, "release")
     store_i32(global_addr("pcc_gc_full_phase"), 0, 0)
+    atomic_store_i32(global_addr("pcc_gc_full_handover_active"), 0, 0, "release")
 
 
 @c_abi_export("pcc_gc_backend0_full_abort")
@@ -834,8 +841,12 @@ def _advance(deadline: i64, concurrent: i64) -> i64:
         load_i32(global_addr("py_gc_enabled"), 0) == 0
         or load_i32(global_addr("py_gc_threshold0"), 0) <= 0
     ):
-        # Automatic collection is off: no candidate may reach a collection.
-        store_i64(state, _STATE_DISCARD, 1)
+        # Cancel a handover only before it has exposed any age changes.
+        # An in-flight handover can finish publishing the complete batch;
+        # the mutator still checks enablement before it starts collection.
+        if (load_i32(global_addr("pcc_gc_full_phase"), 0) != _PHASE_DEMOTE
+                or load_i64(state, _STATE_INDEX) == 0):
+            store_i64(state, _STATE_DISCARD, 1)
     running: i64 = 1
     while running != 0:
         phase: i64 = load_i32(global_addr("pcc_gc_full_phase"), 0)
@@ -852,10 +863,11 @@ def _advance(deadline: i64, concurrent: i64) -> i64:
         elif phase == _PHASE_SWEEP:
             advanced = _sweep(state, deadline, concurrent)
         elif concurrent != 0:
-            # Every candidate becomes young in one stop.
+            # The age writes still require the stopped world.
             return 3
         else:
-            _demote(state)
+            if _demote(state, deadline) == _PASS_MORE:
+                return 1
             discarded: i64 = load_i64(state, _STATE_DISCARD)
             _finish(state)
             if discarded != 0:
@@ -875,7 +887,7 @@ def _advance(deadline: i64, concurrent: i64) -> i64:
             if load_i64(state, _STATE_DISCARD) != 0 and phase < _PHASE_SWEEP:
                 phase = _PHASE_SWEEP - 1
             _enter(state, phase + 1)
-            if phase + 1 < _PHASE_DEMOTE and _time_up(deadline) != 0:
+            if _time_up(deadline) != 0:
                 running = 0
     return 1
 

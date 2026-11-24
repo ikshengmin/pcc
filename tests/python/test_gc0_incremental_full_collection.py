@@ -212,7 +212,7 @@ MUTATES = PRELUDE + textwrap.dedent("""
 
 MUTATES_OUTPUT = textwrap.dedent("""
     cycle running True
-    phases seen [1, 2, 3, 4]
+    phases seen [1, 2, 3, 4, 5]
     mutated 500 True True
     next cycle 1
     live intact True True

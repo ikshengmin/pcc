@@ -1618,6 +1618,10 @@ def _gc_maybe_auto_collect() -> None:
     if (load_i32(global_addr("pcc_gc_full_phase"), 0) != 0
             and load_i32(global_addr("py_gc_collecting"), 0) == 0):
         stepped = pcc_gc_backend0_full_step()
+    if atomic_load_i32(global_addr("pcc_gc_full_handover_active"), 0, "acquire") != 0:
+        # A young view must not decide on only part of the full candidates.
+        # A subsequent allocation tick (or the worker) advances the handover.
+        return
     paced: int = atomic_rmw_i32(
         "xchg", global_addr("pcc_gc_full_slice_pending"), 0, 0, "acq_rel"
     )

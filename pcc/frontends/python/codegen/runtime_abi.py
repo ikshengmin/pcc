@@ -1648,6 +1648,7 @@ FREESTANDING_GC_I32_GLOBALS: frozenset[str] = frozenset(
         'pcc_gc_full_concurrent',
         'pcc_gc_full_worker',
         'pcc_gc_full_finished',
+        'pcc_gc_full_handover_active',
         'pcc_gc_tracking_materialized',
         'pcc_gc_cycle_requested',
         'pcc_gc_explicit_collect_active',

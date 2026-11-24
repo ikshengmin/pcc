@@ -223,9 +223,16 @@ in the relevant section or issue and removes the entry.
        is not met.
        Exact reclaim now uses the existing terminal free protocol for
        already-cleared built-in containers; the 320k Linux pause fell from
-       a median 226 to 173 ms, and is still not bounded. Next: bound the
-       full-to-young handover without exposing partial cycles, then split
-       the expensive exact reclaim phases.
+       a median 226 to 173 ms. The full-to-young handover now also yields
+       between batches, without admitting a young view over a partial batch.
+       Next: remove candidate-buffer growth copies, then split the exact
+       reclaim phases; the complete pause is still not bounded.
+   macOS verification of (0b) handover: run the high-fanout and
+   incremental full tests named below. On the parent seal `pcc_perf.py arm
+   handover-base` and `pcc_perf.py arm handover-control`; on the result seal
+   `pcc_perf.py arm handover-new`. Run `pcc_perf.py ab handover-base
+   handover-new --control-arm handover-control` and `pcc_perf.py table
+   handover-new`. Platform macOS.
    macOS verification of (0b) gray links: focused high-fanout and incremental
    full tests, plus a sealed A/B against its parent with a duplicate parent
    control arm and `table`. Platform macOS.
@@ -283,7 +290,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (0b) bounded full-to-young handover: Codex, Linux x86-64, 2026-11-24 00:02 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
@@ -677,6 +684,21 @@ Ten CPU-pinned, alternating 320k pairs against `a2e7bc36`: median exact
 young pause 226.2 to 173.3 ms (9/10 lower, one 284.7 ms candidate);
 median handover essentially unchanged at about 10 ms. This is a targeted
 pause probe, not a throughput claim. macOS was not run.
+
+The handover now checks its deadline every 64 candidate addresses. Automatic
+collection defers a young view until completion; admission racing the
+handover takes an exact full view rather than exposing a partial batch.
+Disabling automatic collection mid-handover never initiates reclamation.
+The native test observes multiple handover slices at zero work budget
+(previously none), exercises both admission paths and checks the disabled case.
+Ten pinned 320k Linux pairs: one old handover pause had median 9.51 ms;
+the new maximum per run of the handover-start slices had median 0.32 ms
+(worst 0.46 ms, 52–56 slices). Including sweep-start slices the candidate's
+worst from those two phases was 1.33 ms. Exact young reclaim remained at
+about 166 ms median; this is not a bound on the complete collection or
+a throughput result. 16 focused native and 7 ABI-chunk checks passed.
+The extra port ABI suite stopped on a baseline test that opens removed
+`freestanding_gc_relocation_payload.py`. macOS and hosted CI were not run.
 
 Collector thread, the concurrent feature of the former GC2 (off by default:
 `pcc_gc_full_concurrent`, set through

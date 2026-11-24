@@ -798,7 +798,11 @@ def pcc_gc_tracked_materialize() -> i64:
         # finalizer of a young collection): complete the young view in
         # place. Objects that already have a node are skipped below.
         store_i32(global_addr("pcc_gc_tracking_young_view"), 0, 0)
-    elif load_i32(global_addr("pcc_gc_backend0_young_request"), 0) != 0:
+    elif (load_i32(global_addr("pcc_gc_backend0_young_request"), 0) != 0
+          and atomic_load_i32(global_addr("pcc_gc_full_handover_active"), 0, "acquire") == 0):
+        # Admission outside the stop can race the beginning of handover.
+        # In the race retain the full-view path below, which can decide
+        # exactly and aborts the approximate cycle, rather than use a prefix.
         young: i64 = load_i32(global_addr("pcc_gc_tracking_young_bit"), 0)
         if young != 0:
             required = _TRACKED | young
