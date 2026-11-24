@@ -224,7 +224,7 @@ in the relevant section or issue and removes the entry.
    collect the corresponding hosted receipt before calling it green.
 
    Claims:
-   - none
+   - #20 single-collector sweep CI selectors: Codex, Linux, 2026-11-24 18:09 UTC, area runtime-gc
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
