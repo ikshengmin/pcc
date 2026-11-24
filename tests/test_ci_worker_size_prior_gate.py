@@ -1780,7 +1780,7 @@ def test_x86_jump_threading_uses_existing_three_platform_host_gate():
     assert unconditional.count(jump_test) == 1
     assert not any(part.startswith(jump_test + "::") for part in command.split())
     assert not any(option in step for option in ("-n0", "--noconftest", "addopts=", "--dist="))
-    assert other.index(step_name) < other.index("Build Stage1 and run the five-collector native canary")
+    assert other.index(step_name) < other.index("Build Stage1 for the single collector")
 
 
 def test_workflow_starts_stage1_without_independent_validation_dependencies():
@@ -2113,20 +2113,20 @@ def test_workflow_starts_stage1_without_independent_validation_dependencies():
             mutated = before.join(prefix) + after + suffix
             with pytest.raises(AssertionError):
                 assert_workflow_marker_permissions(mutated)
-    # A push qualifies Stage1 plus the five-collector canary; the full
+    # A push qualifies Stage1 plus the single-collector canary; the full
     # Stage2/Stage3 chain is a manual dispatch input, never a soft failure.
     assert "full_chain:" in text and "type: boolean" in text
     assert "--phase stage1${{ inputs.full_chain && ' --full-chain' || '' }}" in other
 
 
-def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch):
+def test_other_platform_entry_runs_one_collector_and_real_finalization_gate(tmp_path, monkeypatch):
     tree = ast.parse((ROOT / "scripts/ci_worker_size_prior_gate.py").read_text())
     commands = [node for node in ast.walk(tree) if isinstance(node, ast.List)
                 and any(isinstance(item, ast.Constant) and item.value == "scripts/bootstrap_platform.py" for item in node.elts)]
     assert len(commands) == 1
     elements = commands[0].elts
     constants = [item.value for item in elements if isinstance(item, ast.Constant)]
-    assert constants[:4] == ["scripts/bootstrap_platform.py", "--gc", "all", "--stage"]
+    assert constants[:4] == ["scripts/bootstrap_platform.py", "--gc", "0", "--stage"]
     stage = elements[[getattr(item, "value", None) for item in elements].index("--stage") + 1]
     assert isinstance(stage, ast.Name) and stage.id == "stage_limit"
     assert "--runtime-archive" in constants and "17179869184" in constants
@@ -2138,7 +2138,7 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # independent native regression must not rebuild or require pcc1 success.
     workflow = (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text()
     other = workflow_job(workflow, "other-platform-native-wheel")
-    name = "Verify GC4 relocation with one mutator in the admitted threaded runtime"
+    name = "Verify collector cross-thread finalization in the admitted runtime"
     step = other.split("      - name: " + name + "\n", 1)[1].split("      - name:", 1)[0]
     assert "!cancelled()" in step and "startsWith(matrix.platform, 'linux-')" in step
     assert "needs.validation-plan.outputs.legacy == 'true'" in step
@@ -2155,9 +2155,9 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     assert other.index("id: platform_runtime") < other.index(name) < other.index("--phase pcc1")
     assert "build/worker-prior-gate/**/*.json" in other
     assert "build/worker-prior-gate/**/*.xml" in other
-    probe_path = "tests/python/test_gc_relocation_sweep_verdict.py"
+    probe_path = "tests/python/test_gc0_cross_thread_last_drop.py"
     assert workflow.count('      - "' + probe_path + '"') == 2
-    node = probe_path + "::test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"
+    node = probe_path + "::test_gc0_cross_thread_last_drop_native[pcc0]"
     import textwrap
 
     calls = []
@@ -2166,75 +2166,25 @@ def test_other_platform_entry_runs_the_five_gc_matrix_once(tmp_path, monkeypatch
     # Execute only the workflow wrapper with a mocked runner. No compiler,
     # runtime admission, subprocess or native program runs in this host test.
     exec(compile(textwrap.dedent(step.split("        run: |\n", 1)[1]),
-                 "<gc4 single-mutator workflow>", "exec"), {})
+                 "<single-collector finalization workflow>", "exec"), {})
     args, kwargs = calls.pop()
     assert not calls
-    assert args[:3] == (Path("build/worker-prior-gate"), "gc4-single-mutator-relocation", [node])
+    assert args[:3] == (Path("build/worker-prior-gate"), "collector-cross-thread-finalization", [node])
     assert args[3]["PCC_RUNTIME_ARCHIVE"] == "/admitted/libpy_runtime_pcc_py.a"
     assert kwargs == {"integration": True, "timeout": 300}
     command = gate.pytest_command(tmp_path, [node], integration=True)
     assert command[-3:] == ["-m", "integration", node]
     assert not any(argument in ("-n", "-n0", "--dist", "-o", "--override-ini") for argument in command)
 
-    from tests.python import test_gc_relocation_sweep_verdict as probe
+    from tests.python import test_gc0_cross_thread_last_drop as probe
 
-    probe_tree = ast.parse((ROOT / probe_path).read_text())
-    single = next(item for item in probe_tree.body if isinstance(item, ast.FunctionDef)
-                  and item.name == node.split("::")[1])
-    assert [ast.unparse(mark) for mark in single.decorator_list] == ["pytest.mark.integration"]
-    run_calls = []
-    with monkeypatch.context() as scoped:
-        scoped.setattr(probe, "_run_probe", lambda *args, **kwargs: run_calls.append((args, kwargs)))
-        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4(tmp_path, "pcc_python")
-        probe.test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator(tmp_path)
-    assert run_calls == [
-        ((tmp_path, "pcc_python"), {}),
-        ((tmp_path, "pcc_python_single_mutator"), {}),
-    ]
-    archive = tmp_path / "libpy_runtime_pcc_py.a"
-    archive.write_bytes(b"host-test placeholder, never a native runtime")
-    Path(str(archive) + ".capi_syms").write_text("host-test inventory")
-    monkeypatch.setattr(probe, "admitted_runtime", lambda: archive)
-    linked = []
-
-    def fake_link(source, output, **kwargs):
-        linked.append(source.read_text())
-        output.write_bytes(b"host-test placeholder, never a native binary")
-        return SimpleNamespace(returncode=0, stdout="", stderr="")
-
-    monkeypatch.setattr(probe, "link_c_harness", fake_link)
-    kinds = ("pcc_python", "pcc_python_single_mutator")
-    for kind in kinds:
-        manifest = {"target_triple": "host-test-only", "members": [
-            {"runtime_build_config": {"threads": True, "refcount": "atomic"}},
-        ]}
-        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
-        executable = probe._compile_probe(tmp_path, kind, 4)
-        receipt = json.loads(executable.with_suffix(".identity.json").read_text())
-        assert receipt["runtime_config"] == {"threads": True, "refcount": "atomic"}
-        assert receipt["compiler"] == "host-pcc0" and receipt["runtime_provisioning"] is False
-        assert set(receipt["runtime_hashes"]) == {"", ".provenance.json", ".capi_syms"}
-        manifest["members"][0]["runtime_build_config"]["threads"] = False
-        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
-        with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-threads", 4)
-        manifest["members"][0]["runtime_build_config"]["threads"] = True
-        manifest["members"][0]["runtime_build_config"]["refcount"] = "plain"
-        Path(str(archive) + ".provenance.json").write_text(json.dumps(manifest))
-        with pytest.raises(AssertionError):
-            probe._compile_probe(tmp_path, "wrong-refcount", 4)
-    assert linked == [
-        probe.PROBE_SOURCE.replace("@BACKEND@", "4")
-        .replace("@EXPECTED_THREADS@", "1")
-        .replace("@EXPECTED_REFCOUNT_STRATEGY@", "PCC_REFCOUNT_STRATEGY_ATOMIC")
-        for _ in kinds
-    ]
-    for source in linked:
-        assert "if (pcc_threads_enabled() != 1) return 6;" in source
-        assert "if (pcc_refcount_strategy() != PCC_REFCOUNT_STRATEGY_ATOMIC) return 1;" in source
-    assert linked[0].split("    if (pcc_gc_set_backend(backend)", 1)[1] == (
-        linked[1].split("    if (pcc_gc_set_backend(backend)", 1)[1]
-    )
+    assert any(mark.name == "integration"
+               for mark in probe.test_gc0_cross_thread_last_drop_native.pytestmark)
+    owner = other.split("      - name: Build Stage1 for the single collector\n", 1)[1].split("      - name:", 1)[0]
+    assert "if: ${{ !cancelled() && steps.native_dependencies.outcome == 'success' }}" in owner
+    assert "continue-on-error" not in other
+    assert "steps.collector_finalization.outcome == 'success'" in other
+    assert "steps.gc4_relocation" not in other
 
 
 def test_stage1_extension_preserves_other_job_budgets_and_hosted_ceiling():
@@ -3848,7 +3798,7 @@ def test_stage1_builds_once_without_preflight_success(tmp_path, monkeypatch, tar
             (destination / "stage1.process.test/target.stderr").write_text("original diagnostics")
             binary = destination / "pcc1"
         else:
-            assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "all",
+            assert command == ["chosen-python", "scripts/bootstrap_platform.py", "--gc", "0",
                                "--stage", "3" if full_chain else "1",
                                "--out-dir", str(destination), "--runtime-archive", str(archive),
                                "--timeout", "6000", "--stage1-timeout", "7200",

@@ -525,10 +525,6 @@ def test_workflow_retains_original_host_regressions_and_default_workers():
     assert tuple(arg for arg in host_args[len(pytest_command):] if arg in host_tests) == host_tests
     linux_only = (
         "tests/test_ci_stage1_artifact_export.py",
-        "tests/python/test_gc4_copy_page_probe_native.py",
-        "tests/python/test_gc_relocation_membership_lifecycle.py",
-        "tests/python/test_gc_remembered_membership_lifecycle.py",
-        "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
         "tests/python/test_pipeline_ir_split.py",
         "tests/python/test_pipeline_ir_frame_maps.py",
@@ -546,8 +542,6 @@ def test_workflow_retains_original_host_regressions_and_default_workers():
     for path in (
         "scripts/ci_stage1_artifact_export.py",
         "tests/test_ci_stage1_artifact_export.py",
-        "tests/python/test_gc_remembered_membership_lifecycle.py",
-        "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
         "tests/python/test_pipeline_ir_split.py",
         "tests/python/test_pipeline_ir_frame_maps.py",

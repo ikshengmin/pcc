@@ -807,13 +807,10 @@ def run(out, phase, *, strict_closure_timeout=300, full_chain=False):
                     binary = destination / "pcc1"
                 else:
                     env["PCC_HOST_INDEXED_PROCESS_SPLIT"] = "0"
-                    # One shared Stage1, then every collector's chain. A push
-                    # qualifies Stage1 plus the native canary under all five
-                    # collectors; the Stage2/Stage3 fixed point (--full-chain,
-                    # manual dispatch) needs ~66k-116k pcc1 task-s of Stage2
-                    # codegen today, beyond a 6 h hosted job.
+                    # One shared Stage1, then the single collector's chain
+                    # only for explicit full-chain dispatches.
                     stage_limit = "3" if full_chain else "1"
-                    command = [sys.executable, "scripts/bootstrap_platform.py", "--gc", "all", "--stage", stage_limit,
+                    command = [sys.executable, "scripts/bootstrap_platform.py", "--gc", "0", "--stage", stage_limit,
                                "--out-dir", str(destination), "--runtime-archive", str(archive),
                                "--timeout", str(PLATFORM_COMPILE_TIMEOUT_S),
                                "--stage1-timeout", str(STAGE1_TIMEOUT_S),
@@ -886,7 +883,7 @@ def main(argv=None):
                         help="strict closure watchdog seconds (local default: 300; CI sets its own budget)")
     parser.add_argument("--full-chain", action="store_true",
                         help="stage1 phase on Linux/Windows: run every collector's Stage2/Stage3 "
-                             "fixed point after Stage1 (default: Stage1 and the five-collector canary)")
+                             "fixed point after Stage1 (default: Stage1 for the single collector)")
     args = parser.parse_args(argv)
     if args.strict_closure_timeout <= 0:
         parser.error("--strict-closure-timeout must be positive")

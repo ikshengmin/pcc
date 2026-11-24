@@ -92,6 +92,7 @@ on:
       - "tests/python/test_pipeline_frontend_worker_owners.py"
       - "tests/python/test_dynamic_handoff_slots.py"
       - "tests/python/test_indexed_phase_timing.py"
+      - "tests/python/test_gc0_cross_thread_last_drop.py"
       - "tests/python/test_gc_phase_attribution.py"
       - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_gc_mark_color_atomic.py"
@@ -252,11 +253,6 @@ on:
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
       - "tests/python/test_runtime_abi_chunking.py"
-      - "tests/python/test_gc_relocation_page_cursor_model.py"
-      - "tests/python/test_gc4_copy_page_probe_native.py"
-      - "tests/python/test_gc_relocation_membership_lifecycle.py"
-      - "tests/python/test_gc_remembered_membership_lifecycle.py"
-      - "tests/python/test_gc_remembered_membership_native.py"
       - "tests/python/test_owned_runtime_pass_prefix.py"
       - "tests/python/test_pipeline_ir_split.py"
       - "tests/python/test_pipeline_ir_frame_maps.py"
@@ -265,7 +261,6 @@ on:
       - "tests/python/test_x86_64_instruction_encoding_cache_lowering.py"
       - "tests/python/test_x86_64_operand_cache.py"
       - "tests/python/test_freestanding_gc_relocation_copy.py"
-      - "tests/python/fixtures/gc4_copy_page_probe_native.c"
       - "pcc/runtime/py/freestanding_gc_relocation_selector.py"
       - "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py"
       - "tests/python/test_owned_cleanup_helpers.py"
@@ -299,7 +294,6 @@ on:
       - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
-      - "tests/python/test_gc_relocation_sweep_verdict.py"
       - "tests/python/test_gc_tracing_sweep_verdict_native.py"
       - "tests/fixtures/native/gc_tracing_pending_verdict.c"
       - "tests/owned_runtime_c_fixture.py"
@@ -376,6 +370,7 @@ on:
       - "tests/python/test_pipeline_frontend_worker_owners.py"
       - "tests/python/test_dynamic_handoff_slots.py"
       - "tests/python/test_indexed_phase_timing.py"
+      - "tests/python/test_gc0_cross_thread_last_drop.py"
       - "tests/python/test_gc_phase_attribution.py"
       - "tests/python/test_gc_phase_counter_widths.py"
       - "tests/python/test_gc_mark_color_atomic.py"
@@ -536,11 +531,6 @@ on:
       - "tests/python/test_super_call_result_roots.py"
       - "tests/python/test_dict_method_result_ownership.py"
       - "tests/python/test_runtime_abi_chunking.py"
-      - "tests/python/test_gc_relocation_page_cursor_model.py"
-      - "tests/python/test_gc4_copy_page_probe_native.py"
-      - "tests/python/test_gc_relocation_membership_lifecycle.py"
-      - "tests/python/test_gc_remembered_membership_lifecycle.py"
-      - "tests/python/test_gc_remembered_membership_native.py"
       - "tests/python/test_owned_runtime_pass_prefix.py"
       - "tests/python/test_pipeline_ir_split.py"
       - "tests/python/test_pipeline_ir_frame_maps.py"
@@ -549,7 +539,6 @@ on:
       - "tests/python/test_x86_64_instruction_encoding_cache_lowering.py"
       - "tests/python/test_x86_64_operand_cache.py"
       - "tests/python/test_freestanding_gc_relocation_copy.py"
-      - "tests/python/fixtures/gc4_copy_page_probe_native.c"
       - "pcc/runtime/py/freestanding_gc_relocation_selector.py"
       - "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py"
       - "tests/python/test_owned_cleanup_helpers.py"
@@ -583,7 +572,6 @@ on:
       - "tests/test_ci_stage1_artifact_export.py"
       - "tests/fixtures/native/worker_resource_admission.py"
       - "tests/runtime_fixture_provenance.py"
-      - "tests/python/test_gc_relocation_sweep_verdict.py"
       - "tests/python/test_gc_tracing_sweep_verdict_native.py"
       - "tests/fixtures/native/gc_tracing_pending_verdict.c"
       - "tests/owned_runtime_c_fixture.py"
@@ -1079,7 +1067,7 @@ jobs:
           assert selection in ('both', 'integration', 'not integration')
           if os.environ['FULL_CHAIN'] == 'true' and selection != 'not integration':
               raise SystemExit('full_chain=true requires pytest_selection="not integration": '
-                               'Linux/Windows producers own the real five-GC Stage2/3 fixed point in that explicit mode; '
+                               'Linux/Windows producers own the real single-collector Stage2/3 fixed point in that explicit mode; '
                                'macOS keeps its platform-local later-stage owner and integration remainder. '
                                'Use full_chain=false (default) for both complete pytest groups; '
                                'platform-local owners run the real later stages without a second Stage1 build.')
@@ -1450,18 +1438,18 @@ jobs:
             **/requirements*.txt
 
       - name: Install locked development dependencies
+        id: native_dependencies
         run: uv sync --frozen --dev
 
       - name: Verify host Stage2 export-retention, AArch64 call-emission, and ELF assembly contracts
         if: ${{ needs.validation-plan.outputs.legacy == 'true' }}
-        run: uv run --frozen --no-sync python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_x86_jump_threading.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/python/test_gc_phase_attribution.py tests/python/test_gc_phase_counter_widths.py tests/test_ci_native_object_regressions.py tests/python/test_two_root_lifecycle_support.py tests/test_ci_native_ordering_gate.py tests/python/test_user_ordering_exhaustion.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_gc4_copy_page_probe_native.py tests/python/test_gc_relocation_membership_lifecycle.py tests/python/test_gc_remembered_membership_lifecycle.py tests/python/test_gc_remembered_membership_native.py tests/python/test_owned_runtime_pass_prefix.py tests/python/test_pipeline_ir_split.py tests/python/test_pipeline_ir_frame_maps.py tests/python/test_x86_64_branch_syntax_cache.py tests/python/test_x86_64_instruction_encoding_cache.py tests/python/test_x86_64_instruction_encoding_cache_lowering.py tests/python/test_x86_64_operand_cache.py' || '' }}
+        run: uv run --frozen --no-sync python -m pytest -x -q tests/python/test_stage2_export_capture.py tests/python/test_aarch64_call_target_reuse.py tests/python/test_x86_jump_threading.py tests/python/test_owned_elf_assembler_dispatch.py tests/python/test_elf_arm_branch_slot_defaults.py tests/python/test_gc_phase_attribution.py tests/python/test_gc_phase_counter_widths.py tests/test_ci_native_object_regressions.py tests/python/test_two_root_lifecycle_support.py tests/test_ci_native_ordering_gate.py tests/python/test_user_ordering_exhaustion.py ${{ matrix.platform == 'linux-x86_64' && 'tests/test_ci_stage1_artifact_export.py tests/python/test_owned_runtime_pass_prefix.py tests/python/test_pipeline_ir_split.py tests/python/test_pipeline_ir_frame_maps.py tests/python/test_x86_64_branch_syntax_cache.py tests/python/test_x86_64_instruction_encoding_cache.py tests/python/test_x86_64_instruction_encoding_cache_lowering.py tests/python/test_x86_64_operand_cache.py' || '' }}
 
-      # Stage1 is built once. The local five-node owner below exposes later
-      # stages before unrelated postchecks. It and integration remainder share
-      # the original 1800s envelope; visibility is not a performance/coverage PASS.
-      # Explicit full_chain keeps its existing exclusive producer owner.
-      - name: Build Stage1 and run the five-collector native canary
+      # Host checks retain their own failure result. They do not suppress
+      # the independent Stage1 producer after dependencies are ready.
+      - name: Build Stage1 for the single collector
         id: platform_qualification
+        if: ${{ !cancelled() && steps.native_dependencies.outcome == 'success' }}
         env:
           PCC_PROFILE_COORDINATOR_MEMORY: "1"
           # Explicit marker opts in only this push commit and Linux ARM Stage1.
@@ -1629,8 +1617,8 @@ jobs:
           PCC_TEST_NO_NATIVE_PROVISIONING: "1"
         run: uv run --frozen --no-sync python -m pytest -x -q --junitxml=build/worker-prior-gate/platform-machine-provider.xml tests/python/test_platform_machine_provider.py
 
-      - name: Verify GC4 relocation with one mutator in the admitted threaded runtime
-        id: gc4_relocation
+      - name: Verify collector cross-thread finalization in the admitted runtime
+        id: collector_finalization
         if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && startsWith(matrix.platform, 'linux-') && steps.platform_runtime.outputs.ready == 'true' }}
         timeout-minutes: 6
         shell: uv run --frozen --no-sync python {0}
@@ -1653,9 +1641,8 @@ jobs:
           # the verified threaded/atomic archive; do not rebuild or substitute it.
           # This is host-pcc0 C emission, not a native-pcc1 compiler result.
           run_pytest(
-              Path("build/worker-prior-gate"), "gc4-single-mutator-relocation",
-              ["tests/python/test_gc_relocation_sweep_verdict.py::"
-               "test_relocation_copy_clears_stale_sweep_verdict_backend4_single_mutator"],
+              Path("build/worker-prior-gate"), "collector-cross-thread-finalization",
+              ["tests/python/test_gc0_cross_thread_last_drop.py::test_gc0_cross_thread_last_drop_native[pcc0]"],
               os.environ.copy(), integration=True, timeout=300,
           )
 
@@ -1692,7 +1679,7 @@ jobs:
         run: uv run --frozen --no-sync python scripts/ci_native_ordering_gate.py --out-dir build/worker-prior-gate
 
       - name: Verify the new pcc1 on native prior worker shapes
-        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' && steps.machine_provider.outcome == 'success' && (steps.gc4_relocation.outcome == 'success' || steps.gc4_relocation.outcome == 'skipped') && steps.native_objects.outcome == 'success' && steps.native_ordering.outcome == 'success' }}
+        if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.platform_qualification.outcome == 'success' && steps.platform_runtime.outcome == 'success' && steps.stage1_export.outcome == 'success' && steps.stage1_bundle.outcome == 'success' && steps.machine_provider.outcome == 'success' && (steps.collector_finalization.outcome == 'success' || steps.collector_finalization.outcome == 'skipped') && steps.native_objects.outcome == 'success' && steps.native_ordering.outcome == 'success' }}
         id: native_prior
         run: uv run --frozen --no-sync python scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase pcc1
 
@@ -1727,30 +1714,7 @@ jobs:
             build/platform-bootstrap/gc0/stage3.log
             build/platform-bootstrap/gc0/stage3.resources.jsonl
             build/platform-bootstrap/gc0/stage3.windows-job.json
-            build/platform-bootstrap/gc1/stage2.log
-            build/platform-bootstrap/gc1/stage2.resources.jsonl
-            build/platform-bootstrap/gc1/stage2.windows-job.json
-            build/platform-bootstrap/gc1/stage3.log
-            build/platform-bootstrap/gc1/stage3.resources.jsonl
-            build/platform-bootstrap/gc1/stage3.windows-job.json
-            build/platform-bootstrap/gc2/stage2.log
-            build/platform-bootstrap/gc2/stage2.resources.jsonl
-            build/platform-bootstrap/gc2/stage2.windows-job.json
-            build/platform-bootstrap/gc2/stage3.log
-            build/platform-bootstrap/gc2/stage3.resources.jsonl
-            build/platform-bootstrap/gc2/stage3.windows-job.json
-            build/platform-bootstrap/gc3/stage2.log
-            build/platform-bootstrap/gc3/stage2.resources.jsonl
-            build/platform-bootstrap/gc3/stage2.windows-job.json
-            build/platform-bootstrap/gc3/stage3.log
-            build/platform-bootstrap/gc3/stage3.resources.jsonl
-            build/platform-bootstrap/gc3/stage3.windows-job.json
-            build/platform-bootstrap/gc4/stage2.log
-            build/platform-bootstrap/gc4/stage2.resources.jsonl
-            build/platform-bootstrap/gc4/stage2.windows-job.json
-            build/platform-bootstrap/gc4/stage3.log
-            build/platform-bootstrap/gc4/stage3.resources.jsonl
-            build/platform-bootstrap/gc4/stage3.windows-job.json
+
             build/platform-qualification/**/*.log
             build/platform-qualification/**/*.json
             build/platform-qualification/**/*.jsonl
@@ -1807,8 +1771,6 @@ jobs:
       - name: Install wheel and execute native output on the runner
         if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.build.outcome == 'success' }}
         run: python scripts/ci_native_wheel_gate.py dist
-
-
 
   pcc1-package-parity:
     needs: validation-plan
@@ -1940,30 +1902,7 @@ jobs:
             build/bootstrap-pytest-self/profile/stage3.process.stdout
             build/bootstrap-pytest-self/profile/stage3.process.stderr
             build/bootstrap-pytest-self/profile/stage3.process.samples.tsv
-            build/bootstrap-pytest-self-gc1/profile/stage2.process.stdout
-            build/bootstrap-pytest-self-gc1/profile/stage2.process.stderr
-            build/bootstrap-pytest-self-gc1/profile/stage2.process.samples.tsv
-            build/bootstrap-pytest-self-gc1/profile/stage3.process.stdout
-            build/bootstrap-pytest-self-gc1/profile/stage3.process.stderr
-            build/bootstrap-pytest-self-gc1/profile/stage3.process.samples.tsv
-            build/bootstrap-pytest-self-gc2/profile/stage2.process.stdout
-            build/bootstrap-pytest-self-gc2/profile/stage2.process.stderr
-            build/bootstrap-pytest-self-gc2/profile/stage2.process.samples.tsv
-            build/bootstrap-pytest-self-gc2/profile/stage3.process.stdout
-            build/bootstrap-pytest-self-gc2/profile/stage3.process.stderr
-            build/bootstrap-pytest-self-gc2/profile/stage3.process.samples.tsv
-            build/bootstrap-pytest-self-gc3/profile/stage2.process.stdout
-            build/bootstrap-pytest-self-gc3/profile/stage2.process.stderr
-            build/bootstrap-pytest-self-gc3/profile/stage2.process.samples.tsv
-            build/bootstrap-pytest-self-gc3/profile/stage3.process.stdout
-            build/bootstrap-pytest-self-gc3/profile/stage3.process.stderr
-            build/bootstrap-pytest-self-gc3/profile/stage3.process.samples.tsv
-            build/bootstrap-pytest-self-gc4/profile/stage2.process.stdout
-            build/bootstrap-pytest-self-gc4/profile/stage2.process.stderr
-            build/bootstrap-pytest-self-gc4/profile/stage2.process.samples.tsv
-            build/bootstrap-pytest-self-gc4/profile/stage3.process.stdout
-            build/bootstrap-pytest-self-gc4/profile/stage3.process.stderr
-            build/bootstrap-pytest-self-gc4/profile/stage3.process.samples.tsv
+
             build/bootstrap/stage*.process.*/result.json
             build/bootstrap/stage*.process.*/samples.tsv
             build/bootstrap/stage*.process.*/target.stdout
@@ -2002,7 +1941,6 @@ jobs:
             tests/python/test_package_wheel_repo.py \
             tests/python/test_package_build_plan.py \
             tests/python/test_package_array_core.py
-
 
   pytest-markers:
     name: Complete pytest / ${{ matrix.platform.id }} / ${{ matrix.marker }}
@@ -2281,7 +2219,6 @@ jobs:
           name: cpp17-${{ matrix.system }}-${{ matrix.machine }}-${{ github.sha }}
           path: ${{ runner.temp }}/cpp17-${{ github.run_id }}-${{ github.run_attempt }}/
           if-no-files-found: warn
-
 
   pcc-ab-qualification:
     name: Check explicit A/B source selectors and original owner prerequisites

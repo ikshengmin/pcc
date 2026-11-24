@@ -55,7 +55,7 @@ INPUTS = (
 
 def verify_execution_rows(record, runtime):
     rows = record["executions"]
-    assert [row["requested_gc_backend"] for row in rows] == list(range(5))
+    assert [row["requested_gc_backend"] for row in rows] == [0]
     reference = record["reference"]
     assert reference["returncode"] == 0 and reference["stderr"] == ""
     for backend, row in enumerate(rows):

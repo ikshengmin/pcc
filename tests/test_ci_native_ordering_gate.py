@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def _receipt_model():
-    runtime = {"path": "/model/multi-collector.a", "hashes": {"": "model"}}
+    runtime = {"path": "/model/single-collector.a", "hashes": {"": "model"}}
     record = {
         "reference": {"returncode": 0, "stdout": "semantic output\n", "stderr": ""},
         "executions": [
@@ -67,7 +67,7 @@ def test_workflow_reuses_terminal_stage1_without_hiding_missing_admission():
     assert text.count(marker) == 1
     before, step = text.split(marker)
     step = step.split("\n      - name:", 1)[0]
-    assert "Build Stage1 and run the five-collector native canary" in before
+    assert "Build Stage1 for the single collector" in before
     assert "steps.platform_qualification.outcome == 'success'" in step
     assert "steps.platform_qualification.outcome == 'failure'" in step
     assert "steps.platform_runtime.outputs.archive" in step
@@ -133,13 +133,13 @@ def test_invalid_collector_or_semantic_output_fails_closed(stdout):
         native._verify_collector_output(stdout, 1, "semantic output\n")
 
 
-def test_synthetic_receipt_requires_all_five_observed_backends():
+def test_synthetic_receipt_requires_the_single_observed_collector():
     runtime, record = _receipt_model()
-    assert len(gate.verify_execution_rows(record, runtime)) == 5
+    assert len(gate.verify_execution_rows(record, runtime)) == 1
 
 
 @pytest.mark.parametrize("corruption", [
-    "missing", "duplicate", "gc0-only", "stale-before", "stale-after",
+    "missing", "duplicate", "removed-collector", "stale-before", "stale-after",
     "exit", "stderr", "semantic", "observed-bool",
 ])
 def test_synthetic_bad_native_receipt_is_rejected(corruption):
@@ -148,22 +148,20 @@ def test_synthetic_bad_native_receipt_is_rejected(corruption):
     if corruption == "missing":
         rows.pop()
     elif corruption == "duplicate":
-        rows[-1]["requested_gc_backend"] = 3
-    elif corruption == "gc0-only":
-        for row in rows:
-            row["observed_gc_backend"] = 0
-            row["stdout"] = "PCC_ORDERING_GC 0\nsemantic output\n"
+        rows.append(dict(rows[0]))
+    elif corruption == "removed-collector":
+        rows[0]["requested_gc_backend"] = 3
     elif corruption in ("stale-before", "stale-after"):
         key = "runtime_" + corruption.removeprefix("stale-")
-        rows[2][key]["hashes"][""] = "different"
+        rows[0][key]["hashes"][""] = "different"
     elif corruption == "exit":
-        rows[2]["returncode"] = 1
+        rows[0]["returncode"] = 1
     elif corruption == "stderr":
-        rows[2]["stderr"] = "unexpected diagnostic"
+        rows[0]["stderr"] = "unexpected diagnostic"
     elif corruption == "semantic":
-        rows[2]["stdout"] += "unexpected semantic output\n"
+        rows[0]["stdout"] += "unexpected semantic output\n"
     else:
-        rows[1]["observed_gc_backend"] = True
+        rows[0]["observed_gc_backend"] = True
     with pytest.raises(AssertionError):
         gate.verify_execution_rows(record, runtime)
 

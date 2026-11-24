@@ -969,10 +969,6 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
     ]
     linux_only = (
         "tests/test_ci_stage1_artifact_export.py",
-        "tests/python/test_gc4_copy_page_probe_native.py",
-        "tests/python/test_gc_relocation_membership_lifecycle.py",
-        "tests/python/test_gc_remembered_membership_lifecycle.py",
-        "tests/python/test_gc_remembered_membership_native.py",
         "tests/python/test_owned_runtime_pass_prefix.py",
         "tests/python/test_pipeline_ir_split.py",
         "tests/python/test_pipeline_ir_frame_maps.py",
@@ -991,7 +987,7 @@ def test_workflow_runs_post_stage1_without_building_or_widening_the_job(tmp_path
                  "tests/elf_arm_branch_slot_reference.py",
                  "tests/elf_x86_packed_classification_reference.py",
                  *linux_only, "tests/python/test_freestanding_gc_relocation_copy.py",
-                 "tests/python/fixtures/gc4_copy_page_probe_native.c"):
+                 "tests/python/test_gc0_cross_thread_last_drop.py"):
         assert text.count('      - "' + path + '"') == 2
     for suffix in ("json", "jsonl", "stdout", "stderr", "tsv", "xml"):
         assert "build/worker-prior-gate/**/*." + suffix in other
