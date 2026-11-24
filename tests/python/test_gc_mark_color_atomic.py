@@ -1,30 +1,23 @@
-"""Deterministic host interleavings of actual production GC color writers.
-
-Raw memory/atomic intrinsics are modeled, with an explicitly empty persistent
-gray queue in the scheduler seam. Function bodies are loaded unchanged from the
-runtime source. These tests prove a lost-header-update regression and owned host
-IR, not persistent-queue behavior, native threading or bootstrap qualification.
-"""
+"""Live collector tracking and reachability; retains the shared header model."""
 
 from __future__ import annotations
 
 import ast
 from pathlib import Path
-import re
 
 import pytest
 
+from tests.python.runtime_body_model import load_functions
 
-pytestmark = pytest.mark.xdist_group("gc_mark_color_atomic")
 ROOT = Path(__file__).resolve().parents[2]
 RUNTIME = ROOT / "pcc/runtime/py"
-ROOT_OPS = RUNTIME / "freestanding_gc_root_operations.py"
-SCHEDULER = RUNTIME / "freestanding_gc_incremental_concurrent_scheduler.py"
-MANAGED = RUNTIME / "py_gc_backend.py"
-COLOR = 56
+TRACKING = RUNTIME / "freestanding_gc_tracking.py"
+TRACKED = 2
+FINALIZED = 4
+PINNED = 64
+# Bit patterns retained by the shared interleaving fixture while it migrates.
 GRAY = 16
 BLACK = 32
-PINNED = 64
 DYING = 524288
 
 
@@ -94,235 +87,137 @@ class HeaderMemory:
             "i64": int, "PYOBJECTHEADER_FLAGS_OFFSET": 12,
             "atomic_load_i32": self.load, "atomic_cas_i32": self.cas,
             "atomic_rmw_i32": self.rmw,
-            # This header is no object cell: it has no page mark bit
-            # (freestanding_gc_page_marks), so its colour is the header's.
-            "pcc_gc_page_mark_set": lambda obj: -1,
         }
-        # An absent helper is allowed only so the same call-site regression
-        # can demonstrate the original stale-store failure on the preimage.
-        if "def pcc_gc_set_mark_color(" in ROOT_OPS.read_text(encoding="utf-8"):
-            _load(ROOT_OPS, "pcc_gc_set_mark_color", namespace)
         return namespace
 
 
-@pytest.mark.parametrize("color", [8, GRAY, BLACK])
-@pytest.mark.parametrize("initial,interference", [
-    (GRAY, [("or", DYING)]),
-    (GRAY, [("or", PINNED)]),
-    (GRAY | PINNED, [("and", ~PINNED)]),
-    (GRAY, [("or", DYING), ("or", PINNED)]),
-    (0xFFFFFFD7, [("and", ~PINNED), ("and", ~DYING)]),
-])
-def test_color_cas_preserves_every_noncolor_bit(initial, interference, color):
-    memory = HeaderMemory(initial, interference)
-    expected = _i32(initial)
-    for operation, mask in interference:
-        expected = _i32(expected | mask if operation == "or" else expected & mask)
-    namespace = memory.namespace()
-    namespace["pcc_gc_set_mark_color"](memory.obj, color)
-    assert memory.obj[12] == _i32((expected & ~COLOR) | color)
-    assert memory.loads == 1, "retry must use the word observed by failed CAS"
-    assert len(memory.cas_calls) == len(interference) + 1
-    for previous, current in zip(memory.cas_calls, memory.cas_calls[1:]):
-        assert current[0] == previous[2]
-    assert memory.writes == ["cas"]
-    assert all((flags & COLOR) != 0 for flags in memory.states)
-
-
-def _scheduler_namespace(memory, operation):
-    namespace = memory.namespace()
-    node = {0: memory.obj, 16: None, 32: 0}
-    globals_ = {
-        "pcc_gc_mark_active": {0: 1},
-        "pcc_gc_cycle_requested": {0: 0},
-        # Keep this header-interleaving seam on the object-list fallback.
-        "pcc_gc_nonmoving_count_free": {0: 0},
-        "pcc_gc_trace_extension_roots_pending": {0: 0},
-        "pcc_gc_trace_cext_pending_obj": None,
-        "pcc_gc_trace_cursor": node,
-        "pcc_gc_object_head": node,
+def _layout_constants():
+    tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
+    return {
+        node.target.id: ast.literal_eval(node.value)
+        for node in tree.body
+        if isinstance(node, ast.AnnAssign)
+        and isinstance(node.target, ast.Name)
+        and isinstance(node.value, ast.Constant)
+        and isinstance(node.value.value, int)
     }
-    locks = []
-    trace = []
-    counts = []
-
-    def store(obj, offset, value):
-        obj[offset] = value
-
-    def trace_referents(obj):
-        assert obj is memory.obj and locks == ["lock"]
-        trace.append(obj)
-        # The mutator does not take the graph lock. Publish after the
-        # scheduler's flags snapshot, before its black transition.
-        memory.update(operation)
-        return 1  # One fixed-size owner in this header-interleaving seam.
-
-    namespace.update({
-        "stack_alloc": lambda size: {}, "null": lambda: None,
-        "ptr_is_null": lambda obj: int(obj is None), "is_tagged_int": lambda obj: 0,
-        "load_i32": lambda obj, offset: obj[offset],
-        "load_i64": lambda obj, offset: obj[offset],
-        "load_ptr": lambda obj, offset: obj[offset],
-        "store_i32": store, "store_i64": store, "store_ptr": store,
-        "global_addr": lambda name: globals_[name],
-        "global_load_ptr": lambda name: globals_[name],
-        "global_store_ptr": lambda name, value: globals_.__setitem__(name, value),
-        # The walk over registered objects: this one listed node.
-        "pcc_gc_object_walk_first": lambda: globals_["pcc_gc_object_head"],
-        "pcc_gc_object_walk_next": lambda node: node[16],
-        "pcc_py_gc_minor_graph_lock": lambda: locks.append("lock"),
-        "pcc_py_gc_minor_graph_unlock": lambda: locks.append("unlock"),
-        "pcc_thread_owns_stopped_world": lambda: 0,
-            "pcc_gc_is_cms_worker": lambda: 0,
-        "pcc_capi_is_cext_type_tag": lambda tag: 0,
-        "pcc_gc_trace_referents": trace_referents,
-        "pcc_gc_trace_referents_work": trace_referents,
-        "pcc_gc_gray_count_decrement_acq_rel": lambda: counts.append(-1),
-        # Leave another gray object pending so this slice does not finish.
-        "pcc_gc_gray_count_load_acquire": lambda: 1,
-        "pcc_gc_trace_stack_begin": lambda: None,
-        "pcc_gc_trace_stack_end": lambda: None,
-        "pcc_gc_trace_stack_drain": lambda budget: 0,
-        # Empty-queue fallback only; keep the header-interleaving oracle intact.
-        "pcc_gc_gray_worklist_take_locked": lambda: memory.gray_worklist_events.append("take"),
-        "pcc_gc_gray_worklist_flush": lambda: memory.gray_worklist_events.append("flush"),
-    })
-    return namespace, locks, trace, counts
 
 
-@pytest.mark.parametrize("initial,operation", [
-    (GRAY, ("or", DYING)),
-    (GRAY, ("or", PINNED)),
-    (GRAY | PINNED, ("and", ~PINNED)),
-])
-def test_scheduler_preserves_mutator_header_update(initial, operation):
-    memory = HeaderMemory(initial)
-    namespace, locks, trace, counts = _scheduler_namespace(memory, operation)
-    step = _load(SCHEDULER, "pcc_gc_tracing_step_cycle", namespace)
-    assert step(1) == 1
-    kind, mask = operation
-    expected = initial | mask if kind == "or" else initial & mask
-    assert memory.obj[12] == (expected & ~COLOR) | BLACK
-    assert locks == ["lock", "unlock"] and trace == [memory.obj] and counts == [-1]
+def test_tracking_header_writes_are_exact_masked_atomic_operations():
+    tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
+    constants = _layout_constants()
+    assert constants["_TRACKED"] == TRACKED
 
+    YOUNG = 131072  # pcc_gc_tracking_young_bit on the fused collector
 
-@pytest.mark.parametrize("initial,operation", [
-    (GRAY, ("or", DYING)),
-    (GRAY, ("or", PINNED)),
-    (GRAY | PINNED, ("and", ~PINNED)),
-])
-def test_terminal_gray_clear_preserves_mutator_header_update(initial, operation):
-    memory = HeaderMemory(initial)
-    namespace = memory.namespace()
-    node = {32: 0, 80: 0}
-    # No free watch is open on this thread (pcc_gc_free_watch_begin).
-    globals_ = {
-        "pcc_gc_config_initialized": {0: 1},
-        "pcc_gc_backend_selected": {0: 1},
-        "pcc_gc_free_watch": None,
-        "pcc_gc_scalar_sweep_state": {0: 0},
-    }
-    counts, retired, released, locks = [], [], [], []
-    retired_links = []
+    def mask_value(node):
+        if isinstance(node, ast.Name):
+            # ``young`` is the loaded pcc_gc_tracking_young_bit.
+            return YOUNG if node.id == "young" else constants[node.id]
+        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
+            return mask_value(node.left) | mask_value(node.right)
+        if isinstance(node, ast.Call):
+            assert ast.unparse(node) == "load_i32(global_addr('pcc_gc_tracking_young_bit'), 0)"
+            return YOUNG
+        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
+            return ~mask_value(node.operand)
+        return ast.literal_eval(node)
 
-    def decrement():
-        counts.append(-1)
-        memory.update(operation)
-
-    namespace.update({
-        "atomic_load_i64": lambda obj, offset, order: obj[offset],
-        "stack_alloc": lambda size: {}, "null": lambda: None,
-        "ptr_is_null": lambda obj: int(obj is None),
-        "load_i32": lambda obj, offset: obj[offset],
-        "load_i64": lambda obj, offset: obj[offset],
-        "store_i32": lambda obj, offset, value: obj.__setitem__(offset, value),
-        "store_ptr": lambda obj, offset, value: obj.__setitem__(offset, value),
-        "global_addr": lambda name: globals_[name],
-        "global_load_ptr": lambda name: globals_[name],
-        "global_store_ptr": lambda name, value: globals_.__setitem__(name, value),
-        "_object_graph_lock": lambda: locks.append("lock"),
-        "_object_graph_unlock": lambda: locks.append("unlock"),
-        "pcc_gc_object_index_find": lambda obj: node,
-        "pcc_gc_granule_is_object_start": lambda obj: 1,
-        "_identity_remove": lambda obj: None, "_gc_tracks_objects": lambda: 1,
-        "_object_node_freeing": lambda obj: 0,
-        "_gc_gray_count_decrement_acq_rel": decrement,
-        "_object_node_size": lambda obj: 64,
-        "_live_bytes_subtract": lambda size: retired.append(size),
-        "_set_object_node_freeing": lambda obj, value: released.append(value),
-        # The retired node then leaves the index and the object list.
-        "pcc_gc_object_index_remove": lambda obj: retired_links.append("index"),
-        "_unlink_object_node": lambda obj: retired_links.append("unlink"),
-        "_object_node_release": lambda obj: retired_links.append("release"),
-    })
-    freeing = _load(MANAGED, "pcc_gc_note_object_freeing", namespace)
-    freeing(memory.obj)
-    kind, mask = operation
-    expected = initial | mask if kind == "or" else initial & mask
-    assert memory.obj[12] == expected & ~GRAY
-    assert memory.writes == ["and"]
-    assert counts == [-1] and retired == [64] and released == [1]
-    assert retired_links == ["index", "unlink", "release"]
-    assert locks == ["lock", "unlock"]
-
-
-def test_actual_helper_emits_one_strong_full_word_cas(tmp_path):
-    from pcc.frontends.python import pipeline
-    from pcc.frontends.python.codegen.runtime_abi import FREESTANDING_GC_CROSS_OBJECT_SIGNATURES
-    from tests.owned_ir_validation import verify_ir_text
-
-    node = _function(ROOT_OPS, "pcc_gc_set_mark_color")
-    constants = ast.parse((RUNTIME / "py_abi_constants.py").read_text(encoding="utf-8"))
-    flags_offset = next(node for node in constants.body if isinstance(node, ast.Assign)
-                        and any(isinstance(target, ast.Name) and target.id == "PYOBJECTHEADER_FLAGS_OFFSET"
-                                for target in node.targets))
-    source = (
-        "from pcc import i64\n"
-        "from pcc.extern import c_abi_export, c_int64, c_ptr, extern\n"
-        "from pcc.unsafe import atomic_load_i32, atomic_cas_i32\n"
-        "__pcc_freestanding__ = True\n" + ast.unparse(flags_offset) + "\n"
-        # Gray and black also set an object cell's page bit, in another
-        # object (freestanding_gc_page_marks); the header is still one CAS.
-        "pcc_gc_page_mark_set = extern('pcc_gc_page_mark_set', (c_ptr,), c_int64)\n"
-        + ast.unparse(node) + "\n"
-    )
-    path = tmp_path / "actual_mark_color.py"
-    output = tmp_path / "actual_mark_color.ll"
-    path.write_text(source, encoding="utf-8")
-    pipeline.compile_python(str(path), str(output), emit_llvm_only=True,
-                            python_library=True)
-    text = output.read_text(encoding="utf-8")
-    verify_ir_text(text)
-    assert FREESTANDING_GC_CROSS_OBJECT_SIGNATURES["pcc_gc_set_mark_color"] == (("c_ptr", "c_int64"), "c_void")
-    assert re.search(r"define (?:external )?void @pcc_gc_set_mark_color\(ptr [^,]+, i64 [^)]+\)", text)
-    assert text.count("cmpxchg ") == 1
-    assert "cmpxchg weak" not in text
-    assert re.search(r"cmpxchg ptr [^,]+, i32 [^,]+, i32 [^\n]+ acq_rel acquire", text)
-    assert re.search(r"load atomic i32, ptr [^\n]+ acquire", text)
-    assert "atomicrmw" not in text
-    assert "store i32 " not in text
-
-
-# Gray transitions belong to pcc_gc_shade_gray_atomic (one counted CAS);
-# pcc_gc_set_mark_color writes the black of a traced object: after a list
-# walk, a work-stack trace, a work-accounted work-stack trace (b7e2e3a53)
-# and a stopped-world slice (mark cycle), and the scheduler's concurrent
-# step and C-extension commit.
-@pytest.mark.parametrize("filename,expected_calls", [
-    ("freestanding_gc_root_operations.py", 0),
-    ("freestanding_gc_common_mark_cycle.py", 4),
-    ("freestanding_gc_barrier_dispatcher.py", 0),
-    ("freestanding_gc_incremental_concurrent_scheduler.py", 2),
-])
-def test_active_color_writers_share_one_atomic_owner(filename, expected_calls):
-    tree = ast.parse((RUNTIME / filename).read_text(encoding="utf-8"))
-    calls = [node for node in ast.walk(tree) if isinstance(node, ast.Call)
-             and isinstance(node.func, ast.Name) and node.func.id == "pcc_gc_set_mark_color"]
-    assert len(calls) == expected_calls
-    for call in calls:
-        assert ast.literal_eval(call.args[1]) in (GRAY, BLACK)
-    # Keep this lock narrow: non-color writers and STW initialization are
-    # explicitly outside this change, not claimed fixed by the helper.
+    writes = []
     for node in ast.walk(tree):
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "store_i32":
-            assert "~56" not in ast.unparse(node)
+        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
+            continue
+        if node.func.id == "atomic_rmw_i32":
+            if ast.unparse(node.args[1]) == "obj":
+                assert ast.literal_eval(node.args[2]) == 12
+                assert ast.literal_eval(node.args[4]) == "acq_rel"
+                writes.append((ast.literal_eval(node.args[0]), mask_value(node.args[3])))
+            else:
+                # Shared accounting moved to atomics; it is not a header
+                # write and must target one of the named counter cells.
+                assert ast.unparse(node.args[1]) in {
+                    "global_addr('py_gc_tracked_count')",
+                    "global_addr('pcc_gc_tracked_node_pool_count')",
+                    "global_addr('pcc_gc_young_log_chunk_count')",
+                    "count",  # young-log reservation counter, not object memory
+                }
+                assert ast.literal_eval(node.args[2]) == 0
+                assert ast.literal_eval(node.args[0]) in ("add", "sub")
+                assert ast.literal_eval(node.args[4]) == "acq_rel"
+        elif node.func.id == "store_i32":
+            assert ast.unparse(node.args[0]) != "obj"
+    # Node-path untrack/track (two ors: tracked and already-indexed), plus
+    # flag-mode entry and the first-freeze race recheck under shard ownership.
+    # A first track also sets the young bit (flag mode and the node path);
+    # every view teardown clears it, which promotes the survivors.
+    assert sorted(writes) == (
+        [("and", ~YOUNG)] + [("and", ~TRACKED)] * 3
+        + [("or", TRACKED)] * 2 + [("or", TRACKED | YOUNG)] * 2
+    )
+
+
+@pytest.mark.parametrize("subset", [False, True])
+def test_single_collector_marks_gc_nodes_not_object_headers(subset):
+    """Exercise the real traversal, including a cycle and a non-owning slot."""
+    objects = ("root", "child", "borrowed", "outside", "full-view")
+    class Header(dict):
+        __hash__ = object.__hash__
+        __eq__ = object.__eq__
+
+    flags = FINALIZED | TRACKED | (1 << 31)
+    headers = {obj: Header({12: flags}) for obj in objects}
+    object_names = {header: obj for obj, header in headers.items()}
+    slots = {
+        "root": [("child", 0), ("borrowed", 3), ("outside", 0), ("full-view", 0)],
+        "child": [("root", 0)],
+    }
+    # The runtime's GC-node word encodes subset membership, full-view
+    # ownership, and unrelated bookkeeping independently of reachability.
+    reachable, candidate, full_view, keep = 1, 4, 64, 256
+    original = (candidate | keep, candidate | keep, candidate, 0, candidate | full_view)
+    nodes = {obj: {16: bits} for obj, bits in zip(objects, original, strict=True)}
+    globals_ = {
+        "pcc_gc_full_marking": {0: 0},
+        "pcc_gc_backend0_subset_active": {0: int(subset)},
+    }
+    visited = []
+
+    def visit(obj, visitor, ctx):
+        name = object_names[obj]
+        visited.append(name)
+        for child, role in slots.get(name, ()):
+            visitor(headers[child], role, ctx)
+
+    def store(base, index, value):
+        base[index] = value
+
+    namespace = {
+        "i64": int, "null": lambda: None, "ptr_is_null": lambda value: int(value is None),
+        "ptr_eq": lambda left, right: int(left is right), "is_tagged_int": lambda obj: 0,
+        "global_addr": globals_.__getitem__,
+        "py_gc_index_find": lambda obj: nodes.get(object_names[obj]),
+        "stack_alloc": lambda n: {},
+        "load_i32": lambda base, index: base[index],
+        "load_i64": lambda base, index: base[index],
+        "load_ptr": lambda base, index: base[index],
+        "store_i32": store, "store_i64": store, "store_ptr": store,
+        "pcc_gc_load_ptr": lambda owner, slot: slot,
+        "pcc_gc_visit_object_slots": visit,
+    }
+    load_functions(RUNTIME / "freestanding_gc_backend0_slots.py",
+                   ("pcc_gc_backend0_mark_reachable", "pcc_gc_backend0_is_unreachable"),
+                   namespace)
+    mark = namespace["pcc_gc_backend0_mark_reachable"]
+    is_unreachable = namespace["pcc_gc_backend0_is_unreachable"]
+    mark(headers["root"])
+    initial_visits = set(visited)
+    assert initial_visits == ({"root", "child"} if subset else {"root", "child", "outside"})
+    assert len(visited) == len(initial_visits)
+    mark(headers["root"])
+    assert len(visited) == len(initial_visits), "re-marking must not scan the cycle again"
+    assert {obj for obj in objects if is_unreachable(headers[obj])} == {"borrowed"}
+    assert {obj: node[16] for obj, node in nodes.items()} == {
+        obj: bits | (reachable if obj in initial_visits else 0)
+        for obj, bits in zip(objects, original, strict=True)
+    }
+    assert all(header[12] == flags for header in headers.values())
