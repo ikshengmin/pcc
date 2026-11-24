@@ -173,6 +173,17 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- Item 2 (b), tests-only collection repair, 2026-11-24. Linux candidate
+  `c1b34833` collects 48,150 ordinary Python nodes with zero errors and
+  passes 42 focused native-program cases under the original guard.
+  The candidate is local, not published. The matching native pcc1
+  fails a minimal program with the default passes: `pcc re: pattern
+  outside the native regex subset`. Whole-language acceptance is blocked.
+  Options: qualify the compiler fix first, or authorize this tests-only
+  slice to land explicitly unqualified for the maintainer's Mac checkpoint.
+  Codex's recommendation: the tests-only checkpoint, without mixing in
+  compiler or pressure instrumentation changes.
+
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -357,7 +368,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) unblock Python test collection: Codex, Linux, 2026-11-24 12:04Z, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
