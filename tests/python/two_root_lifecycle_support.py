@@ -246,7 +246,7 @@ def assert_two_root_slots_native(compiler, compiler_mode, archive, directory, ca
     if compiler.__module__ == "tests.pcc1_route":
         compiler_mode = "pcc1-routed"
     receipt = {
-        "schema": "pcc.two-root-slots.v1",
+        "schema": "pcc.two-root-slots.v2",
         "status": "RUNNING",
         "run_id": os.environ.get("PCC_NATIVE_OBJECT_GATE_RUN_ID", ""),
         "compiler_fixture_parameter": requested_mode,
@@ -260,7 +260,6 @@ def assert_two_root_slots_native(compiler, compiler_mode, archive, directory, ca
         "probe_ir_sha256": hashlib.sha256(ir_text.encode()).hexdigest(),
         "probe_object_sha256": hashlib.sha256(helper.read_bytes()).hexdigest(),
         "probe_object_producer": "host-pcc-owned-object-emitter",
-        "gc_backends": list(range(5)),
         "executions": [],
     }
     receipt_path = directory / "slot-postcondition.json"
@@ -291,23 +290,22 @@ def assert_two_root_slots_native(compiler, compiler_mode, archive, directory, ca
         receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
         raise
     receipt["binary_sha256"] = receipt["linkage"]["binary_sha256"]
-    for backend in (0,):
-        environment = dict(
-            os.environ, PCC_GC_BACKEND=str(backend),
-            PCC_GC_REFCOUNT_PROVENANCE_PROBE="2",
-            PCC_TEST_NO_NATIVE_PROVISIONING="1", PCC_NO_AUTO_PCC1="1",
-            PCC_HOST_PYTHON="/nonexistent/host-python",
-            PCC_HOST_PCC="/nonexistent/host-pcc", PATH="",
-        )
-        environment.pop("LC_ALL", None)
-        result = _record_execution(directory, f"gc{backend}", [str(binary)], environment)
-        receipt["executions"].append({"gc_backend": backend, **result})
-        expected = (0, "TWO_ROOT_SLOTS_OK\n", "")
-        actual = tuple(result[key] for key in ("returncode", "stdout", "stderr"))
-        if actual != expected:
-            receipt["status"] = "NATIVE_EXECUTION_FAILED"
-        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-        assert actual == expected, (compiler_mode, backend, result)
+    environment = dict(
+        os.environ, PCC_GC_REFCOUNT_PROVENANCE_PROBE="2",
+        PCC_TEST_NO_NATIVE_PROVISIONING="1", PCC_NO_AUTO_PCC1="1",
+        PCC_HOST_PYTHON="/nonexistent/host-python",
+        PCC_HOST_PCC="/nonexistent/host-pcc", PATH="",
+    )
+    environment.pop("LC_ALL", None)
+    environment.pop("PCC_GC_BACKEND", None)
+    result = _record_execution(directory, "native", [str(binary)], environment)
+    receipt["executions"].append(result)
+    expected = (0, "TWO_ROOT_SLOTS_OK\n", "")
+    actual = tuple(result[key] for key in ("returncode", "stdout", "stderr"))
+    if actual != expected:
+        receipt["status"] = "NATIVE_EXECUTION_FAILED"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    assert actual == expected, (compiler_mode, result)
     assert hashlib.sha256(archive.read_bytes()).hexdigest() == receipt["runtime_sha256"]
     receipt["status"] = "PASS"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")

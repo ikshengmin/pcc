@@ -289,7 +289,7 @@ def verify_two_root_slots(directory, runtime, run_id, lifecycle_root):
     path = paths[0]
     assert path.parent == lifecycle_root / "slots", "unpaired two-root slot receipt"
     record = read_receipt(path)
-    assert record["schema"] == "pcc.two-root-slots.v1"
+    assert record["schema"] == "pcc.two-root-slots.v2"
     source, binary = path.parent / "slots.py", path.parent / "slots.out"
     assert source.read_text(encoding="utf-8") == SLOT_PROBE_PROGRAM
     verify_common_identity(record, source, binary, runtime, run_id, strict=True)
@@ -304,7 +304,18 @@ def verify_two_root_slots(directory, runtime, run_id, lifecycle_root):
     linkage = record["linkage"]
     assert linkage["schema"] == "pcc.owned-image-linkage.v1"
     assert linkage["libpython"] == "off" and linkage["binary_sha256"] == sha(binary)
-    executions = verify_executions(record, binary, list(range(5)), "TWO_ROOT_SLOTS_OK\n", strict=True)
+    assert "gc_backends" not in record
+    executions = record["executions"]
+    assert len(executions) == 1, "expected one native slot execution"
+    row = executions[0]
+    assert set(row) == {"command", "returncode", "stdout", "stderr",
+                        "start_ns", "end_ns", "elapsed_ns"}
+    assert type(row["returncode"]) is int
+    assert row["command"] == [str(binary)]
+    assert (row["returncode"], row["stdout"], row["stderr"]) == (0, "TWO_ROOT_SLOTS_OK\n", "")
+    assert all(type(row[k]) is int for k in ("start_ns", "end_ns", "elapsed_ns"))
+    assert 0 <= row["start_ns"] <= row["end_ns"]
+    assert row["elapsed_ns"] == row["end_ns"] - row["start_ns"]
     return {"receipt": str(path), **record, "image": verify_native_image(binary),
             "executions": executions}
 

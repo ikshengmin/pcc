@@ -261,14 +261,21 @@ in the relevant section or issue and removes the entry.
    passed. Windows native execution is pending hosted CI. The combined
    gate still fails its common two-root slot receipt (old five-run
    requirement), not the independent Win64 receipt.
-   Next: #20 common native object CI receipts, starting with two-root
-   slot postconditions. Preserve immediate death and independent
-   cyclic collection witnesses under the current collector.
+   #20 two-root slot receipt: the intact owned helper checks both slots
+   are empty and the original TLS exception survives, with exactly one
+   native execution in the v2 receipt. The verifier rejects expired,
+   duplicate, selector-bearing or malformed execution evidence. Linux:
+   329 host receipt/model checks passed, including the combined Win64
+   admission control. Actual native slot execution remains unverified
+   (the restored Linux environment lost its runtime archive).
+   Next: #20 common ownership program receipts and independent cyclic
+   collection witness. Preserve immediate death and cyclic collection
+   under the current collector.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 two-root slot receipt: Codex, Linux, 2026-11-24 22:04 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

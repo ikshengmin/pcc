@@ -44,7 +44,7 @@ def _slot_receipt(directory, runtime):
     probe_ir.write_text(ir_text, encoding="utf-8", newline="\n")
     helper.write_bytes(gate.expected_slot_object(ir_text, runtime["target"]))
     record = {
-        "schema": "pcc.two-root-slots.v1", "status": "PASS", "run_id": RUN_ID,
+        "schema": "pcc.two-root-slots.v2", "status": "PASS", "run_id": RUN_ID,
         "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0", "backend": "self",
         "target": runtime["target"], "source_sha256": gate.sha(source),
         "runtime_archive": runtime["path"], "runtime_sha256": runtime["hashes"][""],
@@ -53,9 +53,9 @@ def _slot_receipt(directory, runtime):
         "probe_object_producer": "host-pcc-owned-object-emitter",
         "linkage": {"schema": "pcc.owned-image-linkage.v1", "libpython": "off",
                     "binary_sha256": gate.sha(binary)},
-        "gc_backends": list(range(5)),
-        "executions": [{"command": [str(binary)], "gc_backend": gc, "returncode": 0,
-                        "stdout": "TWO_ROOT_SLOTS_OK\n", "stderr": ""} for gc in (0,)],
+        "executions": [{"command": [str(binary)], "returncode": 0,
+                        "stdout": "TWO_ROOT_SLOTS_OK\n", "stderr": "",
+                        "start_ns": 10, "end_ns": 20, "elapsed_ns": 10}],
     }
     path = directory / "slot-postcondition.json"
     path.write_text(json.dumps(record), encoding="utf-8")
@@ -134,7 +134,7 @@ def admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_thirty_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_six_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -168,9 +168,13 @@ def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_thirty_exe
         "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
         "two-root-tracing", "two-root-slots",
     }
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 30
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 26
     for label, row in result["programs"].items():
-        assert [item["requested_gc_backend"] for item in row["executions"]] == gate.expected_backends(label)
+        if label == "two-root-slots":
+            assert len(row["executions"]) == 1
+            assert "requested_gc_backend" not in row["executions"][0]
+        else:
+            assert [item["requested_gc_backend"] for item in row["executions"]] == gate.expected_backends(label)
         assert all("gc_backend" not in item for item in row["executions"])
     assert json.loads((tmp_path / (gate.NAME + ".json")).read_text()) == result
 
@@ -1084,7 +1088,7 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     assert result["tree_rss_limit_bytes"] == 17179869184
     assert result["observed_collector_witness"] is False
     assert len(result["programs"]) == 8
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 31
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 27
     extra = result["programs"]["win64-home-callback"]
     assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is False
     assert len(extra["executions"]) == 1
@@ -1315,7 +1319,7 @@ def test_two_root_split_receipts_fail_closed(tmp_path, monkeypatch, admitted, la
     "missing", "duplicate", "stale", "schema", "pcc1", "routed-pcc1", "llvm", "target",
     "source", "source-digest", "runtime-path", "runtime-digest", "binary-path", "binary-digest",
     "ir-digest", "object-digest", "object-producer", "first-slot", "second-slot", "tls",
-    "ir-crlf", "object-with-rehashed-digest", "missing-gc", "duplicate-gc", "boolean-gc",
+    "ir-crlf", "object-with-rehashed-digest", "missing-gc", "duplicate-gc", "selector", "boolean-status", "timing",
     "failed-gc", "wrong-output", "stderr", "native-command", "linkage", "linkage-digest",
 ))
 def test_two_root_native_slot_postcondition_is_mandatory(tmp_path, monkeypatch, admitted, change):
@@ -1323,6 +1327,7 @@ def test_two_root_native_slot_postcondition_is_mandatory(tmp_path, monkeypatch, 
     directory = tmp_path / "receipts"
     _receipts(directory, runtime)
     path = directory / "two-root/slots/slot-postcondition.json"
+    assert len(gate.verify_two_root_slots(directory, runtime, RUN_ID, directory / "two-root")["executions"]) == 1
     record = json.loads(path.read_text())
     fields = {
         "stale": ("run_id", "old-run"), "schema": ("schema", "other"),
@@ -1360,17 +1365,21 @@ def test_two_root_native_slot_postcondition_is_mandatory(tmp_path, monkeypatch, 
     elif change == "missing-gc":
         record["executions"].pop()
     elif change == "duplicate-gc":
-        record["executions"][-1]["gc_backend"] = 0
-    elif change == "boolean-gc":
-        record["gc_backends"][1] = record["executions"][1]["gc_backend"] = True
+        record["executions"].append(copy.deepcopy(record["executions"][0]))
+    elif change == "selector":
+        record["executions"][0]["gc_backend"] = 0
+    elif change == "boolean-status":
+        record["executions"][0]["returncode"] = False
+    elif change == "timing":
+        record["executions"][0]["elapsed_ns"] += 1
     elif change == "failed-gc":
-        record["executions"][2]["returncode"] = 1
+        record["executions"][0]["returncode"] = 1
     elif change == "wrong-output":
-        record["executions"][2]["stdout"] = "wrong\n"
+        record["executions"][0]["stdout"] = "wrong\n"
     elif change == "stderr":
-        record["executions"][2]["stderr"] = "unexpected diagnostic"
+        record["executions"][0]["stderr"] = "unexpected diagnostic"
     elif change == "native-command":
-        record["executions"][2]["command"] = [sys.executable]
+        record["executions"][0]["command"] = [sys.executable]
     elif change == "linkage":
         record["linkage"]["libpython"] = "on"
     elif change == "linkage-digest":
@@ -1383,7 +1392,7 @@ def test_two_root_native_slot_postcondition_is_mandatory(tmp_path, monkeypatch, 
         extra.mkdir()
         (extra / path.name).write_text(path.read_text())
     with pytest.raises((AssertionError, KeyError, FileNotFoundError)):
-        gate.verify_program_receipts(directory, runtime, RUN_ID)
+        gate.verify_two_root_slots(directory, runtime, RUN_ID, directory / "two-root")
 
 
 def test_two_root_encoded_markers_and_legacy_receipts_keep_distinct_contracts(tmp_path, admitted):
