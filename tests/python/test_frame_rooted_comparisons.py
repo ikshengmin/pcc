@@ -2,7 +2,7 @@
 
 References: Python expressions, Comparisons and Evaluation order; data model,
 object.__eq__/__lt__/__le__/__gt__/__ge__. Native probes compare unchanged
-programs with CPython and execute every selected collector.
+programs with CPython.
 """
 
 from __future__ import annotations
@@ -18,6 +18,7 @@ import sys
 import pytest
 
 from pcc.frontends.python.pipeline import compile_python
+from tests.python.test_frame_rooted_operations import assert_runtime_uses_frame_inputs
 from pcc.runtime.py.py_abi_constants import (
     PY_TYPE_BOOL,
     PY_TYPE_FLOAT,
@@ -99,7 +100,7 @@ def test_primitive_probe_preserves_comparison_and_leaves_input_slots_intact(left
 
 
 @pytest.mark.parametrize("left,right", (([], []), ({}, {}), (None, None), ("1", 1), (object(), object())))
-def test_nonprimitive_pairs_are_left_to_the_leased_callback_path(left, right):
+def test_nonprimitive_pairs_are_left_to_the_callback_path(left, right):
     probe, calls, _extensions, _operations = _primitive_probe()
     assert probe([left], [right], 2) == -1
     assert calls == []
@@ -113,7 +114,7 @@ def test_extension_tag_overrides_and_unknown_operations_do_not_enter_the_primiti
     assert calls == []
 
 
-def test_local_comparisons_reuse_frame_slots_and_keep_leases_on_the_slow_path(tmp_path):
+def test_local_comparisons_reuse_frame_slots_on_the_slow_path(tmp_path):
     text = _ir(tmp_path, '''
 def equal(left, right):
     return left == right
@@ -127,23 +128,25 @@ def owned(left, right):
     return first == second
 print(equal(1, 2), less(1, 2), strings("a", "b"), owned(1, 2))
 ''')
-    for name in ("equal", "less", "strings", "owned"):
+    for name, runtime_name, lhs, rhs in (
+        ("equal", "py_obj_eq_value", "left", "right"),
+        ("less", "py_obj_lt", "left", "right"),
+        ("strings", "py_obj_eq_value", "left", "right"),
+        ("owned", "py_obj_eq_value", "first", "second"),
+    ):
         body = _function(text, name)
         assert "frame.cmp.lhs" in body and "frame.cmp.rhs" in body
         assert "int.cmp.fast" in body and "int.cmp.slow" in body
-        assert "@pcc_gc_foreign_lease_release(" in body
-        assert "@py_obj_compare_builtin_rooted(" in body
-        assert "obj.cmp.leased" in body and "obj.cmp.handled" in body
-    for name in ("equal", "less", "strings"):
-        body = _function(text, name)
-        assert "@pcc_gc_pin(" not in body
-        assert "@pcc_gc_retain(" not in body
-        assert "@pcc_gc_root_copy_local(" not in body
-        for argument in ("left", "right"):
-            assert re.search(r"@pcc_gc_borrowed_lease_acquire\(ptr %" + argument + r"\.addr", body)
-    for local in ("first", "second"):
-        assert re.search(r"@pcc_gc_foreign_lease_acquire\(ptr %" + local + r"\.addr",
-                         _function(text, "owned"))
+        assert re.search(
+            rf"@py_obj_compare_builtin_rooted\(ptr %{lhs}\.addr[\d.]*, ptr %{rhs}\.addr[\d.]*, i64",
+            body,
+        )
+        assert "obj.cmp.handled" in body
+        assert_runtime_uses_frame_inputs(body, runtime_name, (lhs, rhs))
+        if name != "owned":
+            assert "@pcc_gc_pin(" not in body
+            assert "@pcc_gc_retain(" not in body
+            assert "@pcc_gc_root_copy_local(" not in body
 
 
 def test_global_attribute_and_callback_operands_keep_the_capture_path(tmp_path):
@@ -278,7 +281,7 @@ main()
 
 
 @pytest.mark.integration
-def test_frame_comparisons_match_cpython_on_five_collectors(tmp_path, pcc_runtime_archive):
+def test_frame_comparisons_match_cpython(tmp_path, pcc_runtime_archive):
     source = tmp_path / "comparisons.py"
     source.write_text(PROGRAM, encoding="utf-8")
     reference = subprocess.run([sys.executable, str(source)], text=True,
@@ -287,10 +290,8 @@ def test_frame_comparisons_match_cpython_on_five_collectors(tmp_path, pcc_runtim
     binary = tmp_path / "comparisons"
     compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
-    for backend in (0,):
-        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
-                                env=dict(os.environ, PCC_GC_BACKEND=str(backend),
-                                         PATH="/nonexistent"))
-        assert (result.returncode, result.stdout, result.stderr) == (
-            reference.returncode, reference.stdout, reference.stderr,
-        ), (backend, result.stdout, result.stderr)
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
+                            env=dict(os.environ, PATH="/nonexistent"))
+    assert (result.returncode, result.stdout, result.stderr) == (
+        reference.returncode, reference.stdout, reference.stderr,
+    ), (result.stdout, result.stderr)

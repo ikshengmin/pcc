@@ -235,13 +235,19 @@ in the relevant section or issue and removes the entry.
    request. The raw status ABI check remains. Linux: 19 focused tests pass;
    no runtime code changed. No new CI run for this test-only slice while
    the sweep CI run is queued; whole-language qualification is pending.
-   Next: #20 frame-rooted ownership tests;
-   then the native CI receipt/bootstrap assertions as separate units.
+   #20 frame-rooted operands: seven obsolete lease expectations now
+   verify the actual call operands trace to the original frame slots,
+   in argument order, without accidental root copies. The native
+   comparisons and operations still match CPython through reentrant
+   collection, rebinding and exception cases. Linux: 82 focused checks
+   passed, including both native CPython comparisons. No compiler/runtime
+   changes; hosted and whole-language qualification are pending.
+   Next: #20 native CI receipt and bootstrap assertions as separate units.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 frame-rooted operand ownership: Codex, Linux, 2026-11-24 18:18 UTC, area runtime-codegen
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

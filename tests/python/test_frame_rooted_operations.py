@@ -1,7 +1,8 @@
 """Private frame inputs for membership and non-tagged arithmetic paths.
 
 Reference: Python expressions, Binary arithmetic operations, Membership test
-operations, and Evaluation order. Input leases must not consume caller roots.
+operations, and Evaluation order. Callback-capable paths reuse the original
+frame inputs without consuming them.
 """
 from __future__ import annotations
 
@@ -43,23 +44,44 @@ def operations_ir(tmp_path):
     return output.read_text(encoding="utf-8")
 
 
-@pytest.mark.parametrize("name,inputs", (
-    ("membership", ("needle", "haystack")), ("absent", ("needle", "haystack")),
-    ("strings", ("needle", "haystack")),
-    ("divide", ("left", "right")), ("floor", ("left", "right")),
-    ("modulo", ("left", "right")),
+def assert_runtime_uses_frame_inputs(body, runtime_name, inputs):
+    """Trace runtime operands through their SSA loads to their original slots."""
+    call, = re.findall(
+        rf"^.*\bcall [^\n]*@{runtime_name}\(ptr (%[\w.]+), ptr (%[\w.]+)\)$",
+        body, re.M,
+    )
+    for value, source in zip(call, inputs, strict=True):
+        assert re.search(
+            rf"^  {re.escape(value)} = load ptr, ptr %{source}\.addr(?:\.\d+)*$",
+            body, re.M,
+        ), body
+        assert not re.search(rf"@pcc_gc_root_copy_local\([^\n]*ptr %{source}\.addr", body)
+    assert not re.search(
+        r"\bcall [^\n]*@pcc_gc_(?:borrowed_lease_acquire|foreign_lease_(?:acquire|release))\(",
+        body,
+    )
+
+
+@pytest.mark.parametrize("name,runtime_name,inputs", (
+    ("membership", "py_obj_contains", ("haystack", "needle")),
+    ("absent", "py_obj_contains", ("haystack", "needle")),
+    ("strings", "py_obj_contains", ("haystack", "needle")),
+    ("divide", "py_obj_truediv", ("left", "right")),
+    ("floor", "py_obj_floordiv", ("left", "right")),
+    ("modulo", "py_obj_mod", ("left", "right")),
 ))
-def test_operations_lease_the_original_inputs_without_copying_them(operations_ir, name, inputs):
+def test_operations_reuse_original_frame_inputs(operations_ir, name, runtime_name, inputs):
     matched = re.search(r"define [^@]*@user_frame_operations_" + name + r"\(.*?\n}\n",
                         operations_ir, re.S)
     assert matched, name
     body = matched.group(0)
-    for source in inputs:
-        assert re.search(r"@pcc_gc_borrowed_lease_acquire\(ptr %" + source + r"\.addr", body), body
-        assert not re.search(r"@pcc_gc_root_copy_local\([^\n]*ptr %" + source + r"\.addr", body)
-    if name in ("membership", "absent", "strings"):
+    assert_runtime_uses_frame_inputs(body, runtime_name, inputs)
+    if runtime_name == "py_obj_contains":
         assert "@pcc_gc_pin(" not in body and "@pcc_gc_retain(" not in body
-        assert "@py_obj_contains_builtin_rooted(" in body
+        assert re.search(
+            r"@py_obj_contains_builtin_rooted\(ptr %haystack\.addr[\d.]*, ptr %needle\.addr[\d.]*\)",
+            body,
+        )
 
 
 PROGRAM = '''import gc
@@ -148,7 +170,7 @@ main()
 
 
 @pytest.mark.integration
-def test_frame_operations_match_cpython_on_five_collectors(tmp_path, pcc_runtime_archive):
+def test_frame_operations_match_cpython(tmp_path, pcc_runtime_archive):
     source = tmp_path / "frame_operations.py"
     source.write_text(PROGRAM, encoding="utf-8")
     expected = subprocess.run([sys.executable, str(source)], capture_output=True,
@@ -157,9 +179,8 @@ def test_frame_operations_match_cpython_on_five_collectors(tmp_path, pcc_runtime
     binary = tmp_path / "frame_operations"
     compile_python(str(source), str(binary), backend="self", ir_scaffold_mode="on",
                    runtime_archive=str(pcc_runtime_archive))
-    for collector in (0,):
-        result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
-                                env=dict(os.environ, PATH="/nonexistent", PCC_GC_BACKEND=str(collector)))
-        assert (result.returncode, result.stdout, result.stderr) == (
-            expected.returncode, expected.stdout, expected.stderr,
-        ), (collector, result.stdout, result.stderr)
+    result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=60,
+                            env=dict(os.environ, PATH="/nonexistent"))
+    assert (result.returncode, result.stdout, result.stderr) == (
+        expected.returncode, expected.stdout, expected.stderr,
+    ), (result.stdout, result.stderr)
