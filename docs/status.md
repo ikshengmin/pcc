@@ -232,8 +232,14 @@ in the relevant section or issue and removes the entry.
        Linux native 320k exact-pause medians over ten rounds: 185 ms base,
        171 ms result (8/10 lower), 174 ms repeated base control, similar
        peak RSS; one result run reached 294 ms. No bound or throughput
-       improvement is established. Next: split the retained stopped work,
-       starting by separating exact view enumeration from node creation.
+       improvement is established. At `ba3ebafe`, the Linux 320k
+       exact view spent about 7 ms enumerating and 24 ms creating nodes.
+       A 64-cell raw allocation batch reduced instrumented node creation
+       from 24.4 to 21.2 ms (seven pairs), but the uninstrumented exact
+       stop had near-identical medians (166.0 vs 165.5 ms, 4/12 shorter,
+       repeated-base control 174.7 ms). The candidate was not kept.
+       Next: examine block-backed exact-view storage and its index
+       lifetimes before another allocation change.
    macOS verification of (0b) detached-node release: run
    `uv run pytest -x -v tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_incremental_full_collection.py tests/python/test_gc0_generational_collection.py tests/python/test_gc0_young_log_bound.py`.
    On the parent seal `pcc_perf.py arm retire-base` and
@@ -310,7 +316,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - batch exact node preparation: Codex, Linux, 2026-11-24 04:02 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
