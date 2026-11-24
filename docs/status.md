@@ -212,10 +212,37 @@ in the relevant section or issue and removes the entry.
    macOS for the measurements (rule 14). Measure with
    `scripts/pcc_perf.py`. While this item has a ready unit, an untargeted
    round takes it before item 3.
-   Next, in order. Each letter is one unit, a group of files of it when it
-   is too large for a round; area `runtime-gc` unless it names another.
-   Two defects found on Linux at `cba826a9` come first (details in the
-   section below):
+   > 维护者指示（2026-11-24）：item 2 先做稳定化，暂停 (0b) 的停顿优化。
+   >
+   > 原因：(0b) 最近两个候选（64-cell 批量分配、e74be5c94 的 exact node batch）都没有测出收益。按 AGENTS.md「No optimization that cannot pay」，先把 (0b) 现状写进 item 2 的 Next，然后停下 (0b)，等下面几步完成后再继续。
+   >
+   > 新顺序，每一步是一个单元，照常按 work order 的规则 claim、验证、推送：
+   > 1. (d) 生成协议定型：编译器不再生成 pin/lease/relocation-read/write-barrier 调用；删掉 fused-protocol pass、pcc_gc_backend() 和所有 PCC_GC_BACKEND 读取（当前还有 54 处，分布在 17 个文件）；删掉没人用的 closed-young 分析和 pcc_perf.py 的 --gc / pacer 选项。area runtime-codegen。
+   > 2. (c) 用 scripts/one_collector/sweep_one_collector.py entries 清掉只给 collectors 1-4 用的函数，把还在用的函数挪到使用方旁边，然后删除旧模块。
+   > 3. (b) 用 scripts/one_collector/prune_tests.py report 清到 0：测这个收集器的测试改写后必须通过；只测 collectors 1-4 的测试删除。
+   >    如果实际依赖关系要求调整 1-3 的顺序，可以调，但要把原因写进 Next。
+   > 4. #13 的收集器侧第一道门槛（只做运行时这一侧；Go/Java 的切片降级留给前端 agent）：
+   >    - 现有对象头不变，只加一个 described layout tag，payload 的第一个字指向编译器生成的不可变描述符；
+   >    - 列出这个 tag 必须覆盖的每一个 tag 分派点（slot visitor/traverse、销毁时的 decref、size/extent、young 跟踪），并加一个测试，漏掉任何一个就失败；
+   >    - 一个不含指针的字节数组对照和一个含引用的对照，分别在 young 回收、full 回收、显式 gc.collect() 下通过，覆盖根的生命周期、环、回收，以及对象只在寄存器里时触发回收的那个窗口；
+   >    - 跑 pcc_perf.py ab --control-arm（5 对，w1 和 w4），证明现有 Python 对象的 tag 不因此变慢。
+   >
+   > 完成第 4 步后，写一个"收集器接口稳定"检查，五条全部满足才算稳定：
+   > (1) 生成的 IR 里没有 pin/lease/barrier/relocation 调用，代码里没有 PCC_GC_BACKEND；
+   > (2) sweep_one_collector.py entries 为空；
+   > (3) prune_tests.py report 为 0；
+   > (4) 对象头布局（count@0、tag@8、flags@12）和 described tag 的 ABI 不再改；
+   > (5) 一次检查点 CI 没有新回归，#10/#11 的托管 lane 已重跑。
+   > 全部满足后，在 item 2 和 item 4 的 Next 里写明「collector interface stable at <sha>」，再回去做 (0b) 和吞吐。
+   >
+   > 记录要求：在 work order 里用原话引用这条维护者指示。其他规则照旧：每个结果推送前跑受影响语言的整套测试，遵守检查点规则，macOS 的数字归 rule 14 的 macOS 验证单元。
+
+   Next: stabilization only, in order: (d) emitted protocol
+   (`runtime-codegen`), (c) obsolete runtime modules, (b) test migration,
+   then the collector-side first gate of #13. Generic Go/Java slice
+   lowering stays with the frontend work in item 4. Check all five
+   stability conditions before resuming (0b) and throughput. The steps
+   below describe scope and existing evidence, not an earlier priority.
    (0a) Done on Linux: the young log is process-wide bounded without
        changing collection admission; see the regression evidence below.
    (0b) Slot slicing and allocation-free gray links landed. The 320k
@@ -238,8 +265,9 @@ in the relevant section or issue and removes the entry.
        from 24.4 to 21.2 ms (seven pairs), but the uninstrumented exact
        stop had near-identical medians (166.0 vs 165.5 ms, 4/12 shorter,
        repeated-base control 174.7 ms). The candidate was not kept.
-       Next: examine block-backed exact-view storage and its index
-       lifetimes before another allocation change.
+       Paused at `e74be5c94`: neither batch candidate established a
+       gain; do not start another (0b) candidate before the collector
+       interface gate. Exact synchronous reclaim remains unbounded.
    macOS verification of (0b) detached-node release: run
    `uv run pytest -x -v tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_incremental_full_collection.py tests/python/test_gc0_generational_collection.py tests/python/test_gc0_young_log_bound.py`.
    On the parent seal `pcc_perf.py arm retire-base` and
