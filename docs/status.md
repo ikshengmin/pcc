@@ -154,9 +154,13 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. Pending: none. The 2026-11-23 checkpoint
-is due; dispatch was not admitted because the Linux GitHub CLI has no
-authenticated host. No run ID was issued.
+That run is a red baseline. Pending:
+[run 45427972345](https://github.com/ikshengmin/pcc/actions/runs/45427972345),
+dispatched by Claude from the local Mac on 2026-11-24 with
+`base_sha=7ce5cf6635b0893ceca1f06932b1127745099223` and
+`expected_sha=7ec14d388c366656b9160681e12dc84bf26eabb3`, after the first
+tests-only (b) slice landed; it also reruns the #10 and #11 lanes. The next
+untargeted round compares it first.
 [Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
 at `0f638af5b` completed red and did not replace it. The
 [checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
