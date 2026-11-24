@@ -1735,11 +1735,9 @@ def test_macos_failure_workflow_preserves_narrow_guard_evidence():
     assert [path.strip() for path in paths if path.strip()] == [
         "build/bootstrap-pytest-self*/profile/stage*.result.json",
         "build/bootstrap-pytest-self*/profile/stage*.process.*/result.json",
-        # The existing five-GC Stage2/3 transport is finite text evidence,
-        # not permission to upload bootstrap binaries or entire directories.
+        # Stage2/3 transports only the single collector's finite text evidence.
         *[
-            f"build/bootstrap-pytest-self{suffix}/profile/stage{stage}.process.{kind}"
-            for suffix in ("", "-gc1", "-gc2", "-gc3", "-gc4")
+            f"build/bootstrap-pytest-self/profile/stage{stage}.process.{kind}"
             for stage in (2, 3)
             for kind in ("stdout", "stderr", "samples.tsv")
         ],

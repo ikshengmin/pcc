@@ -242,12 +242,19 @@ in the relevant section or issue and removes the entry.
    collection, rebinding and exception cases. Linux: 82 focused checks
    passed, including both native CPython comparisons. No compiler/runtime
    changes; hosted and whole-language qualification are pending.
-   Next: #20 native CI receipt and bootstrap assertions as separate units.
+   #20 Stage2/3 artifact transport: the finite contract tests now use
+   the six actual log/resource paths on each CI route, not the 30
+   paths of the retired collectors. They still reject missing,
+   duplicate, unrelated and binary paths, and now also reject adding
+   retired collector logs. Linux: 11 focused checks passed; no bootstrap
+   was run and no workflow budget or actual artifact path was changed.
+   Next: #20 native object CI receipts and same-run Stage1 bundle
+   admission assertions as separate units.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 Stage2/3 artifact transport assertions: Codex, Linux, 2026-11-24 18:21 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

@@ -47,15 +47,14 @@ def _nonmac_paths():
                 and isinstance(node.args[0], ast.Constant)}
     assert set(suffixes) == {".resources.jsonl", ".windows-job.json"}
     paths = []
-    for gc in (0,):
-        for stage in (2, 3):
-            log = eval(expression, {"__builtins__": {}},
-                       {"out_dir": Path("build/platform-bootstrap") / ("gc" + str(gc)), "stage": stage})
-            paths.append(log.as_posix())
-            for suffix in (".resources.jsonl", ".windows-job.json"):
-                path = eval(compile(ast.Expression(suffixes[suffix]), "<actual stage resource path>", "eval"),
-                            {"__builtins__": {}}, {"log_path": log})
-                paths.append(path.as_posix())
+    for stage in (2, 3):
+        log = eval(expression, {"__builtins__": {}},
+                   {"out_dir": Path("build/platform-bootstrap/gc0"), "stage": stage})
+        paths.append(log.as_posix())
+        for suffix in (".resources.jsonl", ".windows-job.json"):
+            path = eval(compile(ast.Expression(suffixes[suffix]), "<actual stage resource path>", "eval"),
+                        {"__builtins__": {}}, {"log_path": log})
+            paths.append(path.as_posix())
     return paths
 
 
@@ -73,13 +72,12 @@ def _macos_paths():
                              *deepcopy(functions)], type_ignores=[])
     exec(compile(ast.fix_missing_locations(module), "<actual path-only helpers>", "exec"), namespace)
     paths = []
-    for gc in (0,):
-        profile = namespace["_bootstrap_out_dir"](str(gc)) / "profile"
-        for stage in (2, 3):
-            argv, stdout, stderr = namespace["_bootstrap_stage_sampler_command"](
-                ["never-executed"], profile_dir=profile, stage=stage)
-            samples = Path(argv[argv.index("--samples") + 1])
-            paths.extend(path.as_posix() for path in (stdout, stderr, samples))
+    profile = namespace["_bootstrap_out_dir"]("0") / "profile"
+    for stage in (2, 3):
+        argv, stdout, stderr = namespace["_bootstrap_stage_sampler_command"](
+            ["never-executed"], profile_dir=profile, stage=stage)
+        samples = Path(argv[argv.index("--samples") + 1])
+        paths.extend(path.as_posix() for path in (stdout, stderr, samples))
     return paths
 
 
@@ -106,7 +104,7 @@ def _assert_transport(kind, paths, expected):
 @pytest.mark.parametrize("kind", ["nonmac", "macos"])
 def test_existing_coverage_and_exact_actual_stage_output_paths(kind):
     expected = _nonmac_paths() if kind == "nonmac" else _macos_paths()
-    assert len(expected) == 30
+    assert len(set(expected)) == len(expected) == 6
     _assert_transport(kind, _step_paths(kind), expected)
 
 
@@ -125,3 +123,14 @@ def test_missing_or_unrelated_transport_is_rejected(mutation):
                       "binary": "build/platform-bootstrap/gc0/pcc2"}[mutation])
     with pytest.raises(AssertionError):
         _assert_transport("nonmac", paths, expected)
+
+
+@pytest.mark.parametrize("kind,retired_path", (
+    ("nonmac", "build/platform-bootstrap/gc4/stage2.log"),
+    ("macos", "build/bootstrap-pytest-self-gc4/profile/stage2.process.stdout"),
+))
+def test_retired_collector_stage_transport_is_rejected(kind, retired_path):
+    paths = _step_paths(kind)
+    expected = _nonmac_paths() if kind == "nonmac" else _macos_paths()
+    with pytest.raises(AssertionError):
+        _assert_transport(kind, paths + [retired_path], expected)
