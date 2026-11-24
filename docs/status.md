@@ -225,10 +225,22 @@ in the relevant section or issue and removes the entry.
        already-cleared built-in containers; the 320k Linux pause fell from
        a median 226 to 173 ms. The full-to-young handover now also yields
        between batches, without admitting a young view over a partial batch.
-       Sweep now packs candidates into retired node blocks, with no
-       growing buffer. Next: split exact reclamation, beginning with
-       storage that is already detached from observably live objects.
-       The complete pause is still not bounded.
+       Sweep packs candidates into retired node blocks, with no growing
+       buffer. Exact collection now frees detached raw tracking nodes
+       after resuming, with safe-point polls between batches. Object
+       destruction and synchronous collection semantics are unchanged.
+       Linux native 320k exact-pause medians over ten rounds: 185 ms base,
+       171 ms result (8/10 lower), 174 ms repeated base control, similar
+       peak RSS; one result run reached 294 ms. No bound or throughput
+       improvement is established. Next: split the retained stopped work,
+       starting by separating exact view enumeration from node creation.
+   macOS verification of (0b) detached-node release: run
+   `uv run pytest -x -v tests/python/test_gc0_high_fanout_pause.py tests/python/test_gc0_incremental_full_collection.py tests/python/test_gc0_generational_collection.py tests/python/test_gc0_young_log_bound.py`.
+   On the parent seal `pcc_perf.py arm retire-base` and
+   `pcc_perf.py arm retire-control`, and on the result seal
+   `pcc_perf.py arm retire-new`. Run `pcc_perf.py ab retire-base retire-new
+   --control-arm retire-control` and `pcc_perf.py table retire-new`.
+   Platform macOS.
    macOS verification of (0b) candidate blocks: run the high-fanout and
    incremental full tests named below. On the parent build `pcc_perf.py arm
    blocks-base` and `pcc_perf.py arm blocks-control`, and on the result
@@ -298,7 +310,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - exact detached-node release: Codex, Linux, 2026-11-24 02:02 UTC, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific

@@ -134,6 +134,7 @@ pcc_gc_backend0_clear_referents = extern(
 # duplicate entries, and recycled addresses cannot prove garbage by themselves.
 _SUBSET_NODE = 0
 _SUBSET_OBJECT = 8
+_RETIRED_NODE_POLL_INTERVAL = 64
 _SUBSET_RECORD_BYTES = 16
 _SUBSET_CANDIDATE = 4
 _SUBSET_REACHABLE = 1
@@ -713,7 +714,10 @@ def _collect(pairs, candidate_count: i64) -> i64:
                 flags = flags | PY_FLAG_GC_DEALLOCATING
             store_i32(obj, 12, flags)
             store_i64(obj, 0, 0)
-            free(node)
+            # The verdict array has no further readers of its consumed
+            # prefix. Compact just the detached node pointers there (collected
+            # <= i), not object addresses or nodes that are still indexed.
+            store_ptr(unreachable, collected * 8, node)
             pcc_gc_note_object_freeing(obj)
             _dealloc_unreachable(obj)
             collected = collected + 1
@@ -722,13 +726,24 @@ def _collect(pairs, candidate_count: i64) -> i64:
             survivor_count = survivor_count + 1
         i = i + 1
 
-    free(unreachable)
     _finish_subset()
     store_i32(collecting_slot, 0, 0)
     pcc_gc_tracked_dematerialize(materialization_owned)
     pcc_gc_default_table_unlock()
     pcc_gc_record_collection_stw_pause(collection_stw_start, pcc_platform_monotonic_us())
     pcc_resume_world()
+    # Private metadata only. Object destruction above and survivor release
+    # below keep their original order. By now even the subset's cached node
+    # identities are gone; a later collection cannot see this retired batch.
+    # Poll between release batches so that a new stop need not wait for
+    # the whole private drain (raw free need not poll).
+    i = 0
+    while i < collected:
+        free(load_ptr(unreachable, i * 8))
+        i = i + 1
+        if (i & (_RETIRED_NODE_POLL_INTERVAL - 1)) == 0:
+            pcc_thread_safepoint()
+    free(unreachable)
     i = 0
     while i < survivor_count:
         py_decref(load_ptr(survivors, i * 8))

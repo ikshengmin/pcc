@@ -39,7 +39,36 @@ static int mixed_cycle(void) {
     return py_gc_get_count(0) != 0;
 }
 
+/* Every stop removes most of the nodes, leaving alternating rooted cycles.
+ * The next stop rematerializes the retained cycles and allocates new nodes.
+ * No retired node may still be indexed or reachable from the tracked list. */
+static int repeat_exact(void) {
+    enum { CYCLES = 768, ROUNDS = 3, KEEP_EVERY = 4 };
+    PyObject *roots[CYCLES / KEEP_EVERY];
+    py_gc_init();
+    py_gc_disable();
+    for (int round = 0; round < ROUNDS; round++) {
+        for (int i = 0; i < CYCLES; i++) {
+            PyObject *obj = py_list_new(0);
+            if (!obj) return 21;
+            py_list_append(obj, obj);
+            if (i % KEEP_EVERY == 0) roots[i / KEEP_EVERY] = obj;
+            else py_decref(obj);
+        }
+        if (py_gc_collect() != CYCLES - CYCLES / KEEP_EVERY
+            || py_gc_get_count(0) != CYCLES / KEEP_EVERY) return 22;
+        for (int i = 0; i < CYCLES / KEEP_EVERY; i++) {
+            if (py_list_len(roots[i]) != 1) return 23;
+            py_decref(roots[i]);
+        }
+        if (py_gc_collect() != CYCLES / KEEP_EVERY || py_gc_get_count(0) != 0)
+            return 24;
+    }
+    return 0;
+}
+
 int main(int argc, char **argv) {
+    if (argc == 2 && strcmp(argv[1], "repeat-exact") == 0) return repeat_exact();
     if (argc == 2 && strcmp(argv[1], "mixed") == 0) return mixed_cycle();
     if (argc != 2 && argc != 3) return 2;
     const char *mode = argc == 3 ? argv[2] : "flat";
