@@ -352,7 +352,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) unblock Python test collection: Codex, Linux, 2026-11-24 06:31Z, area runtime-gc
+   - (b) unblock Python test collection: Codex, Linux, 2026-11-24 08:27Z, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
