@@ -237,12 +237,20 @@ in the relevant section or issue and removes the entry.
    >
    > 记录要求：在 work order 里用原话引用这条维护者指示。其他规则照旧：每个结果推送前跑受影响语言的整套测试，遵守检查点规则，macOS 的数字归 rule 14 的 macOS 验证单元。
 
-   Next: stabilization only, in order: (d) emitted protocol
-   (`runtime-codegen`), (c) obsolete runtime modules, (b) test migration,
-   then the collector-side first gate of #13. Generic Go/Java slice
-   lowering stays with the frontend work in item 4. Check all five
-   stability conditions before resuming (0b) and throughput. The steps
-   below describe scope and existing evidence, not an earlier priority.
+   Next: (b) first, with the smallest test-migration slice that restores
+   Python ordinary-suite collection. On unchanged `06e375f9`,
+   `uv run pytest --collect-only -n0 -q tests/python` collected 48,242
+   ordinary nodes and stopped with 24 collection errors: 22 imports of
+   deleted test helpers/modules, plus stale five-entry parameter ID lists in
+   `test_gc1_marker_scheduling_native.py` and
+   `test_gc_foreign_handle_collection_native.py`. Preserve and rewrite the
+   live tests (including exception ownership, finalization and C-owned
+   references); retire only tests exclusive to removed collectors. Do not
+   bypass these errors to qualify a codegen change. Finish the (b) inventory,
+   then (d) (`runtime-codegen`), (c), and the collector-side first gate of
+   #13. Some (c) exports are still named by (d), so (d) precedes (c).
+   Generic Go/Java slice lowering stays with the frontend work in item 4.
+   Check all five stability conditions before resuming (0b) and throughput.
    (0a) Done on Linux: the young log is process-wide bounded without
        changing collection admission; see the regression evidence below.
    (0b) Slot slicing and allocation-free gray links landed. The 320k
@@ -344,7 +352,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) emitted protocol: Codex, Linux, 2026-11-24 04:33Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
