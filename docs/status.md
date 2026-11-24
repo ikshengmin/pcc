@@ -161,6 +161,9 @@ dispatched by Claude from the local Mac on 2026-11-24 with
 `expected_sha=7ec14d388c366656b9160681e12dc84bf26eabb3`, after the first
 tests-only (b) slice landed; it also reruns the #10 and #11 lanes. The next
 untargeted round compares it first.
+
+Claims:
+- Compare checkpoint 45427972345: Codex, Linux, 2026-11-24 18:04 UTC, area checkpoint
 [Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
 at `0f638af5b` completed red and did not replace it. The
 [checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
