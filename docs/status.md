@@ -261,10 +261,27 @@ in the relevant section or issue and removes the entry.
    >
    > 记录要求：在 work order 里用原话引用这条维护者指示。其他规则照旧：每个结果推送前跑受影响语言的整套测试，遵守检查点规则，macOS 的数字归 rule 14 的 macOS 验证单元。
 
-   Next: finish (b) before (d) (runtime-codegen), (c), and the
-   collector-side first gate of #13. Some (c) exports still have (d)
-   callers. Generic Go/Java lowering stays with item 4. Do not resume (0b)
-   or throughput until all five stability conditions hold.
+   Next: (b) and (d) run in parallel at the maintainer's request ("派发并做
+   (d)", 2026-11-24): (b) changes tests, (d) code generation; the Python
+   suite collects again, so (d) compares by node id against the prune list.
+   Then (c) and the collector-side first gate of #13. Some (c) exports
+   still have (d) callers. Generic Go/Java lowering stays with item 4. Do
+   not resume (0b) or throughput until all five stability conditions hold.
+
+   (d), first slice: the fused-protocol pass scans its lines without `re`.
+   Native pcc1 runs the pass, and its owned regex engine rejected the
+   patterns ("pattern outside the native regex subset"), which blocked the
+   full Python gate. On ASCII IR the scanner gives exactly the former
+   expressions' output, also on the pass's actual inputs for a program and
+   two runtime modules; it accepts ASCII names only, so host pcc0 and pcc1
+   decide alike. A pcc-compiled program running the pass matches CPython
+   (local Mac; the same program with the former module failed as pcc1 did).
+   pcc1 was not rebuilt: bootstrap needs the maintainer's OK.
+   Next for (d): stop emitting the pin/unpin, lease and barrier calls at
+   their code generation sites and in runtime sources, then delete the
+   pass; remove `pcc_gc_backend()` and the `PCC_GC_BACKEND` reads (58 in 20
+   files at `7ec14d388`); remove the closed-young analysis and the
+   per-collector options of `scripts/pcc_perf.py`.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
@@ -384,8 +401,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) emitted protocol, in parallel with (b) at the maintainer's request
-     ("派发并做 (d)"): Claude, local Mac, 2026-11-24 15:39Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
