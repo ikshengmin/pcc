@@ -50,8 +50,7 @@ ORIGINAL_JOBS = (
     "pcc1-package-parity", "pytest-markers", "cpp17",
 )
 BOOTSTRAP_NODES = {
-    f"tests/python/gc/test_pcc_bootstrap_full_gc{gc}.py::test_full_three_stage_bootstrap_self_gc{gc}"
-    for gc in range(5)
+    "tests/python/gc/test_pcc_bootstrap_full_gc0.py::test_full_three_stage_bootstrap_self_gc0",
 }
 MAX_JSON = 32 * 1024 * 1024
 MAX_ARCHIVE = 4 * 1024**3
@@ -420,8 +419,9 @@ def validate_marker(archive, arm, platform, marker, partition, source_hash):
     require(set(reports) == {(node, phase) for node in selected for phase in ("setup", "call", "teardown")},
             "not all original selected nodes actually executed")
     if partition == "bootstrap":
-        require(len(selected) == 5 and {node.split("@", 1)[0] for node in selected} == BOOTSTRAP_NODES,
-                "not all original five-GC Stage1-to-Stage3 owners executed")
+        require(len(selected) == len(BOOTSTRAP_NODES)
+                and {node.split("@", 1)[0] for node in selected} == BOOTSTRAP_NODES,
+                "the single Stage1-to-Stage3 bootstrap owner did not execute")
     guard_bytes = raw("result.json")
     require(hashlib.sha256(guard_bytes).hexdigest() == receipt.get("guard_result_sha256"),
             "guard receipt hash differs")

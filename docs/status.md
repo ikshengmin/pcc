@@ -251,6 +251,11 @@ in the relevant section or issue and removes the entry.
    #13. Some (c) exports are still named by (d), so (d) precedes (c).
    Generic Go/Java slice lowering stays with the frontend work in item 4.
    Check all five stability conditions before resuming (0b) and throughput.
+   The Linux Stage1 producer in [run 45356074767](https://github.com/ikshengmin/pcc/actions/runs/45356074767)
+   reached compilation. The native worker and bootstrap selectors now require
+   the single collector. The new bootstrap selector was collected on Linux,
+   but Stage2/Stage3, native pcc1 tests and the stability checkpoint remain
+   unqualified. Finish the Python test migration before treating this as a gate.
    (0a) Done on Linux: the young log is process-wide bounded without
        changing collection admission; see the regression evidence below.
    (0b) Slot slicing and allocation-free gray links landed. The 320k

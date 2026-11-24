@@ -3,9 +3,8 @@ from __future__ import annotations
 
 import math
 
-BOOTSTRAP_NODES = tuple(
-    f"tests/python/gc/test_pcc_bootstrap_full_gc{gc}.py::test_full_three_stage_bootstrap_self_gc{gc}"
-    for gc in range(5)
+BOOTSTRAP_NODES = (
+    "tests/python/gc/test_pcc_bootstrap_full_gc0.py::test_full_three_stage_bootstrap_self_gc0",
 )
 PARTITIONS = ("all", "bootstrap", "remainder")
 INTEGRATION_SECONDS = 1800
@@ -36,10 +35,10 @@ def partition_inventory(expected, selected, partition):
         return list(expected), list(selected), []
     owners = set(BOOTSTRAP_NODES)
     expected_owned = [node for node in expected if canonical_node(node) in owners]
-    require(len(expected_owned) == 5 and {canonical_node(node) for node in expected_owned} == owners,
-            "the original five bootstrap owners must all be present exactly once")
+    require(len(expected_owned) == len(owners) and {canonical_node(node) for node in expected_owned} == owners,
+            "the single bootstrap owner must be present exactly once")
     if partition == "bootstrap":
-        require(len(expected) == 5, "unexpected node in bootstrap owner collection")
+        require(len(expected) == len(owners), "unexpected node in bootstrap owner collection")
         return list(expected), list(selected), []
     transferred = expected_owned
     remaining = [node for node in expected if canonical_node(node) not in owners]
@@ -143,7 +142,8 @@ def verify_union(owner, remainder):
     require(owner["partition"] == "bootstrap" and remainder["partition"] == "remainder",
             "invalid ownership pair")
     owned, rest, original = map(set, (owner["selected"], remainder["selected"], remainder["original_expected"]))
-    require({canonical_node(node) for node in owned} == set(BOOTSTRAP_NODES) and len(owned) == 5,
-            "owner inventory is not the exact five nodes")
+    require(len(owner["selected"]) == len(BOOTSTRAP_NODES)
+            and {canonical_node(node) for node in owned} == set(BOOTSTRAP_NODES),
+            "owner inventory is not the exact single bootstrap node")
     require(owned == set(remainder["transferred"]) and not owned & rest and owned | rest == original,
             "owner and remainder do not cover the original integration inventory exactly")

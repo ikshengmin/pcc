@@ -497,7 +497,7 @@ def test_batches_preserve_exact_union_modules_and_transitive_xdist_groups():
 
 @pytest.mark.parametrize("members,expected_group", [
     ((
-        ("tests.test_ci_bootstrap_owner", "test_actual_six_worker_partition_runs_five_bodies_once_then_remainder"),
+        ("tests.test_ci_bootstrap_owner", "test_actual_six_worker_partition_runs_single_owner_once_then_remainder"),
         ("tests.python.test_worker_resource_plan", "test_live_peak_growth_backs_off_until_worker_retires"),
     ), "worker_resource_fixtures"),
     ((

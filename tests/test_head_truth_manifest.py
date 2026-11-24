@@ -53,7 +53,7 @@ def _runtime_provenance_observation() -> dict[str, object]:
     }
 
 
-def _five_gc_observations() -> list[dict[str, object]]:
+def _single_gc_observations() -> list[dict[str, object]]:
     return [
         {
             "backend": "self",
@@ -88,7 +88,7 @@ def _result(
 ) -> GateResult:
     registered = {spec.gate_id: spec for spec in head_truth.gate_specs(Path("."))}
     spec = registered.get(gate_id)
-    bootstrap = gate_id == "self-five-gc-bootstrap"
+    bootstrap = gate_id == "self-single-gc-bootstrap"
     runtime_archive = gate_id == "runtime-archive-preflight"
     native_artifact = bootstrap or gate_id == "numpy-core-head"
     return GateResult(
@@ -102,8 +102,8 @@ def _result(
         log_path=f"build/{gate_id}.log",
         output_sha256="a" * 64,
         pytest_summary=(
-            "5 passed in 0.10s"
-            if gate_id == "self-five-gc-bootstrap"
+            "1 passed in 0.10s"
+            if gate_id == "self-single-gc-bootstrap"
             else "1 passed in 0.10s" if kind.startswith("pytest") else None
         ),
         backend=(
@@ -114,7 +114,7 @@ def _result(
         gc_backend=(
             spec.gc_backend
             if spec is not None
-            else "0..4" if gate_id == "self-five-gc-bootstrap" else None
+            else "0" if gate_id == "self-single-gc-bootstrap" else None
         ),
         links_libpython=False if native_artifact else None,
         pcc2_pcc3_equal=True if bootstrap else None,
@@ -135,8 +135,8 @@ def _result(
             [_runtime_provenance_observation()]
             if runtime_archive
             else (
-                _five_gc_observations()
-                if gate_id == "self-five-gc-bootstrap"
+                _single_gc_observations()
+                if gate_id == "self-single-gc-bootstrap"
                 else (
                     [
                         {
@@ -176,7 +176,7 @@ def _manifest() -> dict[str, object]:
             _result("runtime-archive-preflight", kind="command"),
             _result("fallback-ratchet"),
             _result("gc-production-contract"),
-            _result("self-five-gc-bootstrap", kind="pytest-bootstrap"),
+            _result("self-single-gc-bootstrap", kind="pytest-bootstrap"),
             _result("numpy-core-head", kind="command"),
         ],
         generated_at="2026-07-10T00:00:00Z",
@@ -447,16 +447,16 @@ def test_pass_rejects_missing_summary_timeout_and_bad_bootstrap_claims() -> None
     manifest = _manifest()
     _gate(manifest, "fallback-ratchet")["pytest_summary"] = None
     _gate(manifest, "gc-production-contract")["returncode"] = 124
-    five_gc = _gate(manifest, "self-five-gc-bootstrap")
-    five_gc["links_libpython"] = True
-    five_gc["pcc2_pcc3_equal"] = False
+    single_gc = _gate(manifest, "self-single-gc-bootstrap")
+    single_gc["links_libpython"] = True
+    single_gc["pcc2_pcc3_equal"] = False
 
     errors = validate_manifest(manifest)
 
     assert "fallback-ratchet: pytest PASS requires a final summary" in errors
     assert "gc-production-contract: PASS requires returncode 0" in errors
-    assert "self-five-gc-bootstrap: PASS requires links_libpython=false" in errors
-    assert "self-five-gc-bootstrap: PASS requires pcc2_pcc3_equal=true" in errors
+    assert "self-single-gc-bootstrap: PASS requires links_libpython=false" in errors
+    assert "self-single-gc-bootstrap: PASS requires pcc2_pcc3_equal=true" in errors
 
 
 def test_runtime_archive_pass_requires_exactly_one_provenance_observation() -> None:
@@ -582,28 +582,28 @@ def test_pytest_summary_accepts_elapsed_clock_suffix() -> None:
     assert counts == {"passed": 20}
 
 
-def test_self_five_gc_gate_rejects_a_partial_pytest_summary(
+def test_self_single_gc_gate_rejects_a_partial_pytest_summary(
     tmp_path: Path, monkeypatch
 ) -> None:
     spec = GateSpec(
-        gate_id="self-five-gc-bootstrap",
+        gate_id="self-single-gc-bootstrap",
         suite="heavy",
         command=("uv", "run", "pytest", "-q", "-m", "integration"),
         timeout_seconds=1800,
         kind="pytest-bootstrap",
         backend="self",
-        gc_backend="0..4",
+        gc_backend="0",
     )
     process = subprocess.CompletedProcess(
         args=list(spec.command),
         returncode=0,
-        stdout="1 passed in 0.10s\n",
+        stdout="2 passed in 0.10s\n",
         stderr="",
     )
     monkeypatch.setattr(
         head_truth,
         "inspect_bootstrap_artifacts",
-        lambda *_args, **_kwargs: _five_gc_observations(),
+        lambda *_args, **_kwargs: _single_gc_observations(),
     )
 
     result = head_truth.run_gate(
@@ -614,16 +614,16 @@ def test_self_five_gc_gate_rejects_a_partial_pytest_summary(
     )
 
     assert result.status == FAIL
-    assert result.failure == "self-five-gc-bootstrap executed fewer than five tests"
+    assert result.failure == "self-single-gc-bootstrap must execute exactly one test"
 
 
-def test_self_five_gc_gate_records_current_success_for_every_backend(
+def test_self_single_gc_gate_records_current_collector_success(
     tmp_path: Path, monkeypatch
 ) -> None:
     spec = next(
         spec
         for spec in head_truth.gate_specs(tmp_path)
-        if spec.gate_id == "self-five-gc-bootstrap"
+        if spec.gate_id == "self-single-gc-bootstrap"
     )
     passed = "\n".join(
         "PASSED tests/python/gc/test_pcc_bootstrap_full_gc"
@@ -636,14 +636,14 @@ def test_self_five_gc_gate_records_current_success_for_every_backend(
         stdout=(
             "================ short test summary info ================\n"
             + passed
-            + "\n5 passed in 0.10s\n"
+            + "\n1 passed in 0.10s\n"
         ),
         stderr="",
     )
     monkeypatch.setattr(
         head_truth,
         "inspect_bootstrap_artifacts",
-        lambda *_args, **_kwargs: _five_gc_observations(),
+        lambda *_args, **_kwargs: _single_gc_observations(),
     )
 
     result = head_truth.run_gate(
@@ -656,28 +656,22 @@ def test_self_five_gc_gate_records_current_success_for_every_backend(
     assert result.status == PASS
     assert [observation["pytest_status"] for observation in result.observations] == [
         "passed"
-    ] * 5
-    assert [observation["gc_backend"] for observation in result.observations] == [
-        "0",
-        "1",
-        "2",
-        "3",
-        "4",
     ]
+    assert [observation["gc_backend"] for observation in result.observations] == ["0"]
 
 
-def test_self_five_gc_gate_rejects_a_missing_current_backend_success(
+def test_self_single_gc_gate_rejects_a_missing_current_backend_success(
     tmp_path: Path, monkeypatch
 ) -> None:
     spec = next(
         spec
         for spec in head_truth.gate_specs(tmp_path)
-        if spec.gate_id == "self-five-gc-bootstrap"
+        if spec.gate_id == "self-single-gc-bootstrap"
     )
     passed = "\n".join(
         "PASSED tests/python/gc/test_pcc_bootstrap_full_gc"
         f"{gc_backend}.py::test_full_three_stage_bootstrap_self_gc{gc_backend}"
-        for gc_backend in range(4)
+        for gc_backend in (1,)
     )
     process = subprocess.CompletedProcess(
         args=list(spec.command),
@@ -685,14 +679,14 @@ def test_self_five_gc_gate_rejects_a_missing_current_backend_success(
         stdout=(
             "================ short test summary info ================\n"
             + passed
-            + "\n5 passed in 0.10s\n"
+            + "\n1 passed in 0.10s\n"
         ),
         stderr="",
     )
     monkeypatch.setattr(
         head_truth,
         "inspect_bootstrap_artifacts",
-        lambda *_args, **_kwargs: _five_gc_observations(),
+        lambda *_args, **_kwargs: _single_gc_observations(),
     )
 
     result = head_truth.run_gate(
@@ -704,10 +698,10 @@ def test_self_five_gc_gate_rejects_a_missing_current_backend_success(
 
     assert result.status == FAIL
     assert result.failure == (
-        "self-five-gc-bootstrap requires one current pytest PASS and one valid "
-        "artifact observation for each GC backend 0..4"
+        "self-single-gc-bootstrap requires one current pytest PASS and one valid "
+        "artifact observation for the single collector"
     )
-    assert result.observations[4]["pytest_status"] is None
+    assert result.observations[0]["pytest_status"] is None
 
 
 @pytest.mark.parametrize(
@@ -754,59 +748,67 @@ def test_pytest_gate_rejects_xpass_and_all_deselected_runs(
     assert result.failure == expected_failure
 
 
-def test_self_five_gc_manifest_requires_all_unique_backend_observations() -> None:
+def test_self_single_gc_manifest_requires_all_unique_backend_observations() -> None:
     manifest = _manifest()
-    gate = _gate(manifest, "self-five-gc-bootstrap")
+    gate = _gate(manifest, "self-single-gc-bootstrap")
     gate["observations"] = gate["observations"][:-1]
 
     errors = validate_manifest(manifest)
 
     assert (
-        "self-five-gc-bootstrap: PASS requires one current pytest PASS and one "
-        "valid artifact observation for each GC backend 0..4"
+        "self-single-gc-bootstrap: PASS requires one current pytest PASS and one "
+        "valid artifact observation for the single collector"
     ) in errors
 
 
-def test_self_five_gc_manifest_rejects_partial_summary_and_reused_paths() -> None:
+def test_self_single_gc_manifest_rejects_extra_pass_and_wrong_artifact_paths() -> None:
     manifest = _manifest()
-    gate = _gate(manifest, "self-five-gc-bootstrap")
-    gate["pytest_summary"] = "1 passed in 0.10s"
-    first_paths = gate["observations"][0]["artifact_paths"]
-    for observation in gate["observations"][1:]:
-        observation["artifact_paths"] = list(first_paths)
+    gate = _gate(manifest, "self-single-gc-bootstrap")
+    gate["pytest_summary"] = "2 passed in 0.10s"
+    gate["observations"][0]["artifact_paths"] = ["build/unrelated/pcc1"]
 
     errors = validate_manifest(manifest)
 
-    assert "self-five-gc-bootstrap: PASS requires at least five passed tests" in errors
+    assert "self-single-gc-bootstrap: PASS requires exactly one passed test" in errors
     assert (
-        "self-five-gc-bootstrap: PASS requires one current pytest PASS and one "
-        "valid artifact observation for each GC backend 0..4"
+        "self-single-gc-bootstrap: PASS requires one current pytest PASS and one "
+        "valid artifact observation for the single collector"
     ) in errors
 
 
-def test_self_five_gc_manifest_rejects_an_unproven_backend_success() -> None:
+def test_self_single_gc_manifest_rejects_an_unproven_backend_success() -> None:
     manifest = _manifest()
-    gate = _gate(manifest, "self-five-gc-bootstrap")
-    gate["observations"][2]["pytest_status"] = None
+    gate = _gate(manifest, "self-single-gc-bootstrap")
+    gate["observations"][0]["pytest_status"] = None
 
     errors = validate_manifest(manifest)
 
     assert (
-        "self-five-gc-bootstrap: PASS requires one current pytest PASS and one "
-        "valid artifact observation for each GC backend 0..4"
+        "self-single-gc-bootstrap: PASS requires one current pytest PASS and one "
+        "valid artifact observation for the single collector"
     ) in errors
+
+
+def test_single_collector_manifest_does_not_admit_a_legacy_matrix_receipt() -> None:
+    manifest = _manifest()
+    manifest["schema"] = "pcc.head_truth.v1"
+    gate = _gate(manifest, "self-single-gc-bootstrap")
+    gate["gate_id"] = "self-five-gc-bootstrap"
+    errors = validate_manifest(manifest, require_complete=True)
+    assert "unexpected schema 'pcc.head_truth.v1'" in errors
+    assert any("self-single-gc-bootstrap" in error for error in errors)
 
 
 def test_manifest_rejects_a_gate_command_that_differs_from_registry() -> None:
     manifest = _manifest()
-    gate = _gate(manifest, "self-five-gc-bootstrap")
+    gate = _gate(manifest, "self-single-gc-bootstrap")
     gate["command"] = [
         item for item in gate["command"] if item not in {"-m", "integration"}
     ]
 
     errors = validate_manifest(manifest)
 
-    assert "self-five-gc-bootstrap: command differs from registry" in errors
+    assert "self-single-gc-bootstrap: command differs from registry" in errors
 
 
 def test_selected_gate_failures_reject_keep_going_failures() -> None:
@@ -872,13 +874,13 @@ def test_timeout_status_survives_bootstrap_artifact_inspection(
     tmp_path: Path, monkeypatch
 ) -> None:
     spec = GateSpec(
-        gate_id="self-five-gc-bootstrap",
+        gate_id="self-single-gc-bootstrap",
         suite="heavy",
         command=("uv", "run", "pytest"),
         timeout_seconds=900,
         kind="pytest-bootstrap",
         backend="self",
-        gc_backend="0..4",
+        gc_backend="0",
     )
     process = subprocess.CompletedProcess(
         args=list(spec.command),

@@ -240,10 +240,10 @@ def validate_marker(artifact):
     return gate.validate_marker(artifact, arm(), "macos-arm64", "integration", "bootstrap", "d" * 64)
 
 
-def test_actual_original_five_gc_node_phase_proof_is_required():
+def test_actual_single_bootstrap_owner_phase_proof_is_required():
     artifact = marker_fixture()
     receipt, inventory = validate_marker(artifact)
-    assert receipt["status"] == "PASS" and len(inventory["selected"]) == 5
+    assert receipt["status"] == "PASS" and len(inventory["selected"]) == 1
     events = artifact.bytes("pytest/live.jsonl").splitlines()
     artifact.rows["pytest/live.jsonl"] = b"\n".join(events[:-2] + events[-1:])
     with pytest.raises(ValueError, match="actually executed"):

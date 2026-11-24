@@ -29,7 +29,7 @@ def test_light_and_heavy_commands_are_owned_by_manifest_registry() -> None:
     assert "fallback-ratchet" in gate_ids
     assert "control-plane-ratchets" in gate_ids
     assert "gc-production-contract" in gate_ids
-    assert "self-five-gc-bootstrap" in gate_ids
+    assert "self-single-gc-bootstrap" in gate_ids
     assert "numpy-core-head" in gate_ids
     assert "numpy-core-head" in REQUIRED_GATE_IDS
 
@@ -60,11 +60,11 @@ def test_heavy_registry_prebuilds_runtime_archive_before_consumers() -> None:
     assert "PYTHON=../../.venv/bin/python3" in preflight.command
     assert str(ROOT) not in " ".join(preflight.command)
 
-    self_five_gc = next(
-        spec for spec in specs if spec.gate_id == "self-five-gc-bootstrap"
+    self_single_gc = next(
+        spec for spec in specs if spec.gate_id == "self-single-gc-bootstrap"
     )
-    assert self_five_gc.timeout_seconds == 1800
-    assert self_five_gc.command[:6] == (
+    assert self_single_gc.timeout_seconds == 1800
+    assert self_single_gc.command[:6] == (
         "uv",
         "run",
         "pytest",
@@ -72,8 +72,8 @@ def test_heavy_registry_prebuilds_runtime_archive_before_consumers() -> None:
         "-m",
         "integration",
     )
-    assert "-rA" in self_five_gc.command
-    assert "-n0" not in self_five_gc.command
+    assert "-rA" in self_single_gc.command
+    assert "-n0" not in self_single_gc.command
 
     numpy_core = next(spec for spec in specs if spec.gate_id == "numpy-core-head")
     assert numpy_core.suite == "heavy"

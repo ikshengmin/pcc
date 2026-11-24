@@ -62,7 +62,7 @@ def _stage1_handoff_contract(job, *, mac):
         field(export, 'PCC_STAGE1_EXPORT_SOURCE_SHA256', '${{ steps.platform_runtime.outputs.source_sha256 }}', 10)
     bundle = step('Preserve the existing native Stage1 bundle',
                   "steps.stage1_export.outcome == 'success'", identity='stage1_bundle')
-    owner = step('Stage2 to Stage3 / five original bootstrap owners',
+    owner = step('Stage2 to Stage3 / single collector bootstrap owner',
                  legacy + "steps.stage1_export.outcome == 'success' && " + selection, identity='bootstrap_owner')
     field(owner, 'run', 'uv run --frozen --no-sync python scripts/ci_pytest_markers.py --marker integration '
           '--partition bootstrap --in-place --platform ' + platform + ' --bundle build/stage1-native-export '
@@ -398,7 +398,7 @@ def test_unified_workflow_covers_both_groups_on_four_native_platforms(tmp_path, 
     for body, is_mac in ((nonmac, False), (mac, True)):
         _stage1_handoff_contract(body, mac=is_mac)
         for name in ('Export the admitted native Stage1 identity', 'Preserve the existing native Stage1 bundle',
-                     'Stage2 to Stage3 / five original bootstrap owners',
+                     'Stage2 to Stage3 / single collector bootstrap owner',
                      'Preserve platform-local bootstrap owner and consumed budget'):
             original = _workflow_step(body, name)
             condition = "if: ${{ !cancelled() && "

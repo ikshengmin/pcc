@@ -27,7 +27,7 @@ from pcc.tools.runtime_archive_provenance import (
 )
 from scripts.numpy_first_blocker import ALLOWED_KINDS, evaluate_result
 
-SCHEMA = "pcc.head_truth.v1"
+SCHEMA = "pcc.head_truth.v2"
 PASS = "PASS"
 FAIL = "FAIL"
 TIMEOUT = "TIMEOUT"
@@ -37,7 +37,7 @@ REQUIRED_GATE_IDS = (
     "runtime-archive-preflight",
     "fallback-ratchet",
     "gc-production-contract",
-    "self-five-gc-bootstrap",
+    "self-single-gc-bootstrap",
     "numpy-core-head",
 )
 
@@ -52,12 +52,12 @@ _PYTEST_SUMMARY_RE = re.compile(
 _PYTEST_COUNT_RE = re.compile(
     r"(?P<count>\d+)\s+(?P<label>passed|failed|skipped|xfailed|xpassed|error|errors)"
 )
-_FIVE_GC_TEST_NODEIDS = {
+_BOOTSTRAP_TEST_NODEIDS = {
     str(gc_backend): (
         "tests/python/gc/test_pcc_bootstrap_full_gc"
         f"{gc_backend}.py::test_full_three_stage_bootstrap_self_gc{gc_backend}"
     )
-    for gc_backend in range(5)
+    for gc_backend in (0,)
 }
 _RUNTIME_ARCHIVE = Path("pcc/runtime/libpy_runtime_pcc_py.a")
 # The archive is produced by the owned self backend's object writer; the
@@ -174,10 +174,10 @@ def gate_specs(repo_root: Path) -> tuple[GateSpec, ...]:
             timeout_seconds=420,
             kind="pytest",
             backend="self",
-            gc_backend="0..4",
+            gc_backend="0",
         ),
         GateSpec(
-            gate_id="self-five-gc-bootstrap",
+            gate_id="self-single-gc-bootstrap",
             suite="heavy",
             command=(
                 "uv",
@@ -188,15 +188,11 @@ def gate_specs(repo_root: Path) -> tuple[GateSpec, ...]:
                 "integration",
                 "-rA",
                 "tests/python/gc/test_pcc_bootstrap_full_gc0.py",
-                "tests/python/gc/test_pcc_bootstrap_full_gc1.py",
-                "tests/python/gc/test_pcc_bootstrap_full_gc2.py",
-                "tests/python/gc/test_pcc_bootstrap_full_gc3.py",
-                "tests/python/gc/test_pcc_bootstrap_full_gc4.py",
             ),
             timeout_seconds=1800,
             kind="pytest-bootstrap",
             backend="self",
-            gc_backend="0..4",
+            gc_backend="0",
         ),
         GateSpec(
             gate_id="numpy-core-head",
@@ -277,7 +273,7 @@ def _pytest_summary(output: str) -> tuple[str | None, dict[str, int]]:
     return summary, counts
 
 
-def _five_gc_pytest_successes(output: str) -> dict[str, str]:
+def _bootstrap_pytest_successes(output: str) -> dict[str, str]:
     """Return current-run GC backends proven PASS by pytest's ``-rA`` report."""
 
     marker = "short test summary info"
@@ -288,7 +284,7 @@ def _five_gc_pytest_successes(output: str) -> dict[str, str]:
     passed_lines = {line.strip() for line in report.splitlines()}
     return {
         gc_backend: nodeid
-        for gc_backend, nodeid in _FIVE_GC_TEST_NODEIDS.items()
+        for gc_backend, nodeid in _BOOTSTRAP_TEST_NODEIDS.items()
         if f"PASSED {nodeid}" in passed_lines
     }
 
@@ -369,57 +365,31 @@ def _bootstrap_observation(
 def inspect_bootstrap_artifacts(
     repo_root: Path, gate_id: str
 ) -> list[dict[str, object]]:
-    if gate_id != "self-five-gc-bootstrap":
+    if gate_id != "self-single-gc-bootstrap":
         return []
-    observations: list[dict[str, object]] = []
-    for gc_backend in ("0", "1", "2", "3", "4"):
-        suffix = "" if gc_backend == "0" else f"-gc{gc_backend}"
-        observations.append(
-            _bootstrap_observation(
-                repo_root,
-                backend="self",
-                gc_backend=gc_backend,
-                out_dir=repo_root / "build" / f"bootstrap-pytest-self{suffix}",
-            )
-        )
-    return observations
+    return [_bootstrap_observation(
+        repo_root, backend="self", gc_backend="0",
+        out_dir=repo_root / "build" / "bootstrap-pytest-self",
+    )]
 
 
-def _five_gc_observations_are_complete(
-    observations: object,
-) -> bool:
-    if not isinstance(observations, list) or len(observations) != 5:
+def _bootstrap_observations_are_complete(observations: object) -> bool:
+    if not isinstance(observations, list) or len(observations) != 1:
         return False
-    gc_backends: set[str] = set()
-    for observation in observations:
-        if not isinstance(observation, dict):
-            return False
-        gc_backend = observation.get("gc_backend")
-        if not isinstance(gc_backend, str):
-            return False
-        expected_nodeid = _FIVE_GC_TEST_NODEIDS.get(gc_backend)
-        if expected_nodeid is None:
-            return False
-        artifact_paths = observation.get("artifact_paths")
-        expected_root = (
-            "build/bootstrap-pytest-self"
-            if gc_backend == "0"
-            else f"build/bootstrap-pytest-self-gc{gc_backend}"
-        )
-        expected_paths = [f"{expected_root}/pcc{stage}" for stage in (1, 2, 3)]
-        if (
-            observation.get("backend") != "self"
-            or observation.get("links_libpython") is not False
-            or observation.get("pcc2_pcc3_equal") is not True
-            or observation.get("pytest_status") != "passed"
-            or observation.get("pytest_nodeid") != expected_nodeid
-            or observation.get("failure") is not None
-            or not isinstance(artifact_paths, list)
-            or artifact_paths != expected_paths
-        ):
-            return False
-        gc_backends.add(gc_backend)
-    return gc_backends == {"0", "1", "2", "3", "4"}
+    observation = observations[0]
+    return (
+        isinstance(observation, dict)
+        and observation.get("gc_backend") == "0"
+        and observation.get("backend") == "self"
+        and observation.get("links_libpython") is False
+        and observation.get("pcc2_pcc3_equal") is True
+        and observation.get("pytest_status") == "passed"
+        and observation.get("pytest_nodeid") == _BOOTSTRAP_TEST_NODEIDS["0"]
+        and observation.get("failure") is None
+        and observation.get("artifact_paths") == [
+            f"build/bootstrap-pytest-self/pcc{stage}" for stage in (1, 2, 3)
+        ]
+    )
 
 
 def inspect_numpy_head_artifact(repo_root: Path) -> list[dict[str, object]]:
@@ -720,9 +690,9 @@ def run_gate(
     ):
         status = FAIL
         failure = f"pytest summary is not strict green: {summary}"
-    elif spec.gate_id == "self-five-gc-bootstrap" and counts.get("passed", 0) < 5:
+    elif spec.gate_id == "self-single-gc-bootstrap" and counts.get("passed", 0) != 1:
         status = FAIL
-        failure = "self-five-gc-bootstrap executed fewer than five tests"
+        failure = "self-single-gc-bootstrap must execute exactly one test"
     else:
         status = PASS
 
@@ -731,8 +701,8 @@ def run_gate(
         observations = inspect_runtime_archive_artifact(repo_root)
     elif spec.gate_id == "numpy-core-head":
         observations = inspect_numpy_head_artifact(repo_root)
-    elif spec.gate_id == "self-five-gc-bootstrap":
-        pytest_successes = _five_gc_pytest_successes(output)
+    elif spec.gate_id == "self-single-gc-bootstrap":
+        pytest_successes = _bootstrap_pytest_successes(output)
         for observation in observations:
             if not isinstance(observation, dict):
                 continue
@@ -769,11 +739,11 @@ def run_gate(
                 )
                 if provenance_errors:
                     observation_failure = provenance_errors[0]
-    elif spec.gate_id == "self-five-gc-bootstrap":
-        if not _five_gc_observations_are_complete(observations):
+    elif spec.gate_id == "self-single-gc-bootstrap":
+        if not _bootstrap_observations_are_complete(observations):
             observation_failure = (
-                "self-five-gc-bootstrap requires one current pytest PASS and one "
-                "valid artifact observation for each GC backend 0..4"
+                "self-single-gc-bootstrap requires one current pytest PASS and one "
+                "valid artifact observation for the single collector"
             )
     elif observations:
         observation_failure = next(
@@ -803,7 +773,7 @@ def run_gate(
     )
     pcc2_pcc3_equal = (
         all(observation["pcc2_pcc3_equal"] is True for observation in observations)
-        if observations and spec.gate_id == "self-five-gc-bootstrap"
+        if observations and spec.gate_id == "self-single-gc-bootstrap"
         else None
     )
     return GateResult(
@@ -935,24 +905,23 @@ def validate_manifest(
                             f"{gate_id}: pytest PASS requires a strict green summary"
                         )
                     if (
-                        gate_id == "self-five-gc-bootstrap"
-                        and counts.get("passed", 0) < 5
+                        gate_id == "self-single-gc-bootstrap"
+                        and counts.get("passed", 0) != 1
                     ):
                         errors.append(
-                            "self-five-gc-bootstrap: PASS requires at least five "
-                            "passed tests"
+                            "self-single-gc-bootstrap: PASS requires exactly one passed test"
                         )
-            if gate_id == "self-five-gc-bootstrap":
+            if gate_id == "self-single-gc-bootstrap":
                 if gate.get("links_libpython") is not False:
                     errors.append(f"{gate_id}: PASS requires links_libpython=false")
                 if gate.get("pcc2_pcc3_equal") is not True:
                     errors.append(f"{gate_id}: PASS requires pcc2_pcc3_equal=true")
-            if gate_id == "self-five-gc-bootstrap" and not (
-                _five_gc_observations_are_complete(gate.get("observations"))
+            if gate_id == "self-single-gc-bootstrap" and not (
+                _bootstrap_observations_are_complete(gate.get("observations"))
             ):
                 errors.append(
-                    "self-five-gc-bootstrap: PASS requires one current pytest PASS "
-                    "and one valid artifact observation for each GC backend 0..4"
+                    "self-single-gc-bootstrap: PASS requires one current pytest PASS "
+                    "and one valid artifact observation for the single collector"
                 )
             if (
                 gate_id == "numpy-core-head"

@@ -754,12 +754,11 @@ class TestObligation6FiveGCComparativeStatic:
         mapped_roots = _read("pcc/runtime/py/freestanding_gc_mapped_roots.py")
         assert '@c_abi_export("pcc_gc_visit_registered_root_slots")' in mapped_roots
 
-    def test_every_backend_has_its_own_bootstrap_gate(self):
+    def test_only_live_collector_has_a_bootstrap_gate(self):
         gc_dir = REPO_ROOT / "tests" / "python" / "gc"
-        for n in range(5):
-            assert (gc_dir / f"test_pcc_bootstrap_full_gc{n}.py").is_file(), (
-                f"GC backend {n} has no dedicated bootstrap gate"
-            )
+        assert {p.name for p in gc_dir.glob("test_pcc_bootstrap_full_gc*.py")} == {
+            "test_pcc_bootstrap_full_gc0.py",
+        }
 
     def test_gc_production_contract_suite_exists(self):
         """Finalizer/weakref/cycle production-contract tests must exist for the

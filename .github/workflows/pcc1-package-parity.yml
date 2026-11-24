@@ -1589,9 +1589,9 @@ jobs:
             ${{ runner.temp }}/java-managed-input/py_shared_managed.o.provenance.json
             ${{ runner.temp }}/java-managed-input/managed-input.json
 
-      # One integration budget, not 1800 seconds per collector. Same-run
+      # One integration budget shared with the remaining tests. Same-run
       # immutable Stage1 bytes are admitted in place; no native provisioning.
-      - name: Stage2 to Stage3 / five original bootstrap owners
+      - name: Stage2 to Stage3 / single collector bootstrap owner
         id: bootstrap_owner
         if: ${{ !cancelled() && needs.validation-plan.outputs.legacy == 'true' && steps.stage1_export.outcome == 'success' && !inputs.full_chain && inputs.pytest_selection != 'not integration' }}
         env:
@@ -1845,9 +1845,9 @@ jobs:
             build/stage1-native-export/stage1-native.tar.gz
             build/stage1-native-export/manifest.json
 
-      # One integration budget, not 1800 seconds per collector. Same-run
+      # One integration budget shared with the remaining tests. Same-run
       # immutable Stage1 bytes are admitted in place; no native provisioning.
-      - name: Stage2 to Stage3 / five original bootstrap owners
+      - name: Stage2 to Stage3 / single collector bootstrap owner
         id: bootstrap_owner
         if: ${{ !cancelled() && steps.stage1_export.outcome == 'success' && (inputs.full_chain || inputs.pytest_selection != 'not integration') }}
         env:

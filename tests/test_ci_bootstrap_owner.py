@@ -83,20 +83,22 @@ def test_disjoint_partition_retains_exact_original_inventory(suffix):
                             "transferred": moved, "original_expected": original})
 
 
-@pytest.mark.parametrize("bad", ["missing", "duplicate", "extra-owner"])
-def test_original_five_owner_inventory_is_exact(bad):
+@pytest.mark.parametrize("bad", ["missing", "duplicate", "extra-owner", "retired-owner"])
+def test_single_bootstrap_owner_inventory_is_exact(bad):
     nodes = list(partition.BOOTSTRAP_NODES)
     if bad == "missing":
         nodes.pop()
     elif bad == "duplicate":
         nodes.append(nodes[0])
-    else:
+    elif bad == "extra-owner":
         nodes.append("tests/test_other.py::test_other")
+    else:
+        nodes = [nodes[0].replace("gc0", "gc1")]
     with pytest.raises(ValueError):
         partition.partition_inventory(nodes, nodes, "bootstrap")
 
 
-@pytest.mark.parametrize("bad", ["overlap", "missing", "unknown", "transfer"])
+@pytest.mark.parametrize("bad", ["overlap", "missing", "unknown", "transfer", "duplicate-owner"])
 def test_union_rejects_gap_duplicate_unknown_or_wrong_transfer(bad):
     nodes = list(partition.BOOTSTRAP_NODES)
     owner = {"partition": "bootstrap", "selected": nodes}
@@ -106,6 +108,7 @@ def test_union_rejects_gap_duplicate_unknown_or_wrong_transfer(bad):
     if bad == "missing": remainder["selected"] = []
     if bad == "unknown": remainder["selected"].append("unknown")
     if bad == "transfer": remainder["transferred"] = nodes[:-1]
+    if bad == "duplicate-owner": owner["selected"] = nodes + nodes
     with pytest.raises(ValueError):
         partition.verify_union(owner, remainder)
 
@@ -117,7 +120,7 @@ def test_owner_and_remainder_preserve_original_watchdog_caps(tmp_path, platform)
     assert owner[owner.index("--timeout") + 1] == "1800"
     assert remainder[remainder.index("--timeout") + 1] == "123"
     assert owner[owner.index("--") + 1:] == gate.marker_command(tmp_path, "integration", "bootstrap")
-    assert owner[-5:] == list(partition.BOOTSTRAP_NODES)
+    assert owner[-len(partition.BOOTSTRAP_NODES):] == list(partition.BOOTSTRAP_NODES)
     assert remainder[remainder.index("--") + 1:] == gate.execution_command(tmp_path, "integration", "remainder")
     assert remainder[-2:] == ["--runtime-phases", str(tmp_path)]
     ordinary = gate.marker_command(tmp_path / "ordinary", "integration", "remainder", "ordinary")
@@ -135,7 +138,7 @@ def test_owner_and_remainder_preserve_original_watchdog_caps(tmp_path, platform)
 # A second six-worker pytest tree must not overlap the real allocation probes.
 # Use their existing group without reducing either outer or nested worker count.
 @pytest.mark.xdist_group(name="worker_resource_fixtures")
-def test_actual_six_worker_partition_runs_five_bodies_once_then_remainder(tmp_path):
+def test_actual_six_worker_partition_runs_single_owner_once_then_remainder(tmp_path):
     """Actual harmless pytest bodies, not importing or running the GC fixtures."""
     corpus = tmp_path / "corpus"
     corpus.mkdir()
@@ -167,7 +170,7 @@ def test_actual_six_worker_partition_runs_five_bodies_once_then_remainder(tmp_pa
         assert gate.summarize(out, "integration", scope)["status"] == "PASS"
         inventories.append(json.loads((out / "inventory-gw0.json").read_text()))
     partition.verify_union(*inventories)
-    assert len(list(corpus.glob("owner-*"))) == 5
+    assert len(list(corpus.glob("owner-*"))) == 1
     assert (corpus / "remainder-ran").read_text() == "actual body"
 
 
