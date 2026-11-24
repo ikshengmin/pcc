@@ -177,6 +177,15 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- Item 2 (b), C weakref lifetime test, 2026-11-24. Replacement of
+  retired selector and system link passed two Linux pcc0 native tests.
+  The patch is not published: whole-language acceptance needs the
+  current-source self-host chain and the Linux executor cannot dispatch
+  a manual workflow with its current GitHub CLI login. Asked whether to
+  land this exact tests-only patch explicitly unqualified in a normal
+  push to let GitHub CI run, or keep it local for the whole gate first.
+  Agent recommendation: the former; do not wait for a local Mac.
+
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -409,7 +418,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) weakref native lifetime test migration: Codex, Linux, 2026-11-24 16:04Z, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
