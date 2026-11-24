@@ -177,15 +177,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- Item 2 (b), C weakref lifetime test, 2026-11-24. Replacement of
-  retired selector and system link passed two Linux pcc0 native tests.
-  The patch is not published: whole-language acceptance needs the
-  current-source self-host chain and the Linux executor cannot dispatch
-  a manual workflow with its current GitHub CLI login. Asked whether to
-  land this exact tests-only patch explicitly unqualified in a normal
-  push to let GitHub CI run, or keep it local for the whole gate first.
-  Agent recommendation: the former; do not wait for a local Mac.
-
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -276,6 +267,17 @@ in the relevant section or issue and removes the entry.
    Then (c) and the collector-side first gate of #13. Some (c) exports
    still have (d) callers. Generic Go/Java lowering stays with item 4. Do
    not resume (0b) or throughput until all five stability conditions hold.
+
+   (b), C weakref lifetime: retained the native ownership contract as
+   a typed C probe linked by PCC, without the retired selector or the
+   system linker. A live weakref dereference owns its result; after the
+   final release the reference clears. Linux pcc0: the probe and the
+   existing CPython weakref comparison passed under the usual guard.
+   The native whole-language gate is unqualified locally; run it in
+   GitHub CI. This is test-only and changes no compiler or runtime.
+   Next: fix the obsolete lease-call expectation in the Linux cleanup
+   helper IR gate, then continue the (b) inventory. Use GitHub CI for
+   cross-platform failures; do not wait for the maintainer's local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -418,7 +420,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) C weakref lifetime publication: Codex, Linux, 2026-11-24 17:04Z, area runtime-gc
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
