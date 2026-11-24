@@ -2508,7 +2508,7 @@ def _cross_object_signatures_part_15():
     "pcc_thread_world_reacquire_held": (("c_int64",), "c_void"),
     "py_user_del_pending": (("c_ptr",), "c_int64"),
     "py_gen_finalize_pending": (("c_ptr",), "c_int64"),
-    "py_weakref_queue_gc0_candidates": (("c_ptr",), "c_int64"),
+    "py_weakref_queue_gc0_batch": (("c_ptr", "c_ptr", "c_int64"), "c_int64"),
     "py_weakref_run_queued_callbacks": (("c_ptr", "c_int64"), "c_void"),
     # The concurrent sweep hands the graph lock to a queued mutator at once.
     # A mark's finish reads a walked record's bit through its span and cell.

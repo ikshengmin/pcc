@@ -869,3 +869,112 @@ def test_batch_and_late_clear_leave_only_records_a_later_death_retires():
     assert chain(model, target) == []
     assert model.index.live("pcc_weak_reverse_slots") == {}
     assert_directory_exact(model)
+
+
+def _batch_scenario(model):
+    """Three batch targets, a batch member without refs, 30 unrelated refs."""
+    new = model.ns["py_weakref_new"]
+    targets = [target_object(model) for _ in range(3)]
+    unrelated = [target_object(model) for _ in range(30)]
+    plain = target_object(model)
+    refs = {
+        "callback0": new(targets[0], 0x8000),
+        "silent0": new(targets[0], 0),
+        "callback1": new(targets[1], 0x8100),
+        "in_batch": new(targets[1], 0x8200),
+        "silent2": new(targets[2], 0),
+    }
+    others = [new(obj, 0x8300) for obj in unrelated]
+    model.candidates.update(targets + [plain, refs["in_batch"]])
+    nodes = model.stack_alloc(8 * 5)
+    for index, obj in enumerate(targets + [plain]):
+        node = model.stack_alloc(16)
+        model.store(node, 0, obj)
+        model.store(nodes, 8 * index, node)
+    model.store(nodes, 8 * 4, 0)  # a detached batch slot
+    return targets, refs, others, nodes
+
+
+def _late_refs(model):
+    refs, wr = set(), model.late
+    while wr:
+        refs.add(wr)
+        wr = model.words.get(wr + 40, 0)
+    return refs
+
+
+def _run_early_pass(batch):
+    model = directory_model() if batch != "disabled" else WeakBatch()
+    if batch == "disabled":
+        model.words[0xE028] = 0  # index the scenario's refs, then retire it
+        model.heads["pcc_weak_target_slots"] = model.malloc(16 * 64)
+        model.heads["pcc_weak_reverse_slots"] = model.malloc(16 * 64)
+        index = ModelIndex(model, {0xE038: "pcc_weak_target_slots",
+                                   0xE058: "pcc_weak_reverse_slots"})
+        model.ns.update(pcc_gc_index_py_find=index.find,
+                        pcc_gc_index_py_find_slot=index.find_slot,
+                        pcc_gc_index_py_insert=index.insert,
+                        pcc_gc_index_py_remove=index.remove)
+    load_functions(SOURCE, {"py_weakref_queue_gc0_batch"}, model.ns)
+    targets, refs, others, nodes = _batch_scenario(model)
+    if batch == "disabled":
+        model.words[0xE028] = 1
+    model.stopped = True
+    pending = model.stack_alloc(16)
+    model.store(pending, 0, 0)
+    model.store(pending, 8, 0)
+    model.target_reads = 0
+    if batch == "list":
+        queued = model.ns["py_weakref_queue_gc0_candidates"](pending)
+    else:
+        queued = model.ns["py_weakref_queue_gc0_batch"](pending, nodes, 5)
+    reads = model.target_reads
+    model.ns["py_weakref_run_queued_callbacks"](pending, 1)
+    cleared = {name for name, wr in refs.items() if model.load(wr, 16) == 0}
+    late = {name for name, wr in refs.items() if wr in _late_refs(model)}
+    assert all(model.load(ref, 16) != 0 for ref in others)
+    return model, refs, queued, reads, cleared, late
+
+
+def test_batch_early_pass_treats_each_ref_as_the_full_list_pass():
+    """CPython handle_weakrefs: each unreachable object's own weaklist.
+
+    The batch pass reaches the refs of marked batch members through the
+    directory and gives each the full-list pass's treatment: callback refs
+    of live owners are held and cleared, a ref inside the batch is cleared
+    without a callback, callback-free refs move to the late list.
+    """
+    full = _run_early_pass("list")
+    batch = _run_early_pass("batch")
+    for model, refs, queued, reads, cleared, late in (full, batch):
+        assert queued == 2
+        assert cleared == {"callback0", "callback1", "in_batch"}
+        assert late == {"silent0", "silent2"}
+        assert set(model.calls) == {refs["callback0"], refs["callback1"]}
+        assert model.windows == 1  # the late clear closes it
+    # Full list: global newest-first order; batch: per object, batch order.
+    assert full[0].calls == [full[1]["callback1"], full[1]["callback0"]]
+    assert batch[0].calls == [batch[1]["callback0"], batch[1]["callback1"]]
+    # The batch pass reads its five refs' targets in each of its two passes
+    # and never one of the 30 unrelated refs; the list pass reads them all.
+    assert batch[3] <= 2 * 5 < 35 <= full[3]
+    # As after the full-list pass, the cleared callback refs keep stale
+    # records until their targets die; the late clear and the deaths leave
+    # the directory exact.
+    model, refs = batch[0], batch[1]
+    records = model.index.live("pcc_weak_reverse_slots")
+    stale = {wr for wr in records if model.load(wr, 16) == 0}
+    assert stale == {refs["callback0"], refs["callback1"], refs["in_batch"]}
+    dying = {model.words[records[wr] + 8] for wr in stale}
+    model.ns["py_weakref_clear_gc0_candidates"]()
+    model.stopped = False
+    for target in dying:
+        model.ns["py_weakref_invalidate"](target)
+    assert_directory_exact(model)
+
+
+def test_batch_early_pass_without_the_directory_is_the_full_list_pass():
+    full = _run_early_pass("list")
+    retired = _run_early_pass("disabled")
+    assert retired[2:3] + retired[4:] == full[2:3] + full[4:]
+    assert retired[3] >= 35

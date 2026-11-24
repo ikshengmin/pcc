@@ -226,12 +226,18 @@ in the relevant section or issue and removes the entry.
    and the directory model cases of `tests/python/test_gc0_weakref_batch.py`.
    Not a measured handler-throughput change (no `pcc_perf ab`). Linux,
    pcc1 and the whole Python suite (blocked by item 2 (b)) are unrun.
-   Next: the early weak pass, `py_weakref_queue_gc0_candidates`, still
-   walks every live weakref on each collection; visit the batch's marked
-   objects through the directory instead (area runtime-gc).
+   The collector's early weak pass, `py_weakref_queue_gc0_batch`, now visits
+   only the batch members' own refs through the directory instead of every
+   live weakref on each collection. Local Mac: 200k garbage cycles with 64k
+   live weakrefs elsewhere 0.545 s -> 0.284 s (0.27 s with none); the probe
+   above still matches CPython. A full collection with 64k weakly referenced
+   live objects is 36 ms against CPython's 4.9 ms: collector traversal cost,
+   item 2's throughput work, not this pass.
+   Next: no unit is ready. A correctness failure of the one collector
+   becomes this item's first unit when it is reported.
 
    Claims:
-   - early weak pass through the target directory: Claude, local Mac, 2026-11-24 15:13Z, area runtime-gc
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

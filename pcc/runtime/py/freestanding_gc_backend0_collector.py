@@ -100,8 +100,8 @@ py_incref = extern("py_incref", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_user_del_pending = extern("py_user_del_pending", (c_ptr,), c_int64)
-py_weakref_queue_gc0_candidates = extern(
-    "py_weakref_queue_gc0_candidates", (c_ptr,), c_int64
+py_weakref_queue_gc0_batch = extern(
+    "py_weakref_queue_gc0_batch", (c_ptr, c_ptr, c_int64), c_int64
 )
 py_weakref_run_queued_callbacks = extern(
     "py_weakref_run_queued_callbacks", (c_ptr, c_int64), c_void
@@ -622,7 +622,9 @@ def _collect(pairs, candidate_count: i64) -> i64:
     pending_cell = stack_alloc(16)
     store_ptr(pending_cell, 0, null())
     store_ptr(pending_cell, 8, null())
-    weak_callbacks: i64 = py_weakref_queue_gc0_candidates(pending_cell)
+    # Visits only the batch members' own refs (target directory), not every
+    # live weakref in the process on each collection.
+    weak_callbacks: i64 = py_weakref_queue_gc0_batch(pending_cell, unreachable, count)
     finalized: i64 = 0
     if weak_callbacks > 0 or user_code != 0:
         # Callbacks and finalizers are user code: they run with the world

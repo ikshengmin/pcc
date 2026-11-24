@@ -988,6 +988,67 @@ def py_weakref_queue_gc0_candidates(pending_cell) -> int:
     return count
 
 
+@c_abi_export("py_weakref_queue_gc0_batch")
+def py_weakref_queue_gc0_batch(pending_cell, nodes, count: int) -> int:
+    """py_weakref_queue_gc0_candidates over the batch's own refs.
+
+    ``nodes`` holds the collection's ``count`` batch nodes (object @0). A
+    batch object without PY_FLAG_WEAK_REFERENCED has no ref; a marked one
+    names its refs on the ordinary list through the target directory. Each
+    ref gets exactly the treatment of the full-list pass, without walking
+    every live weakref on each collection. As CPython's handle_weakrefs
+    visits each unreachable object's weaklist, callbacks queue per object in
+    batch order. Without the directory this is the full-list pass.
+    """
+    if _target_directory_available() == 0:
+        return py_weakref_queue_gc0_candidates(pending_cell)
+    if pcc_thread_owns_stopped_world() == 0:
+        pcc_platform_abort()
+        return -1
+    _open_late_window()
+    queued: int = 0
+    i: int = 0
+    while i < count:
+        node = load_ptr(nodes, i * 8)
+        i += 1
+        if ptr_is_null(node) != 0:
+            continue
+        target = load_ptr(node, 0)
+        if (ptr_is_null(target) != 0 or is_tagged_int(target) != 0
+                or (load_i32(target, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_WEAK_REFERENCED) == 0
+                or pcc_gc_backend0_is_weak_candidate(target) == 0):
+            continue
+        entry = _target_directory_head(target)
+        while ptr_is_null(entry) == 0:
+            nxt = load_ptr(entry, _DIR_NEXT)  # _unlink frees this record
+            wr = load_ptr(entry, _DIR_REF)
+            if ptr_eq(load_ptr(wr, _WEAKREF_TARGET), target) != 0:
+                if ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) != 0:
+                    _unlink(wr)
+                    _link_late(wr)
+                elif (pcc_gc_backend0_is_weak_candidate(wr) == 0
+                        and (load_i32(wr, 12) & 524288) == 0
+                        and load_i64(wr, 0) > 0):
+                    if _queue_callback_hold(wr, pending_cell, 1) != 0:
+                        return -1
+                    queued += 1
+            entry = nxt
+    # Every hold exists; only refs with callbacks to batch targets remain.
+    i = 0
+    while i < count:
+        node = load_ptr(nodes, i * 8)
+        i += 1
+        if ptr_is_null(node) != 0:
+            continue
+        target = load_ptr(node, 0)
+        if (ptr_is_null(target) != 0 or is_tagged_int(target) != 0
+                or (load_i32(target, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_WEAK_REFERENCED) == 0
+                or pcc_gc_backend0_is_weak_candidate(target) == 0):
+            continue
+        _gc0_clear_entries(_target_directory_head(target), target)
+    return queued
+
+
 @c_abi_export("py_weakref_clear_gc0_candidates")
 def py_weakref_clear_gc0_candidates() -> int:
     """GC0's late clear: settle the late list and close the weak window.
