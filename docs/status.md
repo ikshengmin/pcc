@@ -438,7 +438,7 @@ in the relevant section or issue and removes the entry.
    `backend`); a unit that changes only pcc-gateway holds none.
 
    Claims:
-   - none
+   - #17 content-derived Mach-O UUID: Claude, local Mac, 2026-11-24 16:10Z, area backend
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
