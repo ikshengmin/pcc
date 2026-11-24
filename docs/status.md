@@ -418,7 +418,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (b) Python cleanup helper IR test migration: Codex, Linux, 2026-11-24 17:04Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
