@@ -282,6 +282,14 @@ in the relevant section or issue and removes the entry.
    pass; remove `pcc_gc_backend()` and the `PCC_GC_BACKEND` reads (58 in 20
    files at `7ec14d388`); remove the closed-young analysis and the
    per-collector options of `scripts/pcc_perf.py`.
+   An unpublished slice on Claude's Mac (2026-11-25, stopped at the usage
+   limit) makes the compiler stop reading `PCC_GC_BACKEND` and calling
+   `pcc_gc_backend()` (`pipeline_frontend_workers.py`,
+   `deferred_frontend_schedule.py`, `indexed_phase_timing.py`; class keys
+   keep `0`). Left before it can land: rewrite the env-parametrized cases in
+   `test_deferred_frontend_schedule.py` and the `_pcc_gc_backend` patches in
+   `test_macho_merge_phase_timing.py`, then rerun the covering files. Every
+   generated module still polls `pcc_gc_backend4_auto_step_pending`.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
@@ -401,7 +409,6 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) compiler reads of PCC_GC_BACKEND: Claude, local Mac, 2026-11-24 15:54Z, area runtime-codegen
    - (b) weakref native lifetime test migration: Codex, Linux, 2026-11-24 16:04Z, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
