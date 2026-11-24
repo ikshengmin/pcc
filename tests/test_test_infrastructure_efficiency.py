@@ -51,7 +51,6 @@ _RUNTIME_SOURCE_COPY_SUITES = (
 )
 
 _NESTED_PYTEST_STRATEGIES = {
-    "tests/python/test_gc_backend_under_env.py": "One inner pytest owns the complete frontend/GC slice",
     "tests/test_gc_bootstrap_xdist_group.py": "test_full_gc_bootstraps_remain_independently_schedulable",
     # Inner runs over a two-test temporary file under ``-c /dev/null``.
     "tests/python/test_pytest_live_report_tool.py": '"/dev/null"',
@@ -59,6 +58,8 @@ _NESTED_PYTEST_STRATEGIES = {
     "tests/python/test_install_pcc1_toolchain.py": '"--collect-only"',
     # Inner runs execute only generated, compiler-free probes with timeout=30.
     "tests/test_xdist_cpu_budget.py": "test_real_xdist_budget_contract",
+    # Temporary source tree; the child pytest gets a 90s/1 GiB process-tree guard.
+    "tests/test_runtime_shared_collection.py": '"--max-tree-rss-bytes", "1073741824"',
 }
 _NESTED_PYTEST_ARGV = re.compile(r"""["']-m["'],\s*["']pytest["']""")
 
@@ -348,14 +349,6 @@ def test_default_xdist_keeps_bounded_workers_for_compiler_heavy_suite():
     assert "def pytest_xdist_auto_num_workers" not in conftest
     assert "from tests.xdist_cpu_budget import (" in conftest
     assert "items[:] = warmup + remaining" in conftest
-    matrix = (ROOT / "tests/python/test_gc_backend_under_env.py").read_text(
-        encoding="utf-8"
-    )
-    # Only the self backend remains (983254526): the matrix groups its
-    # slices as pcc_heavy_self and the full default slice as
-    # pcc_heavy_self_full.
-    assert 'name="pcc_heavy_self_full"' in matrix
-    assert 'else "pcc_heavy_self"' in matrix
 
 
 def test_boc_speedup_proofs_share_one_measured_performance_lane():
@@ -394,79 +387,12 @@ def test_lock_owned_self_host_warmer_has_independent_inner_budget(monkeypatch):
     assert oracle._child_env()["PCC_PY_FRONTEND_JOBS"] == "3"
 
 
-def test_gc_meta_matrix_retains_required_modes_without_accidental_duplicates():
-    from tests.python import test_gc_backend_under_env as matrix
+def test_runtime_and_self_host_oracles_share_one_heavy_xdist_lane():
     from tests.python import test_runtime_oracle_diff as runtime_oracle
     from tests.python import test_self_host_oracle_diff as self_host_oracle
 
-    for target in matrix._FRONTEND_INDEPENDENT_TARGETS:
-        assert matrix._self_frontend_target(target) is None
-    assert (
-        matrix._self_frontend_target(matrix._CONCURRENT_COLLECTION_FILE)
-        == matrix._CONCURRENT_COLLECTION_PCC_PYTHON_TARGET
-    )
-    assert len(matrix._self_frontend_target(matrix._GENERATIONAL_TARGETS)) < len(
-        matrix._GENERATIONAL_TARGETS
-    )
-    assert len(matrix._self_frontend_target(matrix._RELOCATING_TARGETS)) < len(
-        matrix._RELOCATING_TARGETS
-    )
-
-    cases = {
-        (frontend, gc_backend): set(matrix._target_args(targets))
-        for parameter in matrix._iter_cases()
-        for frontend, gc_backend, targets in (parameter.values,)
-    }
-    heavy_groups = {
-        (frontend, gc_backend): next(
-            mark.kwargs["name"]
-            for mark in parameter.marks
-            if mark.name == "xdist_group"
-        )
-        for parameter in matrix._iter_cases()
-        for frontend, gc_backend, _targets in (parameter.values,)
-    }
-    gc4_contract = "tests/python/test_gc_backend4_production.py"
-    assert gc4_contract in cases[(None, "4")]
-    assert gc4_contract in cases[("self", "4")]
-    assert set(heavy_groups.values()) == {
-        "pcc_heavy_self_full",
-        "pcc_heavy_self",
-    }
-    assert all(
-        group == ("pcc_heavy_self_full" if frontend is None else "pcc_heavy_self")
-        for (frontend, _gc_backend), group in heavy_groups.items()
-    )
     assert runtime_oracle.pytestmark.mark.kwargs["name"] == "pcc_heavy_self"
     assert self_host_oracle.pytestmark.mark.kwargs["name"] == "pcc_heavy_self"
-
-    for gc_backend, targets in matrix._BACKEND_TEST_GROUPS.items():
-        complete = {
-            node for target in targets for node in matrix._target_args(target)
-        }
-        assert cases[(None, gc_backend)] == complete
-        assert all(
-            node in complete or node.split("::", 1)[0] in complete
-            for node in cases[("self", gc_backend)]
-        )
-
-
-def test_gc_meta_matrix_uses_owned_backend_and_stops_at_first_failure(monkeypatch):
-    from tests.python import test_gc_backend_under_env as matrix
-
-    calls = []
-
-    def run(**kwargs):
-        calls.append(kwargs)
-        return subprocess.CompletedProcess(kwargs["args"], 0, stdout="", stderr="")
-
-    monkeypatch.setenv("PCC_BACKEND", "llvm")
-    monkeypatch.setattr(matrix.subprocess, "run", run)
-    for backend in matrix._FRONTEND_BACKENDS:
-        matrix._run_file_under_backends(backend, "4", "unchanged-test-target.py")
-    assert [call["env"]["PCC_BACKEND"] for call in calls] == ["", "self"]
-    assert all("-x" in call["args"] for call in calls)
-    assert all(call["args"][-1] == "unchanged-test-target.py" for call in calls)
 
 
 def test_stateless_gc_compile_suites_are_not_forced_onto_one_worker():

@@ -1,6 +1,6 @@
-"""5-GC common production contract: vthread waiter-node freelist pool.
+"""Production contract: vthread waiter-node freelist pool.
 
-Part of the virtual-thread T-track (T-P0-VTHREAD-NODE-POOL) and the 5-GC
+Part of the virtual-thread T-track (T-P0-VTHREAD-NODE-POOL) and the
 production slot/root contract. The owned py_threading runtime wakes
 virtual threads that block on a Lock / Event / Condition / Semaphore through a
 per-object waiter queue whose nodes (PyThreadVThreadWaiter) used to be raw
@@ -10,7 +10,7 @@ pool in pcc_threads.c (PCC_VTHREAD_READY_ENTRY_POOL_LIMIT).
 
 The waiter-node path is a runtime ABI surface rather than a Python source
 construct, so this brick builds a focused C probe against pcc's no-libpython
-runtime archive and runs the same probe under PCC_GC_BACKEND 0..4.
+runtime archive.
 
 The probe spawns many virtual threads that each try to acquire one shared
 threading.Lock while running on the scheduler. Only one holds it at a time; the
@@ -19,22 +19,11 @@ time to retry acquisition until every worker has acquired and released it. Runni
 over many rounds forces the freelist to fill and be reused. The pool must
 preserve the observable contract: every worker eventually acquires the lock
 (mutual exclusion, FIFO wake, no lost wakeups), the scheduler queues drain to
-empty, and no waiter node leaks — identically across all five GC backends.
+empty, and no waiter node leaks.
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import textwrap
-
-import pytest
-
-
-from pathlib import Path
-
-
-REPO_ROOT = Path(__file__).absolute().parents[3]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
+from tests.python.gc_production_contract.native_abi_probe import run_native_abi_probe
 
 
 # Number of worker vthreads that contend for the single lock per round, and the
@@ -49,7 +38,6 @@ _SOURCE = r"""
 #include "py_internal.h"
 
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 
 #define WORKERS %(workers)d
@@ -158,12 +146,7 @@ static int run_one_round(void) {
     return ok;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 2) return 2;
-    int64_t backend = (int64_t)atoll(argv[1]);
-    if (pcc_gc_set_backend(backend) != 0) return 3;
-    pcc_gc_telemetry_reset();
-
+int64_t pcc_test_gc_probe(void) {
     int all_ok = 1;
     for (int r = 0; r < ROUNDS; r++) {
         if (!run_one_round()) { all_ok = 0; break; }
@@ -186,58 +169,19 @@ int main(int argc, char **argv) {
     );
     int reused = allocations > 0 && reuses > 0 && cached > 0 && cached <= 4096;
 
-    printf("%%lld:%%d:%%d:%%d:%%lld:%%lld:%%lld\n",
-        (long long)backend, all_ok, drained, reused,
-        (long long)allocations, (long long)reuses, (long long)cached);
-    return all_ok && drained && reused ? 0 : (int)(10 + backend);
+    if (!all_ok) return 1;
+    if (!drained) return 2;
+    if (!reused) return 3;
+    return 0;
 }
 """ % {"workers": _WORKERS, "rounds": _ROUNDS}
 
 
-@pytest.fixture(scope="module", params=["py"])
-def _vthread_waiter_pool_exe(tmp_path_factory, request):
-    tmp = tmp_path_factory.mktemp("gc_vthread_waiter_pool")
-    archive = request.getfixturevalue("pcc_runtime_archive")
-    # This is an external-C ABI reference harness, not an owned application
-    # build. Owned archives live below build_owned/<target>/<config>; their
-    # parent is not the runtime's source/include directory.
-    work_runtime = Path(os.environ.get("PCC_RUNTIME_DIR", str(RUNTIME_DIR)))
-
-    src = tmp / "vthread_waiter_node_pool.c"
-    src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
-    exe = tmp / "vthread_waiter_node_pool_bin"
-    cc = os.environ.get("CC", "cc")
-    build = subprocess.run(
-        [
-            cc,
-            "-std=c11",
-            f"-I{work_runtime / 'include'}",
-            f"-I{work_runtime / 'src'}",
-            str(src),
-            str(archive),
-            "-lm",
-            "-o",
-            str(exe),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
+def test_vthread_waiter_node_pool(tmp_path, pcc_runtime_archive, python_program_compiler):
+    run = run_native_abi_probe(
+        tmp_path, _SOURCE, pcc_runtime_archive, python_program_compiler,
     )
-    assert build.returncode == 0, build.stdout + build.stderr
-    return str(exe)
-
-
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_vthread_waiter_node_pool(_vthread_waiter_pool_exe, backend):
-    run = subprocess.run(
-        [_vthread_waiter_pool_exe, backend],
-        text=True,
-        capture_output=True,
-        timeout=60,
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "0\n", (
+        f"waiter pool probe: {run.stdout.strip()} (1=workers, 2=drain, 3=reuse)"
     )
-    assert run.returncode == 0, (
-        f"backend #{backend} rc={run.returncode}: {run.stderr.strip()[:200]}"
-    )
-    fields = run.stdout.strip().split(":")
-    assert fields[:4] == [backend, "1", "1", "1"], run.stdout
-    assert all(int(value) > 0 for value in fields[4:]), run.stdout

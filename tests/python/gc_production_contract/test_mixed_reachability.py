@@ -1,26 +1,4 @@
-"""5-GC common production contract: the collection BOUNDARY + scale.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-
-A collection must keep everything reachable from a root and reclaim ONLY what is
-unreachable — the boundary between the two must be exact on all five backends,
-and must hold at scale. These two shapes pass on ALL FIVE backends (clean
-contract lock, verified 2026-05-31):
-
-  * mixed_boundary — a reachable chain (keep -> N(2)) coexists with an
-    unreachable cycle (x <-> y). After gc.collect the reachable chain survives
-    intact (its __del__ does NOT run) and the unreachable cycle is reclaimed
-    (its __del__ DOES run). Output: "3 [100, 200]" (CPython-identical). This is
-    the precise partial-collection boundary — neither over-collecting the
-    reachable side nor leaking the unreachable side.
-  * large_graph — 200 reachable instances survive gc.collect while 200
-    unreachable self-cycle objects are reclaimed in the same collection
-    (stresses the sweep over many candidates). Output: "19900".
-
-A divergence on any backend (wrong sum, crash, or a survivor's __del__ firing /
-a victim's __del__ not firing) is a reachability/boundary or scale gap and would
-be xfail'd + root-caused like the prior gaps.
-"""
+"""Reclaim unreachable cycles without touching reachable objects at scale."""
 from __future__ import annotations
 import os
 import subprocess
@@ -87,7 +65,6 @@ _PROGRAMS = {
 def _exes(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("gc_mixed")
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     built = {}
     for name, (src, _expected) in _PROGRAMS.items():
         p = tmp / f"{name}.py"
@@ -103,12 +80,9 @@ def _exes(tmp_path_factory):
 
 
 @pytest.mark.parametrize("name", list(_PROGRAMS))
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_collection_boundary_and_scale(_exes, name, backend):
+def test_collection_boundary_and_scale(_exes, name):
     expected = _PROGRAMS[name][1]
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     r = subprocess.run([_exes[name]], text=True, capture_output=True, timeout=60, env=env)
-    assert r.returncode == 0, f"{name} backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
-    assert r.stdout.splitlines()[:1] == [expected], f"{name} #{backend}: {r.stdout!r}"
+    assert r.returncode == 0, f"{name} rc={r.returncode}: {r.stderr.strip()[:200]}"
+    assert r.stdout.splitlines()[:1] == [expected], f"{name}: {r.stdout!r}"

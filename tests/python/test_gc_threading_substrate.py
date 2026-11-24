@@ -21,7 +21,6 @@ from gcsubstrate_c_safepoints_selectors_cext_claims import *  # noqa: F401,F403
 from gcsubstrate_d_store_ptr_capi_pins import *  # noqa: F401,F403
 from gcsubstrate_e_iterators_tuple_dict_set_reads import *  # noqa: F401,F403
 from gcsubstrate_f_backend4_growth_publication import *  # noqa: F401,F403
-from gcsubstrate_g_cext_traverse_remembered import *  # noqa: F401,F403
 from gcsubstrate_h_tracing_stw_threads import *  # noqa: F401,F403
 from gcsubstrate_i_container_commit_contracts import *  # noqa: F401,F403
 from gcsubstrate_j_concurrent_tracer_races import *  # noqa: F401,F403

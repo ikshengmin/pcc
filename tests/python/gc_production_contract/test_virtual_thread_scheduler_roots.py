@@ -1,10 +1,4 @@
-"""5-GC common production contract: virtual-thread scheduler roots.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track) and
-the virtual-thread T-track. Virtual-thread scheduler queues are currently a
-runtime ABI surface rather than a Python source construct, so this brick builds
-a focused C probe against pcc's no-libpython runtime archive and runs the same
-probe under PCC_GC_BACKEND 0..4.
+"""Native virtual-thread scheduler root contract.
 
 The probe drops the last ordinary reference to a virtual thread after placing it
 in the ready queue, timer queue, and IO-wait queue. A gc.collect() happens while
@@ -14,19 +8,7 @@ pointer-bearing frame slot.
 """
 from __future__ import annotations
 
-import os
-import subprocess
-import textwrap
-
-import pytest
-
-from tests.runtime_build_cache import cached_pcc_python_runtime
-
-from pathlib import Path
-
-
-REPO_ROOT = Path(__file__).absolute().parents[3]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
+from tests.python.gc_production_contract.native_abi_probe import run_native_abi_probe
 
 
 _SOURCE = r"""
@@ -35,7 +17,6 @@ _SOURCE = r"""
 
 #include <poll.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -89,7 +70,7 @@ static int check_timer_queue(void) {
     if (py_virtual_thread_sleep(vt, 20) != 0) return 0;
     pcc_gc_release(vt);
     (void)pcc_gc_collect(0);
-    usleep(30000);
+    if (pcc_runtime_sleep_ns(30000000) != 0) return 0;
     if (py_virtual_thread_poll_timers() != 1) return 0;
     PyObject *ready = py_virtual_thread_poll_ready();
     if (ready == 0) return 0;
@@ -135,61 +116,25 @@ static int check_io_queue(void) {
     return ok;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 2) return 2;
-    int64_t backend = (int64_t)atoll(argv[1]);
-    if (pcc_gc_set_backend(backend) != 0) return 3;
-    pcc_gc_telemetry_reset();
-    int ready = check_ready_queue();
-    int timer = check_timer_queue();
-    int io = check_io_queue();
-    int counts = py_virtual_thread_ready_count() == 0
-        && py_virtual_thread_timer_count() == 0
-        && py_virtual_thread_io_wait_count() == 0;
-    printf("%lld:%d:%d:%d:%d\n", (long long)backend, ready, timer, io, counts);
-    return ready && timer && io && counts ? 0 : (int)(10 + backend);
+int64_t pcc_test_gc_probe(void) {
+    if (!check_ready_queue()) return 1;
+    if (!check_timer_queue()) return 2;
+    if (!check_io_queue()) return 3;
+    if (py_virtual_thread_ready_count() != 0
+        || py_virtual_thread_timer_count() != 0
+        || py_virtual_thread_io_wait_count() != 0) return 4;
+    return 0;
 }
 """
 
 
-@pytest.fixture(scope="module")
-def _virtual_thread_scheduler_exe(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp("gc_vthread_scheduler")
-    work_runtime = cached_pcc_python_runtime()
-
-    src = tmp / "virtual_thread_scheduler_roots.c"
-    src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
-    exe = tmp / "virtual_thread_scheduler_roots_bin"
-    cc = os.environ.get("CC", "cc")
-    build = subprocess.run(
-        [
-            cc,
-            "-std=c11",
-            f"-I{work_runtime / 'include'}",
-            f"-I{work_runtime / 'src'}",
-            str(src),
-            str(work_runtime / "libpy_runtime_pcc_py.a"),
-            "-lm",
-            "-o",
-            str(exe),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
+def test_virtual_thread_scheduler_roots(
+    tmp_path, pcc_runtime_archive, python_program_compiler,
+):
+    run = run_native_abi_probe(
+        tmp_path, _SOURCE, pcc_runtime_archive, python_program_compiler,
     )
-    assert build.returncode == 0, build.stdout + build.stderr
-    return str(exe)
-
-
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_virtual_thread_scheduler_roots(_virtual_thread_scheduler_exe, backend):
-    run = subprocess.run(
-        [_virtual_thread_scheduler_exe, backend],
-        text=True,
-        capture_output=True,
-        timeout=60,
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "0\n", (
+        f"root probe: {run.stdout.strip()} (1=ready, 2=timer, 3=I/O, 4=drain)"
     )
-    assert run.returncode == 0, (
-        f"backend #{backend} rc={run.returncode}: {run.stderr.strip()[:200]}"
-    )
-    assert run.stdout.strip() == f"{backend}:1:1:1:1", run.stdout

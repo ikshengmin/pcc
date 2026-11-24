@@ -173,22 +173,6 @@ Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
-- Item 2 (b), tests-only collection repair, 2026-11-24. Linux candidate
-  `c1b34833` collects 48,150 ordinary Python nodes with zero errors and
-  passes 42 focused native-program cases under the original guard.
-  The candidate is local, not published. The matching native pcc1
-  fails a minimal program with the default passes: `pcc re: pattern
-  outside the native regex subset`. Whole-language acceptance is blocked.
-  Options: qualify the compiler fix first, or authorize this tests-only
-  slice to land explicitly unqualified for the maintainer's Mac checkpoint.
-  Codex's recommendation: the tests-only checkpoint, without mixing in
-  compiler or pressure instrumentation changes.
-  Maintainer's answer, 2026-11-24, in chat to Claude on the local Mac,
-  asked "同意 Codex 先合入只改测试的 (b) 修复吗？" ("approve Codex landing
-  the tests-only (b) fix first?"): "同意合入" ("approved, land it"). The
-  agent holding `c1b34833` lands it labelled unqualified, then removes this
-  entry; Claude then dispatches the due checkpoint from the Mac (rule 13).
-
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -273,22 +257,23 @@ in the relevant section or issue and removes the entry.
    >
    > 记录要求：在 work order 里用原话引用这条维护者指示。其他规则照旧：每个结果推送前跑受影响语言的整套测试，遵守检查点规则，macOS 的数字归 rule 14 的 macOS 验证单元。
 
-   Next: (b) first, with the smallest test-migration slice that restores
-   Python ordinary-suite collection. The maintainer approved landing the
-   tests-only candidate `c1b34833` unqualified ("同意合入", 2026-11-24; see
-   "Waiting on maintainer"): land it as is, labelled unqualified. On unchanged `06e375f9`,
-   `uv run pytest --collect-only -n0 -q tests/python` collected 48,242
-   ordinary nodes and stopped with 24 collection errors: 22 imports of
-   deleted test helpers/modules, plus stale five-entry parameter ID lists in
-   `test_gc1_marker_scheduling_native.py` and
-   `test_gc_foreign_handle_collection_native.py`. Preserve and rewrite the
-   live tests (including exception ownership, finalization and C-owned
-   references); retire only tests exclusive to removed collectors. Do not
-   bypass these errors to qualify a codegen change. Finish the (b) inventory,
-   then (d) (`runtime-codegen`), (c), and the collector-side first gate of
-   #13. Some (c) exports are still named by (d), so (d) precedes (c).
-   Generic Go/Java slice lowering stays with the frontend work in item 4.
-   Check all five stability conditions before resuming (0b) and throughput.
+   Next: finish (b) before (d) (runtime-codegen), (c), and the
+   collector-side first gate of #13. Some (c) exports still have (d)
+   callers. Generic Go/Java lowering stays with item 4. Do not resume (0b)
+   or throughput until all five stability conditions hold.
+
+   The first tests-only (b) slice is admitted unqualified: the maintainer
+   said “同意合入” and asked Codex to continue. The exact test patch of
+   `c1b34833` collected 48,150 ordinary Python nodes with zero collection
+   errors on its frozen Linux base; 42 focused native-program cases passed
+   with pcc0 under the original guard. The full Python gate did not pass:
+   the matching Linux pcc1 rejected the default fused-protocol regex.
+   This slice changes no compiler or runtime files. On the frozen
+   candidate, `prune_tests.py report` still listed 65 whole files and
+   856 cases in 172 mixed files; audit them, rewrite tests of the live
+   collector and remove only tests exclusive to retired collectors.
+   Checkpoint (rule 13): Claude dispatches the due checkpoint from Mac
+   after this slice lands, including reruns of #10 and #11 hosted lanes.
    The Linux Stage1 producer in [run 45356074767](https://github.com/ikshengmin/pcc/actions/runs/45356074767)
    reached compilation. The native worker and bootstrap selectors now require
    the single collector. The new bootstrap selector was collected on Linux,
@@ -395,7 +380,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - item 2 (b) Python test collection repair: Codex, Linux, 2026-11-24 15:32 UTC, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific

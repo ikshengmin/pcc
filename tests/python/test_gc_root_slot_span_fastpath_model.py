@@ -15,9 +15,6 @@ import random
 
 import pytest
 
-from test_gc4_scalar_load_fastpath_model import ENTRY_POINTS, _LoadModel
-
-
 ROOT = Path(__file__).resolve().parents[2]
 REFERENCE = "independent-enumerated-address-oracle"
 AFTER = ROOT / "pcc/runtime/py/freestanding_gc_root_introspection.py"
@@ -335,39 +332,6 @@ def test_actual_registry_caller_preserves_overlap_order_locks_and_shortcuts(layo
         assert new.contains(slot) == old.contains(slot)
         assert new.events == old.events
         assert new.memory == old.memory and new.globals == old.globals
-
-
-@pytest.mark.parametrize("entry", ENTRY_POINTS)
-@pytest.mark.parametrize("kind", ["frame", "continuation", "overlap", "native", "scheduler", "miss", "misaligned"])
-def test_actual_gc4_load_entries_use_real_registry_with_identical_effects(entry, kind):
-    slot = _LoadModel.SLOT
-    layouts = {
-        "frame": {"frames": [(slot - 8, 3)]},
-        "continuation": {"continuations": [(slot - 8, 3)]},
-        "overlap": {"frames": [(slot - 8, 3), (slot, 1)], "continuations": [(slot, 2)]},
-        "native": {"native": [slot]},
-        "scheduler": {"scheduler": [slot]},
-        "miss": {"frames": [(slot + 8, 3)]},
-        "misaligned": {"frames": [(slot - 7, 3)]},
-    }
-    for population, pending, value in [(0, 1, _LoadModel.OBJECT), (0, 0, _LoadModel.OBJECT),
-                                       (1, 1, _LoadModel.OBJECT), (0, 1, 0), (0, 1, 3)]:
-        states = []
-        for path in [REFERENCE, AFTER]:
-            registry = RegistryModel(path, **layouts[kind])
-            load = _LoadModel(value=value, population=population, pending=pending,
-                              candidate=True, forwarded=bool(population))
-            def membership(slot, load=load, registry=registry):
-                load.note("root_membership", slot)
-                return registry.contains(slot)
-            load.namespace["pcc_gc_slot_is_runtime_root"] = membership
-            result = load.run(entry)
-            expected_membership = int(population == 0 and pending and value == load.OBJECT)
-            assert load.counts["root_membership"] == expected_membership
-            assert bool(registry.events) == bool(expected_membership)
-            states.append((result, load.cells, load.events, load.counts, registry.events,
-                           registry.depth, registry.scheduler_depth))
-        assert states[0] == states[1]
 
 
 def test_registered_large_span_has_constant_primitive_work_without_timing_claim():

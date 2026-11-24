@@ -1,8 +1,7 @@
-"""5-GC common production contract: valuebox pointer payload roots.
+"""Native regression: valuebox pointer payload roots.
 
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track) and
-the value-model obligation: a boxed valueclass that crosses an object boundary
-must trace pointer-bearing payload fields under every backend.
+A boxed valueclass that crosses an object boundary must keep its
+pointer-bearing payload fields live across collection.
 
 The program boxes ``Bag(items: list, label: str, count: int)`` and
 ``Holder(bag: Bag, label: str)`` through ``Any`` boundaries, container literals,
@@ -473,7 +472,6 @@ def _valuebox_exe(tmp_path_factory):
     src.write_text(_PROGRAM, encoding="utf-8")
     exe = tmp / "valuebox_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     build = subprocess.run(
         [
             "uv",
@@ -495,11 +493,8 @@ def _valuebox_exe(tmp_path_factory):
     return str(exe)
 
 
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_valuebox_pointer_payload_survives_gc(_valuebox_exe, backend):
+def test_valuebox_pointer_payload_survives_gc(_valuebox_exe):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     run = subprocess.run(
         [_valuebox_exe],
         text=True,
@@ -508,6 +503,6 @@ def test_valuebox_pointer_payload_survives_gc(_valuebox_exe, backend):
         env=env,
     )
     assert run.returncode == 0, (
-        f"backend #{backend} rc={run.returncode}: {run.stderr.strip()[:200]}"
+        f"rc={run.returncode}: {run.stderr.strip()[:200]}"
     )
     assert run.stdout.splitlines()[: len(_EXPECTED)] == _EXPECTED, run.stdout

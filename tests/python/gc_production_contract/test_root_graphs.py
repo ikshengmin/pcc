@@ -1,23 +1,12 @@
-"""5-GC common production contract: reachability through frames + containers.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-Each program is compiled once under strict no-libpython and run under
-PCC_GC_BACKEND 0..4; every backend must keep the reachable objects alive across
-gc.collect() and produce the same correct output.
-
-These three shapes pass on ALL FIVE backends (clean contract locks, verified
-2026-05-31): a suspended generator frame's local survives gc.collect; a nested
-dict->list->instance container graph survives + stays mutable; a set of
-custom-__hash__/__eq__ instances survives. The earlier caught-exception
-referent gap is now resolved and locked separately in test_exception_roots.py.
-"""
+"""Generator, dictionary and set roots survive explicit GC."""
 from __future__ import annotations
+
 import os
 import subprocess
+import sys
 
 import pytest
 
-pytestmark = pytest.mark.xdist_group(name="gc_root_graphs")
 
 _PROGRAMS = {
     # suspended generator frame local must survive gc.collect (frame roots)
@@ -72,32 +61,23 @@ _PROGRAMS = {
 }
 
 
-@pytest.fixture(scope="module")
-def _exes(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp("gc_roots")
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    built = {}
-    for name, (src, _expected) in _PROGRAMS.items():
-        p = tmp / f"{name}.py"
-        p.write_text(src, encoding="utf-8")
-        exe = tmp / f"{name}_bin"
-        b = subprocess.run(
-            ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(p), "-o", str(exe)],
-            text=True, capture_output=True, timeout=420, env=env,
-        )
-        assert b.returncode == 0, f"{name}: {b.stdout + b.stderr}"
-        built[name] = str(exe)
-    return built
-
-
 @pytest.mark.parametrize("name", list(_PROGRAMS))
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_root_graph_survives_gc(_exes, name, backend):
-    expected = _PROGRAMS[name][1]
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
-    r = subprocess.run([_exes[name]], text=True, capture_output=True, timeout=60, env=env)
-    assert r.returncode == 0, f"{name} backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
-    assert r.stdout.splitlines()[:1] == [expected], f"{name} #{backend}: {r.stdout!r}"
+def test_root_graph_survives_gc(
+    tmp_path, name, pcc_runtime_archive, python_program_compiler,
+):
+    program, expected = _PROGRAMS[name]
+    source = tmp_path / f"{name}.py"
+    source.write_text(program, encoding="utf-8")
+    ref = subprocess.run(
+        [sys.executable, str(source)], capture_output=True, text=True, timeout=30,
+    )
+    assert (ref.returncode, ref.stdout, ref.stderr) == (0, expected + "\n", "")
+    binary = tmp_path / f"{name}_bin"
+    python_program_compiler(
+        str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive),
+    )
+    native = subprocess.run(
+        [str(binary)], text=True, capture_output=True, timeout=60,
+        env=dict(os.environ, PATH="/nonexistent"),
+    )
+    assert (native.returncode, native.stdout, native.stderr) == (0, ref.stdout, "")

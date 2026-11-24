@@ -12,15 +12,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from tests.python.test_class_lookup_cache_runtime import _compile_and_run
+from tests.python.gc_production_contract.native_abi_probe import run_native_abi_probe
 
 
 SOURCE = r'''
     #include "py_internal.h"
     #include <stdint.h>
 
-    int main(void) {
-        if (pcc_gc_set_backend(UNBOX_BACKEND) != 0) return 1;
+    int64_t pcc_test_gc_probe(void) {
         int overflow = 7;
         if (py_int_to_i64(py_True, &overflow) != 1 || overflow != 0) return 10;
         overflow = 7;
@@ -35,24 +34,12 @@ SOURCE = r'''
     }
 '''
 
-
 def test_bool_objects_unbox_as_zero_and_one(
     tmp_path: Path,
     pcc_runtime_archive: Path,
+    python_program_compiler,
 ) -> None:
-    for backend in (0,):
-        backend_source = SOURCE.replace("UNBOX_BACKEND", str(backend))
-        for runtime_name, archive in (
-            ("pcc_py", pcc_runtime_archive),
-        ):
-            result = _compile_and_run(
-                tmp_path,
-                f"int_unbox_bool_backend{backend}_{runtime_name}",
-                backend_source,
-                archive,
-            )
-            assert result.returncode == 0, (
-                f"backend={backend} runtime={runtime_name}: rc={result.returncode} "
-                + result.stdout
-                + result.stderr
-            )
+    result = run_native_abi_probe(
+        tmp_path, SOURCE, pcc_runtime_archive, python_program_compiler,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "0\n", ""), result

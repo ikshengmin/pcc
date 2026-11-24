@@ -1,8 +1,8 @@
-"""5-GC contract: direct valueclass payload locals root pointer fields.
+"""Native regression: direct valueclass payload locals root pointer fields.
 
 ValueBox tests cover object-boundary boxing. This gate keeps a valueclass in
 the direct payload form and verifies that object pointer fields embedded in the
-payload remain live across explicit collections under every GC backend.
+payload remain live across explicit collections.
 """
 from __future__ import annotations
 
@@ -550,7 +550,6 @@ def _valueclass_direct_payload_exe(tmp_path_factory):
     src.write_text(_PROGRAM, encoding="utf-8")
     exe = tmp / "valueclass_direct_payload_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     build = subprocess.run(
         [
             "uv",
@@ -572,14 +571,10 @@ def _valueclass_direct_payload_exe(tmp_path_factory):
     return str(exe)
 
 
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
 def test_direct_valueclass_pointer_payload_survives_gc(
     _valueclass_direct_payload_exe,
-    backend,
 ):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     run = subprocess.run(
         [_valueclass_direct_payload_exe],
         text=True,
@@ -588,7 +583,7 @@ def test_direct_valueclass_pointer_payload_survives_gc(
         env=env,
     )
     assert run.returncode == 0, (
-        f"backend #{backend} rc={run.returncode}: {run.stderr.strip()[:400]}"
+        f"rc={run.returncode}: {run.stderr.strip()[:400]}"
     )
     assert run.stdout.splitlines() == [
         "4",

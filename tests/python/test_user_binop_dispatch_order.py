@@ -10,13 +10,13 @@ operands, the rhs first when its class is a proper subclass; ``py_obj_lt``
 and friends never asked a user dunder at all, so two instances always
 compared equal.  Each method records ``method * 1000 + self.id * 10 +
 other.id``, naming the method that answered and its receiver order.  Both
-runtimes, all five collectors.
+runtime.
 """
 from __future__ import annotations
 
 from pathlib import Path
 
-from tests.python.test_class_lookup_cache_runtime import _compile_and_run
+from tests.python.gc_production_contract.native_abi_probe import run_native_abi_probe
 
 
 SOURCE = r'''
@@ -88,8 +88,7 @@ SOURCE = r'''
         return value;
     }
 
-    int main(void) {
-        if (pcc_gc_set_backend(DISPATCH_BACKEND) != 0) return 1;
+    int64_t pcc_test_gc_probe(void) {
         PyClassObject *base = make_class("Base", NULL);
         add(base, "__sub__", (void *)base_sub);
         add(base, "__rsub__", (void *)base_rsub);
@@ -179,8 +178,7 @@ ORDER_SOURCE = r'''
         return inst;
     }
 
-    int main(void) {
-        if (pcc_gc_set_backend(DISPATCH_BACKEND) != 0) return 1;
+    int64_t pcc_test_gc_probe(void) {
         PyClassObject *base = make_class("Base", NULL);
         add(base, "__lt__", (void *)base_lt);
         PyClassObject *ptr = make_class("Ptr", base);
@@ -229,46 +227,23 @@ ORDER_SOURCE = r'''
     }
 '''
 
-
 def test_binop_dispatch_follows_cpython_reflected_order(
     tmp_path: Path,
     pcc_runtime_archive: Path,
+    python_program_compiler,
 ) -> None:
-    for backend in (0,):
-        backend_source = SOURCE.replace("DISPATCH_BACKEND", str(backend))
-        for runtime_name, archive in (
-            ("pcc_py", pcc_runtime_archive),
-        ):
-            result = _compile_and_run(
-                tmp_path,
-                f"binop_order_backend{backend}_{runtime_name}",
-                backend_source,
-                archive,
-            )
-            assert result.returncode == 0, (
-                f"backend={backend} runtime={runtime_name}: rc={result.returncode} "
-                + result.stdout
-                + result.stderr
-            )
+    result = run_native_abi_probe(
+        tmp_path, SOURCE, pcc_runtime_archive, python_program_compiler,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "0\n", ""), result
 
 
 def test_ordering_compares_ask_user_dunders_in_cpython_order(
     tmp_path: Path,
     pcc_runtime_archive: Path,
+    python_program_compiler,
 ) -> None:
-    for backend in (0,):
-        backend_source = ORDER_SOURCE.replace("DISPATCH_BACKEND", str(backend))
-        for runtime_name, archive in (
-            ("pcc_py", pcc_runtime_archive),
-        ):
-            result = _compile_and_run(
-                tmp_path,
-                f"order_backend{backend}_{runtime_name}",
-                backend_source,
-                archive,
-            )
-            assert result.returncode == 0, (
-                f"backend={backend} runtime={runtime_name}: rc={result.returncode} "
-                + result.stdout
-                + result.stderr
-            )
+    result = run_native_abi_probe(
+        tmp_path, ORDER_SOURCE, pcc_runtime_archive, python_program_compiler,
+    )
+    assert (result.returncode, result.stdout, result.stderr) == (0, "0\n", ""), result

@@ -282,7 +282,6 @@ def test_refused_value_retain_releases_the_key_after_the_transaction():
 @pytest.mark.parametrize("flag,value", [
     ("pcc_gc_refcount_atomic", 0),
     ("pcc_diagnostics_runtime_log_fast_state", 1),
-    ("pcc_gc_backend_selected", 3),
     ("pcc_gc_foreign_lease_active", -1),
 ])
 def test_unadmitted_transactions_change_nothing(flag, value):
@@ -324,23 +323,6 @@ def test_get_retains_a_found_value_inside_the_transaction():
     assert heap.refs[value] == 2
     # Three lookups, none of them under the graph lock.
     assert heap.calls == _get_calls(d) * 3
-
-
-@pytest.mark.parametrize("backend", (1, 2, 3, 4))
-def test_the_count_free_tracers_share_both_transactions(backend):
-    # Their retain is reachability: the same lookup and set are admitted
-    # with the collector fixed, whatever the refcount mode says.
-    heap = Heap()
-    heap.flags.update({"pcc_gc_nonmoving_count_free": 1, "pcc_gc_refcount_atomic": 0,
-                       "pcc_gc_backend_selected": backend})
-    key, old, new = heap.obj(), heap.obj(), heap.obj()
-    d = heap.dict([(key, old)])
-    ns = _functions(heap, SET_NAMES + ["_dict_get_gc0_locked"])
-    out = heap.alloc(8)
-    assert ns["_dict_get_gc0_locked"](d, key, 2, out) == 1
-    assert ns["_dict_set_gc0_locked"](d, key, new, 2) == 1
-    assert heap.load(out) == old and _entry(heap, d, 0) == (key, new)
-    assert heap.calls == _get_calls(d) + _set_calls(d) + [("decref", old)]
 
 
 def test_without_container_mode_every_transaction_is_a_graph_transaction():

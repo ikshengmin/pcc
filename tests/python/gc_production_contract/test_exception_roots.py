@@ -1,14 +1,4 @@
-"""5-GC common production contract: a live exception's message referent must
-survive gc.collect under all five backends.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-
-CURRENT STATE (resolved 2026-05-31): all five backends keep a caught
-exception's message across gc.collect. The original gap was frontend root
-mapping for locals assigned from except-handler bindings (`saved = e`), not an
-exception trace-slot omission. See
-docs/investigations/gc-5backend-exception-referent-roots-no-libpython.md.
-"""
+"""A caught exception retains its message through explicit collection."""
 from __future__ import annotations
 import os
 import subprocess
@@ -30,7 +20,6 @@ _PROGRAM = (
     "main()\n"
 )
 _EXPECTED = "[1, 2, 3]"
-_ALL_BACKENDS = ("0", "1", "2", "3", "4")
 
 
 @pytest.fixture(scope="module")
@@ -40,7 +29,6 @@ def _exc_exe(tmp_path_factory):
     src.write_text(_PROGRAM, encoding="utf-8")
     exe = tmp / "exc_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     b = subprocess.run(
         ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
@@ -49,11 +37,8 @@ def _exc_exe(tmp_path_factory):
     return str(exe)
 
 
-@pytest.mark.parametrize("backend", list(_ALL_BACKENDS))
-def test_exception_referents_survive_gc(_exc_exe, backend):
+def test_exception_referents_survive_gc(_exc_exe):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     r = subprocess.run([_exc_exe], text=True, capture_output=True, timeout=60, env=env)
-    assert r.returncode == 0, f"backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
+    assert r.returncode == 0, f"rc={r.returncode}: {r.stderr.strip()[:200]}"
     assert r.stdout.splitlines()[:1] == [_EXPECTED], r.stdout

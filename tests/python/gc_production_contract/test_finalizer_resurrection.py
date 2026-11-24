@@ -1,22 +1,4 @@
-"""5-GC common production contract: object resurrection inside __del__ (PEP 442).
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-
-If a finalizer (__del__) makes its object reachable again — e.g. stores `self`
-into a still-reachable global — that object MUST survive the collection intact
-(PEP 442: after finalizers run, the collector re-checks reachability and does
-NOT reclaim resurrected objects). CPython and #0 (refcount+cycle) do this.
-
-RESOLVED 2026-05-31 by a PEP-442 post-finalizer reachability recheck in
-`_sweep_unreachable` (re-mark from roots after PASS-0; clear the 1024
-sweep-candidate flag on any object a __del__ resurrected, so PASS-1/PASS-2 skip
-it). Before the fix the tracing backends mishandled resurrection — #1/#2 aborted
-(heap corruption: a resurrected object freed while still referenced by the
-global -> double-free), #3/#4 raised AttributeError (its fields were cleared);
-#0 was correct. Now all five backends keep the resurrected objects intact
-(`2 [42, 43]`). Hard gate on 0..4. See
-docs/investigations/gc-5backend-finalizer-resurrection-no-libpython.md.
-"""
+"""PEP 442: a finalizer can make its object reachable again."""
 from __future__ import annotations
 import os
 import subprocess
@@ -50,7 +32,6 @@ _PROGRAM = (
     "main()\n"
 )
 _EXPECTED = "2 [42, 43]"
-_ALL_BACKENDS = ("0", "1", "2", "3", "4")
 
 
 @pytest.fixture(scope="module")
@@ -60,7 +41,6 @@ def _exe(tmp_path_factory):
     src.write_text(_PROGRAM, encoding="utf-8")
     exe = tmp / "resurrect_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     b = subprocess.run(
         ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
@@ -69,11 +49,8 @@ def _exe(tmp_path_factory):
     return str(exe)
 
 
-@pytest.mark.parametrize("backend", list(_ALL_BACKENDS))
-def test_resurrected_object_survives_gc(_exe, backend):
+def test_resurrected_object_survives_gc(_exe):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     r = subprocess.run([_exe], text=True, capture_output=True, timeout=60, env=env)
-    assert r.returncode == 0, f"backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
+    assert r.returncode == 0, f"rc={r.returncode}: {r.stderr.strip()[:200]}"
     assert r.stdout.splitlines()[:1] == [_EXPECTED], r.stdout

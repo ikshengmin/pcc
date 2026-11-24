@@ -1,15 +1,9 @@
-"""5-GC common production contract: pcc-native extension module state roots.
+"""Single-collector C extension module-state lifetime contract.
 
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-An imported pcc-native extension may own PyObject references only through its
-``PyModuleDef.m_size`` module state. When it exposes those references through
-``m_traverse``, every GC backend must treat them as roots.
-
-The extension below stores a list only in module state, never as a module
-attribute. The compiled program imports the extension, drops through repeated
-``gc.collect()`` calls, then calls back into the extension to append through the
-same state pointer. The expected increasing sizes prove the state-held list
-survived under PCC_GC_BACKEND 0..4.
+Darwin exercises the owned dynamic loader. On other hosts the same module
+definition and exec slot are linked into the executable. The static test
+covers module state, reference lifetime and the traversal ABI, not loading
+a shared object.
 """
 from __future__ import annotations
 
@@ -19,6 +13,8 @@ import sys
 from pathlib import Path
 
 import pytest
+
+from tests.python.gc_production_contract.native_abi_probe import run_native_abi_probe
 
 
 REPO_ROOT = Path(__file__).absolute().parents[3]
@@ -160,21 +156,69 @@ def _extension_module_state_exe(tmp_path_factory):
     return str(exe), str(site)
 
 
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_extension_module_state_roots(_extension_module_state_exe, backend):
-    exe, site = _extension_module_state_exe
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_PACKAGE_SITE"] = site
-    env["PCC_GC_BACKEND"] = backend
-    run = subprocess.run(
-        [exe],
-        text=True,
-        capture_output=True,
-        timeout=60,
-        env=env,
+_STATIC_MODULE_DRIVER = r"""
+extern PyObject *pcc_capi_module_exec(PyObject *);
+extern void pcc_capi_visit_extension_module_state_roots(
+    void (*visit)(PyObject *, void *), void *);
+
+static PyObject *test_module;
+
+static void count_state_reference(PyObject *object, void *arg) {
+    StateDemoState *state = (StateDemoState *)PyModule_GetState(test_module);
+    if (state != NULL && object == state->items) {
+        *(int *)arg += 1;
+    }
+}
+
+int64_t pcc_test_gc_probe(void) {
+    test_module = pcc_capi_module_exec(PyInit_statedemo());
+    return test_module == NULL ? -1 : 0;
+}
+
+int64_t statedemo_push_count(void) {
+    if (test_module == NULL) return -1;
+    int visits = 0;
+    pcc_capi_visit_extension_module_state_roots(count_state_reference, &visits);
+    if (visits != 1) return -2;
+    PyObject *result = statedemo_push(test_module, NULL);
+    if (result == NULL) return -3;
+    long count = PyLong_AsLong(result);
+    Py_DECREF(result);
+    return count;
+}
+"""
+
+_STATIC_READBACK = """\
+import gc
+push = extern('statedemo_push_count', (), c_int64)
+print(push())
+gc.collect()
+print(push())
+gc.collect()
+print(push())
+"""
+
+
+def test_extension_module_state_roots(tmp_path, request):
+    if sys.platform == "darwin":
+        exe, site = request.getfixturevalue("_extension_module_state_exe")
+        env = os.environ.copy()
+        env.pop("LC_ALL", None)
+        env["PCC_PACKAGE_SITE"] = site
+        run = subprocess.run(
+            [exe], text=True, capture_output=True, timeout=60, env=env,
+        )
+        assert run.returncode == 0, run.stderr
+        assert run.stdout.splitlines() == ["2", "3", "4"], run.stdout
+        return
+
+    from pcc.frontends.python.pipeline import compile_python
+
+    run = run_native_abi_probe(
+        tmp_path, _EXTENSION_SOURCE + _STATIC_MODULE_DRIVER,
+        request.getfixturevalue("pcc_runtime_archive"), compile_python,
+        readback=_STATIC_READBACK,
+        include_dirs=(REPO_ROOT / "utils" / "fake_libc_include",),
     )
-    assert run.returncode == 0, (
-        f"backend #{backend} rc={run.returncode}: {run.stderr.strip()[:200]}"
-    )
-    assert run.stdout.splitlines()[:3] == ["2", "3", "4"], run.stdout
+    assert run.returncode == 0, run.stderr
+    assert run.stdout.splitlines() == ["0", "2", "3", "4"], run.stdout

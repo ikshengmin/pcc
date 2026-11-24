@@ -2,17 +2,14 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
-import textwrap
-from pathlib import Path
+from contextlib import ExitStack
+import socket
 
 import pytest
 
+from tests.python.gc_production_contract.native_abi_probe import RUNTIME_DIR, run_native_abi_probe
 from tests.python.vthread_pool_root_probe import CACHED_POOL_ROOT_PROBE
 
-REPO_ROOT = Path(__file__).absolute().parents[3]
-RUNTIME_DIR = REPO_ROOT / "pcc" / "runtime"
 pytestmark = pytest.mark.xdist_group(name="vthread_io_waitset_runtime")
 
 
@@ -24,17 +21,20 @@ _SOURCE = CACHED_POOL_ROOT_PROBE + r"""
 
 #include <poll.h>
 #include <stdint.h>
-#include <stdio.h>
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <unistd.h>
+
+extern int64_t pcc_platform_socket_shutdown(int64_t fd, int64_t how);
+
+static int64_t caller_roots;
 
 static int64_t active_scheduler_roots(void) {
     /* Empty cached slots remain registered. Validate every cached slot,
        then count only roots that can retain a task. */
     int64_t cached = cached_pool_roots();
     if (cached < 0) return -1;
-    return pcc_gc_scheduler_root_count() - cached;
+    return pcc_gc_scheduler_root_count() - cached - caller_roots;
 }
 
 static PyObject *new_vthread(void) {
@@ -70,9 +70,7 @@ static int check_pipe_ready(void) {
     return active_scheduler_roots() == 0;
 }
 
-static int check_socket_ready(void) {
-    int fds[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, fds) != 0) return 0;
+static int check_socket_ready(const int fds[2]) {
     PyObject *vt = new_vthread();
     if (vt == NULL) return 0;
     if (py_virtual_thread_block_on_fd(vt, fds[0], POLLIN, -1) != 0) return 0;
@@ -99,8 +97,9 @@ static int check_observed_wait(int already_ready, int timeout) {
     pcc_gc_release(vt);
     (void)pcc_gc_collect(0);
     if (active_scheduler_roots() != 1) return 0;
-    if (timeout) (void)poll(NULL, 0, 8);
-    else if (!already_ready && write(fds[1], "b", 1) != 1) return 0;
+    if (timeout) {
+        if (pcc_runtime_sleep_ns(8000000) != 0) return 0;
+    } else if (!already_ready && write(fds[1], "b", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 1 || !finish_one_ready()) return 0;
     close(fds[0]); close(fds[1]);
     return active_scheduler_roots() == 0;
@@ -133,16 +132,17 @@ static int check_existing_probe_keeps_immediate_ready_result(void) {
     return active_scheduler_roots() == 0;
 }
 
-static int check_data_readiness_precedes_disconnect_cleanup(void) {
-    int data[2], closed[2];
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, data) != 0) return 0;
-    if (socketpair(AF_UNIX, SOCK_STREAM, 0, closed) != 0) return 0;
+static int check_data_readiness_precedes_disconnect_cleanup(
+    const int data[2], const int closed[2]
+) {
     PyObject *reader = new_vthread();
     PyObject *cleanup = new_vthread();
     if (reader == NULL || cleanup == NULL) return 0;
     /* Register cleanup last so the wait-list walk encounters it first. */
     if (py_virtual_thread_block_on_fd(reader, data[0], POLLIN, -1) != 0) return 0;
     if (py_virtual_thread_block_on_fd(cleanup, closed[0], POLLIN, -1) != 0) return 0;
+    /* The parent still owns its fd; shutdown is visible to both owners. */
+    if (pcc_platform_socket_shutdown(closed[1], SHUT_RDWR) != 0) return 0;
     close(closed[1]);
     if (write(data[1], "r", 1) != 1) return 0;
     if (py_virtual_thread_poll_io(0) != 2) return 0;
@@ -172,7 +172,7 @@ static int check_timeout(void) {
     if (py_virtual_thread_block_on_fd(vt, fds[0], POLLIN, 3) != 0) return 0;
     pcc_gc_release(vt);
     (void)pcc_gc_collect(0);
-    (void)poll(NULL, 0, 8);
+    if (pcc_runtime_sleep_ns(8000000) != 0) return 0;
     if (py_virtual_thread_poll_io(0) != 1) return 0;
     if (!finish_one_ready()) return 0;
     close(fds[0]);
@@ -236,7 +236,7 @@ static void *live_wait_worker(void *opaque) {
 static int wait_until_live_wait_active(void) {
     for (int i = 0; i < 500; i++) {
         if (py_virtual_thread_io_wait_active() == 1) return 1;
-        (void)poll(NULL, 0, 1);
+        if (pcc_runtime_sleep_ns(1000000) != 0) return 0;
     }
     return 0;
 }
@@ -329,96 +329,66 @@ static int check_pool_stop_restart_preserves_parked_io(void) {
         && active_scheduler_roots() == 0;
 }
 
-int main(int argc, char **argv) {
-    if (argc != 3) return 2;
-    int64_t backend = (int64_t)atoll(argv[1]);
-    const char *mode = argv[2];
-    if (setenv("PCC_VTHREAD_IO_BACKEND", mode, 1) != 0) return 3;
-    if (pcc_gc_set_backend(backend) != 0) return 4;
-    int64_t expected = mode[0] == 'p'
+enum { MODE_AUTO, MODE_POLL, MODE_EPOLL };
+
+int64_t pcc_test_gc_probe(
+    int64_t mode, int64_t ready_read, int64_t ready_write,
+    int64_t data_read, int64_t data_write, int64_t closed_read, int64_t closed_write
+) {
+    caller_roots = pcc_gc_scheduler_root_count();
+    int ready[2] = {(int)ready_read, (int)ready_write};
+    int data[2] = {(int)data_read, (int)data_write};
+    int closed[2] = {(int)closed_read, (int)closed_write};
+    int64_t expected = mode == MODE_POLL
         ? PCC_VTHREAD_IO_BACKEND_POLL
-        : (mode[0] == 'e'
-            ? (pcc_io_waitset_epoll_available()
-                ? PCC_VTHREAD_IO_BACKEND_EPOLL
-                : PCC_VTHREAD_IO_BACKEND_POLL)
-            : (pcc_io_waitset_kqueue_available()
+        : (mode == MODE_AUTO && pcc_io_waitset_kqueue_available())
             ? PCC_VTHREAD_IO_BACKEND_KQUEUE
-            : (pcc_io_waitset_epoll_available()
+            : pcc_io_waitset_epoll_available()
                 ? PCC_VTHREAD_IO_BACKEND_EPOLL
-                : PCC_VTHREAD_IO_BACKEND_POLL)));
-    int ok = py_virtual_thread_io_backend() == expected
-        && check_pipe_ready()
-        && check_socket_ready()
-        && check_observed_wait(0, 0)
-        && check_observed_wait(1, 0)
-        && check_observed_wait(0, 1)
-        && check_observed_wait_completion_cancels_registration()
-        && check_existing_probe_keeps_immediate_ready_result()
-        && check_data_readiness_precedes_disconnect_cleanup()
-        && check_timeout()
-        && check_same_fd_waiters()
-        && check_complete_cancels_wait()
-        && check_live_wait_registration_and_cancel_interrupt()
-        && check_pool_stop_restart_preserves_parked_io()
-        && py_virtual_thread_io_backend() == expected
-        && py_virtual_thread_ready_count() == 0
-        && py_virtual_thread_io_wait_count() == 0
-        && active_scheduler_roots() == 0
-        && py_virtual_thread_node_pool_stat(
-            PCC_VTHREAD_NODE_IO, PCC_VTHREAD_POOL_REUSES
-        ) > 0;
-    printf("%lld:%s:%lld:%d\n", (long long)backend, mode,
-        (long long)py_virtual_thread_io_backend(), ok);
-    return ok ? 0 : (int)(10 + backend);
+                : PCC_VTHREAD_IO_BACKEND_POLL;
+    if (py_virtual_thread_io_backend() != expected) return __LINE__;
+    if (!check_pipe_ready()) return __LINE__;
+    if (!check_socket_ready(ready)) return __LINE__;
+    if (!check_observed_wait(0, 0)) return __LINE__;
+    if (!check_observed_wait(1, 0)) return __LINE__;
+    if (!check_observed_wait(0, 1)) return __LINE__;
+    if (!check_observed_wait_completion_cancels_registration()) return __LINE__;
+    if (!check_existing_probe_keeps_immediate_ready_result()) return __LINE__;
+    if (!check_data_readiness_precedes_disconnect_cleanup(data, closed)) return __LINE__;
+    if (!check_timeout()) return __LINE__;
+    if (!check_same_fd_waiters()) return __LINE__;
+    if (!check_complete_cancels_wait()) return __LINE__;
+    if (!check_live_wait_registration_and_cancel_interrupt()) return __LINE__;
+    if (!check_pool_stop_restart_preserves_parked_io()) return __LINE__;
+    if (py_virtual_thread_io_backend() != expected) return __LINE__;
+    if (py_virtual_thread_ready_count() != 0) return __LINE__;
+    if (py_virtual_thread_io_wait_count() != 0) return __LINE__;
+    if (active_scheduler_roots() != 0) return __LINE__;
+    if (py_virtual_thread_node_pool_stat(
+        PCC_VTHREAD_NODE_IO, PCC_VTHREAD_POOL_REUSES
+    ) <= 0) return __LINE__;
+    return 0;
 }
 """
 
 
-@pytest.fixture(scope="module")
-def _io_waitset_runtime_exe(tmp_path_factory, threaded_pcc_runtime_archive):
-    tmp = tmp_path_factory.mktemp("gc_vthread_io_waitset_runtime")
-    src = tmp / "vthread_io_waitset_runtime.c"
-    src.write_text(textwrap.dedent(_SOURCE).lstrip(), encoding="utf-8")
-    exe = tmp / "vthread_io_waitset_runtime_bin"
-    build = subprocess.run(
-        [
-            os.environ.get("CC", "cc"),
-            "-std=c11",
-            f"-I{RUNTIME_DIR / 'include'}",
-            f"-I{RUNTIME_DIR / 'src'}",
-            str(src),
-            str(threaded_pcc_runtime_archive),
-            "-pthread",
-            "-lm",
-            "-o",
-            str(exe),
-        ],
-        capture_output=True,
-        text=True,
-        timeout=60,
-    )
-    assert build.returncode == 0, build.stdout + build.stderr
-    return str(exe)
-
-
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
 @pytest.mark.parametrize("mode", ["auto", "poll", "epoll"])
 def test_production_io_waitset_modes_preserve_roots(
-    _io_waitset_runtime_exe, backend, mode
+    tmp_path, mode, pcc_runtime_archive, python_program_compiler,
 ):
-    run = subprocess.run(
-        [_io_waitset_runtime_exe, backend, mode],
-        capture_output=True,
-        text=True,
-        timeout=30,
-    )
-    assert run.returncode == 0, (
-        f"GC{backend} mode={mode} rc={run.returncode}: "
-        f"{run.stdout.strip()} {run.stderr.strip()[:400]}"
-    )
-    fields = run.stdout.strip().split(":")
-    assert fields[:2] == [backend, mode]
-    assert fields[-1] == "1"
+    with ExitStack() as stack:
+        fds = tuple(
+            stack.enter_context(endpoint).fileno()
+            for _ in range(3) for endpoint in socket.socketpair()
+        )
+        run = run_native_abi_probe(
+            tmp_path, _SOURCE, pcc_runtime_archive, python_program_compiler,
+            run_env={"PCC_VTHREAD_IO_BACKEND": mode},
+            arguments=(("auto", "poll", "epoll").index(mode), *fds),
+            pass_fds=fds,
+        )
+    assert run.returncode == 0, run.stderr
+    assert run.stdout == "0\n", f"{mode}: native waitset probe C line {run.stdout.strip()}"
 
 
 def test_scheduler_owns_waitset_instead_of_per_entry_poll() -> None:

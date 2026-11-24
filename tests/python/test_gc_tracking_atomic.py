@@ -1,37 +1,20 @@
 """Actual tracking functions must preserve concurrent non-TRACKED updates.
 
-The table lock owns list/index membership, not the graph-lock color changes
-or atomic pin/lifetime flags. These are bounded host interleavings, not native
+The table lock owns list/index membership, not atomic lifetime flags. These are bounded host interleavings, not native
 collector or object-lifetime qualification.
 """
 
 from __future__ import annotations
 
-import ast
-
 import pytest
 
 from tests.python.test_gc_mark_color_atomic import (
-    BLACK, DYING, GRAY, PINNED, RUNTIME, HeaderMemory, _i32, _load,
+    DYING, FINALIZED, PINNED, TRACKING, TRACKED, HeaderMemory, _i32, _layout_constants, _load,
 )
 
 
 pytestmark = pytest.mark.xdist_group("gc_tracking_atomic")
-TRACKING = RUNTIME / "freestanding_gc_tracking.py"
-TRACKED = 2
-UPDATES = ("black", "pin", "unpin", "dying", "high_bit")
-
-
-def _layout_constants():
-    tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
-    return {
-        node.target.id: ast.literal_eval(node.value)
-        for node in tree.body
-        if isinstance(node, ast.AnnAssign)
-        and isinstance(node.target, ast.Name)
-        and isinstance(node.value, ast.Constant)
-        and isinstance(node.value.value, int)
-    }
+UPDATES = ("finalized", "pin", "unpin", "dying", "high_bit")
 
 
 class TrackingState:
@@ -43,7 +26,7 @@ class TrackingState:
     """
 
     def __init__(self, initial, update, *, inserted=1, owner=False, present=True,
-                 allocation=True, backend=1, flag_mode=0):
+                 allocation=True, flag_mode=0):
         self.memory = HeaderMemory(initial)
         self.namespace = self.memory.namespace()
         self.layout = _layout_constants()
@@ -81,6 +64,8 @@ class TrackingState:
             # Generational collection is off in this model (young bit 0).
             "pcc_gc_tracking_young_bit": {0: 0},
             "pcc_gc_tracking_young_view": {0: 0},
+            "pcc_gc_full_view_active": {0: 0},
+            "py_gc_threshold0": {0: 0},
             "pcc_gc_deferred_node_free_head": None,
             "pcc_gc_tracking_flag_mode": {0: flag_mode},
             "pcc_gc_tracking_materialized": {0: 0},
@@ -93,7 +78,6 @@ class TrackingState:
             "null": lambda: None,
             "pcc_threads_enabled": lambda: 1,
             "pcc_current_thread_id": lambda: 99,
-            "gc_backend_current": lambda: backend,
             "atomic_load_i64": self.load_owner,
             "atomic_load_i32": self.load32,
             "atomic_cas_i32": self.cas32,
@@ -157,6 +141,7 @@ class TrackingState:
         assert any(slot is self.globals[name] for name in (
             "pcc_gc_tracked_node_pool_count", "py_gc_tracked_count",
             "pcc_gc_tracking_flag_mode", "pcc_gc_tracking_materialized",
+            "pcc_gc_full_view_active",
         ))
         return slot[offset]
 
@@ -190,11 +175,11 @@ class TrackingState:
 
     def interfere(self):
         # Both index callbacks occur after the header snapshot but before
-        # membership publication. The color/pin writer does not take this lock.
+        # membership publication. A lifetime flag writer need not take this lock.
         assert self.owner or self.events[0] == "lock"
         obj = self.memory.obj
-        if self.update == "black":
-            self.namespace["pcc_gc_set_mark_color"](obj, BLACK)
+        if self.update == "finalized":
+            self.memory.update(("or", FINALIZED))
         elif self.update == "pin":
             self.memory.update(("or", PINNED))
         elif self.update == "unpin":
@@ -231,7 +216,7 @@ class TrackingState:
 @pytest.mark.parametrize("inserted", [1, 0])
 @pytest.mark.parametrize("owner", [False, True])
 def test_track_only_sets_membership_bit(update, inserted, owner):
-    initial = GRAY if update == "pin" else GRAY | PINNED
+    initial = 0 if update == "pin" else PINNED
     state = TrackingState(initial, update, inserted=inserted, owner=owner)
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked | TRACKED)
@@ -258,7 +243,7 @@ def _tracked_count(state) -> int:
 def test_flag_mode_track_is_one_header_bit_counted_once(update):
     # GC0 tracking keeps no nodes between collections: no lock, pool, index
     # or list operation, and a second track neither re-counts nor re-flags.
-    initial = GRAY if update == "pin" else GRAY | PINNED
+    initial = 0 if update == "pin" else PINNED
     state = TrackingState(initial, update, flag_mode=1)
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked | TRACKED)
@@ -271,7 +256,7 @@ def test_flag_mode_track_is_one_header_bit_counted_once(update):
 
 @pytest.mark.parametrize("update", UPDATES)
 def test_flag_mode_untrack_clears_the_bit_counted_once(update):
-    initial = (GRAY if update == "pin" else GRAY | PINNED) | TRACKED
+    initial = (0 if update == "pin" else PINNED) | TRACKED
     state = TrackingState(initial, update, flag_mode=1)
     state.namespace["py_gc_untrack"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
@@ -285,7 +270,7 @@ def test_flag_mode_untrack_clears_the_bit_counted_once(update):
 @pytest.mark.parametrize("present", [False, True])
 @pytest.mark.parametrize("owner", [False, True])
 def test_untrack_only_clears_membership_bit(update, present, owner):
-    initial = (GRAY if update == "pin" else GRAY | PINNED) | TRACKED
+    initial = (0 if update == "pin" else PINNED) | TRACKED
     state = TrackingState(initial, update,
                           present=present, owner=owner)
     state.namespace["py_gc_untrack"](state.memory.obj)
@@ -303,78 +288,24 @@ def test_untrack_only_clears_membership_bit(update, present, owner):
     state.check_locks()
 
 
-@pytest.mark.parametrize("name,initial,backend", [
-    ("py_gc_track", GRAY | TRACKED, 1),
-    ("py_gc_untrack", GRAY, 1),
-    ("py_gc_track", GRAY, 4),
-    ("py_gc_untrack", GRAY | TRACKED, 4),
+@pytest.mark.parametrize("name,initial", [
+    ("py_gc_track", FINALIZED | TRACKED),
+    ("py_gc_untrack", FINALIZED),
 ])
-def test_tracking_early_returns_do_not_mutate_header(name, initial, backend):
-    state = TrackingState(initial, "black", backend=backend)
+def test_tracking_early_returns_do_not_mutate_header(name, initial):
+    state = TrackingState(initial, "finalized")
     state.namespace[name](state.memory.obj)
     assert state.memory.obj[12] == initial
     assert not state.memory.writes
-    assert "insert" not in state.events and "remove" not in state.events
-    assert state.events == ([] if backend == 4 else ["lock", "unlock"])
+    assert state.events == ["lock", "unlock"]
 
 
 @pytest.mark.parametrize("allocation", [False, True])
 def test_failed_tracking_does_not_publish_membership(allocation):
-    state = TrackingState(GRAY | PINNED, "black", inserted=-1, allocation=allocation)
+    state = TrackingState(FINALIZED | PINNED, "finalized", inserted=-1, allocation=allocation)
     state.namespace["py_gc_track"](state.memory.obj)
     assert state.memory.obj[12] == _i32(state.expected_nontracked)
     assert "or" not in state.memory.writes and "and" not in state.memory.writes
     assert _tracked_count(state) == 0
     assert state.head() is None
     state.check_locks()
-
-
-def test_tracking_header_writes_are_exact_masked_atomic_operations():
-    tree = ast.parse(TRACKING.read_text(encoding="utf-8"))
-    constants = _layout_constants()
-    assert constants["_TRACKED"] == TRACKED
-
-    YOUNG = 131072  # pcc_gc_tracking_young_bit on the fused collector
-
-    def mask_value(node):
-        if isinstance(node, ast.Name):
-            # ``young`` is the loaded pcc_gc_tracking_young_bit.
-            return YOUNG if node.id == "young" else constants[node.id]
-        if isinstance(node, ast.BinOp) and isinstance(node.op, ast.BitOr):
-            return mask_value(node.left) | mask_value(node.right)
-        if isinstance(node, ast.Call):
-            assert ast.unparse(node) == "load_i32(global_addr('pcc_gc_tracking_young_bit'), 0)"
-            return YOUNG
-        if isinstance(node, ast.UnaryOp) and isinstance(node.op, ast.Invert):
-            return ~mask_value(node.operand)
-        return ast.literal_eval(node)
-
-    writes = []
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Name):
-            continue
-        if node.func.id == "atomic_rmw_i32":
-            if ast.unparse(node.args[1]) == "obj":
-                assert ast.literal_eval(node.args[2]) == 12
-                assert ast.literal_eval(node.args[4]) == "acq_rel"
-                writes.append((ast.literal_eval(node.args[0]), mask_value(node.args[3])))
-            else:
-                # Shared accounting moved to atomics; it is not a header
-                # write and must target one of the two named counter cells.
-                assert ast.unparse(node.args[1]) in {
-                    "global_addr('py_gc_tracked_count')",
-                    "global_addr('pcc_gc_tracked_node_pool_count')",
-                }
-                assert ast.literal_eval(node.args[2]) == 0
-                assert ast.literal_eval(node.args[0]) in ("add", "sub")
-                assert ast.literal_eval(node.args[4]) == "acq_rel"
-        elif node.func.id == "store_i32":
-            assert ast.unparse(node.args[0]) != "obj"
-    # Node-path untrack/track (two ors: tracked and already-indexed), plus
-    # flag-mode entry and the first-freeze race recheck under shard ownership.
-    # A first track also sets the young bit (flag mode and the node path);
-    # every view teardown clears it, which promotes the survivors.
-    assert sorted(writes) == (
-        [("and", ~YOUNG)] + [("and", ~TRACKED)] * 3
-        + [("or", TRACKED)] * 2 + [("or", TRACKED | YOUNG)] * 2
-    )

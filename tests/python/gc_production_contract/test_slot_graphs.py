@@ -1,15 +1,9 @@
-"""5-GC common production contract: slot-backed instance graphs.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-Slot-backed user instances store references outside the ordinary ``__dict__``
-shape, so every backend must trace and preserve those slots the same way it
-does ordinary instance attributes. Each program is compiled once under strict
-no-libpython and run under PCC_GC_BACKEND 0..4.
-"""
+"""Pointer-bearing object slots survive explicit GC."""
 from __future__ import annotations
 
 import os
 import subprocess
+import sys
 
 import pytest
 
@@ -59,56 +53,23 @@ _PROGRAMS = {
 }
 
 
-@pytest.fixture(scope="module")
-def _exes(tmp_path_factory):
-    tmp = tmp_path_factory.mktemp("gc_slots")
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    built = {}
-    for name, (src, _expected) in _PROGRAMS.items():
-        path = tmp / f"{name}.py"
-        path.write_text(src, encoding="utf-8")
-        exe = tmp / f"{name}_bin"
-        build = subprocess.run(
-            [
-                "uv",
-                "run",
-                "pcc",
-                "--backend",
-                "self",
-                "--ir-scaffold=on",
-                str(path),
-                "-o",
-                str(exe),
-            ],
-            text=True,
-            capture_output=True,
-            timeout=420,
-            env=env,
-        )
-        assert build.returncode == 0, f"{name}: {build.stdout + build.stderr}"
-        built[name] = str(exe)
-    return built
-
-
 @pytest.mark.parametrize("name", list(_PROGRAMS))
-@pytest.mark.parametrize("backend", ["0", "1", "2", "3", "4"])
-def test_slot_graph_survives_gc(_exes, name, backend):
-    expected = _PROGRAMS[name][1]
-    env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
-    run = subprocess.run(
-        [_exes[name]],
-        text=True,
-        capture_output=True,
-        timeout=60,
-        env=env,
+def test_slot_graph_survives_gc(
+    tmp_path, name, pcc_runtime_archive, python_program_compiler,
+):
+    program, expected = _PROGRAMS[name]
+    source = tmp_path / f"{name}.py"
+    source.write_text(program, encoding="utf-8")
+    ref = subprocess.run(
+        [sys.executable, str(source)], capture_output=True, text=True, timeout=30,
     )
-    assert run.returncode == 0, (
-        f"{name} backend #{backend} rc={run.returncode}: "
-        f"{run.stderr.strip()[:200]}"
+    assert (ref.returncode, ref.stdout, ref.stderr) == (0, expected + "\n", "")
+    binary = tmp_path / f"{name}_bin"
+    python_program_compiler(
+        str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive),
     )
-    assert run.stdout.splitlines()[:1] == [expected], (
-        f"{name} #{backend}: {run.stdout!r}"
+    native = subprocess.run(
+        [str(binary)], text=True, capture_output=True, timeout=60,
+        env=dict(os.environ, PATH="/nonexistent"),
     )
+    assert (native.returncode, native.stdout, native.stderr) == (0, ref.stdout, "")

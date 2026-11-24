@@ -1,15 +1,4 @@
-"""5-GC common production contract: weakref invalidation + finalizer-runs-once
-must behave IDENTICALLY under all five GC backends.
-
-Part of the 5-GC Production Equality Rule (docs/goal/goal-prompt.md G-track).
-Compiled once under strict no-libpython (``--backend self
-``) and run under ``PCC_GC_BACKEND`` 0..4; every backend
-must produce the same correct output. Finalizer TIMING may differ across
-backends, but the POLICY may NOT: a weakref resolves while its referent is
-alive and is invalidated once the referent is reclaimed, and ``__del__`` runs at
-most once (Rule 8). This is a hard gate on all five backends; any future backend
-divergence must be root-caused rather than hidden behind a local xfail.
-"""
+"""Weakref resolution, intermediate lifetime and finalizer-once contracts."""
 from __future__ import annotations
 import os
 import subprocess
@@ -58,7 +47,6 @@ _ATTR_PROGRAM = (
 )
 _ATTR_EXPECTED = ["9", "1"]
 
-_ALL_BACKENDS = ("0", "1", "2", "3", "4")
 
 
 @pytest.fixture(scope="module")
@@ -68,7 +56,6 @@ def _wf_exe(tmp_path_factory):
     src.write_text(_PROGRAM, encoding="utf-8")
     exe = tmp / "wf_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     build = subprocess.run(
         ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
@@ -84,7 +71,6 @@ def _wf_attr_exe(tmp_path_factory):
     src.write_text(_ATTR_PROGRAM, encoding="utf-8")
     exe = tmp / "wf_attr_bin"
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
     build = subprocess.run(
         ["uv", "run", "pcc", "--backend", "self", "--ir-scaffold=on", str(src), "-o", str(exe)],
         text=True, capture_output=True, timeout=420, env=env,
@@ -93,21 +79,15 @@ def _wf_attr_exe(tmp_path_factory):
     return str(exe)
 
 
-@pytest.mark.parametrize("backend", list(_ALL_BACKENDS))
-def test_weakref_finalizer_contract(_wf_exe, backend):
+def test_weakref_finalizer_contract(_wf_exe):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     r = subprocess.run([_wf_exe], text=True, capture_output=True, timeout=60, env=env)
-    assert r.returncode == 0, f"backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
+    assert r.returncode == 0, f"rc={r.returncode}: {r.stderr.strip()[:200]}"
     assert r.stdout.splitlines()[:3] == _EXPECTED, r.stdout
 
 
-@pytest.mark.parametrize("backend", list(_ALL_BACKENDS))
-def test_weakref_call_intermediate_attr_releases_temp(_wf_attr_exe, backend):
+def test_weakref_call_intermediate_attr_releases_temp(_wf_attr_exe):
     env = os.environ.copy()
-    env.pop("LC_ALL", None)
-    env["PCC_GC_BACKEND"] = backend
     r = subprocess.run(
         [_wf_attr_exe],
         text=True,
@@ -115,5 +95,5 @@ def test_weakref_call_intermediate_attr_releases_temp(_wf_attr_exe, backend):
         timeout=60,
         env=env,
     )
-    assert r.returncode == 0, f"backend #{backend} rc={r.returncode}: {r.stderr.strip()[:200]}"
+    assert r.returncode == 0, f"rc={r.returncode}: {r.stderr.strip()[:200]}"
     assert r.stdout.splitlines()[:2] == _ATTR_EXPECTED, r.stdout
