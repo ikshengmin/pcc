@@ -198,9 +198,11 @@ def _assert_merged_object(blob, chunk_limit):
 
 # Captured from the existing merge before extracting its placement step: a
 # change detector for the linked image, not a statement of what is right.
+# Recaptured for #17 (content-derived LC_UUID): against the previous images
+# only the 16 UUID bytes and the code signature that covers them differ.
 _IMAGE_SHA256 = {
-    8: "68b8777cc9b04786cc768b2c0dbe831ac2e288bd84ab8e3546e0e8102f03da83",
-    64: "06d6d2f6733bb28ffdddce2f68357de960df703f4f1409af2be0621e596274ad",
+    8: "c93007ef85bd5c810b51b669e1a49da0b4f79e5d5884475b6b801d97fe1604cb",
+    64: "4ac05620c251375f0e75b10df15e62fd6092cd111703f1973f5b3f154e6ed71b",
 }
 
 

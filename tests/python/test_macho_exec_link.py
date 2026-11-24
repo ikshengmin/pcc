@@ -207,6 +207,40 @@ def test_multiple_objects_link_into_one_executable(tmp_path):
     assert run.returncode == 7
 
 
+def _uuid(image: bytes) -> bytes:
+    command = spec.parse_object(image).command(spec.LC_UUID)
+    assert command is not None and command.cmdsize == 24
+    return command.raw[8:24]
+
+
+def test_uuid_is_derived_from_the_image_not_a_constant(tmp_path):
+    """#17: one UUID per build, as ld64; equal inputs keep equal bytes.
+
+    A shared constant UUID let macOS symbolication match another binary's
+    indexed debug symbols (Mach-O LC_UUID; RFC 4122 version/variant bits).
+    """
+    first = link_executable([_object(WITH_IMPORTS)])
+    again = link_executable([_object(WITH_IMPORTS)])
+    other = link_executable([_object(NO_IMPORTS)])
+    assert first == again
+    assert _uuid(first) != _uuid(other)
+    for image in (first, other):
+        uuid = _uuid(image)
+        assert uuid not in (bytes(16), b"\x11" * 16)
+        assert uuid[6] >> 4 == 5 and uuid[8] >> 6 == 0b10
+    exe = tmp_path / "uuid"
+    exe.write_bytes(other)
+    exe.chmod(0o755)
+    verify = _run(["codesign", "--verify", "--strict", str(exe)])
+    assert verify.returncode == 0, verify.stderr
+    # The platform reader (this file's gate requires the Darwin toolchain).
+    shown = _run(["dwarfdump", "--uuid", str(exe)]).stdout
+    expected = _uuid(other).hex().upper()
+    dashed = "-".join((expected[:8], expected[8:12], expected[12:16],
+                       expected[16:20], expected[20:]))
+    assert dashed in shown, shown
+
+
 def test_the_binary_is_validly_signed(tmp_path):
     exe = _link(tmp_path, "signed", [WITH_IMPORTS])
     verify = _run(["codesign", "--verify", "--strict", str(exe)])

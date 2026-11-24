@@ -25,6 +25,7 @@ bounded workers; signing still consumes the one complete deterministic prefix.
 
 from __future__ import annotations
 
+import hashlib
 import os
 import struct
 import sys
@@ -329,6 +330,26 @@ def _unwind_rows_name_handlers(
 
 def _align(value: int, alignment: int) -> int:
     return (value + alignment - 1) & ~(alignment - 1)
+
+
+def _image_uuid(*parts) -> bytes:
+    """LC_UUID from the image's own metadata, as ld64 derives it from output.
+
+    A constant UUID made every executable claim one build, so macOS
+    symbolication (sample, Instruments, crash reports) matched any indexed
+    dSYM with that UUID (#17). The parts are the load commands with a zero
+    UUID, chained fixups, symbol and string tables and the export trie: they
+    fix every symbol's name and address without a second pass over the
+    code, which the signature already hashes. Equal inputs keep equal bytes.
+    """
+    digest = hashlib.sha256()
+    for part in parts:
+        digest.update(struct.pack("<Q", len(part)))
+        digest.update(part)
+    uuid = bytearray(digest.digest()[:16])
+    uuid[6] = (uuid[6] & 0x0F) | 0x50  # RFC 4122 version 5 (name-based, SHA)
+    uuid[8] = (uuid[8] & 0x3F) | 0x80  # RFC 4122 variant
+    return bytes(uuid)
 
 
 def _build_seg_info(fixups, seg_vmaddr, seg_size, seg_file_off, _owned_output=None):
@@ -2255,7 +2276,8 @@ def _prepare_executable_image(
     dl_size = _align(12 + len(DYLINKER) + 1, 8)
     cmds += struct.pack("<III", spec.LC_LOAD_DYLINKER, dl_size, 12)
     cmds += DYLINKER.ljust(dl_size - 12, b"\0")
-    cmds += struct.pack("<II", spec.LC_UUID, 24) + b"\x11" * 16
+    uuid_at = len(cmds) + 8
+    cmds += struct.pack("<II", spec.LC_UUID, 24) + bytes(16)
     cmds += spec.BUILD_VERSION_COMMAND.pack({
         "cmd": spec.LC_BUILD_VERSION,
         "cmdsize": spec.BUILD_VERSION_COMMAND.size,
@@ -2295,6 +2317,7 @@ def _prepare_executable_image(
         raise LinkError(
             f"load-command size mismatch: predicted {sizeofcmds}, built {len(cmds)}"
         )
+    cmds[uuid_at:uuid_at + 16] = _image_uuid(cmds, fixups, nlists, strtab, exports)
 
     # MH_HAS_TLV_DESCRIPTORS (0x800000): dyld only processes thread-local
     # descriptors — replacing each thunk with tlv_get_addr and allocating the

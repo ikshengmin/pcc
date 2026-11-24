@@ -436,9 +436,17 @@ in the relevant section or issue and removes the entry.
    (d) per-site attribute lookup caches.
    Area: the pcc area of the unit's files (`runtime-codegen`, `runtime-gc`,
    `backend`); a unit that changes only pcc-gateway holds none.
+   Mac attribution for (b) and (c): until
+   [#17](https://github.com/ikshengmin/pcc/issues/17) every owned Mach-O
+   executable carried the constant LC_UUID `11111111-…`, and `sample` (also
+   behind `pcc_perf.py top` and `run_process_tree_sample.py`) named functions
+   from another binary's indexed debug symbols. The UUID now comes from the
+   image's load commands, fixups, symbol and string tables and export trie;
+   a local Mac `sample` of a probe names its own functions. Re-check a Mac
+   function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - #17 content-derived Mach-O UUID: Claude, local Mac, 2026-11-24 16:10Z, area backend
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
