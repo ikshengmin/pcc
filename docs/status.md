@@ -154,27 +154,18 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. Pending:
-[run 45427972345](https://github.com/ikshengmin/pcc/actions/runs/45427972345),
-dispatched by Claude from the local Mac on 2026-11-24 with
-`base_sha=7ce5cf6635b0893ceca1f06932b1127745099223` and
-`expected_sha=7ec14d388c366656b9160681e12dc84bf26eabb3`, after the first
-tests-only (b) slice landed; it also reruns the #10 and #11 lanes. The next
-untargeted round compares it first.
-
-Claims:
-- Compare checkpoint 45427972345: Codex, Linux, 2026-11-24 18:04 UTC, area checkpoint
-[Run 45020986775](https://github.com/ikshengmin/pcc/actions/runs/45020986775)
-at `0f638af5b` completed red and did not replace it. The
-[checkpoint comparison](investigations/checkpoint-validation-45020986775.md)
-identifies three Go ordinary node regressions
-([#10](https://github.com/ikshengmin/pcc/issues/10)), one Rust integration
-node regression ([#11](https://github.com/ikshengmin/pcc/issues/11)),
-and a separate Windows collection blocker
-([#12](https://github.com/ikshengmin/pcc/issues/12)).
-Stopped areas: none. The #10 and #11 fixes are locally validated;
-the affected hosted lanes have not been rerun. #12 remains open.
-Linux ARM now produced Stage1 (6,794 s); Stage2→Stage3 is not green.
+That run is a red baseline. No formal run pending. The latest completed
+[checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
+keeps that baseline: candidate `7ec14d388` has exact test regressions
+[#19](https://github.com/ikshengmin/pcc/issues/19) and
+[#20](https://github.com/ikshengmin/pcc/issues/20). #19's fix landed at
+`6c1c280f`; matching hosted evidence is not yet green
+([run 45447422239](https://github.com/ikshengmin/pcc/actions/runs/45447422239)).
+Stopped areas: the affected single-collector test and CI paths, except fixes
+for #20. The two Go diagnostics and Rust integration node from #10/#11 passed;
+the revised Go index native integration witness was not reached. #12 still
+blocks Windows ordinary collection. This checkpoint did not produce ARM64
+Stage1 on either platform; Linux x86-64 and Windows did. No fixed point proved.
 
 **Waiting on maintainer.** Questions agents could not settle. The maintainer
 answers here or in chat; the agent that next takes the unit records the answer
@@ -199,7 +190,7 @@ in the relevant section or issue and removes the entry.
    on maintainer". The checkpoint regressions
    [#10](https://github.com/ikshengmin/pcc/issues/10) and
    [#11](https://github.com/ikshengmin/pcc/issues/11) have locally validated
-   fixes whose hosted lanes were not rerun;
+   fixes and partial hosted confirmation in checkpoint 45427972345;
    [#12](https://github.com/ikshengmin/pcc/issues/12) (Windows collection)
    is open. This item's earlier text, the results for #9 and for collectors
    1-4, is in the
@@ -224,8 +215,13 @@ in the relevant section or issue and removes the entry.
    above still matches CPython. A full collection with 64k weakly referenced
    live objects is 36 ms against CPython's 4.9 ms: collector traversal cost,
    item 2's throughput work, not this pass.
-   Next: no unit is ready. A correctness failure of the one collector
-   becomes this item's first unit when it is reported.
+   Next: fix the exact [#20](https://github.com/ikshengmin/pcc/issues/20)
+   test/CI regressions from checkpoint 45427972345, starting with the
+   single-collector sweep selector, then active frame/ownership witnesses
+   and the native CI receipt/bootstrap assertions as separate units.
+   No weakening the CI resource guards or skipping live contracts.
+   [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
+   collect the corresponding hosted receipt before calling it green.
 
    Claims:
    - none
