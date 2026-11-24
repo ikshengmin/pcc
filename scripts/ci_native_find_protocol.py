@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Reuse a successful Stage1 compiler/runtime for find and str length qualification.
 
-Four explicit pcc0/pcc1 compiles and twenty requested five-GC executions.
+Four explicit pcc0/pcc1 compiles and four single-collector native executions.
 The find executables import all six find cases and the str length case; the
 container-bitset executables exercise arbitrary-precision scaffold operands.
 No compiler or runtime provisioning, timeout extension, or Stage1 replay.
@@ -40,10 +40,10 @@ CASES = (
 )
 MODES = ("pcc0", "pcc1")
 NODES = tuple(
-    TEST + "::test_bound_find_and_str_len_owned_native_five_gc[" + mode + "]"
+    TEST + "::test_bound_find_and_str_len_owned_native[" + mode + "]"
     for mode in MODES
 ) + tuple(
-    BITSETS_TEST + "::test_container_bitsets_owned_native_five_gc[" + mode + "]"
+    BITSETS_TEST + "::test_container_bitsets_owned_native[" + mode + "]"
     for mode in MODES
 )
 TEST_INPUTS = (
@@ -133,7 +133,9 @@ def verify_receipts(directory, runtime):
         reference = record["reference"]
         assert tuple(reference[key] for key in ("returncode", "stdout", "stderr")) == expected
         executions = record["executions"]
-        assert [row["gc_backend"] for row in executions] == list(range(5))
+        assert record["gc_backends"] == [0] and type(record["gc_backends"][0]) is int
+        assert [row["gc_backend"] for row in executions] == [0]
+        assert type(executions[0]["gc_backend"]) is int
         for row in executions:
             assert row["command"] == [str(binary)]
             assert tuple(row[key] for key in ("returncode", "stdout", "stderr")) == expected
@@ -155,8 +157,8 @@ def run(out):
         "compiler_modes": list(MODES), "program_cases": list(PROGRAM_CASES),
         "qualifies_fixed_point": False,
         "observed_collector_witness": False,
-        "collector_evidence": "gc_backend records the requested PCC_GC_BACKEND; "
-                              "collector selection is not independently observed",
+        "collector_evidence": "One native run per program and compiler. gc_backend is the legacy receipt identifier; "
+                              "the collector is not independently observed by this gate.",
     }
     save(path, receipt)
     try:

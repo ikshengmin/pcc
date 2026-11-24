@@ -60,7 +60,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.HOST_FILES[7] == "tests/python/test_owned_mem2reg_frontiers.py"
     assert gate.HOST_FILES[8] == "tests/c/test_self_backend_text_index.py"
     assert gate.HOST_FILES[9] == "tests/c/test_self_backend_type_parser.py"
-    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23)
+    assert gate.HOST_COUNTS[:72] == (106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23)
     assert gate.HOST_FILES[14:17] == (gate.X87_PREFIX_TEST, gate.X87_ENCODING_TEST, gate.ASSEMBLY_PROFILE_TEST)
     assert gate.HOST_FILES[17] == gate.REGALLOC_FACTS_TEST
     assert gate.HOST_FILES[18:20] == (gate.RSS_READER_TEST, gate.RSS_PUBLICATION_TEST)
@@ -87,7 +87,7 @@ def test_default_command_retains_project_xdist(tmp_path):
                                   gate.MACHO_WINDOWED_PARITY_TEST,
                                   gate.PE_IMAGE_STACKMAP_PARTITION_TEST)
     assert gate.HOST_FILES[53:57] == gate.TWO_ROOT_CLEANUP_TESTS
-    assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST)
+    assert gate.HOST_FILES[57:59] == (gate.RUNTIME_ABI_CHUNK_TEST, gate.STAGE1_INPUT_INVENTORY_TEST)
     assert gate.HOST_FILES[59:61] == (gate.MACHO_SECTION_TARGET_INDEX_TEST, gate.WIN64_DIRECT_SCALAR_TEST)
     assert gate.HOST_FILES[61:63] == (gate.CONSUMED_UNSAFE_TEST, gate.IR_BUILDER_CALL9_TEST)
     assert gate.HOST_FILES[63:65] == (gate.MACHO_ARCHIVE_RETIREMENT_TEST, gate.GC_MARK_COLOR_ATOMIC_TEST)
@@ -117,7 +117,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         'tests/python/test_str_len_protocol.py',
         'tests/python/test_worker_observation_scope.py',
     )
-    assert gate.HOST_COUNTS[72:85] == (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
+    assert gate.HOST_COUNTS[72:85] == (36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13)
     assert gate.HOST_FILES[85:] == ("tests/python/test_lambda_rejection_diagnostics.py",
                                      "tests/python/test_lambda_scaffold_capture_owner.py")
     assert gate.HOST_COUNTS[85:] == (33, 27)
@@ -131,41 +131,41 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert (ROOT / ".github/workflows/pcc1-package-parity.yml").read_text().count(
         '      - "tests/python/test_runtime_abi_chunking.py"') == 2
     assert len(gate.HOST_FILES) == len(set(gate.HOST_FILES)) == len(gate.HOST_COUNTS) == 87
-    assert sum(gate.HOST_COUNTS) == 3957 and sum(gate.HOST_COUNTS[:85]) == 3897
-    assert sum(gate.HOST_COUNTS[:72]) == 3537
-    assert sum(gate.HOST_COUNTS[:70]) == 3479
-    assert sum(gate.HOST_COUNTS[:65]) == 3226
-    assert sum(gate.HOST_COUNTS[:63]) == 3188
-    assert sum(gate.HOST_COUNTS[:62]) == 3179
-    assert sum(gate.HOST_COUNTS[:61]) == 2947
-    assert sum(gate.HOST_COUNTS[:60]) == 2794
-    assert sum(gate.HOST_COUNTS[:59]) == 2783
-    assert sum(gate.HOST_COUNTS[:58]) == 2666
-    assert sum(gate.HOST_COUNTS[:57]) == 2658
-    assert sum(gate.HOST_COUNTS[:53]) == 2545
-    assert sum(gate.HOST_COUNTS[:52]) == 2520
-    assert sum(gate.HOST_COUNTS[:51]) == 2489
-    assert sum(gate.HOST_COUNTS[:50]) == 2447 and sum(gate.HOST_COUNTS[:49]) == 2401
-    assert sum(gate.HOST_COUNTS[:48]) == 2360
-    assert sum(gate.HOST_COUNTS[:47]) == 2317
-    assert sum(gate.HOST_COUNTS[:43]) == 2225
-    assert sum(gate.HOST_COUNTS[:42]) == 2109
-    assert sum(gate.HOST_COUNTS[:40]) == 2100
-    assert sum(gate.HOST_COUNTS[:38]) == 2090
-    assert sum(gate.HOST_COUNTS[:36]) == 2081
-    assert sum(gate.HOST_COUNTS[:34]) == 2063
-    assert sum(gate.HOST_COUNTS[:32]) == 2028
-    assert sum(gate.HOST_COUNTS[:30]) == 1868
-    assert sum(gate.HOST_COUNTS[:28]) == 1767
-    assert sum(gate.HOST_COUNTS[:27]) == 1712
-    assert sum(gate.HOST_COUNTS[:25]) == 1572
-    assert sum(gate.HOST_COUNTS[:23]) == 1417
-    assert sum(gate.HOST_COUNTS[:22]) == 1401
-    assert sum(gate.HOST_COUNTS[:21]) == 1346
-    assert sum(gate.HOST_COUNTS[:20]) == 1246
-    assert sum(gate.HOST_COUNTS[:18]) == 1209
-    assert sum(gate.HOST_COUNTS[:17]) == 1142 and sum(gate.HOST_COUNTS[:16]) == 1081
-    assert sum(gate.HOST_COUNTS[:14]) == 1072
+    assert sum(gate.HOST_COUNTS) == 3810 and sum(gate.HOST_COUNTS[:85]) == 3750
+    assert sum(gate.HOST_COUNTS[:72]) == 3384
+    assert sum(gate.HOST_COUNTS[:70]) == 3326
+    assert sum(gate.HOST_COUNTS[:65]) == 3113
+    assert sum(gate.HOST_COUNTS[:63]) == 3075
+    assert sum(gate.HOST_COUNTS[:62]) == 3066
+    assert sum(gate.HOST_COUNTS[:61]) == 2834
+    assert sum(gate.HOST_COUNTS[:60]) == 2681
+    assert sum(gate.HOST_COUNTS[:59]) == 2670
+    assert sum(gate.HOST_COUNTS[:58]) == 2669
+    assert sum(gate.HOST_COUNTS[:57]) == 2661
+    assert sum(gate.HOST_COUNTS[:53]) == 2548
+    assert sum(gate.HOST_COUNTS[:52]) == 2523
+    assert sum(gate.HOST_COUNTS[:51]) == 2492
+    assert sum(gate.HOST_COUNTS[:50]) == 2450 and sum(gate.HOST_COUNTS[:49]) == 2404
+    assert sum(gate.HOST_COUNTS[:48]) == 2363
+    assert sum(gate.HOST_COUNTS[:47]) == 2320
+    assert sum(gate.HOST_COUNTS[:43]) == 2228
+    assert sum(gate.HOST_COUNTS[:42]) == 2112
+    assert sum(gate.HOST_COUNTS[:40]) == 2103
+    assert sum(gate.HOST_COUNTS[:38]) == 2093
+    assert sum(gate.HOST_COUNTS[:36]) == 2084
+    assert sum(gate.HOST_COUNTS[:34]) == 2066
+    assert sum(gate.HOST_COUNTS[:32]) == 2031
+    assert sum(gate.HOST_COUNTS[:30]) == 1871
+    assert sum(gate.HOST_COUNTS[:28]) == 1770
+    assert sum(gate.HOST_COUNTS[:27]) == 1715
+    assert sum(gate.HOST_COUNTS[:25]) == 1575
+    assert sum(gate.HOST_COUNTS[:23]) == 1420
+    assert sum(gate.HOST_COUNTS[:22]) == 1404
+    assert sum(gate.HOST_COUNTS[:21]) == 1349
+    assert sum(gate.HOST_COUNTS[:20]) == 1249
+    assert sum(gate.HOST_COUNTS[:18]) == 1212
+    assert sum(gate.HOST_COUNTS[:17]) == 1145 and sum(gate.HOST_COUNTS[:16]) == 1084
+    assert sum(gate.HOST_COUNTS[:14]) == 1075
     # Exercise the complete fixed inventory through its real consumer. These
     # are synthetic all-passed report controls, not collection/run evidence.
     inventory_nodes = [path + "::test_inventory[" + str(index) + "]"
@@ -193,12 +193,12 @@ def test_default_command_retains_project_xdist(tmp_path):
     assert gate.verify_pytest(tmp_path, gate.HOST_FILES, gate.HOST_COUNTS,
                               collection_witness=True) == inventory_nodes
     assert json.loads((tmp_path / "collection-accounting.json").read_text()) == {
-        "universe_count": 3957, "selected_passed_count": 3957,
+        "universe_count": 3810, "selected_passed_count": 3810,
         "platform_unrun": [], "worker_witnesses": 6,
     }
     # A complete report cannot pass stale counts or omit the new module. Dropping
     # the added nodes from every witness/report still fails the fixed receipt.
-    for index, old_count in ((20, 89), (28, 84), (2, 291), (12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
+    for index, old_count in ((58, 0), (20, 89), (28, 84), (2, 291), (12, 433), (84, 11), (85, 0), (85, 32), (86, 0), (86, 26)):
         old_counts = list(gate.HOST_COUNTS)
         old_counts[index] = old_count
         put(tmp_path, inventory_reports(inventory_nodes))
@@ -244,7 +244,7 @@ def test_default_command_retains_project_xdist(tmp_path):
         with pytest.raises(AssertionError, match="parameter sequence"):
             parameter_case_count(ast.parse(expression, mode="eval").body)
     for filename, expected_count in ((gate.MANAGED_SCRATCH_TEST, 34), (gate.MANAGED_MEMORY_TEST, 1),
-                                     (gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST, 117),
+                                     (gate.STAGE1_INPUT_INVENTORY_TEST, 1),
                                      (gate.IR_BUILDER_CALL9_TEST, 9),
                                      (gate.HOST_FILES[73], 36),
                                      (gate.HOST_FILES[75], 41),
@@ -405,7 +405,7 @@ def test_default_command_retains_project_xdist(tmp_path):
     # The default host phase executes these cases, not their native gates.
     for path, expected_count in zip(
         (*gate.TUPLE_OWNED_ROOT_HOST_TESTS, *gate.AARCH64_STACKMAP_RETIREMENT_HOST_TESTS),
-        (54, 30, 9, 76, 84, 35, 23),
+        (14, 30, 9, 76, 84, 35, 23),
     ):
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
@@ -439,17 +439,9 @@ def test_default_command_retains_project_xdist(tmp_path):
                     cases *= len(values.elts)
             count += cases
         assert count == expected_count
-    assert gate.GC_RELOCATION_PAGE_CURSOR_INPUTS == (
-        gate.GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
-        "pcc/runtime/py/freestanding_gc_relocation_selector.py",
-        "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py",
-    )
-    assert any(isinstance(node, ast.Starred) and isinstance(node.value, ast.Name)
-               and node.value.id == "GC_RELOCATION_PAGE_CURSOR_INPUTS"
-               for node in ast.walk(identity))
-    for path in gate.GC_RELOCATION_PAGE_CURSOR_INPUTS:
-        assert push_filters.count('      - "' + path + '"') == 1
-        assert pull_request_filters.count('      - "' + path + '"') == 1
+    assert input_names.count(gate.STAGE1_INPUT_INVENTORY_TEST) == 1
+    for filters in (push_filters, pull_request_filters):
+        assert filters.count('      - "' + gate.STAGE1_INPUT_INVENTORY_TEST + '"') == 1
     for path in exception_inputs:
         assert push_filters.count('      - "' + path + '"') == 1
         assert pull_request_filters.count('      - "' + path + '"') == 1
@@ -2297,7 +2289,7 @@ def test_platform_gates_follow_verified_runtime_and_stop_on_failure(tmp_path, mo
                 assert name == "linux-elf-owner"
                 assert nodes == [gate.ELF_OWNER_NODE] and counts is None
         elif name == "default-xdist":
-            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84, 35, 23) + (36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
+            assert nodes == gate.HOST_FILES and counts == (106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17, 4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55, 89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1, 116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6, 43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84, 35, 23) + (36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13, 33, 27) and not integration
         else:
             assert name == "strict-closure" and integration
         if name == failing:

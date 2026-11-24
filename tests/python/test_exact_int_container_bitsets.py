@@ -122,7 +122,7 @@ def bitsets_owned_runtime(request, monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
-def test_container_bitsets_owned_native_five_gc(
+def test_container_bitsets_owned_native(
     python_program_compiler, request, bitsets_owned_runtime, bitsets_project, capfd,
 ):
     from tests.python.owned_regression_support import assert_owned_program
@@ -130,5 +130,5 @@ def test_container_bitsets_owned_native_five_gc(
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(
         PROGRAM, "CONTAINER_BITSETS_OK\n", bitsets_project,
-        python_program_compiler, mode, bitsets_owned_runtime, capfd,
+        python_program_compiler, mode, bitsets_owned_runtime, capfd, backends=(0,),
     )

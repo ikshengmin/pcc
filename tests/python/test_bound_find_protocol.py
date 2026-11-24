@@ -497,7 +497,7 @@ def find_owned_runtime(request, monkeypatch):
 
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
-def test_bound_find_and_str_len_owned_native_five_gc(
+def test_bound_find_and_str_len_owned_native(
     python_program_compiler, request, find_owned_runtime, tmp_path, capfd,
 ):
     from tests.python.owned_regression_support import assert_owned_program
@@ -505,5 +505,5 @@ def test_bound_find_and_str_len_owned_native_five_gc(
     source, expected, _ = _write_native_find_and_str_len_suite(tmp_path)
     assert_owned_program(
         source.read_text(encoding="utf-8"), expected, tmp_path,
-        python_program_compiler, mode, find_owned_runtime, capfd,
+        python_program_compiler, mode, find_owned_runtime, capfd, backends=(0,),
     )

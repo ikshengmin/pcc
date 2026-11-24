@@ -76,10 +76,10 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         invocations.append((name, tuple(nodes), dict(env), integration, timeout))
         assert name == "native-find-protocol"
         assert tuple(nodes) == (
-            "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native_five_gc[pcc0]",
-            "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native_five_gc[pcc1]",
-            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native_five_gc[pcc0]",
-            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native_five_gc[pcc1]",
+            "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native[pcc0]",
+            "tests/python/test_bound_find_protocol.py::test_bound_find_and_str_len_owned_native[pcc1]",
+            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native[pcc0]",
+            "tests/python/test_exact_int_container_bitsets.py::test_container_bitsets_owned_native[pcc1]",
         )
         assert integration is True and timeout == 300
         assert env["PCC_RUNTIME_ARCHIVE"] == str(state["archive"])
@@ -144,6 +144,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                     program, expected, directory,
                     compile_fixture, mode, state["archive"],
                     types.SimpleNamespace(readouterr=lambda: types.SimpleNamespace(out="", err="")),
+                    backends=(0,),
                 )
             record = json.loads((directory / "ownership-regression.json").read_text())
             if mode == "pcc1":
@@ -199,7 +200,11 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                 elif case_fault == "gc_missing":
                     record["executions"].pop()
                 elif case_fault == "gc_duplicate":
-                    record["executions"][-1]["gc_backend"] = 3
+                    record["executions"].append(dict(record["executions"][0]))
+                elif case_fault == "gc_removed":
+                    record["executions"][0]["gc_backend"] = 3
+                elif case_fault == "gc_inventory":
+                    record["gc_backends"].append(3)
                 elif case_fault == "native_command":
                     record["executions"][0]["command"] = ["HOST-STUB", str(source)]
                 elif case_fault == "native_output":
@@ -291,9 +296,9 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             has_compiler = any(arg.arg == "python_program_compiler" for arg in function.args.args)
             if "pytest.mark.integration" not in marks and not has_compiler:
                 continue
-            expected_function = ("test_container_bitsets_owned_native_five_gc"
+            expected_function = ("test_container_bitsets_owned_native"
                                  if test_file == gate.BITSETS_TEST
-                                 else "test_bound_find_and_str_len_owned_native_five_gc")
+                                 else "test_bound_find_and_str_len_owned_native")
             assert function.name == expected_function
             assert "pytest.mark.integration" in marks and has_compiler
             parameters = [
@@ -332,7 +337,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         "routed_producer", "host_output", "python_linkage", "linkage_hash",
         "linkage_missing", "libpython_missing",
         "source_hash", "source_bytes", "runtime_path", "runtime_hash", "binary_hash",
-        "reference_output", "gc_missing", "gc_duplicate", "native_command",
+        "reference_output", "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command",
         "native_output", "native_returncode", "module_bytes", "module_hash",
         "module_inventory", "source_after", "compiler_after", "runtime_after",
         "test_input_after", "len_entry_missing", "len_reference_output",
@@ -345,7 +350,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         "host_output", "python_linkage", "linkage_hash", "linkage_missing",
         "libpython", "libpython_missing", "source_hash", "source_bytes", "source_newlines",
         "runtime_path", "runtime_hash", "binary_hash", "reference_output",
-        "gc_missing", "gc_duplicate", "native_command", "native_output",
+        "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command", "native_output",
         "native_returncode",
     )
     scenarios = [(fault, "find") for fault in ("none",) + preflight_faults + receipt_faults]
@@ -406,7 +411,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
             assert {(row["program_case"], row["mode"]) for row in result["programs"]} == {
                 (case, mode) for case in gate.PROGRAM_CASES for mode in gate.MODES
             }
-            assert all(len(record["executions"]) == 5 for record in result["programs"])
+            assert all(len(record["executions"]) == 1 for record in result["programs"])
             assert all(
                 record["cases"] == [*gate.CASES, "str_len_protocol"]
                 and set(record["module_sha256"]) == set(FIND_AND_STR_LEN_NATIVE_MODULES)

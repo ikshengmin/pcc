@@ -269,12 +269,7 @@ TWO_ROOT_CLEANUP_INPUTS = (
     "tests/python/test_two_root_lifecycle_support.py",
 )
 RUNTIME_ABI_CHUNK_TEST = "tests/python/test_runtime_abi_chunking.py"
-GC_RELOCATION_PAGE_CURSOR_MODEL_TEST = "tests/python/test_gc_relocation_page_cursor_model.py"
-GC_RELOCATION_PAGE_CURSOR_INPUTS = (
-    GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
-    "pcc/runtime/py/freestanding_gc_relocation_selector.py",
-    "pcc/runtime/py/freestanding_gc_zpage_lifecycle.py",
-)
+STAGE1_INPUT_INVENTORY_TEST = "tests/test_ci_stage1_input_inventory.py"
 GC_MARK_COLOR_ATOMIC_TEST = "tests/python/test_gc_mark_color_atomic.py"
 TUPLE_OWNED_ROOT_HOST_TESTS = (
     "tests/python/test_tuple_owned_root_factory.py",
@@ -321,7 +316,7 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               MACHO_ARCHIVE_SYMBOL_STATE_TEST, MACHO_SECTION_PLACEMENT_TEST,
               MACHO_ARCHIVE_FRAMING_TEST, MACHO_WINDOWED_PREPARE_TEST,
               MACHO_WINDOWED_PARITY_TEST, PE_IMAGE_STACKMAP_PARTITION_TEST,
-              *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, GC_RELOCATION_PAGE_CURSOR_MODEL_TEST,
+              *TWO_ROOT_CLEANUP_TESTS, RUNTIME_ABI_CHUNK_TEST, STAGE1_INPUT_INVENTORY_TEST,
               MACHO_SECTION_TARGET_INDEX_TEST, WIN64_DIRECT_SCALAR_TEST, CONSUMED_UNSAFE_TEST,
               IR_BUILDER_CALL9_TEST, MACHO_ARCHIVE_RETIREMENT_TEST, GC_MARK_COLOR_ATOMIC_TEST,
               *TUPLE_OWNED_ROOT_HOST_TESTS, *AARCH64_STACKMAP_RETIREMENT_HOST_TESTS,
@@ -340,7 +335,9 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
               'tests/python/test_worker_observation_scope.py',
               'tests/python/test_lambda_rejection_diagnostics.py',
               'tests/python/test_lambda_scaffold_capture_owner.py')
-# Expected default-marker inventory: 87 modules, 3957 ordinary raw nodes.
+# Expected default-marker inventory: 87 modules, 3810 ordinary raw nodes.
+# Single-collector migration replaces 117 retired relocation tests with one
+# live Stage1 input inventory regression. Historical counts below predate it.
 # Source-matched 87b58370 AArch64 CI collected all 3957: 3956 passed and
 # the existing text-index platform-inapplicable node remained explicit UNRUN.
 # 6e7304e adds 11 scalar projection controls (89 -> 100); 4e01251 adds
@@ -349,12 +346,12 @@ HOST_FILES = ("tests/python/test_worker_size_priors.py", PROCESS_TEST,
 # Reconcile source hashes and node identities before updating this receipt;
 # collection is not execution evidence and UNRUN is never counted as PASS.
 HOST_COUNTS = (
-    106, 3, 318, 0, 6, 29, 25, 7, 25, 49, 19, 21, 447, 17,
+    106, 3, 318, 0, 6, 29, 28, 7, 25, 49, 19, 21, 447, 17,
     4, 5, 61, 67, 24, 13, 100, 55, 16, 136, 19, 117, 23, 55,
     89, 12, 51, 109, 34, 1, 17, 1, 8, 1, 9, 1, 8, 1,
     116, 43, 10, 1, 38, 43, 41, 46, 42, 31, 25, 43, 21, 6,
-    43, 8, 117, 11, 153, 232, 9, 12, 26, 54, 30, 9, 76, 84,
-    35, 23, 36, 36, 4, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
+    43, 8, 1, 11, 153, 232, 9, 12, 26, 14, 30, 9, 76, 84,
+    35, 23, 36, 36, 10, 41, 11, 23, 10, 65, 7, 92, 20, 2, 13,
     33, 27,
 )
 PHASES = ("preflight", "stage1", "pcc1")
@@ -396,7 +393,7 @@ def source_identity():
     value["test_versions"] = {"pytest": pytest.__version__, "xdist": xdist.__version__}
     value["test_inputs"] = {name: sha(ROOT / name) for name in (*HOST_FILES, *EXIT_INPUTS, *ARM_TRANSPORT_INPUTS, *REGALLOC_INPUTS, *ELF_INPUTS, *X87_INPUTS, *ASSEMBLY_PROFILE_INPUTS, *RSS_READER_INPUTS, *STACKMAP_BUDGET_INPUTS, *PARSE_BUFFER_INPUTS, *TREE_RECOVERY_INPUTS, *TAR_ATTRIBUTES_INPUTS,
                            *PE_IMAGE_STACKMAP_PARTITION_INPUTS, *TWO_ROOT_CLEANUP_INPUTS,
-                           *GC_RELOCATION_PAGE_CURSOR_INPUTS, *WIN64_DIRECT_SCALAR_INPUTS,
+                           *WIN64_DIRECT_SCALAR_INPUTS,
                            *CONSUMED_UNSAFE_INPUTS, *HOST_CONTRACT_DATA_INPUTS,
                            "tests/strict_exception_oracle.py", "tests/fixtures/strict_stackmap_catch.ll",
                            "tests/owned_ir_validation.py",
@@ -882,7 +879,7 @@ def main(argv=None):
     parser.add_argument("--strict-closure-timeout", type=int, default=300,
                         help="strict closure watchdog seconds (local default: 300; CI sets its own budget)")
     parser.add_argument("--full-chain", action="store_true",
-                        help="stage1 phase on Linux/Windows: run every collector's Stage2/Stage3 "
+                        help="stage1 phase on Linux/Windows: run the single collector's Stage2/Stage3 "
                              "fixed point after Stage1 (default: Stage1 for the single collector)")
     args = parser.parse_args(argv)
     if args.strict_closure_timeout <= 0:
