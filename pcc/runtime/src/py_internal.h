@@ -97,7 +97,10 @@ int64_t pcc_platform_socket_peer_text(
 #define PY_FLAG_GC_MINOR_ARENA 0x1000
 #define PY_FLAG_GC_RELOCATION_TARGET 0x2000
 #define PY_FLAG_GC_FRESH_ALLOC 0x4000
-#define PY_FLAG_GC_LARGE_DEFERRED 0x8000
+/* Set when a weakref to the object is created, never cleared: a death
+ * without it skips weakref invalidation (formerly the unused
+ * PY_FLAG_GC_LARGE_DEFERRED of a removed collector). */
+#define PY_FLAG_WEAK_REFERENCED 0x8000
 #define PY_FLAG_GC_ZPAGE_ALLOC 0x10000
 /* Remap-phase epoch marker on relocated OLD shells: set at the remap
  * that healed the heap, consumed (entry retired) at the NEXT remap, so

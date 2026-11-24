@@ -170,6 +170,7 @@ PORT_ABI_NATIVE_EXPORTS = {
         "PY_FLAG_GC_TRACKED": {"kind": "constant", "value_kind": "int", "value": 2},
         "PY_FLAG_FINALIZED": {"kind": "constant", "value_kind": "int", "value": 4},
         "PY_FLAG_GC_PINNED": {"kind": "constant", "value_kind": "int", "value": 64},
+        "PY_FLAG_WEAK_REFERENCED": {"kind": "constant", "value_kind": "int", "value": 32768},
         "PY_FLAG_GC_MALLOC_ALLOC": {"kind": "constant", "value_kind": "int", "value": 262144},
         "PY_FLAG_GC_DEALLOCATING": {"kind": "constant", "value_kind": "int", "value": 524288},
         "PY_FLAG_CLASS_SLOTS_ONLY": {"kind": "constant", "value_kind": "int", "value": 2097152},

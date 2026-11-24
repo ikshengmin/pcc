@@ -23,8 +23,15 @@ class WeakBatch:
         self.backend = backend
         self.words = {
             0xE018: backend,  # frozen collector
-            0xE020: 0,  # this legacy-list model is not the nonmoving directory
+            0xE020: 0,
+            # This legacy-list model runs with the target directory retired
+            # (pcc_weak_target_dir_disabled): invalidation walks the lists.
+            # directory_model() enables it over model memory.
+            0xE028: 1,
         }
+        self.lock_depth = 0
+        self.lock_acquisitions = 0
+        self.target_reads = 0  # loads of a weakref's target field
         # py_weakref_head and an open weak window's py_weakref_late_head.
         self.heads = {"py_weakref_head": 0, "py_weakref_late_head": 0}
         self.none = 0xF000
@@ -41,6 +48,7 @@ class WeakBatch:
         self.tuple_allocated = []
         self.freed = []  # Both domains, also used by the stale-read poison.
         self.poison_freed = False
+        self.sizes = {}
         self.malloc_calls = 0
         self.fail_at = 0
         self.fail_tracking = False
@@ -53,6 +61,9 @@ class WeakBatch:
             load_i32=self.load, load_i64=self.load, load_ptr=self.load,
             atomic_load_i32=lambda base, offset, _: self.load(base, offset),
             atomic_store_i32=lambda base, offset, value, _: self.store(base, offset, value),
+            atomic_rmw_i32=self.atomic_rmw,
+            pcc_py_gc_minor_graph_lock=self.graph_lock,
+            pcc_py_gc_minor_graph_unlock=self.graph_unlock,
             store_i32=self.store, store_i64=self.store, store_ptr=self.store,
             global_load_ptr=lambda name: self.none if name == "py_None" else self.heads[name],
             global_store_ptr=self.global_store,
@@ -96,14 +107,29 @@ class WeakBatch:
 
     def load(self, base, offset=0):
         assert not self.poison_freed or not any(
-            address <= base + offset < address + 56
+            address <= base + offset < address + self.sizes.get(address, 56)
             for address in self.freed if address in self.refcounts
         ), (
             "read from freed weakref", base, offset,
         )
         if offset == 0 and base in self.refcounts:
             return self.refcounts[base]
+        if offset == 16 and self.words.get(base + 8) == abi.PY_TYPE_WEAKREF:
+            self.target_reads += 1
         return self.words.get(base + offset, 0)
+
+    def atomic_rmw(self, op, base, offset, value, order):
+        old = self.load(base, offset)
+        self.store(base, offset, {"or": old | value, "and": old & value}[op])
+        return old
+
+    def graph_lock(self):
+        self.lock_depth += 1
+        self.lock_acquisitions += 1
+
+    def graph_unlock(self):
+        assert self.lock_depth > 0
+        self.lock_depth -= 1
 
     def store(self, base, offset, value):
         self.words[base + offset] = value
@@ -129,6 +155,15 @@ class WeakBatch:
             "pcc_weakref_layer_snapshot_dirty": 0xE010,
             "pcc_gc_backend_selected": 0xE018,
             "pcc_gc_nonmoving_count_free": 0xE020,
+            "pcc_weak_target_dir_disabled": 0xE028,
+            "pcc_weak_reverse_cap": 0xE030,
+            "pcc_weak_target_slots": 0xE038,
+            "pcc_weak_target_cap": 0xE040,
+            "pcc_weak_reverse_slots": 0xE058,
+            "pcc_weak_reverse_count": 0xE060,
+            "pcc_weak_reverse_used": 0xE068,
+            "pcc_weak_target_count": 0xE070,
+            "pcc_weak_target_used": 0xE078,
         }[name]
 
     @property
@@ -164,6 +199,7 @@ class WeakBatch:
     def allocate_object(self, size, tag, flags):
         address = self.next
         self.next += size + 16
+        self.sizes[address] = size  # the poison window of a freed object
         self.managed_allocated.append(address)
         self.refcounts[address] = 1
         self.words[address + 8] = tag
@@ -212,6 +248,8 @@ class WeakBatch:
         self.tuples[args] = value
 
     def call(self, callback, args, kwargs):
+        # A callback is user code: never under the graph lock.
+        assert self.lock_depth == 0
         wr = self.tuples[args]
         assert self.refcounts[wr] >= 2  # pending hold plus argument tuple
         assert wr not in self.freed
@@ -231,6 +269,11 @@ class WeakBatch:
         """A weakref on the ordinary list, or on an open window's late list."""
         wr = self.allocate_object(56, abi.PY_TYPE_WEAKREF, 524288 if dying else 0)
         self.refcounts[wr] = count
+        if target and not target & 1:
+            # As py_weakref_new: a target with a weakref carries the bit.
+            self.words[target + 12] = (
+                self.words.get(target + 12, 0) | abi.PY_FLAG_WEAK_REFERENCED
+            )
         self.store(wr, 16, target)
         self.store(wr, 24, callback)
         self.store(wr, 32, 0)
@@ -541,6 +584,7 @@ def test_target_directory_oom_retires_only_raw_records_and_keeps_legacy_links():
     """Execute the production failure path with an already indexed weakref."""
     model = WeakBatch(backend=1)
     model.words[0xE020] = 1
+    model.words[0xE028] = 0  # the directory is active until the failure
     target = model.allocate_object(64, abi.PY_TYPE_LIST, 0)
     old = model.ref(target)
     old_entry = model.malloc(32)
@@ -617,3 +661,211 @@ def test_review_graph_admission_requires_actual_observer_or_uncertainty(case):
     plan = model.ns["pcc_gc_callback_layers_build"](batch, 2, 7)
     expected = (0, []) if case == "unrelated" else (0x4000, [(batch, 2, 7)])
     assert (plan, calls) == expected
+
+
+class ModelIndex:
+    """pcc_gc_index_py_* over model memory: row i of a table is at base + 16*i.
+
+    Rows hold the key and the value words the production code reads and
+    rewrites in place (``_target_directory_set_head_locked``). A duplicate
+    insert returns 0 without replacing, as the runtime table does.
+    """
+
+    def __init__(self, model, cells):
+        self.model = model
+        self.cells = cells  # slots-cell address -> heads name of its table
+        self.keys = {}  # table base -> keys by row, None once removed
+
+    def _base(self, cell):
+        return self.model.heads[self.cells[cell]]
+
+    def _row(self, base, key):
+        keys = self.keys.setdefault(base, [])
+        return keys.index(key) if key in keys else -1
+
+    def find(self, cell, cap_cell, key, reject_tagged):
+        base = self._base(cell)
+        row = self._row(base, key)
+        return 0 if row < 0 else self.model.words.get(base + 16 * row + 8, 0)
+
+    def find_slot(self, base, cap, key):
+        return self._row(base, key)
+
+    def insert(self, cell, cap_cell, count_cell, used_cell, key, value, *flags):
+        base = self._base(cell)
+        if self._row(base, key) >= 0:
+            return 0
+        keys = self.keys.setdefault(base, [])
+        keys.append(key)
+        self.model.words[base + 16 * (len(keys) - 1)] = key
+        self.model.words[base + 16 * (len(keys) - 1) + 8] = value
+        return 1
+
+    def remove(self, cell, cap_cell, count_cell, used_cell, key, reject_tagged):
+        base = self._base(cell)
+        row = self._row(base, key)
+        if row < 0:
+            return 0
+        self.keys[base][row] = None
+        return self.model.words.get(base + 16 * row + 8, 0)
+
+    def live(self, name):
+        base = self.model.heads[name]
+        return {
+            key: self.model.words[base + 16 * row + 8]
+            for row, key in enumerate(self.keys.get(base, [])) if key is not None
+        }
+
+
+def directory_model():
+    """A WeakBatch whose target directory is active over model memory."""
+    model = WeakBatch()
+    model.stopped = False
+    model.words[0xE028] = 0
+    model.heads["pcc_weak_target_slots"] = model.malloc(16 * 64)
+    model.heads["pcc_weak_reverse_slots"] = model.malloc(16 * 64)
+    index = ModelIndex(model, {0xE038: "pcc_weak_target_slots",
+                               0xE058: "pcc_weak_reverse_slots"})
+    model.ns.update(
+        pcc_gc_index_py_find=index.find,
+        pcc_gc_index_py_find_slot=index.find_slot,
+        pcc_gc_index_py_insert=index.insert,
+        pcc_gc_index_py_remove=index.remove,
+    )
+    model.index = index
+    model.tables = set(model.allocated)
+    return model
+
+
+def target_object(model):
+    return model.allocate_object(64, abi.PY_TYPE_LIST, 0)
+
+
+def chain(model, target):
+    """The directory records of ``target``, head first, as their refs."""
+    refs = []
+    entry = model.index.live("pcc_weak_target_slots").get(target, 0)
+    while entry:
+        refs.append(model.words[entry])
+        entry = model.words.get(entry + 24, 0)
+    return refs
+
+
+def assert_directory_exact(model):
+    """Every indexed ref is on the ordinary list with a target, and back."""
+    main = []
+    wr = model.head
+    while wr:
+        if model.words.get(wr + 16, 0):
+            main.append(wr)
+        wr = model.words.get(wr + 40, 0)
+    reverse = model.index.live("pcc_weak_reverse_slots")
+    assert sorted(reverse) == sorted(main)
+    for wr, entry in reverse.items():
+        assert model.words[entry] == wr
+        assert wr in chain(model, model.words[entry + 8])
+    entries = set(reverse.values())
+    raw = set(model.allocated) - set(model.raw_freed) - model.tables
+    assert raw == entries  # no directory record leaks or is freed twice
+
+
+def test_constructor_indexes_the_ref_and_sets_the_target_bit():
+    """#16: the bit and the record exist before the ref can be observed."""
+    model = directory_model()
+    target = target_object(model)
+    first = model.ns["py_weakref_new"](target, 0)
+    second = model.ns["py_weakref_new"](target, 0x8000)
+    assert model.words[target + 12] & abi.PY_FLAG_WEAK_REFERENCED
+    assert chain(model, target) == [second, first]  # the list's order
+    assert model.lock_depth == 0
+    assert_directory_exact(model)
+
+
+def test_directory_invalidation_visits_only_the_dying_targets_refs():
+    """#16: a death clears its own refs without walking unrelated ones."""
+    model = directory_model()
+    target = target_object(model)
+    unrelated = [target_object(model) for _ in range(40)]
+    older = model.ns["py_weakref_new"](target, 0x8000)
+    others = [model.ns["py_weakref_new"](obj, 0x8200) for obj in unrelated]
+    silent = model.ns["py_weakref_new"](target, 0)
+    newer = model.ns["py_weakref_new"](target, 0x8100)
+
+    def observe(wr):
+        assert all(model.ns["py_weakref_call"](ref) == model.none
+                   for ref in (older, silent, newer))
+        assert all(model.load(ref, 16) == obj for ref, obj in zip(others, unrelated))
+
+    model.callbacks[0x8000] = model.callbacks[0x8100] = observe
+    model.target_reads = 0
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+    # One read per own ref to hold callbacks and one to clear, plus the
+    # callbacks' own checks; none of the 40 unrelated refs is examined
+    # outside them.
+    assert model.target_reads == 2 * 3 + 2 * (3 + 40)
+    assert chain(model, target) == []
+    assert all(chain(model, obj) == [ref] for ref, obj in zip(others, unrelated))
+    assert_directory_exact(model)
+    calls = list(model.calls)
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == calls
+
+
+def test_unmarked_death_skips_the_lists_and_the_graph_lock():
+    """#16: an object never weakly referenced has nothing to clear."""
+    model = directory_model()
+    marked = target_object(model)
+    plain = target_object(model)
+    ref = model.ns["py_weakref_new"](marked, 0x8000)
+    model.target_reads = 0
+    acquisitions = model.lock_acquisitions
+    model.ns["py_weakref_invalidate"](plain)
+    assert (model.target_reads, model.lock_acquisitions) == (0, acquisitions)
+    assert model.load(ref, 16) == marked and model.calls == []
+
+
+def test_directory_stays_exact_through_callback_reentry_and_ref_deaths():
+    model = directory_model()
+    model.poison_freed = True
+    target = target_object(model)
+    other = target_object(model)
+    older = model.ns["py_weakref_new"](target, 0x8000)
+    newer = model.ns["py_weakref_new"](target, 0x8100)
+    created = []
+
+    def reenter(wr):
+        model.decref(older)
+        created.append(model.ns["py_weakref_new"](other, 0x8200))
+        model.ns["py_weakref_invalidate"](target)  # delivers nothing twice
+
+    model.callbacks[0x8100] = reenter
+    model.ns["py_weakref_invalidate"](target)
+    assert model.calls == [newer, older]
+    model.decref(newer)
+    assert older in model.freed and newer in model.freed
+    assert chain(model, other) == created
+    assert_directory_exact(model)
+    model.ns["py_weakref_invalidate"](other)
+    assert model.calls == [newer, older, created[0]]
+    assert_directory_exact(model)
+
+
+def test_batch_and_late_clear_leave_only_records_a_later_death_retires():
+    """A callback ref cleared by the early pass keeps a stale record."""
+    model = directory_model()
+    model.stopped = True
+    target = target_object(model)
+    callback_ref = model.ns["py_weakref_new"](target, 0x8000)
+    silent = model.ns["py_weakref_new"](target, 0)
+    model.candidates.add(target)
+    assert model.batch() == 1
+    assert model.load(callback_ref, 16) == 0
+    assert model.late == silent and chain(model, target) == [callback_ref]
+    assert model.ns["py_weakref_clear_gc0_candidates"]() == 1
+    assert model.load(silent, 16) == 0 and model.late == 0
+    model.stopped = False
+    model.ns["py_weakref_invalidate"](target)
+    assert chain(model, target) == []
+    assert model.index.live("pcc_weak_reverse_slots") == {}
+    assert_directory_exact(model)

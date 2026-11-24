@@ -208,11 +208,25 @@ in the relevant section or issue and removes the entry.
    is open. This item's earlier text, the results for #9 and for collectors
    1-4, is in the
    [archive](status-archive/2026-11.md#work-order-item-1-gc-correctness-as-of-2026-11-24).
-   Next: no unit is ready. A correctness failure of the one collector
-   becomes this item's first unit when it is reported.
+   [#16](https://github.com/ikshengmin/pcc/issues/16) is fixed: every
+   instance death walked every live weakref in the process (O(n²)). The
+   target now carries `PY_FLAG_WEAK_REFERENCED` (0x8000, the unused former
+   `PY_FLAG_GC_LARGE_DEFERRED`) from its first weakref, and the existing
+   target directory runs on the one collector, so a death visits only its
+   own refs and an unmarked death none. Local Mac, host pcc0: 100k deaths
+   with 16k unrelated live weakrefs 20.8 s -> 0.033 s (CPython 0.008 s);
+   weakly referenced cycles at 2k/8k/32k 0.10/1.55/26.8 s ->
+   0.009/0.028/0.105 s; a weakref/finalizer/resurrection probe matched
+   CPython (129.5 s -> 0.97 s). Tests: `tests/python/test_weakref_target_directory_native.py`
+   and the directory model cases of `tests/python/test_gc0_weakref_batch.py`.
+   Not a measured handler-throughput change (no `pcc_perf ab`). Linux,
+   pcc1 and the whole Python suite (blocked by item 2 (b)) are unrun.
+   Next: the early weak pass, `py_weakref_queue_gc0_candidates`, still
+   walks every live weakref on each collection; visit the batch's marked
+   objects through the directory instead (area runtime-gc).
 
    Claims:
-   - #16 weakref invalidation per target: Claude, local Mac, 2026-11-24 14:25Z, area runtime-gc
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

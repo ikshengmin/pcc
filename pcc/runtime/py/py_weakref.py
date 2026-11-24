@@ -21,6 +21,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
     PY_FLAG_GC_DEALLOCATING,
+    PY_FLAG_WEAK_REFERENCED,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
@@ -42,6 +43,7 @@ from pcc.runtime.py.py_abi_constants import (
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.unsafe import (
     atomic_load_i32,
+    atomic_rmw_i32,
     atomic_store_i32,
     define_global_i64,
     define_global_ptr_null,
@@ -164,10 +166,14 @@ def _invalidate_layer_snapshot() -> None:
         atomic_store_i32(global_addr("pcc_weakref_layer_snapshot_dirty"), 0, 1, "release")
 
 
-# The target directory is non-owning raw storage for the nonmoving #9 path.
-# Keep the legacy main/late lists for cyclic collection and fail-closed use.
-# Writers hold the recursive, no-park graph lock; the review reader owns
-# the stopped world. No managed object or C-visible weakref layout changes.
+# The target directory indexes every ref on the ordinary list by its target,
+# so a dying target visits only its own refs (#16), as CPython visits only
+# its weaklist. It is non-owning raw storage beside the main/late lists,
+# which stay complete for cyclic collection and fail-closed use. Writers hold
+# the recursive, no-park graph lock. An allocation failure retires it for the
+# process; invalidation then walks the lists. Late-list refs are not indexed:
+# that list is non-empty only inside a collection's weak window. No managed
+# object or C-visible weakref layout changes.
 _DIR_REF: int = 0
 _DIR_TARGET: int = 8
 _DIR_PREV: int = 16
@@ -201,9 +207,9 @@ pcc_gc_index_py_remove = extern(
 
 
 def _target_directory_supported() -> int:
-    backend: int = load_i32(global_addr("pcc_gc_backend_selected"), 0)
-    return 1 if ((backend >= 1 and backend <= 3)
-                 and load_i32(global_addr("pcc_gc_nonmoving_count_free"), 0) != 0) else 0
+    # The one collector never moves an object: a target's address names it
+    # for its whole life, so the directory is always maintained.
+    return 1
 
 
 def _target_directory_available() -> int:
@@ -308,6 +314,35 @@ def _target_directory_unlink_locked(ref) -> None:
     if ptr_is_null(nxt) == 0:
         store_ptr(nxt, _DIR_PREV, prev)
     free(entry)
+
+
+def _target_directory_drop_locked(target) -> None:
+    """Retire every directory record of a dying target; its refs stay linked.
+
+    Each ref has at most one record, found by its reverse entry. A reverse
+    entry naming another record breaks that invariant: retire the whole
+    directory instead of trusting it.
+    """
+    entry = _target_directory_head(target)
+    if ptr_is_null(entry) != 0:
+        return
+    while ptr_is_null(entry) == 0:
+        nxt = load_ptr(entry, _DIR_NEXT)
+        removed = pcc_gc_index_py_remove(
+            global_addr("pcc_weak_reverse_slots"), global_addr("pcc_weak_reverse_cap"),
+            global_addr("pcc_weak_reverse_count"), global_addr("pcc_weak_reverse_used"),
+            load_ptr(entry, _DIR_REF), 1,
+        )
+        if ptr_eq(removed, entry) == 0:
+            _target_directory_disable_locked()
+            return
+        free(entry)
+        entry = nxt
+    pcc_gc_index_py_remove(
+        global_addr("pcc_weak_target_slots"), global_addr("pcc_weak_target_cap"),
+        global_addr("pcc_weak_target_count"), global_addr("pcc_weak_target_used"),
+        target, 1,
+    )
 
 
 def _retarget_weak(ref, resolved) -> None:
@@ -520,6 +555,11 @@ def py_weakref_new(target, callback):
         py_decref(wr)
         py_raise_owned(py_exc_new(19, cstr("weak reference tracking failed")))
         return null()
+    # The deallocator skips invalidation for a target without this bit. The
+    # creator still owns the target, so its last release orders this store
+    # before that check. Other flag writers may run concurrently: or it in.
+    atomic_rmw_i32("or", target, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_WEAK_REFERENCED,
+                   "relaxed")
     if load_i32(global_addr("pcc_weakref_late_windows"), 0) != 0:
         # Created by a weak callback or finalizer: the open window's late
         # clear decides it with the refs that kept their targets.
@@ -1012,22 +1052,58 @@ def _gc0_clear_target(wr, target) -> None:
         wr = load_ptr(wr, _WEAKREF_NEXT)
 
 
+def _gc0_hold_entry_callbacks(entry, target, pending_cell) -> None:
+    """_gc0_hold_target_callbacks over one target's directory records."""
+    while ptr_is_null(entry) == 0:
+        wr = load_ptr(entry, _DIR_REF)
+        if (ptr_eq(load_ptr(wr, _WEAKREF_TARGET), target) != 0
+                and (load_i32(wr, 12) & 524288) == 0
+                and load_i64(wr, 0) > 0
+                and ptr_is_null(load_ptr(wr, _WEAKREF_CALLBACK)) == 0):
+            if _queue_callback_hold(wr, pending_cell, 1) != 0:
+                return
+        entry = load_ptr(entry, _DIR_NEXT)
+
+
+def _gc0_clear_entries(entry, target) -> None:
+    """_gc0_clear_target over one target's directory records."""
+    while ptr_is_null(entry) == 0:
+        wr = load_ptr(entry, _DIR_REF)
+        if ptr_eq(load_ptr(wr, _WEAKREF_TARGET), target) != 0:
+            store_ptr(wr, _WEAKREF_TARGET, null())
+            pcc_diagnostics_runtime_log_event_code(4, 2, 0, load_i32(target, 8), target)
+        entry = load_ptr(entry, _DIR_NEXT)
+
+
 def _weakref_invalidate_gc0_target(target) -> None:
-    """A terminal GC0 target clears all its refs before any callback.
+    """A terminal target clears all its refs before any callback.
 
     Callbacks may drop other weakrefs or replace the global chain. Prepare
     counted holds before clearing targets, then use only that fixed queue
-    once user code can run. GC0 never moves these owned weakrefs; the malloc
-    slots are not offered as roots to the count-free collectors. A death
-    inside an open weak window also finds refs on the late list.
+    once user code can run, after the graph lock is released. The one
+    collector never moves these owned weakrefs. The directory names this
+    target's refs on the ordinary list in that list's order; a death inside
+    an open weak window also finds refs on the late list. Without the
+    directory both lists are walked.
     """
     pending_cell = stack_alloc(16)
     store_ptr(pending_cell, 0, null())
     store_ptr(pending_cell, 8, null())
-    _gc0_hold_target_callbacks(global_load_ptr("py_weakref_head"), target, pending_cell)
-    _gc0_hold_target_callbacks(global_load_ptr("py_weakref_late_head"), target, pending_cell)
-    _gc0_clear_target(global_load_ptr("py_weakref_head"), target)
-    _gc0_clear_target(global_load_ptr("py_weakref_late_head"), target)
+    pcc_py_gc_minor_graph_lock()
+    late = global_load_ptr("py_weakref_late_head")
+    if _target_directory_available() != 0:
+        entry = _target_directory_head(target)
+        _gc0_hold_entry_callbacks(entry, target, pending_cell)
+        _gc0_hold_target_callbacks(late, target, pending_cell)
+        _gc0_clear_entries(entry, target)
+        _gc0_clear_target(late, target)
+        _target_directory_drop_locked(target)
+    else:
+        _gc0_hold_target_callbacks(global_load_ptr("py_weakref_head"), target, pending_cell)
+        _gc0_hold_target_callbacks(late, target, pending_cell)
+        _gc0_clear_target(global_load_ptr("py_weakref_head"), target)
+        _gc0_clear_target(late, target)
+    pcc_py_gc_minor_graph_unlock()
     _run_callback_queue(load_ptr(pending_cell, 0), 1)
 
 
@@ -1037,13 +1113,11 @@ def py_weakref_invalidate(target) -> None:
         return
     if is_tagged_int(target) != 0:
         return
+    # py_weakref_new sets the bit before any ref to this target exists. A
+    # death without it has no ref to clear (CPython: an empty weaklist).
+    if (load_i32(target, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_WEAK_REFERENCED) == 0:
+        return
     _weakref_invalidate_gc0_target(target)
-    return
-    # PASS1 and the eventual object deallocator both invalidate refs again.
-    # At a stop an exact negative plus an empty late list proves there is
-    # no observer; don't rescan every unrelated ref for each dead object.
-    # Outside a stop, or for a real matching observer, preserve the legacy
-    # callback path and its ordering without borrowing a running-world list.
 
 
 @c_abi_export("py_dealloc_weakref")
