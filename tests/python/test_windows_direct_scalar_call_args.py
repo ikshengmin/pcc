@@ -611,13 +611,11 @@ pcc_win64_home_probe:
 
 MANAGED_CALLBACK_SOURCE = '''
 import gc
-import os
 from pcc import i64
 from pcc.extern import c_abi_typed_export, c_int64, c_ptr, extern
 from pcc.unsafe import function_addr
 
 probe = extern("pcc_win64_home_probe", (c_ptr, c_int64, c_int64, c_int64), c_int64)
-collector = extern("pcc_gc_backend", (), c_int64)
 live = []
 
 @c_abi_typed_export("pcc_win64_managed_callback", "i64", ("i64", "i64", "i64", "i64"))
@@ -631,7 +629,6 @@ def callback(a: i64, b: i64, c: i64, d: i64) -> i64:
     return a + 3 * b + 5 * c + 7 * d
 
 def main():
-    assert collector() == int(os.environ["PCC_GC_BACKEND"])
     caller_only = [{"answer": 73}, "caller stack only"]
     payload = ["caller root", {"answer": 41}]
     live.append(payload)
@@ -692,7 +689,7 @@ def test_native_fixture_compiles_and_encodes_without_a_runtime(tmp_path):
 
 @pytest.mark.integration
 @pytest.mark.pcc_gate(probe=lambda: sys.platform == "win32" and platform.machine().lower() in ("amd64", "x86_64"))
-def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, explicit_owned_runtime, capfd):
+def test_native_win64_home_space_and_rooted_callback(tmp_path, explicit_owned_runtime, capfd):
     from pcc.backend.target_objects import encode_assembly_object
     from pcc.frontends.python.pipeline import compile_python
 
@@ -708,7 +705,7 @@ def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, e
     receipt_path = tmp_path / "win64-home-callback.json"
     assert not receipt_path.exists(), "refuse a stale Win64 callback receipt"
     record = {
-        "schema": "pcc.win64-home-callback.v1", "status": "RUNNING",
+        "schema": "pcc.win64-home-callback.v2", "status": "RUNNING",
         "run_id": os.environ.get("PCC_NATIVE_OBJECT_GATE_RUN_ID", ""),
         "compiler_mode": "host-pcc0", "backend": "self",
         "target": TARGET, "source_sha256": digest(source),
@@ -735,19 +732,18 @@ def test_native_win64_home_space_and_rooted_callback_five_collectors(tmp_path, e
             (tmp_path / "compile.stdout").write_text(captured.out)
             (tmp_path / "compile.stderr").write_text(captured.err)
         record["binary_sha256"] = digest(executable)
-        for backend in (0,):
-            command = [str(executable)]
-            result = run_process_group_timeout(
-                command, env=dict(os.environ, PCC_GC_BACKEND=str(backend)), timeout=10,
-            )
-            record["executions"].append({
-                "requested_gc_backend": backend, "command": command,
-                "returncode": result.returncode, "stdout": result.stdout, "stderr": result.stderr,
-            })
-            save()
-            assert (result.returncode, result.stdout, result.stderr) == (
-                0, "WIN64_HOME_ROOT_CALLBACK_OK\n", "",
-            ), record["executions"][-1]
+        command = [str(executable)]
+        environment = dict(os.environ)
+        environment.pop("PCC_GC_BACKEND", None)
+        result = run_process_group_timeout(command, env=environment, timeout=10)
+        record["executions"].append({
+            "command": command, "returncode": result.returncode,
+            "stdout": result.stdout, "stderr": result.stderr,
+        })
+        save()
+        assert (result.returncode, result.stdout, result.stderr) == (
+            0, "WIN64_HOME_ROOT_CALLBACK_OK\n", "",
+        ), record["executions"][-1]
         assert digest(source) == record["source_sha256"]
         assert digest(helper) == record["helper_sha256"]
         assert digest(executable) == record["binary_sha256"]

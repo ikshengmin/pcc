@@ -253,12 +253,22 @@ in the relevant section or issue and removes the entry.
    bootstrap, no cross-run download or implicit provisioning, and the
    exact same-attempt producer/consumer bundle. Linux: 208 focused
    admission/export checks passed; no hosted bootstrap was run.
-   Next: #20 native object CI receipts.
+   #20 Win64 callback: the native executable checks home-space,
+   result 616 and preserved caller roots without a collector selector.
+   The v2 receipt requires exactly one execution and rejects duplicate,
+   stale, nonzero/boolean status, wrong image or selector evidence.
+   Linux: 34 focused host controls and Win64 IR/COFF encoding checks
+   passed. Windows native execution is pending hosted CI. The combined
+   gate still fails its common two-root slot receipt (old five-run
+   requirement), not the independent Win64 receipt.
+   Next: #20 common native object CI receipts, starting with two-root
+   slot postconditions. Preserve immediate death and independent
+   cyclic collection witnesses under the current collector.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 Win64 callback receipt contract: Codex, Linux, 2026-11-24 20:03 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

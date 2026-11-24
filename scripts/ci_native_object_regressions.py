@@ -2,7 +2,7 @@
 """Bounded host-pcc0 object regressions using the terminal Stage1 runtime.
 
 Seven common executable compiles and thirty native executions, plus one Win64
-callback/root compile and five executions, with no archive/compiler provisioning.
+callback/root compile and one execution, with no archive/compiler provisioning.
 The two-root split adds two executable compiles and five executions within the
 unchanged 300-second total budget; budget fit must be established in CI.
 This independent gate does not qualify Stage1, pcc1 or a self-host fixed point.
@@ -50,7 +50,7 @@ NODES = (
     "test_two_root_cleanup_error_path_native_five_gc[pcc0]",
 )
 WINDOWS_NODES = (
-    WIN64_DIRECT_SCALAR_TEST + "::test_native_win64_home_space_and_rooted_callback_five_collectors",
+    WIN64_DIRECT_SCALAR_TEST + "::test_native_win64_home_space_and_rooted_callback",
 )
 TEST_INPUTS = (
     *(node.split("::")[0] for node in (*NODES, *WINDOWS_NODES)),
@@ -370,8 +370,8 @@ def verify_win64_callback_receipt(directory, runtime, run_id):
     paths = sorted(directory.rglob("win64-home-callback.json"))
     assert len(paths) == 1, "missing or duplicate Win64 callback receipt"
     path = paths[0]
-    record = json.loads(path.read_text(encoding="utf-8"))
-    assert record["schema"] == "pcc.win64-home-callback.v1"
+    record = read_receipt(path)
+    assert record["schema"] == "pcc.win64-home-callback.v2"
     assert record["status"] == "PASS"
     assert run_id and record["run_id"] == run_id, "stale Win64 callback receipt"
     assert record["compiler_mode"] == "host-pcc0"
@@ -397,18 +397,19 @@ def verify_win64_callback_receipt(directory, runtime, run_id):
         stream.seek(int.from_bytes(header[60:64], "little"))
         assert stream.read(6) == b"PE\0\0\x64\x86", "Win64 callback must target AMD64"
     executions = record["executions"]
-    assert [row["requested_gc_backend"] for row in executions] == list(range(5))
+    assert len(executions) == 1
     for row in executions:
-        assert type(row["requested_gc_backend"]) is int
+        assert set(row) == {"command", "returncode", "stdout", "stderr"}
+        assert type(row["returncode"]) is int
         assert row["command"] == [str(binary)]
         assert (row["returncode"], row["stdout"], row["stderr"]) == (
             0, "WIN64_HOME_ROOT_CALLBACK_OK\n", "",
         )
     return {
         "receipt": str(path), **record, "image": image,
-        "observed_collector_witness": True,
-        "collector_evidence": "The exact native source asserts pcc_gc_backend() equals "
-                              "PCC_GC_BACKEND before the home-space, result-616 and rooted-callback oracle.",
+        "observed_collector_witness": False,
+        "collector_evidence": "Single run of the home-space, result-616 and rooted-callback oracle; "
+                              "no collector selector or collector telemetry.",
     }
 
 

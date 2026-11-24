@@ -1021,16 +1021,15 @@ def _win64_receipt(directory, runtime, run_id):
     payload[64:] = b"PE\0\0\x64\x86"
     binary.write_bytes(payload)
     record = {
-        "schema": "pcc.win64-home-callback.v1", "status": "PASS", "run_id": run_id,
+        "schema": "pcc.win64-home-callback.v2", "status": "PASS", "run_id": run_id,
         "compiler_mode": "host-pcc0", "backend": "self", "target": TARGET,
         "source_sha256": gate.sha(source),
         "helper_assembly_sha256": hashlib.sha256(HOME_CALLBACK_ASM.encode()).hexdigest(),
         "helper_sha256": gate.sha(helper), "runtime_archive": runtime["path"],
         "runtime_sha256": runtime["hashes"][""],
         "binary_path": str(binary), "binary_sha256": gate.sha(binary),
-        "executions": [{"requested_gc_backend": gc, "command": [str(binary)],
-                        "returncode": 0, "stdout": "WIN64_HOME_ROOT_CALLBACK_OK\n", "stderr": ""}
-                       for gc in (0,)],
+        "executions": [{"command": [str(binary)],
+                        "returncode": 0, "stdout": "WIN64_HOME_ROOT_CALLBACK_OK\n", "stderr": ""}],
     }
     path = directory / "win64-home-callback.json"
     path.write_text(json.dumps(record))
@@ -1039,7 +1038,7 @@ def _win64_receipt(directory, runtime, run_id):
 
 def test_win64_native_extension_selects_only_windows_and_binds_its_inputs():
     expected = (prior.WIN64_DIRECT_SCALAR_TEST +
-                "::test_native_win64_home_space_and_rooted_callback_five_collectors",)
+                "::test_native_win64_home_space_and_rooted_callback",)
     assert gate.WINDOWS_NODES == expected
     assert gate.selected_nodes("win32") == (*gate.NODES, *expected)
     assert gate.selected_nodes("linux") == gate.NODES
@@ -1085,10 +1084,11 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     assert result["tree_rss_limit_bytes"] == 17179869184
     assert result["observed_collector_witness"] is False
     assert len(result["programs"]) == 8
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 35
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 31
     extra = result["programs"]["win64-home-callback"]
-    assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is True
-    assert [row["requested_gc_backend"] for row in extra["executions"]] == list(range(5))
+    assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is False
+    assert len(extra["executions"]) == 1
+    assert "requested_gc_backend" not in extra["executions"][0]
     assert result["source"] == result["source_after"]
     assert result["runtime"] == result["runtime_after"] == runtime
 
@@ -1097,7 +1097,7 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     "missing", "duplicate", "stale", "running", "schema", "pcc1", "llvm",
     "target", "runtime-target", "runtime-path", "runtime-digest", "source", "source-digest",
     "assembly-digest", "helper", "helper-digest", "binary-path", "binary-digest", "machine",
-    "image-format", "missing-gc", "duplicate-gc", "boolean-gc", "failed-gc", "wrong-output",
+    "image-format", "missing-execution", "duplicate-execution", "old-selector", "boolean-status", "failed-execution", "wrong-output",
     "stderr", "wrong-command",
 ))
 def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
@@ -1139,20 +1139,22 @@ def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
         record["binary_sha256"] = gate.sha(binary)
     elif change == "image-format":
         monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "static-elf"})
-    elif change == "missing-gc":
+    elif change == "missing-execution":
         record["executions"].pop()
-    elif change == "duplicate-gc":
-        record["executions"][-1]["requested_gc_backend"] = 0
-    elif change == "boolean-gc":
-        record["executions"][1]["requested_gc_backend"] = True
-    elif change == "failed-gc":
+    elif change == "duplicate-execution":
+        record["executions"].append(dict(record["executions"][0]))
+    elif change == "old-selector":
+        record["executions"][0]["requested_gc_backend"] = True
+    elif change == "boolean-status":
+        record["executions"][0]["returncode"] = False
+    elif change == "failed-execution":
         record["executions"][-1]["returncode"] = 124
     elif change == "wrong-output":
-        record["executions"][2]["stdout"] = "616\n"
+        record["executions"][0]["stdout"] = "616\n"
     elif change == "stderr":
-        record["executions"][2]["stderr"] = "diagnostic"
+        record["executions"][0]["stderr"] = "diagnostic"
     elif change == "wrong-command":
-        record["executions"][2]["command"] = [sys.executable]
+        record["executions"][0]["command"] = [sys.executable]
     path.write_text(json.dumps(record))
     if change == "missing":
         path.unlink()
@@ -1162,7 +1164,7 @@ def test_win64_receipt_rejects_missing_stale_or_mismatched_evidence(
         gate.verify_win64_callback_receipt(directory, runtime, "current-run")
 
 
-@pytest.mark.parametrize("failure", (None, "compile", "collector", "runtime-drift"))
+@pytest.mark.parametrize("failure", (None, "compile", "execution", "runtime-drift"))
 def test_win64_native_probe_records_one_compile_and_fails_closed(
     tmp_path, monkeypatch, admitted, failure,
 ):
@@ -1172,6 +1174,7 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
 
     runtime["target"] = probe.TARGET
     monkeypatch.setenv("PCC_NATIVE_OBJECT_GATE_RUN_ID", "host-control-run")
+    monkeypatch.setenv("PCC_GC_BACKEND", "4")
     calls, executions = [], []
     expected = tmp_path / "expected"
     expected_path = _win64_receipt(expected, runtime, "host-control-run")
@@ -1186,12 +1189,12 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
         Path(binary).write_bytes(expected_binary)
 
     def execute(command, *, env, timeout):
-        backend = int(env["PCC_GC_BACKEND"])
+        assert "PCC_GC_BACKEND" not in env
         executions.append((command, env, timeout))
         assert command == [str(work / "win64_home_callback.exe")] and timeout == 10
-        if failure == "runtime-drift" and backend == 4:
+        if failure == "runtime-drift":
             Path(runtime["path"]).write_bytes(b"changed runtime")
-        return subprocess.CompletedProcess(command, 124 if failure == "collector" and backend == 2 else 0,
+        return subprocess.CompletedProcess(command, 124 if failure == "execution" else 0,
                                            stdout="WIN64_HOME_ROOT_CALLBACK_OK\n", stderr="")
 
     monkeypatch.setattr(pipeline, "compile_python", compile_program)
@@ -1199,12 +1202,12 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
     monkeypatch.setattr(gate, "verify_native_image", lambda path: {"format": "pe", "libraries": ["kernel32.dll"]})
     capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
     if failure is None:
-        probe.test_native_win64_home_space_and_rooted_callback_five_collectors(work, Path(runtime["path"]), capfd)
+        probe.test_native_win64_home_space_and_rooted_callback(work, Path(runtime["path"]), capfd)
         verified = gate.verify_win64_callback_receipt(work, runtime, "host-control-run")
         assert verified["status"] == "PASS" and verified["compiler_mode"] == "host-pcc0"
     else:
         with pytest.raises((AssertionError, RuntimeError)):
-            probe.test_native_win64_home_space_and_rooted_callback_five_collectors(work, Path(runtime["path"]), capfd)
+            probe.test_native_win64_home_space_and_rooted_callback(work, Path(runtime["path"]), capfd)
     assert len(calls) == 1
     source, binary, options = calls[0]
     assert options == {"backend": "self", "ir_scaffold_mode": "on",
@@ -1212,10 +1215,11 @@ def test_win64_native_probe_records_one_compile_and_fails_closed(
                        "target_triple": probe.TARGET}
     record = json.loads((work / "win64-home-callback.json").read_text())
     assert record["status"] == ("PASS" if failure is None else "FAIL")
-    assert len(executions) == (0 if failure == "compile" else 3 if failure == "collector" else 5)
+    assert len(executions) == (0 if failure == "compile" else 1)
     assert "assert result == 616" in probe.MANAGED_CALLBACK_SOURCE
     assert 'assert caller_only[0]["answer"] == 73' in probe.MANAGED_CALLBACK_SOURCE
-    assert 'assert collector() == int(os.environ["PCC_GC_BACKEND"])' in probe.MANAGED_CALLBACK_SOURCE
+    assert "PCC_GC_BACKEND" not in probe.MANAGED_CALLBACK_SOURCE
+    assert "pcc_gc_backend" not in probe.MANAGED_CALLBACK_SOURCE
 
 
 @pytest.mark.parametrize("label", ("two-root-cleanup", "two-root-tracing"))
