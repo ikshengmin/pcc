@@ -248,13 +248,17 @@ in the relevant section or issue and removes the entry.
    duplicate, unrelated and binary paths, and now also reject adding
    retired collector logs. Linux: 11 focused checks passed; no bootstrap
    was run and no workflow budget or actual artifact path was changed.
-   Next: #20 native object CI receipts and same-run Stage1 bundle
-   admission assertions as separate units.
+   #20 same-attempt Stage1 admission: the test finds the bootstrap
+   owner by step ID, not by an old comment. It still checks legacy-only
+   bootstrap, no cross-run download or implicit provisioning, and the
+   exact same-attempt producer/consumer bundle. Linux: 208 focused
+   admission/export checks passed; no hosted bootstrap was run.
+   Next: #20 native object CI receipts.
    [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
    matching hosted evidence is still pending.
 
    Claims:
-   - #20 same-run Stage1 bundle admission: Codex, Linux, 2026-11-24 19:06 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

@@ -248,6 +248,11 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
     assert 'name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}' in consumer
     assert '--stage1-bundle "$RUNNER_TEMP/source-native-input"' in consumer
     assert consumer.index('actions/download-artifact@v7') < consumer.index('scripts/ci_validation_run.py')
+    download = consumer.split('        id: source_native_download\n', 1)[1].split('\n      - name:', 1)[0]
+    assert 'name: stage1-native-linux-x86_64-${{ github.sha }}-${{ github.run_attempt }}' in download
+    assert 'path: ${{ runner.temp }}/source-native-input' in download
+    assert not re.search(r'^\s*(run-id|github-token|repository):', download, re.M)
+    assert "steps.source_native_download.outcome == 'success'" in consumer
     # Rust keeps the exact official compiler and both authenticated reference
     # targets when its integration partition moves to the existing bundle owner.
     install = consumer.split('      - name: Install the pinned official Rust compiler and both checked targets', 1)[1]
@@ -277,7 +282,15 @@ def test_workflow_consumes_same_run_attempt_bundle_only_in_native_job():
     assert "outputs.native_stage1 == 'true' && (!inputs.full_chain || inputs.pytest_selection == 'not integration')" in producer
     assert 'matrix: ${{ fromJSON(needs.validation-plan.outputs.matrix_native_stage1) }}' in producer
     assert producer.count('scripts/ci_worker_size_prior_gate.py --out-dir build/worker-prior-gate --phase stage1') == 1
-    later = producer.split('      # One integration budget,', 1)[1]
+    # The single-collector bootstrap owner and all later producer probes
+    # belong to the legacy gate, not to the same-attempt Stage1 consumer.
+    before, owner = producer.split('        id: bootstrap_owner\n')
+    assert '        id: stage1_bundle\n' in before
+    first_step, _, later = owner.partition('\n      - name:')
+    assert 'steps.stage1_export.outcome' in first_step
+    assert "needs.validation-plan.outputs.legacy == 'true'" in first_step
+    assert '--partition bootstrap --in-place' in first_step
+    assert '--bundle build/stage1-native-export' in first_step
     for line in later.splitlines():
         if line.strip().startswith('if:') and line.strip() != 'if: always()':
             assert "needs.validation-plan.outputs.legacy == 'true'" in line
