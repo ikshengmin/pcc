@@ -395,7 +395,8 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (b) Python test collection repair on the Mac, at the maintainer's
+     request ("你推进吧"); supersedes the unpublished `c1b34833`: Claude, local Mac, 2026-11-24 15:23Z, area runtime-gc
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
