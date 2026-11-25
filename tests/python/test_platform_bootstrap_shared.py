@@ -64,6 +64,73 @@ def test_all_gc_chains_build_runtime_and_stage1_once_and_verify_each_gc(tmp_path
     assert saved["source"] == receipt["source"]
 
 
+def _stage_compile_events(events):
+    return [event for event in events if "--ir-scaffold=on" in event[0]]
+
+
+def _assert_stage_worker_budget(events, jobs, rss_limit, timeout):
+    assert [event[3] for event in events] == [False, True, True]
+    for _command, env, actual_rss, native, actual_timeout in events:
+        assert env["PCC_PY_FRONTEND_JOBS"] == str(jobs)
+        assert env["PCC_SELF_BACKEND_JOBS"] == str(jobs)
+        assert env["PCC_WORKER_TREE_BUDGET_BYTES"] == str(rss_limit)
+        assert actual_rss == rss_limit
+        assert actual_timeout == timeout
+        assert env["PCC_PY_FRONTEND_IR_CACHE"] == env["PCC_SELF_BACKEND_OBJECT_CACHE"] == "0"
+        if native:
+            assert env["PCC_HOST_PYTHON"].endswith("forbidden-host-python")
+
+
+@pytest.mark.parametrize("cpu_budget,host_cpus,expected", [(4, 8, 4), (8, 3, 3), (1, 8, 1)])
+def test_single_chain_matrix_inherits_stage1_worker_budget(
+    tmp_path, monkeypatch, cpu_budget, host_cpus, expected,
+):
+    events = _fake_platform(tmp_path, monkeypatch)
+    monkeypatch.setattr(platform.os, "cpu_count", lambda: host_cpus)
+    receipt = platform.run_matrix(("0",), tmp_path / "matrix",
+                                  cpu_budget=cpu_budget, timeout=1800)
+    assert receipt["parallel_chains"] == 1
+    assert receipt["shared"]["worker_jobs"] == expected
+    assert receipt["jobs_per_chain"] == receipt["chains"][0]["worker_jobs"] == expected
+    assert receipt["aggregate_rss_limit"] == receipt["chains"][0]["tree_rss_limit"] == 17179869184
+    _assert_stage_worker_budget(_stage_compile_events(events), expected, 17179869184, 1800)
+
+
+@pytest.mark.parametrize("jobs", [1, 3, 4])
+def test_admitted_stage1_worker_budget_is_reused_for_later_stages(tmp_path, monkeypatch, jobs):
+    events = _fake_platform(tmp_path, monkeypatch)
+    rss_limit = 17179869184
+    shared = platform.run_chain("0", tmp_path / "shared", stage_limit=1,
+                                jobs=jobs, timeout=1800, rss_limit=rss_limit)
+    monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
+    receipt = platform.run_from_shared("0", tmp_path / "gc0",
+                                      timeout=1800, rss_limit=rss_limit)
+    stages = _stage_compile_events(events)
+    assert receipt["worker_jobs"] == shared["worker_jobs"] == jobs
+    assert stages[1][0][0] == shared["compiler_path"]
+    stage2_command = stages[1][0]
+    assert stages[2][0][0] == stage2_command[stage2_command.index("-o") + 1]
+    _assert_stage_worker_budget(stages, jobs, rss_limit, 1800)
+
+
+@pytest.mark.parametrize("invalid_budget", [None, True, 0, -1, "4"])
+def test_invalid_admitted_stage1_worker_budget_never_executes_native_chain(
+    tmp_path, monkeypatch, invalid_budget,
+):
+    events = _fake_platform(tmp_path, monkeypatch)
+    shared = platform.run_chain("0", tmp_path / "shared", stage_limit=1, jobs=4)
+    if invalid_budget is None:
+        del shared["worker_jobs"]
+    else:
+        shared["worker_jobs"] = invalid_budget
+    (tmp_path / "shared" / "receipt.json").write_text(json.dumps(shared))
+    events.clear()
+    monkeypatch.setenv("PCC_TEST_NO_NATIVE_PROVISIONING", "1")
+    with pytest.raises(RuntimeError, match="shared Stage1 worker budget"):
+        platform.run_from_shared("0", tmp_path / "gc0")
+    assert events == []
+
+
 def test_separate_gc_gates_reuse_one_shared_preparation(tmp_path, monkeypatch):
     events = _fake_platform(tmp_path, monkeypatch)
     # Exercise mocked provisioning only after replacing platform.run.

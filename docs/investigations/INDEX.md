@@ -1104,6 +1104,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - Current-source evidence supersedes the broad historical inventory below.
 - [set-and-frozenset-of-dict-lower-to-empty.md](set-and-frozenset-of-dict-lower-to-empty.md) — **`set(d)` / `frozenset(d)` on a mapping lower to an EMPTY set in pcc-compiled code**
   - Predecessor:
+- [shared-compiler-admission-45619704293.md](shared-compiler-admission-45619704293.md) — **Independent compiler pool admission in one source guard**
+  - Source: [run 45619704293, shared ordinary job 139281129025](https://github.com/ikshengmin/pcc/actions/runs/45619704293/job/139281129025),...
 - [shared-refcount-contention-thread-scaling.md](shared-refcount-contention-thread-scaling.md) — **shared-object refcount contention destroys thread scaling; gc.immortalize restores it on backend 0**
   - The Quansight post "Scaling NumPy on Free-Threaded Python"
 - [single-cli-blocked-by-c-frontend-closure.md](single-cli-blocked-by-c-frontend-closure.md) — **one CLI needs eleven frontend gaps closed, not a CLI rewrite**
@@ -1124,6 +1126,8 @@ Regenerate with `uv run python scripts/regen_investigations_index.py`.
   - run_pcc_stage1_build emits metric_scopes and comparison_contract in its v1
 - [stage2-deferred-checkpoint-coordinator-memory-cap.md](stage2-deferred-checkpoint-coordinator-memory-cap.md) — **Stage2 coordinator exceeds memory cap at deferred checkpoint**
   - The first complete Stage2 qualification of the native fragment cohort fails
+- [stage2-worker-budget-parity-45643044565.md](stage2-worker-budget-parity-45643044565.md) — **Stage2 worker-budget parity and measured native bootstrap slowdown**
+  - Active. The single-chain bootstrap coordinator now inherits Stage1's worker
 - [str-print-format-no-repr-fallback-no-libpython.md](str-print-format-no-repr-fallback-no-libpython.md) — **str()/print()/format() of an instance does not fall back to __repr__ (no-libpython)**
   - Under strict no-libpython, `print(obj)` / `str(obj)` / `f"{obj}"` / `"x" + str(obj)`
 - [strict-cext-dynamic-tag-decref-parity.md](strict-cext-dynamic-tag-decref-parity.md) — **strict decref ignores dynamic C-extension type tags**

@@ -1082,9 +1082,16 @@ in the relevant section or issue and removes the entry.
    #200; section "Self-host fixed point: the final convergence step" below),
    together with every result that needs a current pcc1 (GPU M2, proof-checker
    stage 3). Bootstrap runs need the maintainer's explicit OK.
+   Next: validate the corrected single-chain Stage1/2/3 worker ceiling in
+   CI, then the native export/preload and indexed generation slowdown
+   under the same guard. Run 45643044565 timed out inside Stage2:
+   Linux 2/621 codegen modules retired, Windows not yet through the
+   class preload index. The inherited width fix preserves the original
+   byte and time guards; 334 related tests passed on Linux. No full
+   Stage2/3 or native speedup claim. See the
+   [phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2/3 single-collector worker-budget parity: Codex, Linux, 2026-11-25 16:49 UTC, area selfhost
    - Stage2 native export batch admission: Codex, Linux, 2026-11-25T16:51Z, area selfhost (pipeline_frontend_parallel and export tests; not bootstrap_platform)
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
@@ -1508,9 +1515,13 @@ and Stage2 wall time does not exceed Stage1, because Stage2 is the native pcc1
 compiling the same source that host pcc0 compiles under CPython in Stage1.
 Compare the two stages with the same source, worker count and cache state.
 
-State against that bar: not met. In CI run 44358778171 (Linux x86-64, below)
-Stage1 took 2,202.313 s with four workers; Stage2, with two workers, was
-stopped by the 1,800 s watchdog before linking, its process tree already 22.5%
-above the Stage1 RSS sample. The worker counts differ, so those times are not
-an equal-condition comparison. Stage2 completion blockers are tracked in
+State against that bar: not met. In CI run 45643044565 at `5f101c61`,
+Stage1 compiled 621/621 modules with four workers in 1,466.275 s on
+Linux x86-64 and 2,377.649 s on Windows x86-64; Stage2 timed out at the
+unchanged 1,800 s whole-owner watchdog on both. The legacy single-chain
+two-worker ceiling is now corrected to match its Stage1 receipt.
+Stage2 native work is substantially slower even within matching module
+phases. Details and focused validation:
+[worker-budget and native phase attribution](investigations/stage2-worker-budget-parity-45643044565.md).
+No equal-condition completed-stage comparison or fixed point yet;
 [allstoalls/pcc#200](https://github.com/allstoalls/pcc/issues/200).

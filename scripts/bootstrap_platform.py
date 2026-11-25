@@ -615,9 +615,16 @@ def run_from_shared(gc_backend, out_dir, *, stage_limit=3, timeout=2400,
                 raise RuntimeError("integration requires its admitted same-source Stage1; automatic rebuild is disabled")
             shared = run_chain("0", common, stage_limit=1, timeout=timeout, rss_limit=rss_limit,
                                allow_dirty=allow_dirty, jobs=shared_stage1_jobs(4, rss_limit), lock_held=True)
+        # The admitted Stage1 receipt records its actual CPU/worker ceiling.
+        # This gate owns a single native chain, so the obsolete two-workers-per-
+        # collector split is not applicable. Both stages keep their existing
+        # phase-specific admission and the same tree/deadline guards.
+        jobs = shared.get("worker_jobs")
+        if type(jobs) is not int or jobs <= 0:
+            raise RuntimeError("invalid shared Stage1 worker budget")
         return run_chain(gc_backend, out_dir, stage_limit=stage_limit, timeout=timeout,
                          rss_limit=rss_limit, allow_dirty=allow_dirty, shared=shared,
-                         jobs=2, lock_held=True)
+                         jobs=jobs, lock_held=True)
 
 
 def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400, stage1_timeout=None,
@@ -625,8 +632,12 @@ def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400, stage1_timeout
                runtime_archive=None):
     """One immutable runtime/Stage1, then resource-bounded native chains."""
     out_dir = Path(out_dir).resolve()
-    slots = min(len(backends), 2, max(1, cpu_budget // 2), max(1, rss_limit // (4 * 1024 ** 3)))
-    jobs = max(1, min(2, cpu_budget // max(1, slots)))
+    stage1_jobs = shared_stage1_jobs(cpu_budget, rss_limit)
+    slots = min(len(backends), 2, max(1, stage1_jobs // 2),
+                max(1, rss_limit // (4 * 1024 ** 3)))
+    # Preserve the simultaneous-chain bound for legacy matrix callers, but
+    # a sole chain must retain the same admitted CPU ceiling as Stage1.
+    jobs = stage1_jobs if slots == 1 else max(1, min(2, stage1_jobs // slots))
     chain_rss = rss_limit // max(1, slots)
     with (contextlib.nullcontext() if lock_held else performance_lock()):
         out_dir.mkdir(parents=True, exist_ok=True)
@@ -634,7 +645,7 @@ def run_matrix(backends, out_dir, *, stage_limit=3, timeout=2400, stage1_timeout
         shared = run_chain("0", out_dir / "shared", stage_limit=1, timeout=timeout,
                            stage1_timeout=stage1_timeout,
                            rss_limit=rss_limit, allow_dirty=allow_dirty,
-                           jobs=shared_stage1_jobs(cpu_budget, rss_limit), lock_held=True,
+                           jobs=stage1_jobs, lock_held=True,
                            runtime_archive=runtime_archive)
         cancelled = threading.Event()
         def execute(backend):

@@ -617,7 +617,7 @@ def test_nonmac_shared_stage1_still_executes_requested_later_stages(tmp_path, mo
     source, configuration = {'commit': 'a' * 40}, {'target': 'native'}
     compiler = tmp_path / 'existing-pcc1'
     compiler.write_bytes(b'existing Stage1 contract fixture')
-    shared = {'source': source, 'configuration': configuration,
+    shared = {'source': source, 'configuration': configuration, 'worker_jobs': 4,
               'compiler_path': str(compiler), 'stages': [{'sha256': gate.digest(compiler)}]}
     common = tmp_path / 'shared'
     common.mkdir()
@@ -636,6 +636,7 @@ def test_nonmac_shared_stage1_still_executes_requested_later_stages(tmp_path, mo
     assert result == {'dispatch_only': True} and len(calls) == 1
     assert calls[0][0] == '4' and calls[0][2]['stage_limit'] == 3
     assert calls[0][2]['shared'] == shared
+    assert calls[0][2]['jobs'] == shared['worker_jobs'] == 4
 
 
 def test_workflow_script_entrypoints_import_without_pythonpath(tmp_path):

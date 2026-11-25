@@ -7,7 +7,7 @@ Search for the error text or symbol after locating its current code path.
 Read the matching experiment and later corrections, expanding as needed.
 Titles, snippets and status are historical locators, not current diagnosis.
 
-604 investigations.
+606 investigations.
 
 - [`2**52` does not round-trip through pcc1's float formatting or parsing](../investigations/pcc1-float-repr-strtod-17-digit-defect.md) — **Root cause identified, minimised to a two-line probe, bisected per stage, and**
   - `stage2 -> stage3` · `verify: cmp pcc2 pcc3` · `0x...004` · `0x...000` · `1000.0` · `123456789012345.0`
@@ -103,6 +103,7 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `PCC_GC_BACKEND=0` · `PCC_PYTHON_LIBPYTHON=off` · `pcc.py_frontend.mixin_ownership` · `typing.Optional[ir.X]` · `Optional[ir.X]` · `pcc.llvm_capi.ir.Function`
 - [Granule span lookup radix](../investigations/granule-span-lookup-radix.md) — **`DONE_STRONG`. Durable evidence:**
   - `pcc1-stage2-emit-throughput-and-memory.md` · `benchmarks/python/granule_heavy_object.py` · `offset >> ZGranuleSizeShift` · `mheap.arenas` · `address >> 12` · `pcc_allocator_metadata_mapped`
+- [Independent compiler pool admission in one source guard](../investigations/shared-compiler-admission-45619704293.md)
 - [Investigation Report: `nbody_shootout` Was Not "Just Missing Vectorization"](../investigations/nbody-shootout-fp-contract-and-vectorization.md)
   - `nbody_shootout` · `benchmarks/nbody_shootout.c` · `were around` · `was therefore more than` · `improved from roughly` · `slower to about`
 - [Investigation Report: Bootstrap Stage2 Type Inference Runtime Corruption](../investigations/pcc-bootstrap-stage2-type-infer-runtime-corruption.md) — **historical — fixes from this investigation have landed (Function.__init__**
@@ -1190,6 +1191,8 @@ Titles, snippets and status are historical locators, not current diagnosis.
   - `, and` · `StopIteration.value` · `__enter__` · `__exit__` · `__format__` · `libpython_mode="off"`
 - [self-backend torture cluster: phi parallel-copy swap + smin/smax-against-zero peephole](../investigations/self-backend-torture-phi-swap-and-minmax-zero-fold.md) — **resolved (2026-06-18)**
   - `tests/c/test_gcc_torture_self.py` · `tests/c/test_self_backend.py` · `## Report` · `--backend self` · `--backend llvm` · `fp-cmp-1..6`
+- [Stage2 worker-budget parity and measured native bootstrap slowdown](../investigations/stage2-worker-budget-parity-45643044565.md) — **Active. The single-chain bootstrap coordinator now inherits Stage1's worker**
+  - `worker-prior-gate/stage1.json` · `platform-qualification/shared/stage1.log` · `platform-bootstrap/gc0/stage2.log` · `pipeline_frontend_parallel.compile_parallel_uncached` · `pipeline._preload_deltas_in_workers` · `preload_delta_worker.run`
 - [TinyXML2 explicit destruction: effect graph and next slice](../investigations/tinyxml2-explicit-virtual-destructor-effects.md)
   - `tinyxml2.cpp:1199:9` · `cpp.unsupported.placement-constructor-effects` · `_parent->Unlink(this)` · `: it compiles` · `and invokes` · `tests/cpp/test_cpp_destructor_exception_specifications.py`
 - [Tracing clears callback weakrefs before acyclic resurrection](../investigations/gc-tracing-acyclic-weakref-resurrection.md)
