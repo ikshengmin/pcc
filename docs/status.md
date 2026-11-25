@@ -470,15 +470,33 @@ in the relevant section or issue and removes the entry.
    with its own source-matched runtime archive, `-m integration -k "not
    pcc1"`): 236 pass, and the 19 failing nodes are the same 19 that fail at
    `a38318725`. pcc1 and Linux were not run.
+   (d), step 1 (Claude, local Mac, `4b2cc8f04` and test follow-ups to
+   `e21d8c14b`): code generation emits no `pcc_gc_pin`, `pcc_gc_unpin`,
+   `pcc_gc_note_slot_write_barrier` or `pcc_gc_note_write_barrier`. The
+   fused pass already dropped each of them, so the post-pass IR keeps its
+   blocks (358 on the sample program) and loses only the 28 dead loads that
+   fed them. `_gc_pin`/`_gc_unpin`, about 280 call sites and the extern
+   repin are gone. Tests that asserted the emitted pin protocol now assert
+   its absence or the owner that replaces it (cleared shared-return slots,
+   the staging-root clear, release pairing on scaffold error edges). Host
+   pcc0, by node id against HEAD (`97014d7d4`): in the 239 files naming
+   pin, unpin, barrier or lease, every file that fails on either side was
+   enumerated; after rewriting 12 test files no failing node differs.
+   Native integration programs of the
+   lease slice's 47 files (pcc0, source-matched archive, `-m integration -k
+   "not pcc1"`): 236 pass and the same 19 nodes fail. pcc1 and Linux were
+   not run. Left in code generation for step 4: the graph lock around a
+   root reload (`_emit_root_pin_lock`), the extern prior-pin read and
+   `pcc_gc_take_pinned_slot`, and pin-named bookkeeping (`pinned_arg_temps`,
+   `_pinned_gc_rooted_local_names`, the `ret.shared.unpin` label).
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
    the header/ABI freeze.
    Next for (d), in order, each with its tests rewritten in the same
-   change: (1) code generation stops emitting pin/unpin and write
-   barriers (`_gc_pin`/`_gc_unpin` and about 50 direct sites); (2) the
-   runtime sources drop their own pin/unpin/lease/barrier calls (about 700
-   in about 45 files, in file batches, each module compiled alone first);
+   change: (1) done above; (2) the runtime sources drop their own
+   pin/unpin/lease/barrier calls (about 700 in about 45 files, in file
+   batches, each module compiled alone first);
    (3) delete the fused-protocol pass (its test file named to the
    maintainer first); (4) `pcc_gc_root_copy_lease`,
    `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
@@ -607,7 +625,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) pin/unpin and barrier emission: Claude, macOS, 2026-11-25T08:07Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
