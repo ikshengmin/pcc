@@ -913,9 +913,28 @@ in the relevant section or issue and removes the entry.
    ns (owner compared through a thread-local or the thread pointer), so
    biased reference counting has no ceiling here; the per-request cost
    is the number of runtime operations, not their atomicity.
-   Next for (c): fewer operations a request. Containers that take the
-   reference a literal produces instead of retaining it and releasing the
-   temporary; then borrowed temporaries in code generation.
+   Profile after it (arm `load-new`, w1, 17.4 us a request): `json.dumps`
+   is 5.6 us inclusive (32%), object release (`_py_decref_finish` and the
+   deallocators) 2.2 us, allocation 1.2 us. The json primitive (6.4 us
+   against CPython's 1.7 us) spends 0.8 us in the list-append path's
+   container lock and checks (`pcc_container_lock` and unlock,
+   `pcc_gc_try_init_ptr_locked`, `_list_is_sane`, and
+   `_container_fast_still_admitted`, which rechecks a collector-switch word
+   no code sets to -1 any more), 0.2 us in Darwin TLV calls, 0.24 us in
+   provenance checks. Arguments pass borrowed (no per-argument root or
+   count). Containers taking a literal's reference was estimated at about
+   0.2% and is not pursued. Candidates of 3% or more, each structural:
+   (1) the list-append path's lock and checks, about 4% of a request
+   (`py_list.py`, claimed by item 2 (d) 4b while that batch runs);
+   (2) Darwin thread-local access: every access calls the TLV resolver
+   through its descriptor (`_materialize_thread_local_address`), about 4%;
+   inlining the resolver's fast path reads the pthread TSD array through
+   `tpidrro_el0`, an undocumented layout Go also relies on, so it waits
+   for the maintainer's decision; (3) borrowed temporaries in code
+   generation (the root operations are 20% of a request). Below the floor
+   alone and together (about 2.5%): the allocator's per-call statistics
+   atomics, the magazine limit's division, the dict deallocator's debug
+   slot check.
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
