@@ -1542,17 +1542,21 @@ in the relevant section or issue and removes the entry.
    a local Mac `sample` of a probe names its own functions. Re-check a Mac
    function profile taken before this fix against `nm` before using it.
 
-   Failing on master on 2026-11-26, not caused by item 3 (checked on
-   HEAD and on `shenming/master` snapshots):
-   `tests/python/test_local_frame_arena.py`, 8 nodes (models of the
-   removed frame protocol), and
-   `tests/python/test_typed_list_iteration_ownership.py`, 4 nodes: the
-   allocator's live bytes grow linearly with iterations (about 23.5 bytes
-   per iteration; `Item(7)` alone about 7), in 8 KiB doubling steps, as if
-   a global pointer array grew per GC-tracked allocation; reproduced with
-   arm p1-base (e7374ffc0). Stale expectations in the backend test set
-   (record lanes, worker phases, codec preflight, link lifetime, typed
-   C ABI, structured inventory, suffix scratch) were updated on 2026-11-26.
+   Failing on master on 2026-11-26, not caused by item 3 (checked on HEAD
+   and on `shenming/master` snapshots):
+   `tests/python/test_local_frame_arena.py`, 8 nodes (models of the removed
+   frame protocol). `tests/python/test_typed_list_iteration_ownership.py` (4
+   nodes) counted the collector's young log as a leak: one entry per newly
+   tracked container in 8 KiB chunks, reset only by a young collection,
+   capped at 1 MiB. A loop that frees everything by reference count triggers
+   no collection, so 8000 iterations of three containers grew the log by 23
+   chunks (188416 bytes) while every object was freed; the test now
+   subtracts the log. Open, unmeasured: in a steady server the log saturates
+   after about 130k tracked allocations, and a saturated log sends the next
+   young collection to the exact-flag path. Stale expectations in the
+   backend test set (record lanes, worker phases, codec preflight, link
+   lifetime, typed C ABI, structured inventory, suffix scratch) were updated
+   on 2026-11-26.
 
    Claims:
    - P0 unit 1: self AArch64 register copies and immediate operands: Claude, macOS, 2026-11-25T21:10Z, area backend (AArch64 selection, register allocation and their tests; native and bootstrap gates authorized by the user on 2026-11-26)

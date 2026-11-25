@@ -15,9 +15,18 @@ def test_typed_field_iteration_releases_object_tree(tmp_path: Path, pcc_runtime_
     action = {"exhausted": "pass", "break": "break", "return": "return total",
               "error": 'raise ValueError("expected")'}[exit_kind]
     source = tmp_path / "typed_field_loop.py"
+    # Allocator live bytes include the collector's young log: one entry per
+    # newly tracked container, in 8 KiB chunks reset by a young collection
+    # and capped at 1 MiB (freestanding_gc_tracking._YOUNG_CHUNK_BYTES and
+    # _YOUNG_LOG_MAX_CHUNKS). This loop frees everything by reference count
+    # and triggers no collection, so the log grows; subtract its chunks to
+    # measure the object tree itself.
     source.write_text('''from dataclasses import dataclass, field
 from pcc.extern import c_int64, extern
-live_bytes = extern("pcc_os_heap_in_use_bytes", (), c_int64)
+from pcc.unsafe import global_addr, load_i32
+heap_bytes = extern("pcc_os_heap_in_use_bytes", (), c_int64)
+def live_bytes() -> int:
+    return heap_bytes() - 8192 * load_i32(global_addr("pcc_gc_young_log_chunk_count"), 0)
 @dataclass
 class Item:
     value: int
