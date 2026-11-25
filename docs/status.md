@@ -501,7 +501,7 @@ in the relevant section or issue and removes the entry.
    behavior was changed.
 
    Claims:
-   - none
+   - #20 x86 SymbolMeta explicit weak field and binding controls: Codex, Linux x86-64, 2026-11-25T17:28Z, area backend
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
