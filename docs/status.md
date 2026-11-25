@@ -1367,6 +1367,19 @@ in the relevant section or issue and removes the entry.
    generation and 12k (13%) from IR optimization: fix the backend's
    instruction selection, frame lowering and machine-level peephole, not
    the IR. The handler program itself is still self-compiled in all three.
+   P0 ranking (estimate: each hot function's static machine-code mix times
+   its profile share; a time-weighted per-instruction count under-counts
+   cheap instructions, and the default xctrace CPU Counters template records
+   no call stacks): register-to-register `mov` 10.4% of executed
+   instructions, frame record and pointer authentication 7.9%, immediates
+   materialized with `mov` before use 6.5%, callee-saved saves and restores
+   5.3% (clang saves about as many), `nop` 2.0%, `adrp`+`add` foldable into
+   the load 2.0%, `sxtw` after a 32-bit load 1.7%, frame-slot spills 1.1%,
+   unfused sign and bit tests 0.9%, branches to branches 0.1%; 38% in all,
+   against the measured 31% of code generation alone. Order: register
+   copies (coalescing) and immediate operands, then frameless functions,
+   then the peepholes; each change measured with `instr` and gated by the
+   native and bootstrap checks.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
