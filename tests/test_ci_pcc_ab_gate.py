@@ -296,6 +296,8 @@ def test_whole_source_plan_cannot_be_a_scope_label_only():
                 matrix=dict(include=[dict(domain=d, lane=l) for d in sorted(gate.DOMAINS) for l in sorted(gate.LANES)]),
                 matrix_platform=dict(include=[]))
     assert "Complete pytest / macos-arm64 / integration" in gate.expected_jobs(plan)
+    assert "Linux x86_64 owned ELF and Clang++ reference" in gate.expected_jobs(plan)
+    assert "Linux x86_64 owned ELF and G++ reference" not in gate.expected_jobs(plan)
     plan["matrix"]["include"].pop()
     with pytest.raises(ValueError, match="incomplete"):
         gate.expected_jobs(plan)

@@ -2066,21 +2066,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - name: Linux x86_64 owned ELF and G++ reference
+          - name: Linux x86_64 owned ELF and Clang++ reference
             runner: ubuntu-24.04
             system: Linux
             machine: x86_64
-            oracle: g++
+            # The mandatory C++17 gate includes accepted DRs such as CWG2394.
+            # G++13 rejects that valid input; keep its separate observation,
+            # but use one qualified normative compiler for the entire suite.
+            oracle: clang++-18
+            diagnostic_oracle: g++
           - name: macOS arm64 owned Mach-O and Clang++ reference
             runner: macos-15
             system: Darwin
             machine: arm64
             oracle: clang++
+            diagnostic_oracle: ""
     env:
       EXPECTED_SHA: ${{ github.sha }}
       EXPECTED_SYSTEM: ${{ matrix.system }}
       EXPECTED_MACHINE: ${{ matrix.machine }}
       REFERENCE_DRIVER: ${{ matrix.oracle }}
+      REFERENCE_DIAGNOSTIC_DRIVER: ${{ matrix.diagnostic_oracle }}
       PCC_NO_AUTO_PCC1: "1"
       PCC_TEST_NO_NATIVE_PROVISIONING: "1"
       PYTEST_ADDOPTS: ""
@@ -2187,7 +2193,7 @@ jobs:
             uv run --offline --no-sync python -m pytest -x -vv --tb=short -m integration \
             --basetemp "$CPP17_OUT/native-tmp" --junitxml "$CPP17_OUT/native.xml" \
             tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_owned_native_execution
-      - name: Explicit external C++17 reference (DR disagreements remain failures)
+      - name: Qualified external C++17 reference (every original input)
         shell: bash
         run: |
           uv run --offline --no-sync python scripts/run_process_tree_sample.py \
@@ -2196,6 +2202,9 @@ jobs:
             --darwin-preflight-reserve-bytes 536870912 \
             --result "$CPP17_OUT/reference.json" --samples "$CPP17_OUT/reference.samples.jsonl" \
             --stdout "$CPP17_OUT/reference.stdout" --stderr "$CPP17_OUT/reference.stderr" -- \
+            uv run --offline --no-sync python scripts/ci_validation_cpp_reference.py \
+            --compiler "$PCC_CPP_ORACLE" --identity "$CPP17_OUT/identity.json" \
+            --out "$CPP17_OUT/reference-capability" --diagnostic-driver "$REFERENCE_DIAGNOSTIC_DRIVER" -- \
             uv run --offline --no-sync python -m pytest -x --maxfail=0 -vv --tb=short -m integration \
             --basetemp "$CPP17_OUT/reference-tmp" --junitxml "$CPP17_OUT/reference.xml" \
             tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_explicit_cpp17_reference

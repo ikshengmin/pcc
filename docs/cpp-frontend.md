@@ -590,3 +590,50 @@ ordinary noexcept function definitions and calls, throw/catch, partially
 constructed object cleanup on an exceptional edge and actual termination
 remain separate obligations. The unchanged TinyXML2 constructor still has
 an unknown, potentially allocating call after its two class-member C1s.
+
+### C++17 platform reference qualification
+
+Run [45643044565](https://github.com/ikshengmin/pcc/actions/runs/45643044565),
+source `5f101c6160d8301d9d3fd5f1e82e0686e38b7f23`, dedicated
+Linux job [139306814071](https://github.com/ikshengmin/pcc/actions/runs/45643044565/job/139306814071):
+artifact `15035827358` has 193 ordinary, 172 cross-object and all 86 owned
+native nodes passing; the G++ 13.3 reference is 85/86. The sole failed node is
+`test_cpp_platform_explicit_cpp17_reference[class-const-empty-default-construction-cwg2394]`.
+Its original `const Outer` contains a `const Empty` member; G++ rejects its
+default construction. [WG21 CWG2394](https://cplusplus.github.io/CWG/issues/2394.html)
+was accepted as a defect correction in February 2019. The
+[GCC DR table](https://gcc.gnu.org/projects/cxx-dr-status.html) does not
+identify an implementing GCC release for that correction; the
+[Clang DR table](https://clang.llvm.org/cxx_dr_status.html) records Clang 15.
+The same run's Darwin artifact `15037941529` has Apple Clang 17.0.0 executing
+all 86 original reference nodes successfully, including CWG2394.
+
+The dedicated normative C++17 platform gate now names its real comparator:
+Ubuntu 24.04 `clang++-18` and macOS `clang++`. The
+[hosted Ubuntu image inventory](https://github.com/actions/runner-images/blob/main/images/ubuntu/Ubuntu2404-Readme.md)
+includes Clang 18.1.3, and the same run's Linux source reference artifact
+`15036234690` records the actual installed Clang 18.1.3 C driver. C++ invocation
+spelling remains distinct from its resolved executable path. Within the existing
+90 s / 1 GiB guarded reference phase, `scripts/ci_validation_cpp_reference.py`
+requires the exact bound compiler identity, Clang 15 or later, successful
+compilation and execution of a CWG2394 positive probe, and rejection of a
+non-const-default-constructible negative control. It then executes every
+original platform reference node using that same qualified compiler. No
+per-node fallback, tolerated reference error, changed source or relaxed pytest
+policy is introduced. Linux G++ runs the same capability probes as an
+independent diagnostic and retains its actual raw results and mismatch label;
+its rejection is not an acceptance result. The historical G++ job cannot
+qualify a fresh performance A/B baseline for this renamed mandatory gate.
+
+Local Linux validation on this change: 441 CI/AB contract tests, all 6060
+ordinary C++ tests and 49 subtests, and all 86 native owned ELF platform nodes
+passed under the existing gate limits. The unchanged 86-node external G++
+14.2 reference remains 85/86, with the same sole CWG2394 rejection. G++ 14.2
+also fails the new positive capability probe while rejecting the negative
+control as required; the strict qualifier records `CAPABILITY_MISMATCH`.
+This environment has no Linux Clang installation; the new Linux Clang
+capability and 86-node reference run remain hosted-CI obligations, not a
+local pass. The independent Linux Source / cpp / reference lane retains its
+G++ binding and all obligations: artifact `15036234690` records 9 failures
+among 1207 nodes, including CWG2394. No full-source reference or TinyXML2 pass
+follows from changing the dedicated platform comparator.

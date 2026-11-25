@@ -344,7 +344,9 @@ def expected_jobs(plan):
         "macOS arm64 focused pcc0 native regressions", "macOS arm64 pcc0 float and class-doc regressions",
         "macOS arm64 pcc0 indexed-stage bridge gate", "Windows RSS publication with a held reader",
         "macOS arm64 native pcc1 and installed wheel",
-        "Linux x86_64 owned ELF and G++ reference", "macOS arm64 owned Mach-O and Clang++ reference",
+        # A historical G++ run cannot qualify the new mandatory DR-aware
+        # reference owner; a fresh baseline must execute the same gate.
+        "Linux x86_64 owned ELF and Clang++ reference", "macOS arm64 owned Mach-O and Clang++ reference",
     }
     jobs.update(f"Source / {row['domain']} / {row['lane']}" for row in matrix)
     jobs.update(f"Source / {row['domain']} / {row['lane']} / {row['platform']}"

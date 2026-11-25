@@ -1002,6 +1002,15 @@ in the relevant section or issue and removes the entry.
    [C1 frontier investigation](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
    Native pcc1 still stops at the parser's no-libpython stub; no upstream
    executable or full C++ integration pass.
+   C++ platform CI (45643044565, artifact 15035827358): all 86 owned
+   ELF cases passed; G++ 13.3's sole reference failure is accepted DR
+   CWG2394. The mandatory platform comparator now selects Clang 18 on
+   Linux, with strict positive/negative capability and identity probes
+   before all unchanged 86 cases; G++ mismatch remains separate evidence.
+   Local Linux: 441 CI contracts, 6060 ordinary C++ + 49 subtests and 86
+   owned cases passed; G++ 14.2 still 85/86. Next: run the actual hosted
+   Clang gate; independent Source / cpp / reference remains at its 9/1207
+   G++ failures, not waived. See [reference qualification](cpp-frontend.md#cpp17-platform-reference-qualification).
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -1031,7 +1040,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - C++17 platform normative reference qualification: Codex, Linux x86_64, 2026-11-25T16:50Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
