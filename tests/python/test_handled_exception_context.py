@@ -280,9 +280,10 @@ def test_generator_close_result_handoff_takes_slot_without_lock_or_pin():
 
     source = SOURCE.with_name("py_gen.py")
     tree = ast.parse(source.read_text())
-    close = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                 and node.name == "py_gen_close")
-    stopped = next(node for node in ast.walk(close) if isinstance(node, ast.If)
+    # py_gen_close claims the running bit and closes in _gen_close_claimed.
+    stopped = next(node for function in tree.body if isinstance(function, ast.FunctionDef)
+                   and function.name in ("py_gen_close", "_gen_close_claimed")
+                   for node in ast.walk(function) if isinstance(node, ast.If)
                    and isinstance(node.test, ast.Compare)
                    and isinstance(node.test.left, ast.Name)
                    and node.test.left.id == "stopped")
