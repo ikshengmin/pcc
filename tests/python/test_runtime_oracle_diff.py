@@ -33,15 +33,8 @@ def _corpus_programs() -> list[Path]:
     return sorted(ORACLE_DIR.glob("*_basics.py"))
 
 
-def _pcc_binary() -> str:
-    candidate = Path(sys.executable).parent / "pcc"
-    if candidate.exists():
-        return str(candidate)
-    found = shutil.which("pcc")
-    if found is None:
-        pytest.fail("pcc CLI not on PATH")
-    return found
-
+def _pcc_command() -> list[str]:
+    return [sys.executable, "-m", "pcc"]
 
 def _run_env() -> dict[str, str]:
     env = dict(os.environ)
@@ -66,7 +59,7 @@ def test_corpus_program_matches_cpython(tmp_path, program, pcc_runtime_archive):
     compile_env["PCC_RUNTIME_ARCHIVE"] = str(pcc_runtime_archive)
     compiled = subprocess.run(
         [
-            _pcc_binary(),
+            *_pcc_command(),
             str(program),
             "-o",
             str(executable),
@@ -100,6 +93,20 @@ def test_corpus_program_matches_cpython(tmp_path, program, pcc_runtime_archive):
         expected.stdout,
         expected.stderr,
     )
+
+
+def test_runtime_oracle_cli_uses_checkout_without_installed_entry_point(tmp_path):
+    # A frozen CI environment intentionally installs dependencies with
+    # --no-install-project. The exact checkout module must still be a real CLI.
+    env = dict(os.environ, PATH=str(tmp_path))
+    command = _pcc_command()
+    assert command == [sys.executable, "-m", "pcc"]
+    completed = subprocess.run(
+        command + ["--help"], cwd=str(REPO_ROOT), env=env,
+        capture_output=True, text=True, timeout=20,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert "Usage: pcc" in completed.stdout
 
 
 def test_corpus_is_not_empty():

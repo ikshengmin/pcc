@@ -574,8 +574,16 @@ in the relevant section or issue and removes the entry.
    No worker production policy, outer guard or CI worker count changed.
    Windows/macOS execution remains hosted evidence.
 
+   Complete pytest runtime oracle (run 45643044565, artifact 15044643830):
+   the exact checkout CLI now runs as `sys.executable -m pcc` from the
+   repository, rather than requiring an installed console shim on PATH.
+   Linux source 92392bb4 plus test change, matched 192-member runtime:
+   all 15 tests passed (13 native programs byte-for-byte against CPython,
+   empty-PATH CLI and corpus inventory), 89.33 s, 272,707,584 B peak
+   under the unchanged 90 s / 1 GiB guard. Hosted verification pending.
+
    Claims:
-   - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
+   - none
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
