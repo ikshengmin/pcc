@@ -112,13 +112,10 @@ pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
@@ -1182,11 +1179,10 @@ define_global_i32("pcc_func_snapshot_release_frame_map", 2)
 
 @c_abi_export("py_func_release_default_snapshot")
 def py_func_release_default_snapshot(snapshot: c_ptr) -> None:
-    """Consume a NEW pinned snapshot owner without an unpin/decref gap.
+    """Consume a NEW snapshot owner through a registered frame slot.
 
-    The caller transfers its owned reference and explicit legacy pin. The
-    pin keeps the input stable until the registered frame owns it; every
-    operation after unpinning uses the authoritative slot instead of SSA.
+    The caller transfers its owned reference; every operation after the
+    frame owns it uses the authoritative slot instead of SSA.
     """
     slots = stack_alloc(_FUNC_SNAPSHOT_RELEASE_COUNT * C_POINTER_SIZE)
     memset(slots, 0, _FUNC_SNAPSHOT_RELEASE_COUNT * C_POINTER_SIZE)
@@ -1194,7 +1190,6 @@ def py_func_release_default_snapshot(snapshot: c_ptr) -> None:
     store_ptr(slots, _FUNC_SNAPSHOT_RELEASE_VALUE * C_POINTER_SIZE, snapshot)
     error_slot = ptr_add(slots, _FUNC_SNAPSHOT_RELEASE_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(error_slot)
-    pcc_gc_unpin(snapshot)
     pcc_gc_store_root(slots, null())
     py_clear_exception()
     py_tls_exc_swap_slot(error_slot)
@@ -1590,35 +1585,30 @@ def _signature_default_kind(flag) -> int:
     return 1 if py_obj_truthy(flag) != 0 else 0
 
 
-def _factory_binding_root(slots, pins, offset: int, value) -> None:
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        store_i64(pins, offset, load_i32(value, 12) & 64)
-        pcc_gc_pin(value)
+def _factory_binding_root(slots, offset: int, value) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), value)
 
 
 def _bind_dataclass_factory(factory, bound, remaining, names, kinds, has_defaults, defaults, name, kind_obj, has_default_obj):
-    # Binding now has an arbitrary application callback. Pin and root every
+    # Binding now has an arbitrary application callback. Root every
     # suspended binding owner, including products of earlier factories and the
-    # current name/flag temporaries. The surrounding call owns pinned fn/args.
+    # current name/flag temporaries. The surrounding call owns fn/args.
     # Reuse its eleven-slot trace map; this introduces no object/record layout.
     slots = stack_alloc(88)
-    pins = stack_alloc(88)
     memset(slots, 0, 88)
-    memset(pins, 0, 88)
     pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
-    _factory_binding_root(slots, pins, 8, factory)
-    _factory_binding_root(slots, pins, 16, bound)
-    _factory_binding_root(slots, pins, 24, remaining)
-    _factory_binding_root(slots, pins, 32, names)
-    _factory_binding_root(slots, pins, 40, kinds)
-    _factory_binding_root(slots, pins, 48, has_defaults)
-    _factory_binding_root(slots, pins, 56, defaults)
-    _factory_binding_root(slots, pins, 64, name)
-    _factory_binding_root(slots, pins, 72, kind_obj)
-    _factory_binding_root(slots, pins, 80, has_default_obj)
+    _factory_binding_root(slots, 8, factory)
+    _factory_binding_root(slots, 16, bound)
+    _factory_binding_root(slots, 24, remaining)
+    _factory_binding_root(slots, 32, names)
+    _factory_binding_root(slots, 40, kinds)
+    _factory_binding_root(slots, 48, has_defaults)
+    _factory_binding_root(slots, 56, defaults)
+    _factory_binding_root(slots, 64, name)
+    _factory_binding_root(slots, 72, kind_obj)
+    _factory_binding_root(slots, 80, has_default_obj)
     empty_args = py_tuple_new(0)
-    _factory_binding_root(slots, pins, 0, empty_args)
+    _factory_binding_root(slots, 0, empty_args)
     py_decref(empty_args)
     result = null()
     if ptr_is_null(load_ptr(slots, 0)) == 0:
@@ -1630,34 +1620,14 @@ def _bind_dataclass_factory(factory, bound, remaining, names, kinds, has_default
             cstr("dataclass default factory"),
             cstr("dataclass default factory returned NULL without exception"),
         )
-    prior_result_pin: int = 0
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior_result_pin = load_i32(result, 12) & 64
-    # Later leases may observe an already-pinned aliased input. The earliest
-    # lease carries the external bit to restore when handing off the result.
-    offset: int = 80
-    while offset >= 0:
-        if ptr_eq(result, load_ptr(slots, offset)) != 0:
-            prior_result_pin = load_i64(pins, offset)
-        offset = offset - 8
-    empty_args = load_ptr(slots, 0)
-    if ptr_is_null(empty_args) == 0 and is_tagged_int(empty_args) == 0:
-        pcc_gc_unpin(empty_args)
-        if load_i64(pins, 0) != 0:
-            pcc_gc_reassert_pin(empty_args)
     pcc_gc_store_root(slots, result)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_pin(result)
     py_decref(result)
-    offset = 80
+    offset: int = 80
     while offset >= 8:
-        _func_clear_call_root(slots, pins, offset)
+        _func_clear_call_root(slots, offset)
         offset = offset - 8
-    result = load_ptr(slots, 0)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+    return pcc_gc_take_slot(slots)
 
 
 def _bind_signature(sig, args_tuple, kwargs, fn):
@@ -2265,41 +2235,17 @@ def _builtin_function_cache_mutex():
     return candidate
 
 
-def _builtin_value_pin_slot(slots, offset: int) -> int:
-    # A root is authoritative throughout construction. Pin only a bounded
-    # raw-ABI operation or the final frame-leave/return handoff.
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), ptr_add(slots, offset))
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
-def _builtin_value_unpin_slot(slots, offset: int, prior: int) -> None:
-    value = pcc_gc_load_ptr(null(), ptr_add(slots, offset))
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        pcc_gc_unpin(value)
-        if prior != 0:
-            pcc_gc_reassert_pin(value)
-
-
 def _builtin_value_finish(slots, result_offset: int):
-    pins = stack_alloc(88)
-    memset(pins, 0, 88)
     if ptr_is_null(load_ptr(slots, result_offset)):
-        _func_keep_call_error(slots, pins, 32)
+        _func_keep_call_error(slots, 32)
     offset: int = 0
     while offset < 88:
         if offset != result_offset and offset != 32:
             pcc_gc_store_root(ptr_add(slots, offset), null())
         offset = offset + 8
-    _func_clear_call_root(slots, pins, 32)
-    prior: int = _builtin_value_pin_slot(slots, result_offset)
+    _func_clear_call_root(slots, 32)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, result_offset), prior)
+    return pcc_gc_take_slot(ptr_add(slots, result_offset))
 
 
 def _builtin_function_cache_load(slots) -> None:
@@ -2310,26 +2256,16 @@ def _builtin_function_cache_load(slots) -> None:
 
 
 def _builtin_function_cache_get(slots) -> None:
-    cache_pin: int = _builtin_value_pin_slot(slots, 8)
-    key_pin: int = _builtin_value_pin_slot(slots, 0)
     value = py_dict_get(pcc_gc_load_ptr(null(), ptr_add(slots, 8)),
                         pcc_gc_load_ptr(null(), slots))
     # py_dict_get returns one owner. Transfer it directly into the frame.
     store_ptr(slots, 24, value)
-    _builtin_value_unpin_slot(slots, 0, key_pin)
-    _builtin_value_unpin_slot(slots, 8, cache_pin)
 
 
 def _builtin_function_cache_set(slots) -> None:
-    cache_pin: int = _builtin_value_pin_slot(slots, 8)
-    key_pin: int = _builtin_value_pin_slot(slots, 0)
-    value_pin: int = _builtin_value_pin_slot(slots, 16)
     py_dict_set(pcc_gc_load_ptr(null(), ptr_add(slots, 8)),
                 pcc_gc_load_ptr(null(), slots),
                 pcc_gc_load_ptr(null(), ptr_add(slots, 16)))
-    _builtin_value_unpin_slot(slots, 16, value_pin)
-    _builtin_value_unpin_slot(slots, 0, key_pin)
-    _builtin_value_unpin_slot(slots, 8, cache_pin)
 
 
 def _builtin_function_cache_begin(slots, name):
@@ -2405,10 +2341,8 @@ def py_builtin_function_value(entry, name):
     if ptr_is_null(captures):
         _func_runtime_error_if_unset(cstr("builtin value"), cstr("builtin captures allocation failed"))
         return _builtin_value_finish(slots, 24)
-    captures_pin: int = _builtin_value_pin_slot(slots, 16)
     candidate = py_func_new_named(entry, pcc_gc_load_ptr(null(), ptr_add(slots, 16)), name)
     store_ptr(slots, 40, candidate)
-    _builtin_value_unpin_slot(slots, 16, captures_pin)
     pcc_gc_store_root(ptr_add(slots, 16), pcc_gc_load_ptr(null(), ptr_add(slots, 40)))
     pcc_gc_store_root(ptr_add(slots, 40), null())
     if ptr_is_null(candidate):
@@ -2463,134 +2397,72 @@ def py_builtin_abs_entry(captures, args):
         return _builtin_value_finish(slots, 16)
     argument = py_tuple_get(pcc_gc_load_ptr(null(), slots), 0)
     store_ptr(slots, 8, argument)
-    argument_pin: int = _builtin_value_pin_slot(slots, 8)
     result = py_obj_abs(pcc_gc_load_ptr(null(), ptr_add(slots, 8)))
     store_ptr(slots, 16, result)
-    _builtin_value_unpin_slot(slots, 8, argument_pin)
     if ptr_is_null(result):
         _func_runtime_error_if_unset(cstr("abs"), cstr("absolute result returned NULL without exception"))
     return _builtin_value_finish(slots, 16)
 
 
-def _func_keep_call_error(slots, pins, offset: int) -> None:
+def _func_keep_call_error(slots, offset: int) -> None:
     if ptr_is_null(load_ptr(slots, offset)) == 0:
         return
     error = py_current_exception()
     if ptr_is_null(error):
         return
-    prior_pin: int = load_i32(error, 12) & 64
-    pcc_gc_pin(error)
     py_incref(error)
     store_ptr(slots, offset, error)
-    store_i64(pins, offset, prior_pin)
 
 
-def _func_clear_call_root(slots, pins, offset: int) -> None:
-    value = load_ptr(slots, offset)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        pcc_gc_unpin(value)
-        if load_i64(pins, offset) != 0:
-            pcc_gc_reassert_pin(value)
+def _func_clear_call_root(slots, offset: int) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
-def _func_call_pin_resolved(slots, pins, offset: int) -> None:
-    # Only called after a counted lease has resolved this authoritative slot.
-    value = load_ptr(slots, offset)
-    store_i64(pins, offset, 0)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        store_i64(pins, offset, load_i32(value, 12) & 64)
-        pcc_gc_pin(value)
-
-
-def _func_call_adopt_owned(slots, pins, offset: int) -> int:
-    # Producer stores NEW directly into its preregistered slot, then acquires
-    # before inspecting a header: the returned address may already forward.
-    store_i64(pins, offset, -1)
+def _func_call_adopt_owned(slots, tokens, offset: int) -> int:
+    # Producer stores NEW directly into its preregistered slot, then leases it.
     token: int = pcc_gc_foreign_lease_acquire(ptr_add(slots, offset))
     if token < 0:
         pcc_gc_store_root(ptr_add(slots, offset), null())
         _func_runtime_error_if_unset(cstr("function call"), cstr("returned owner lease acquisition failed"))
         return -1
-    store_i64(pins, 88 + offset, token)
-    _func_call_pin_resolved(slots, pins, offset)
+    store_i64(tokens, offset, token)
     return 0
 
 
-def _func_call_copy_captures(slots, pins) -> int:
-    # fn.captures is an owning managed field. Copy its actual slot, not a
-    # borrowed value loaded before a lock wait or callback can move the child.
-    store_i64(pins, 24, -1)
-    fn = load_ptr(slots, 64)
-    token: int = pcc_gc_root_copy_lease(ptr_add(slots, 24), ptr_add(fn, 64))
-    if token < 0:
-        _func_runtime_error_if_unset(cstr("function call"), cstr("captures owner transfer failed"))
-        return -1
-    store_i64(pins, 112, token)
-    _func_call_pin_resolved(slots, pins, 24)
-    return 0
-
-
-def _func_call_drop(slots, pins, offset: int) -> None:
+def _func_call_drop(slots, tokens, offset: int) -> None:
     slot = ptr_add(slots, offset)
-    if pcc_gc_foreign_lease_release(slot, load_i64(pins, 88 + offset)) != 0:
+    if pcc_gc_foreign_lease_release(slot, load_i64(tokens, offset)) != 0:
         pcc_platform_abort()
         return
-    store_i64(pins, 88 + offset, 0)
-    if load_i64(pins, offset) < 0:
-        # An adoption failure did not acquire the legacy pin protocol.
-        pcc_gc_store_root(slot, null())
-    else:
-        _func_clear_call_root(slots, pins, offset)
+    store_i64(tokens, offset, 0)
+    pcc_gc_store_root(slot, null())
 
 
-def _func_call_keep_error(slots, pins) -> None:
+def _func_call_keep_error(slots, tokens) -> None:
     if ptr_is_null(load_ptr(slots, 16)) == 0:
         return
     # Transfer TLS's owner into the registered slot before any header access.
     py_tls_exc_swap_slot(ptr_add(slots, 16))
     if ptr_is_null(load_ptr(slots, 16)) == 0:
-        _func_call_adopt_owned(slots, pins, 16)
+        _func_call_adopt_owned(slots, tokens, 16)
 
 
-def _func_call_restore_error(slots, pins) -> None:
+def _func_call_restore_error(slots, tokens) -> None:
     if ptr_is_null(load_ptr(slots, 16)):
         return
     py_clear_exception()
-    prior: int = load_i64(pins, 16)
     # Release through the token-bearing slot BEFORE transferring it to TLS.
-    if pcc_gc_foreign_lease_release(ptr_add(slots, 16), load_i64(pins, 104)) != 0:
+    if pcc_gc_foreign_lease_release(ptr_add(slots, 16), load_i64(tokens, 16)) != 0:
         pcc_platform_abort()
         return
-    store_i64(pins, 104, 0)
+    store_i64(tokens, 16, 0)
     py_tls_exc_swap_slot(ptr_add(slots, 16))
-    if prior >= 0:
-        # TLS owns the error again. Read the authoritative owner after the
-        # exchange, rather than carrying a raw copy across the lease release.
-        error = py_current_exception()
-        if ptr_is_null(error) == 0 and is_tagged_int(error) == 0:
-            pcc_gc_unpin(error)
-            if prior != 0:
-                pcc_gc_reassert_pin(error)
-    store_i64(pins, 16, 0)
 
 
 @c_abi_export("py_func_call_kwargs")
 def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     # The existing C ABI borrows inputs for this call. Keep each input stable
     # across binder/entry polls, including nested transparent adapters.
-    argument_pins = stack_alloc(24)
-    memset(argument_pins, 0, 24)
-    # Unrolled: a loop latch would park with later borrowed copies unpinned.
-    if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
-        store_i64(argument_pins, 0, load_i32(callable_obj, 12) & 64)
-        pcc_gc_pin(callable_obj)
-    if ptr_is_null(args_tuple) == 0 and is_tagged_int(args_tuple) == 0:
-        store_i64(argument_pins, 8, load_i32(args_tuple, 12) & 64)
-        pcc_gc_pin(args_tuple)
-    if ptr_is_null(kwargs) == 0 and is_tagged_int(kwargs) == 0:
-        store_i64(argument_pins, 16, load_i32(kwargs, 12) & 64)
-        pcc_gc_pin(kwargs)
     roles: int = 0
     if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
         if load_i32(callable_obj, 8) == PY_TYPE_FUNC:
@@ -2602,73 +2474,45 @@ def py_func_call_kwargs(callable_obj, args_tuple, kwargs):
     store_i32(global_addr("pcc_native_callable_forward_context"), 0, forward)
     drive: int = 1 if (context & 1) != 0 and (roles & (PY_FLAG_FUNC_AUTO_PARK | PY_FLAG_FUNC_CONTINUATION_FACTORY)) != 0 and (roles & PY_FLAG_FUNC_TRANSPARENT_CALL) == 0 else 0
     slots = stack_alloc(88)
-    # First lane preserves the legacy raw-ABI pin state; the independent
-    # second lane owns counted leases for extracted children and NEW results.
-    pins = stack_alloc(176)
+    # Counted leases for extracted children and NEW results, by slot offset.
+    tokens = stack_alloc(88)
     memset(slots, 0, 88)
-    memset(pins, 0, 176)
+    memset(tokens, 0, 88)
     pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
-    store_i64(pins, 64, load_i64(argument_pins, 0))
     pcc_gc_store_root(ptr_add(slots, 64), callable_obj)
-    store_i64(pins, 72, load_i64(argument_pins, 8))
     pcc_gc_store_root(ptr_add(slots, 72), args_tuple)
-    store_i64(pins, 80, load_i64(argument_pins, 16))
     pcc_gc_store_root(ptr_add(slots, 80), kwargs)
     # slot0 = compiler-created child; slot1 = returned user value; slot2 =
     # pending exception protected across all owner cleanup. Slots3..7 own
     # captures, signature, inner captures, synthesized args and bound args.
     output_offset: int = 0 if drive else 8
-    _func_call_kwargs_body(slots, pins, output_offset, context & 2)
+    _func_call_kwargs_body(slots, output_offset, context & 2)
     if drive and ptr_is_null(load_ptr(slots, 0)) == 0:
         store_ptr(slots, 8, py_gen_run_may_park_sync(load_ptr(slots, 0)))
-        _func_call_adopt_owned(slots, pins, 8)
+        _func_call_adopt_owned(slots, tokens, 8)
     if ptr_is_null(load_ptr(slots, 8)):
-        _func_call_keep_error(slots, pins)
-    index: int = 0
-    result = load_ptr(slots, 8)
-    prior_result_pin: int = load_i64(pins, 8)
-    if ptr_is_null(result) == 0:
-        if ptr_eq(result, load_ptr(slots, 0)):
-            prior_result_pin = load_i64(pins, 0)
-        # A native continuation factory can return its captures container.
-        # The body keeps this lease through synchronous driving; the other
-        # binder temporaries have already been cleared before the drive.
-        if ptr_eq(result, load_ptr(slots, 24)):
-            prior_result_pin = load_i64(pins, 24)
-        # An aliased result restores the external pin state, not a pin this
-        # invocation itself acquired for the earliest matching argument.
-        index = 3
-        while index > 0:
-            index = index - 1
-            if ptr_eq(result, load_ptr(slots, 64 + index * 8)):
-                prior_result_pin = load_i64(pins, 64 + index * 8)
-    _func_call_drop(slots, pins, 0)
-    _func_call_drop(slots, pins, 56)
-    _func_call_drop(slots, pins, 48)
-    _func_call_drop(slots, pins, 40)
-    _func_call_drop(slots, pins, 32)
-    _func_call_drop(slots, pins, 24)
-    _func_call_drop(slots, pins, 80)
-    _func_call_drop(slots, pins, 72)
-    _func_call_drop(slots, pins, 64)
-    _func_call_restore_error(slots, pins)
-    # Argument/child unpins may have cleared the same bit on an aliased
-    # result. The result lease still exists; reload the healed root and
-    # restore that bit without acquiring an extra metric-counted pin.
-    result = load_ptr(slots, 8)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
+        _func_call_keep_error(slots, tokens)
+    _func_call_drop(slots, tokens, 0)
+    _func_call_drop(slots, tokens, 56)
+    _func_call_drop(slots, tokens, 48)
+    _func_call_drop(slots, tokens, 40)
+    _func_call_drop(slots, tokens, 32)
+    _func_call_drop(slots, tokens, 24)
+    _func_call_drop(slots, tokens, 80)
+    _func_call_drop(slots, tokens, 72)
+    _func_call_drop(slots, tokens, 64)
+    _func_call_restore_error(slots, tokens)
     pcc_gc_frame_leave(slots)
     store_i32(global_addr("pcc_native_callable_forward_context"), 0, previous_forward)
     store_i32(global_addr("pcc_native_callable_sync_context"), 0, context)
     # This is the strictly terminal raw-ABI bridge. The counted output owner
-    # stayed live through every callback; its legacy pin now bridges the last
-    # lease release and the nonparking transfer to the caller.
-    if pcc_gc_foreign_lease_release(ptr_add(slots, 8), load_i64(pins, 96)) != 0:
+    # stayed live through every callback; its last lease release precedes
+    # the nonparking transfer to the caller.
+    if pcc_gc_foreign_lease_release(ptr_add(slots, 8), load_i64(tokens, 8)) != 0:
         pcc_platform_abort()
         return null()
-    store_i64(pins, 96, 0)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
+    store_i64(tokens, 8, 0)
+    return pcc_gc_take_slot(ptr_add(slots, 8))
 
 
 @c_abi_export("py_obj_call_sync")
@@ -2756,7 +2600,7 @@ def py_func_call_bound_forward(callable_obj, args):
     return result
 
 
-def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) -> None:
+def _func_call_kwargs_body(slots, output_offset: int, already_bound: int) -> None:
     callable_obj = load_ptr(slots, 64)
     args_tuple = load_ptr(slots, 72)
     kwargs = load_ptr(slots, 80)
@@ -2785,9 +2629,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
     if _is_none_or_null(args) != 0:
         args = py_tuple_new(0)
         store_ptr(slots, 48, args)
-        if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
-            store_i64(pins, 48, load_i32(args, 12) & 64)
-            pcc_gc_pin(args)
         made_args = 1
         if ptr_is_null(args):
             _func_runtime_error_if_unset(
@@ -2796,11 +2637,8 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
             )
             return
     captures = pcc_gc_load_ptr(fn, ptr_add(fn, 64))
-    # This field load borrows from a pinned function. Pin before retaining;
-    # thereafter the owned slot protects it independently of function mutation.
-    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
-        store_i64(pins, 24, load_i32(captures, 12) & 64)
-        pcc_gc_pin(captures)
+    # This field load borrows from the function; the owned slot then protects
+    # it independently of function mutation.
     py_incref(captures)
     store_ptr(slots, 24, captures)
     actual_captures = captures
@@ -2813,19 +2651,13 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
     if captures_len == 2:
         candidate = py_tuple_get(captures, 1)
         store_ptr(slots, 32, candidate)
-        if ptr_is_null(candidate) == 0 and is_tagged_int(candidate) == 0:
-            store_i64(pins, 32, load_i32(candidate, 12) & 64)
-            pcc_gc_pin(candidate)
         if _signature_valid(candidate) != 0:
             inner = py_tuple_get(captures, 0)
             store_ptr(slots, 40, inner)
-            if ptr_is_null(inner) == 0 and is_tagged_int(inner) == 0:
-                store_i64(pins, 40, load_i32(inner, 12) & 64)
-                pcc_gc_pin(inner)
             if ptr_is_null(inner):
-                _func_clear_call_root(slots, pins, 32)
+                _func_clear_call_root(slots, 32)
                 if made_args != 0:
-                    _func_clear_call_root(slots, pins, 48)
+                    _func_clear_call_root(slots, 48)
                 _func_runtime_error_if_unset(
                     cstr("py_func_signature_from_captures"),
                     cstr("native function signature has no captures tuple")
@@ -2836,12 +2668,12 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
             owns_actual_captures = 1
         else:
             if ptr_is_null(candidate) == 0:
-                _func_clear_call_root(slots, pins, 32)
+                _func_clear_call_root(slots, 32)
 
     kwargs_are_empty: int = _kwargs_empty(kwargs)
     if ptr_is_null(sig) and kwargs_are_empty == 0:
         if made_args != 0:
-            _func_clear_call_root(slots, pins, 48)
+            _func_clear_call_root(slots, 48)
         _func_type_error(cstr("native function does not accept keywords"))
         return
 
@@ -2853,9 +2685,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         else:
             call_args = _bind_signature(sig, args, kwargs, fn)
         store_ptr(slots, 56, call_args)
-        if ptr_is_null(call_args) == 0 and is_tagged_int(call_args) == 0:
-            store_i64(pins, 56, load_i32(call_args, 12) & 64)
-            pcc_gc_pin(call_args)
         if ptr_is_null(call_args):
             # Validate the binder's return before cleanup can run deallocators
             # and accidentally provide an unrelated pending exception.
@@ -2865,16 +2694,16 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
                     "native function argument binding returned NULL without exception"
                 )
             )
-            _func_clear_call_root(slots, pins, 32)
+            _func_clear_call_root(slots, 32)
             if owns_actual_captures != 0:
-                _func_clear_call_root(slots, pins, 40)
+                _func_clear_call_root(slots, 40)
             if made_args != 0:
-                _func_clear_call_root(slots, pins, 48)
+                _func_clear_call_root(slots, 48)
             return
         owns_call_args = 1
 
-    # Nested calls can clear the single pin bit. Caller and binder roots are
-    # authoritative after arbitrary callbacks; reload every pointer we reuse.
+    # Caller and binder roots are authoritative after arbitrary callbacks;
+    # reload every pointer we reuse.
     actual_captures = load_ptr(slots, 40) if owns_actual_captures else load_ptr(slots, 24)
     if owns_call_args:
         call_args = load_ptr(slots, 56)
@@ -2884,22 +2713,6 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
         call_args = load_ptr(slots, 72)
     result = call_ptr2(entry, actual_captures, call_args)
     store_ptr(slots, output_offset, result)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        store_i64(pins, output_offset, load_i32(result, 12) & 64)
-        pcc_gc_pin(result)
-    # The result may alias a binder temporary. Restore the pin state from
-    # before the earliest matching temporary lease, not that lease's own bit.
-    if ptr_is_null(result) == 0:
-        if ptr_eq(result, load_ptr(slots, 56)):
-            store_i64(pins, output_offset, load_i64(pins, 56))
-        if ptr_eq(result, load_ptr(slots, 40)):
-            store_i64(pins, output_offset, load_i64(pins, 40))
-        if ptr_eq(result, load_ptr(slots, 32)):
-            store_i64(pins, output_offset, load_i64(pins, 32))
-        if ptr_eq(result, load_ptr(slots, 24)):
-            store_i64(pins, output_offset, load_i64(pins, 24))
-        if ptr_eq(result, load_ptr(slots, 48)):
-            store_i64(pins, output_offset, load_i64(pins, 48))
     # The compiled entry owns its exception contract.  Check it before
     # releasing call temporaries so cleanup cannot mask a silent NULL return.
     if ptr_is_null(result):
@@ -2910,15 +2723,15 @@ def _func_call_kwargs_body(slots, pins, output_offset: int, already_bound: int) 
             entry_name,
             cstr("compiled native function returned NULL without exception")
         )
-        _func_keep_call_error(slots, pins, 16)
+        _func_keep_call_error(slots, 16)
     if owns_call_args != 0:
-        _func_clear_call_root(slots, pins, 56)
+        _func_clear_call_root(slots, 56)
     if ptr_is_null(sig) == 0:
-        _func_clear_call_root(slots, pins, 32)
+        _func_clear_call_root(slots, 32)
     if owns_actual_captures != 0:
-        _func_clear_call_root(slots, pins, 40)
+        _func_clear_call_root(slots, 40)
     if made_args != 0:
-        _func_clear_call_root(slots, pins, 48)
+        _func_clear_call_root(slots, 48)
     return
 
 
@@ -2927,38 +2740,26 @@ def py_func_call(callable_obj, args_tuple):
     return py_func_call_kwargs(callable_obj, args_tuple, null())
 
 
-def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
+def _partial_entry_build(slots, has_kwargs: int) -> None:
     # slots: output0, captures8, call args16, function24, bound32,
     # kwargs40, full args48, current item56, preserved error64.
     fn = py_tuple_get(load_ptr(slots, 8), 0)
     store_ptr(slots, 24, fn)
-    if ptr_is_null(fn) == 0 and is_tagged_int(fn) == 0:
-        store_i64(pins, 24, load_i32(fn, 12) & 64)
-        pcc_gc_pin(fn)
     if ptr_is_null(fn):
         return
     bound = py_tuple_get(load_ptr(slots, 8), 1)
     store_ptr(slots, 32, bound)
-    if ptr_is_null(bound) == 0 and is_tagged_int(bound) == 0:
-        store_i64(pins, 32, load_i32(bound, 12) & 64)
-        pcc_gc_pin(bound)
     if ptr_is_null(bound):
         return
     if has_kwargs:
         kwargs = py_tuple_get(load_ptr(slots, 8), 2)
         store_ptr(slots, 40, kwargs)
-        if ptr_is_null(kwargs) == 0 and is_tagged_int(kwargs) == 0:
-            store_i64(pins, 40, load_i32(kwargs, 12) & 64)
-            pcc_gc_pin(kwargs)
         if ptr_is_null(kwargs):
             return
     nb: int = py_tuple_len(load_ptr(slots, 32))
     na: int = py_tuple_len(load_ptr(slots, 16))
     full = py_tuple_new(nb + na)
     store_ptr(slots, 48, full)
-    if ptr_is_null(full) == 0 and is_tagged_int(full) == 0:
-        store_i64(pins, 48, load_i32(full, 12) & 64)
-        pcc_gc_pin(full)
     if ptr_is_null(full):
         return
     i: int = 0
@@ -2968,61 +2769,37 @@ def _partial_entry_build(slots, pins, has_kwargs: int) -> None:
         else:
             item = py_tuple_get(load_ptr(slots, 16), i - nb)
         store_ptr(slots, 56, item)
-        if ptr_is_null(item) == 0 and is_tagged_int(item) == 0:
-            store_i64(pins, 56, load_i32(item, 12) & 64)
-            pcc_gc_pin(item)
         if ptr_is_null(item):
             return
         py_tuple_set_item(load_ptr(slots, 48), i, load_ptr(slots, 56))
-        _func_clear_call_root(slots, pins, 56)
+        _func_clear_call_root(slots, 56)
         i = i + 1
     result = py_obj_call_forward(load_ptr(slots, 24), load_ptr(slots, 48), load_ptr(slots, 40))
     store_ptr(slots, 0, result)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        store_i64(pins, 0, load_i32(result, 12) & 64)
-        pcc_gc_pin(result)
 
 
 def _partial_entry(captures, args, has_kwargs: int):
     slots = stack_alloc(88)
-    pins = stack_alloc(88)
     memset(slots, 0, 88)
-    memset(pins, 0, 88)
     pcc_gc_frame_enter(global_addr("pcc_native_callable_result_frame_map"), slots)
-    if ptr_is_null(captures) == 0 and is_tagged_int(captures) == 0:
-        store_i64(pins, 8, load_i32(captures, 12) & 64)
-        pcc_gc_pin(captures)
     pcc_gc_store_root(ptr_add(slots, 8), captures)
-    if ptr_is_null(args) == 0 and is_tagged_int(args) == 0:
-        store_i64(pins, 16, load_i32(args, 12) & 64)
-        pcc_gc_pin(args)
     pcc_gc_store_root(ptr_add(slots, 16), args)
-    _partial_entry_build(slots, pins, has_kwargs)
+    _partial_entry_build(slots, has_kwargs)
     if ptr_is_null(load_ptr(slots, 0)):
-        _func_keep_call_error(slots, pins, 64)
-    prior_result_pin: int = load_i64(pins, 0)
-    # Reverse acquisition order preserves an alias's external pin state.
-    index: int = 7
-    while index > 0:
-        if ptr_eq(load_ptr(slots, 0), load_ptr(slots, index * 8)):
-            prior_result_pin = load_i64(pins, index * 8)
-        index = index - 1
-    _func_clear_call_root(slots, pins, 56)
-    _func_clear_call_root(slots, pins, 48)
-    _func_clear_call_root(slots, pins, 40)
-    _func_clear_call_root(slots, pins, 32)
-    _func_clear_call_root(slots, pins, 24)
-    _func_clear_call_root(slots, pins, 16)
-    _func_clear_call_root(slots, pins, 8)
+        _func_keep_call_error(slots, 64)
+    _func_clear_call_root(slots, 56)
+    _func_clear_call_root(slots, 48)
+    _func_clear_call_root(slots, 40)
+    _func_clear_call_root(slots, 32)
+    _func_clear_call_root(slots, 24)
+    _func_clear_call_root(slots, 16)
+    _func_clear_call_root(slots, 8)
     error = load_ptr(slots, 64)
     if ptr_is_null(error) == 0:
         py_raise(error)
-        _func_clear_call_root(slots, pins, 64)
-    result = load_ptr(slots, 0)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
+        _func_clear_call_root(slots, 64)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(slots, prior_result_pin)
+    return pcc_gc_take_slot(slots)
 
 
 def _pcc_partial_entry(captures, args):
