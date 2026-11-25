@@ -432,8 +432,10 @@ in the relevant section or issue and removes the entry.
    control). Host pcc0: the 129 files naming the protocol and 25 other
    IR-shape files show no new failure by node id against HEAD; one native
    program (fresh results, identity, exceptions, finalizers) matches
-   CPython. The native integration programs (pcc0, against a source-matched
-   archive) are being compared against HEAD; pcc1 and Linux were not run.
+   CPython. Native integration programs of those 47 files (pcc0, each tree
+   with its own source-matched runtime archive, `-m integration -k "not
+   pcc1"`): 236 pass, and the 19 failing nodes are the same 19 that fail at
+   `a38318725`. pcc1 and Linux were not run.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -571,7 +573,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) emitted GC protocol calls: Claude, macOS, 2026-11-25T03:46Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
