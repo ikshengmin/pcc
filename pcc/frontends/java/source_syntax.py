@@ -783,8 +783,11 @@ class SourceParser:
                     # Only final static arrays can receive the native class root.
                     field_type = self.array_suffix(common_type, signature={"static", "final"} <= mods)
                     initialized = bool(self.accept("="))
-                    if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
-                        result.error("final instance fields require constructor definite-unassignment semantics",
+                    if instance and "final" in mods and initialized and not isinstance(field_type, ArrayType):
+                        # Blank final fields use the constructor DA/DU owner.
+                        # Initialized non-array final fields retain their
+                        # separate instance final-value/constant semantics.
+                        result.error("initialized final instance fields require instance final-value semantics",
                                      code="java.unsupported.final-instance-fields")
                     if not initialized and not instance and not self.class_model and isinstance(field_type, NamedType):
                         # Nominal/String reference storage is a separate shared

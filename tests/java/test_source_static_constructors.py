@@ -277,7 +277,6 @@ CAPABILITIES = [
     boundary("instance-state", "private Utility(){}int value;public static int run(){return 42;}", "instance-methods"),
     boundary("instance-method", "private Utility(){}int unused(){return 7;}public static int run(){return 42;}", "instance-methods"),
     boundary("instance-initializer", "private Utility(){}{}public static int run(){return 42;}", "instance-methods"),
-    boundary("static-initializer", "private Utility(){}static {}public static int run(){return 42;}", "static-initialization"),
     boundary("mutable-static", "private Utility(){}static int value=42;public static int run(){return value;}", "static-initialization"),
     boundary("nonconstant-static", "private Utility(){}static final int VALUE=run();public static int run(){return 42;}", "static-initialization"),
     boundary("nonstatic-member", "private Utility(){}class Inner{private Inner(){}}public static int run(){return 42;}", "member-types"),
@@ -297,6 +296,26 @@ CAPABILITIES += [
         "p/Unused.java": unit("p", "Unused", "private Unused(){;}static int unused(){return 7;}"),
      }, "p.Utility", CONSTRUCTOR_CODE),
 ]
+
+
+# The previous static-block rejection witness is retained byte-for-byte in
+# the real native class-initialization route, and in the JDK acceptance lane.
+ADMITTED_STATIC_INITIALIZER = boundary(
+    "static-initializer", "private Utility(){}static {}public static int run(){return 42;}", "static-initialization")
+
+
+def test_original_private_constructor_with_static_block_uses_native_class_guard(monkeypatch):
+    _, sources, entry, _ = ADMITTED_STATIC_INITIALIZER
+    before = dict(sources)
+    forbid_bytecode_or_external_owner(monkeypatch)
+    compiled = compile_sources(sources, entry_class=entry)
+    assert compiled.managed_runtime and compiled.emit_object().startswith(b"\x7fELF")
+    guard = "__pcc_java_static_" + "p/Utility".encode().hex() + "_initialize"
+    assert guard in compiled.module.globals[compiled.entry_symbol].render()
+    body = compiled.module.globals[guard].render()
+    assert "pcc_rt_java_class_enter" in body and "pcc_rt_java_class_publish" in body
+    assert method_symbol("p/Utility", "Utility", "()V") not in str(compiled.module)
+    assert sources == before
 
 
 @pytest.mark.parametrize("name,sources,entry,code", CAPABILITIES, ids=[case[0] for case in CAPABILITIES])
@@ -574,8 +593,9 @@ def test_identical_complete_utility_maps_match_selected_jdk_raw_processes(tmp_pa
 @pytest.mark.pcc_gate(unavailable=JDK_REASON)
 @pytest.mark.xdist_group(name="java-static-constructor-reference")
 def test_identical_constructor_capability_originals_are_valid_selected_jdk_sources(tmp_path, request):
-    reference_batch(tmp_path, request, CAPABILITIES, mode="accept")
-    for name, sources, _, _ in CAPABILITIES:
+    originals = CAPABILITIES + [ADMITTED_STATIC_INITIALIZER]
+    reference_batch(tmp_path, request, originals, mode="accept")
+    for name, sources, _, _ in originals:
         directory = tmp_path / name
         assert (directory / "compiler-status.txt").read_text() == "0", (name, (directory / "compiler.stderr.bin").read_bytes())
 

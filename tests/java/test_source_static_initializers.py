@@ -211,7 +211,7 @@ def test_native_static_block_guard_is_not_called_for_a_folded_constant_read():
     }, entry_class="Main")
     guard = "__pcc_java_static_" + "Cold".encode().hex() + "_initialize"
     assert guard in str(compiled.module)
-    assert guard not in str(compiled.module.globals[compiled.entry_symbol])
+    assert guard not in compiled.module.globals[compiled.entry_symbol].render()
 
 
 def test_native_blank_array_cannot_use_different_extent_proofs_on_two_paths():

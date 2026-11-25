@@ -307,6 +307,8 @@ def invalid(name, members, message):
 
 
 INVALID = [
+    invalid("nested-blank-static-final", "public static int run(){return 42;}static class Inner{static final int VALUE;}",
+            "not definitely assigned by a static initializer"),
     invalid("duplicate-sibling", "public static int run(){return 42;}static class Inner{}static class Inner{}", "duplicate member class"),
     invalid("same-name-as-parent", "public static int run(){return 42;}static class Outer{}", "same simple name as an enclosing class"),
     invalid("same-name-as-ancestor", "public static int run(){return 42;}static class Middle{static class Outer{}}", "same simple name as an enclosing class"),
@@ -430,9 +432,7 @@ BOUNDARIES = [
     ("inherited-member", "static class Inner extends Outer{}", "class-supertypes-generics"),
     ("nested-instance-method", "static class Inner{int f(){return 42;}}", "instance-methods"),
     ("nested-instance-field", "static class Inner{int value;}", "instance-methods"),
-    ("nested-static-block", "static class Inner{static {int n=1;}}", "static-initialization"),
     ("nested-mutable-static", "static class Inner{static int value=42;}", "static-initialization"),
-    ("nested-blank-static-final", "static class Inner{static final int VALUE;}", "static-initialization"),
     ("nested-nonconstant-initializer", "static class Inner{static final int VALUE=f();static int f(){return 42;}}", "static-initialization"),
     ("unused-object-allocation", "static class Inner{static int unused(){new Inner();return 42;}}", "object-expressions"),
     # Native class creation parses; an anonymous body needs the nested-class domain.
@@ -441,6 +441,21 @@ BOUNDARIES = [
     ("unused-string", 'static class Inner{static int unused(){return "text";}}', "string-literals"),
     ("cross-owner-constant-cycle", "static final int VALUE=Inner.VALUE;static class Inner{static final int VALUE=Outer.VALUE;}", "cyclic-initialization"),
 ]
+
+
+def test_original_unused_nested_static_block_is_emitted_without_false_active_use(monkeypatch):
+    # Retain the old rejection witness unchanged. The actual nested guard
+    # is emitted even though this entry does not initialize the nested class.
+    sources = outer("public static int run(){return 42;}static class Inner{static {int n=1;}}")
+    before = dict(sources)
+    forbid_bytecode_or_external_owner(monkeypatch)
+    compiled = compile_sources(sources, entry_class="p.Outer")
+    assert compiled.managed_runtime and compiled.emit_object().startswith(b"\x7fELF")
+    guard = "__pcc_java_static_" + "p/Outer$Inner".encode().hex() + "_initialize"
+    assert guard not in compiled.module.globals[compiled.entry_symbol].render()
+    body = compiled.module.globals[guard].render()
+    assert "pcc_rt_java_class_enter" in body and "pcc_rt_java_class_publish" in body
+    assert sources == before
 
 
 @pytest.mark.parametrize("name,members,code", BOUNDARIES, ids=[case[0] for case in BOUNDARIES])

@@ -193,7 +193,7 @@ def test_invalid_original_class_model_is_not_accepted(text, message):
 
 
 @pytest.mark.parametrize("text,message", [
-    ("class Record{final int value=42;}", "definite-unassignment"),
+    ("class Record{final int value=42;}", "final-value semantics"),
     ("class Record{static int value=42;}", "class initialization"),
     ("class Record{int hashCode(){return 42;}}", "inherited-method"),
     # `class Record extends Other{}` moved to test_source_class_supertypes.

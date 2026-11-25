@@ -20,6 +20,7 @@ from .managed_objects import PRIMITIVE_SIZES, class_value_plan, reference_value_
 from .source_array_model import ArrayModelAnalyzer
 from .source_class_initialization import ClassInitializationAnalyzer, class_initialization_plan
 from .source_construction_model import ClassConstructionAnalyzer, ClassConstructionObligation
+from .source_instance_finals import blank_instance_final, check_blank_instance_finals
 from .source_integral_arithmetic_model import IntegralArithmeticModelAnalyzer, integral_arithmetic_context
 from .source_project import SourceProject
 from .source_sema import SourceAnalyzer
@@ -338,7 +339,10 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
             self.bind_explicit_receiver(node, assigned)
             if field is None:
                 node.token.error("undefined instance field " + node.token.text)
-            if "static" in field.modifiers or "final" in field.modifiers:
+            blank_initialization = (blank_instance_final(field) and node.value == "=" and
+                                    (self.current_initializer is not None or
+                                     self.method is not None and self.method.is_constructor))
+            if ("static" in field.modifiers or "final" in field.modifiers) and not blank_initialization:
                 node.token.error("cannot assign a final constant field " + node.token.text)
             # The forward-write exception is for simple assignment. A compound
             # assignment also reads the old value (JLS 15.26.2), just like ++,
@@ -409,6 +413,7 @@ class ClassAnalyzer(IntegralArithmeticModelAnalyzer, ThrowModelAnalyzer, ClassCo
                     constructor.token.error("recursive constructor invocation")
                 visited.add(id(current))
                 current = self.constructor_edge[id(current)]
+        check_blank_instance_finals(self.program, self.constructors.values())
         return self.program
 
 

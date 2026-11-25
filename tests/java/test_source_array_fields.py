@@ -42,6 +42,7 @@ PROGRAMS = [
     ("declarator-brackets", original("int first[]={7},answer=35,last[]={42};", "return first[0]+answer+last[0]-42;")),
     ("common-brackets", original("int[] first={42},second=first;", "return first==second?second[0]:0;")),
     ("constructor-assignment", original("int[] values;ArrayExample(){this.values=new int[]{42};}", "return values[0];")),
+    ("blank-final-array-constructor", original("final int[] values;ArrayExample(){values=new int[]{42};}", "return 42;")),
     ("constructor-parameter-shadow", original("int[] values;ArrayExample(){this(new int[]{42});}ArrayExample(int[] values){this.values=values;}", "return values[0];")),
     ("field-rebind", original("int[] values={7};", "values=new int[]{42};return this.values[0];")),
     ("explicit-field-rebind", original("int[] values={7};", "this.values=new int[]{42};return values[0];")),
@@ -228,7 +229,6 @@ def test_array_field_length_and_component_store_keep_runtime_check_order():
 
 
 @pytest.mark.parametrize("members,code", [
-    ("final int[] values;ArrayExample(){values=new int[]{42};}", "java.unsupported.final-instance-fields"),
     # Original static array field moved verbatim to
     # test_source_class_initialization_model (class-initialization step).
     ("int[][] values;", "java.unsupported.array-model-shape"),

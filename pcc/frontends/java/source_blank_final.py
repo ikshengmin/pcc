@@ -18,16 +18,18 @@ class FlowPoint:
     successors: list = field(default_factory=list)
     generate: int = 0
     kill: int = 0
+    da_generate: int = 0
+    da_kill: int = 0
 
 
 class BlankFinalFlow:
-    def __init__(self, method, *, static_bindings=None):
+    def __init__(self, method=None, *, static_bindings=None):
         # A class initialization has the same must property across all blocks.
         # Static fields are created before those blocks, not regenerated at a
         # local scope's entry or on a loop backedge (JLS 16.8).
-        self.class_initializer = static_bindings is not None
+        self.extended_domain = static_bindings is not None
         self.static_bindings = frozenset(static_bindings or ())
-        bindings = [binding for binding in method.locals if binding.is_blank_final]
+        bindings = [binding for binding in method.locals if binding.is_blank_final] if method is not None else []
         bindings.extend(static_bindings or ())
         self.bits = {binding: 1 << index for index, binding in enumerate(bindings)}
         self.universe = (1 << len(self.bits)) - 1
@@ -35,9 +37,10 @@ class BlankFinalFlow:
         self.writes = []
         self.targets = {}
 
-    def point(self, *predecessors, generate=0, kill=0):
+    def point(self, *predecessors, generate=0, kill=0, da_generate=0, da_kill=0):
         index = len(self.points)
-        self.points.append(FlowPoint(generate=generate, kill=kill))
+        self.points.append(FlowPoint(generate=generate, kill=kill,
+                                     da_generate=da_generate, da_kill=da_kill))
         for predecessor in dict.fromkeys(predecessors):
             self.edge(predecessor, index)
         return index
@@ -47,11 +50,14 @@ class BlankFinalFlow:
             self.points[source].successors.append(destination)
             self.points[destination].predecessors.append(source)
 
+    def binding_bit(self, binding):
+        return self.bits.get(binding, 0)
+
     def write(self, node, incoming):
-        bit = self.bits.get(node.symbol, 0)
+        bit = self.binding_bit(node.symbol)
         if not bit:
             return incoming
-        point = self.point(incoming, kill=bit)
+        point = self.point(incoming, kill=bit, da_generate=bit)
         self.writes.append((point, node, bit))
         return point
 
@@ -64,7 +70,7 @@ class BlankFinalFlow:
         while remaining:
             node = remaining.pop()
             if node.kind == "var":
-                generate |= self.bits.get(node.symbol, 0)
+                generate |= self.binding_bit(node.symbol)
             elif node.kind == "sequence":
                 remaining.extend(node.children)
         return self.point(incoming, generate=generate) if generate else incoming
@@ -108,7 +114,7 @@ class BlankFinalFlow:
                               self.expression(node.children[2], no))
         supported = {"bool", "integer", "floating", "char", "name", "call",
                      "group", "cast", "unary", "binary", "mutation"}
-        if self.class_initializer:
+        if self.extended_domain:
             supported |= {"null", "array_initializer", "array_new", "array_access", "array_length", "array_place"}
         if node.kind not in supported:
             node.token.error("blank final locals require flow rules for this expression domain",
@@ -130,7 +136,7 @@ class BlankFinalFlow:
         if kind == "var":
             for child in node.children:
                 incoming = self.expression(child, incoming)
-            bit = self.bits.get(node.symbol, 0)
+            bit = self.binding_bit(node.symbol)
             # A declaration inside a loop creates a new local on each entry.
             return self.point(incoming, generate=bit) if bit else incoming
         if kind == "assign":
@@ -198,7 +204,7 @@ class BlankFinalFlow:
                     self.edge(self.statement(update, continuation), head)
             self.edge(when_false, exit_point)
             return exit_point
-        if kind == "enhanced_for" and self.class_initializer:
+        if kind == "enhanced_for" and self.extended_domain:
             _, expression, body = node.children
             head = self.point(self.expression(expression, incoming))
             exit_point = self.point(head)
@@ -213,8 +219,8 @@ class BlankFinalFlow:
         node.token.error("blank final locals require flow rules for this statement domain",
                          code="java.unsupported.blank-final-local")
 
-    def check(self, body):
-        self.statement(body, self.point(generate=self.universe))
+    def solve(self, *, da=False):
+        """Meet predecessor facts from top; DA and DU are independent lattices."""
         before = [self.universe] * len(self.points)
         after = [self.universe] * len(self.points)
         work = deque(range(len(self.points)))
@@ -227,13 +233,20 @@ class BlankFinalFlow:
             for predecessor in point.predecessors:
                 incoming &= after[predecessor]
             before[index] = incoming
-            outgoing = (incoming | point.generate) & ~point.kill
+            generate, kill = ((point.da_generate, point.da_kill) if da else
+                              (point.generate, point.kill))
+            outgoing = (incoming | generate) & ~kill
             if outgoing != after[index]:
                 after[index] = outgoing
                 for successor in point.successors:
                     if not queued[successor]:
                         queued[successor] = True
                         work.append(successor)
+        return before, after
+
+    def check(self, body):
+        self.statement(body, self.point(generate=self.universe))
+        before, _ = self.solve()
         for index, node, bit in self.writes:
             if not before[index] & bit:
                 category = "static field" if node.symbol in self.static_bindings else "local"

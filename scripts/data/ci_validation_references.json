@@ -1881,6 +1881,14 @@
         ]
       }
     },
+    "tests/java/test_source_instance_blank_finals.py": {
+      "test_exact_blank_instance_final_originals_against_selected_jdk": {
+        "activity": "external-reference",
+        "reason": [
+          "Selected actual JDK compiler/runtime through unchanged original constructor DA/DU sources and raw subprocess receipts; PCC managed object execution is not qualified"
+        ]
+      }
+    },
     "tests/java/test_source_array_model.py": {
       "test_exact_array_model_originals_against_selected_jdk_only": {
         "activity": "external-reference",

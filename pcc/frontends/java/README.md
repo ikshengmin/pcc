@@ -346,9 +346,20 @@ certify the rest of that input as valid Java. Resource limits and missing
 supplied dependencies have separate codes. The frozen class-file compatibility
 experiment retains its message-only errors and is not source acceptance.
 
-These codes do not change the object/runtime boundary: class analysis is a
-semantic model, blank final instance fields remain gated, and the unpublished blank
-final model/reference disagreement is not part of this source revision.
+These codes do not change the object/runtime boundary. Class analysis is a
+semantic model, not managed construction. Blank final instance fields now use
+the bound `SourceField` identity and the shared definite-assignment/unassignment
+graph (JLS 8.3.1.2 and 16.9). The two must facts are independent: instance
+initializers execute in textual order, alternate `this(...)` invocations adopt
+the selected constructor's definite-assignment obligation, and every explicit
+return and normal constructor exit is checked. Abrupt throws do not complete a
+constructor; loop backedges still prohibit possible repeated assignment. A blank
+field is not a constant variable, and assigning it in an ordinary method is an
+error. This covers the admitted statement/expression domains without adding
+reference layout or runtime registration; field assignment expressions and
+initialized non-array final fields keep their existing explicit capabilities.
+The earlier unpublished model/reference disagreement remains historical evidence,
+not a certification of this source revision.
 
 ### Primitive-array semantic model (not native arrays)
 

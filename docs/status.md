@@ -1138,14 +1138,22 @@ in the relevant section or issue and removes the entry.
    The new overlap regression failed before and passed after; 48 focused
    protocol tests and two native owned ELF controls passed on Linux. The
    hosted Go 1.27.3 integration and whole-language verdicts are pending.
-   Java CI next: native scalar static blocks and blank-final initialization of
-   already admitted primitive-array owners use the existing class guard, shared
-   DA/DU flow, and lexical root retirement. Linux host: 706 focused ordinary
-   tests and 2 lane-registry checks passed; JDK and managed native execution
-   remain CI obligations. The v1 envelope, runtime ABI and #13 gate are unchanged.
-   Run 45619704293's Commons Numbers and ZXing gates still require nominal static
-   reference storage and class construction after #13; the six JDK-only failed
-   nodes retain the normative conformance obligations, not a changed oracle.
+   Java: generic blank instance final fields now use the bound DA/DU graph
+   through initializer order, constructor delegation and every normal exit.
+   Linux host pcc0: 4436 whole ordinary tests passed; 52 exact new originals
+   matched OpenJDK 21 (23 executed, 3 valid-only, 26 rejected); old array-field
+   and constructor-reference controls passed. Three stale static-init tests
+   retain their original source in real class-guard ELF/IR and Java-error
+   checks. The unchanged class-model frontiers advance from BigInteger:134:11
+   to 159:5 (annotation) and GenericGF:42:17 to GenericGFPoly:200:16 (reference
+   arrays). Strict production still requires #13 nominal static roots and
+   construction (`SmallPrimes.java:90:18`, `GenericGF.java:33:23`). Run
+   45643044565 reference (207 nodes, 4 failing aggregates/6 leaf differences)
+   and integration (1259 nodes, 4 failures including 2 JDK-only) receipts
+   reproduced all eight JDK-only source differences locally on 21.0.13. The
+   applicable JLS 21/25 obligations remain strict; no qualified replacement
+   JDK is known. Next: #13 backing/roots and native constructor lowering, not
+   another v1 storage shortcut. The v1 envelope and runtime ABI are unchanged.
    Rust CI next: the original fallible-streaming-iterator still fails at
    lib.rs:22:1 (core::cmp) in run 45619704293, artifact 15033286334. Closed
    source dependencies now admit edition-2015 explicit extern crates and
@@ -1157,7 +1165,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - blank final instance fields in Java constructor DA/DU: Codex, Linux x86_64, 2026-11-25T17:19Z, area frontend-java
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

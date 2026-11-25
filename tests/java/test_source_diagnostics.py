@@ -131,7 +131,7 @@ def test_source_capability_has_explicit_code(source, suffix, message, monkeypatc
 
 
 @pytest.mark.parametrize("source,suffix,message", [
-    ("class Diagnostic{final int x;}", "final-instance-fields", "final instance fields require"),
+    ("class Diagnostic{final int x=1;}", "final-instance-fields", "final instance fields require"),
     # `class Diagnostic{static {}}` moved to test_source_static_initializers.
     ("class Diagnostic{int hashCode(){return 42;}}", "object-inherited-methods", "Object override/final/access semantics"),
 ])
@@ -139,6 +139,14 @@ def test_semantic_model_capability_is_not_runtime_support(source, suffix, messag
     with pytest.raises(UnsupportedJava, match=message) as caught:
         analyze_class_sources({"Original.java": source})
     assert caught.value.code == "java.unsupported." + suffix
+
+
+def test_missing_blank_instance_final_is_a_semantic_error():
+    # Preserve the original boundary witness: it now reaches its implicit
+    # constructor's real JLS definite-assignment check rather than a gap.
+    with pytest.raises(JavaError, match="not definitely assigned") as caught:
+        analyze_class_sources({"Original.java": "class Diagnostic{final int x;}"})
+    assert type(caught.value) is JavaError and caught.value.code is None
 
 
 INVALID = [

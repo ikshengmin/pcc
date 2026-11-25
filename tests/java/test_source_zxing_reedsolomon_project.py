@@ -84,6 +84,20 @@ def test_materialized_snapshot_keeps_every_original_byte(tmp_path):
             if path.is_file()} == set(files)
 
 
+def test_original_reedsolomon_class_model_advances_past_blank_final_fields():
+    # Independent source-model evidence only. The strict production gate
+    # below still needs nominal static roots, constructors and shared storage.
+    from pcc.frontends.java import UnsupportedJava, analyze_class_sources
+    _, files = load_inputs()
+    sources = original_sources(files, PRODUCTION)
+    before = dict(sources)
+    with pytest.raises(UnsupportedJava) as caught:
+        analyze_class_sources(sources)
+    assert caught.value.code == "java.unsupported.array-model-shape"
+    assert str(caught.value).startswith(PRODUCTION[1] + ":200:16:")
+    assert sources == before
+
+
 @pytest.mark.integration
 def test_original_reedsolomon_package_compiles_with_the_owned_java_frontend(monkeypatch):
     """Strict project gate: every original production unit, no rewrite."""
