@@ -136,15 +136,17 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
 
             def execute_fixture(directory, label, command, environment):
                 return {"command": list(command), "returncode": 0,
-                        "stdout": expected, "stderr": ""}
+                        "stdout": expected, "stderr": "", "start_ns": 10,
+                        "end_ns": 20, "elapsed_ns": 10}
 
             with monkeypatch.context() as process_patch:
+                process_patch.setenv("PCC_NATIVE_OBJECT_GATE_RUN_ID", env["PCC_NATIVE_OBJECT_GATE_RUN_ID"])
                 process_patch.setattr(producer, "_record_execution", execute_fixture)
                 producer.assert_owned_program(
                     program, expected, directory,
                     compile_fixture, mode, state["archive"],
                     types.SimpleNamespace(readouterr=lambda: types.SimpleNamespace(out="", err="")),
-                    backends=(0,),
+                    backends=None,
                 )
             record = json.loads((directory / "ownership-regression.json").read_text())
             if mode == "pcc1":
@@ -204,7 +206,17 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                 elif case_fault == "gc_removed":
                     record["executions"][0]["gc_backend"] = 3
                 elif case_fault == "gc_inventory":
-                    record["gc_backends"].append(3)
+                    record["gc_backends"] = [0, 3]
+                elif case_fault == "stale_run":
+                    record["run_id"] = "previous-run"
+                elif case_fault == "binary_path":
+                    record["binary_path"] += ".other"
+                elif case_fault == "native_timing":
+                    record["executions"][0]["elapsed_ns"] = -1
+                elif case_fault == "reference_command":
+                    record["reference"]["command"] = ["other", str(source)]
+                elif case_fault == "native_boolean_status":
+                    record["executions"][0]["returncode"] = False
                 elif case_fault == "native_command":
                     record["executions"][0]["command"] = ["HOST-STUB", str(source)]
                 elif case_fault == "native_output":
@@ -337,7 +349,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         "routed_producer", "host_output", "python_linkage", "linkage_hash",
         "linkage_missing", "libpython_missing",
         "source_hash", "source_bytes", "runtime_path", "runtime_hash", "binary_hash",
-        "reference_output", "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command",
+        "reference_output", "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command", "stale_run", "binary_path", "native_timing", "reference_command", "native_boolean_status",
         "native_output", "native_returncode", "module_bytes", "module_hash",
         "module_inventory", "source_after", "compiler_after", "runtime_after",
         "test_input_after", "len_entry_missing", "len_reference_output",
@@ -350,7 +362,7 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         "host_output", "python_linkage", "linkage_hash", "linkage_missing",
         "libpython", "libpython_missing", "source_hash", "source_bytes", "source_newlines",
         "runtime_path", "runtime_hash", "binary_hash", "reference_output",
-        "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command", "native_output",
+        "gc_missing", "gc_duplicate", "gc_removed", "gc_inventory", "native_command", "stale_run", "binary_path", "native_timing", "reference_command", "native_boolean_status", "native_output",
         "native_returncode",
     )
     scenarios = [(fault, "find") for fault in ("none",) + preflight_faults + receipt_faults]
@@ -407,6 +419,8 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
         if fault == "none":
             result = gate.run(out)
             assert result["status"] == "PASS"
+            assert result["schema"] == "pcc.native-find-protocol.v2"
+            assert all(row["run_id"] == result["run_id"] for row in result["programs"])
             assert len(result["programs"]) == 4
             assert {(row["program_case"], row["mode"]) for row in result["programs"]} == {
                 (case, mode) for case in gate.PROGRAM_CASES for mode in gate.MODES

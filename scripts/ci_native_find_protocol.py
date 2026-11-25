@@ -14,6 +14,7 @@ import json
 import os
 from pathlib import Path
 import sys
+import uuid
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -51,6 +52,7 @@ TEST_INPUTS = (
     BITSETS_TEST,
     "tests/python/test_str_len_protocol.py",
     "scripts/ci_native_find_protocol.py",
+    "scripts/native_ownership_receipt.py",
     "scripts/ci_worker_size_prior_gate.py",
     ".github/workflows/pcc1-package-parity.yml",
     "tests/python/owned_regression_support.py",
@@ -66,7 +68,8 @@ TEST_INPUTS = (
 )
 
 
-def verify_receipts(directory, runtime):
+def verify_receipts(directory, runtime, run_id):
+    from scripts.native_ownership_receipt import read_receipt, verify_executions
     from scripts.owned_image_linkage import inspect_owned_image
 
     from tests.python.test_bound_find_protocol import (
@@ -100,7 +103,7 @@ def verify_receipts(directory, runtime):
     assert len(paths) == len(NODES), "missing or extra native find receipts"
     results = []
     for path in paths:
-        record = json.loads(path.read_text(encoding="utf-8"))
+        record = read_receipt(path)
         source = path.parent / "program.py"
         binary = path.parent / "program.out"
         # The shared producer writes program.py with text-mode newlines.
@@ -123,6 +126,8 @@ def verify_receipts(directory, runtime):
         assert pair in remaining, "duplicate or unexpected native program/compiler pair"
         remaining.remove(pair)
         assert record["status"] == "PASS" and record["compiler_mode"] == mode
+        assert run_id and record["run_id"] == run_id, "stale native execution receipt"
+        assert binary.is_absolute() and record["binary_path"] == str(binary)
         assert record["backend"] == "self" and record["libpython"] == "off"
         assert record["source_sha256"] == sha(source)
         assert record["runtime_archive"] == runtime["path"]
@@ -131,14 +136,10 @@ def verify_receipts(directory, runtime):
         assert record["linkage"] == inspect_owned_image(binary.read_bytes())
         expected = (0, expected_programs[case][1], "")
         reference = record["reference"]
+        assert reference["command"] == [sys.executable, str(source)]
+        assert type(reference["returncode"]) is int
         assert tuple(reference[key] for key in ("returncode", "stdout", "stderr")) == expected
-        executions = record["executions"]
-        assert record["gc_backends"] == [0] and type(record["gc_backends"][0]) is int
-        assert [row["gc_backend"] for row in executions] == [0]
-        assert type(executions[0]["gc_backend"]) is int
-        for row in executions:
-            assert row["command"] == [str(binary)]
-            assert tuple(row[key] for key in ("returncode", "stdout", "stderr")) == expected
+        verify_executions(record, binary, expected[1])
         results.append({**record, "program_case": case,
                         "cases": [*CASES, "str_len_protocol"] if case == "find" else [case],
                         "mode": mode, "receipt": str(path),
@@ -151,14 +152,15 @@ def run(out):
     out = Path(out).resolve()
     path = out / (NAME + ".json")
     assert not path.exists(), "refuse a stale native find gate receipt"
+    run_id = uuid.uuid4().hex
     receipt = {
-        "schema": "pcc.native-find-protocol.v1", "status": "RUNNING",
+        "schema": "pcc.native-find-protocol.v2", "run_id": run_id, "status": "RUNNING",
         "nodes": list(NODES), "timeout_s": TIMEOUT_S,
         "compiler_modes": list(MODES), "program_cases": list(PROGRAM_CASES),
         "qualifies_fixed_point": False,
         "observed_collector_witness": False,
-        "collector_evidence": "One native run per program and compiler. gc_backend is the legacy receipt identifier; "
-                              "the collector is not independently observed by this gate.",
+        "collector_evidence": "One native run per program and compiler, without a collector selector. "
+                              "The collector is not independently observed by this gate.",
     }
     save(path, receipt)
     try:
@@ -182,12 +184,13 @@ def run(out):
             PCC_RUNTIME_ARCHIVE=str(archive), PCC_CURRENT_PCC1=str(binary),
             PCC_REQUIRE_CURRENT_PCC1="1", PCC_TEST_NO_NATIVE_PROVISIONING="1",
             PCC_NO_AUTO_PCC1="1", UV_PYTHON_DOWNLOADS="never",
+            PCC_NATIVE_OBJECT_GATE_RUN_ID=run_id,
         )
         receipt.update(source=source, compiler=compiler, runtime=runtime, test_inputs=inputs)
         save(path, receipt)
         try:
             run_pytest(out, NAME, NODES, env, integration=True, timeout=TIMEOUT_S)
-            receipt["programs"] = verify_receipts(out / NAME, runtime)
+            receipt["programs"] = verify_receipts(out / NAME, runtime, run_id)
         finally:
             receipt["source_after"] = source_identity()
             receipt["runtime_after"] = runtime_identity(archive)

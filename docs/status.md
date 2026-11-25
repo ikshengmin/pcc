@@ -284,9 +284,14 @@ in the relevant section or issue and removes the entry.
    IR/runtime/linked-image checks. It rejects legacy evidence. Linux:
    503 host controls passed, including inherited-selector removal and
    negative native status. Actual native executions pending hosted CI.
-   Next: migrate the other callers of the shared ownership helper and
-   native find gate to v2, then remove the temporary legacy helper path.
-   Audit dynamic selector use, not only literal prune matches.
+   #20 native find gate: both compiler modes and both programs now use
+   one native execution each without a selector. Shared v2 admission
+   checks bind the current run, absolute binary, typed status and timing;
+   the seven find/length modules, Stage1 provenance and budget are intact.
+   Linux: 340 host/reference/IR checks passed, four native nodes pending.
+   Next: migrate remaining shared ownership helper callers and receipt
+   retention, then remove the temporary legacy selector path. Audit
+   dynamic selector use, not only literal prune matches.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -301,7 +306,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 native find one-run protocol: Codex, Linux, 2026-11-25T02:24Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
