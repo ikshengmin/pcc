@@ -724,6 +724,20 @@ in the relevant section or issue and removes the entry.
    `test_py_multi_file_bootstrap_shim.py`), the four heavy qualification
    files, integration, pcc1 and Linux. Remaining 4b: 23 modules, from
    `py_os_mkdir` (4 sites) to `py_class` (93).
+   (d), step 4b, second batch (Claude, local Mac, `86b321f68`, tests to
+   `9675bed27`): 9 runtime modules (user finalizer dispatch, os.mkdir,
+   sys.modules and the threaded name-key cache, raise/raise_owned, list
+   factory and getter, buffer and bytes-decode finishes, int-bytes results,
+   set constructor/binary/pop/snapshot results, tuple conversion and
+   concat) take through `pcc_gc_take_slot`; the prior reads, pins, unpins
+   and reasserts go with os.mkdir's pins array, `_set_constructor_pin` and
+   the tuple pin/restore helpers. Each module compiles alone. The shared
+   exception-constructor model now moves nothing too; os.mkdir leaves the
+   pin-bit metadata inventory (nine sites). Host pcc0, by node id against
+   HEAD, the 105 files naming those modules match (the renamed inventory
+   node fails for the same pre-existing `_path_clear_root_prefix` reason).
+   Not run: the heavy files named above, integration, pcc1 and Linux.
+   Remaining 4b: 14 modules, from `py_obj` (7 sites) to `py_class` (93).
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -878,7 +892,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) 4b runtime takes, second batch (py_dunder, py_os_mkdir, py_module_attrs_runtime, py_exc_tls, py_list, py_obj_stubs, py_int_convert, py_set, py_tuple): Claude, macOS, 2026-11-25T16:24Z, area runtime-codegen
+   - none
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
