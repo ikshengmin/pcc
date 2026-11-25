@@ -311,7 +311,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - none
+   - #20 source-matched Linux runtime and native regressions: Codex, Linux, 2026-11-25T03:28Z, area checkpoint
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
