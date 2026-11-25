@@ -1240,6 +1240,7 @@ in the relevant section or issue and removes the entry.
    "generator already executing" (self re-entry recurses into
    RecursionError; four threads drive one generator without a ValueError),
    a correctness bug independent of J2 that blocks J2's step 2.
+   J2 next: step 1 (ordinary functions) with its own borrowed-local registry, after the generator re-entrance fix.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
@@ -1288,7 +1289,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - (c) J2 borrowed local operands of slot calls: Claude, macOS, 2026-11-25T18:31Z, area frontend-python (design note first; then call_object_lowering.py, generator_lowering.py, the stable-operand helper and new tests; (d) U6-U10 change root-copy emission nearby: whichever lands second rebases)
+   - generator re-entrance ("generator already executing"), before J2 step 2: Claude, macOS, 2026-11-25T19:45Z, area runtime-gc (py_gen.py's resume entries and done word, py_coroutine only if it shares them, new tests; the user asked for it on 2026-11-26; (d) U3 edits py_gen.py later and rebases on this)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
