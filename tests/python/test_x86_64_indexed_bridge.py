@@ -173,9 +173,9 @@ def test_selector_decodes_negative_ids_in_the_fixed_vocabulary(tmp_path, monkeyp
 @pytest.mark.parametrize("malformed_tail", [False, True], ids=["selector-error", "verify-error-first"])
 def test_unsupported_instruction_and_verification_diagnostics_are_unchanged(malformed_tail):
     source = '''target triple = "x86_64-unknown-linux-gnu"
-define i32 @unsupported(<2 x i32> %vector) {
+define i32 @unsupported(<2 x i32> %vector, i32 %lane) {
 entry:
-  %value = extractelement <2 x i32> %vector, i32 0
+  %value = extractelement <2 x i32> %vector, i32 %lane
   TAIL
   ret i32 %value
 }
@@ -194,7 +194,10 @@ entry:
             for function in module.functions:
                 get_indexed_function_kernel(function).close_native_tables()
     assert errors[0] == errors[1]
-    assert "undefined" in errors[0] if malformed_tail else "extractelement" in errors[0]
+    # Constant lanes are implemented; the valid dynamic-lane form remains
+    # a real selector limitation, distinct from the undefined SSA value.
+    assert ("undefined" if malformed_tail else
+            "extractelement requires constant lane index") in errors[0]
     assert "unsupported" in errors[0]
 
 
@@ -210,10 +213,10 @@ entry:
   %sum = add nsw i32 VALUE, 2
   ret i32 %sum
 }
-'''.replace("ARGS", "<2 x i32> %vector" if early_unsupported else "")
+'''.replace("ARGS", "<2 x i32> %vector, i32 %lane" if early_unsupported else "")
     source = source.replace(
         "EXTRACT",
-        "%value = extractelement <2 x i32> %vector, i32 0" if early_unsupported else "",
+        "%value = extractelement <2 x i32> %vector, i32 %lane" if early_unsupported else "",
     ).replace("VALUE", "%value" if early_unsupported else "40")
     source_module = parse_self_backend_module(source)
     wire = tmp_path / "corrupt-input.pidx"
@@ -259,7 +262,7 @@ entry:
             # Streaming may reject an earlier unsupported selector before a
             # later corrupt payload that eager legacy projection saw first.
             # Multiple-invalid-input first-error ordering is not a contract.
-            assert "'probe'/'entry': extractelement" in str(caught.value)
+            assert "extractelement requires constant lane index in 'probe': lane" in str(caught.value)
         elif corruption == "missing-flags":
             assert caught.value.args == (0,)
         else:

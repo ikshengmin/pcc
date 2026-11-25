@@ -531,6 +531,17 @@ in the relevant section or issue and removes the entry.
    90 s / 1 GiB (4.59 s, 110,600,192-byte peak). Next: stale constant-lane
    selector negative witnesses and remaining backend correctness red.
    Production verifier/GC semantics unchanged.
+   #20 indexed bridge selector negatives: constant vector lane extraction
+   is now implemented, so the old unsupported-instruction fixture no longer
+   reached an unsupported selector. The new valid dynamic-lane witness
+   retains the real selector rejection, earlier SSA verifier ordering,
+   later corrupt-wire rejection and emission state restoration. All 87
+   affected tests pass (2.82 s, 85,504,000-byte peak). The same whole
+   ordinary x86 batch now gives 1,418 pass / one pre-existing failure
+   (register homes across the pointer-retirement marker), with 15 passing
+   subtests and four deselected; 26.61 s, 142,790,656-byte peak. Eleven of
+   the former twelve x86 baseline failures are repaired. The remaining
+   optimization witness is still open; no selector behavior was changed.
 
    Complete pytest overlap fixture (run 45643044565, artifact 15044643830):
    the fixed 330 MiB allowance rejected a real child whose inherited host
@@ -548,7 +559,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - #20 runtime oracle exact checkout CLI entry: Codex, Linux, 2026-11-25T17:42Z, area runtime-codegen (test_runtime_oracle_diff only)
-   - #20 indexed bridge selector-negative dynamic lane witnesses: Codex, Linux x86-64, 2026-11-25T17:46Z, area backend
 
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
