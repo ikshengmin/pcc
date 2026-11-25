@@ -775,8 +775,13 @@ in the relevant section or issue and removes the entry.
    collector (no movement, `pcc_gc_take_slot`, no pin); no file has a new
    failing node. Not run per the user: integration suites; also pcc1,
    Linux and the heavy files that exceed the cap. Claude stops and asks
-   only for: a behavior change it cannot attribute to a model, deleting a
-   test file or a public header export, or a file another agent claims.
+   only for: a behavior change it cannot attribute to a model, or a file
+   another agent claims. The user's answers of 2026-11-26 (selected
+   options): run the units back to back ("连续做"); U12 may delete
+   `tests/python/test_fused_protocol_pass.py` with the pass ("可以删");
+   U11 deletes the matching `py_runtime.h` exports ("一起删"); a test or
+   case that only exercises a removed protocol function is rewritten to
+   the one collector, or deleted and listed in its commit ("改写或删并列出").
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
