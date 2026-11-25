@@ -440,9 +440,19 @@ in the relevant section or issue and removes the entry.
    definitions and five cross-module symbols, with zero return mismatches.
    Linux focused: 6/6 pass in 23.39 s; guarded peak 264,605,696 bytes under
    the original 1 GiB cap. Test-only, no compiler ABI change; hosted rerun pending.
-   Next: remaining cross-module failures, worker-prior/changed-module
-   and Source; wait for the active checkpoint's independent wheel
-   evidence before dispatching its successor.
+   #20 multi-module valueclass emission witness: the diagnostic IR bundle
+   contains separate modules with distinct local frame-map constants of the
+   same name (the original failure used counts -5/-4/-5). The test now emits
+   every module independently, like the real object pipeline, retaining the
+   original function-symbol check. Linux: all five focused valueclass ABI
+   tests passed after the latest fused-protocol change (20.36 s, peak
+   207,953,920 bytes); the actual 20-module
+   failure artifact separately emitted all modules for Darwin, including
+   consumer and functools (43.90 s, peak 144,818,176 bytes), under 90 s/1 GiB.
+   No stack-map bounds check or compiler behavior changed.
+   Next: worker-prior/changed-module and remaining Source; the 216-node
+   source shared batch still requires a hosted rerun, and the active
+   checkpoint's independent wheel evidence is pending.
    #20 source worker admission: in run 45619704293, independent compiler
    pools overlapped and exhausted the existing 128-MiB headroom. The source
    guard now binds one peer admission lease per exact state path. The two
@@ -464,7 +474,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 multi-module valueclass object emission witness: Codex, Linux, 2026-11-25T16:38Z, area backend
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

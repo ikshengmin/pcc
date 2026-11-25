@@ -390,5 +390,18 @@ def build_reload(holder: Holder, target: str) -> Reload:
 
     from pcc.backend.self_backend_dispatch import emit_self_asm
 
-    assembly = emit_self_asm(ir_text)
-    assert "_user_pcc_backend_repro_consumer_build_reload:" in assembly
+    # --emit-llvm-only writes a diagnostic concatenation of translation
+    # units, not a link-resolved module. Internal globals (notably each
+    # module's frame-map constants) are allowed to share names across units.
+    # Emit every actual unit independently, as the real object pipeline does.
+    sections = re.split(r"^; ---- module: ([^\n]+) ----\n", ir_text, flags=re.M)
+    names = sections[1::2]
+    modules = dict(zip(names, sections[2::2]))
+    assert len(modules) == len(names)
+    assert {"pcc.backend.repro_consumer", "pcc.backend.self_backend_value_arena",
+            "pcc.unsafe"} <= modules.keys()
+    for module_name, module_ir in modules.items():
+        assembly = emit_self_asm(module_ir)
+        assert assembly
+        if module_name == "pcc.backend.repro_consumer":
+            assert "_user_pcc_backend_repro_consumer_build_reload:" in assembly
