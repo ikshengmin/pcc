@@ -352,7 +352,15 @@ in the relevant section or issue and removes the entry.
    assertion removal. Linux: 157 find/string model tests and the
    pcc0 native bound-find/str-length oracle passed on a verified
    matching archive. No inventory change.
-   Next: rerun the worker gate and fix the next failure.
+   #20 Linux ordinary worker-prior gate at `192e35e3`: all
+   3759 nodes in 87 files passed in 76.85 s with default six xdist
+   workers. The real verify_pytest consumer accepts all six collection
+   witnesses, 3759 selected/passed and zero platform-unrun; watchdog
+   completed at 78.57 s, peak process-tree RSS 1,460,609,024 bytes.
+   Local cap 4 GiB (stricter than hosted 16 GiB), so this is the
+   ordinary subgate, not the entire hosted prior/stage1 qualification.
+   Next: hosted checkpoint on the accumulated fixes; continue with
+   native prior/changed-module and remaining source regressions.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -367,7 +375,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior final inventory: Codex, Linux, 2026-11-25T13:00Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
