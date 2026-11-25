@@ -3,7 +3,7 @@
 __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
-    C_POINTER_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, PY_TYPE_STR,
+    C_POINTER_SIZE, PY_TYPE_STR,
     PYSTROBJECT_BYTE_LEN_OFFSET, PYSTROBJECT_DATA_OFFSET,
 )
 
@@ -63,20 +63,16 @@ py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
@@ -174,19 +170,12 @@ def _sys_modules_finish(slots, tokens):
         return null()
     py_tls_exc_swap_slot(saved)
     result = ptr_add(slots, _SM_OUTPUT * C_POINTER_SIZE)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if not ptr_is_null(value) and not is_tagged_int(value):
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _SM_OUTPUT * C_POINTER_SIZE)
     if token >= 0 and pcc_gc_foreign_lease_release(result, token) < 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 def _sys_modules_mutex():
@@ -551,15 +540,13 @@ def _threaded_cached_name_key(text):
         free(entry)
         return null()
     # Register the empty physical owner first. The NEW result reaches it
-    # before any later call; pin itself cannot park, and publication preserves
-    # the ordinary root barrier for all five collectors.
+    # before any later call.
     fresh = py_str_new(text, length)
     store_ptr(key_slot, 0, fresh)
     if ptr_is_null(fresh):
         pcc_gc_scheduler_root_unregister_handle(handle)
         free(entry)
         return null()
-    pcc_gc_pin(fresh)
     store_ptr(entry, _NAME_CACHE_TEXT * C_POINTER_SIZE, text)
     store_ptr(entry, _NAME_CACHE_HANDLE * C_POINTER_SIZE, handle)
     prior = atomic_cas_i64(table, offset, 0, ptr_to_int(entry), "acq_rel", "acquire")
@@ -567,7 +554,6 @@ def _threaded_cached_name_key(text):
         return fresh
     # The winner is permanent; the loser retires only its private owner and
     # handle. No published key can disappear while a caller borrows it.
-    pcc_gc_unpin(fresh)
     pcc_gc_store_root(key_slot, null())
     pcc_gc_scheduler_root_unregister_handle(handle)
     free(entry)

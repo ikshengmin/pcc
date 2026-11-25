@@ -19,8 +19,6 @@ from pcc.runtime.py.py_abi_constants import PY_TYPE_ELLIPSIS, PY_TYPE_NOTIMPLEME
 from pcc.runtime.py.py_abi_constants import (
     PY_FLAG_EXC_UNICODE_PAYLOAD,
     PY_FLAG_EXC_OS_PAYLOAD,
-    PY_FLAG_GC_PINNED,
-    PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
     PYBYTEARRAYOBJECT_BYTE_LEN_OFFSET,
@@ -941,8 +939,7 @@ pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), 
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_memoryview_free_owned_buffer = extern(
     "pcc_memoryview_free_owned_buffer", (c_ptr,), c_void
@@ -1218,13 +1215,6 @@ def _buffer_finish_owned(borrowed, borrowed_count: int, slots, tokens, status: i
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     token = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result, token) < 0:
@@ -1232,7 +1222,7 @@ def _buffer_finish_owned(borrowed, borrowed_count: int, slots, tokens, status: i
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 def _buffer_convert_owned(obj, mode: int):
@@ -3134,13 +3124,6 @@ def _bytes_decode_guarded(value, encoding, errors, codec: int, mode: int):
         index = index - 1
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    pcc_py_gc_minor_graph_lock()
-    current = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if not ptr_is_null(current) and not is_tagged_int(current):
-        prior = load_i32(current, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(current)
-    pcc_py_gc_minor_graph_unlock()
     token: int = load_i64(tokens, _BUFFER_RESULT * _BUFFER_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result, token) < 0:
@@ -3148,7 +3131,7 @@ def _bytes_decode_guarded(value, encoding, errors, codec: int, mode: int):
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 define_global_i32("pcc_text_decode_borrowed_map", -3)

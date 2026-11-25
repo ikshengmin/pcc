@@ -21,9 +21,7 @@ from pcc.runtime.py.py_abi_constants import (
     PYINTOBJECT_NDIGITS_OFFSET,
     PYINTOBJECT_SIGN_OFFSET,
     PYMEMORYVIEWOBJECT_BASE_OFFSET,
-    PYOBJECTHEADER_FLAGS_OFFSET,
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
-    PY_FLAG_GC_PINNED,
     PY_TYPE_BOOL,
     PY_TYPE_BYTEARRAY,
     PY_TYPE_BYTES,
@@ -74,9 +72,7 @@ py_err_occurred = extern("py_err_occurred", (), c_int64)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_retain_plan_prepare_locked = extern("pcc_gc_retain_plan_prepare_locked", (c_ptr, c_ptr), c_ptr)
@@ -260,15 +256,11 @@ def _int_bytes_save_result(state: c_ptr, result) -> c_ptr:
     store_i64(state, 8, 0)
     if ptr_is_null(result):
         return null()
-    prior: int = 0
-    if not is_tagged_int(result):
-        prior = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(result)
+    # The one collector pins nothing; state's second word stays 0 (item 2 (d)).
     store_ptr(state, 0, result)
-    store_i64(state, 8, prior)
     handle = pcc_gc_scheduler_root_register_handle(state)
     if ptr_is_null(handle):
-        result = pcc_gc_take_pinned_slot(state, prior)
+        result = pcc_gc_take_slot(state)
         py_decref(result)
         if py_err_occurred() == 0:
             _raise_int_bytes(7, cstr("integer byte conversion result root registration failed"))
@@ -279,14 +271,8 @@ def _int_bytes_save_result(state: c_ptr, result) -> c_ptr:
 def _int_bytes_take_result(state: c_ptr, handle: c_ptr):
     if ptr_is_null(handle):
         return null()
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), state)
-    # A finalizer may have balanced a nested pin/unpin on an alias.
-    pcc_gc_unpin(result)
-    pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
     pcc_gc_scheduler_root_unregister_handle(handle)
-    result = pcc_gc_take_pinned_slot(state, load_i64(state, 8))
+    result = pcc_gc_take_slot(state)
     if py_err_occurred() != 0:
         py_decref(result)
         return null()

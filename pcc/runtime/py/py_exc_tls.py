@@ -26,8 +26,6 @@ The runtime-error exception-table code remains owned by the exception ABI.
 __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
-    PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
     PY_TYPE_CLASS,
     PY_TYPE_EXC,
     PY_TYPE_INSTANCE,
@@ -293,8 +291,6 @@ def py_raise_rooted(borrowed, owned) -> None:
     # returns in the same registered slot and is released by the raw wrapper.
     py_tls_exc_swap_slot(owned)
 
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -312,13 +308,8 @@ def py_raise(exc: c_ptr) -> None:
     store_ptr(borrowed, 0, exc)
     store_ptr(borrowed, 8, null())
     store_ptr(owned, 0, null())
-    prior: int = 0
-    if ptr_is_null(exc) == 0 and is_tagged_int(exc) == 0:
-        prior = load_i32(exc, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(exc)
     pcc_gc_frame_enter(global_addr("pcc_raise_borrowed_frame_map"), borrowed)
     pcc_gc_frame_enter(global_addr("pcc_raise_owned_frame_map"), owned)
-    store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
     py_raise_rooted(borrowed, owned)
     # The displaced pending owner may be the last reference to a context.
     # Retire all borrowed aliases before releasing it or unregistering roots.
@@ -334,12 +325,7 @@ def py_raise_owned(exc: c_ptr) -> None:
     exc = exc
     owned = stack_alloc(8)
     store_ptr(owned, 0, exc)
-    prior: int = 0
-    if ptr_is_null(exc) == 0 and is_tagged_int(exc) == 0:
-        prior = load_i32(exc, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(exc)
     pcc_gc_frame_enter(global_addr("pcc_raise_owned_frame_map"), owned)
-    store_ptr(owned, 0, pcc_gc_take_pinned_slot(owned, prior))
     py_raise(load_ptr(owned, 0))
     pcc_gc_store_root(owned, null())
     pcc_gc_frame_leave(owned)

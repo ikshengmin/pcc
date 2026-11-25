@@ -24,7 +24,7 @@ from pcc import i64
 from pcc.extern import extern, c_abi_export, c_ptr, c_int32, c_int64, c_void
 from pcc.runtime.py.py_abi_constants import PYLISTOBJECT_CAPACITY_OFFSET, PYLISTOBJECT_ITEMS_OFFSET, PYLISTOBJECT_LENGTH_OFFSET, PYLISTOBJECT_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PYTUPLEOBJECT_ITEMS_OFFSET, PYTUPLEOBJECT_LEN_OFFSET, PY_TYPE_INT, PY_TYPE_LIST, PY_TYPE_TUPLE
 from pcc.runtime.py.py_abi_constants import PY_TYPE_BYTEARRAY, PY_TYPE_DICT, PY_TYPE_SET, PY_TYPE_STR
-from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED
+from pcc.runtime.py.py_abi_constants import PYOBJECTHEADER_FLAGS_OFFSET
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE,
     PY_FLAG_GC_DEALLOCATING,
@@ -112,8 +112,7 @@ pcc_gc_try_take_ptr = extern("pcc_gc_try_take_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_load_borrowed_ptr = extern("pcc_gc_load_borrowed_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_slot_lease_acquire = extern("pcc_gc_slot_lease_acquire", (c_ptr, c_int64), c_int64)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_resolve_root_slot_unlocked = extern(
     "pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr
 )
@@ -491,18 +490,15 @@ def _list_factory_finish(slots, token: int, success: int):
         pcc_gc_native_frame_unbind_map(slots)
         return null()
     # Successful construction still owns its address lease and this private
-    # root. The collector cannot relocate the value while that lease lives;
-    # convert it to the terminal pin before releasing the lease. No shared
-    # list mutation or graph transaction is needed for this handoff.
-    value = pcc_gc_load_ptr(null(), slots)
-    prior: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(value)
+    # root. The one collector never moves the value, so the root's owner is
+    # taken after the lease with no terminal pin (item 2 (d)). No shared list
+    # mutation or graph transaction is needed for this handoff.
     if token >= 0:
         if pcc_gc_foreign_lease_release(slots, token) < 0:
             pcc_platform_abort()
             return null()
     pcc_gc_native_frame_unbind_map(slots)
-    return pcc_gc_take_pinned_slot(slots, prior)
+    return pcc_gc_take_slot(slots)
 
 
 def _list_allocate_unpublished(output, requested: i64, lease_state) -> i64:
@@ -1003,19 +999,9 @@ def _list_get_owned_rooted(lst, i: int, raising: int):
 
 
 def _list_get_finish(result_slot, result_handle):
-    # Keep the result movable during normal work. Only the final root teardown
-    # needs a short pin, acquired while its address is protected by the lease.
-    pcc_py_gc_minor_graph_lock()
-    result = pcc_gc_load_ptr(null(), result_slot)
-    prior_pin: int = 0
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        prior_pin = load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(result)
-    pcc_py_gc_minor_graph_unlock()
     pcc_gc_native_root_unbind(result_handle)
-    # No callback/park/refcount change after removing the last result root;
-    # the existing primitive also restores a pin held before this getter.
-    return pcc_gc_take_pinned_slot(result_slot, prior_pin)
+    # No callback/park/refcount change after removing the last result root.
+    return pcc_gc_take_slot(result_slot)
 
 
 @c_abi_export("pcc_list_body_py_list_get_i64")

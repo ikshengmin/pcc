@@ -85,9 +85,6 @@ py_gen_finalize_pending = extern("py_gen_finalize_pending", (c_ptr,), c_int64)
 pcc_gc_alloc = extern("pcc_gc_alloc", (c_int64, c_int32, c_int32), c_ptr)
 strlen = extern("strlen", (c_ptr,), c_int64)
 pcc_diagnostics_runtime_log_event_code = extern("pcc_diagnostics_runtime_log_event_code", (c_int32, c_int32, c_int64, c_int64, c_ptr), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_tls_exc_set = extern("py_tls_exc_set", (c_ptr,), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
@@ -667,14 +664,11 @@ def py_user_del_dispatch(o) -> None:
     store_ptr(finalizer_owner, 0, o)
     finalizer_lease: int = _finalizer_owner_enter(finalizer_owner)
     saved_exc = py_current_exception()
-    saved_exc_pin: int = 0
     if ptr_is_null(saved_exc) == 0:
+        # TLS stops owning this exception during the user finalizer; this
+        # reference keeps it alive until TLS owns it again. The one collector
+        # never moves it (item 2 (d)).
         py_incref(saved_exc)
-        # TLS stops owning this address during the user finalizer. Its raw
-        # local and the callback's enclosing deallocation frame cannot heal
-        # it, so keep this one exception stationary until TLS owns it again.
-        saved_exc_pin = load_i32(saved_exc, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(saved_exc)
         py_tls_exc_set(null())
     pcc_diagnostics_runtime_log_event_code(5, 2, tag, 0, o)
     atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
@@ -683,8 +677,5 @@ def py_user_del_dispatch(o) -> None:
     py_clear_exception()
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)
-        pcc_gc_unpin(saved_exc)
-        if saved_exc_pin != 0:
-            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     _finalizer_owner_leave(finalizer_owner, finalizer_lease, flags & 524288)

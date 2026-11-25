@@ -27,7 +27,6 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     PYOBJECTHEADER_TYPE_TAG_OFFSET,
-    PYOBJECTHEADER_FLAGS_OFFSET,
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PYTUPLEOBJECT_LEN_OFFSET,
     PY_TYPE_SET,
@@ -481,8 +480,7 @@ define_global_i32("pcc_set_constructor_owned_map", 3)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
@@ -496,17 +494,6 @@ def _set_constructor_drop(slots: c_ptr, tokens: c_ptr, index: int) -> None:
             return
     store_i64(tokens, index * _SET_CONSTRUCTOR_SLOT_BYTES, -1)
     pcc_gc_store_root(slot, null())
-
-
-def _set_constructor_pin(slot: c_ptr) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
 
 
 @c_abi_export("py_set_from_iterable")
@@ -555,7 +542,6 @@ def py_set_from_iterable(src):
     py_clear_exception()
     py_tls_exc_swap_slot(error_slot)
     # The only raw return transfer happens after every callback-capable cleanup.
-    prior: int = _set_constructor_pin(result_slot)
     token = load_i64(tokens, _SET_CONSTRUCTOR_RESULT * _SET_CONSTRUCTOR_SLOT_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result_slot, token) < 0:
@@ -563,7 +549,7 @@ def py_set_from_iterable(src):
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 def _set_predicate_iterable(a, b, superset: int) -> int:
@@ -1520,7 +1506,6 @@ def _set_binary_owned(a, b, operation: int):
         _set_constructor_drop(slots, tokens, _SET_BINARY_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error_slot)
-    prior: int = _set_constructor_pin(result_slot)
     token = load_i64(tokens, _SET_BINARY_RESULT * _SET_BINARY_SLOT_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(result_slot, token) < 0:
@@ -1528,7 +1513,7 @@ def _set_binary_owned(a, b, operation: int):
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 @c_abi_export("py_set_isdisjoint")
@@ -1739,7 +1724,6 @@ def _set_pop_owned(s):
         _set_constructor_drop(slots, tokens, _SET_CONSTRUCTOR_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    prior: int = _set_constructor_pin(output)
     token = load_i64(tokens, _SET_CONSTRUCTOR_RESULT * _SET_CONSTRUCTOR_SLOT_BYTES)
     if token >= 0:
         if pcc_gc_foreign_lease_release(output, token) < 0:
@@ -1747,7 +1731,7 @@ def _set_pop_owned(s):
             return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)
 
 
 
@@ -1869,11 +1853,10 @@ def _set_snapshot_owned(s):
         _set_constructor_drop(slots, tokens, _SET_BINARY_RESULT)
     py_clear_exception()
     py_tls_exc_swap_slot(error)
-    prior: int = _set_constructor_pin(output)
     token: int = load_i64(tokens, _SET_BINARY_RESULT * _SET_BINARY_SLOT_BYTES)
     if token >= 0 and pcc_gc_foreign_lease_release(output, token) < 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior)
+    return pcc_gc_take_slot(output)

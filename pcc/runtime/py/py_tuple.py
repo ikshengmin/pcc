@@ -32,7 +32,6 @@ from pcc.runtime.py.py_abi_constants import (
     PYTUPLEOBJECT_ITEMS_OFFSET,
     PYTUPLEOBJECT_LEN_OFFSET,
     PYTUPLEOBJECT_SIZE,
-    PY_FLAG_GC_PINNED,
     PY_FLAG_GC_TRACKED,
     PY_TYPE_CLASS,
     PY_TYPE_COROUTINE,
@@ -61,7 +60,6 @@ from pcc.unsafe import (
     memset,
     null,
     ptr_add,
-    ptr_eq,
     ptr_is_null,
     ptr_to_int,
     store_i32,
@@ -98,8 +96,7 @@ pcc_gc_scheduler_root_register_handle = extern(
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_alloc      = extern("pcc_gc_alloc",      (c_int64, c_int32, c_int32),          c_ptr)
@@ -345,35 +342,9 @@ def py_tuple_from_static_items(items, count: int):
     return t
 
 
-def _tuple_conversion_pin_value(value) -> int:
-    prior_pin: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior_pin = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(value)
-    return prior_pin
-
-
-def _tuple_conversion_pin_slot(slot) -> int:
-    # Lock acquisition can park. Reload only after acquiring the graph lease;
-    # callbacks and decrefs run after releasing it, with a short pin instead.
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    store_ptr(slot, 0, value)
-    prior_pin: int = _tuple_conversion_pin_value(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior_pin
-
-
-def _tuple_conversion_restore_slot(slot, prior_pin: int) -> None:
-    # Both operations are no-park: restore the preexisting pin and keep the
-    # reference in its updateable slot without retaining/releasing it.
-    store_ptr(slot, 0, pcc_gc_take_pinned_slot(slot, prior_pin))
-
-
 def _tuple_conversion_release_slot(slot) -> None:
-    prior_pin: int = _tuple_conversion_pin_slot(slot)
     # Clear the owner before decref can invoke finalizers or resurrection.
-    py_decref(pcc_gc_take_pinned_slot(slot, prior_pin))
+    py_decref(pcc_gc_take_slot(slot))
 
 
 def _tuple_conversion_fill(slots) -> int:
@@ -394,16 +365,12 @@ def _tuple_conversion_fill(slots) -> int:
         store_ptr(item_slot, 0, py_list_get(pcc_gc_load_ptr(null(), slots), i))
         if ptr_is_null(load_ptr(item_slot, 0)) or py_err_occurred() != 0:
             return 0
-        out_pin: int = _tuple_conversion_pin_slot(out_slot)
-        item_pin: int = _tuple_conversion_pin_slot(item_slot)
         # The setter consumes raw arguments through its store/tracking and
-        # publication calls, so protect both just for this retaining call.
+        # publication calls; both slots keep their owners through it.
         py_tuple_set_item(load_ptr(out_slot, 0), i, load_ptr(item_slot, 0))
-        _tuple_conversion_restore_slot(out_slot, out_pin)
         if py_err_occurred() != 0:
-            _tuple_conversion_restore_slot(item_slot, item_pin)
             return 0
-        py_decref(pcc_gc_take_pinned_slot(item_slot, item_pin))
+        py_decref(pcc_gc_take_slot(item_slot))
         i = i + 1
     return 1
 
@@ -419,11 +386,9 @@ def py_tuple_from_list(lst):
     memset(slots, 0, 32)
     memset(handles, 0, 32)
     store_ptr(slots, 0, lst)
-    # Registering the first root may park before it is linked. Protect the
-    # borrowed argument until all empty result/error slots are registered.
-    source_pin: int = _tuple_conversion_pin_value(lst)
+    # Registering the first root may park before it is linked. The caller's
+    # reference keeps the borrowed argument alive meanwhile.
     count: int = 0
-    _tuple_conversion_restore_slot(slots, source_pin)
     success: int = _tuple_conversion_fill(slots)
     result_slot = ptr_add(slots, 8)
     if success == 0:
@@ -431,21 +396,18 @@ def py_tuple_from_list(lst):
         # owners. Any finalizers remain free to collect, weakref or resurrect.
         error_slot = ptr_add(slots, 24)
         store_ptr(error_slot, 0, py_current_exception())
-        error_pin: int = _tuple_conversion_pin_slot(error_slot)
         py_incref(load_ptr(error_slot, 0))
         py_clear_exception()
-        _tuple_conversion_restore_slot(error_slot, error_pin)
         _tuple_conversion_release_slot(ptr_add(slots, 16))
         _tuple_conversion_release_slot(result_slot)
         py_clear_exception()
         result_slot = error_slot
-    # Unregistration can park before or after unlinking. Only the final owned
-    # result/error handoff remains pinned, and take restores its previous pin.
-    result_pin: int = _tuple_conversion_pin_slot(result_slot)
+    # Unregistration can park before or after unlinking; the final owned
+    # result/error handoff follows it. The one collector pins nothing.
     while count > 0:
         count = count - 1
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * 8))
-    result = pcc_gc_take_pinned_slot(result_slot, result_pin)
+    result = pcc_gc_take_slot(result_slot)
     if success == 0:
         if ptr_is_null(result) == 0:
             py_raise_owned(result)
@@ -838,11 +800,7 @@ def _tuple_concat_fill(slots) -> int:
         store_ptr(item_slot, 0, item)
         pcc_py_gc_minor_graph_unlock()
         pcc_gc_retain_plan_finish(retain_plan)
-        result_pin: int = _tuple_conversion_pin_slot(result_slot)
-        item_pin: int = _tuple_conversion_pin_slot(item_slot)
         py_tuple_set_item(load_ptr(result_slot, 0), position, load_ptr(item_slot, 0))
-        _tuple_conversion_restore_slot(result_slot, result_pin)
-        _tuple_conversion_restore_slot(item_slot, item_pin)
         if py_err_occurred() != 0:
             return 0
         _tuple_conversion_release_slot(item_slot)
@@ -867,10 +825,6 @@ def py_tuple_concat(a, b):
     error_slot = ptr_add(slots, _TUPLE_CONCAT_ERROR * C_POINTER_SIZE)
     store_ptr(left_slot, 0, a)
     store_ptr(right_slot, 0, b)
-    left_pin: int = _tuple_conversion_pin_value(a)
-    right_pin: int = _tuple_conversion_pin_value(b)
-    if ptr_eq(a, b):
-        right_pin = left_pin
     count: int = 0
     while count < _TUPLE_CONCAT_SLOT_COUNT:
         handle = pcc_gc_scheduler_root_register_handle(ptr_add(slots, count * C_POINTER_SIZE))
@@ -878,30 +832,23 @@ def py_tuple_concat(a, b):
             while count > 0:
                 count = count - 1
                 pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
-            _tuple_conversion_restore_slot(left_slot, left_pin)
-            _tuple_conversion_restore_slot(right_slot, right_pin)
             py_raise_owned(py_exc_new(19, cstr("tuple concat: root allocation failed")))
             return null()
         store_ptr(handles, count * C_POINTER_SIZE, handle)
         count = count + 1
-    _tuple_conversion_restore_slot(left_slot, left_pin)
-    _tuple_conversion_restore_slot(right_slot, right_pin)
     success: int = _tuple_concat_fill(slots)
     if success == 0:
         store_ptr(error_slot, 0, py_current_exception())
-        error_pin: int = _tuple_conversion_pin_slot(error_slot)
         py_incref(load_ptr(error_slot, 0))
         py_clear_exception()
-        _tuple_conversion_restore_slot(error_slot, error_pin)
         _tuple_conversion_release_slot(item_slot)
         _tuple_conversion_release_slot(result_slot)
         py_clear_exception()
         result_slot = error_slot
-    result_pin: int = _tuple_conversion_pin_slot(result_slot)
     while count > 0:
         count = count - 1
         pcc_gc_scheduler_root_unregister_handle(load_ptr(handles, count * C_POINTER_SIZE))
-    result = pcc_gc_take_pinned_slot(result_slot, result_pin)
+    result = pcc_gc_take_slot(result_slot)
     if success == 0:
         if ptr_is_null(result) == 0:
             py_raise_owned(result)
