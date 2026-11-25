@@ -1259,7 +1259,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - none
+   - (c) measurement tool: instructions per request and program reuse across arms: Claude, macOS, 2026-11-25T18:25Z, area proof (scripts/pcc_perf.py, tests/python/test_pcc_perf.py only)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
