@@ -572,7 +572,15 @@ in the relevant section or issue and removes the entry.
    (3) delete the fused-protocol pass after (4) (its test file
    named to the maintainer first); (4) `pcc_gc_root_copy_lease`,
    `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
-   lease-free forms; (5) remove the runtime's `pcc_gc_backend()` with its
+   lease-free forms, in four committed parts: (4a) a `pcc_gc_take_slot`
+   (load, clear, return; the one collector never sets the pin bit, so a
+   prior is always 0) and code generation emits it with no prior read,
+   `pin_slot_for_take` or root-pin lock; (4b) the runtime's take callers
+   (108 takes, 249 pins, 35 reasserts in 28 files) switch to it in file
+   batches with their test models; (4c) the runtime's leases (about 190
+   foreign-lease and 68 root-copy calls) become token-free in file batches
+   with their models; (4d) the then-unused ABI functions go, the C header's
+   exports only after the maintainer's answer; (5) remove the runtime's `pcc_gc_backend()` with its
    lowering (`unsafe_lowering.py`, `extern_lowering.py`, `runtime_abi.py`,
    `pipeline_freestanding.py`) and the worker env prefix's
    `PCC_GC_BACKEND=0`; (6) the closed-young analysis (a GC3 frontend
@@ -697,7 +705,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (d) 4a lease-free take: Claude, macOS, 2026-11-25T13:28Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
