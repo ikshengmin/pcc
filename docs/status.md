@@ -572,8 +572,8 @@ in the relevant section or issue and removes the entry.
    naming the take, its labels or the changed helpers show no other
    difference. Not run: four heavy qualification files
    (`test_fallback_baseline.py` and three infrastructure gates), the
-   integration suites (the maintainer asked not to run them on this Mac
-   for now), pcc1 and Linux. One native program (object returns,
+   integration suites (the user, 2026-11-25: "算了你不要跑集成测试了。机器资源太慢了。"),
+   pcc1 and Linux. One native program (object returns,
    generator yields, extern text, a finalizer, an exception) matches
    CPython.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
