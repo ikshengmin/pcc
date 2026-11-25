@@ -935,6 +935,24 @@ in the relevant section or issue and removes the entry.
    alone and together (about 2.5%): the allocator's per-call statistics
    atomics, the magazine limit's division, the dict deallocator's debug
    slot check.
+   Candidate (3) examined (Claude, 2026-11-26, emitted IR of small
+   programs at `31a803cf0`): in an ordinary function an assignment from a
+   call already takes the result's reference (`store ptr` into the local's
+   slot) and arguments pass borrowed, so there is no retain-and-release
+   pair to remove there. Generator and parking frames keep them: a
+   literal's container root is counted (`pcc_gc_store_root` in and out)
+   where ordinary functions use `pcc_gc_temp_root_enter_fresh`, by design
+   for a literal whose element suspends (literal_lowering.py,
+   `_enter_fresh_container_temp_root`); a delegated call's result is
+   retained into its slot and the original released, then copied and
+   cleared again; each resume stores and clears the handled-exception
+   slot. Their ceiling on the handler is below 1%. The root operations'
+   20% is mostly the ownership every Python local carries, done by a
+   runtime call where CPython uses inline code; a backend short path for
+   `pcc_gc_store_root` when neither value needs a count (NULL, tagged or
+   immortal; a third of the calls clear an empty slot), like the existing
+   AArch64 short path of the root reads, is the remaining form of (3),
+   ceiling about 3% (not measured).
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
