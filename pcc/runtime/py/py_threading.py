@@ -6,7 +6,7 @@ The kernel ABI supplies mutexes, condition variables and safepoints.
 
 __pcc_runtime_port__ = True
 
-from pcc.runtime.py.py_abi_constants import PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_BOOL, PY_TYPE_FLOAT, PY_TYPE_INT, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_GC_PINNED, PYVIRTUALTHREADOBJECT_IDENTITY_OFFSET
+from pcc.runtime.py.py_abi_constants import PY_TYPE_THREAD, PY_TYPE_THREAD_CONDITION, PY_TYPE_THREAD_EVENT, PY_TYPE_THREAD_LOCK, PY_TYPE_THREAD_RLOCK, PY_TYPE_THREAD_SEMAPHORE, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_BOOL, PY_TYPE_FLOAT, PY_TYPE_INT, PYVIRTUALTHREADOBJECT_IDENTITY_OFFSET
 
 from pcc.extern import c_abi_export, c_int32, c_int64, c_ptr, c_void, c_double, extern
 from pcc.unsafe import (
@@ -91,9 +91,6 @@ py_obj_call_sync = extern("py_obj_call_sync", (c_ptr, c_ptr, c_ptr), c_ptr)
 py_incref_extern = extern("py_incref", (c_ptr,), c_void)
 py_decref_extern = extern("py_decref", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern(
@@ -579,20 +576,6 @@ def _condition_enqueue(cond_root, vthread_root, state: int):
     return node
 
 
-def _condition_pin(value) -> int:
-    prior: int = PY_FLAG_GC_PINNED
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        if prior == 0:
-            pcc_gc_pin(value)
-    return prior
-
-
-def _condition_unpin(value, prior: int) -> None:
-    if prior == 0:
-        pcc_gc_unpin(value)
-
-
 def _condition_deadline(timeout) -> int:
     """Condition.wait(timeout=None) as CPython: None waits without a deadline
     (-1); ``timeout > 0`` waits that long (waiter.acquire(True, timeout));
@@ -600,7 +583,6 @@ def _condition_deadline(timeout) -> int:
     error raised."""
     if _is_none_or_omitted(timeout) != 0:
         return -1
-    prior: int = _condition_pin(timeout)
     positive: int = py_obj_gt(timeout, py_int_from_i64(0))
     deadline: int = -2
     if py_err_occurred() == 0:
@@ -611,7 +593,6 @@ def _condition_deadline(timeout) -> int:
                 deadline = _deadline_after_ns(load_i64(converted, 0))
             else:
                 deadline = -2
-    _condition_unpin(timeout, prior)
     return deadline
 
 
@@ -676,17 +657,14 @@ def _condition_wait(cond, timeout, allow_vthread: int) -> int:
     result: int = -1
     if deadline != -2:
         vthread = _current_vthread() if allow_vthread != 0 else null()
-        vthread_prior: int = _condition_pin(vthread)
         store_ptr(cond_root, 16, vthread)
         if ptr_is_null(vthread):
             pinned = _pin_current_vthread(cstr("threading.Condition.wait"))
-            pinned_prior: int = _condition_pin(pinned)
             store_ptr(cond_root, 16, pinned)
             result = _condition_native_wait(cond_root, deadline)
             store_ptr(cond_root, 16, null())
             if ptr_is_null(pinned) == 0:
                 py_virtual_thread_pin_leave(pinned)
-                _condition_unpin(pinned, pinned_prior)
                 py_decref_extern(pinned)
         elif deadline >= 0 and deadline <= pcc_runtime_monotonic_us():
             # A nonblocking wait still releases/restores the primitive.
@@ -708,7 +686,6 @@ def _condition_wait(cond, timeout, allow_vthread: int) -> int:
                     _condition_retire(node)
         if ptr_is_null(vthread) == 0:
             store_ptr(cond_root, 16, null())
-            _condition_unpin(vthread, vthread_prior)
             py_decref_extern(vthread)
     pcc_gc_frame_leave(cond_root)
     return result
@@ -731,12 +708,10 @@ def _condition_wake_one(cond) -> int:
             atomic_store_i64(node, 24, -2, "release")
             return 1 if pcc_cond_broadcast(load_ptr(cond, 24)) == 0 else -1
         vthread = pcc_gc_load_ptr(null(), node)
-        prior: int = _condition_pin(vthread)
         py_incref_extern(vthread)
         _condition_retire(node)
         if ptr_is_null(vthread) == 0:
             result: int = py_virtual_thread_unpark(vthread)
-            _condition_unpin(vthread, prior)
             py_decref_extern(vthread)
             return 1 if result == 0 else -1
         node = after
@@ -820,22 +795,16 @@ def py_threading_lock_acquire_args(lock, blocking, timeout) -> int:
     if _is_lock_object(lock) == 0:
         py_raise_owned(py_exc_new(3, cstr("acquire() requires a threading lock")))
         return -1
-    # Argument conversion may run __bool__/__float__ and collect: the pins
-    # keep these raw operands in place until they are no longer read.
-    prior: int = _condition_pin(lock)
-    blocking_prior: int = _condition_pin(blocking)
-    timeout_prior: int = _condition_pin(timeout)
+    # Argument conversion may run __bool__/__float__ and collect; the one
+    # collector never moves these raw operands.
     deadline = stack_alloc(8)
     converted: int = _lock_acquire_deadline(blocking, timeout, deadline)
-    _condition_unpin(timeout, timeout_prior)
-    _condition_unpin(blocking, blocking_prior)
     result: int = -1
     if converted == 0:
         if load_i32(lock, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_THREAD_RLOCK:
             result = _rlock_acquire_until(lock, load_i64(deadline, 0))
         else:
             result = _lock_acquire_until(lock, load_i64(deadline, 0))
-    _condition_unpin(lock, prior)
     return result
 
 
@@ -1187,12 +1156,10 @@ def py_threading_event_wait_args(event, timeout) -> int:
     # CPython returns a set flag before it looks at the timeout.
     if atomic_load_i64(event, 32, "acquire") != 0:
         return 0
-    prior: int = _condition_pin(event)
     deadline: int = _condition_deadline(timeout)
     result: int = -1
     if deadline != -2:
         result = _event_wait_until(event, deadline)
-    _condition_unpin(event, prior)
     return result
 
 
@@ -1295,17 +1262,12 @@ def py_threading_condition_wait_vthread_timeout(cond, timeout) -> int:
 def py_threading_condition_wait_resume(cond) -> int:
     # Called with Condition reacquired by the lifted caller. The timer cannot
     # masquerade as notify: an outstanding FIFO entry is still our waiter.
-    cond_prior: int = _condition_pin(cond)
     vthread = _current_vthread()
     if ptr_is_null(vthread):
-        _condition_unpin(cond, cond_prior)
         return -1
-    vthread_prior: int = _condition_pin(vthread)
     node = _condition_vm_node(cond, vthread)
     if ptr_is_null(node):
-        _condition_unpin(vthread, vthread_prior)
         py_decref_extern(vthread)
-        _condition_unpin(cond, cond_prior)
         return 0
     state: int = load_i64(node, 24)
     deadline: int = -1 if state == 0 else state - 2
@@ -1313,44 +1275,33 @@ def py_threading_condition_wait_resume(cond) -> int:
         _condition_unlink(cond, node)
         _condition_retire(node)
         py_virtual_thread_cancel_timer(vthread)
-        _condition_unpin(vthread, vthread_prior)
         py_decref_extern(vthread)
-        _condition_unpin(cond, cond_prior)
         return 2
     rc: int = _condition_vm_park(vthread, deadline)
     if rc != 0:
         _condition_unlink(cond, node)
         _condition_retire(node)
         py_virtual_thread_cancel_timer(vthread)
-    _condition_unpin(vthread, vthread_prior)
     py_decref_extern(vthread)
     result: int = 1 if rc == 0 and pcc_mutex_unlock(load_ptr(cond, 16)) == 0 else -1
-    _condition_unpin(cond, cond_prior)
     return result
 
 
 @c_abi_export("py_threading_condition_wait_cancel")
 def py_threading_condition_wait_cancel(cond) -> int:
-    cond_prior: int = _condition_pin(cond)
     vthread = _current_vthread()
     if ptr_is_null(vthread):
-        _condition_unpin(cond, cond_prior)
         return -1
-    vthread_prior: int = _condition_pin(vthread)
     mutex = load_ptr(cond, 16)
     if pcc_mutex_lock(mutex) != 0:
-        _condition_unpin(vthread, vthread_prior)
         py_decref_extern(vthread)
-        _condition_unpin(cond, cond_prior)
         return -1
     node = _condition_vm_node(cond, vthread)
     if ptr_is_null(node) == 0:
         _condition_unlink(cond, node)
         _condition_retire(node)
         py_virtual_thread_cancel_timer(vthread)
-    _condition_unpin(vthread, vthread_prior)
     py_decref_extern(vthread)
-    _condition_unpin(cond, cond_prior)
     # Condition.wait restores the lock even when an injected exception ends
     # the wait; the caller's normal with/finally path owns its release.
     return 0
@@ -1360,12 +1311,10 @@ def py_threading_condition_wait_cancel(cond) -> int:
 def py_threading_condition_notify(cond) -> int:
     if ptr_is_null(cond):
         return -1
-    prior: int = _condition_pin(cond)
     woken = _condition_wake_one(cond)
     result: int = -1
     if woken >= 0:
         result = 0 if woken != 0 else pcc_cond_signal(load_ptr(cond, 24))
-    _condition_unpin(cond, prior)
     return result
 
 
@@ -1373,12 +1322,10 @@ def py_threading_condition_notify(cond) -> int:
 def py_threading_condition_notify_all(cond) -> int:
     if ptr_is_null(cond) or is_tagged_int(cond):
         return -1
-    prior: int = _condition_pin(cond)
     woken: int = 1
     while woken > 0:
         woken = _condition_wake_one(cond)
     result: int = pcc_cond_broadcast(load_ptr(cond, 24)) if woken == 0 else -1
-    _condition_unpin(cond, prior)
     return result
 
 
@@ -1531,9 +1478,6 @@ def py_threading_semaphore_acquire_args(sem, blocking, timeout) -> int:
     acquired, -1 with the exception raised."""
     if ptr_is_null(sem) or is_tagged_int(sem):
         return -1
-    prior: int = _condition_pin(sem)
-    blocking_prior: int = _condition_pin(blocking)
-    timeout_prior: int = _condition_pin(timeout)
     result: int = -1
     wait: int = _blocking_flag(blocking)
     timed: int = 1 - _is_none_or_omitted(timeout)
@@ -1551,9 +1495,6 @@ def py_threading_semaphore_acquire_args(sem, blocking, timeout) -> int:
             result = -1
             if deadline != -2:
                 result = _semaphore_acquire_until(sem, deadline)
-    _condition_unpin(timeout, timeout_prior)
-    _condition_unpin(blocking, blocking_prior)
-    _condition_unpin(sem, prior)
     return result
 
 
@@ -1629,9 +1570,7 @@ def py_threading_semaphore_release_args(sem, n) -> int:
     count: int = 1
     if ptr_is_null(n) == 0:
         # ``n < 1`` may run __lt__ and collect: keep the raw receiver in place.
-        prior: int = _condition_pin(sem)
         below: int = py_obj_lt(n, py_int_from_i64(1))
-        _condition_unpin(sem, prior)
         if py_err_occurred() != 0:
             return -1
         if below != 0:
@@ -1656,8 +1595,8 @@ def py_dealloc_thread_semaphore(sem) -> None:
 
 # PyThreadObject: header@0, handle@16, callable@24, args@32, result@40,
 # started@48, joined@56 (0, 2 while the first joiner reaps, 1), finished@64,
-# done mutex@72, done cond@80, ident@88, handoff pin@96 (the header pin bit
-# before start(); 104 bytes). The thread running the target sets
+# done mutex@72, done cond@80, ident@88, unused word@96 (formerly the
+# handoff pin; 104 bytes). The thread running the target sets
 # ``finished`` under the done mutex and broadcasts the cond; is_alive()
 # reads it on any thread.
 
@@ -1705,12 +1644,7 @@ def py_threading_thread_new(callable, args):
     return o
 
 
-def _thread_invoke_clear(slots, pins, offset: int) -> None:
-    value = load_ptr(slots, offset)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        pcc_gc_unpin(value)
-        if load_i64(pins, offset) != 0:
-            pcc_gc_reassert_pin(value)
+def _thread_invoke_clear(slots, offset: int) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
@@ -1727,51 +1661,31 @@ def _thread_mark_finished(thread) -> None:
 
 def _thread_invoke(thread) -> None:
     if atomic_load_i64(thread, 64, "acquire") != 0:
-        if load_i64(thread, 96) == 0:
-            pcc_gc_unpin(thread)
         return
     store_i64(thread, 88, pcc_current_thread_id())
-    # Nested calls can clear the single physical pin bit. Every operand that
-    # survives the target body also has a healable root and is reloaded.
+    # Every operand that survives the target body has a root and is reloaded.
     slots = stack_alloc(32)
-    pins = stack_alloc(32)
     memset(slots, 0, 32)
-    memset(pins, 0, 32)
-    # start() pinned the Thread for the handoff; its pre-start pin state is
-    # the one to restore once the root below owns the object.
-    store_i64(pins, 0, load_i64(thread, 96))
-    pcc_gc_pin(thread)
     pcc_gc_frame_enter(global_addr("pcc_threading_invoke_frame_map"), slots)
     pcc_gc_store_root(slots, thread)
     callable_obj = pcc_gc_load_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 24))
-    if ptr_is_null(callable_obj) == 0 and is_tagged_int(callable_obj) == 0:
-        store_i64(pins, 8, load_i32(callable_obj, 12) & 64)
-        pcc_gc_pin(callable_obj)
     pcc_gc_store_root(ptr_add(slots, 8), callable_obj)
     args_obj = pcc_gc_load_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 32))
-    if ptr_is_null(args_obj) == 0 and is_tagged_int(args_obj) == 0:
-        store_i64(pins, 16, load_i32(args_obj, 12) & 64)
-        pcc_gc_pin(args_obj)
     pcc_gc_store_root(ptr_add(slots, 16), args_obj)
     callable_obj = load_ptr(slots, 8)
     if ptr_is_null(callable_obj) == 0 and ptr_eq(callable_obj, global_load_ptr("py_None")) == 0:
         result = py_obj_call_sync(callable_obj, load_ptr(slots, 16), null())
         store_ptr(slots, 24, result)
-        if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-            store_i64(pins, 24, load_i32(result, 12) & 64)
-            pcc_gc_pin(result)
         thread = load_ptr(slots, 0)
-        pcc_gc_reassert_pin(thread)
         pcc_gc_store_ptr(thread, ptr_add(thread, 40), load_ptr(slots, 24))
     else:
         pcc_gc_store_ptr(load_ptr(slots, 0), ptr_add(load_ptr(slots, 0), 40), global_load_ptr("py_None"))
     # Result is now owned by Thread, before its returned reference is released.
-    # Reverse lease order preserves original pin state when values alias.
-    _thread_invoke_clear(slots, pins, 24)
-    _thread_invoke_clear(slots, pins, 16)
-    _thread_invoke_clear(slots, pins, 8)
+    _thread_invoke_clear(slots, 24)
+    _thread_invoke_clear(slots, 16)
+    _thread_invoke_clear(slots, 8)
     _thread_mark_finished(load_ptr(slots, 0))
-    _thread_invoke_clear(slots, pins, 0)
+    _thread_invoke_clear(slots, 0)
     pcc_gc_frame_leave(slots)
 
 
@@ -1800,22 +1714,13 @@ def py_threading_thread_start(thread) -> int:
     # reference before it starts: ``t = Thread(...); t.start(); t = None``
     # must not free the wrapper before the thread body runs.
     py_incref_extern(thread)
-    # The pointer is also raw until the new thread registers and roots it.
-    # A moving collector decides from the registered threads only, so it
-    # could relocate the Thread meanwhile and leave the new thread reading
-    # the old copy (its args, its locks). The pin holds the object in place
-    # across the handoff; _thread_invoke restores the pre-start state.
-    prior: int = load_i32(thread, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    store_i64(thread, 96, prior)
-    if prior == 0:
-        pcc_gc_pin(thread)
+    # The pointer is also raw until the new thread registers and roots it;
+    # the one collector never moves the Thread meanwhile.
     if pcc_thread_start(
         ptr_add(thread, 16),
         function_addr("py_threading_thread_main_py"),
         thread,
     ) != 0:
-        if prior == 0:
-            pcc_gc_unpin(thread)
         py_decref_extern(thread)
         py_raise_owned(py_exc_new(7, cstr("can't start new thread")))
         return -1
@@ -1870,8 +1775,6 @@ def py_threading_thread_join_args(thread, timeout) -> int:
     if atomic_load_i64(thread, 64, "acquire") == 0 and load_i64(thread, 88) == pcc_current_thread_id():
         py_raise_owned(py_exc_new(7, cstr("cannot join current thread")))
         return -1
-    prior: int = _condition_pin(thread)
-    timeout_prior: int = _condition_pin(timeout)
     deadline: int = -1
     if _is_none_or_omitted(timeout) == 0:
         # CPython: ``timeout = max(timeout, 0)``, then the handle's timed join.
@@ -1886,7 +1789,6 @@ def py_threading_thread_join_args(thread, timeout) -> int:
                 deadline = -2
             else:
                 deadline = _deadline_after_ns(load_i64(converted, 0))
-    _condition_unpin(timeout, timeout_prior)
     result: int = -1
     if deadline != -2:
         result = _thread_wait_finished(thread, deadline)
@@ -1896,7 +1798,6 @@ def py_threading_thread_join_args(thread, timeout) -> int:
             result = 0
         if result < 0 and py_err_occurred() == 0:
             py_raise_owned(py_exc_new(7, cstr("thread join failed")))
-    _condition_unpin(thread, prior)
     return result
 
 

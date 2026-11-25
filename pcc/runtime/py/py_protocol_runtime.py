@@ -143,10 +143,7 @@ py_float_from_f64 = extern("py_float_from_f64", (c_double,), c_ptr)
 floor_c = extern("floor", (c_double,), c_double)
 fmod_c = extern("fmod", (c_double, c_double), c_double)
 pcc_numeric_float_from_bits = extern("pcc_numeric_float_from_bits", (c_int64,), c_double)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
@@ -317,25 +314,12 @@ def _protocol_unary_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
     return 0
 
 
-def _protocol_unary_pin_result(slot: c_ptr) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
 def _call_unary_function(method, self_obj):
     # Precondition: the selected managed method has a live external owner and
-    # a stable address through dispatch classification and this initial pin.
+    # a stable address through dispatch classification.
     # A borrowed method-table entry alone does not establish that contract;
     # lookup/replacement before this helper is a separate unresolved boundary.
     # self_obj is borrowed from a live, address-stable caller root.
-    method_pin: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-    pcc_gc_pin(method)
     borrowed = stack_alloc(_PROTOCOL_UNARY_BORROWED_COUNT * C_POINTER_SIZE)
     store_ptr(borrowed, _PROTOCOL_UNARY_METHOD * C_POINTER_SIZE, method)
     store_ptr(borrowed, _PROTOCOL_UNARY_SELF * C_POINTER_SIZE, self_obj)
@@ -348,10 +332,8 @@ def _call_unary_function(method, self_obj):
     status: int = _protocol_unary_body(slots, tokens, borrowed)
     py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_UNARY_ERROR * C_POINTER_SIZE))
     # The result has an independent counted owner even when it aliases method,
-    # self, or the argument tuple. Restore the temporary input pin before
-    # disposal; no unregistered raw result crosses this operation.
-    method_slot = ptr_add(borrowed, _PROTOCOL_UNARY_METHOD * C_POINTER_SIZE)
-    store_ptr(method_slot, 0, pcc_gc_take_pinned_slot(method_slot, method_pin))
+    # self, or the argument tuple; no unregistered raw result crosses this
+    # operation.
     memset(borrowed, 0, _PROTOCOL_UNARY_BORROWED_COUNT * C_POINTER_SIZE)
     _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_ARGS)
     _protocol_unary_drop(slots, tokens, _PROTOCOL_UNARY_SELF)
@@ -361,13 +343,12 @@ def _call_unary_function(method, self_obj):
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_UNARY_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE)
-    prior: int = _protocol_unary_pin_result(result_slot)
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _PROTOCOL_UNARY_RESULT * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 def _call_unary(method, self_obj):
@@ -463,25 +444,12 @@ def _protocol_binary_body(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr) -> int:
     return 0
 
 
-def _protocol_binary_pin_result(slot: c_ptr) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
 def _call_binary_function(method, self_obj, arg):
     # Precondition: the selected managed method has a live external owner and
-    # a stable address through dispatch classification and this initial pin.
+    # a stable address through dispatch classification.
     # A borrowed method-table entry alone does not establish that contract;
     # lookup/replacement before this helper is a separate unresolved boundary.
     # self_obj and arg are borrowed from live, address-stable caller roots.
-    method_pin: int = load_i32(method, PYOBJECTHEADER_FLAGS_OFFSET) & 64
-    pcc_gc_pin(method)
     borrowed = stack_alloc(_PROTOCOL_BINARY_BORROWED_COUNT * C_POINTER_SIZE)
     store_ptr(borrowed, _PROTOCOL_BINARY_METHOD * C_POINTER_SIZE, method)
     store_ptr(borrowed, _PROTOCOL_BINARY_SELF * C_POINTER_SIZE, self_obj)
@@ -495,10 +463,8 @@ def _call_binary_function(method, self_obj, arg):
     status: int = _protocol_binary_body(slots, tokens, borrowed)
     py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_BINARY_ERROR * C_POINTER_SIZE))
     # The result has an independent counted owner even when it aliases method,
-    # either operand, or the argument tuple. Restore the temporary input pin
-    # before disposal; no unregistered raw result crosses this operation.
-    method_slot = ptr_add(borrowed, _PROTOCOL_BINARY_METHOD * C_POINTER_SIZE)
-    store_ptr(method_slot, 0, pcc_gc_take_pinned_slot(method_slot, method_pin))
+    # either operand, or the argument tuple; no unregistered raw result
+    # crosses this operation.
     memset(borrowed, 0, _PROTOCOL_BINARY_BORROWED_COUNT * C_POINTER_SIZE)
     _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_ARGS)
     _protocol_binary_drop(slots, tokens, _PROTOCOL_BINARY_ARG)
@@ -509,13 +475,12 @@ def _call_binary_function(method, self_obj, arg):
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _PROTOCOL_BINARY_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE)
-    prior: int = _protocol_binary_pin_result(result_slot)
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _PROTOCOL_BINARY_RESULT * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 def _call_binary(method, self_obj, arg):
@@ -1157,16 +1122,6 @@ def py_obj_divmod(a, b) -> c_ptr:
         return null()
     # Runtime calls borrow operands. Hold updateable slots through callbacks;
     # a user dunder may mutate the owners from which either argument came.
-    pins = stack_alloc(24)
-    store_i64(pins, 0, 0)
-    store_i64(pins, 8, 0)
-    store_i64(pins, 16, 0)
-    if _ptr_can_have_header(a) != 0:
-        store_i64(pins, 0, load_i32(a, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
-    if _ptr_can_have_header(b) != 0:
-        store_i64(pins, 8, load_i32(b, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
-    pcc_gc_pin(a)
-    pcc_gc_pin(b)
     slots = stack_alloc(24)
     store_ptr(slots, 0, null())
     store_ptr(slots, 8, null())
@@ -1179,34 +1134,18 @@ def py_obj_divmod(a, b) -> c_ptr:
     result = null()
     if ptr_is_null(left_handle) == 0 and ptr_is_null(right_handle) == 0 and ptr_is_null(result_handle) == 0:
         result = _divmod_impl(load_ptr(slots, 0), load_ptr(slots, 8))
-        if _ptr_can_have_header(result) != 0:
-            store_i64(pins, 16, load_i32(result, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
-        pcc_gc_pin(result)
         pcc_gc_store_root(ptr_add(slots, 16), result)
         py_decref(result)
     else:
         _protocol_require_result(null(), cstr("divmod"), cstr("divmod operand root registration failed"))
-    prior_result_pin: int = load_i64(pins, 16)
     index: int = 2
     while index > 0:
         index = index - 1
-        if ptr_eq(load_ptr(slots, 16), load_ptr(slots, index * C_POINTER_SIZE)) != 0:
-            prior_result_pin = load_i64(pins, index * C_POINTER_SIZE)
-    index = 2
-    while index > 0:
-        index = index - 1
-        value = load_ptr(slots, index * C_POINTER_SIZE)
-        pcc_gc_unpin(value)
-        if load_i64(pins, index * C_POINTER_SIZE) != 0 and _ptr_can_have_header(value) != 0:
-            pcc_gc_reassert_pin(value)
         pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
     pcc_gc_scheduler_root_unregister_handle(right_handle)
     pcc_gc_scheduler_root_unregister_handle(left_handle)
-    result = load_ptr(slots, 16)
-    if _ptr_can_have_header(result) != 0:
-        pcc_gc_reassert_pin(result)
     pcc_gc_scheduler_root_unregister_handle(result_handle)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 16), prior_result_pin)
+    return pcc_gc_take_slot(ptr_add(slots, 16))
 
 
 # In-place operator codes shared with codegen: 0 +, 1 -, 2 *, 3 /, 4 //,
@@ -2766,13 +2705,12 @@ def _named_dispatch(obj, arg0, arg1, name, rname, nargs: int, mode: int, convers
     else:
         py_tls_exc_swap_slot(ptr_add(slots, _NAMED_OLD_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _NAMED_RESULT * C_POINTER_SIZE)
-    prior: int = _protocol_unary_pin_result(result_slot)
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _NAMED_RESULT * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 @c_abi_export("py_user_special_dispatch")

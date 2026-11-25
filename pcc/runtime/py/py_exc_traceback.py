@@ -56,9 +56,6 @@ from pcc.unsafe import (
 )
 
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_exc_builtin_class = extern("py_exc_builtin_class", (c_int64,), c_ptr)
 py_isinstance = extern("py_isinstance", (c_ptr, c_ptr), c_int64)
 py_obj_str = extern("py_obj_str", (c_ptr,), c_ptr)
@@ -126,7 +123,7 @@ define_global_i32("pcc_traceback_current_map", 2)
 py_runtime_error_if_unset_abi = extern("py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 py_cleanup_one_root_preserving_exception = extern("py_cleanup_one_root_preserving_exception", (c_ptr,), c_void)
@@ -259,20 +256,14 @@ def _write_user_exception_heading(exc) -> None:
             cls_name = name
 
     saved_exc = py_current_exception()
-    saved_exc_pin: int = 0
     if ptr_is_null(saved_exc) == 0:
         py_incref(saved_exc)
-        saved_exc_pin = load_i32(saved_exc, 12) & 64
-        pcc_gc_pin(saved_exc)
         py_tls_exc_set(null())
     msg = py_obj_str(exc)
     if ptr_is_null(py_tls_exc_get()) == 0:
         py_clear_exception()
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)
-        pcc_gc_unpin(saved_exc)
-        if saved_exc_pin != 0:
-            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     if ptr_is_null(msg) == 0:
         if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR
@@ -545,20 +536,14 @@ def _tb_append_user_exc_heading(b, exc) -> None:
             cls_name = name
 
     saved_exc = py_current_exception()
-    saved_exc_pin: int = 0
     if ptr_is_null(saved_exc) == 0:
         py_incref(saved_exc)
-        saved_exc_pin = load_i32(saved_exc, 12) & 64
-        pcc_gc_pin(saved_exc)
         py_tls_exc_set(null())
     msg = py_obj_str(exc)
     if ptr_is_null(py_tls_exc_get()) == 0:
         py_clear_exception()
     if ptr_is_null(saved_exc) == 0:
         py_tls_exc_set(saved_exc)
-        pcc_gc_unpin(saved_exc)
-        if saved_exc_pin != 0:
-            pcc_gc_reassert_pin(saved_exc)
         py_decref(saved_exc)
     if ptr_is_null(msg) == 0:
         if _type_of(msg) == PY_TYPE_STR:          # PY_TYPE_STR
@@ -690,15 +675,8 @@ def _tb_current_finish(slots, lease: int):
         py_cleanup_one_lease_preserving_exception(slots, lease)
     py_cleanup_one_root_preserving_exception(slots)
     result = ptr_add(slots, C_POINTER_SIZE)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 def _tb_current_call(print_only: int):
@@ -928,16 +906,9 @@ def _tb_finish(slots, borrowed, success: int):
             py_cleanup_one_root_preserving_exception(ptr_add(slots, index * C_POINTER_SIZE))
         index = index + 1
     result = ptr_add(slots, _TB_CHAIN * C_POINTER_SIZE)
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), result)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result, prior)
+    return pcc_gc_take_slot(result)
 
 
 @c_abi_export("py_exc_traceback_object")

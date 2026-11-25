@@ -2302,15 +2302,13 @@ def _call_object_format(value, spec):
     py_clear_exception()
     py_tls_exc_swap_slot(ptr_add(slots, _FORMAT_ERROR * C_POINTER_SIZE))
     result_slot = ptr_add(slots, _FORMAT_RESULT * C_POINTER_SIZE)
-    # Only the terminal raw ABI transfer uses the existing temporary pin.
     # The counted result owner remains registered through all disposal above.
-    prior: int = _unicode_format_pin(result_slot)
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, _FORMAT_RESULT * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 @c_abi_export("py_builtin_format")
@@ -2460,13 +2458,12 @@ def _percent_frame_finish(slots: c_ptr, tokens: c_ptr, borrowed: c_ptr, keep: in
         pcc_gc_frame_leave(borrowed)
         return null()
     result_slot = ptr_add(slots, keep * C_POINTER_SIZE)
-    prior: int = _unicode_format_pin(result_slot)
     if pcc_gc_foreign_lease_release(result_slot, load_i64(tokens, keep * C_POINTER_SIZE)) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(result_slot, prior)
+    return pcc_gc_take_slot(result_slot)
 
 
 def _percent_next_argument_slots(slots: c_ptr, tokens: c_ptr, cursor: c_ptr) -> int:
@@ -3416,41 +3413,25 @@ py_str_ord_at_i64 = extern("py_str_ord_at_i64", (c_ptr, c_int64), c_int64)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 define_global_i32("pcc_unicode_format_borrowed_map", -1)
 define_global_i32("pcc_unicode_format_owned_map", 8)
 
 
-def _unicode_format_pin(slot) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
 def _unicode_format_append(state, slots, index: int, repr_mode: int) -> int:
     source_slot = ptr_add(slots, index * 8)
-    source_pin: int = _unicode_format_pin(source_slot)
     value = load_ptr(source_slot, 0)
     if repr_mode != 0:
         rendered = py_obj_repr(value)
     else:
         rendered = py_obj_str(value)
     store_ptr(slots, 40, rendered)
-    store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
     if ptr_is_null(rendered):
         return -1
     slot = ptr_add(slots, 40)
-    prior: int = _unicode_format_pin(slot)
     rc: int = _append_pystr(state, load_ptr(slot, 0))
-    store_ptr(slot, 0, pcc_gc_take_pinned_slot(slot, prior))
     pcc_gc_store_root(slot, null())
     return rc
 
@@ -3471,9 +3452,7 @@ def _unicode_format_repr(state, slots, type_tag: int) -> int:
     while i < count:
         if i != 0:
             _buffer_cstr(state, cstr(", "))
-        prior: int = _unicode_format_pin(args_slot)
         store_ptr(slots, 0, py_tuple_get(load_ptr(args_slot, 0), i))
-        store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
         if ptr_is_null(load_ptr(slots, 0)) or _unicode_format_append(state, slots, 0, 1) != 0:
             return -1
         pcc_gc_store_root(slots, null())
@@ -3496,7 +3475,6 @@ def _unicode_format_body(state, slots, repr_mode: int, type_tag: int) -> int:
     start: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 16)))
     end: int = py_int_value_i64(pcc_gc_load_ptr(null(), ptr_add(slots, 24)))
     source_slot = ptr_add(slots, 8)
-    source_pin: int = _unicode_format_pin(source_slot)
     length: int = 0
     if type_tag == 58:
         length = py_bytes_len(load_ptr(source_slot, 0))
@@ -3508,7 +3486,6 @@ def _unicode_format_body(state, slots, repr_mode: int, type_tag: int) -> int:
             code = load_i8(py_bytes_data_ptr(load_ptr(source_slot, 0)), start) & 255
         else:
             code = py_str_ord_at_i64(load_ptr(source_slot, 0), start)
-    store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
     _buffer_char(state, 39)
     if _unicode_format_append(state, slots, 0, 0) != 0:
         return -1
@@ -3575,7 +3552,6 @@ def py_unicode_error_format(value, repr_mode: int):
         if _unicode_format_body(state, slots, repr_mode, type_tag) == 0:
             store_ptr(slots, 48, _buffer_string(state))
         _buffer_free(state)
-    prior: int = _unicode_format_pin(ptr_add(slots, 48))
     i = 0
     while i < 8:
         if i != 6:
@@ -3583,7 +3559,7 @@ def py_unicode_error_format(value, repr_mode: int):
         i = i + 1
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 48), prior)
+    return pcc_gc_take_slot(ptr_add(slots, 48))
 
 
 py_os_error_get_field = extern("py_os_error_get_field", (c_ptr, c_int64), c_ptr)
@@ -3601,9 +3577,7 @@ def _os_error_format_body(state, slots, repr_mode: int, present: int) -> int:
         while i < count:
             if i != 0:
                 _buffer_cstr(state, cstr(", "))
-            prior: int = _unicode_format_pin(args_slot)
             store_ptr(slots, 0, py_tuple_get(load_ptr(args_slot, 0), i))
-            store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
             if ptr_is_null(load_ptr(slots, 0)) or _unicode_format_append(state, slots, 0, 1) != 0:
                 return -1
             pcc_gc_store_root(slots, null())
@@ -3634,9 +3608,7 @@ def _os_error_format_body(state, slots, repr_mode: int, present: int) -> int:
         return 0
     if count > 1:
         return _unicode_format_append(state, slots, 7, 1)
-    prior = _unicode_format_pin(args_slot)
     store_ptr(slots, 32, py_tuple_get(load_ptr(args_slot, 0), 0))
-    store_ptr(args_slot, 0, pcc_gc_take_pinned_slot(args_slot, prior))
     return _unicode_format_append(state, slots, 4, 0)
 
 
@@ -3669,7 +3641,6 @@ def py_os_error_format(value, repr_mode: int):
         if _os_error_format_body(state, slots, repr_mode, present) == 0:
             store_ptr(slots, 48, _buffer_string(state))
         _buffer_free(state)
-    prior: int = _unicode_format_pin(ptr_add(slots, 48))
     i = 0
     while i < 8:
         if i != 6:
@@ -3677,4 +3648,4 @@ def py_os_error_format(value, repr_mode: int):
         i = i + 1
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 48), prior)
+    return pcc_gc_take_slot(ptr_add(slots, 48))
