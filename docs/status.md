@@ -591,6 +591,7 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (b) public generator lifetime: Codex, Linux, 2026-11-25T08:06Z, area checkpoint
+   - (d) pin/unpin and barrier emission: Claude, macOS, 2026-11-25T08:07Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
