@@ -12,7 +12,6 @@ from pcc.runtime.py.py_abi_constants import (
     PYINLINEGENOBJECT_LENGTH_OFFSET,
     PYINLINEGENOBJECT_ITEMS_OFFSET,
     PYOBJECTHEADER_FLAGS_OFFSET,
-    PY_FLAG_GC_PINNED,
     PY_FLAG_GEN_SOURCE,
     PY_FLAG_GEN_INLINE_FRAME,
     PY_TYPE_COROUTINE,
@@ -70,11 +69,6 @@ py_exc_matches       = extern("py_exc_matches",       (c_ptr, c_ptr), c_int64)
 py_exc_get_message   = extern("py_exc_get_message",   (c_ptr,),       c_ptr)
 py_gc_track          = extern("py_gc_track",          (c_ptr,),         c_void)
 py_weakref_invalidate = extern("py_weakref_invalidate", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
-pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
-pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_refcount_incref = extern("pcc_refcount_incref", (c_ptr,), c_int64)
 pcc_refcount_decref = extern("pcc_refcount_decref", (c_ptr,), c_int64)
 pcc_gc_alloc         = extern("pcc_gc_alloc",         (c_int64, c_int32, c_int32), c_ptr)
@@ -116,7 +110,7 @@ pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_frame_enter_local = extern("pcc_gc_frame_enter_local", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave_local = extern("pcc_gc_frame_leave_local", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 define_global_i32("pcc_gen_sync_frame_map", 5)
 
 _GEN_FRAME_FACTORY_VALUE = 0
@@ -290,19 +284,14 @@ def _gen_frame_factory_finish(slots, token: i64, success: i64):
         py_tls_exc_swap_slot(error_slot)
         pcc_gc_frame_leave_local(slots)
         return null()
-    # Bridge the terminal raw ABI with the same pin/slot transfer protocol
-    # as ordinary list construction. The counted lease remains live through
-    # every allocation, poll and initialization operation above this point.
-    # That lease already protects the private root's address through pinning;
-    # taking the global graph lock again only serializes unrelated factories.
-    value = pcc_gc_load_ptr(null(), value_slot)
-    prior: i64 = i64(load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED)
-    pcc_gc_pin(value)
+    # Bridge the terminal raw ABI with the slot transfer of ordinary list
+    # construction. The counted lease remains live through every
+    # allocation, poll and initialization operation above this point.
     if pcc_gc_foreign_lease_release(value_slot, token) != 0:
         pcc_platform_abort()
         return null()
     pcc_gc_frame_leave_local(slots)
-    return pcc_gc_take_pinned_slot(value_slot, prior)
+    return pcc_gc_take_slot(value_slot)
 
 
 def _gen_frame_factory_oom(slots, token: i64, message):
@@ -512,18 +501,14 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
         return
     store_i32(gen, 12, flags | 4)
     py_incref(gen)
-    pcc_gc_pin(gen)
     # Weak callbacks and close/finally can change reachability. A completed,
     # unstarted or already-finalized generator never reaches this boundary.
     atomic_rmw_i64("add", global_addr("pcc_gc_user_finalizer_runs"), 0, 1, "relaxed")
     if invalidate_weakrefs != 0:
         py_weakref_invalidate(gen)
     saved = py_current_exception()
-    saved_pin: int = 0
     if ptr_is_null(saved) == 0:
         py_incref(saved)
-        saved_pin = load_i32(saved, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-        pcc_gc_pin(saved)
     py_clear_exception()
     closed = py_gen_close(gen)
     if ptr_is_null(closed) == 0:
@@ -537,14 +522,6 @@ def _gen_finalize_mode(gen, invalidate_weakrefs: int) -> None:
         # back without raising again, which would replace its implicit context
         # with the exception handled outside the finalizing frame.
         py_tls_exc_set(saved)
-        pcc_gc_unpin(saved)
-        if saved_pin != 0:
-            pcc_gc_reassert_pin(saved)
-    pcc_gc_unpin(gen)
-    # Legacy pins are Boolean, not nested holds. Balance our pin calls, but
-    # leave an enclosing caller's pre-existing protection intact.
-    if (flags & PY_FLAG_GC_PINNED) != 0:
-        pcc_gc_reassert_pin(gen)
     py_decref(gen)
 
 
@@ -654,7 +631,7 @@ def py_gen_is_done(gen) -> int:
 
 
 # A driver that consumes a generator's return (py_gen_next_direct) names it
-# here for the duration of one resume. Record: the pinned target generator,
+# here for the duration of one resume. Record: the target generator,
 # then whether its return was delivered.
 define_thread_local_ptr_null("pcc_tls_gen_direct_request")
 _DIRECT_TARGET = 0
@@ -736,115 +713,75 @@ def py_gen_take_completed(gen):
     return pcc_gc_load_ptr(gen, ptr_add(gen, 24))
 
 
-def _gen_sync_clear(slots, pins, offset: int) -> None:
-    value = load_ptr(slots, offset)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        pcc_gc_unpin(value)
-        if load_i64(pins, offset) != 0:
-            pcc_gc_reassert_pin(value)
+def _gen_sync_clear(slots, offset: int) -> None:
     pcc_gc_store_root(ptr_add(slots, offset), null())
 
 
-def _gen_sync_build(slots, pins) -> None:
+def _gen_sync_build(slots) -> None:
     # gen0, result8, error16, yielded24, close-result32. All returned and
     # TLS-borrowed owners are captured before another runtime-port entry.
     completed = py_gen_take_completed(load_ptr(slots, 0))
     if ptr_is_null(completed) == 0:
-        if ptr_is_null(completed) == 0 and is_tagged_int(completed) == 0:
-            store_i64(pins, 8, load_i32(completed, 12) & 64)
-            pcc_gc_pin(completed)
         py_incref(completed)
         store_ptr(slots, 8, completed)
         return
     if ptr_is_null(py_current_exception()) == 0:
         return
     yielded = py_gen_next(load_ptr(slots, 0))
-    if ptr_is_null(yielded) == 0 and is_tagged_int(yielded) == 0:
-        store_i64(pins, 24, load_i32(yielded, 12) & 64)
-        pcc_gc_pin(yielded)
     store_ptr(slots, 24, yielded)
     if ptr_is_null(yielded) == 0:
         # Preserve the existing explicit boundary for an unresolved dynamic
         # parking call inside a virtual thread; do not block its carrier.
-        _gen_sync_clear(slots, pins, 24)
-        gen = load_ptr(slots, 0)
-        pcc_gc_reassert_pin(gen)
-        closed = py_gen_close(gen)
-        if ptr_is_null(closed) == 0 and is_tagged_int(closed) == 0:
-            store_i64(pins, 32, load_i32(closed, 12) & 64)
-            pcc_gc_pin(closed)
+        _gen_sync_clear(slots, 24)
+        closed = py_gen_close(load_ptr(slots, 0))
         store_ptr(slots, 32, closed)
-        _gen_sync_clear(slots, pins, 32)
+        _gen_sync_clear(slots, 32)
         py_clear_exception()
         py_raise_owned(py_exc_new(7, cstr("a parking call suspended outside a resumable caller")))
         return
     error = py_current_exception()
     if ptr_is_null(error):
         return
-    if ptr_is_null(error) == 0 and is_tagged_int(error) == 0:
-        store_i64(pins, 16, load_i32(error, 12) & 64)
-        pcc_gc_pin(error)
     py_incref(error)
     store_ptr(slots, 16, error)
     stop_type = py_exc_builtin_class(8)
-    error = load_ptr(slots, 16)
-    pcc_gc_reassert_pin(error)
-    if py_exc_matches(error, stop_type) == 0:
+    if py_exc_matches(load_ptr(slots, 16), stop_type) == 0:
         return
     value = py_exc_get_message(load_ptr(slots, 16))
     if ptr_is_null(value):
         value = global_load_ptr("py_None")
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        store_i64(pins, 8, load_i32(value, 12) & 64)
-        pcc_gc_pin(value)
     py_incref(value)
     store_ptr(slots, 8, value)
-    # The message is a borrowed field. Its own root and pin precede clearing
-    # TLS or releasing the StopIteration; either operation can run cleanup.
+    # The message is a borrowed field. Its own root precedes clearing TLS or
+    # releasing the StopIteration; either operation can run cleanup.
     py_clear_exception()
 
 
 @c_abi_export("py_gen_run_may_park_sync")
 def py_gen_run_may_park_sync(gen):
     slots = stack_alloc(40)
-    pins = stack_alloc(40)
     memset(slots, 0, 40)
-    memset(pins, 0, 40)
-    if ptr_is_null(gen) == 0 and is_tagged_int(gen) == 0:
-        store_i64(pins, 0, load_i32(gen, 12) & 64)
-        pcc_gc_pin(gen)
     pcc_gc_frame_enter(global_addr("pcc_gen_sync_frame_map"), slots)
     pcc_gc_store_root(slots, gen)
-    _gen_sync_build(slots, pins)
+    _gen_sync_build(slots)
     # On failure preserve the current exception across root cleanup. A
     # successfully consumed StopIteration is not restored to TLS.
     failed: int = 1 if ptr_is_null(load_ptr(slots, 8)) else 0
     if failed and ptr_is_null(load_ptr(slots, 16)):
         error = py_current_exception()
         if ptr_is_null(error) == 0:
-            if ptr_is_null(error) == 0 and is_tagged_int(error) == 0:
-                store_i64(pins, 16, load_i32(error, 12) & 64)
-                pcc_gc_pin(error)
             py_incref(error)
             store_ptr(slots, 16, error)
-    prior_result_pin: int = load_i64(pins, 8)
-    if ptr_eq(load_ptr(slots, 8), load_ptr(slots, 16)):
-        prior_result_pin = load_i64(pins, 16)
-    if ptr_eq(load_ptr(slots, 8), load_ptr(slots, 0)):
-        prior_result_pin = load_i64(pins, 0)
-    _gen_sync_clear(slots, pins, 32)
-    _gen_sync_clear(slots, pins, 24)
-    _gen_sync_clear(slots, pins, 0)
+    _gen_sync_clear(slots, 32)
+    _gen_sync_clear(slots, 24)
+    _gen_sync_clear(slots, 0)
     # Restoring TLS comes after every other owner release: a generator's
     # finalizer must not replace the callback's original pending exception.
     if failed and ptr_is_null(load_ptr(slots, 16)) == 0:
         py_raise(load_ptr(slots, 16))
-    _gen_sync_clear(slots, pins, 16)
-    result = load_ptr(slots, 8)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
+    _gen_sync_clear(slots, 16)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 8), prior_result_pin)
+    return pcc_gc_take_slot(ptr_add(slots, 8))
 
 
 def _gen_enter(gen) -> int:
@@ -908,8 +845,8 @@ def py_gen_next_direct(gen, returned):
     A return stores its value in the finished generator's send slot instead
     of raising StopIteration; ``returned`` then holds 1 and the result is a
     new reference to that value. Generators this one drives keep the ordinary
-    protocol. It stays pinned while it runs, so py_gen_finish can recognize
-    it by address: no other object can occupy that address meanwhile.
+    protocol. It stays alive while it runs and the one collector never moves
+    it, so py_gen_finish can recognize it by address.
     """
     store_i64(returned, 0, 0)
     gen = _checked_gen(gen)
@@ -918,8 +855,6 @@ def py_gen_next_direct(gen, returned):
     request = stack_alloc(_DIRECT_BYTES)
     store_ptr(request, _DIRECT_TARGET, gen)
     store_i64(request, _DIRECT_DELIVERED, 0)
-    prior_pin: int = load_i32(gen, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(gen)
     outer = global_load_ptr("pcc_tls_gen_direct_request")
     global_store_ptr("pcc_tls_gen_direct_request", request)
     result = py_gen_next(gen)
@@ -928,9 +863,6 @@ def py_gen_next_direct(gen, returned):
         result = pcc_gc_load_ptr(gen, ptr_add(gen, 48))
         py_incref(result)
         store_i64(returned, 0, 1)
-    pcc_gc_unpin(gen)
-    if prior_pin != 0:
-        pcc_gc_reassert_pin(gen)
     return result
 
 
@@ -1097,21 +1029,10 @@ def _gen_close_claimed(gen):
                 value = global_load_ptr("py_None")
             pcc_gc_store_root(exc_slot, value)
             py_clear_exception()
-            # Acquiring the graph lease can park and move the rooted
-            # result. Reload only under that lease, then pin before any
-            # cleanup operation can expose another safepoint.
-            pcc_py_gc_minor_graph_lock()
-            value = pcc_gc_load_ptr(null(), exc_slot)
-            store_ptr(exc_slot, 0, value)
-            prior_pin: int = 0
-            if is_tagged_int(value) == 0:
-                prior_pin = load_i32(value, 12) & 64
-                pcc_gc_pin(value)
-            pcc_py_gc_minor_graph_unlock()
             pcc_gc_store_root(gen_slot, null())
             pcc_gc_scheduler_root_unregister_handle(gen_root)
             pcc_gc_scheduler_root_unregister_handle(exc_root)
-            return pcc_gc_take_pinned_slot(exc_slot, prior_pin)
+            return pcc_gc_take_slot(exc_slot)
         elif exiting != 0:
             # Any GeneratorExit is a successful close, including one
             # explicitly raised by the body. Other BaseExceptions escape.

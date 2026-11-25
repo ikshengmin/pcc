@@ -80,8 +80,7 @@ pcc_gc_free_object_memory = extern("pcc_gc_free_object_memory", (c_ptr,), c_void
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 define_global_i32("pcc_exc_construct_borrowed_frame_map", -2)
@@ -149,7 +148,6 @@ def _exc_construct_body(borrowed, owned, msg) -> int:
 
 
 def _exc_construct_finish(borrowed, owned, complete: int, log_code: int, log_tag: int):
-    prior_pin: int = 0
     if complete != 0:
         pcc_diagnostics_runtime_log_event_code(6, 1, 12, 0, pcc_gc_load_ptr(null(), owned))
     if log_code == 2:
@@ -160,11 +158,6 @@ def _exc_construct_finish(borrowed, owned, complete: int, log_code: int, log_tag
         pcc_diagnostics_runtime_log_event_code(6, 9, log_tag, 0, pcc_gc_load_ptr(null(), owned))
     if complete != 0:
         pcc_gc_publish_initialized(pcc_gc_load_ptr(null(), owned))
-        # Construction remained movable. Only the final raw NEW handoff
-        # spans root unregistration, whose graph unlock can itself park.
-        result = pcc_gc_load_ptr(null(), owned)
-        prior_pin = load_i32(result, 12) & 64
-        pcc_gc_pin(result)
     pcc_gc_store_root(ptr_add(owned, 8), null())
     if complete == 0:
         pcc_gc_store_root(owned, null())
@@ -172,7 +165,7 @@ def _exc_construct_finish(borrowed, owned, complete: int, log_code: int, log_tag
     pcc_gc_frame_leave(borrowed)
     if complete == 0:
         return null()
-    return pcc_gc_take_pinned_slot(owned, prior_pin)
+    return pcc_gc_take_slot(owned)
 
 
 @c_abi_export("py_exc_alloc")
@@ -427,33 +420,14 @@ define_global_i32("pcc_unicode_borrowed_map", -2)
 define_global_i32("pcc_unicode_owned_map", 8)
 
 
-def _unicode_pin_slot(slot) -> int:
-    pcc_py_gc_minor_graph_lock()
-    value = pcc_gc_load_ptr(null(), slot)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
-    pcc_py_gc_minor_graph_unlock()
-    return prior
-
-
 def _unicode_tuple_put(slots, tuple_offset: int, index: int, value_offset: int) -> None:
-    # Setters may park. These are NEW tuple slots; the pin covers only their
-    # raw-argument ABI handoff and does not pin the completed exception graph.
+    # Setters may park. These are NEW tuple slots, rooted in ``slots``.
     target_slot = ptr_add(slots, tuple_offset)
     value_slot = ptr_add(slots, value_offset)
-    target_pin: int = _unicode_pin_slot(target_slot)
-    value_pin: int = _unicode_pin_slot(value_slot)
     py_tuple_set_item(load_ptr(target_slot, 0), index, load_ptr(value_slot, 0))
-    store_ptr(value_slot, 0, pcc_gc_take_pinned_slot(value_slot, value_pin))
-    store_ptr(target_slot, 0, pcc_gc_take_pinned_slot(target_slot, target_pin))
 
 
 def _unicode_finish(borrowed, owned, success: int):
-    pin: int = 0
-    if success != 0:
-        pin = _unicode_pin_slot(owned)
     i: int = 1
     while i < 8:
         pcc_gc_store_root(ptr_add(owned, i * 8), null())
@@ -464,7 +438,7 @@ def _unicode_finish(borrowed, owned, success: int):
     pcc_gc_frame_leave(borrowed)
     if success == 0:
         return null()
-    return pcc_gc_take_pinned_slot(owned, pin)
+    return pcc_gc_take_slot(owned)
 
 
 def _unicode_copy_cstr(out, offset: int, text) -> int:
@@ -499,13 +473,10 @@ def _unicode_arity_error(count: int) -> None:
 def _unicode_type_error(slots, offset: int, argument: int) -> None:
     slot = ptr_add(slots, offset)
     name_slot = ptr_add(slots, 16)
-    prior: int = _unicode_pin_slot(slot)
     # py_obj_type_name returns a NEW managed str, not a borrowed char pointer.
     store_ptr(name_slot, 0, py_obj_type_name(load_ptr(slot, 0)))
-    store_ptr(slot, 0, pcc_gc_take_pinned_slot(slot, prior))
     if ptr_is_null(load_ptr(name_slot, 0)):
         return
-    name_pin: int = _unicode_pin_slot(name_slot)
     name = py_str_utf8(load_ptr(name_slot, 0))
     message = malloc(py_str_byte_len(load_ptr(name_slot, 0)) + 48)
     if ptr_is_null(message) == 0:
@@ -521,7 +492,6 @@ def _unicode_type_error(slots, offset: int, argument: int) -> None:
             store_i8(message, end, 39)
             end = end + 1
         store_i8(message, end, 0)
-    store_ptr(name_slot, 0, pcc_gc_take_pinned_slot(name_slot, name_pin))
     pcc_gc_store_root(name_slot, null())
     if ptr_is_null(message) == 0:
         py_raise_owned(py_exc_new(3, message))
@@ -531,20 +501,16 @@ def _unicode_type_error(slots, offset: int, argument: int) -> None:
 def _unicode_constructor_index(owned, offset: int) -> int:
     source_slot = ptr_add(owned, offset)
     result_slot = ptr_add(owned, 16)
-    prior: int = _unicode_pin_slot(source_slot)
     # Invoke __index__ exactly once, retaining the full arbitrary-precision
     # result until the platform-sized conversion has been checked.
     store_ptr(result_slot, 0, py_obj_index(load_ptr(source_slot, 0)))
-    store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, prior))
     if ptr_is_null(load_ptr(result_slot, 0)):
         return 0
     overflow = stack_alloc(4)
     store_i32(overflow, 0, 0)
-    result_pin: int = _unicode_pin_slot(result_slot)
     number: int = py_int_to_i64(load_ptr(result_slot, 0), overflow)
     if load_i32(overflow, 0) == 0:
         pcc_gc_store_root(source_slot, load_ptr(result_slot, 0))
-    store_ptr(result_slot, 0, pcc_gc_take_pinned_slot(result_slot, result_pin))
     pcc_gc_store_root(result_slot, null())
     if load_i32(overflow, 0) != 0:
         py_raise_owned(py_exc_new(15, cstr("Python int too large to convert to C ssize_t")))
@@ -561,9 +527,7 @@ def _unicode_constructor_body(borrowed, owned, type_tag: int) -> int:
     # Snapshot constructor arguments before invoking any __index__ method.
     i: int = 0
     while i < 5:
-        source_pin: int = _unicode_pin_slot(borrowed)
         store_ptr(owned, 24 + i * 8, py_tuple_get(load_ptr(borrowed, 0), i))
-        store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, source_pin))
         i = i + 1
     if _type_of(pcc_gc_load_ptr(null(), ptr_add(owned, 24))) != PY_TYPE_STR:
         _unicode_type_error(owned, 24, 1)
@@ -577,9 +541,7 @@ def _unicode_constructor_body(borrowed, owned, type_tag: int) -> int:
             # Buffer conversion owns and leases the actual payload leaf, so
             # a memoryview's base may move independently of the outer view.
             source_slot = ptr_add(owned, 32)
-            source_pin: int = _unicode_pin_slot(source_slot)
             store_ptr(owned, 16, py_bytes_from_obj(load_ptr(source_slot, 0)))
-            store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, source_pin))
             if ptr_is_null(load_ptr(owned, 16)):
                 return 0
             pcc_gc_store_root(source_slot, load_ptr(owned, 16))
@@ -658,11 +620,7 @@ def _unicode_error_normalize(value, type_tag: int):
     if tag == PY_TYPE_EXC:
         class_slot = ptr_add(borrowed, 8)
         store_ptr(class_slot, 0, py_exc_builtin_class(type_tag))
-        class_pin: int = _unicode_pin_slot(class_slot)
-        prior: int = _unicode_pin_slot(borrowed)
         matched = py_exc_matches(load_ptr(borrowed, 0), load_ptr(class_slot, 0))
-        store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
-        store_ptr(class_slot, 0, pcc_gc_take_pinned_slot(class_slot, class_pin))
     if matched != 0:
         pcc_py_gc_minor_graph_lock()
         pcc_gc_store_root(owned, pcc_gc_load_ptr(null(), borrowed))
@@ -729,11 +687,9 @@ def py_unicode_decode_error_from_buffer(data, count: int, encoding, start: int, 
     # slot until py_raise_owned has installed the TLS reference, then release
     # the construction owner through the normal shared cleanup traversal.
     if ptr_is_null(load_ptr(owned, 0)) == 0:
-        result_pin: int = _unicode_pin_slot(owned)
         result = load_ptr(owned, 0)
         py_incref(result)
         py_raise_owned(result)
-        store_ptr(owned, 0, pcc_gc_take_pinned_slot(owned, result_pin))
     _unicode_finish(borrowed, owned, 0)
 
 
@@ -774,7 +730,7 @@ def py_unicode_encode_error(obj, encoding, start: int, end: int, reason) -> None
 
 def _exc_primary_argument(error):
     # Keep the legacy BORROWED args[0] contract without leaking the private
-    # record, and protect its raw handoff across frame unregistration.
+    # record; the raw handoff goes through the frame's second slot.
     borrowed = stack_alloc(16)
     store_ptr(borrowed, 0, error)
     store_ptr(borrowed, 8, null())
@@ -789,13 +745,9 @@ def _exc_primary_argument(error):
         if py_tuple_len(args) > 0:
             value = pcc_gc_load_ptr(args, ptr_add(args, PYTUPLEOBJECT_ITEMS_OFFSET))
     store_ptr(borrowed, 8, value)
-    prior: int = 0
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(ptr_add(borrowed, 8), prior)
+    return pcc_gc_take_slot(ptr_add(borrowed, 8))
 
 
 @c_abi_export("py_unicode_error_get_field")
@@ -813,13 +765,9 @@ def py_unicode_error_get_field(error, index: int):
         value = global_load_ptr("py_None")
     py_incref(value)
     store_ptr(borrowed, 8, value)
-    prior: int = 0
-    if is_tagged_int(value) == 0:
-        prior = load_i32(value, 12) & 64
-        pcc_gc_pin(value)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(ptr_add(borrowed, 8), prior)
+    return pcc_gc_take_slot(ptr_add(borrowed, 8))
 
 
 @c_abi_export("py_unicode_error_set_field")
@@ -841,9 +789,7 @@ def py_unicode_error_set_field(error, index: int, value) -> int:
             pcc_gc_store_root(ptr_add(owned, 8), pcc_gc_load_ptr(null(), source_slot))
             pcc_py_gc_minor_graph_unlock()
         else:
-            prior: int = _unicode_pin_slot(source_slot)
             store_ptr(owned, 8, py_tuple_from_splat(load_ptr(source_slot, 0)))
-            store_ptr(source_slot, 0, pcc_gc_take_pinned_slot(source_slot, prior))
             if ptr_is_null(load_ptr(owned, 8)):
                 ok = 0
     elif index == 3 or index == 4:
@@ -901,23 +847,18 @@ _OS_NEW_TEMP = 56
 
 
 def _os_error_argument(borrowed, owned, index: int, destination: int) -> int:
-    prior: int = _unicode_pin_slot(borrowed)
     store_ptr(owned, destination, py_tuple_get(load_ptr(borrowed, 0), index))
-    store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
     return 0 if ptr_is_null(load_ptr(owned, destination)) else 1
 
 
 def _os_error_constructor_body(borrowed, owned, exception_tag: int) -> int:
     count: int = 0
-    prior: int = 0
     if ptr_is_null(pcc_gc_load_ptr(null(), borrowed)):
         store_ptr(owned, _OS_NEW_ARGS, py_tuple_new(0))
         if ptr_is_null(load_ptr(owned, _OS_NEW_ARGS)):
             return 0
     else:
-        prior = _unicode_pin_slot(borrowed)
         count = py_tuple_len(load_ptr(borrowed, 0))
-        store_ptr(borrowed, 0, pcc_gc_take_pinned_slot(borrowed, prior))
         pcc_py_gc_minor_graph_lock()
         args = pcc_gc_load_ptr(null(), borrowed)
         py_incref(args)
@@ -936,9 +877,7 @@ def _os_error_constructor_body(borrowed, owned, exception_tag: int) -> int:
             # ints. Mapping must neither coerce user objects nor truncate ints.
             overflow = stack_alloc(4)
             store_i32(overflow, 0, 0)
-            prior = _unicode_pin_slot(number_slot)
             number: int = py_int_to_i64(load_ptr(number_slot, 0), overflow)
-            store_ptr(number_slot, 0, pcc_gc_take_pinned_slot(number_slot, prior))
             if py_err_occurred():
                 return 0
             if load_i32(overflow, 0) == 0 and number >= -2147483648 and number <= 2147483647:
@@ -1075,9 +1014,7 @@ def py_os_error_set_field(error, index: int, value) -> int:
             pcc_gc_store_root(ptr_add(owned, 8), pcc_gc_load_ptr(null(), source))
             pcc_py_gc_minor_graph_unlock()
         else:
-            prior: int = _unicode_pin_slot(source)
             store_ptr(owned, 8, py_tuple_from_splat(load_ptr(source, 0)))
-            store_ptr(source, 0, pcc_gc_take_pinned_slot(source, prior))
             if ptr_is_null(load_ptr(owned, 8)):
                 ok = 0
     if ok != 0:

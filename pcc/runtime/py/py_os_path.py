@@ -8,8 +8,7 @@ __pcc_runtime_port__ = True
 
 from pcc.runtime.py.py_abi_constants import (
     C_POINTER_SIZE, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
-    PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_FLAG_GC_PINNED,
-    PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_LIST,
+    PYOBJECTHEADER_TYPE_TAG_OFFSET, PY_TYPE_BYTES, PY_TYPE_INT, PY_TYPE_LIST,
     PY_TYPE_STR, PY_TYPE_TUPLE,
 )
 from pcc.extern import (
@@ -78,10 +77,7 @@ mkdir_sys          = extern("mkdir",              (c_ptr, c_int32), c_int32)
 access             = extern("pcc_platform_access", (c_ptr, c_int64), c_int64)
 getenv             = extern("pcc_platform_getenv", (c_ptr,), c_ptr)
 memcmp_c           = extern("memcmp", (c_ptr, c_ptr, c_int64), c_int64)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
@@ -138,20 +134,12 @@ define_global_i32("pcc_os_errno_owned_map", _OSE_COUNT)
 define_global_i32("pcc_os_errno_borrowed_map", -2)
 
 
-def _path_clear_root_prefix(slots, pins, count: int) -> None:
-    # Reverse acquisition order preserves pre-existing pins even when two
-    # owned slots alias. Clear through the canonical root-store RC owner.
+def _path_clear_root_prefix(slots, count: int) -> None:
+    # Clear through the canonical root-store RC owner, in reverse order.
     index: int = count
     while index > 0:
         index = index - 1
-        offset: int = index * 8
-        value = load_ptr(slots, offset)
-        if not ptr_is_null(value):
-            prior_pin: int = load_i64(pins, offset)
-            pcc_gc_unpin(value)
-            if prior_pin:
-                pcc_gc_reassert_pin(value)
-        pcc_gc_store_root(ptr_add(slots, offset), null())
+        pcc_gc_store_root(ptr_add(slots, index * 8), null())
 
 
 
@@ -188,33 +176,21 @@ def _path_drive_length(data, n: int) -> int:
     return second
 
 
-def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots, pins) -> int:
+def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots) -> int:
     left_text = py_str_new(left, left_len)
     store_ptr(slots, 0, left_text)
-    if not ptr_is_null(left_text):
-        store_i64(pins, 0, load_i32(left_text, 12) & 64)
-        pcc_gc_pin(left_text)
     if ptr_is_null(left_text):
         return 0
     right_text = py_str_new(right, right_len)
     store_ptr(slots, 8, right_text)
-    if not ptr_is_null(right_text):
-        store_i64(pins, 8, load_i32(right_text, 12) & 64)
-        pcc_gc_pin(right_text)
     if ptr_is_null(right_text):
         return 0
     left_key = py_os_path_normcase(load_ptr(slots, 0))
     store_ptr(slots, 16, left_key)
-    if not ptr_is_null(left_key):
-        store_i64(pins, 16, load_i32(left_key, 12) & 64)
-        pcc_gc_pin(left_key)
     if ptr_is_null(left_key):
         return 0
     right_key = py_os_path_normcase(load_ptr(slots, 8))
     store_ptr(slots, 24, right_key)
-    if not ptr_is_null(right_key):
-        store_i64(pins, 24, load_i32(right_key, 12) & 64)
-        pcc_gc_pin(right_key)
     if ptr_is_null(right_key):
         return 0
     left_key = load_ptr(slots, 16)
@@ -228,12 +204,10 @@ def _path_windows_equal_build(left, left_len: int, right, right_len: int, slots,
 def _path_windows_equal(left, left_len: int, right, right_len: int) -> int:
     # The caller owns stable raw spans; this frame owns all allocated keys.
     slots = stack_alloc(32)
-    pins = stack_alloc(32)
     memset(slots, 0, 32)
-    memset(pins, 0, 32)
     pcc_gc_frame_enter(global_addr("pcc_os_path_compare_frame_map"), slots)
-    result: int = _path_windows_equal_build(left, left_len, right, right_len, slots, pins)
-    _path_clear_root_prefix(slots, pins, 4)
+    result: int = _path_windows_equal_build(left, left_len, right, right_len, slots)
+    _path_clear_root_prefix(slots, 4)
     pcc_gc_frame_leave(slots)
     return result
 
@@ -986,13 +960,11 @@ def py_os_path_islink_result(path):
     _fs_close(slots, tokens, 1)
     pcc_py_gc_minor_graph_lock()
     value = load_ptr(output, 0)
-    prior_pin: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(value)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(slots)
     store_ptr(borrowed, 0, null())
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior_pin)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_os_path_lexists")
@@ -1032,13 +1004,11 @@ def py_os_path_lexists_result(path):
     _fs_close(slots, tokens, 1)
     pcc_py_gc_minor_graph_lock()
     value = load_ptr(output, 0)
-    prior_pin: int = load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED
-    pcc_gc_pin(value)
     pcc_py_gc_minor_graph_unlock()
     pcc_gc_frame_leave(slots)
     store_ptr(borrowed, 0, null())
     pcc_gc_frame_leave(borrowed)
-    return pcc_gc_take_pinned_slot(output, prior_pin)
+    return pcc_gc_take_slot(output)
 
 
 @c_abi_export("py_os_path_isabs")
@@ -1080,8 +1050,8 @@ def py_os_path_isdir(path) -> int:
     return 0
 
 
-def _path_abspath_build(path, slots, pins) -> None:
-    # Inputs are borrowed and pinned by the managed call boundary. New owned
+def _path_abspath_build(path, slots) -> None:
+    # Inputs are borrowed from the managed call boundary. New owned
     # strings go into an already registered slot before any following call.
     if ptr_is_null(path):
         return
@@ -1089,9 +1059,6 @@ def _path_abspath_build(path, slots, pins) -> None:
     if _type_of(path) != PY_TYPE_STR:
         converted = py_obj_str(path)
         store_ptr(slots, 0, converted)
-        if not ptr_is_null(converted):
-            store_i64(pins, 0, load_i32(converted, 12) & 64)
-            pcc_gc_pin(converted)
         if ptr_is_null(converted):
             return
         item = load_ptr(slots, 0)
@@ -1106,17 +1073,11 @@ def _path_abspath_build(path, slots, pins) -> None:
                 length = length + 1
             out = py_str_new(result, length)
             store_ptr(slots, 8, out)
-            if not ptr_is_null(out):
-                store_i64(pins, 8, load_i32(out, 12) & 64)
-                pcc_gc_pin(out)
         free(buffer)
         return
     if in_len > 0 and load_i8(data, 0) == 47:
         out = py_str_new(data, in_len)
         store_ptr(slots, 8, out)
-        if not ptr_is_null(out):
-            store_i64(pins, 8, load_i32(out, 12) & 64)
-            pcc_gc_pin(out)
         return
     cwd_ptr = py_path_getcwd()
     if ptr_is_null(cwd_ptr):
@@ -1127,9 +1088,6 @@ def _path_abspath_build(path, slots, pins) -> None:
     if in_len == 0:
         out = py_str_new(cwd_ptr, cwd_len)
         store_ptr(slots, 8, out)
-        if not ptr_is_null(out):
-            store_i64(pins, 8, load_i32(out, 12) & 64)
-            pcc_gc_pin(out)
         return
     # getcwd("/") already supplies the separator. Inventing a second slash
     # would create a distinct POSIX // prefix that normpath must preserve.
@@ -1137,9 +1095,6 @@ def _path_abspath_build(path, slots, pins) -> None:
     total: int = cwd_len + separator_len + in_len
     out = py_str_new(null(), total)
     store_ptr(slots, 8, out)
-    if not ptr_is_null(out):
-        store_i64(pins, 8, load_i32(out, 12) & 64)
-        pcc_gc_pin(out)
     if ptr_is_null(out):
         return
     out = load_ptr(slots, 8)
@@ -1153,22 +1108,17 @@ def _path_abspath_build(path, slots, pins) -> None:
 @c_abi_export("py_os_path_abspath")
 def py_os_path_abspath(path):
     slots = stack_alloc(24)
-    pins = stack_alloc(24)
     memset(slots, 0, 24)
-    memset(pins, 0, 24)
     pcc_gc_frame_enter(global_addr("pcc_os_path_abspath_frame_map"), slots)
-    _path_abspath_build(path, slots, pins)
+    _path_abspath_build(path, slots)
     if not ptr_is_null(load_ptr(slots, 8)):
         # abspath is normpath(join(cwd, path)), including dot/dotdot and
         # the POSIX two-leading-slash rule. Reuse the existing path algorithm.
         normalized = py_os_path_normpath(load_ptr(slots, 8))
         store_ptr(slots, 16, normalized)
-        if not ptr_is_null(normalized):
-            store_i64(pins, 16, load_i32(normalized, 12) & 64)
-            pcc_gc_pin(normalized)
-    _path_clear_root_prefix(slots, pins, 2)
+    _path_clear_root_prefix(slots, 2)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 16), load_i64(pins, 16))
+    return pcc_gc_take_slot(ptr_add(slots, 16))
 
 
 def _windows_expanduser(item):
@@ -1457,16 +1407,13 @@ def _path_component_is_dotdot(data, start: int, n: int) -> int:
     return 0
 
 
-def _path_normpath_build(path, slots, pins) -> None:
+def _path_normpath_build(path, slots) -> None:
     if ptr_is_null(path):
         return
     item = path
     if _type_of(path) != PY_TYPE_STR:
         converted = py_obj_str(path)
         store_ptr(slots, 0, converted)
-        if not ptr_is_null(converted):
-            store_i64(pins, 0, load_i32(converted, 12) & 64)
-            pcc_gc_pin(converted)
         if ptr_is_null(converted):
             return
         item = load_ptr(slots, 0)
@@ -1536,9 +1483,6 @@ def _path_normpath_build(path, slots, pins) -> None:
         out_len = out_len + 1
     result = py_str_new(work, out_len)
     store_ptr(slots, 8, result)
-    if not ptr_is_null(result):
-        store_i64(pins, 8, load_i32(result, 12) & 64)
-        pcc_gc_pin(result)
     free(work)
     free(starts)
     free(lens)
@@ -1548,14 +1492,12 @@ def _path_normpath_build(path, slots, pins) -> None:
 @c_abi_export("py_os_path_normpath")
 def py_os_path_normpath(path):
     slots = stack_alloc(16)
-    pins = stack_alloc(16)
     memset(slots, 0, 16)
-    memset(pins, 0, 16)
     pcc_gc_frame_enter(global_addr("pcc_os_path_normpath_frame_map"), slots)
-    _path_normpath_build(path, slots, pins)
-    _path_clear_root_prefix(slots, pins, 1)
+    _path_normpath_build(path, slots)
+    _path_clear_root_prefix(slots, 1)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 8), load_i64(pins, 8))
+    return pcc_gc_take_slot(ptr_add(slots, 8))
 
 
 @c_abi_export("py_os_path_splitdrive")
@@ -2020,16 +1962,13 @@ def _path_bytes_equal(left, right, length: int) -> int:
     return 1
 
 
-def _path_relpath_build(path, start, slots, pins) -> None:
+def _path_relpath_build(path, start, slots) -> None:
     if ptr_is_null(path):
         return
     path_item = path
     if _type_of(path) != PY_TYPE_STR:
         converted = py_obj_str(path)
         store_ptr(slots, 0, converted)
-        if not ptr_is_null(converted):
-            store_i64(pins, 0, load_i32(converted, 12) & 64)
-            pcc_gc_pin(converted)
         if ptr_is_null(converted):
             return
         path_item = load_ptr(slots, 0)
@@ -2038,16 +1977,10 @@ def _path_relpath_build(path, start, slots, pins) -> None:
         return
     path_absolute = py_os_path_abspath(path_item)
     store_ptr(slots, 8, path_absolute)
-    if not ptr_is_null(path_absolute):
-        store_i64(pins, 8, load_i32(path_absolute, 12) & 64)
-        pcc_gc_pin(path_absolute)
     if ptr_is_null(path_absolute):
         return
     start_absolute = py_os_path_abspath(start)
     store_ptr(slots, 16, start_absolute)
-    if not ptr_is_null(start_absolute):
-        store_i64(pins, 16, load_i32(start_absolute, 12) & 64)
-        pcc_gc_pin(start_absolute)
     if ptr_is_null(start_absolute):
         return
     windows: int = _path_windows()
@@ -2078,7 +2011,7 @@ def _path_relpath_build(path, start, slots, pins) -> None:
     common: int = 0
     while common < path_count and common < start_count:
         # Reload from the registered owners on each iteration, including the
-        # edge after a loop safepoint. Owners stay pinned while callees use
+        # edge after a loop safepoint. Owners stay rooted while callees use
         # interior views. Dynamic views do not outlive the leaf comparison.
         path_data = ptr_add(load_ptr(slots, 8), 40)
         start_data = ptr_add(load_ptr(slots, 16), 40)
@@ -2102,9 +2035,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
         free(start_lengths)
         out = py_str_new(cstr("."), 1)
         store_ptr(slots, 24, out)
-        if not ptr_is_null(out):
-            store_i64(pins, 24, load_i32(out, 12) & 64)
-            pcc_gc_pin(out)
         return
     output_len: int = 2 * up + total - 1
     j: int = common
@@ -2113,9 +2043,6 @@ def _path_relpath_build(path, start, slots, pins) -> None:
         j = j + 1
     out = py_str_new(null(), output_len)
     store_ptr(slots, 24, out)
-    if not ptr_is_null(out):
-        store_i64(pins, 24, load_i32(out, 12) & 64)
-        pcc_gc_pin(out)
     if ptr_is_null(out):
         free(path_offsets)
         free(path_lengths)
@@ -2157,15 +2084,13 @@ def _path_relpath_build(path, start, slots, pins) -> None:
 @c_abi_export("py_os_path_relpath")
 def py_os_path_relpath(path, start):
     slots = stack_alloc(32)
-    pins = stack_alloc(32)
     memset(slots, 0, 32)
-    memset(pins, 0, 32)
     pcc_gc_frame_enter(global_addr("pcc_os_path_relpath_frame_map"), slots)
-    _path_relpath_build(path, start, slots, pins)
-    _path_clear_root_prefix(slots, pins, 3)
-    # The result remains pinned through the last potentially parking call.
+    _path_relpath_build(path, start, slots)
+    _path_clear_root_prefix(slots, 3)
+    # The result remains rooted through the last potentially parking call.
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, 24), load_i64(pins, 24))
+    return pcc_gc_take_slot(ptr_add(slots, 24))
 
 
 @c_abi_export("py_os_path_exists")
