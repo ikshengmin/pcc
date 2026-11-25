@@ -391,8 +391,15 @@ in the relevant section or issue and removes the entry.
    Linux: 102 passing focused checks; the existing legacy sweep-trigger
    assertion still fails on both this patch and its unmodified parent.
    The hosted float gate and whole-language qualification are pending CI.
-   Next: reconcile the remaining (b) tests with CI selectors, starting
-   with the stale sweep selectors. Do not wait for the maintainer's local Mac.
+   (b) populated cyclic-list public collection: 777 self-referential
+   lists made by a joined creator release their payloads exactly once;
+   callbacks clear all weakrefs, a rooted self-referential sentinel stays
+   live, and another collection does not repeat finalization. Retired
+   backend-specific sweep internals and their unreferenced C fixture are
+   removed. CPython and actual Linux pcc0 native executions passed at
+   `ff41b4af` with its verified runtime; pcc1 remains pending CI.
+   Next: migrate remaining (b) lifetime tests and CI selectors. Do not
+   wait for the maintainer's local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -573,7 +580,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) public cyclic-list collection witness: Codex, Linux, 2026-11-25T06:03Z, area checkpoint
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
