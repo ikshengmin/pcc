@@ -407,6 +407,14 @@ in the relevant section or issue and removes the entry.
    cannot compile as written: Subject.__del__ may_park implicit dunder
    is not statically resumable. Neither failed check was suppressed,
    and the original tests remain intact. #9 stays open.
+   (b) public generator lifetime at `49e13664`: 777 unstarted and
+   777 suspended generators release their frame payloads, suspended cleanup
+   runs exactly once, weakrefs clear, a rooted suspended sentinel survives
+   collection and later closes normally. CPython and Linux pcc0 passed
+   (2 tests); native pcc1 remains pending CI. The removed controlled
+   sweep modes exercised retired collector-specific candidate and worker
+   protocols; existing generator finalization, pending-error and resurrection
+   checks remain untouched.
    Next: migrate other independent (b) lifetime tests; investigate the
    parent-cycle order in runtime-gc and the may_park frontend boundary
    separately, respecting active claims. Do not wait for the local Mac.
@@ -590,7 +598,6 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) public generator lifetime: Codex, Linux, 2026-11-25T08:06Z, area checkpoint
    - (d) pin/unpin and barrier emission: Claude, macOS, 2026-11-25T08:07Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as

@@ -1,199 +1,86 @@
-"""Cleared ordinary generators, actual owned-runtime lifetime evidence.
-
-Specification: docs/project-intent.md, five-GC lifetime equality (finalizers,
-weakrefs, resurrection and suspended frames). Host pcc0, owned self backend,
-threaded atomic no-libpython runtime; not native-pcc1/bootstrap qualification.
-Public collection has no injected verdicts. Controlled modes inject candidate
-flags and a same-stop-epoch completed-mark verdict, then use the real bounded
-three-pass sweep and CMS worker. Real weakref/finalizer reachability rechecks
-remain enabled.
-Started-generator checks distinguish proven first-epoch retirement from real
-conservative retention. The former requires an observed negative-owner claim
-with cleared slots; the latter requires the live verdict and intact fields.
-Both join the entire observer thread before fresh public collections prove
-eventual retirement.
-Live tracking checks require TRACKED and the selected representation: no idle
-GCNode for flag mode, the original stable GCNode identity for node mode.
-Each child independently must have a missing ObjectNode index, a verified
-pending zero-shell LIST claim, or a verified live verdict. Pending is counted
-separately from gone; every claimed child must lose its index after worker drain.
-The first sweep's reclaimed count is checked against this actual partition.
-The old one-epoch death assertion was wrong when a real snapshot still held
-the generator. Finally resurrection must actually occur before its explicit
-root is released; it is never replaced by a direct finalizer call.
-The C resume thunk covers the native generator ABI; Python finally lowering is
-covered separately by test_generator_finalizer_accounting_native.
-"""
-from __future__ import annotations
-
-import hashlib
-import json
-import os
-from pathlib import Path
+"""Public collection preserves live generator frames and releases dead ones."""
+import subprocess
+import sys
+import textwrap
 
 import pytest
 
-from tests.owned_runtime_c_fixture import admitted_runtime, link_c_harness
-from tests.python.process_timeout import run_process_group_timeout
+from tests.python.owned_regression_support import assert_owned_program, explicit_owned_runtime
 
-ROOT = Path(__file__).resolve().parents[2]
-pytestmark = pytest.mark.xdist_group("gc-cleared-gen-sweep-native")
+PROGRAM = textwrap.dedent("""\
+    import gc
+    import weakref
+
+    finalized = []
+    closed = []
+
+    class Payload:
+        def __init__(self, ident):
+            self.ident = ident
+        def __del__(self):
+            finalized.append(self.ident)
+
+    def values(payload):
+        try:
+            yield payload.ident
+        finally:
+            closed.append(payload.ident)
+
+    def discard(started):
+        refs = []
+        for i in range(777):
+            payload = Payload(i)
+            refs.append(weakref.ref(payload))
+            gen = values(payload)
+            if started:
+                assert next(gen) == i
+            gen = None
+            payload = None
+        return refs
+
+    def main():
+        gc.disable()
+        sentinel = Payload(-1)
+        live = values(sentinel)
+        live_ref = weakref.ref(sentinel)
+        sentinel = None
+        assert next(live) == -1
+        refs = discard(False)
+        gc.collect()
+        assert sorted(finalized) == list(range(777))
+        assert closed == []
+        for ref in refs:
+            assert ref() is None
+        finalized.clear()
+        refs = discard(True)
+        gc.collect()
+        assert sorted(finalized) == list(range(777))
+        assert sorted(closed) == list(range(777))
+        for ref in refs:
+            assert ref() is None
+        assert live_ref() is not None
+        gc.collect()
+        assert len(finalized) == 777 and len(closed) == 777
+        live.close()
+        assert closed[-1] == -1
+        print("GENERATOR_COLLECTION_OK")
+
+    main()
+""")
+EXPECTED = "GENERATOR_COLLECTION_OK\n"
 
 
-def _digest(path):
-    with Path(path).open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
-
-
-@pytest.fixture(scope="module")
-def cleared_gen_binary(tmp_path_factory):
-    archive = admitted_runtime()
-    provenance = Path(str(archive) + ".provenance.json")
-    manifest = json.loads(provenance.read_text())
-    assert all(
-        member["runtime_build_config"]["threads"] is True
-        and member["runtime_build_config"]["refcount"] == "atomic"
-        for member in manifest["members"]
-    )
-    assert "freestanding_gc_scalar_sweep.o" in {
-        member["member"] for member in manifest["members"]
-    }
-    source = ROOT / "tests/fixtures/native/gc_cleared_gen_sweep_worker.c"
-    binary = tmp_path_factory.mktemp("gc_cleared_gen_sweep") / "cleared_gen.out"
-    before = tuple(_digest(path) for path in (source, archive, provenance))
-    link_c_harness(source, binary, runtime_archive=archive)
-    assert before == tuple(_digest(path) for path in (source, archive, provenance))
-    return binary, dict(
-        source_sha256=before[0], runtime_sha256=before[1],
-        provenance_sha256=before[2], binary_sha256=_digest(binary),
-        target=manifest["target_triple"], compiler="host-pcc0",
-        backend="self", runtime_provisioning=False,
-    )
-
-
-def _run(cleared_gen_binary, backend, mode):
-    binary, identity = cleared_gen_binary
-    command = [str(binary), str(mode)]
-    result = run_process_group_timeout(
-        command,
-        env=dict(
-            os.environ, PCC_GC_BACKEND=str(backend),
-            PCC_GC_DEBT_THRESHOLD="1099511627776",
-            PCC_TEST_NO_NATIVE_PROVISIONING="1", PCC_NO_AUTO_PCC1="1",
-        ),
-        timeout=30,
-    )
-    receipt = dict(
-        identity, command=command, gc_backend=backend, mode=mode,
-        returncode=result.returncode, stdout=result.stdout, stderr=result.stderr,
-    )
-    (binary.parent / f"gc{backend}-mode{mode}.json").write_text(
-        json.dumps(receipt, indent=2) + "\n"
-    )
-    assert result.returncode == 0 and result.stderr == "", receipt
-    assert result.stdout.startswith("cleared-gen-sweep "), receipt
-    fields = {
-        key: int(value)
-        for key, value in (
-            item.split("=") for item in result.stdout.strip().split()[1:]
-        )
-    }
-    assert fields["backend"] == backend and fields["mode"] == mode, receipt
-    assert fields["status"] == fields["double_frees"] == 0, receipt
-    assert fields["tracking_flags"] == int(backend <= 2), receipt
-    assert fields["tracking_view"] == 0, receipt
-    assert fields["retired"] == fields["released"] == fields["admitted"], receipt
-    assert fields["worker_retired"] == fields["admitted"] and fields["local"] == 0, receipt
-    assert fields["pending"] == fields["state"] == fields["quarantine"] == 0, receipt
-    assert fields["sentinel_checks"] == 2, receipt
-    if fields["admitted"]:
-        assert fields["worker"] > 0 and fields["worker"] != fields["producer"], receipt
-        assert 0 < fields["peak_objects"] <= 256, receipt
-        assert 0 < fields["peak_bytes"] <= 65536, receipt
-        assert fields["chunks"] >= (fields["admitted"] + 255) // 256, receipt
-    else:
-        assert fields["chunks"] == fields["peak_objects"] == fields["peak_bytes"] == 0, receipt
-    return fields, receipt
+def test_public_collect_retires_ordinary_generators_cpython():
+    run = subprocess.run([sys.executable, "-c", PROGRAM],
+                         capture_output=True, text=True, timeout=20)
+    assert (run.returncode, run.stdout, run.stderr) == (0, EXPECTED, ""), run
 
 
 @pytest.mark.integration
-@pytest.mark.parametrize("backend", (0,), ids=lambda value: f"gc{value}")
-def test_public_collect_retires_ordinary_generators(cleared_gen_binary, backend):
-    fields, receipt = _run(cleared_gen_binary, backend, 1)
-    if backend in (1, 2):
-        # Total queue deaths need not all be generators. Independently prove
-        # most of the actual ordinary-generator addresses lost their index.
-        assert fields["admitted"] > 512 and fields["public_gen_gone"] > 512, receipt
-    else:
-        assert fields["admitted"] == 0, receipt
-    assert fields["bounded_calls"] == fields["observed_gen"] == 0, receipt
-
-
-@pytest.mark.integration
-@pytest.mark.parametrize("backend", (1, 2), ids=lambda value: f"gc{value}")
-@pytest.mark.parametrize(
-    "mode", (2, 3, 4, 5, 6, 7),
-    ids=("unstarted", "completed", "already-finalized", "suspended-pending-error",
-         "finally-resurrection", "weak-callback-resurrection"),
-)
-def test_controlled_bounded_sweep_clears_owned_gen_edges_before_retirement(
-    cleared_gen_binary, backend, mode,
+@pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
+def test_public_collect_retires_ordinary_generators(
+    python_program_compiler, request, explicit_owned_runtime, tmp_path, capfd,
 ):
-    fields, receipt = _run(cleared_gen_binary, backend, mode)
-    count = 1 if mode >= 5 else 12
-    assert fields["rejected"] == count, receipt
-    assert 1 <= fields["bounded_calls"] <= count * 4 + 1, receipt
-    if mode < 5:
-        assert fields["observed_gen"] == count, receipt
-        assert fields["observed_list"] == 3 * count, receipt
-        assert fields["admitted"] == 4 * count, receipt
-        assert fields["tracking_checks"] == count, receipt
-        assert fields["children_gone"] == 3 * count, receipt
-        assert fields["finalizers"] == fields["closes"] == 0, receipt
-        assert fields["pending_preserved"] == 0, receipt
-        assert fields["weak"] == fields["resurrection_checks"] == 0, receipt
-        if mode == 2:
-            assert fields["tracked_delta"] == 4 * count, receipt
-    elif mode in (5, 6):
-        assert 0 <= fields["first_children_dead_mask"] <= 7, receipt
-        first_children_dead = fields["first_children_gone"] + fields["first_children_pending"]
-        assert first_children_dead == fields["first_children_dead_mask"].bit_count(), receipt
-        assert fields["observed_list"] == fields["first_children_pending"], receipt
-        assert fields["actual_reclaimed"] == fields["observed_gen"] + first_children_dead, receipt
-        assert fields["public_gen_gone"] == 1 and fields["children_gone"] == 3, receipt
-        assert fields["finalizer_total"] == fields["closes"] == 1, receipt
-        # Public collection may retire other scalars as well. These total
-        # worker counters are deliberately not attributed solely to GEN.
-        assert fields["admitted"] > 0, receipt
-        assert fields["pending_preserved"] == int(mode == 5), receipt
-        if mode == 5:
-            assert fields["finalizers"] == 1, receipt
-            if fields["first_epoch_admitted"] == 1:
-                assert fields["observed_gen"] == fields["tracking_checks"] == 1, receipt
-                assert fields["retained_gen"] == 0, receipt
-            else:
-                assert fields["first_epoch_admitted"] == 0, receipt
-                assert fields["observed_gen"] == fields["tracking_checks"] == 0, receipt
-                assert fields["retained_gen"] == 1, receipt
-                assert fields["first_children_dead_mask"] & 3 == 0, receipt
-                assert fields["root_gen"] > 0 and fields["pin_gen"] & 1, receipt
-            assert fields["diagnostic_pending"] == 1, receipt
-            assert 1 <= fields["public_collections"] <= 4, receipt
-            assert fields["weak"] == fields["resurrection_checks"] == 0, receipt
-        else:
-            assert fields["first_epoch_admitted"] == fields["observed_gen"] == 0, receipt
-            assert fields["retained_gen"] == 1 and fields["tracking_checks"] == 0, receipt
-            assert fields["finalizers"] in (0, 1), receipt
-            assert fields["first_children_dead_mask"] & 3 == 0, receipt
-            if fields["finalizers"] == 0:
-                assert first_children_dead == 0, receipt
-            assert 2 <= fields["public_collections"] <= 8, receipt
-            assert fields["weak"] == fields["resurrection_checks"] == 1, receipt
-    else:
-        assert fields["observed_gen"] == fields["admitted"] == 0, receipt
-        assert fields["observed_list"] == 0, receipt
-        assert fields["weak"] == fields["resurrection_checks"] == 1, receipt
-        assert fields["children_gone"] == fields["finalizers"] == 0, receipt
-        # Weak resurrection keeps the explicit owner and its fields intact;
-        # the retained object can subsequently be closed once.
-        assert fields["closes"] == 1, receipt
+    mode = request.node.callspec.params["python_program_compiler"]
+    assert_owned_program(PROGRAM, EXPECTED, tmp_path, python_program_compiler,
+                         mode, explicit_owned_runtime, capfd)
