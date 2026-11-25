@@ -1,4 +1,4 @@
-"""Finalizers borrow a temporarily live owner; terminal leases stay forbidden."""
+"""Single-collector finalizer ownership: temporary count, TLS and resurrection."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -6,124 +6,189 @@ import textwrap
 
 import pytest
 
-from tests.python.test_foreign_address_leases import Model, _functions
+from tests.python.runtime_body_model import load_functions
 from tests.python.owned_regression_support import assert_owned_program, explicit_owned_runtime
 
 RUNTIME = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
 TERMINAL = 524288
 
 
-class FinalizerModel(Model):
-    def load(self, base, offset=0):
-        return super().load(base + offset, 0) if isinstance(base, int) else super().load(base, offset)
+class FinalizerModel:
+    """Run the live finalizer and lease bodies with a deterministic heap.
 
-    def store(self, base, offset, value):
-        if isinstance(base, int):
-            super().store(base + offset, 0, value)
-        else:
-            super().store(base, offset, value)
+    The default stable-address lease is inert. The optional refcount
+    provenance probe still exercises the checked counted-token path, not an
+    alternate collector. The temporary reference is the finalizer owner in
+    both cases.
+    """
 
-    def __init__(self, backend, *, terminal=True, resurrect=False, pending=False):
-        super().__init__(backend)
-        self.self_slot = self.object(flags=TERMINAL if terminal else 0, tag=104)
+    def __init__(self, *, terminal=True, resurrect=False, pending=False,
+                 provenance_probe=0):
+        self.memory = {}
+        self.nodes = {1000: 11000}
+        self.depth = 0
+        self.on_unlock = None
+        self.provenance_probe = provenance_probe
+        self.self_slot = 21000
+        self.store(self.self_slot, 0, 1000)
+        self.store(1000, 8, 104)
+        self.store(1000, 12, TERMINAL if terminal else 0)
         self.store(1000, 0, 0 if terminal else 2)
         self.store(1000, 16, 2000)
+        self.store('pcc_gc_config_initialized', 0, 1)
+        self.store('pcc_gc_refcount_provenance_probe', 0, provenance_probe)
         self.store('pcc_class_del_defined_count', 0, 1)
         self.store('pcc_gc_user_finalizer_runs', 0, 0)
-        self.store(4000, 0, 1)
+        self.store(4000, 0, int(pending))
         self.store(4000, 12, 64)
         self.pending = 4000 if pending else 0
+        self.saved_pending = self.pending
         self.resurrect = resurrect
-        self.marked = []
-        self.store('pcc_gc_object_head', 0, self.nodes[1000])
-        self.store(self.nodes[1000], 0, 1000)
         self.calls = 0
         self.next_slot = 50000
-        self.ns.update(C_POINTER_SIZE=8, PY_TYPE_GEN=15, PY_TYPE_INSTANCE=11,
-                       PY_TYPE_USER_CLASS_START=104, c_ptr=int,
-                       cstr=lambda value: value, ptr_add=lambda base, offset: base + offset,
-                       stack_alloc=self.alloc,
-                       pcc_capi_is_cext_type_tag=lambda tag: 0,
-                       _load_instance_cls=lambda value: self.load(value, 16),
-                       py_class_lookup=lambda cls, name: 3000,
-                       pcc_refcount_incref=lambda value: self.ref(value, 1),
-                       pcc_refcount_decref=lambda value: self.ref(value, -1),
-                       py_incref=lambda value: self.ref(value, 1),
-                       py_decref=lambda value: self.ref(value, -1),
-                       pcc_gc_mark_root_gray_if_known=self.marked.append,
-                       pcc_gc_visit_registered_root_slots=lambda *args: None,
-                       pcc_gc_pin=lambda value: self.store(value, 12, self.load(value, 12) | 64),
-                       pcc_gc_unpin=lambda value: self.store(value, 12, self.load(value, 12) & ~64),
-                       atomic_rmw_i32=lambda op, value, offset, bits, order: self.store(value, offset, self.load(value, offset) | bits),
-                       atomic_rmw_i64=self.atomic_add,
-                       py_current_exception=lambda: self.pending,
-                       py_tls_exc_set=self.set_exception,
-                       py_clear_exception=lambda: self.set_exception(0),
-                       _call_user_unary_method_void=self.callback,
-                       pcc_diagnostics_runtime_log_event_code=lambda *args: None,
-                       pcc_platform_abort=lambda: pytest.fail('finalizer owner protocol abort'))
-        _functions(RUNTIME / 'py_dunder.py', {
-            '_finalizer_owner_enter', '_finalizer_owner_leave', 'py_user_del_dispatch'
+        self.ns = dict(
+            i64=int, c_ptr=int, C_POINTER_SIZE=8,
+            PYOBJECTHEADER_FLAGS_OFFSET=12, PY_FLAG_GC_PINNED=64,
+            PY_TYPE_GEN=15, PY_TYPE_INSTANCE=11, PY_TYPE_USER_CLASS_START=104,
+            ptr_to_int=lambda value: value, ptr_is_null=lambda value: int(value == 0),
+            is_tagged_int=lambda value: int(isinstance(value, int) and value & 1),
+            ptr_eq=lambda a,b: int(a == b), null=lambda: 0,
+            global_addr=lambda name: name, global_load_ptr=lambda name: self.load(name),
+            ptr_add=lambda base, offset: base + offset, cstr=lambda value: value,
+            load_i32=self.load, load_i64=self.load, load_ptr=self.load,
+            store_i32=self.store, store_i64=self.store, store_ptr=self.store,
+            atomic_load_i32=lambda base, offset, order: self.load(base, offset),
+            atomic_load_i64=lambda base, offset, order: self.load(base, offset),
+            atomic_store_i32=lambda base, offset, value, order: self.store(base, offset, value),
+            atomic_cas_i64=self.compare_exchange,
+            atomic_rmw_i64=self.atomic_add,
+            pcc_gc_config_ensure=lambda: 0,
+            pcc_gc_object_index_find=lambda obj: self.nodes.get(obj, 0),
+            pcc_gc_resolve_root_slot_unlocked=lambda slot, offset: self.load(slot, offset),
+            pcc_gc_resolve_borrowed_root_slot_unlocked=lambda slot, offset: self.load(slot, offset),
+            pcc_gc_static_literal_contains=lambda obj: 0,
+            pcc_gc_granule_is_object_start=lambda obj: int(obj in self.nodes),
+            pcc_gc_managed_pointer_index_contains=lambda obj: 0,
+            pcc_gc_managed_pointer_index_seen=lambda obj: 0,
+            pcc_py_gc_minor_graph_lock=self.lock,
+            pcc_py_gc_minor_graph_unlock=self.unlock,
+            stack_alloc=self.alloc,
+            pcc_capi_is_cext_type_tag=lambda tag: 0,
+            _load_instance_cls=lambda value: self.load(value, 16),
+            py_class_lookup=lambda cls, name: 3000,
+            pcc_refcount_incref=lambda value: self.ref(value, 1),
+            pcc_refcount_decref=lambda value: self.ref(value, -1),
+            py_incref=lambda value: self.ref(value, 1),
+            py_decref=lambda value: self.ref(value, -1),
+            py_current_exception=lambda: self.pending,
+            py_tls_exc_set=self.set_exception,
+            py_clear_exception=lambda: self.set_exception(0),
+            _call_user_unary_method_void=self.callback,
+            pcc_diagnostics_runtime_log_event_code=lambda *args: None,
+            pcc_platform_abort=lambda: pytest.fail('finalizer owner protocol abort'),
+        )
+        load_functions(RUNTIME / 'freestanding_gc_root_operations.py', {
+            'pcc_gc_foreign_lease_acquire', 'pcc_gc_foreign_lease_release',
+            'pcc_gc_foreign_lease_count_quiescent',
+            'pcc_gc_object_is_address_pinned',
         }, self.ns)
-        _functions(RUNTIME / 'freestanding_gc_object_root_seeding.py', {
-            'pcc_gc_gray_current_roots'
-        }, self.ns)
-        # The root walk reads each listed node's own pin state.
-        _functions(RUNTIME / 'freestanding_gc_root_operations.py', {
-            'pcc_gc_object_node_is_address_pinned'
+        load_functions(RUNTIME / 'py_dunder.py', {
+            '_finalizer_owner_enter', '_finalizer_owner_leave', 'py_user_del_dispatch',
         }, self.ns)
         self.on_unlock = self.boundary
+
+    def load(self, base, offset=0):
+        key = base + offset if isinstance(base, int) else (base, offset)
+        return self.memory.get(key, 0)
+
+    def store(self, base, offset, value):
+        key = base + offset if isinstance(base, int) else (base, offset)
+        self.memory[key] = value
 
     def alloc(self, size):
         self.next_slot += size
         return self.next_slot
 
+    def compare_exchange(self, base, offset, expected, desired, success, failure):
+        observed = self.load(base, offset)
+        if observed == expected:
+            self.store(base, offset, desired)
+        return observed
+
+    def lock(self):
+        self.depth += 1
+
+    def unlock(self):
+        self.depth -= 1
+        assert self.depth >= 0
+        if self.depth == 0 and self.on_unlock:
+            hook, self.on_unlock = self.on_unlock, None
+            hook()
+
     def atomic_add(self, op, base, offset, delta, order):
-        # py_user_del_dispatch counts each user finalizer run.
         assert op == "add"
         previous = self.load(base, offset)
         self.store(base, offset, previous + delta)
         return previous
 
     def ref(self, value, change):
+        if not value:
+            return 0
         count = self.load(value, 0) + change
         assert count >= 0
         self.store(value, 0, count)
         return count
 
     def set_exception(self, value):
+        # The actual setter transfers a counted owner into TLS.
+        previous = self.pending
+        self.ref(value, 1)
         self.pending = value
+        self.ref(previous, -1)
+
+    def acquire(self, slot):
+        return self.ns['pcc_gc_foreign_lease_acquire'](slot)
+
+    def release(self, slot, token):
+        return self.ns['pcc_gc_foreign_lease_release'](slot, token)
+
+    def count(self):
+        return self.load(self.nodes[1000], 80)
+
+    def active(self):
+        return self.ns['pcc_gc_foreign_lease_count_quiescent']()
 
     def boundary(self):
-        assert self.pinned() == 1 and self.count() == 1
+        expected_token = int(self.provenance_probe != 0)
+        assert self.count() == self.active() == expected_token
+        assert self.ns['pcc_gc_object_is_address_pinned'](1000) == expected_token
         assert self.load(1000, 0) > 0
         assert not self.load(1000, 12) & TERMINAL
-        self.marked.clear()
-        self.ns['pcc_gc_gray_current_roots']()
-        assert self.marked == [1000]
 
     def callback(self, func, value):
-        assert self.depth == 0
+        assert self.depth == 0 and self.pending == 0
+        if self.saved_pending:
+            assert self.load(self.saved_pending, 0) == 1
         self.calls += 1
         self.boundary()
-        # Execute the real lease body for a callback's self argument. A legacy
-        # helper's unpin must not undo the independent finalizer address lease.
         token = self.acquire(self.self_slot)
-        assert token == 1 and self.count() == 2
-        self.store(value, 12, self.load(value, 12) & ~64)
+        expected_token = int(self.provenance_probe != 0)
+        assert token == expected_token and self.count() == 2 * expected_token
         assert self.release(self.self_slot, token) == 0
         self.boundary()
+        # Preserve unrelated flags, and model a real resurrection owner.
         self.store(value, 12, self.load(value, 12) | 32)
         if self.resurrect:
             self.ref(value, 1)
-        self.pending = 6000  # A finalizer error must not replace caller TLS.
+        self.set_exception(6000)
 
 
-@pytest.mark.parametrize('backend', (0,))
+@pytest.mark.parametrize('provenance_probe', (0, 2))
 @pytest.mark.parametrize('scenario', ('dealloc', 'resurrect', 'cycle', 'pending-error'))
-def test_actual_finalizer_body_preserves_owner_leases_flags_and_exception(backend, scenario):
-    m = FinalizerModel(backend, terminal=scenario != 'cycle',
-                       resurrect=scenario == 'resurrect', pending=scenario == 'pending-error')
+def test_actual_finalizer_body_preserves_owner_flags_and_exception(provenance_probe, scenario):
+    m = FinalizerModel(terminal=scenario != 'cycle',
+                       resurrect=scenario == 'resurrect', pending=scenario == 'pending-error',
+                       provenance_probe=provenance_probe)
     before = m.load(1000, 0)
     m.ns['py_user_del_dispatch'](1000)
     assert m.calls == 1 and m.depth == 0
@@ -133,23 +198,27 @@ def test_actual_finalizer_body_preserves_owner_leases_flags_and_exception(backen
     assert flags & 4 and flags & 32
     assert bool(flags & TERMINAL) == (scenario in ('dealloc', 'pending-error'))
     assert m.pending == (4000 if scenario == 'pending-error' else 0)
+    assert m.load(6000, 0) == 0
     if scenario == 'pending-error':
         assert m.load(4000, 0) == 1 and m.load(4000, 12) & 64
     m.ns['py_user_del_dispatch'](1000)
-    assert m.calls == 1  # The finalized bit survives the callback transition.
+    assert m.calls == 1
 
 
-def test_terminal_object_still_rejects_an_ordinary_lease():
-    m = FinalizerModel(4)
+@pytest.mark.parametrize('provenance_probe, expected', [(0, 0), (2, -1)])
+def test_terminal_address_probe_has_the_single_collector_contract(provenance_probe, expected):
+    m = FinalizerModel(provenance_probe=provenance_probe)
     m.on_unlock = None
-    assert m.acquire(m.self_slot) == -1
+    assert m.acquire(m.self_slot) == expected
     assert m.active() == 0 and m.load(1000, 0) == 0
 
 
-def test_counted_lease_is_a_production_collector_root_without_a_frame():
-    m = FinalizerModel(4)
+@pytest.mark.parametrize('provenance_probe', (0, 2))
+def test_temporary_finalizer_reference_owns_terminal_instance(provenance_probe):
+    m = FinalizerModel(provenance_probe=provenance_probe)
     token = m.ns['_finalizer_owner_enter'](m.self_slot)
     m.boundary()
+    assert m.load(1000, 0) == 1
     m.ns['_finalizer_owner_leave'](m.self_slot, token, TERMINAL)
     assert m.load(1000, 0) == 0 and m.load(1000, 12) & TERMINAL
     assert m.count() == 0 and m.active() == 0
@@ -227,10 +296,11 @@ PROGRAM = textwrap.dedent('''\
 
 @pytest.mark.integration
 @pytest.mark.parametrize('python_program_compiler', ('pcc0', 'pcc1'), indirect=True)
-def test_finalizer_callback_owner_native_five_gc(python_program_compiler, request,
+@pytest.mark.parametrize('provenance_probe', ('0', '2'))
+def test_finalizer_callback_owner_native_single_collector(python_program_compiler, provenance_probe, request,
                                                 explicit_owned_runtime, tmp_path, capfd):
     mode = request.node.callspec.params['python_program_compiler']
     assert_owned_program(PROGRAM, 'FINALIZER_CALLBACK_LEASE_OK\n', tmp_path,
                          python_program_compiler, mode, explicit_owned_runtime,
-                         capfd, provenance_probe='2')
+                         capfd, provenance_probe=provenance_probe)
     assert (tmp_path / 'compiler-wrapper.stderr').read_text() == ''

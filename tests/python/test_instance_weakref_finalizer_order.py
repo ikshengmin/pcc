@@ -4,20 +4,20 @@ from pathlib import Path
 import pytest
 
 from tests.python.test_finalizer_callback_lease import FinalizerModel, TERMINAL
-from tests.python.test_foreign_address_leases import _functions
+from tests.python.runtime_body_model import load_functions
 
 RUNTIME = Path(__file__).resolve().parents[2] / 'pcc/runtime/py'
 
 
 class DeallocationModel(FinalizerModel):
-    def __init__(self, backend, *, resurrect=False, pending=False, tag=104):
+    def __init__(self, *, resurrect=False, pending=False, tag=104, provenance_probe=0):
         self.lifecycle = []
         self.weakref_live = True
         self.freed = False
         self.tracked = []
         # pcc_gc_free_watch_begin/end records: [object, noted].
         self.watches = []
-        super().__init__(backend, resurrect=resurrect, pending=pending)
+        super().__init__(resurrect=resurrect, pending=pending, provenance_probe=provenance_probe)
         self.tag = tag
         self.store(1000, 8, tag)
         # The process holds weakrefs, so a death walks the weakref list.
@@ -42,15 +42,15 @@ class DeallocationModel(FinalizerModel):
             PY_FLAG_GC_TRACKED=2,
             py_gc_track=self.tracked.append,
             pcc_dealloc_with_trash=self.dispatch,
-            _gc_backend_selected_fast=lambda: backend,
+            _gc_backend_selected_fast=lambda: 0,
             pcc_gc_pointer_is_managed=lambda value: int(value in self.nodes),
             _dealloc_ptr_is_instance=lambda value: True,
             pcc_gc_load_ptr=lambda owner, slot: self.load(slot),
             pcc_gc_store_ptr=lambda owner, slot, value: self.store(slot, 0, value),
             pcc_gc_free_object_memory=self.free,
         )
-        _functions(RUNTIME / 'py_obj.py', {'_py_decref_finish'}, self.ns)
-        _functions(RUNTIME / 'py_class.py', {
+        load_functions(RUNTIME / 'py_obj.py', {'_py_decref_finish'}, self.ns)
+        load_functions(RUNTIME / 'py_class.py', {
             '_instance_storage_slot_count', '_instance_reserved_owner_slot',
             '_instance_builtin_payload_slot', 'py_instance_dealloc',
         }, self.ns)
@@ -100,16 +100,16 @@ class DeallocationModel(FinalizerModel):
     def finish(self):
         prepared = self.alloc(64)
         for offset, value in ((0, 1000), (8, self.tag), (16, self.load(1000, 12)),
-                              (24, self.load('pcc_gc_backend_selected')), (32, 0),
+                              (24, 0), (32, 0),
                               (40, 1), (48, 0)):
             self.store(prepared, offset, value)
         self.ns['_py_decref_finish'](prepared)
 
 
-@pytest.mark.parametrize('backend', (0,))
+@pytest.mark.parametrize('provenance_probe', (0, 2))
 @pytest.mark.parametrize('pending', (False, True))
-def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
-    model = DeallocationModel(backend, pending=pending)
+def test_actual_deallocation_finalizes_before_weakrefs(provenance_probe, pending):
+    model = DeallocationModel(provenance_probe=provenance_probe, pending=pending)
     model.finish()
     assert model.lifecycle.index('finalizer') < model.lifecycle.index('weakref')
     assert model.lifecycle.index('weakref') < model.lifecycle.index('free')
@@ -119,10 +119,10 @@ def test_actual_deallocation_finalizes_before_weakrefs(backend, pending):
     assert model.count() == model.active() == model.depth == 0
 
 
-@pytest.mark.parametrize('backend', (0,))
+@pytest.mark.parametrize('provenance_probe', (0, 2))
 @pytest.mark.parametrize('pending', (False, True))
-def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
-    model = DeallocationModel(backend, resurrect=True, pending=pending)
+def test_actual_resurrection_keeps_weakrefs_until_final_drop(provenance_probe, pending):
+    model = DeallocationModel(provenance_probe=provenance_probe, resurrect=True, pending=pending)
     model.finish()
     assert model.lifecycle == ['finalizer']
     assert model.tracked == [1000]
@@ -140,19 +140,19 @@ def test_actual_resurrection_keeps_weakrefs_until_final_drop(backend, pending):
     assert model.pending == (4000 if pending else 0)
 
 
-@pytest.mark.parametrize('backend', (0,))
+@pytest.mark.parametrize('provenance_probe', (0, 2))
 @pytest.mark.parametrize('tag', (5, 65536))
-def test_builtin_and_extension_keep_generic_invalidation(backend, tag):
-    model = DeallocationModel(backend, tag=tag)
+def test_builtin_and_extension_keep_generic_invalidation(provenance_probe, tag):
+    model = DeallocationModel(provenance_probe=provenance_probe, tag=tag)
     model.finish()
     assert model.calls == 0 and model.freed
     assert model.lifecycle.index('weakref') < model.lifecycle.index('generic-dealloc')
 
 
-@pytest.mark.parametrize('backend', (0,))
+@pytest.mark.parametrize('provenance_probe', (0, 2))
 @pytest.mark.parametrize('resurrect', (False, True))
-def test_builtin_payload_owner_is_detached_only_on_terminal_deallocation(backend, resurrect):
-    model = DeallocationModel(backend, resurrect=resurrect)
+def test_builtin_payload_owner_is_detached_only_on_terminal_deallocation(provenance_probe, resurrect):
+    model = DeallocationModel(provenance_probe=provenance_probe, resurrect=resurrect)
     cls = model.load(1000, 16)
     # One declared field, the reserved owner and one builtin payload owner.
     model.store(cls, model.ns['PYCLASSOBJECT_N_FIELDS_OFFSET'], 1)

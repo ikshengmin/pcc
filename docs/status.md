@@ -600,9 +600,19 @@ in the relevant section or issue and removes the entry.
    native output and clean TLS. The prune report no longer marks this
    model file. Adjacent instance-finalizer tests still depend on removed
    lease-freeze/thaw models; migrate those independently, not by skipping.
-   Next: other independent (b) lifetime tests; investigate the parent-cycle
-   order in runtime-gc and the may_park frontend boundary separately.
-   Do not wait for the local Mac.
+   (b) finalizer/instance weakref ownership: the current body witnesses
+   no longer import the removed lease-freeze/thaw or count-free root
+   seeding model. They run the live finalizer, refcount tail and instance
+   deallocator with the stable default owner and the optional checked
+   provenance probe; temporary counted ownership, TLS, reentry,
+   resurrection, weakref ordering and payload/class release remain tested.
+   Linux at `3e4e3f55`, source-matched 192-member runtime: 28 source-body
+   controls and two pcc0 native/CPython comparisons passed, including both
+   provenance settings. pcc1 nodes remain in hosted CI. Both test files
+   no longer appear in the prune report; no production runtime change.
+   Next: migrate other independent (b) lifetime tests; investigate the
+   parent-cycle order and may_park frontend boundary separately. Do not
+   wait for the local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -869,7 +879,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (d) 4b runtime takes, second batch (py_dunder, py_os_mkdir, py_module_attrs_runtime, py_exc_tls, py_list, py_obj_stubs, py_int_convert, py_set, py_tuple): Claude, macOS, 2026-11-25T16:24Z, area runtime-codegen
-   - (b) finalizer and instance weakref ownership witnesses: Codex, Linux, 2026-11-25T17:23Z, area runtime-gc (finalizer and instance test models only)
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
