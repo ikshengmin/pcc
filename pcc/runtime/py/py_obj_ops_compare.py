@@ -120,8 +120,6 @@ pcc_gc_release       = extern("pcc_gc_release",       (c_ptr,),                 
 pcc_gc_scheduler_root_unregister_handle = extern(
     "pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void
 )
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_exc_new           = extern("py_exc_new",           (c_int64, c_ptr),            c_ptr)
 py_raise             = extern("py_raise",             (c_ptr,),                    c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -1635,7 +1633,7 @@ _TIM_STATE_BYTES = 1584
 
 def _tim_less(slots, tokens, first: int, second: int) -> int:
     # ``first`` < ``second`` by key index: 1/0, or -1 with an exception set.
-    # Without tokens, ``slots`` is py_obj_sorted's private pinned work list
+    # Without tokens, ``slots`` is py_obj_sorted's private work list
     # and the indices name its own elements.
     if ptr_is_null(tokens) != 0:
         items = load_ptr(slots, PYLISTOBJECT_ITEMS_OFFSET)
@@ -2657,7 +2655,6 @@ def py_obj_sorted(x):
         if ptr_is_null(x_handle) == 0:
             pcc_gc_scheduler_root_unregister_handle(x_handle)
         return null()
-    pcc_gc_pin(out)
     if _type_of(x) == PY_TYPE_DICT:
         # dict -> sort its keys. py_obj_getitem(dict, int) would look up the
         # int as a KEY (returns NULL -> [<null>,...]); use py_dict_keys instead.
@@ -2666,7 +2663,6 @@ def py_obj_sorted(x):
         # default mode still fall to the indexable else-path, a follow-on.)
         keys = py_dict_keys(x)
         if ptr_is_null(keys) == 0:
-            pcc_gc_pin(keys)
             nk: int = py_list_len(keys)
             ki: int = 0
             while ki < nk:
@@ -2674,7 +2670,6 @@ def py_obj_sorted(x):
                 py_list_append(out, el)
                 py_decref(el)
                 ki = ki + 1
-            pcc_gc_unpin(keys)
             py_decref(keys)
     else:
         # General length-less iterable (custom __iter__/__next__ class,
@@ -2710,7 +2705,7 @@ def py_obj_sorted(x):
     m: int = py_list_len(out)
     if m > 1:
         # CPython's listsort over an index array (_sorted_merge_indices),
-        # comparing the private pinned work list's own elements, so an
+        # comparing the private work list's own elements, so an
         # inconsistent order (NaN) and ties come out as CPython orders them.
         order = malloc(m * 8)
         positions = malloc(m * 8)
@@ -2730,7 +2725,6 @@ def py_obj_sorted(x):
                 if ptr_is_null(x_handle) == 0:
                     pcc_gc_scheduler_root_unregister_handle(x_handle)
                 return null()
-            pcc_gc_unpin(out)
             if ptr_is_null(x_handle) == 0:
                 pcc_gc_scheduler_root_unregister_handle(x_handle)
             return out
@@ -2764,12 +2758,10 @@ def py_obj_sorted(x):
             if insertion_failed != 0:
                 j = m
         if insertion_failed != 0:
-            pcc_gc_unpin(out)
             py_decref(out)
             if ptr_is_null(x_handle) == 0:
                 pcc_gc_scheduler_root_unregister_handle(x_handle)
             return null()
-    pcc_gc_unpin(out)
     if ptr_is_null(x_handle) == 0:
         pcc_gc_scheduler_root_unregister_handle(x_handle)
     return out
@@ -2782,10 +2774,9 @@ def py_obj_contains_borrowed(container_slot, needle) -> int:
     """``needle in container`` for a stable borrowed parameter's slot.
 
     The needle is permanent image storage (a literal). A str container
-    searched for a str runs no user code, gate or callback, and collectors
-    relocate only at gates, so one borrowed read-barrier load serves with no
-    retain or pin. Any other container keeps the retain and pin the generic
-    membership lowering places around py_obj_contains.
+    searched for a str runs no user code, gate or callback, so one borrowed
+    load serves with no retain. Any other container keeps the retain the
+    generic membership lowering places around py_obj_contains.
     """
     container = pcc_gc_load_borrowed_ptr(null(), container_slot)
     if (ptr_is_null(container) == 0 and is_tagged_int(container) == 0
@@ -2794,9 +2785,7 @@ def py_obj_contains_borrowed(container_slot, needle) -> int:
             and load_i32(needle, PYOBJECTHEADER_TYPE_TAG_OFFSET) == PY_TYPE_STR):
         return 1 if py_str_contains(container, needle) != 0 else 0
     held = pcc_gc_retain(container)
-    pcc_gc_pin(held)
     result: int = py_obj_contains(held, needle)
-    pcc_gc_unpin(held)
     pcc_gc_release(held)
     return result
 

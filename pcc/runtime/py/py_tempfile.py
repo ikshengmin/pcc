@@ -16,14 +16,14 @@ from pcc.extern import (
     extern, c_abi_export, c_int32, c_int64, c_ptr, c_void,
 )
 from pcc.runtime.py.py_abi_constants import (
-    C_POINTER_SIZE, PYOBJECTHEADER_FLAGS_OFFSET, PYOBJECTHEADER_TYPE_TAG_OFFSET,
-    PY_FLAG_GC_PINNED, PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_BYTEARRAY,
+    C_POINTER_SIZE, PYOBJECTHEADER_TYPE_TAG_OFFSET,
+    PY_TYPE_STR, PY_TYPE_BYTES, PY_TYPE_BYTEARRAY,
     PY_TYPE_MEMORYVIEW, PY_TYPE_LIST,
     PY_TYPE_INT, PY_TYPE_BOOL,
     PYSTROBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_BYTE_LEN_OFFSET, PYBYTESOBJECT_DATA_OFFSET,
 )
 from pcc.unsafe import (
-    atomic_cas_i64, atomic_load_i64, atomic_rmw_i32, close, cstr, function_addr, define_global_i32,
+    atomic_cas_i64, atomic_load_i64, close, cstr, function_addr, define_global_i32,
     define_global_i64, define_global_ptr_null, free, global_addr,
     global_load_ptr, global_store_ptr, int_to_ptr, is_tagged_int,
     load_i8, load_i32, load_i64, load_ptr, malloc, memcpy, memset,
@@ -87,12 +87,10 @@ py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
@@ -234,40 +232,24 @@ def _td_error(tag: int, message):
     return null()
 
 
-def _td_hold(slots, pins, index: int, value) -> None:
+def _td_hold(slots, index: int, value) -> None:
     # A NEW return enters its registered slot before the next safepoint.
-    offset: int = index * C_POINTER_SIZE
     if ptr_is_null(value) and not py_err_occurred():
         _td_error(19, cstr("TemporaryDirectory owned object allocation failed"))
-    store_ptr(slots, offset, value)
-    if not ptr_is_null(value) and not is_tagged_int(value):
-        store_i64(pins, offset, load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & PY_FLAG_GC_PINNED)
-        pcc_gc_pin(value)
+    store_ptr(slots, index * C_POINTER_SIZE, value)
 
 
-def _td_drop(slots, pins, index: int) -> None:
-    offset: int = index * C_POINTER_SIZE
-    value = load_ptr(slots, offset)
-    if not ptr_is_null(value) and not is_tagged_int(value):
-        pcc_gc_unpin(value)
-        keep_result: int = ptr_eq(value, load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE))
-        if keep_result and not load_i64(pins, offset):
-            store_i64(pins, _TD_OUTPUT * C_POINTER_SIZE, 0)
-        if load_i64(pins, offset) or keep_result:
-            atomic_rmw_i32("or", value, PYOBJECTHEADER_FLAGS_OFFSET,
-                           PY_FLAG_GC_PINNED, "relaxed")
-    pcc_gc_store_root(ptr_add(slots, offset), null())
-    store_i64(pins, offset, 0)
+def _td_drop(slots, index: int) -> None:
+    pcc_gc_store_root(ptr_add(slots, index * C_POINTER_SIZE), null())
 
 
-def _td_finish(slots, pins):
+def _td_finish(slots):
     index: int = _TD_OUTPUT
     while index > 0:
         index = index - 1
-        _td_drop(slots, pins, index)
+        _td_drop(slots, index)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE),
-                                   load_i64(pins, _TD_OUTPUT * C_POINTER_SIZE))
+    return pcc_gc_take_slot(ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE))
 
 
 def _td_mutex():
@@ -297,34 +279,32 @@ def _td_os_error(status: int, name):
     elif status == -20:
         tag = 38
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(name)
-    _td_hold(slots, pins, 0, name)
+    _td_hold(slots, 0, name)
     message = stack_alloc(256)
     errno_message(0 - status, message, 256)
-    _td_hold(slots, pins, 1, py_exc_new(tag, message))
-    _td_hold(slots, pins, 2, py_int_from_i64(0 - status))
-    _td_hold(slots, pins, 3, py_str_new(message, strlen(message)))
-    _td_hold(slots, pins, 4, py_tuple_new(2))
+    _td_hold(slots, 1, py_exc_new(tag, message))
+    _td_hold(slots, 2, py_int_from_i64(0 - status))
+    _td_hold(slots, 3, py_str_new(message, strlen(message)))
+    _td_hold(slots, 4, py_tuple_new(2))
     exc = load_ptr(slots, C_POINTER_SIZE)
     if not ptr_is_null(exc) and not py_err_occurred():
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), 0, load_ptr(slots, 2 * C_POINTER_SIZE))
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), 1, load_ptr(slots, 3 * C_POINTER_SIZE))
         if py_obj_setattr(exc, cstr("errno"), load_ptr(slots, 2 * C_POINTER_SIZE)) != 0:
-            return _td_finish(slots, pins)
+            return _td_finish(slots)
         if py_obj_setattr(exc, cstr("strerror"), load_ptr(slots, 3 * C_POINTER_SIZE)) != 0:
-            return _td_finish(slots, pins)
+            return _td_finish(slots)
         if py_obj_setattr(exc, cstr("filename"), load_ptr(slots, 0)) != 0:
-            return _td_finish(slots, pins)
+            return _td_finish(slots)
         if py_obj_setattr(exc, cstr("args"), load_ptr(slots, 4 * C_POINTER_SIZE)) != 0:
-            return _td_finish(slots, pins)
+            return _td_finish(slots)
         if not py_err_occurred():
             py_incref(exc)
             py_raise_owned(exc)
-    return _td_finish(slots, pins)
+    return _td_finish(slots)
 
 
 def _td_text(value, default):
@@ -379,23 +359,21 @@ def _td_windows_path_template(root, prefix, suffix) -> c_ptr:
     # Use the existing owned Windows drive/UNC join implementation, and fix
     # the absolute spelling BEFORE creation (never resolve a later cwd).
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     raw = _td_path_template(cstr(""), prefix, suffix)
     result = null()
     if not ptr_is_null(raw):
-        _td_hold(slots, pins, 0, py_str_new(root, strlen(root)))
-        _td_hold(slots, pins, 1, py_str_new(raw, strlen(raw)))
+        _td_hold(slots, 0, py_str_new(root, strlen(root)))
+        _td_hold(slots, 1, py_str_new(raw, strlen(raw)))
         free(raw)
-        _td_hold(slots, pins, 2, py_tuple_new(2))
+        _td_hold(slots, 2, py_tuple_new(2))
         if not py_err_occurred():
             py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), 0, load_ptr(slots, 0))
             py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), 1, load_ptr(slots, C_POINTER_SIZE))
-            _td_hold(slots, pins, 3, py_os_path_join(load_ptr(slots, 2 * C_POINTER_SIZE)))
+            _td_hold(slots, 3, py_os_path_join(load_ptr(slots, 2 * C_POINTER_SIZE)))
             if not py_err_occurred():
-                _td_hold(slots, pins, 4, py_os_path_abspath(load_ptr(slots, 3 * C_POINTER_SIZE)))
+                _td_hold(slots, 4, py_os_path_abspath(load_ptr(slots, 3 * C_POINTER_SIZE)))
                 if not py_err_occurred():
                     text = py_str_utf8(load_ptr(slots, 4 * C_POINTER_SIZE))
                     if not ptr_is_null(text):
@@ -403,7 +381,7 @@ def _td_windows_path_template(root, prefix, suffix) -> c_ptr:
                         result = malloc(length + 1)
                         if not ptr_is_null(result):
                             memcpy(result, text, length + 1)
-    _td_finish(slots, pins)
+    _td_finish(slots)
     return result
 
 
@@ -438,7 +416,7 @@ def _td_remove_created(path, owner) -> int:
     return remove_tree(path)
 
 
-def _td_mkdtemp(suffix, prefix, directory, slots, pins, owner):
+def _td_mkdtemp(suffix, prefix, directory, slots, owner):
     store_ptr(owner, 0, null())
     suffix_raw = _td_text(suffix, cstr(""))
     if ptr_is_null(suffix_raw):
@@ -472,17 +450,17 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins, owner):
             elif windows and candidate == 3:
                 root = getenv(cstr("USERPROFILE"))
                 if not ptr_is_null(root) and load_i8(root, 0) != 0:
-                    _td_hold(slots, pins, 12, py_str_new(root, strlen(root)))
-                    _td_hold(slots, pins, 13, py_str_new(cstr("\\AppData\\Local\\Temp"), 19))
-                    _td_hold(slots, pins, 14, py_str_concat(load_ptr(slots, 12 * C_POINTER_SIZE), load_ptr(slots, 13 * C_POINTER_SIZE)))
+                    _td_hold(slots, 12, py_str_new(root, strlen(root)))
+                    _td_hold(slots, 13, py_str_new(cstr("\\AppData\\Local\\Temp"), 19))
+                    _td_hold(slots, 14, py_str_concat(load_ptr(slots, 12 * C_POINTER_SIZE), load_ptr(slots, 13 * C_POINTER_SIZE)))
                     if not py_err_occurred():
                         root = py_str_utf8(load_ptr(slots, 14 * C_POINTER_SIZE))
             elif windows and candidate == 4:
                 root = getenv(cstr("SYSTEMROOT"))
                 if not ptr_is_null(root) and load_i8(root, 0) != 0:
-                    _td_hold(slots, pins, 15, py_str_new(root, strlen(root)))
-                    _td_hold(slots, pins, 16, py_str_new(cstr("\\Temp"), 5))
-                    _td_hold(slots, pins, 17, py_str_concat(load_ptr(slots, 15 * C_POINTER_SIZE), load_ptr(slots, 16 * C_POINTER_SIZE)))
+                    _td_hold(slots, 15, py_str_new(root, strlen(root)))
+                    _td_hold(slots, 16, py_str_new(cstr("\\Temp"), 5))
+                    _td_hold(slots, 17, py_str_concat(load_ptr(slots, 15 * C_POINTER_SIZE), load_ptr(slots, 16 * C_POINTER_SIZE)))
                     if not py_err_occurred():
                         root = py_str_utf8(load_ptr(slots, 17 * C_POINTER_SIZE))
             elif windows and candidate == 5:
@@ -524,13 +502,13 @@ def _td_mkdtemp(suffix, prefix, directory, slots, pins, owner):
     if ptr_is_null(path):
         failed_path = load_ptr(status, C_POINTER_SIZE)
         if not ptr_is_null(failed_path):
-            _td_hold(slots, pins, 8, py_str_new(failed_path, strlen(failed_path)))
+            _td_hold(slots, 8, py_str_new(failed_path, strlen(failed_path)))
             free(failed_path)
             if not ptr_is_null(load_ptr(slots, 8 * C_POINTER_SIZE)) and not py_err_occurred():
                 return _td_os_error(load_i64(status, 0), load_ptr(slots, 8 * C_POINTER_SIZE))
             return null()
         return _td_os_error(load_i64(status, 0), directory)
-    _td_hold(slots, pins, 8, py_str_new(path, strlen(path)))
+    _td_hold(slots, 8, py_str_new(path, strlen(path)))
     if ptr_is_null(load_ptr(slots, 8 * C_POINTER_SIZE)):
         _td_remove_created(path, owner)
         free(path)
@@ -673,56 +651,50 @@ def _td_windows_cleanup(state, delete: int, terminal: int) -> int:
 
 def _td_finalize_state(state) -> None:
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(state)
-    _td_hold(slots, pins, 0, state)
+    _td_hold(slots, 0, state)
     if load_i8(target_sys_platform(), 0) == 119:
-        _td_hold(slots, pins, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
+        _td_hold(slots, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
         should_delete: int = py_obj_truthy(load_ptr(slots, C_POINTER_SIZE))
         # Even a failing user truth conversion must release the OS resource
         # and registry entry; shutdown must not revisit an undetachable node.
         status: int = _td_windows_cleanup(load_ptr(slots, 0),
             should_delete if not py_err_occurred() else 0, 1)
         if status < 0 and not py_err_occurred():
-            _td_hold(slots, pins, 2, py_list_get(load_ptr(slots, 0), _TD_NAME))
-            _td_hold(slots, pins, 3, py_list_get(load_ptr(slots, 0), _TD_IGNORE))
+            _td_hold(slots, 2, py_list_get(load_ptr(slots, 0), _TD_NAME))
+            _td_hold(slots, 3, py_list_get(load_ptr(slots, 0), _TD_IGNORE))
             ignored: int = py_obj_truthy(load_ptr(slots, 3 * C_POINTER_SIZE))
             if not ignored and not py_err_occurred():
                 _td_os_error(status, load_ptr(slots, 2 * C_POINTER_SIZE))
     elif _td_detach(load_ptr(slots, 0)):
-        _td_hold(slots, pins, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
+        _td_hold(slots, 1, py_list_get(load_ptr(slots, 0), _TD_DELETE))
         should_delete: int = py_obj_truthy(load_ptr(slots, C_POINTER_SIZE))
         if should_delete and not py_err_occurred():
-            _td_hold(slots, pins, 2, py_list_get(load_ptr(slots, 0), _TD_NAME))
-            _td_hold(slots, pins, 3, py_list_get(load_ptr(slots, 0), _TD_IGNORE))
+            _td_hold(slots, 2, py_list_get(load_ptr(slots, 0), _TD_NAME))
+            _td_hold(slots, 3, py_list_get(load_ptr(slots, 0), _TD_IGNORE))
             _td_remove(load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE))
-    _td_finish(slots, pins)
+    _td_finish(slots)
 
 
 def _td_weakref_callback(captures, args):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_tuple_get(captures, 0))
+    _td_hold(slots, 0, py_tuple_get(captures, 0))
     if not ptr_is_null(load_ptr(slots, 0)):
         _td_finalize_state(load_ptr(slots, 0))
     if not py_err_occurred():
         py_incref(_td_none())
-        _td_hold(slots, pins, _TD_OUTPUT, _td_none())
-    return _td_finish(slots, pins)
+        _td_hold(slots, _TD_OUTPUT, _td_none())
+    return _td_finish(slots)
 
 
 def _td_shutdown() -> None:
     # Reverse creation order, as weakref.finalize's default atexit policy.
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     mutex = _td_mutex()
     while not ptr_is_null(mutex):
@@ -738,26 +710,24 @@ def _td_shutdown() -> None:
         pcc_gc_foreign_lease_release(slots, token)
         pcc_gc_store_root(slots, null())
         py_clear_exception()
-    _td_finish(slots, pins)
+    _td_finish(slots)
 
 
 @c_abi_export("pcc_tempdir_init_entry")
 def _td_init(captures, args):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     owner = stack_alloc(C_POINTER_SIZE)
     store_ptr(owner, 0, null())
     index: int = 0
     while index < 6:
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
-    _td_hold(slots, pins, 6, _td_mkdtemp(load_ptr(slots, C_POINTER_SIZE),
-        load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE), slots, pins, owner))
+    _td_hold(slots, 6, _td_mkdtemp(load_ptr(slots, C_POINTER_SIZE),
+        load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE), slots, owner))
     if not ptr_is_null(load_ptr(slots, 6 * C_POINTER_SIZE)):
-        _td_hold(slots, pins, 7, py_list_new(4))
+        _td_hold(slots, 7, py_list_new(4))
         state = load_ptr(slots, 7 * C_POINTER_SIZE)
         if not ptr_is_null(state) and not py_err_occurred():
             # py_list_new reserves capacity, not logical elements. Populate
@@ -774,13 +744,13 @@ def _td_init(captures, args):
                 if not py_err_occurred() and state_length != 4:
                     _td_error(19, cstr("TemporaryDirectory finalizer state initialization failed"))
         if not ptr_is_null(state) and not py_err_occurred():
-            _td_hold(slots, pins, 9, py_tuple_new(1))
+            _td_hold(slots, 9, py_tuple_new(1))
             if not ptr_is_null(load_ptr(slots, 9 * C_POINTER_SIZE)):
                 py_tuple_set_item(load_ptr(slots, 9 * C_POINTER_SIZE), 0, state)
-                _td_hold(slots, pins, 10, py_func_new_named(_td_weakref_callback,
+                _td_hold(slots, 10, py_func_new_named(_td_weakref_callback,
                     load_ptr(slots, 9 * C_POINTER_SIZE), cstr("TemporaryDirectory finalizer")))
                 if not ptr_is_null(load_ptr(slots, 10 * C_POINTER_SIZE)):
-                    _td_hold(slots, pins, 11, py_weakref_new(load_ptr(slots, 0),
+                    _td_hold(slots, 11, py_weakref_new(load_ptr(slots, 0),
                         load_ptr(slots, 10 * C_POINTER_SIZE)))
                     if not ptr_is_null(load_ptr(slots, 11 * C_POINTER_SIZE)) and not py_err_occurred():
                         if _td_register(state, load_ptr(owner, 0)) == 0:
@@ -800,14 +770,14 @@ def _td_init(captures, args):
                                 py_obj_setattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state"), state)
                                 if not py_err_occurred():
                                     py_incref(_td_none())
-                                    _td_hold(slots, pins, _TD_OUTPUT, _td_none())
+                                    _td_hold(slots, _TD_OUTPUT, _td_none())
         if ptr_is_null(load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE)):
             # Preserve the constructor error while cleanup executes. A pending
             # exception must neither skip rollback nor be replaced by it.
             py_tls_exc_swap_slot(ptr_add(slots, _TD_SAVED_ERROR * C_POINTER_SIZE))
             saved = load_ptr(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
             if not ptr_is_null(saved):
-                _td_hold(slots, pins, _TD_SAVED_ERROR, saved)
+                _td_hold(slots, _TD_SAVED_ERROR, saved)
             if load_i8(target_sys_platform(), 0) == 119:
                 if not ptr_is_null(load_ptr(slots, 7 * C_POINTER_SIZE)):
                     _td_windows_cleanup(load_ptr(slots, 7 * C_POINTER_SIZE), 1, 1)
@@ -821,14 +791,10 @@ def _td_init(captures, args):
             py_clear_exception()
             saved = load_ptr(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
             if not ptr_is_null(saved):
-                pcc_gc_unpin(saved)
-                if load_i64(pins, _TD_SAVED_ERROR * C_POINTER_SIZE):
-                    atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET,
-                                   PY_FLAG_GC_PINNED, "relaxed")
                 py_tls_exc_swap_slot(ptr_add(slots, _TD_SAVED_ERROR * C_POINTER_SIZE))
             if not py_err_occurred():
                 _td_error(19, cstr("TemporaryDirectory construction failed"))
-    return _td_finish(slots, pins)
+    return _td_finish(slots)
 
 
 @c_abi_export("pcc_tempdir_enter_entry")
@@ -836,28 +802,24 @@ def _td_enter(captures, args):
     if py_tuple_len(args) != 1:
         return _td_error(3, cstr("TemporaryDirectory.__enter__ expects no arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_tuple_get(args, 0))
-    _td_hold(slots, pins, _TD_OUTPUT, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
-    return _td_finish(slots, pins)
+    _td_hold(slots, 0, py_tuple_get(args, 0))
+    _td_hold(slots, _TD_OUTPUT, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
+    return _td_finish(slots)
 
 
 def _td_cleanup_manager(manager) -> None:
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(manager)
-    _td_hold(slots, pins, 0, manager)
-    _td_hold(slots, pins, 1, py_obj_getattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state")))
+    _td_hold(slots, 0, manager)
+    _td_hold(slots, 1, py_obj_getattr(load_ptr(slots, 0), cstr("_pcc_finalizer_state")))
     if not ptr_is_null(load_ptr(slots, C_POINTER_SIZE)):
         if load_i8(target_sys_platform(), 0) == 119:
-            _td_hold(slots, pins, 2, py_list_get(load_ptr(slots, C_POINTER_SIZE), _TD_NAME))
-            _td_hold(slots, pins, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
+            _td_hold(slots, 2, py_list_get(load_ptr(slots, C_POINTER_SIZE), _TD_NAME))
+            _td_hold(slots, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
             ignored: int = py_obj_truthy(load_ptr(slots, 3 * C_POINTER_SIZE)) if not py_err_occurred() else 0
             if not py_err_occurred():
                 status: int = _td_windows_cleanup(load_ptr(slots, C_POINTER_SIZE), 1, 0)
@@ -865,13 +827,13 @@ def _td_cleanup_manager(manager) -> None:
                     _td_os_error(status, load_ptr(slots, 2 * C_POINTER_SIZE))
         else:
             detached: int = _td_detach(load_ptr(slots, C_POINTER_SIZE))
-            _td_hold(slots, pins, 2, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
+            _td_hold(slots, 2, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
             if not ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)):
                 if detached or py_os_path_exists(load_ptr(slots, 2 * C_POINTER_SIZE)):
-                    _td_hold(slots, pins, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
+                    _td_hold(slots, 3, py_obj_getattr(load_ptr(slots, 0), cstr("_ignore_cleanup_errors")))
                     if not ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)):
                         _td_remove(load_ptr(slots, 2 * C_POINTER_SIZE), load_ptr(slots, 3 * C_POINTER_SIZE))
-    _td_finish(slots, pins)
+    _td_finish(slots)
 
 
 @c_abi_export("pcc_tempdir_cleanup_entry")
@@ -879,17 +841,15 @@ def _td_cleanup(captures, args):
     if py_tuple_len(args) != 1:
         return _td_error(3, cstr("TemporaryDirectory.cleanup expects no arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_tuple_get(args, 0))
+    _td_hold(slots, 0, py_tuple_get(args, 0))
     if not ptr_is_null(load_ptr(slots, 0)):
         _td_cleanup_manager(load_ptr(slots, 0))
     if not py_err_occurred():
         py_incref(_td_none())
-        _td_hold(slots, pins, _TD_OUTPUT, _td_none())
-    return _td_finish(slots, pins)
+        _td_hold(slots, _TD_OUTPUT, _td_none())
+    return _td_finish(slots)
 
 
 @c_abi_export("pcc_tempdir_exit_entry")
@@ -897,54 +857,50 @@ def _td_exit(captures, args):
     if py_tuple_len(args) != 4:
         return _td_error(3, cstr("TemporaryDirectory.__exit__ expects three arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_tuple_get(args, 0))
-    _td_hold(slots, pins, 1, py_obj_getattr(load_ptr(slots, 0), cstr("_delete")))
+    _td_hold(slots, 0, py_tuple_get(args, 0))
+    _td_hold(slots, 1, py_obj_getattr(load_ptr(slots, 0), cstr("_delete")))
     if not ptr_is_null(load_ptr(slots, C_POINTER_SIZE)):
         should_delete: int = py_obj_truthy(load_ptr(slots, C_POINTER_SIZE))
         if should_delete and not py_err_occurred():
             # Python resolves self.cleanup at exit time. Instance overrides and
             # subclass methods keep their ordinary binding/exception behavior.
-            _td_hold(slots, pins, 2, py_obj_getattr(load_ptr(slots, 0), cstr("cleanup")))
-            _td_hold(slots, pins, 3, py_tuple_new(0))
+            _td_hold(slots, 2, py_obj_getattr(load_ptr(slots, 0), cstr("cleanup")))
+            _td_hold(slots, 3, py_tuple_new(0))
             if not py_err_occurred():
-                _td_hold(slots, pins, 4, py_obj_call(load_ptr(slots, 2 * C_POINTER_SIZE),
+                _td_hold(slots, 4, py_obj_call(load_ptr(slots, 2 * C_POINTER_SIZE),
                     load_ptr(slots, 3 * C_POINTER_SIZE), null()))
         if not py_err_occurred():
             py_incref(_td_none())
-            _td_hold(slots, pins, _TD_OUTPUT, _td_none())
-    return _td_finish(slots, pins)
+            _td_hold(slots, _TD_OUTPUT, _td_none())
+    return _td_finish(slots)
 
 
 @c_abi_export("pcc_tempdir_repr_entry")
 def _td_repr(captures, args):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, 0, py_tuple_get(args, 0))
-    _td_hold(slots, pins, 1, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
+    _td_hold(slots, 0, py_tuple_get(args, 0))
+    _td_hold(slots, 1, py_obj_getattr(load_ptr(slots, 0), cstr("name")))
     if not ptr_is_null(load_ptr(slots, C_POINTER_SIZE)):
-        _td_hold(slots, pins, 2, py_obj_repr(load_ptr(slots, C_POINTER_SIZE)))
-        _td_hold(slots, pins, 3, py_str_new(cstr("<TemporaryDirectory "), 20))
+        _td_hold(slots, 2, py_obj_repr(load_ptr(slots, C_POINTER_SIZE)))
+        _td_hold(slots, 3, py_str_new(cstr("<TemporaryDirectory "), 20))
         if not ptr_is_null(load_ptr(slots, 2 * C_POINTER_SIZE)) and not ptr_is_null(load_ptr(slots, 3 * C_POINTER_SIZE)):
-            _td_hold(slots, pins, 4, py_str_concat(load_ptr(slots, 3 * C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE)))
-            _td_hold(slots, pins, 5, py_str_new(cstr(">"), 1))
+            _td_hold(slots, 4, py_str_concat(load_ptr(slots, 3 * C_POINTER_SIZE), load_ptr(slots, 2 * C_POINTER_SIZE)))
+            _td_hold(slots, 5, py_str_new(cstr(">"), 1))
             if not ptr_is_null(load_ptr(slots, 4 * C_POINTER_SIZE)) and not ptr_is_null(load_ptr(slots, 5 * C_POINTER_SIZE)):
-                _td_hold(slots, pins, _TD_OUTPUT, py_str_concat(load_ptr(slots, 4 * C_POINTER_SIZE), load_ptr(slots, 5 * C_POINTER_SIZE)))
-    return _td_finish(slots, pins)
+                _td_hold(slots, _TD_OUTPUT, py_str_concat(load_ptr(slots, 4 * C_POINTER_SIZE), load_ptr(slots, 5 * C_POINTER_SIZE)))
+    return _td_finish(slots)
 
 
-def _td_init_signature(slots, pins, constructor: int = 1):
+def _td_init_signature(slots, constructor: int = 1):
     count: int = 6 if constructor else 3
-    _td_hold(slots, pins, 1, py_tuple_new(count))
-    _td_hold(slots, pins, 2, py_tuple_new(count))
-    _td_hold(slots, pins, 3, py_tuple_new(count))
-    _td_hold(slots, pins, 4, py_tuple_new(count))
+    _td_hold(slots, 1, py_tuple_new(count))
+    _td_hold(slots, 2, py_tuple_new(count))
+    _td_hold(slots, 3, py_tuple_new(count))
+    _td_hold(slots, 4, py_tuple_new(count))
     index: int = 0
     while index < count:
         parameter: int = index if constructor else index + 1
@@ -959,12 +915,12 @@ def _td_init_signature(slots, pins, constructor: int = 1):
             name = cstr("ignore_cleanup_errors")
         elif parameter == 5:
             name = cstr("delete")
-        _td_hold(slots, pins, 5, py_str_new(name, strlen(name)))
+        _td_hold(slots, 5, py_str_new(name, strlen(name)))
         py_tuple_set_item(load_ptr(slots, C_POINTER_SIZE), index, load_ptr(slots, 5 * C_POINTER_SIZE))
-        _td_drop(slots, pins, 5)
-        _td_hold(slots, pins, 5, py_int_from_i64(2 if parameter == 5 else 0))
+        _td_drop(slots, 5)
+        _td_hold(slots, 5, py_int_from_i64(2 if parameter == 5 else 0))
         py_tuple_set_item(load_ptr(slots, 2 * C_POINTER_SIZE), index, load_ptr(slots, 5 * C_POINTER_SIZE))
-        _td_drop(slots, pins, 5)
+        _td_drop(slots, 5)
         py_tuple_set_item(load_ptr(slots, 3 * C_POINTER_SIZE), index,
                           global_load_ptr("py_False") if parameter == 0 else global_load_ptr("py_True"))
         default = _td_none()
@@ -974,15 +930,15 @@ def _td_init_signature(slots, pins, constructor: int = 1):
             default = global_load_ptr("py_True")
         py_tuple_set_item(load_ptr(slots, 4 * C_POINTER_SIZE), index, default)
         index = index + 1
-    _td_hold(slots, pins, 5, py_tuple_new(5))
-    _td_hold(slots, pins, 6, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
+    _td_hold(slots, 5, py_tuple_new(5))
+    _td_hold(slots, 6, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
     py_tuple_set_item(load_ptr(slots, 5 * C_POINTER_SIZE), 0, load_ptr(slots, 6 * C_POINTER_SIZE))
     index = 1
     while index < 5:
         py_tuple_set_item(load_ptr(slots, 5 * C_POINTER_SIZE), index, load_ptr(slots, index * C_POINTER_SIZE))
         index = index + 1
-    _td_hold(slots, pins, 7, py_tuple_new(0))
-    _td_hold(slots, pins, 8, py_tuple_new(2))
+    _td_hold(slots, 7, py_tuple_new(0))
+    _td_hold(slots, 8, py_tuple_new(2))
     py_tuple_set_item(load_ptr(slots, 8 * C_POINTER_SIZE), 0, load_ptr(slots, 7 * C_POINTER_SIZE))
     py_tuple_set_item(load_ptr(slots, 8 * C_POINTER_SIZE), 1, load_ptr(slots, 5 * C_POINTER_SIZE))
     return load_ptr(slots, 8 * C_POINTER_SIZE)
@@ -996,21 +952,19 @@ def _td_mkdtemp_entry(captures, args):
     if py_tuple_len(args) != _MKDTEMP_ARGUMENT_COUNT:
         return _td_error(3, cstr("mkdtemp expects three bound arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     owner = stack_alloc(C_POINTER_SIZE)
     store_ptr(owner, 0, null())
     index: int = _MKDTEMP_SUFFIX
     while index < _MKDTEMP_ARGUMENT_COUNT:
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
     if not py_err_occurred():
-        _td_hold(slots, pins, _TD_OUTPUT, _td_mkdtemp(
+        _td_hold(slots, _TD_OUTPUT, _td_mkdtemp(
             load_ptr(slots, _MKDTEMP_SUFFIX * C_POINTER_SIZE),
             load_ptr(slots, _MKDTEMP_PREFIX * C_POINTER_SIZE),
-            load_ptr(slots, _MKDTEMP_DIRECTORY * C_POINTER_SIZE), slots, pins, owner))
+            load_ptr(slots, _MKDTEMP_DIRECTORY * C_POINTER_SIZE), slots, owner))
     if not ptr_is_null(load_ptr(owner, 0)):
         closed: int = close_owned(load_ptr(owner, 0))
         if closed < 0:
@@ -1019,32 +973,30 @@ def _td_mkdtemp_entry(captures, args):
             _td_remove_created(null(), owner)
             if not py_err_occurred():
                 _td_os_error(closed, load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE))
-            _td_drop(slots, pins, _TD_OUTPUT)
-    return _td_finish(slots, pins)
+            _td_drop(slots, _TD_OUTPUT)
+    return _td_finish(slots)
 
 
 @c_abi_export("py_tempfile_mkdtemp_function")
 def py_tempfile_mkdtemp_function():
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     mutex = _td_mutex()
     if ptr_is_null(mutex):
-        return _td_finish(slots, pins)
+        return _td_finish(slots)
     pcc_mutex_lock(mutex)
     source = global_addr("pcc_tempfile_mkdtemp_function")
     if not ptr_is_null(global_load_ptr("pcc_tempfile_mkdtemp_function")):
         pcc_mutex_unlock(mutex)
-        _td_copy_cached_owner(slots, pins, source)
-        return _td_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+        return _td_finish(slots)
     pcc_mutex_unlock(mutex)
     # Allocation and retirement can invoke callbacks. Build outside the cache
     # mutex, then retain only the winning candidate in the permanent root.
-    captures = _td_init_signature(slots, pins, 0)
+    captures = _td_init_signature(slots, 0)
     if not py_err_occurred():
-        _td_hold(slots, pins, _MKDTEMP_CALLABLE_CANDIDATE, py_func_new_named(
+        _td_hold(slots, _MKDTEMP_CALLABLE_CANDIDATE, py_func_new_named(
             function_addr("pcc_tempdir_mkdtemp_entry"), captures, cstr("mkdtemp")))
     pcc_mutex_lock(mutex)
     root_failed: int = 0
@@ -1062,28 +1014,28 @@ def py_tempfile_mkdtemp_function():
     if root_failed:
         _td_error(19, cstr("mkdtemp callable root registration failed"))
     if not py_err_occurred():
-        _td_copy_cached_owner(slots, pins, source)
-    return _td_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+    return _td_finish(slots)
 
 
-def _td_copy_cached_owner(slots, pins, source) -> None:
+def _td_copy_cached_owner(slots, source) -> None:
     output = ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE)
     token: int = pcc_gc_root_copy_lease(output, source)
     if token < 0:
         _td_error(7, cstr("cached owner copy failed"))
         return
-    # The counted address lease is independent of the legacy pin flag, and
-    # protects this load until the return pin has been established.
-    _td_hold(slots, pins, _TD_OUTPUT, load_ptr(output, 0))
+    # The counted address lease protects this load until the output slot
+    # holds the owner.
+    _td_hold(slots, _TD_OUTPUT, load_ptr(output, 0))
     if pcc_gc_foreign_lease_release(output, token) < 0:
         _td_error(7, cstr("cached owner lease release failed"))
 
 
-def _fdopen_signature(slots, pins, temporary: int = 0):
+def _fdopen_signature(slots, temporary: int = 0):
     count: int = _NT_ARGUMENT_COUNT if temporary else _FDOPEN_ARGUMENT_COUNT
     index: int = _FILE_SIGNATURE_NAMES
     while index <= _FILE_SIGNATURE_DEFAULTS:
-        _td_hold(slots, pins, index, py_tuple_new(count))
+        _td_hold(slots, index, py_tuple_new(count))
         index = index + 1
     index = _FDOPEN_DESCRIPTOR
     while index < count:
@@ -1123,33 +1075,33 @@ def _fdopen_signature(slots, pins, temporary: int = 0):
                 name = cstr("errors")
             else:
                 name = cstr("delete_on_close")
-        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
+        _td_hold(slots, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_NAMES * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
-        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM,
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
+        _td_hold(slots, _FILE_SIGNATURE_ITEM,
                  py_int_from_i64(2 if temporary and index >= _NT_ERRORS else 0))
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_KINDS * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_PRESENT * C_POINTER_SIZE), index,
             global_load_ptr("py_False") if not temporary and index == _FDOPEN_DESCRIPTOR else global_load_ptr("py_True"))
         default = _td_none()
         if index == (_NT_MODE if temporary else _FDOPEN_MODE):
-            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM,
+            _td_hold(slots, _FILE_SIGNATURE_ITEM,
                      py_str_new(cstr("w+b") if temporary else cstr("r"), 3 if temporary else 1))
             default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
         elif index == (_NT_BUFFERING if temporary else _FDOPEN_BUFFERING):
-            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(-1))
+            _td_hold(slots, _FILE_SIGNATURE_ITEM, py_int_from_i64(-1))
             default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
         elif (not temporary and index == _FDOPEN_CLOSEFD
               or temporary and (index == _NT_DELETE or index == _NT_DELETE_ON_CLOSE)):
             default = global_load_ptr("py_True")
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_DEFAULTS * C_POINTER_SIZE), index, default)
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
         index = index + 1
-    _td_hold(slots, pins, _FILE_SIGNATURE, py_tuple_new(5))
-    _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
+    _td_hold(slots, _FILE_SIGNATURE, py_tuple_new(5))
+    _td_hold(slots, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
     py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), 0,
                       load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
     index = _FILE_SIGNATURE_NAMES
@@ -1157,8 +1109,8 @@ def _fdopen_signature(slots, pins, temporary: int = 0):
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), index,
                           load_ptr(slots, index * C_POINTER_SIZE))
         index = index + 1
-    _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
-    _td_hold(slots, pins, _FILE_CAPTURES, py_tuple_new(2))
+    _td_hold(slots, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+    _td_hold(slots, _FILE_CAPTURES, py_tuple_new(2))
     py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 0,
                       load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE))
     py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 1,
@@ -1196,13 +1148,11 @@ def _fdopen_entry(captures, args):
     if load_i8(target_sys_platform(), 0) == 119:
         return _td_error(11, cstr("native fdopen requires an owned Windows provider"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     index: int = _FDOPEN_DESCRIPTOR
     while index < _FDOPEN_ARGUMENT_COUNT:
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
     buffering: int = -1
     closefd: int = 0
@@ -1213,24 +1163,22 @@ def _fdopen_entry(captures, args):
     if not py_err_occurred() and not ptr_eq(load_ptr(slots, _FDOPEN_OPENER * C_POINTER_SIZE), _td_none()):
         _td_error(11, cstr("native fdopen custom openers are not implemented"))
     if not py_err_occurred():
-        _td_hold(slots, pins, _TD_OUTPUT, py_file_fdopen_options(
+        _td_hold(slots, _TD_OUTPUT, py_file_fdopen_options(
             load_ptr(slots, _FDOPEN_DESCRIPTOR * C_POINTER_SIZE),
             load_ptr(slots, _FDOPEN_MODE * C_POINTER_SIZE),
             load_ptr(slots, _FDOPEN_ENCODING * C_POINTER_SIZE),
             load_ptr(slots, _FDOPEN_ERRORS * C_POINTER_SIZE),
             load_ptr(slots, _FDOPEN_NEWLINE * C_POINTER_SIZE), closefd, buffering))
-    return _nt_finish(slots, pins)
+    return _nt_finish(slots)
 
 
 def _file_provider_function(temporary: int):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     mutex = _td_mutex()
     if ptr_is_null(mutex):
-        return _td_finish(slots, pins)
+        return _td_finish(slots)
     source = global_addr("pcc_namedtempfile_function") if temporary else global_addr("pcc_file_fdopen_function")
     if temporary == 2:
         source = global_addr("pcc_os_open_function")
@@ -1243,10 +1191,10 @@ def _file_provider_function(temporary: int):
     pcc_mutex_lock(mutex)
     if not ptr_is_null(load_ptr(source, 0)):
         pcc_mutex_unlock(mutex)
-        _td_copy_cached_owner(slots, pins, source)
-        return _td_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+        return _td_finish(slots)
     pcc_mutex_unlock(mutex)
-    captures = _os_descriptor_signature(slots, pins, temporary) if temporary >= 2 else _fdopen_signature(slots, pins, temporary)
+    captures = _os_descriptor_signature(slots, temporary) if temporary >= 2 else _fdopen_signature(slots, temporary)
     if not py_err_occurred():
         entry = function_addr("pcc_namedtempfile_entry") if temporary else function_addr("pcc_file_fdopen_entry")
         name = cstr("NamedTemporaryFile") if temporary else cstr("fdopen")
@@ -1262,7 +1210,7 @@ def _file_provider_function(temporary: int):
         elif temporary == 5:
             entry = function_addr("pcc_os_ftruncate_entry")
             name = cstr("ftruncate")
-        _td_hold(slots, pins, _FILE_CALLABLE_CANDIDATE, py_func_new_named(
+        _td_hold(slots, _FILE_CALLABLE_CANDIDATE, py_func_new_named(
             entry, captures, name))
     root_failed: int = 0
     pcc_mutex_lock(mutex)
@@ -1291,8 +1239,8 @@ def _file_provider_function(temporary: int):
     if root_failed:
         _td_error(19, cstr("fdopen callable root registration failed"))
     if not py_err_occurred():
-        _td_copy_cached_owner(slots, pins, source)
-    return _td_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+    return _td_finish(slots)
 
 
 @c_abi_export("py_file_fdopen_function")
@@ -1325,7 +1273,7 @@ def py_os_ftruncate_function():
     return _file_provider_function(5)
 
 
-def _os_descriptor_signature(slots, pins, operation: int):
+def _os_descriptor_signature(slots, operation: int):
     closing: int = 1 if operation == 3 else 0
     positional: int = 1 if operation == 4 or operation == 5 else 0
     count: int = 1 if closing else 4
@@ -1335,7 +1283,7 @@ def _os_descriptor_signature(slots, pins, operation: int):
         count = 2
     index: int = _FILE_SIGNATURE_NAMES
     while index <= _FILE_SIGNATURE_DEFAULTS:
-        _td_hold(slots, pins, index, py_tuple_new(count))
+        _td_hold(slots, index, py_tuple_new(count))
         index = index + 1
     index = 0
     while index < count:
@@ -1350,26 +1298,26 @@ def _os_descriptor_signature(slots, pins, operation: int):
             name = cstr("mode")
         elif index == _OS_OPEN_DIR_FD:
             name = cstr("dir_fd")
-        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
+        _td_hold(slots, _FILE_SIGNATURE_ITEM, py_str_new(name, strlen(name)))
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_NAMES * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
         kind: int = 1 if positional else (2 if index == _OS_OPEN_DIR_FD else 0)
-        _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(kind))
+        _td_hold(slots, _FILE_SIGNATURE_ITEM, py_int_from_i64(kind))
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_KINDS * C_POINTER_SIZE), index,
                           load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_PRESENT * C_POINTER_SIZE), index,
             global_load_ptr("py_True") if not positional and index >= _OS_OPEN_MODE else global_load_ptr("py_False"))
         default = _td_none()
         if not positional and index == _OS_OPEN_MODE:
-            _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_int_from_i64(511))
+            _td_hold(slots, _FILE_SIGNATURE_ITEM, py_int_from_i64(511))
             default = load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE)
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE_DEFAULTS * C_POINTER_SIZE), index, default)
-        _td_drop(slots, pins, _FILE_SIGNATURE_ITEM)
+        _td_drop(slots, _FILE_SIGNATURE_ITEM)
         index = index + 1
-    _td_hold(slots, pins, _FILE_SIGNATURE, py_tuple_new(5))
-    _td_hold(slots, pins, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
+    _td_hold(slots, _FILE_SIGNATURE, py_tuple_new(5))
+    _td_hold(slots, _FILE_SIGNATURE_ITEM, py_str_new(cstr("__pcc_func_signature_v1__"), 25))
     py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), 0,
                       load_ptr(slots, _FILE_SIGNATURE_ITEM * C_POINTER_SIZE))
     index = _FILE_SIGNATURE_NAMES
@@ -1377,8 +1325,8 @@ def _os_descriptor_signature(slots, pins, operation: int):
         py_tuple_set_item(load_ptr(slots, _FILE_SIGNATURE * C_POINTER_SIZE), index,
                           load_ptr(slots, index * C_POINTER_SIZE))
         index = index + 1
-    _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
-    _td_hold(slots, pins, _FILE_CAPTURES, py_tuple_new(2))
+    _td_hold(slots, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+    _td_hold(slots, _FILE_CAPTURES, py_tuple_new(2))
     py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 0,
                       load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE))
     py_tuple_set_item(load_ptr(slots, _FILE_CAPTURES * C_POINTER_SIZE), 1,
@@ -1393,19 +1341,17 @@ def _os_open_entry(captures, args):
     if load_i8(target_sys_platform(), 0) == 119:
         return _td_error(11, cstr("native os.open requires an owned Windows provider"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     index: int = _OS_OPEN_PATH
     while index <= _OS_OPEN_DIR_FD:
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
     flags: int = 0
     permissions: int = 0
     directory_fd: int = -2 if load_i8(target_sys_platform(), 0) == 100 else -100
     if not py_err_occurred():
-        _td_hold(slots, pins, _OS_OPEN_NORMALIZED,
+        _td_hold(slots, _OS_OPEN_NORMALIZED,
                  py_file_fspath(load_ptr(slots, _OS_OPEN_PATH * C_POINTER_SIZE)))
     if not py_err_occurred():
         flags = _file_c_int_argument(slots, _OS_OPEN_FLAGS)
@@ -1437,10 +1383,10 @@ def _os_open_entry(captures, args):
             if descriptor < 0:
                 _td_os_error(descriptor, path)
             else:
-                _td_hold(slots, pins, _TD_OUTPUT, py_int_from_i64(descriptor))
+                _td_hold(slots, _TD_OUTPUT, py_int_from_i64(descriptor))
                 if py_err_occurred():
                     close(descriptor)
-    return _nt_finish(slots, pins)
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_os_close_entry")
@@ -1448,11 +1394,9 @@ def _os_close_entry(captures, args):
     if py_tuple_len(args) != 1:
         return _td_error(3, cstr("os.close expects one argument"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, _FDOPEN_DESCRIPTOR, py_tuple_get(args, 0))
+    _td_hold(slots, _FDOPEN_DESCRIPTOR, py_tuple_get(args, 0))
     descriptor: int = 0
     if not py_err_occurred():
         descriptor = _file_c_int_argument(slots, _FDOPEN_DESCRIPTOR)
@@ -1462,8 +1406,8 @@ def _os_close_entry(captures, args):
             _td_os_error(status, _td_none())
         else:
             py_incref(_td_none())
-            _td_hold(slots, pins, _TD_OUTPUT, _td_none())
-    return _nt_finish(slots, pins)
+            _td_hold(slots, _TD_OUTPUT, _td_none())
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_os_pwrite_entry")
@@ -1480,13 +1424,11 @@ def _os_pwrite_entry(captures, args):
     if load_i8(target_sys_platform(), 0) == 119:
         return _td_error(11, cstr("native os.pwrite requires an owned Windows provider"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     index: int = _OS_POSITIONAL_DESCRIPTOR
     while index <= _OS_POSITIONAL_OFFSET and not py_err_occurred():
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
     descriptor: int = 0
     offset: int = 0
@@ -1507,8 +1449,8 @@ def _os_pwrite_entry(captures, args):
         )
     if not py_err_occurred():
         # Exact bytes retain their identity with an independent owned result.
-        # Publish and pin that owner before exposing its payload to a syscall.
-        _td_hold(slots, pins, _OS_POSITIONAL_SNAPSHOT, py_bytes_from_obj(
+        # Publish that owner before exposing its payload to a syscall.
+        _td_hold(slots, _OS_POSITIONAL_SNAPSHOT, py_bytes_from_obj(
             load_ptr(slots, _OS_POSITIONAL_BUFFER * C_POINTER_SIZE)
         ))
     if not py_err_occurred():
@@ -1530,8 +1472,8 @@ def _os_pwrite_entry(captures, args):
             else:
                 # A successful short write is observable to Python. The
                 # caller decides whether and how to complete the remainder.
-                _td_hold(slots, pins, _TD_OUTPUT, py_int_from_i64(status))
-    return _nt_finish(slots, pins)
+                _td_hold(slots, _TD_OUTPUT, py_int_from_i64(status))
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_os_ftruncate_entry")
@@ -1541,13 +1483,11 @@ def _os_ftruncate_entry(captures, args):
     if load_i8(target_sys_platform(), 0) == 119:
         return _td_error(11, cstr("native os.ftruncate requires an owned Windows provider"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, _OS_POSITIONAL_DESCRIPTOR, py_tuple_get(args, 0))
+    _td_hold(slots, _OS_POSITIONAL_DESCRIPTOR, py_tuple_get(args, 0))
     if not py_err_occurred():
-        _td_hold(slots, pins, _OS_TRUNCATE_LENGTH, py_tuple_get(args, 1))
+        _td_hold(slots, _OS_TRUNCATE_LENGTH, py_tuple_get(args, 1))
     descriptor: int = 0
     length: int = 0
     if not py_err_occurred():
@@ -1569,36 +1509,29 @@ def _os_ftruncate_entry(captures, args):
                 _td_os_error(status, _td_none())
             else:
                 py_incref(_td_none())
-                _td_hold(slots, pins, _TD_OUTPUT, _td_none())
-    return _nt_finish(slots, pins)
+                _td_hold(slots, _TD_OUTPUT, _td_none())
+    return _nt_finish(slots)
 
 
-def _nt_finish(slots, pins):
+def _nt_finish(slots):
     # Retiring file/callable owners may execute user finalizers. Preserve the
     # exception which belongs to this operation until all other owners retire.
     saved_slot = ptr_add(slots, _TD_SAVED_ERROR * C_POINTER_SIZE)
     py_tls_exc_swap_slot(saved_slot)
     saved = load_ptr(saved_slot, 0)
     if not ptr_is_null(saved):
-        _td_hold(slots, pins, _TD_SAVED_ERROR, saved)
+        _td_hold(slots, _TD_SAVED_ERROR, saved)
     index: int = _TD_SAVED_ERROR
     while index > 0:
         index = index - 1
-        _td_drop(slots, pins, index)
+        _td_drop(slots, index)
     py_clear_exception()
-    saved = load_ptr(saved_slot, 0)
-    if not ptr_is_null(saved):
-        pcc_gc_unpin(saved)
-        if load_i64(pins, _TD_SAVED_ERROR * C_POINTER_SIZE):
-            atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET,
-                           PY_FLAG_GC_PINNED, "relaxed")
     py_tls_exc_swap_slot(saved_slot)
     pcc_gc_frame_leave(slots)
-    return pcc_gc_take_pinned_slot(ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE),
-                                   load_i64(pins, _TD_OUTPUT * C_POINTER_SIZE))
+    return pcc_gc_take_slot(ptr_add(slots, _TD_OUTPUT * C_POINTER_SIZE))
 
 
-def _nt_create_name(slots, pins, descriptor_out):
+def _nt_create_name(slots, descriptor_out):
     if load_i8(target_sys_platform(), 0) == 119:
         return _td_error(11, cstr("native NamedTemporaryFile requires an owned Windows provider"))
     suffix = _td_text(load_ptr(slots, _NT_SUFFIX * C_POINTER_SIZE), cstr(""))
@@ -1608,7 +1541,7 @@ def _nt_create_name(slots, pins, descriptor_out):
     directory = load_ptr(slots, _NT_DIRECTORY * C_POINTER_SIZE)
     root = null()
     if not ptr_eq(directory, _td_none()):
-        _td_hold(slots, pins, _NT_NORMALIZED_DIRECTORY, py_file_fspath(directory))
+        _td_hold(slots, _NT_NORMALIZED_DIRECTORY, py_file_fspath(directory))
         if py_err_occurred():
             return null()
         root = _td_text(load_ptr(slots, _NT_NORMALIZED_DIRECTORY * C_POINTER_SIZE), null())
@@ -1653,14 +1586,14 @@ def _nt_create_name(slots, pins, descriptor_out):
     if ptr_is_null(path):
         return _td_error(19, cstr("cannot allocate temporary filename"))
     descriptor: int = mkstemps(path, strlen(suffix))
-    _td_hold(slots, pins, _NT_RAW_NAME, py_str_new(path, strlen(path)))
+    _td_hold(slots, _NT_RAW_NAME, py_str_new(path, strlen(path)))
     if descriptor < 0:
         free(path)
         if not py_err_occurred():
             return _td_os_error(descriptor, load_ptr(slots, _NT_RAW_NAME * C_POINTER_SIZE))
         return null()
     if not py_err_occurred():
-        _td_hold(slots, pins, _NT_PATH,
+        _td_hold(slots, _NT_PATH,
                  py_os_path_abspath(load_ptr(slots, _NT_RAW_NAME * C_POINTER_SIZE)))
     if py_err_occurred():
         close(descriptor)
@@ -1674,27 +1607,25 @@ def _nt_create_name(slots, pins, descriptor_out):
 
 def _nt_cleanup(manager, mode: int):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(manager)
-    _td_hold(slots, pins, _NT_SELF, manager)
-    _td_hold(slots, pins, _NT_CLEANUP_READY, py_obj_getattr(manager, cstr("_ready")))
+    _td_hold(slots, _NT_SELF, manager)
+    _td_hold(slots, _NT_CLEANUP_READY, py_obj_getattr(manager, cstr("_ready")))
     if mode == 2 and py_err_occurred():
         py_clear_exception()  # A failed constructor performs its own rollback.
     elif not py_err_occurred() and py_obj_truthy(load_ptr(slots, _NT_CLEANUP_READY * C_POINTER_SIZE)):
-        _td_hold(slots, pins, _NT_METHOD_FILE, py_obj_getattr(manager, cstr("_cleanup_file")))
-        _td_hold(slots, pins, _NT_CLEANUP_PATH, py_obj_getattr(manager, cstr("_cleanup_name")))
-        _td_hold(slots, pins, _NT_CLEANUP_DELETE, py_obj_getattr(manager, cstr("_delete")))
-        _td_hold(slots, pins, _NT_CLEANUP_ON_CLOSE, py_obj_getattr(manager, cstr("_delete_on_close")))
-        _td_hold(slots, pins, _NT_CLEANUP_REMOVED, py_obj_getattr(manager, cstr("_removed")))
+        _td_hold(slots, _NT_METHOD_FILE, py_obj_getattr(manager, cstr("_cleanup_file")))
+        _td_hold(slots, _NT_CLEANUP_PATH, py_obj_getattr(manager, cstr("_cleanup_name")))
+        _td_hold(slots, _NT_CLEANUP_DELETE, py_obj_getattr(manager, cstr("_delete")))
+        _td_hold(slots, _NT_CLEANUP_ON_CLOSE, py_obj_getattr(manager, cstr("_delete_on_close")))
+        _td_hold(slots, _NT_CLEANUP_REMOVED, py_obj_getattr(manager, cstr("_removed")))
         if not py_err_occurred():
             py_file_close_checked(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE))
             close_error = ptr_add(slots, _NT_CLOSE_ERROR * C_POINTER_SIZE)
             py_tls_exc_swap_slot(close_error)
             if not ptr_is_null(load_ptr(close_error, 0)):
-                _td_hold(slots, pins, _NT_CLOSE_ERROR, load_ptr(close_error, 0))
+                _td_hold(slots, _NT_CLOSE_ERROR, load_ptr(close_error, 0))
             should_remove: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_DELETE * C_POINTER_SIZE))
             on_close: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_ON_CLOSE * C_POINTER_SIZE))
             removed: int = py_obj_truthy(load_ptr(slots, _NT_CLEANUP_REMOVED * C_POINTER_SIZE))
@@ -1709,20 +1640,14 @@ def _nt_cleanup(manager, mode: int):
                         if status < 0 and status != -2:
                             _td_os_error(status, load_ptr(slots, _NT_CLEANUP_PATH * C_POINTER_SIZE))
             if not py_err_occurred() and not ptr_is_null(load_ptr(close_error, 0)):
-                saved = load_ptr(close_error, 0)
-                pcc_gc_unpin(saved)
-                if load_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE):
-                    atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET,
-                                   PY_FLAG_GC_PINNED, "relaxed")
                 py_tls_exc_swap_slot(close_error)
-                store_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE, 0)
     if mode == 2:
         py_clear_exception()
     if not py_err_occurred():
         result = global_load_ptr("py_False") if mode == 1 else _td_none()
         py_incref(result)
-        _td_hold(slots, pins, _TD_OUTPUT, result)
-    return _nt_finish(slots, pins)
+        _td_hold(slots, _TD_OUTPUT, result)
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_namedtempfile_close_entry")
@@ -1746,30 +1671,21 @@ def _nt_del(captures, args):
 
 def _nt_cleanup_entry(args, mode: int):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     prior = ptr_add(slots, _NT_CLOSE_ERROR * C_POINTER_SIZE)
     if mode == 2:
         py_tls_exc_swap_slot(prior)
         if not ptr_is_null(load_ptr(prior, 0)):
-            _td_hold(slots, pins, _NT_CLOSE_ERROR, load_ptr(prior, 0))
-    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
+            _td_hold(slots, _NT_CLOSE_ERROR, load_ptr(prior, 0))
+    _td_hold(slots, _NT_SELF, py_tuple_get(args, 0))
     if not py_err_occurred():
-        _td_hold(slots, pins, _TD_OUTPUT,
+        _td_hold(slots, _TD_OUTPUT,
                  _nt_cleanup(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), mode))
     if mode == 2:
         py_clear_exception()
-        saved = load_ptr(prior, 0)
-        if not ptr_is_null(saved):
-            pcc_gc_unpin(saved)
-            if load_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE):
-                atomic_rmw_i32("or", saved, PYOBJECTHEADER_FLAGS_OFFSET,
-                               PY_FLAG_GC_PINNED, "relaxed")
         py_tls_exc_swap_slot(prior)
-        store_i64(pins, _NT_CLOSE_ERROR * C_POINTER_SIZE, 0)
-    return _nt_finish(slots, pins)
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_namedtempfile_getattr_entry")
@@ -1777,77 +1693,71 @@ def _nt_getattr(captures, args):
     if py_tuple_len(args) != 2:
         return _td_error(3, cstr("__getattr__ expects a name"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
-    _td_hold(slots, pins, _NT_METHOD_NAME, py_tuple_get(args, 1))
+    _td_hold(slots, _NT_SELF, py_tuple_get(args, 0))
+    _td_hold(slots, _NT_METHOD_NAME, py_tuple_get(args, 1))
     name = py_str_utf8(load_ptr(slots, _NT_METHOD_NAME * C_POINTER_SIZE))
     if load_i8(name, 0) == 95 or strcmp(name, cstr("file")) == 0 or strcmp(name, cstr("name")) == 0:
         _td_error(6, cstr("temporary file wrapper attribute is not initialized"))
     else:
-        _td_hold(slots, pins, _NT_METHOD_FILE,
+        _td_hold(slots, _NT_METHOD_FILE,
                  py_obj_getattr(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), cstr("file")))
         if not py_err_occurred():
-            _td_hold(slots, pins, _NT_METHOD_VALUE,
+            _td_hold(slots, _NT_METHOD_VALUE,
                      py_obj_getattr(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE), name))
         if not py_err_occurred():
-            _td_hold(slots, pins, _NT_METHOD_BOOL,
+            _td_hold(slots, _NT_METHOD_BOOL,
                      py_builtin_callable(load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE)))
         if not py_err_occurred():
             if py_obj_truthy(load_ptr(slots, _NT_METHOD_BOOL * C_POINTER_SIZE)):
                 # A saved write/read/etc method keeps the wrapper and its
                 # delete policy alive, not just the underlying FILE object.
-                _td_hold(slots, pins, _NT_METHOD_CAPTURES, py_tuple_new(2))
+                _td_hold(slots, _NT_METHOD_CAPTURES, py_tuple_new(2))
                 if not py_err_occurred():
                     py_tuple_set_item(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 0,
                                       load_ptr(slots, _NT_SELF * C_POINTER_SIZE))
                     py_tuple_set_item(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 1,
                                       load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE))
-                    _td_hold(slots, pins, _TD_OUTPUT, py_func_new_named(
+                    _td_hold(slots, _TD_OUTPUT, py_func_new_named(
                         function_addr("pcc_namedtempfile_delegate_entry"),
                         load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), cstr("temporary_file_method")))
             else:
                 value = load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE)
                 py_incref(value)
-                _td_hold(slots, pins, _TD_OUTPUT, value)
-    return _nt_finish(slots, pins)
+                _td_hold(slots, _TD_OUTPUT, value)
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_namedtempfile_delegate_entry")
 def _nt_delegate(captures, args):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     py_incref(captures)
-    _td_hold(slots, pins, _NT_METHOD_CAPTURES, captures)
+    _td_hold(slots, _NT_METHOD_CAPTURES, captures)
     py_incref(args)
-    _td_hold(slots, pins, _NT_METHOD_ARGS, args)
-    _td_hold(slots, pins, _NT_METHOD_VALUE,
+    _td_hold(slots, _NT_METHOD_ARGS, args)
+    _td_hold(slots, _NT_METHOD_VALUE,
              py_tuple_get(load_ptr(slots, _NT_METHOD_CAPTURES * C_POINTER_SIZE), 1))
     if not py_err_occurred():
-        _td_hold(slots, pins, _TD_OUTPUT, py_obj_call(
+        _td_hold(slots, _TD_OUTPUT, py_obj_call(
             load_ptr(slots, _NT_METHOD_VALUE * C_POINTER_SIZE),
             load_ptr(slots, _NT_METHOD_ARGS * C_POINTER_SIZE), null()))
-    return _nt_finish(slots, pins)
+    return _nt_finish(slots)
 
 
 def _nt_access_entry(args, operation: int):
     if py_tuple_len(args) != 1:
         return _td_error(3, cstr("temporary file context/iterator expects no arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
-    _td_hold(slots, pins, _NT_SELF, py_tuple_get(args, 0))
-    _td_hold(slots, pins, _NT_METHOD_FILE,
+    _td_hold(slots, _NT_SELF, py_tuple_get(args, 0))
+    _td_hold(slots, _NT_METHOD_FILE,
              py_obj_getattr(load_ptr(slots, _NT_SELF * C_POINTER_SIZE), cstr("file")))
     if not py_err_occurred():
-        _td_hold(slots, pins, _NT_METHOD_BOOL,
+        _td_hold(slots, _NT_METHOD_BOOL,
                  py_obj_getattr(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE), cstr("closed")))
     if not py_err_occurred():
         if py_obj_truthy(load_ptr(slots, _NT_METHOD_BOOL * C_POINTER_SIZE)):
@@ -1856,12 +1766,12 @@ def _nt_access_entry(args, operation: int):
             value = py_obj_next(load_ptr(slots, _NT_METHOD_FILE * C_POINTER_SIZE))
             if ptr_is_null(value) and not py_err_occurred():
                 _td_error(8, cstr(""))
-            _td_hold(slots, pins, _TD_OUTPUT, value)
+            _td_hold(slots, _TD_OUTPUT, value)
         else:
             value = load_ptr(slots, _NT_SELF * C_POINTER_SIZE)
             py_incref(value)
-            _td_hold(slots, pins, _TD_OUTPUT, value)
-    return _nt_finish(slots, pins)
+            _td_hold(slots, _TD_OUTPUT, value)
+    return _nt_finish(slots)
 
 
 @c_abi_export("pcc_namedtempfile_enter_entry")
@@ -1881,51 +1791,49 @@ def _nt_next(captures, args):
 
 def _temporary_type(named_file: int):
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     mutex = _td_mutex()
     if ptr_is_null(mutex):
-        return _nt_finish(slots, pins)
+        return _nt_finish(slots)
     source = global_addr("pcc_namedtempfile_wrapper_type") if named_file else global_addr("pcc_tempdir_class")
     handle_slot = global_addr("pcc_namedtempfile_wrapper_root_handle") if named_file else global_addr("pcc_tempdir_class_root_handle")
     pcc_mutex_lock(mutex)
     present: int = not ptr_is_null(load_ptr(source, 0))
     pcc_mutex_unlock(mutex)
     if present != 0:
-        _td_copy_cached_owner(slots, pins, source)
-        return _nt_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+        return _nt_finish(slots)
     # Construction occurs outside the publication mutex. Every candidate is
     # rooted; only a complete class is published to the permanent owner.
-    _td_hold(slots, pins, _TYPE_CANDIDATE, py_class_new(
+    _td_hold(slots, _TYPE_CANDIDATE, py_class_new(
         cstr("_TemporaryFileWrapper") if named_file else cstr("TemporaryDirectory"),
         null(), 0, null(), 0))
     if not py_err_occurred():
         if named_file:
-            _td_hold(slots, pins, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
+            _td_hold(slots, _FILE_CAPTURES_EMPTY, py_tuple_new(0))
         else:
-            captures = _td_init_signature(slots, pins)
+            captures = _td_init_signature(slots)
             _td_add_init(load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE),
-                function_addr("pcc_tempdir_init_entry"), captures, slots, pins)
+                function_addr("pcc_tempdir_init_entry"), captures, slots)
     cls = load_ptr(slots, _TYPE_CANDIDATE * C_POINTER_SIZE)
     captures = load_ptr(slots, _FILE_CAPTURES_EMPTY * C_POINTER_SIZE)
     if not py_err_occurred():
         if named_file:
-            _td_add_method(cls, cstr("close"), function_addr("pcc_namedtempfile_close_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_namedtempfile_enter_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_namedtempfile_exit_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__del__"), function_addr("pcc_namedtempfile_del_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__getattr__"), function_addr("pcc_namedtempfile_getattr_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__iter__"), function_addr("pcc_namedtempfile_iter_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__next__"), function_addr("pcc_namedtempfile_next_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("close"), function_addr("pcc_namedtempfile_close_entry"), captures, slots)
+            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_namedtempfile_enter_entry"), captures, slots)
+            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_namedtempfile_exit_entry"), captures, slots)
+            _td_add_method(cls, cstr("__del__"), function_addr("pcc_namedtempfile_del_entry"), captures, slots)
+            _td_add_method(cls, cstr("__getattr__"), function_addr("pcc_namedtempfile_getattr_entry"), captures, slots)
+            _td_add_method(cls, cstr("__iter__"), function_addr("pcc_namedtempfile_iter_entry"), captures, slots)
+            _td_add_method(cls, cstr("__next__"), function_addr("pcc_namedtempfile_next_entry"), captures, slots)
         else:
-            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_tempdir_enter_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_tempdir_exit_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("cleanup"), function_addr("pcc_tempdir_cleanup_entry"), captures, slots, pins)
-            _td_add_method(cls, cstr("__repr__"), function_addr("pcc_tempdir_repr_entry"), captures, slots, pins)
+            _td_add_method(cls, cstr("__enter__"), function_addr("pcc_tempdir_enter_entry"), captures, slots)
+            _td_add_method(cls, cstr("__exit__"), function_addr("pcc_tempdir_exit_entry"), captures, slots)
+            _td_add_method(cls, cstr("cleanup"), function_addr("pcc_tempdir_cleanup_entry"), captures, slots)
+            _td_add_method(cls, cstr("__repr__"), function_addr("pcc_tempdir_repr_entry"), captures, slots)
             if not py_err_occurred():
-                _td_hold(slots, pins, _TYPE_MODULE, py_str_new(cstr("tempfile"), 8))
+                _td_hold(slots, _TYPE_MODULE, py_str_new(cstr("tempfile"), 8))
             if not py_err_occurred():
                 py_class_setattr(cls, cstr("__module__"), load_ptr(slots, _TYPE_MODULE * C_POINTER_SIZE))
     root_failed: int = 0
@@ -1950,8 +1858,8 @@ def _temporary_type(named_file: int):
     if not py_err_occurred():
         # Reload through the authoritative root after registration/relocation.
         # Losing local candidate roots retire after the winner has its own lease.
-        _td_copy_cached_owner(slots, pins, source)
-    return _nt_finish(slots, pins)
+        _td_copy_cached_owner(slots, source)
+    return _nt_finish(slots)
 
 
 def _nt_wrapper_type():
@@ -1963,13 +1871,11 @@ def _nt_entry(captures, args):
     if py_tuple_len(args) != _NT_ARGUMENT_COUNT:
         return _td_error(3, cstr("NamedTemporaryFile expects ten bound arguments"))
     slots = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
-    pins = stack_alloc(_TD_SLOTS * C_POINTER_SIZE)
     memset(slots, 0, _TD_SLOTS * C_POINTER_SIZE)
-    memset(pins, 0, _TD_SLOTS * C_POINTER_SIZE)
     pcc_gc_frame_enter(global_addr("pcc_tempdir_frame_map"), slots)
     index: int = _NT_MODE
     while index < _NT_ARGUMENT_COUNT:
-        _td_hold(slots, pins, index, py_tuple_get(args, index))
+        _td_hold(slots, index, py_tuple_get(args, index))
         index = index + 1
     buffering: int = -1
     if not py_err_occurred():
@@ -1977,12 +1883,12 @@ def _nt_entry(captures, args):
     descriptor_out = stack_alloc(C_POINTER_SIZE)
     store_i64(descriptor_out, 0, -1)
     if not py_err_occurred():
-        _nt_create_name(slots, pins, descriptor_out)
+        _nt_create_name(slots, descriptor_out)
     descriptor: int = load_i64(descriptor_out, 0)
     if descriptor >= 0 and not py_err_occurred():
-        _td_hold(slots, pins, _NT_DESCRIPTOR, py_int_from_i64(descriptor))
+        _td_hold(slots, _NT_DESCRIPTOR, py_int_from_i64(descriptor))
         if not py_err_occurred():
-            _td_hold(slots, pins, _NT_FILE, py_file_fdopen_options(
+            _td_hold(slots, _NT_FILE, py_file_fdopen_options(
                 load_ptr(slots, _NT_DESCRIPTOR * C_POINTER_SIZE),
                 load_ptr(slots, _NT_MODE * C_POINTER_SIZE),
                 load_ptr(slots, _NT_ENCODING * C_POINTER_SIZE),
@@ -1991,9 +1897,9 @@ def _nt_entry(captures, args):
         if not ptr_is_null(load_ptr(slots, _NT_FILE * C_POINTER_SIZE)):
             descriptor = -1  # The file owner now closes this descriptor.
         if not py_err_occurred():
-            _td_hold(slots, pins, _NT_TYPE, _nt_wrapper_type())
+            _td_hold(slots, _NT_TYPE, _nt_wrapper_type())
         if not py_err_occurred():
-            _td_hold(slots, pins, _NT_WRAPPER, py_instance_new(load_ptr(slots, _NT_TYPE * C_POINTER_SIZE)))
+            _td_hold(slots, _NT_WRAPPER, py_instance_new(load_ptr(slots, _NT_TYPE * C_POINTER_SIZE)))
         if not py_err_occurred():
             manager = load_ptr(slots, _NT_WRAPPER * C_POINTER_SIZE)
             py_obj_setattr(manager, cstr("_ready"), global_load_ptr("py_False"))
@@ -2009,7 +1915,7 @@ def _nt_entry(captures, args):
                 py_obj_setattr(manager, cstr("_ready"), global_load_ptr("py_True"))
                 if not py_err_occurred():
                     py_incref(manager)
-                    _td_hold(slots, pins, _TD_OUTPUT, manager)
+                    _td_hold(slots, _TD_OUTPUT, manager)
     if ptr_is_null(load_ptr(slots, _TD_OUTPUT * C_POINTER_SIZE)):
         if descriptor >= 0:
             close(descriptor)
@@ -2019,30 +1925,30 @@ def _nt_entry(captures, args):
         path = load_ptr(slots, _NT_PATH * C_POINTER_SIZE)
         if not ptr_is_null(path):
             unlinkat(py_str_utf8(path), 0)
-    return _nt_finish(slots, pins)
+    return _nt_finish(slots)
 
 
-def _td_add_method(cls, name, entry, captures, slots, pins) -> None:
+def _td_add_method(cls, name, entry, captures, slots) -> None:
     if py_err_occurred():
         return
-    _td_hold(slots, pins, _TYPE_METHOD, py_func_new_named(entry, captures, name))
+    _td_hold(slots, _TYPE_METHOD, py_func_new_named(entry, captures, name))
     if not py_err_occurred():
         py_class_setattr(cls, name, load_ptr(slots, _TYPE_METHOD * C_POINTER_SIZE))
-    _td_drop(slots, pins, _TYPE_METHOD)
+    _td_drop(slots, _TYPE_METHOD)
 
 
-def _td_add_init(cls, entry, captures, slots, pins) -> None:
+def _td_add_init(cls, entry, captures, slots) -> None:
     # Instance construction resolves __init__ from the method table
     # (py_class_lookup), not the attribute dict. Publish the function in both:
     # the attribute owns it, the table entry is a borrowed metadata slot.
     if py_err_occurred():
         return
-    _td_hold(slots, pins, _TYPE_METHOD, py_func_new_named(entry, captures, cstr("__init__")))
+    _td_hold(slots, _TYPE_METHOD, py_func_new_named(entry, captures, cstr("__init__")))
     if not py_err_occurred():
         method = load_ptr(slots, _TYPE_METHOD * C_POINTER_SIZE)
         if py_class_setattr(cls, cstr("__init__"), method) == 0:
             py_class_add_method(cls, cstr("__init__"), method)
-    _td_drop(slots, pins, _TYPE_METHOD)
+    _td_drop(slots, _TYPE_METHOD)
 
 
 @c_abi_export("py_tempdir_type")

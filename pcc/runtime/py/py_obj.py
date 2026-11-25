@@ -1024,16 +1024,14 @@ def pcc_gc_temp_root_enter_fresh(slot, value) -> None:
     count-free collectors, no provenance probe) no object a running thread
     names moves: the caller's own reference keeps the container alive (GC0
     finds it through that count) and a tracing mark reaches it through this
-    registered slot or the stopped stack. The slot then holds it uncounted
-    and unpinned, a plain store. Any other mode keeps the counted, pinned
-    root (unpin of the slot's previous value, pin, pcc_gc_store_root).
-    Only pcc_gc_temp_root_leave_fresh clears such a slot.
+    registered slot or the stopped stack. The slot then holds it uncounted,
+    a plain store. Any other mode keeps the counted root
+    (pcc_gc_store_root). Only pcc_gc_temp_root_leave_fresh clears such a
+    slot.
     """
     if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
         store_ptr(slot, 0, value)
         return
-    pcc_gc_unpin(load_ptr(slot, 0))
-    pcc_gc_pin(value)
     pcc_gc_store_root(slot, value)
 
 
@@ -1043,9 +1041,7 @@ def pcc_gc_temp_root_leave_fresh(slot) -> None:
     if load_i32(global_addr("pcc_gc_list_container_mode"), 0) != 0:
         store_ptr(slot, 0, null())
         return
-    pinned = pcc_gc_load_ptr(null(), slot)
     pcc_gc_store_root(slot, null())
-    pcc_gc_unpin(pinned)
 
 
 @c_abi_export("pcc_gc_store_root_take")
@@ -1853,7 +1849,6 @@ def pcc_gc_collect(reason: int) -> int:
 
 
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 
 
 @c_abi_export("pcc_gc_pin_slot_for_take")
@@ -1891,13 +1886,12 @@ def pcc_gc_pin_slot_for_take(slot, keep_pinned: int) -> int:
 
 @c_abi_export("pcc_gc_immortalize")
 def pcc_gc_immortalize(o) -> None:
-    # Mirror of C pcc_gc_immortalize: pin + set PY_FLAG_IMMORTAL (0x1) so
-    # py_incref/py_decref stop touching this object's refcount cache line.
+    # Set PY_FLAG_IMMORTAL (0x1) so py_incref/py_decref stop touching this
+    # object's refcount cache line. The one collector never moves it.
     if ptr_is_null(o) != 0:
         return
     if is_tagged_int(o) != 0:
         return
-    pcc_gc_pin(o)
     atomic_rmw_i32("or", o, PYOBJECTHEADER_FLAGS_OFFSET, PY_FLAG_IMMORTAL, "relaxed")
     return
 

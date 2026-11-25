@@ -65,9 +65,7 @@ py_exc_new_with_value = extern("py_exc_new_with_value", (c_int64, c_ptr), c_ptr)
 py_gen_send = extern("py_gen_send", (c_ptr, c_ptr), c_ptr)
 py_gen_throw = extern("py_gen_throw", (c_ptr, c_ptr), c_ptr)
 py_gen_close = extern("py_gen_close", (c_ptr,), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_reassert_pin = extern("pcc_gc_reassert_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
+pcc_gc_take_slot = extern("pcc_gc_take_slot", (c_ptr,), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -387,7 +385,8 @@ def _coroutine_resume(coro, value, error, slots, pins):
 # receiver/inputs/operand slots own the public call inputs. AUX and TEMP own
 # extracted delegates, callable/argument temporaries, or completion values.
 # RESULT and ERROR preserve the outcome across callbacks and owner release.
-# Each owner has a parallel legacy-pin slot and counted-lease token. The
+# Each owner has a parallel counted-lease token; the legacy-pin words
+# before them are unused since item 2 (d) and go with the leases (4c). The
 # final nonmanaged pins word remembers the borrowed-input frame to retire.
 _CORO_RECEIVER = 0
 _CORO_ARGS = 8
@@ -410,7 +409,6 @@ pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
-pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_tuple_len = extern("py_tuple_len", (c_ptr,), c_int64)
@@ -418,36 +416,24 @@ py_tuple_get = extern("py_tuple_get", (c_ptr, c_int64), c_ptr)
 py_func_new_bound = extern("py_func_new_bound", (c_ptr, c_ptr, c_ptr, c_ptr), c_ptr)
 
 
-def _coroutine_slot_pin(slots, pins, offset: int) -> None:
-    value = load_ptr(slots, offset)
-    store_i64(pins, offset, 0)
-    if ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        store_i64(pins, offset, load_i32(value, PYOBJECTHEADER_FLAGS_OFFSET) & 64)
-        pcc_gc_pin(value)
-
-
 def _coroutine_slot_adopt(slots, pins, offset: int) -> int:
     # A producer stores its NEW owner directly into the registered slot,
     # before calling this helper (whose entry can safepoint).
-    store_i64(pins, offset, -1)
     token: int = pcc_gc_foreign_lease_acquire(ptr_add(slots, offset))
     if token < 0:
         pcc_gc_store_root(ptr_add(slots, offset), null())
         _raise_runtimeerror(cstr("coroutine result owner lease failed"))
         return -1
     store_i64(pins, _CORO_LEASES_BASE + offset, token)
-    _coroutine_slot_pin(slots, pins, offset)
     return 0
 
 
 def _coroutine_slot_borrow(slots, pins, offset: int, source) -> int:
-    store_i64(pins, offset, -1)
     token: int = pcc_gc_root_copy_borrowed_lease(ptr_add(slots, offset), source)
     if token < 0:
         _raise_runtimeerror(cstr("coroutine argument owner lease failed"))
         return -1
     store_i64(pins, _CORO_LEASES_BASE + offset, token)
-    _coroutine_slot_pin(slots, pins, offset)
     return 0
 
 
@@ -457,12 +443,6 @@ def _coroutine_slot_drop(slots, pins, offset: int) -> None:
         pcc_platform_abort()
         return
     store_i64(pins, _CORO_LEASES_BASE + offset, 0)
-    value = load_ptr(slots, offset)
-    prior: int = load_i64(pins, offset)
-    if prior >= 0 and ptr_is_null(value) == 0 and is_tagged_int(value) == 0:
-        pcc_gc_unpin(value)
-        if prior != 0:
-            pcc_gc_reassert_pin(value)
     pcc_gc_store_root(slot, null())
 
 
@@ -476,33 +456,21 @@ def _coroutine_keep_error(slots, pins) -> None:
 def _coroutine_finish(slots, pins):
     if ptr_is_null(load_ptr(slots, _CORO_RESULT)):
         _coroutine_keep_error(slots, pins)
-    prior: int = load_i64(pins, _CORO_RESULT)
     offset: int = _CORO_RESULT
     while offset > 0:
         offset = offset - 8
-        if ptr_eq(load_ptr(slots, _CORO_RESULT), load_ptr(slots, offset)):
-            prior = load_i64(pins, offset)
         _coroutine_slot_drop(slots, pins, offset)
     if ptr_is_null(load_ptr(slots, _CORO_ERROR)) == 0:
         py_clear_exception()
-        error = load_ptr(slots, _CORO_ERROR)
-        error_prior: int = load_i64(pins, _CORO_ERROR)
         if pcc_gc_foreign_lease_release(ptr_add(slots, _CORO_ERROR), load_i64(pins, _CORO_LEASES_BASE + _CORO_ERROR)) != 0:
             pcc_platform_abort()
         py_tls_exc_swap_slot(ptr_add(slots, _CORO_ERROR))
-        if error_prior >= 0:
-            pcc_gc_unpin(error)
-            if error_prior != 0:
-                pcc_gc_reassert_pin(error)
-    result = load_ptr(slots, _CORO_RESULT)
-    if ptr_is_null(result) == 0 and is_tagged_int(result) == 0:
-        pcc_gc_reassert_pin(result)
     pcc_gc_frame_leave(slots)
     pcc_gc_frame_leave(load_ptr(pins, _CORO_BORROWED_FRAME))
     if pcc_gc_foreign_lease_release(ptr_add(slots, _CORO_RESULT), load_i64(pins, _CORO_LEASES_BASE + _CORO_RESULT)) != 0:
         pcc_platform_abort()
         return null()
-    return pcc_gc_take_pinned_slot(ptr_add(slots, _CORO_RESULT), prior)
+    return pcc_gc_take_slot(ptr_add(slots, _CORO_RESULT))
 
 
 def _coroutine_release_completed(slots, pins, keep_result: int) -> None:
