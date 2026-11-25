@@ -178,6 +178,15 @@ Stage1 on either platform; Linux x86-64 and Windows did. No fixed point proved.
 answers here or in chat; the agent that next takes the unit records the answer
 in the relevant section or issue and removes the entry.
 
+- Item 2 (d) against item 3 (c) J1 (asked by Claude, 2026-11-26). J1's
+  claim (17:53Z) names `py_class`, `py_obj_ops_dispatch` and
+  `freestanding_gc_root_operations`; the (d) plan needs them for U4's
+  second module, U5 and U11 (the take protocol and its ABI). Options:
+  (d) waits until J1 releases them; or J1 adds the take-protocol removal
+  in those two modules to its own changes. Claude's recommendation: (d)
+  waits; it continues with U2, U3, U4's `py_func` and the 4c files outside
+  J1's list.
+
 - Item 1, issues #9, #4 and #8 (asked by Claude, 2026-11-24). They describe
   collectors 1-4, which no longer exist: #9 weak callbacks and finalizers
   under acyclic resurrection on GC1-4, #4 a GC3 timeout with four carriers,
@@ -804,13 +813,36 @@ in the relevant section or issue and removes the entry.
    node fails for the same pre-existing `_path_clear_root_prefix` reason).
    Not run: the heavy files named above, integration, pcc1 and Linux.
    Remaining 4b: 14 modules, from `py_obj` (7 sites) to `py_class` (93).
+   (d) U1, 4b third batch (Claude, local Mac, `b9dfc1996`, tests
+   `b079efeab`): py_obj, py_coroutine, py_obj_ops_compare and py_tempfile
+   drop their pins. The coroutine finish takes its result through
+   `pcc_gc_take_slot`; its legacy-pin words stay unused until 4c removes
+   the lease tokens beside them. `pcc_gc_temp_root_enter_fresh`/`leave_fresh`
+   keep only the counted root, `pcc_gc_immortalize` no longer pins,
+   `sorted()` and borrowed `in` drop pin/unpin, and tempfile's prior-pin
+   array goes (its finishes take through `pcc_gc_take_slot`). Each module
+   compiles alone. Models: the coroutine protocol model takes through
+   `pcc_gc_take_slot`; the metadata-flag inventory loses the five tempfile
+   pin-restore sites (four left) and the native fixture expects no
+   immortalize pin; the tempfile IR checks look for the `_td_hold` and
+   `_td_register` calls in the raw IR, since an optimized body may inline
+   them (an inlined registration is its single root-handle registration;
+   HEAD already failed these three nodes for that reason). Host pcc0, by
+   node id against HEAD `8887e4917`, the 101 files naming those modules or
+   models have no new failing node. Not run:
+   `test_py_multi_file_bootstrap_shim.py` (over the 2.5 GiB tree cap),
+   integration (including the native metadata fixture), pcc1 and Linux.
+   Remaining 4b: 10 modules, from `py_exc_traceback` to `py_class` (93).
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
    the header/ABI freeze.
    Next for (d): the plan Claude runs without asking between units
    (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
-   Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2.
+   Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2,
+   U1. U4's `py_obj_ops_dispatch`, U5 and U11's edits of
+   `freestanding_gc_root_operations` wait while (c) J1 claims those files
+   (see "Waiting on maintainer").
    Units, in order, each one claim, commit and push (runtime first, then
    its test models, then the status result):
    (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
@@ -978,7 +1010,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) plan U1-U14 (the units under "Next for (d)", in order): Claude, macOS, 2026-11-25T17:56Z, area runtime-codegen
+   - (d) plan U1-U14 (the units under "Next for (d)", in order; not py_class, py_obj_ops_dispatch or freestanding_gc_root_operations while (c) J1 claims them): Claude, macOS, 2026-11-25T18:09Z, area runtime-codegen
 
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
