@@ -1306,6 +1306,22 @@ in the relevant section or issue and removes the entry.
    87 on HEAD, none new.
    (3) coroutines check "already executing" and then store the state with
    a plain store, so two threads may both pass; a probe decides.
+   Where the gap is (Claude, 2026-11-26, local Mac, `/usr/bin/time -l` over
+   1000 minus 200 requests): asyncio on CPython 3.15 executes about 155k
+   instructions and 30k cycles per handler request, pcc about 269k
+   instructions and 58k cycles; instructions per cycle are alike, so the gap
+   is the instruction count. In the j1 arm's profile, sampled time mapped to
+   instructions: callee-saved register saves and restores 10.2%, returns
+   12.5%, pointer authentication 3.2% (frame entry and exit at least 26%),
+   and about half of all samples fall in a function's first 12 instructions
+   or its last 8 before a return. The hot runtime helpers spend most of their
+   time there: `pcc_gc_store_root` (7.9% of the time, 51% at entry or exit,
+   saves 10 registers), `pcc_gc_release_known` 74%, `py_gen_frame_take` 75%,
+   `pcc_gc_granule_is_object_start` 62%, `py_decref` 58%, `free` 55%; json's
+   large functions under 3%. Next for (c): shrink-wrapping in the self
+   backend (save callee-saved registers only on the paths that use them),
+   checked first on one helper's fast path with `instr`; a design note
+   before the change, which needs the native and bootstrap gates.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
