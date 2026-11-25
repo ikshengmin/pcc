@@ -1202,7 +1202,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - (c) J1 json hot-path overheads: Claude, macOS, 2026-11-25T17:53Z, area runtime-gc (py_list, py_list_set_slice, py_class, py_gc_backend, freestanding_allocator, freestanding_thread_kernel_pthread, py_obj_ops_dispatch, py_runtime_log and their tests; not py_obj)
+   - (c) J1 json hot-path overheads: Claude, macOS, 2026-11-25T17:53Z, area runtime-gc (py_list, py_list_set_slice, py_class, py_gc_backend, freestanding_allocator, freestanding_thread_kernel_pthread, py_obj_ops_dispatch, py_runtime_log, py_dict, freestanding_gc_root_operations and their tests; not py_obj)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
