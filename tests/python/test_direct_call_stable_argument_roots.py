@@ -91,9 +91,8 @@ def test_direct_call_pins_only_unrooted_arguments(monkeypatch):
     body = _function(text, "user_binding_later")
     make_call = re.search(r"\bcall [^\n]*@user_binding_make\(", body)
     assert make_call is not None, body
-    for reference in arguments[:2]:
-        pin = re.search(r"@pcc_gc_pin\(ptr " + re.escape(reference) + r"\)", body)
-        assert pin is not None and pin.start() < make_call.start(), body
+    # One collector: the tracked arguments are not pinned (item 2 (d)).
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?:un)?pin\(", text)
 
     # The assignment expression rebinds ``a`` after its first read.
     (arguments, pinned), = calls["user_binding_rebound"]
