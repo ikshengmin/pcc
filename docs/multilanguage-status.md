@@ -14,20 +14,26 @@ upstream tests. Mainlines compile source directly to PCC IR.
 | Go | Go 1.27.3 `math/bits`, whole package and tests | Local Mac and Linux x86-64 container: dynamic integer division checks its divisor (terminal `runtime.divideError` panic, signed MIN/-1) and a runtime-owned error is admitted as a terminal panic operand, so every normal production file of the package now lowers to owned IR (previously `bits.go:507:9`). The internal test package (`export_test.go`) also lowers. Slice types now parse everywhere (the checker keeps the slice-storage gap) and array literals take elided element types (owned arm64 Darwin execution matches a local go1.23.6 reference), so the external test package parses past the `TestReverse` table (`bits_test.go:458:23`, `:461:3`). Function types and literals now parse (function values are an explicit checker gap), then the `defer` statement at `bits_test.go:851:4`; `defer` now parses and its checked call is the explicit `go.unsupported.defer` gap (positions of its syntax errors match a local go1.23.6), then the type assertion `err.(runtime.Error)` at `bits_test.go:1038:26`; type assertions now parse (assertions on interface values stay the interface-types gap), so the whole `bits_test.go` parses, then stopped at its import of `runtime` (`bits_test.go:9:2`). An owned, partial `runtime` package now provides `runtime.Error` (other names are the explicit `go.unsupported.owned-runtime-surface` gap), then stopped at the `testing` import, `bits_test.go:10:2`. The original Go 1.27.3 standard-library closure of `testing`, `fmt`, `os` and `testing/internal/testdeps` is now pinned (107 packages, 667 unchanged `.go` files for linux/darwin on amd64/arm64 from the official `go1.27.3.src.tar.gz`; `tests/go/upstream/go1.27.3/pcc-std-closure-lock.json`, `scripts/pin_go_std_closure.py`; compiler-owned `runtime*`/`unsafe` excluded), so the external test package compiles into the original `testing` package and stopped at its first file, `testing/allocs.go:20:44`, a `float64` result. `float32`/`float64` now work (exact float constants with half-to-even typed rounding, arithmetic, IEEE comparisons, conversions, switch, arrays and struct fields; printing floats and float `min`/`max` stay explicit; an original program runs natively on the Mac and matches go1.23.6), so the closure stops at `testing/benchmark.go:53:32`, the slice expression `s[:len(s)-1]`, which the parser still reports as an unsupported expression token rather than a slicing boundary. The upstream tests remain unrun: they need closures, slices, `defer`, the `testing`/`fmt`/`os` closure, a test entry, and `defer`/`recover` for the panic tests. | Slice expressions in the pinned `testing` closure (`testing/benchmark.go:53:32`; parse them, then gap slice values explicitly), printing floats, then the rest of that closure, `unsafe.Sizeof`, closures/function values, interface values with type assertions and deferred calls with `recover`, then slice storage on the shared managed allocator; owned package-test entry and dependency closure; interface values and runtime error objects beyond panic operands; recoverable panics. Keep the official reference strict. |
 | Rust | `fallible-streaming-iterator` 0.1.9 | CI integration [45619704293](https://github.com/ikshengmin/pcc/actions/runs/45619704293/job/139281128980), exact artifact 15033286334: certification passes, but owned resolution rejects the original `lib.rs:22:1` `use core::cmp;`; the next import is `core::marker::PhantomData`. The earlier parser frontiers (associated constraints, tuple structs/patterns, match guards) do not establish project acceptance. Closed pinned non-system source dependencies now compile and link nested public modules and explicit edition-2015 extern crates; Linux native regression passes, official reference for the new fixture is pending. No PCC project object. | Build a real pinned core closure and owner for its `#![no_core]` and compiler/lang-item attributes (retained Rust 1.90.0 core root currently fails at line 75). Resolve the edition-selected prelude from real definitions, then support foreign nominal and trait identities, Option/Result, generic/blanket impl and associated projections, and closure types. Keep the original project gate strict. |
 
-**TinyXML2 Linux pcc0, destructor exception specifications.** Following
+**TinyXML2 Linux pcc0, D1 and static function linkage.** Following
 the approval in [#14](https://github.com/ikshengmin/pcc/issues/14), the
-unchanged TinyXML2 11.0.0 project progresses past `tinyxml2.cpp:1199:9`
-(`node->~XMLNode()`) to file-scope static function declaration
-`tinyxml2.cpp:2310:1` (`cpp.unsupported.function-storage`, `callfopen`).
-The TU SHA-256 remains
+unchanged TinyXML2 11.0.0 project advances past `tinyxml2.cpp:1199:9`
+(`node->~XMLNode()`) and `2310:1` (file-scope static `callfopen`).
+It now fails at `2580:1`, the XMLPrinter constructor with DynArray
+subobjects, `cpp.unsupported.destructor-subobjects`: unknown construction
+effects require partial member exception cleanup. A user-provided
+constructor without a non-throwing exception specification cannot inherit
+the destructor rule. The TU SHA-256 remains
 `95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554`.
 This is a failed compile at the next independent language boundary, not
 a passed TinyXML2 project. Native pcc1 is separately blocked at
 `pcc.frontends.cpp.parser.parse`'s no-libpython function stub.
 
-Ordinary C++: 6009 passed, 49 subtests passed on Linux CPython 3.15
-(host pcc0); the new and revised D1 controls execute actual owned ELF
-binaries and match g++ 14.2. Non-throwing D1 calls use their exception
+Ordinary C++: 6033 passed, 49 subtests passed on Linux CPython 3.15
+(host pcc0); 11 new static-function programs and the preceding D1
+controls execute actual owned ELF binaries and match g++ 14.2.
+Namespace-scope static declarations retain their TU-local identity
+through definitions/redeclarations, with the Itanium local-name marker
+and no cross-TU coalescing; internal inline uses the same owner. Non-throwing D1 calls use their exception
 specification; potentially-throwing calls still require a closed direct
 effect path, and open potentially-throwing virtual dispatch is rejected.
 The former local-leaf/recursive proof experiments and the next

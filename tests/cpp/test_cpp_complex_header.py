@@ -103,7 +103,7 @@ def test_target_without_external_odr_keeps_declarations_not_strong_fallback(targ
 @pytest.mark.parametrize('source', (
     'namespace n { inline int global=1; }',
     'namespace n { inline int later(int); }',
-    'namespace { inline int f(int n){return n;} }',
+    # This internal-linkage inline original is now executed by test_cpp_file_static_functions.
     'inline int f(int n){return n;}',
     'namespace n{inline int f(){static int a=0;return ++a;}}',
     'namespace n{inline inline int f(){return 0;}}',

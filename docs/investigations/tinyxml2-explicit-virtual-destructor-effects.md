@@ -154,3 +154,34 @@ Next: generic file-scope static function linkage at `2310:1`; constructor
 and deallocation exception specifications and native pcc1 parser execution
 remain independent obligations. Keep the existing potentially-throwing
 effect graph where it is needed.
+
+
+## Next independent namespace-linkage slice (2026-11-25)
+
+Starting master `775384f6` plus the ordinary static-function patch,
+the source owner now resolves linkage from the parsed declaration
+specifiers and canonical overload, rather than the previous literal
+`static inline` prefix. Names inside namespaces retain the Itanium
+local-source-name marker. No external ODR publication is added to
+internal inline functions; the existing non-template out-of-class
+inline and external-inline boundaries remain, as does the existing
+member-template ODR owner.
+
+Linux host pcc0, CPython 3.15.0, G++ 14.2.0: 6033 ordinary C++ tests
+and 49 subtests pass (47.14 s; process-tree peak 197144576 bytes, under
+90 s / 1 GiB). Eleven `test_cpp_file_static_functions.py` integration
+originals match the independently compiled G++ outputs; same-name
+functions in different TUs have distinct local ELF symbols. An unresolved
+used static declaration does not link to another TU's definition.
+
+The unchanged TinyXML2 11.0.0 host project test advances beyond
+`2310:1` (`static FILE* callfopen`) and reaches
+`tinyxml2.cpp:2580:1: cpp.unsupported.destructor-subobjects: unknown
+construction effects require partial member exception cleanup` in
+`XMLPrinter::XMLPrinter`, which constructs `_stack` and `_buffer`
+DynArray subobjects and calls `_buffer.Push(0)`. TU SHA256 is unchanged
+(`95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554`).
+Reproduce with the exact host project test above, not a modified fixture.
+This is not a new passed upstream executable. The next blocker requires
+the generic constructor/partial construction exception owner; a
+user-provided constructor has no implicit non-throwing guarantee.

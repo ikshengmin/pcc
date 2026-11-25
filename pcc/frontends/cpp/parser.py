@@ -241,10 +241,6 @@ class CppParser:
             if self._accept(";"):
                 continue
             value = self._peek().value
-            if (value == "inline" and self.cursor.tokens[self.cursor.position + 1].value != "namespace"
-                    and (not self.scope.namespace_path() or self.scope.internal_linkage)):
-                raise CppDiagnostic("cpp.unsupported.inline-declarations",
-                                    "inline object/function ODR emission is not implemented", self._peek().coord)
             if (value == "extern" and
                     self.cursor.tokens[self.cursor.position + 1].kind == "STRING_LITERAL"):
                 declarations.extend(self._linkage_specification())
@@ -1031,14 +1027,11 @@ class CppParser:
         named_scope = (member_definition is None and self.scope.kind == "namespace"
                        and bool(self.scope.namespace_path()) and not self.scope.internal_linkage
                        and not template_parameters and self.language_linkage is None)
-        file_static_inline = (
-            member_definition is None and self.scope.parent is None
-            and not template_parameters and self.language_linkage is None
-            and self._peek().value == "static"
-            and self.cursor.tokens[self.cursor.position + 1].value == "inline"
-        )
-        inline_specifiers = [] if (member_definition is not None or named_scope
-                                   or template_parameters or file_static_inline) else None
+        # Collect declaration specifiers before deciding linkage. The order
+        # of static, inline and the type specifiers does not change its kind.
+        namespace_declaration = (member_definition is None and self.scope.kind == "namespace")
+        inline_specifiers = [] if (member_definition is not None or namespace_declaration
+                                   or template_parameters) else None
         virtual_specifier = None
         while (self._peek().value in ("extern", "static")
                or inline_specifiers is not None and self._peek().value == "inline"
@@ -1203,18 +1196,13 @@ class CppParser:
             from pcc.frontends.cpp.references import check_result, ordinary_class_result_context
             check_result(result_type, name.coord,
                          allow_class=not template_parameters and ordinary_class_result_context(self))
-        if named_scope and inline_specifiers and (not is_function or member_owner is not None
-                or namespace_owner is not None or storage is not None or self._peek().value != "{"):
-            raise CppDiagnostic("cpp.unsupported.inline-declarations",
-                                "named namespace inline currently requires an unqualified function definition",
-                                name.coord)
         if not is_function:
             if constexpr is not None:
                 raise CppDiagnostic("cpp.unsupported.constexpr-templates",
                                     "constexpr variable template semantics are not implemented", constexpr.coord)
             if inline_specifiers:
-                code = ("cpp.unsupported.inline-declarations" if storage is not None
-                        and storage.value == "static" else "cpp.invalid-inline-specifier")
+                code = ("cpp.unsupported.inline-declarations" if member_owner is None or
+                        storage is not None and storage.value == "static" else "cpp.invalid-inline-specifier")
                 raise CppDiagnostic(code, "this inline member specifier requires a function definition", name.coord)
             if name.kind == "OPERATOR_FUNCTION_ID":
                 raise CppDiagnostic("cpp.invalid-allocation-function", "operator name must declare a function", name.coord)
@@ -1230,10 +1218,14 @@ class CppParser:
             return parse_namespace_object(self, name, result_type, storage, implicit_extern)
         if array_type(result_type) or function_type(result_type):
             raise CppDiagnostic("cpp.invalid-function-return", "a function cannot return an array or function", name.coord)
-        if (member_owner is None and storage is not None and not file_static_inline
-                and (storage.value == "static" or template_parameters)):
+        explicit_static = (member_owner is None and storage is not None and storage.value == "static")
+        if member_owner is None and storage is not None and template_parameters:
             raise CppDiagnostic("cpp.unsupported.function-storage",
-                                "function storage specifiers require function linkage semantics", storage.coord)
+                                "function template storage requires instantiation linkage semantics", storage.coord)
+        if (member_owner is None and name.value == "main" and not function_scope.namespace_path()
+                and (explicit_static or inline_specifiers)):
+            raise CppDiagnostic("cpp.invalid-main-linkage",
+                                "main cannot be declared static or inline", name.coord)
         if self.scope.lookup_lexical(name.value) is not None and self.scope.lookup_lexical(name.value).kind in ("template-type", "template-value"):
             raise CppDiagnostic("cpp.template-parameter-shadowing",
                                 "function name shadows a template parameter", name.coord)
@@ -1270,14 +1262,14 @@ class CppParser:
                                 and declaration_scope.kind == "namespace" and self._peek().value == "="
                                 and self.cursor.tokens[self.cursor.position + 1].value == "delete")
         definition = self._peek().value == "{" or deleted_template
-        if file_static_inline and (not definition or namespace_owner is not None
-                                   or member_owner is not None or name.value == "main"):
+        if (inline_specifiers and member_owner is not None and member_definition is None
+                and not template_parameters):
             raise CppDiagnostic("cpp.unsupported.inline-declarations",
-                                "file-scope static inline requires a local function definition", name.coord)
+                                "out-of-class non-template inline member definitions require separate ODR tracking", name.coord)
         if inline_specifiers and template_parameters and member_owner is None:
             raise CppDiagnostic('cpp.unsupported.inline-declarations',
                                 'inline free function templates require separate ODR tracking', name.coord)
-        if inline_specifiers and not definition:
+        if inline_specifiers and not definition and member_owner is not None:
             raise CppDiagnostic("cpp.unsupported.inline-member-declarations",
                                 "explicit inline member declarations without an in-class body need separate ODR tracking", name.coord)
         if variadic and any(isinstance(t, ReferenceType) for _, t in params):
@@ -1347,7 +1339,7 @@ class CppParser:
         new_symbol = Symbol(name.value, "function", name.coord, arity=len(params), dtype=result_type,
                             parameters=tuple(unqualified(dtype) for param, dtype in params))
         new_symbol.explicit_inline = bool(inline_specifiers)
-        new_symbol.internal_linkage = file_static_inline
+        new_symbol.internal_linkage = explicit_static
         new_symbol.constexpr = constexpr is not None
         new_symbol.deleted_template = deleted_template
         new_symbol.variadic = bool(variadic)
@@ -1367,7 +1359,7 @@ class CppParser:
                    for dtype in (result_type,) + new_symbol.parameters):
                 raise CppDiagnostic("cpp.unsupported.c-linkage-signature",
                                     "C-linkage signatures require declarable fundamental scalars or pointers", name.coord)
-            if function_scope.internal_linkage:
+            if function_scope.internal_linkage or explicit_static:
                 raise CppDiagnostic("cpp.unsupported.c-linkage-internal",
                                     "C function type with internal name linkage is not implemented", name.coord)
         registry = function_scope if declaration_scope is None else declaration_scope
@@ -1389,6 +1381,16 @@ class CppParser:
             symbol = declare_namespace_function(namespace_owner, new_symbol, definition)
         else:
             symbol = registry.declare_function(new_symbol, definition)
+        if inline_specifiers and member_owner is None:
+            # The selected canonical declaration owns linkage, including a
+            # plain or extern definition of a previously static declaration.
+            # Internal inline function definitions never need external ODR
+            # emission; preserve the existing external-inline boundary.
+            if symbol.internal_linkage:
+                symbol.explicit_inline = True
+            elif not (named_scope and namespace_owner is None and storage is None and definition):
+                raise CppDiagnostic("cpp.unsupported.inline-declarations",
+                                    "external inline requires the admitted named namespace definition", name.coord)
         if definition and (symbol.nonthrowing or symbol.noreturn):
             raise CppDiagnostic("cpp.unsupported.exceptions", "definitions of inherited function contracts require runtime enforcement", name.coord)
         if template_parameters:
@@ -1468,7 +1470,7 @@ class CppParser:
             if not definition:
                 self._expect(';')
                 return declaration
-            if named_scope and inline_specifiers:
+            if named_scope and inline_specifiers and not symbol.internal_linkage:
                 from pcc.backend.definition_linkage import supports_external_odr_function_definitions
                 if not supports_external_odr_function_definitions(self.types.target_triple):
                     raise CppDiagnostic('cpp.unsupported.inline-declarations',
@@ -1498,7 +1500,7 @@ class CppParser:
                 this_symbol, collect_body(self), name.coord,
             ))
             return declaration
-        if named_scope and inline_specifiers:
+        if named_scope and inline_specifiers and not symbol.internal_linkage:
             from pcc.backend.definition_linkage import supports_external_odr_function_definitions
             if not supports_external_odr_function_definitions(self.types.target_triple):
                 raise CppDiagnostic("cpp.unsupported.inline-declarations",

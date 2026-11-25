@@ -464,15 +464,27 @@ including the unchanged header matches the separately compiled g++
 reference; this is not native pcc1 or TinyXML2 project acceptance.
 
 
-### File-scope static inline definitions
+### Namespace-scope static functions
 
-An unqualified non-template file-scope function definition with the literal
-`static inline` prefix is lowered as a TU-local C function. [basic.link] and
-[dcl.inline] do not convert it to an external or weak ODR definition. A Linux
-test links two same-name functions in different TUs without merging them,
-checks their local ELF bindings, and matches the explicit g++ reference.
-Declaration-only, named-namespace and external-inline extensions are not
-admitted by this change.
+N4659 [basic.link]/3-4 and [dcl.stc]: an ordinary namespace-scope static
+function has internal linkage. Its declaration and later definition share
+one canonical overload even if later declared without static or with
+extern; a static declaration cannot replace prior external linkage.
+Storage and inline specifiers are collected independently of their order.
+The Itanium local-source-name marker belongs to the function name inside
+a namespace as well as in the global namespace. The shared C projection
+emits TU-local symbols and does not introduce external or weak ODR
+linkage for internal inline functions. This supports forward prototypes,
+qualified definitions of a declared namespace function, independent
+overloads, and internal inline in an unnamed namespace. A referenced
+missing local definition cannot bind to another TU's same-name function.
+
+Eleven original programs match Linux g++ with exact execution streams.
+Cross-TU tests also inspect independent local ELF bindings. Unimplemented
+static function-template instantiation linkage, internal names with C
+function language linkage, inline objects, and unadmitted external-inline
+ODR shapes remain explicit boundaries. This is host pcc0 execution, not
+native pcc1 or full-project qualification.
 
 
 ### Namespace static const arrays of trivial aggregates

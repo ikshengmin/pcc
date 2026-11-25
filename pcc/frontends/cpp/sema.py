@@ -564,9 +564,10 @@ class Scope:
                 registry[symbol.name] = symbol
             symbol.c_name = symbol.name
         elif not symbol.template_parameters:
-            symbol.c_name = mangle_function(symbol.name, symbol.parameters, self.namespace_path(), symbol.variadic)
-            if symbol.internal_linkage:
-                symbol.c_name = "_ZL" + symbol.c_name[2:]
+            symbol.c_name = mangle_function(
+                symbol.name, symbol.parameters, self.namespace_path(), symbol.variadic,
+                local_name=symbol.internal_linkage,
+            )
         if previous is None:
             previous = Symbol(symbol.name, "function", symbol.coord)
             self.names[symbol.name] = previous

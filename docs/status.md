@@ -918,14 +918,18 @@ in the relevant section or issue and removes the entry.
    [#14](https://github.com/ikshengmin/pcc/issues/14):
    implicit/explicit destructor exception specifications and the non-throwing
    override rule now select ordinary versus effect-gated D1 destruction.
-   Linux pcc0: 6009 ordinary tests and 49 subtests passed; cross-TU D1
-   controls match g++ 14.2. Unchanged TinyXML2 moves past `1199:9` to
-   `tinyxml2.cpp:2310:1`, `static FILE* callfopen(...)`:
-   `cpp.unsupported.function-storage`. Next C++ unit: generic file-scope
-   static function linkage, not a project exception. Constructor/deallocation
-   exception specifications and actual throw/terminate execution remain
-   separate obligations. Native pcc1 still stops at the parser's
-   no-libpython stub; no upstream executable or full C++ integration pass.
+   Linux pcc0: cross-TU D1 controls match g++ 14.2. Generic TU-local
+   static function linkage now preserves ordinary declarations, qualified
+   definitions and internal inline semantics independent of specifier order.
+   6033 C++ ordinary tests and 49 subtests passed; 11 new owned ELF
+   programs match g++ 14.2. Unchanged TinyXML2 advances past `1199:9`
+   and `2310:1` to `tinyxml2.cpp:2580:1`, the XMLPrinter constructor:
+   `cpp.unsupported.destructor-subobjects`, unknown construction effects
+   need partial member exception cleanup. Next C++ unit: shared constructor
+   exception/partial-subobject cleanup ownership (constructors are not
+   implicitly non-throwing), not a fixture-specific exemption. Native pcc1
+   still stops at the parser's no-libpython stub; no upstream executable
+   or full C++ integration pass.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -955,7 +959,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - TinyXML2 generic file-scope static function linkage: Codex, Linux x86_64, 2026-11-25 16:10 UTC, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

@@ -2054,7 +2054,9 @@
       ],
       "scope": "Only inputs routed to cpp.unsupported.function-storage in the pinned frontend; this is an explicit capability boundary, not a claim that the entire corresponding specification feature is absent or implemented.",
       "status": "explicitly_unimplemented",
-      "tests": [],
+      "tests": [
+        "tests/cpp/test_cpp_file_static_functions.py::test_unsupported_or_conflicting_linkage_never_reaches_projection"
+      ],
       "diagnostics": [
         "cpp.unsupported.function-storage"
       ],
@@ -4333,7 +4335,7 @@
         "basic.link",
         "dcl.inline"
       ],
-      "scope": "The exact static inline prefix admits an unqualified file-scope non-template C++ function definition, other than main. Both IR and ELF keep the symbol TU-local; two original TUs using same-name functions independently match Linux g++ in raw execution. No declaration-only, namespace, external weak-ODR or native pcc1 extension is implied.",
+      "scope": "The exact static inline prefix admits an unqualified file-scope non-template C++ function definition, other than main. Both IR and ELF keep the symbol TU-local; two original TUs using same-name functions independently match Linux g++ in raw execution. No declaration-only, namespace, external weak-ODR or native pcc1 extension is implied. This historical prefix-only admission is superseded by cpp.file-static-functions for ordinary namespace-scope functions.",
       "tests": [
         "tests/cpp/test_cpp_file_static_inline.py::test_file_static_inline_does_not_export_or_coalesce",
         "tests/cpp/test_cpp_file_static_inline.py::test_file_static_inline_executes_against_explicit_cpp17",
@@ -4628,6 +4630,57 @@
         "cpp.destructors.exception-specifications.linux.unit",
         "cpp.destructors.exception-specifications.linux.program",
         "cpp.destructors.exception-specifications.linux.differential"
+      ]
+    },
+    {
+      "id": "cpp.file-static-functions",
+      "title": "Ordinary namespace-scope static function linkage",
+      "chapter_ids": [
+        "basic.link",
+        "dcl.inline",
+        "dcl.dcl"
+      ],
+      "scope": "Ordinary explicitly static namespace-scope declarations and definitions use one canonical TU-local function identity, including redeclarations with extern/omitted static, qualified definitions, independent overloads and internal inline independent of specifier order. The Itanium local-name marker is encoded at the function leaf and the shared C/ELF owner retains local binding. Unused prototypes are allowed; a referenced missing local body cannot link to another TU. Main cannot be static or inline. Internal inline in unnamed namespaces uses the same owner. Static function templates, C language-linkage function types with internal names, inline objects, unadmitted external-inline ODR and native pcc1 remain unqualified. Linux host-pcc0/self evidence, unchanged TinyXML2 still not a project pass.",
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:632becb86bfc22a80638e489371655bce13ba2e2bc2839de6e01bba51903b81e",
+        "sources": [
+          {
+            "path": "pcc/frontends/c/codegen/c_codegen.py",
+            "sha256": "ffa3b8299d9cc2fd6aef2ea2213e1a2e8d176ffba46fbf42d72c7365237d7da3"
+          },
+          {
+            "path": "pcc/frontends/cpp/namespace_functions.py",
+            "sha256": "e35078cfe57cac1ab7b058e5aa068142ad2c586099baa3c052988d7898be2ef7"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "0e0b775fd0885fe974043b08736b2d9ca2c12e62102d0e5b1cd9519a151b8e11"
+          },
+          {
+            "path": "pcc/frontends/cpp/sema.py",
+            "sha256": "2fb8a7d3df73cdc8a4cd5cee8080597cd0f129e341d94c307df20e26125fa7c2"
+          },
+          {
+            "path": "pcc/frontends/cpp/types.py",
+            "sha256": "56626554eaf538cfd1d9253489e80b6961230834f3ffe44cfc3e7cb5bf83459c"
+          }
+        ]
+      },
+      "tests": [
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_functions_are_local_and_never_coalesced",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17[plain-static-separate-tus]",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_have_owned_elf_artifacts",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_prototype_and_definition_share_canonical_identity",
+        "tests/cpp/test_cpp_file_static_functions.py::test_unsupported_or_conflicting_linkage_never_reaches_projection",
+        "tests/cpp/test_cpp_file_static_functions.py::test_missing_internal_definition_cannot_resolve_to_another_tu"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.file-static-functions.linux.unit",
+        "cpp.file-static-functions.linux.program",
+        "cpp.file-static-functions.linux.differential"
       ]
     }
   ],
@@ -10443,6 +10496,131 @@
         "kind": "raw_process_streams"
       },
       "verification_note": "input_sha256 is the SHA256 of the canonical sorted JSON TU-name to original source SHA256 map (no whitespace). Identical original program TU bytes; G++ force-includes genuine <new> for the reserved placement definition."
+    },
+    {
+      "source_revision": "sha256:632becb86bfc22a80638e489371655bce13ba2e2bc2839de6e01bba51903b81e",
+      "source": {
+        "path": "tests/cpp/test_cpp_file_static_functions.py",
+        "sha256": "4f22f42a4b9894299af7d73f8806fcda00b5a438682a0da17e2818282dc5f92c"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "id": "cpp.file-static-functions.linux.unit",
+      "test_id": "tests/cpp/test_cpp_file_static_functions.py::test_static_functions_are_local_and_never_coalesced",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_functions_are_local_and_never_coalesced",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "b72c7c946be3d3e0c10eb2cc1c3838c1b38f0213e52cbf0ec0d6a8bd3c2d8bff",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Unit passed within the complete 6033-node ordinary C++ run (49 subtests); stream hashes refer to that aggregate run; command is reproduction."
+    },
+    {
+      "source_revision": "sha256:632becb86bfc22a80638e489371655bce13ba2e2bc2839de6e01bba51903b81e",
+      "source": {
+        "path": "tests/cpp/test_cpp_file_static_functions.py",
+        "sha256": "4f22f42a4b9894299af7d73f8806fcda00b5a438682a0da17e2818282dc5f92c"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17[plain-static-separate-tus]",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17[plain-static-separate-tus]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "3fe0f783259b3c949221b6deeaf958859c06827fb94af80695b16dff954207ae",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.file-static-functions.linux.program",
+      "kind": "program"
+    },
+    {
+      "source_revision": "sha256:632becb86bfc22a80638e489371655bce13ba2e2bc2839de6e01bba51903b81e",
+      "source": {
+        "path": "tests/cpp/test_cpp_file_static_functions.py",
+        "sha256": "4f22f42a4b9894299af7d73f8806fcda00b5a438682a0da17e2818282dc5f92c"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17[plain-static-separate-tus]",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_file_static_functions.py::test_static_function_originals_match_cpp17[plain-static-separate-tus]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "3fe0f783259b3c949221b6deeaf958859c06827fb94af80695b16dff954207ae",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.file-static-functions.linux.differential",
+      "kind": "differential",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "3fe0f783259b3c949221b6deeaf958859c06827fb94af80695b16dff954207ae"
+      },
+      "expected": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "input_sha256 is the SHA256 of the canonical sorted JSON map of original TU filenames to exact source SHA256. Reference includes its labeled external result observer; identical original program bytes."
     }
   ]
 }

@@ -46,7 +46,7 @@ def test_file_static_inline_executes_against_explicit_cpp17(tmp_path):
 @pytest.mark.parametrize(("source", "code"), [
     ("int f(); static inline int f(){return 1;}", "cpp.conflicting-function-linkage"),
     ("static inline int x=0;", "cpp.unsupported.inline-declarations"),
-    ("static inline int main(){return 0;}", "cpp.unsupported.inline-declarations"),
+    ("static inline int main(){return 0;}", "cpp.invalid-main-linkage"),
 ])
 def test_file_static_inline_does_not_admit_other_storage_shapes(source, code):
     with pytest.raises(CppDiagnostic) as error:
