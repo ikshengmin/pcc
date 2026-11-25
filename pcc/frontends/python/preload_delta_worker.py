@@ -7,8 +7,9 @@ only on the exports, so contiguous slices of the roots run in parallel
 workers; the coordinator assigns type ids in root order afterwards, which
 keeps the index identical to the serial build.
 
-Wire: the exports file is the full-graph native exports wire; the roots file
-lists one root per line; the result is ``_native_export_to_wire`` of
+Wire: the exports file uses the ordinary native exports wire over the whole
+module graph (the coordinator sends only complete class records); the roots
+file lists one root per line; the result is ``_native_export_to_wire`` of
 ``((root, drop_keys, ((key, descriptor), ...)), ...)``.
 """
 

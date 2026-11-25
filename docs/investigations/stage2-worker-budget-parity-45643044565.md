@@ -280,3 +280,125 @@ and Windows inline-error edge emission (2). No failure is suppressed or
 reclassified as a pass. Full bootstrap, native Windows and Mac execution
 are not claimed; the result is a measured local native compiler-owner
 optimization, not an end-to-end Stage2 speedup or fixed point.
+
+## Follow-up: complete class-only preload transport
+
+The 330.465 s native preload phase was independently investigated. Every
+root-delta worker receives a full module graph; `_preload_unique_external_classes`,
+`_class_type_from_export`, `_resolve_export_type_refs` and
+`resolve_class_base_export` only admit class records. Preserve all module
+keys (including classless owners), visible class/re-export keys, the entire
+class record, and insertion order. The new
+`type_infer.preload_class_export_surface` is used only before the preload
+worker wire is written. Codegen and the ordinary full export graph remain
+unchanged; no class field list, re-export identity, dependency slice or
+root shard size is truncated.
+
+The existing serial-order witness also independently failed: the qualified
+resolver's new qualified-only alias insertion (necessary for recursive
+same-name/enum correctness) placed a freshly resolved top-level unique
+class's qualified key before its bare key. Previously expected
+`(("Shared", 20), ("dup_b.Shared", 20))` became the reverse. A top-level
+unique preload now explicitly binds through the existing bare-then-qualified
+registration; recursive qualified resolution still never writes an
+ambiguous bare name. The original order assertions remain intact.
+
+### Actual short native worker measurement
+
+Compiler is the original Linux Stage1 ELF from artifact 15039495663,
+SHA256 `1c0456d4a0e90d10fc57b4ebaa500e6a21801612ba94a341a4b33588d5cdc69e`.
+Recover actual source ordering from Stage1's export-admission indices in
+artifact 15041691913. From frozen `5f101c61`, select the first 96 module
+indices and the additional names below (duplicates removed in original
+index order); 102 actual compiler modules, 4,843,048 source bytes:
+
+```text
+pcc.frontends.python.py_ast
+pcc.frontends.python.type_infer
+pcc.frontends.python.export_meta
+pcc.frontends.python.pipeline_context
+pcc.frontends.python.pipeline_exports
+pcc.frontends.python.pipeline_closed_world
+pcc.frontends.python.codegen.class_gen
+pcc.frontends.c.codegen.c_codegen
+pcc.ir.ir
+pcc.frontends.cpp.parser
+pcc.backend.self_backend_precise_stackmaps
+```
+
+Use the frozen host's `build_closed_world_context(paths, names)` and existing
+`_write_native_exports_wire` to generate the full graph and its class-only
+projection, retaining every complete class record. This is a real subset
+of the bootstrap source, not the complete 621-module CI graph. Full wire
+4,448,146 B (4,037 records) versus 1,816,064 B (417 class records), reductions
+59.2% and 89.7%. The preimage serial index for all 102 module roots (43
+sensitive) was byte-identical across those two inputs.
+
+Full input SHA256:
+`d6ee0e846d385484f420974584b65b5637d350531da32252e9ae2521d90e1734`.
+Projected input SHA256:
+`9b96e1f99654c5394de7bbe7599420eecece70b4ea418a933bbef94285a4786c`.
+Eight sensitive roots, the first four and last four in that graph:
+
+```text
+pcc.package.metadata
+pcc.package.inspect
+pcc.package.build_plan
+pcc.package.build_exec
+pcc.ir.ir
+pcc.frontends.python.codegen.class_gen
+pcc.frontends.c.codegen.c_codegen
+pcc.frontends.cpp.parser
+```
+
+Run the very same historical native binary and same root file for both
+arms, five alternating pairs, 90 s / 1 GiB process-tree guards and one
+exclusive measurement window; no host compiler fallback or runtime build:
+
+```sh
+python scripts/run_process_tree_sample.py --timeout 90 \
+  --max-tree-rss-bytes 1073741824 --interval .1 --performance-lock \
+  --result <result> --samples <samples> --stdout <stdout> --stderr <stderr> \
+  --cwd <frozen source> -- <verified pcc1> --pcc-preload-delta-worker \
+  <full-or-class-only.json> <roots.txt> <deltas.json>
+```
+
+| Pair | Full s | Class-only s | Full peak tree RSS B | Class-only peak B |
+| --- | ---: | ---: | ---: | ---: |
+| 1 | 3.151 | 1.586 | 185532416 | 146534400 |
+| 2 | 3.317 | 1.582 | 259723264 | 146677760 |
+| 3 | 3.046 | 1.580 | 187125760 | 146788352 |
+| 4 | 3.054 | 1.609 | 259059712 | 146595840 |
+| 5 | 3.107 | 1.491 | 187269120 | 146653184 |
+
+Median 3.1065 → 1.5817 s (-49.1%, 5/5 pairs); median sampled process-tree
+peak 187,269,120 → 146,653,184 B (-21.7%). Ten guards COMPLETE; all native
+delta output bytes identical (49,829 B, SHA256
+`ce670751c182fba8cbffb331d9f4bd0b6185c2c4fe90f57f79c7bd9178f9c64e`).
+This isolates the actual worker input/decoding cost in the existing binary,
+not the new compiler's complete phase or full Stage2 speed. The measured
+worker reduction qualifies this input-owner change; extrapolating an
+equal percentage to full Stage2 would be unsupported.
+
+### Changed-path validation
+
+Original fixed-order and two new projection/enum-reexport tests: three
+red before, three green after the change. The previously reported key-order
+failure is fixed, not suppressed. Complete targeted host unit files:
+343 passed, two integration cases not run; no full-suite claim. The
+actual corrected full and class-only serial indexes for the same 102 real
+modules are again byte-identical (245,153 B, SHA256
+`d0b80142c9b9beacf6c1a877d7479869a35784173923c15ca68640e61b2d767c`),
+and every root's resulting key-to-type mapping equals the original
+preimage after the intended order correction.
+
+A correctness-only native executable compiled the exact new
+`preload_class_export_surface` production body (SHA256
+`edb0d8b7894236f8b9eff2883d804e0dd940a1e9774690bcffb45d5400895a37`)
+under the frozen `5f101c61` host compiler and its deeply verified 192-member
+runtime (codegen identity `c496baf02dba5e975d39048c5ff7d69323315e0a6a1b42009fe9a8031fa68abd`).
+Compile 6.109 s / 231,022,592 B, execute 2.341 s / 122,527,744 B, both
+COMPLETE under 90 s / 1 GiB. Its real 102-module wire output was exactly
+1,816,064 B with the projected input SHA above; no timings compared here
+and no native execution of the new full `type_infer` module or complete
+self-host chain. Current-source native bootstrap remains a CI obligation.

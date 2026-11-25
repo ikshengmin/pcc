@@ -95,6 +95,94 @@ def test_worker_deltas_build_the_serial_index_byte_for_byte(
     assert list(tmp_path.iterdir()) == []
 
 
+def test_worker_transport_contains_only_complete_class_records(
+    monkeypatch, host_workers, tmp_path,
+):
+    exports = _exports()
+    for module in exports:
+        exports[module]["make"] = {
+            "kind": "function", "param_types": (), "return_ty": ("str",),
+        }
+        exports[module]["LABEL"] = {
+            "kind": "constant", "value_kind": "str", "value": "not a class",
+        }
+    # A class's own metadata, including fields not used by preload today,
+    # stays intact. In particular this is not a projection of method schemas.
+    exports["m03"]["C3"]["methods"] = (("show", ("func", (), ("str",))),)
+    original_bytes = json.dumps(exports).encode()
+    expected = {
+        module: {name: info for name, info in table.items()
+                 if isinstance(info, dict) and info.get("kind") == "class"}
+        for module, table in exports.items()
+    }
+    serial = type_infer.build_unique_external_class_preload_index(exports)
+    writes = []
+    original = pipeline._write_native_exports_wire
+
+    def observe(path, graph, *args, **kwargs):
+        if Path(path).parent.name == "preload_deltas":
+            writes.append(graph)
+        return original(path, graph, *args, **kwargs)
+
+    monkeypatch.setattr(pipeline, "_write_native_exports_wire", observe)
+    monkeypatch.setenv("PCC_PRELOAD_DELTA_JOBS", "3")
+    parallel = pipeline._build_unique_external_class_preload_index(exports, str(tmp_path))
+    assert len(host_workers) == 1
+    assert len(writes) == 1
+    assert list(writes[0]) == list(exports)
+    assert writes[0] == expected and writes[0]["plain"] == {}
+    assert writes[0]["m03"]["C3"] is exports["m03"]["C3"]
+    assert json.dumps(exports).encode() == original_bytes
+    assert json.dumps(parallel).encode() == json.dumps(serial).encode()
+
+
+def test_class_preload_surface_preserves_recursive_owners_and_enum_ambiguity(tmp_path):
+    from pcc.frontends.python.pipeline_context import build_closed_world_context
+
+    # Use actual enum metadata, not a stand-in for the class/base resolver.
+    root = Path(__file__).resolve().parents[2]
+    sources = {
+        "enum": root / "pcc" / "stdlib" / "enum.py",
+        "owner": tmp_path / "owner.py",
+        "facade": tmp_path / "facade.py",
+        "consumer": tmp_path / "consumer.py",
+        "functions": tmp_path / "functions.py",
+    }
+    sources["owner"].write_text(
+        "class Enum:\n    other: int\n"
+        "class Record:\n    value: str\n"
+        "def make() -> str:\n    return 'record'\n"
+    )
+    sources["facade"].write_text("from owner import Record as Alias\n")
+    sources["consumer"].write_text(
+        "import enum as standard_enum\nfrom facade import Alias\n"
+        "class Color(standard_enum.Enum):\n    RED = 1\n    BLUE = 2\n"
+        "class Child(Alias):\n    ref: Alias\n"
+    )
+    sources["functions"].write_text("def f() -> int:\n    return 1\n")
+    _, exports, _ = build_closed_world_context(
+        [str(path) for path in sources.values()], list(sources),
+    )
+    assert exports["facade"]["Alias"]["owning_module"] == "owner"
+    assert exports["consumer"]["Color"]["base_names"] == ("enum.Enum",)
+    # The same leaf is exported by two distinct modules. Resolving a
+    # qualified recursive base must not bind an ambiguous bare Enum.
+    preload = type_infer.preload_global_by_key(
+        type_infer.build_unique_external_class_preload(exports)
+    )
+    assert "Enum" not in preload
+    assert preload["enum.Enum"][2] == "enum"
+    assert preload["Color"][4][0][2] == "enum"
+    assert preload["Child"][4][0][2] == "owner"
+    projected = type_infer.preload_class_export_surface(exports)
+    assert list(projected) == list(exports)
+    assert projected["functions"] == {}
+    assert projected["facade"]["Alias"] is exports["facade"]["Alias"]
+    assert json.dumps(type_infer.build_unique_external_class_preload_index(projected)) == json.dumps(
+        type_infer.build_unique_external_class_preload_index(exports)
+    )
+
+
 def test_worker_result_missing_a_root_fails_closed(monkeypatch, host_workers, tmp_path):
     original = preload_delta_worker.read_result
 

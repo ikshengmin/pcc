@@ -3231,6 +3231,7 @@ def _build_unique_external_class_preload_index(native_exports, work_dir=""):
 
 def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
     from pcc.frontends.python.preload_delta_worker import WORKER_ARG, read_result
+    from pcc.frontends.python.type_infer import preload_class_export_surface
     from pcc.frontends.python.worker_process_pool import ResourceObservationScope
 
     # pcc1 compiles tempfile and shutil as CPython modules, so a function
@@ -3242,7 +3243,9 @@ def _preload_deltas_in_workers(native_exports, roots, prefix, jobs, work_dir):
         try:
             exports_path = os.path.join(state, "exports.json")
             created.append(exports_path)
-            _write_native_exports_wire(exports_path, native_exports, {})
+            _write_native_exports_wire(
+                exports_path, preload_class_export_surface(native_exports), {},
+            )
             width = max(1, min(jobs, len(roots)))
             commands = []
             outputs = []

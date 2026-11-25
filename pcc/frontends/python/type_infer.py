@@ -5009,6 +5009,7 @@ def _class_type_from_export(
     info: dict,
     module_exports: dict,
     memo: dict[tuple[str, str], ClassType],
+    bind_unique_preload_name: bool = False,
 ) -> ClassType:
     from pcc.frontends.python.pipeline_closed_world import resolve_class_base_export
 
@@ -5029,6 +5030,8 @@ def _class_type_from_export(
     key = (owning_module, class_name)
     cached = memo.get(key)
     if cached is not None:
+        if bind_unique_preload_name:
+            ctx.register_class_type(class_name, cached)
         return cached
 
     is_valueclass = bool(info.get("valueclass", False))
@@ -5104,9 +5107,14 @@ def _class_type_from_export(
     )
     memo[key] = cls_ty
     # Resolving a qualified export does not execute an unqualified import.
-    # Explicit from-imports and unique-class preloads bind their own aliases;
-    # the recursive resolver must not overwrite a same-named local class.
-    ctx.class_types[owning_module + "." + class_name] = cls_ty
+    # Only the unique preload's top-level binding may introduce a bare
+    # name here. It must use register_class_type's bare-then-qualified order
+    # for newly resolved classes, while recursive dependencies stay qualified
+    # and do not overwrite an ambiguous or same-named local class.
+    if bind_unique_preload_name:
+        ctx.register_class_type(class_name, cls_ty)
+    else:
+        ctx.class_types[owning_module + "." + class_name] = cls_ty
     return cls_ty
 
 
@@ -5932,14 +5940,33 @@ def _preload_unique_external_classes(ctx: _InferCtx) -> None:
         if len(entries) != 1:
             continue
         module_name, info, module_exports = entries[0]
-        cls_ty = _class_type_from_export(
+        _class_type_from_export(
             ctx,
             module_name,
             info,
             module_exports,
             memo,
+            bind_unique_preload_name=True,
         )
-        ctx.register_class_type(class_name, cls_ty)
+
+
+def preload_class_export_surface(external_exports):
+    """Transport precisely the class resolver's complete export graph.
+
+    The unique-class scan and recursive qualified/base lookups only admit
+    class records. Preserve every module (even a classless owner), visible
+    export name, record and insertion order; this is not a dependency slice
+    or a field-schema truncation. Other export consumers still use the
+    original table.
+    """
+    surface = {}
+    for module_name, module_exports in external_exports.items():
+        class_exports = {}
+        for export_name, info in module_exports.items():
+            if isinstance(info, dict) and info.get("kind") == "class":
+                class_exports[export_name] = info
+        surface[module_name] = class_exports
+    return surface
 
 
 def build_unique_external_class_preload(external_exports):

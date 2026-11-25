@@ -1162,18 +1162,23 @@ in the relevant section or issue and removes the entry.
    native export binary, five pairs each: 31.8 KiB eight-module batch
    -33.5%, 62.5 KiB -7.9%, both 5/5 with identical merged metadata and AST
    bytes; 159 worker tests passed. Only guarded batches <=64 KiB / 8
-   modules are admitted. Next preload unit also owns the existing serial
-   key-order witness failure. The shared x86 retarget/forward scan on
-   66 frozen real functions has a 17.0% raw native owner gain (9.86%
-   control-normalized median, 5/5 wins), identical packed object and assembly
-   outputs; 14 new tests pass with all 12 existing x86 reds unchanged.
-   Next: fix those existing x86 correctness/diagnostic witnesses and
-   measure the frame-register and strong-liveness owners independently.
-   No full Stage2/3 speedup claim.
+   modules are admitted. Preload workers now receive the entire class
+   graph without non-class exports, preserving root semantics and correcting
+   the existing serial key order. Actual old native worker on 102 original
+   compiler modules, five alternating pairs: wire 4.45→1.82 MB, worker
+   3.107→1.582 s (-49.1%, 5/5), exact delta bytes and lower peak RSS.
+   343 focused tests passed; exact projection body executed as native ELF.
+   The shared x86 retarget/forward scan on 66 frozen real functions has a
+   17.0% raw native owner gain (9.86% control-normalized median, 5/5 wins),
+   identical packed object and assembly outputs; 14 new tests pass with
+   all 12 existing x86 reds unchanged. Next: CI full equal-ceiling Stage2/3,
+   fix the existing x86 correctness/diagnostic witnesses, then measure
+   frame-register/strong-liveness and remaining per-root reconstruction
+   independently. No full Stage2/3 speedup claim.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 class-only preload wire and ordering: Codex, Linux, 2026-11-25T17:06Z, area selfhost (pipeline/type_infer preload only)
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
