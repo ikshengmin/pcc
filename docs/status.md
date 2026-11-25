@@ -337,6 +337,13 @@ in the relevant section or issue and removes the entry.
    operands, scalar/object/iteration results and exact pending exceptions.
    Keep real emitted IR checks and update the fixed inventory (3759 nodes,
    87 files). Linux: 381 affected ordinary checks passed, no skipped cases.
+   #20 at `3e99de40`: six-worker gate reaches 3457 passed,
+   then three Mach-O link timing stub failures. The production executable
+   link now explicitly selects runtime-main archive ownership; model
+   callbacks did not accept that argument. Test both true and false
+   forwarding through the real preparation body, retaining timing,
+   output, input ownership and injected-error checks. Linux: all 34
+   affected Mach-O timing tests passed; no count change.
    Next: rerun the worker gate and fix the next failure.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
@@ -352,7 +359,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior remaining failure: Codex, Linux, 2026-11-25T11:00Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

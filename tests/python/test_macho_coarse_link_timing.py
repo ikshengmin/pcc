@@ -101,7 +101,7 @@ def _owner(monkeypatch, timer, *, failure=None, error=None, host_owned=None,
     def prepare(objects, **kwargs):
         operation("prepare")
         assert objects == [("decoded", b"encoded")] + ([b"extra"] if extra_input else [])
-        expected = dict(archives=[b"archive"], _consume_inputs=True, _source_view=True)
+        expected = dict(archives=[b"archive"], _consume_inputs=True, _source_view=True, runtime_main=True)
         if host_owned is not None:
             expected["compact_budget"] = budget
         if timer is not None:
@@ -331,7 +331,7 @@ def test_macho_optional_clock_and_sink_faults_preserve_stub_output(monkeypatch):
 
 
 def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
-                   failure=None, error=None, selections=False, required_symbols=()):
+                   failure=None, error=None, selections=False, required_symbols=(), runtime_main=False):
     """Execute the real prepare body; only format/merge boundaries are stubs."""
     operations = []
     receipts = [] if selections else None
@@ -341,6 +341,8 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         operations.append((name, *args))
         if failure == name:
             raise error
+
+    expected_runtime_main = runtime_main
 
     def runtime_format():
         operation("format")
@@ -361,7 +363,8 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         operation("archive", archive)
         return [types.SimpleNamespace(name="member", data=archive + b":object")]
 
-    def select(members, pending, *, already_defined, selected_members):
+    def select(members, pending, *, already_defined, selected_members, runtime_main):
+        assert runtime_main is expected_runtime_main
         operation("select", tuple(pending), tuple(already_defined))
         if selected_members is not None:
             selected_members.extend(members)
@@ -399,7 +402,7 @@ def _prepare_owner(timer, *, archives=(b"archive",), consume=True, budget=None,
         before = list(inputs)
         kwargs = dict(archives=archives, _consume_inputs=consume,
                       _source_view=consume, archive_selections=receipts,
-                      compact_budget=budget, required_symbols=required_symbols)
+                      compact_budget=budget, required_symbols=required_symbols, runtime_main=runtime_main)
         if timer is not None:
             kwargs["coordinator_timing"] = timer
         output = invoke(inputs, **kwargs)
@@ -428,7 +431,7 @@ def test_macho_prepare_required_symbols_preserve_timing():
     for enabled in (False, True):
         timer = Timer() if enabled else None
         run, operations, _receipts = _prepare_owner(
-            timer, required_symbols=("provided",),
+            timer, required_symbols=("provided",), runtime_main=True,
         )
         assert run() == b"unchanged merged payload"
         if enabled:
