@@ -403,16 +403,39 @@ in the relevant section or issue and removes the entry.
    collector 1-4 cases of the prune list). A native program built from the
    two modules gave collector 0 and an available 17-value snapshot with the
    variable unset, `0` and `3`. Integration nodes and Linux were not run.
-   Next for (d): the worker env prefix still passes `PCC_GC_BACKEND=0` to
-   children (`worker_env` in `pipeline_frontend_workers.py`), which the
-   runtime ignores; every generated module still polls
-   `pcc_gc_backend4_auto_step_pending`; then stop emitting the pin/unpin,
-   lease and barrier calls and delete the fused pass; then remove the
-   runtime's `pcc_gc_backend()` with its lowering (`unsafe_lowering.py`,
-   `extern_lowering.py`, `runtime_abi.py`, `pipeline_freestanding.py`);
-   then the closed-young analysis and the per-collector options of
-   `scripts/pcc_perf.py`. `rg -c 'PCC_GC_BACKEND|pcc_gc_backend\(' pcc
-   scripts --glob '!*.md'`: 77 in 36 files, mostly harness scripts.
+   (d), lease slice (Claude, local Mac, `22d737106`): code generation takes
+   no address lease. The fused pass already answered every emitted
+   foreign/borrowed lease acquire and release with 0; the 47 sites now
+   produce that token 0 themselves, a known non-negative status emits no
+   branch, a token-0 lease needs no cleanup and the extern c_str/c_obj
+   projection takes none. Emitted IR has no `pcc_gc_leases_inert` load, lease
+   call or `py_cleanup_one_lease_preserving_exception`; a sample program's
+   IR fell from 6972 to 4737 lines and the test runtime archive from 17.2 to
+   16.4 MB. Tests of the lease protocol now assert its absence (the
+   message-owner contract checks the owning root instead, with a negative
+   control). Host pcc0: the 129 files naming the protocol and 25 other
+   IR-shape files show no new failure by node id against HEAD; one native
+   program (fresh results, identity, exceptions, finalizers) matches
+   CPython. The native integration programs (pcc0, against a source-matched
+   archive) are being compared against HEAD; pcc1 and Linux were not run.
+   Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
+   live automatic-collection request (young and full collections are
+   scheduled through it), not a leftover; it may only be renamed, before
+   the header/ABI freeze.
+   Next for (d), in order, each with its tests rewritten in the same
+   change: (1) code generation stops emitting pin/unpin and write
+   barriers (`_gc_pin`/`_gc_unpin` and about 50 direct sites); (2) the
+   runtime sources drop their own pin/unpin/lease/barrier calls (about 700
+   in about 45 files, in file batches, each module compiled alone first);
+   (3) delete the fused-protocol pass (its test file named to the
+   maintainer first); (4) `pcc_gc_root_copy_lease`,
+   `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
+   lease-free forms; (5) remove the runtime's `pcc_gc_backend()` with its
+   lowering (`unsafe_lowering.py`, `extern_lowering.py`, `runtime_abi.py`,
+   `pipeline_freestanding.py`) and the worker env prefix's
+   `PCC_GC_BACKEND=0`; (6) the closed-young analysis (a GC3 frontend
+   analysis, unrelated to the one collector's generations) and the
+   per-collector options of `scripts/pcc_perf.py`.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
@@ -532,7 +555,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) emitted GC protocol calls and the auto-step poll: Claude, macOS, 2026-11-25T02:23Z, area runtime-codegen
+   - (d) emitted GC protocol calls: Claude, macOS, 2026-11-25T03:46Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
