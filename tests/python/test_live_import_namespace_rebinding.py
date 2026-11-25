@@ -680,11 +680,11 @@ def test_import_publication_retires_staging_owner(tmp_path, monkeypatch):
     main = body(text, 'main')
     publication = re.search(r'call [^\n]*@py_module_attr_set[^\n]*@\.pyattr\.values[, ]', main)
     assert publication is not None
-    retirement = re.search(r'%import.publish.current[^\n]*= load ptr, ptr @\.modvar\.consumer\.values', main)
+    # Retirement clears the staging root after publication; no unpin load
+    # precedes it (item 2 (d)).
+    retirement = re.search(r'call [^\n]*@pcc_gc_store_root\(ptr @\.modvar\.consumer\.values, ptr null\)', main)
     assert retirement is not None
     assert publication.start() < retirement.start()
-    tail = main[retirement.start():]
-    assert re.search(r'call [^\n]*@pcc_gc_store_root\([^\n]*ptr null\)', tail)
 
 
 @pytest.mark.parametrize('statements,helper', [
