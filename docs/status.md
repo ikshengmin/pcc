@@ -432,6 +432,14 @@ in the relevant section or issue and removes the entry.
    roots, then 512 mutations each. Fresh verified 192-member Linux
    runtime: 30 focused tests pass; external LLVM/clang reference
    test remains in the hosted job (clang unavailable on this host).
+   #20 cross-module None ABI witness: the actual run 45619704293 fixture
+   emits external linkage on definitions and declarations; the old regex
+   skipped it. The test now uses the owned header parser, retains repeated
+   declarations, and checks synchronous void/async handle and actual call
+   types. The emitted IR had 2,189 headers, 1,086 unique declarations, 23
+   definitions and five cross-module symbols, with zero return mismatches.
+   Linux focused: 6/6 pass in 23.39 s; guarded peak 264,605,696 bytes under
+   the original 1 GiB cap. Test-only, no compiler ABI change; hosted rerun pending.
    Next: remaining cross-module failures, worker-prior/changed-module
    and Source; wait for the active checkpoint's independent wheel
    evidence before dispatching its successor.
@@ -450,7 +458,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - #20 guarded compiler sibling pool admission: Codex, Linux x86_64, 2026-11-25 16:12 UTC, area selfhost
-   - #20 cross-module None return ABI witness: Codex, Linux x86_64, 2026-11-25 16:28 UTC, area selfhost
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
