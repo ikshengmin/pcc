@@ -720,6 +720,26 @@ def run_codegen_worker(
                 codegen._strict_no_libpython = True
                 codegen._prefer_native_callable_values = True
                 codegen._module_source_path = os.path.abspath(src_paths[index])
+                # The source-mode contract is shared with the serial entry.
+                # Only modules with a directive candidate need a second source
+                # read; ordinary worker inputs keep their existing path.
+                from pcc.frontends.python.py_ast import Assign, Name
+                for statement in ast_module.body:
+                    if (isinstance(statement, Assign) and len(statement.targets) == 1
+                            and isinstance(statement.targets[0], Name)
+                            and statement.targets[0].ident in (
+                                "__pcc_freestanding__", "__pcc_runtime_port__")):
+                        from pcc.frontends.python.pipeline_freestanding import (
+                            source_declares_freestanding_module, source_declares_runtime_port_module,
+                        )
+                        with open(src_paths[index], "r", encoding="utf-8") as source_stream:
+                            mode_source = source_stream.read()
+                        codegen._freestanding_module = source_declares_freestanding_module(mode_source)
+                        codegen._runtime_port_module = source_declares_runtime_port_module(mode_source)
+                        if codegen._freestanding_module:
+                            codegen._thread_safepoints_enabled = False
+                        del mode_source
+                        break
                 codegen._skip_program_main = module_name != entry_module
                 codegen._sibling_module_inits = sibling_inits
                 if closed_young_proof is not None:

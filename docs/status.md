@@ -407,8 +407,23 @@ in the relevant section or issue and removes the entry.
    build trees; prior ungrouped local run hit 1 GiB. 311 CI ownership/
    coverage/plan controls pass (including the new group contract).
    Hosted Darwin execution remains pending, not skipped qualification.
-   Next: worker-prior/changed-module and independent Source regressions;
-   do not cancel the in-flight checkpoint to dispatch just these changes.
+   #20 direct-indexed Source failures: the cross-target tests were
+   intercepting the retired public generate entry instead of the live
+   fresh worker entry. Supply the explicit target at that boundary;
+   observed AArch64 ELF machine 183 and Darwin cmpxchg records. The
+   real worker also failed to apply the freestanding source directive
+   and injected managed safepoint dependencies; it now honors the same
+   source-mode contract as serial compile. Raw write/loop programs
+   link without runtime symbols and execute with exit 22; ordinary
+   managed programs retain the safepoint. Host direct worker and owned
+   pass tests now inspect and link the actual host emission ABI
+   (Linux ELF, Darwin Mach-O, Windows COFF/PE), not the Darwin linker
+   on Linux. Linux fresh verified 192-member runtime; 44 direct tests
+   (including actual linked program 41 42 before/after passes),
+   282 adjacent tests pass. Other hosted platforms not run.
+   Next: remaining shared frame registry/cross-module failures,
+   worker-prior/changed-module and Source; wait for the active
+   checkpoint's independent results before dispatching its successor.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -423,7 +438,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 direct indexed target identity: Codex, Linux, 2026-11-25T15:31Z, area backend
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

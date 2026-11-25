@@ -163,7 +163,7 @@ def test_malformed_syscall_asm_fails_closed(monkeypatch, target, change):
         parse_self_backend_module(text)
 
 
-def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding):
+def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding, loop=False):
     from pcc.frontends.python import pipeline
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
 
@@ -175,7 +175,8 @@ def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding):
             "__pcc_freestanding__ = True\n"
             "@c_abi_export('main')\n"
             "def main() -> i64:\n"
-            "    return write(1, cstr('ordinary unsafe write\\n'), 22)\n"
+            + ("    i: i64 = 0\n    while i < 2:\n        i += 1\n" if loop else "")
+            + "    return write(1, cstr('ordinary unsafe write\\n'), 22)\n"
         )
     else:
         source.write_text(
@@ -185,14 +186,14 @@ def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding):
             "    assert written == 22\n"
             "main()\n"
         )
-    original_generate = L1CodeGen.generate
+    original_generate = L1CodeGen._generate_initial_module
 
-    def generate_for_target(self, module=None):
-        assert module is self.ast_module
+    def generate_for_target(self):
         self._target_triple = target
+        self.module.triple = target
         return original_generate(self)
 
-    monkeypatch.setattr(L1CodeGen, "generate", generate_for_target)
+    monkeypatch.setattr(L1CodeGen, "_generate_initial_module", generate_for_target)
     for key in ("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
                 "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES", "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK",
                 "PCC_DIRECT_INDEXED_NATIVE_OBJECT"):
@@ -207,6 +208,7 @@ def _frontend_write_object(tmp_path, monkeypatch, target, *, freestanding):
 
     def capture(module):
         result = original_capture(module)
+        assert result.triple == target
         assert module._direct_indexed_fallback_records == 0
         records = [record for function in module.functions for block in function.blocks
                    for record in block._instrs if record.opname == "syscall6"]
@@ -235,16 +237,21 @@ def test_ordinary_unsafe_write_worker_has_zero_capture_fallback(monkeypatch, tmp
     from pcc.backend.elf_x86_64 import parse_relocatable
 
     obj = _frontend_write_object(tmp_path, monkeypatch, target, freestanding=False)
-    assert parse_relocatable(obj.read_bytes()).machine == (183 if target.startswith("aarch64") else 62)
+    native = parse_relocatable(obj.read_bytes())
+    assert native.machine == (183 if target.startswith("aarch64") else 62)
+    assert {"pcc_thread_stop_requested", "pcc_thread_safepoint_gate"} <= {
+        symbol.name for symbol in native.symbols
+    }, "ordinary managed workers must still poll the thread runtime"
 
 
 @pytest.mark.pcc_gate(probe=lambda: sys.platform.startswith("linux") and platform.machine() in ("x86_64", "amd64"))
-def test_freestanding_unsafe_write_owned_linux_native_output(monkeypatch, tmp_path):
+@pytest.mark.parametrize("loop", [False, True])
+def test_freestanding_unsafe_write_owned_linux_native_output(monkeypatch, tmp_path, loop):
     from pcc.backend.elf_x86_64 import link_static_executable, parse_relocatable
     from pcc.backend.owned_elf_link import assemble
 
     target = TARGETS[0]
-    obj = _frontend_write_object(tmp_path, monkeypatch, target, freestanding=True)
+    obj = _frontend_write_object(tmp_path, monkeypatch, target, freestanding=True, loop=loop)
     startup = '''.intel_syntax noprefix
 .text
 .globl _start
@@ -254,7 +261,10 @@ _start:
   mov rax, 60
   syscall
 '''
-    image = link_static_executable([parse_relocatable(obj.read_bytes()), assemble(startup, target)])
+    native = parse_relocatable(obj.read_bytes())
+    assert not {"pcc_thread_stop_requested", "pcc_thread_safepoint_gate",
+                "pcc_thread_safepoint"} & {symbol.name for symbol in native.symbols}
+    image = link_static_executable([native, assemble(startup, target)])
     executable = tmp_path / "unsafe-write"
     executable.write_bytes(image)
     executable.chmod(0o755)

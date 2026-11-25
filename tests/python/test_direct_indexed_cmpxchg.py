@@ -60,13 +60,14 @@ def test_darwin_libsystem_frontend_worker_zero_fallback(monkeypatch, tmp_path):
         "def exports_symbol() -> bool:\n"
         "    return not ptr_is_null(darwin_libsystem_symbol(cstr('malloc')))\n"
     )
-    original_generate = L1CodeGen.generate
+    original_generate = L1CodeGen._generate_initial_module
 
-    def generate_for_target(self, module=None):
+    def generate_for_target(self):
         self._target_triple = "aarch64-apple-darwin"
+        self.module.triple = "aarch64-apple-darwin"
         return original_generate(self)
 
-    monkeypatch.setattr(L1CodeGen, "generate", generate_for_target)
+    monkeypatch.setattr(L1CodeGen, "_generate_initial_module", generate_for_target)
     for key in ("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "PCC_DIRECT_INDEXED_KERNEL_EMIT",
                 "PCC_DIRECT_INDEXED_KERNEL_FUSE_USES", "PCC_DIRECT_INDEXED_KERNEL_REQUIRE_ZERO_FALLBACK",
                 "PCC_DIRECT_INDEXED_NATIVE_OBJECT"):
@@ -81,6 +82,7 @@ def test_darwin_libsystem_frontend_worker_zero_fallback(monkeypatch, tmp_path):
 
     def capture(module):
         result = original_capture(module)
+        assert result.triple == "aarch64-apple-darwin"
         assert module._direct_indexed_fallback_records == 0
         records = [record for function in module.functions for block in function.blocks
                    for record in block._instrs if record.opname == "cmpxchg"]

@@ -1,16 +1,16 @@
 """Direct object workers must apply the requested owned IR transformations."""
 
-import os
 import builtins
 from pathlib import Path
 import subprocess
 
-from pcc.backend import self_backend_aarch64_darwin as emitter
+from pcc.backend import self_backend_aarch64_darwin as arm_emitter, target_objects as x86_emitter
 from pcc.backend.macho_exec import link_executable
 from pcc.backend.native_object import decode_packed_native_object
 from pcc.backend.self_backend_ir import PARSED_INSTRUCTION_KINDS
 from pcc.backend.self_backend_kernel import get_indexed_function_kernel
 from pcc.frontends.python import pipeline
+from pcc.frontends.python.pipeline_targets import host_target_triple
 from pcc.ir import ir
 
 
@@ -43,7 +43,12 @@ print(choose(True), choose(False))
         return import_original(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", reject_llvm)
-    original = emitter.emit_aarch64_darwin_indexed_transport
+    target = host_target_triple()
+    if target.startswith("x86_64"):
+        emitter, emit_name = x86_emitter, "emit_x86_64_streamed_module"
+    else:
+        emitter, emit_name = arm_emitter, "emit_aarch64_darwin_indexed_transport"
+    original = getattr(emitter, emit_name)
     observed = []
     original_capture = ir.Module.direct_indexed_module
     captures = []
@@ -70,7 +75,7 @@ print(choose(True), choose(False))
         observed.append(counts)
         return original(module, **kwargs)
 
-    monkeypatch.setattr(emitter, "emit_aarch64_darwin_indexed_transport", capture)
+    monkeypatch.setattr(emitter, emit_name, capture)
     for mode in ("off", "default"):
         captures.clear()
         monkeypatch.setenv("PCC_PYTHON_IR_PASSES", mode)
@@ -88,18 +93,24 @@ print(choose(True), choose(False))
         if mode == "off":
             assert (output / "module_0.ll").read_text() == ""
         pco = output / "module_0.direct.pco"
-        image = link_executable(
-            [decode_packed_native_object(pco.read_bytes())],
-            archives=[Path(pcc_runtime_archive).read_bytes()],
-        )
-        binary = output / "program"
-        binary.write_bytes(image)
-        binary.chmod(0o755)
-        for backend in (0,):
-            ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10,
-                                 env=dict(os.environ, PCC_GC_BACKEND=str(backend)))
-            assert ran.returncode == 0, f"{mode} GC{backend}: {ran.stdout}; {ran.stderr}"
-            assert ran.stdout == "41 42\n"
+        binary = output / ("program.exe" if "windows" in target else "program")
+        if "linux" in target:
+            from pcc.backend.owned_elf_link import link_inputs
+            link_inputs(target=target, output=str(binary), objects=[str(pco)],
+                        archives=[str(pcc_runtime_archive)])
+        elif "windows" in target:
+            from pcc.backend.owned_pe_link import link_inputs
+            link_inputs(output=str(binary), objects=[str(pco)],
+                        archives=[str(pcc_runtime_archive)])
+        else:
+            binary.write_bytes(link_executable(
+                [decode_packed_native_object(pco.read_bytes())],
+                archives=[Path(pcc_runtime_archive).read_bytes()],
+            ))
+            binary.chmod(0o755)
+        ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=10)
+        assert (ran.returncode, ran.stdout) == (0, "41 42\n"), (
+            mode, ran.stdout, ran.stderr)
     before, after = observed
     assert after["alloca"] < before["alloca"], observed
     assert after["load"] < before["load"], observed
