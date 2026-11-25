@@ -832,7 +832,7 @@ in the relevant section or issue and removes the entry.
    No full test execution or owned map/goroutine storage.
 
    Claims:
-   - none
+   - Go reference cold-cache build coordination (45619704293): Codex, Linux x86_64, 2026-11-25 15:14 UTC, area frontend-go
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
