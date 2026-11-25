@@ -569,8 +569,8 @@ in the relevant section or issue and removes the entry.
    calls outside the take protocol done above; their lease calls move into
    (4) with the take-protocol pins, because root-copy tokens are released
    through the same `pcc_gc_foreign_lease_release`;
-   (3) delete the fused-protocol pass (its test file named to the
-   maintainer first); (4) `pcc_gc_root_copy_lease`,
+   (3) delete the fused-protocol pass after (4) (its test file
+   named to the maintainer first); (4) `pcc_gc_root_copy_lease`,
    `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
    lease-free forms; (5) remove the runtime's `pcc_gc_backend()` with its
    lowering (`unsafe_lowering.py`, `extern_lowering.py`, `runtime_abi.py`,
