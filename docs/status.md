@@ -181,6 +181,14 @@ in the relevant section or issue and removes the entry.
   and pass. Claude's recommendation: close #4 and #8, and close #9 after
   that rewrite, which belongs to item 2 (b).
 
+- Item 3 (c) A1 (asked by Claude, 2026-11-26): may compiled code on Darwin
+  read thread-locals through the pthread TSD array (`tpidrro_el0`) as Go
+  does on darwin/arm64, instead of calling the TLV resolver at every
+  access? The layout is not a documented Apple ABI. Claude's
+  recommendation: yes, with a check at process start that compares the
+  inline read with the resolver's answer and falls back to the call for
+  the whole process when they differ.
+
 1. **GC correctness.** Open issues:
    [#7](https://github.com/ikshengmin/pcc/issues/7) (ownership of managed
    boxed-int direct returns) waits for a new reported native owner witness,
@@ -954,6 +962,42 @@ in the relevant section or issue and removes the entry.
    immortal; a third of the calls clear an empty slot), like the existing
    AArch64 short path of the root reads, is the remaining form of (3),
    ceiling about 3% (not measured).
+   Order for (c), Claude's recommendation that the user accepted on
+   2026-11-26 ("按你的建议", then "完整的顺序包括你的启示"); each step records
+   its ceiling first, keeps only a gain beyond an `ab --control-arm`
+   floor, and leaves the object header layout alone:
+   A1. Darwin thread-local access inline: read the pthread TSD slot through
+       `tpidrro_el0` instead of calling the TLV resolver, with a startup
+       check against the resolver and a fallback to the call (about 4%;
+       waits on the maintainer, see "Waiting on maintainer").
+   A2. Backend short paths of `pcc_gc_store_root`, the releases and the
+       retains when neither value needs a count (NULL, tagged, immortal; a
+       clear of an empty slot), as for the root reads (about 3-4%).
+   A3. Short paths of the error check and the recursion-depth check (needs
+       A1; about 2-3%).
+   A4. The list-append path: container-lock fast path, without the
+       recheck of the retired collector-switch word and with the sanity
+       checks off the hot path (after the (d) 4b claim on `py_list.py`;
+       about 4%).
+   A5. Allocation and release bundle: per-thread batched statistics, the
+       magazine limit by table, the dict deallocator's debug check behind
+       a switch (with A1 or A4, together above the floor).
+   Checkpoint after A1 and A2: if the trend does not support w1 at 75-80k
+   req/s, report and reassess.
+   B1. On an idle host, why a w4 request costs about 50% more processor
+       time than a w1 request. B2. Scheduler: the global ready-node pool
+       lock and the shared counters become per-carrier caches and batched
+       statistics. B3. Class reference-count contention (an instance
+       increments its class's count; a w4 instance costs 785 ns against
+       231 ns at w1): module-level classes immortal or deferred, as CPython
+       treats types, after stating the lifetime boundary.
+   C1. Only if A4 leaves container locks at 3% or more of a request:
+       Go-style per-function parameter escape summaries with Java-style lock
+       elision for containers that stay in one thread, conservative at
+       getattr, globals, closures and thread hand-off; a design note first.
+   Not pursued: biased reference counting or locking (measured above; Java
+   removed biased locking in JDK 18), whole-program analysis (neither Go nor
+   Java does it), module-specific accelerators such as a native json.
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
