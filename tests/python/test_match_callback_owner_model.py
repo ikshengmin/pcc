@@ -93,7 +93,8 @@ def test_callback_success_alias_graph_and_no_leases(case):
     m=CallbackModel(case);m.callback();assert not m.tls
     m.cleanup_error=True;m.finish()
     result=m.memory[m.slots]
-    assert result and m.pin=={result} and not m.tls
+    # One collector: the finish pins nothing (item 2 (d)).
+    assert result and m.pin==set() and not m.tls
     assert all(o['leases']==0 for o in m.objects.values())
     assert set(m.objects)==m.reachable(result)|{1,2}
 

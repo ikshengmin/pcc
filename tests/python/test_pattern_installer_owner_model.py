@@ -44,7 +44,8 @@ class InstallModel(MatchModel):
 
 def test_installer_captures_pattern_kind_flags_and_returns_none():
     model=InstallModel();assert model.install()==0
-    assert model.memory[model.slots]==1 and model.pin=={1} and model.tls==0
+    # One collector: the finish pins nothing (item 2 (d)).
+    assert model.memory[model.slots]==1 and model.pin==set() and model.tls==0
     attrs=model.objects[model.target]['value'];assert set(attrs)=={'fullmatch'}
     fn=model.objects[attrs['fullmatch']]
     captures=model.objects[fn['children'][0]]

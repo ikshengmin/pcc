@@ -69,7 +69,8 @@ class ImportMemory(_Memory):
             pcc_gc_note_slot_write_barrier=self.barrier,
             pcc_gc_store_root=self.store_root,
             pcc_gc_load_ptr=lambda _owner, slot: self.read(slot, 0),
-            pcc_gc_pin=self.pin, pcc_gc_take_pinned_slot=self.take_slot,
+            pcc_gc_pin=self.pin, pcc_gc_take_pinned_slot=self.take_pinned_slot,
+            pcc_gc_take_slot=self.take_slot,
             pcc_py_gc_minor_graph_lock=lambda: self.gate('lock'),
             pcc_py_gc_minor_graph_unlock=lambda: None,
             py_tls_exc_swap_slot=self.swap_error, pcc_platform_abort=self.abort,
@@ -187,12 +188,20 @@ class ImportMemory(_Memory):
         assert value.alive
         value.pin = True
 
-    def take_slot(self, slot, prior):
+    def take_pinned_slot(self, slot, prior):
         value = self.read(slot, 0)
         self.write(slot, 0, None)
         if isinstance(value, _Block):
             assert value.alive and value.pin
             value.pin = bool(prior & 64)
+        return value
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value = self.read(slot, 0)
+        self.write(slot, 0, None)
+        if isinstance(value, _Block):
+            assert value.alive
         return value
 
     def store_root(self, slot, value):
@@ -446,7 +455,7 @@ def test_changed_import_consumers_emit_immediate_roots_and_correct_frame_abi(tmp
         assert wrapper.index('store ptr %name,') < wrapper.index('@pcc_gc_frame_enter(')
         assert wrapper.index('store ptr %fromlist,') < wrapper.index('@pcc_gc_frame_enter(')
         finish = _ir_body(text, 'user_' + module + '__import_finish')
-        transfer = finish.index('@pcc_gc_take_pinned_slot(')
+        transfer = finish.index('@pcc_gc_take_slot(')
         assert finish.rfind('@pcc_gc_frame_leave(') < transfer
         assert not re.search(r'\bcall\b', finish[finish.index('\n', transfer):])
         maps = ('pcc_capi_import_borrowed_map', 'pcc_capi_import_owned_map')

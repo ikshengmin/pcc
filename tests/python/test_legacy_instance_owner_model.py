@@ -22,7 +22,8 @@ def test_shared_class_is_leased_through_instance_allocation_and_released_before_
     result=model.memory[model.slots]
     assert model.objects[result]['kind']=='instance'
     assert model.objects[result]['children']==[2]
-    assert model.pin=={result} and model.tls==0
+    # One collector: the finish pins nothing (item 2 (d)).
+    assert model.pin==set() and model.tls==0
     assert set(model.objects)=={1,2,result}
     assert all(o['leases']==0 for o in model.objects.values())
 

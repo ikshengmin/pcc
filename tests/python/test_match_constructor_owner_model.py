@@ -269,7 +269,8 @@ def test_constructor_installs_six_methods_and_finish_leaves_only_reachable_outpu
     result = model.memory[model.slots]
     assert set(model.objects[result]['value']) == {'group', 'start', 'end', 'span', 'groups', 'groupdict'}
     assert model.finish() == 0
-    assert model.tls == 0 and model.pin == {result}
+    # One collector: the finish pins nothing (item 2 (d)).
+    assert model.tls == 0 and model.pin == set()
     assert all(obj['leases'] == 0 for obj in model.objects.values())
     assert set(model.objects) == model.reachable(result) | {1, 2}
     assert all(model.memory[model.slots+i*8] == 0 for i in range(1, 16))

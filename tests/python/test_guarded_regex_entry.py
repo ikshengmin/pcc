@@ -18,7 +18,6 @@ class EntryModel:
         self.fail_registration = fail_registration
         self.result_value = result_value
         self.events = []
-        self.pinned = False
         namespace = {
             "i64": int,
             "c_ptr": int,
@@ -32,7 +31,7 @@ class EntryModel:
             "pcc_gc_note_frame_enter_checked": self.register,
             "pcc_gc_note_frame_leave": self.leave,
             "pcc_re_engine_fullmatch_into": self.body,
-            "pcc_gc_take_pinned_slot": self.take,
+            "pcc_gc_take_slot": self.take,
             "pcc_platform_abort": lambda: (_ for _ in ()).throw(RuntimeError("root failure")),
             "null": lambda: 0,
         }
@@ -79,18 +78,15 @@ class EntryModel:
         self.memory[result][0] = self.result_value
         self.events.append("body")
         assert result in self.roots
-        self.pinned = True
-        self.events.append("pin")
-        return 123
+        # One collector: the body pins nothing and returns 0 (item 2 (d)).
+        return 0
 
     def leave(self, slots):
-        if self.depth == 0:
-            assert self.pinned
         self.roots.remove(slots)
         self.events.append("leave")
 
-    def take(self, result, prior):
-        assert not self.roots and self.pinned and prior == 123
+    def take(self, result):
+        assert not self.roots
         self.events.append("take")
         value = self.memory[result][0]
         self.memory[result][0] = 0
@@ -98,10 +94,10 @@ class EntryModel:
 
 
 @pytest.mark.parametrize("result_value", [0, 900])
-def test_raw_trampoline_roots_before_poll_and_pins_before_retiring_roots(result_value):
+def test_raw_trampoline_roots_before_poll_and_takes_after_retiring_roots(result_value):
     model = EntryModel(result_value=result_value)
     assert model.run(10, 20, 2) == result_value
-    assert model.events == ["guard", "root", "root", "poll", "body", "pin", "leave", "leave", "take"]
+    assert model.events == ["guard", "root", "root", "poll", "body", "leave", "leave", "take"]
     assert model.depth == 0 and not model.roots
 
 
@@ -143,7 +139,7 @@ def test_raw_trampoline_ir_has_no_poll_before_guard_or_managed_prologue(tmp_path
     assert calls.index("pcc_thread_no_park_exit") < calls.index("pcc_re_engine_fullmatch_into")
     # LLVM block layout is not execution order: callback branch blocks can be
     # printed after the join. The take block must return without another call.
-    take_tail = body.split("@pcc_gc_take_pinned_slot(", 1)[1].split("\n}", 1)[0]
+    take_tail = body.split("@pcc_gc_take_slot(", 1)[1].split("\n}", 1)[0]
     take_block = re.split(r"\n[A-Za-z_][^\n]*:\n", take_tail, maxsplit=1)[0]
     assert "ret ptr" in take_block
     assert not re.search(r"\bcall\b", take_block)

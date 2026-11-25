@@ -48,6 +48,7 @@ class BufferModel:
             pcc_gc_note_slot_write_barrier=self.barrier,
             pcc_py_gc_minor_graph_lock=self.boundary, pcc_py_gc_minor_graph_unlock=self.boundary,
             pcc_gc_pin=self.pin, pcc_gc_take_pinned_slot=self.take,
+            pcc_gc_take_slot=self.take_slot,
             pcc_gc_alloc=self.allocate, pcc_gc_load_ptr=self.gc_load,
             pcc_gc_store_ptr=self.store_member, pcc_gc_publish_initialized=self.publish,
             pcc_platform_abort=lambda: pytest.fail('invariant abort'),
@@ -126,20 +127,8 @@ class BufferModel:
         for obj in self.objects:
             if obj.refs and obj.tag == 11:
                 assert {'base', 'buffer'} <= obj.initialized_fields, 'uninitialized traceable memoryview shape'
-        protected = self.pins | {self.load(slot, 0)[0] for slot in self.leases if self.load(slot, 0) is not None}
-        moved = {obj for obj in self.objects if obj.refs and obj not in protected and not obj.immortal}
-        for obj in moved:
-            obj.generation += 1
-        def current(value):
-            return (value[0], value[0].generation, *value[2:]) if isinstance(value, tuple) and value[0] in moved else value
-        for base, count in self.frames.items():
-            for i in range(abs(count)):
-                address = base + i * 8
-                self.memory[address] = current(self.memory.get(address))
-        for obj in self.objects:
-            obj.base = current(obj.base)
-            obj.payload = [current(value) for value in obj.payload]
-        self.pending = current(self.pending)
+        # One collector: a parking point moves no object, so ``relocate``
+        # only adds the shape check above (item 2 (d)).
 
     def stack(self, size):
         self.next_address += 1000
@@ -370,6 +359,15 @@ class BufferModel:
     def pin(self, obj):
         self.check(obj)
         self.pins.add(obj[0])
+
+    def take_slot(self, slot):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        value = self.load(slot, 0)
+        self.store(slot, 0, None)
+        if value is not None:
+            self.check(value)
+            self.fresh = value
+        return value
 
     def take(self, slot, prior):
         value = self.load(slot, 0)

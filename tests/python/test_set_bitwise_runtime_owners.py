@@ -90,15 +90,15 @@ def test_actual_bitwise_exports_survive_movement(operation, phase, values):
 
 
 @pytest.mark.parametrize('operation', OPERATIONS)
-def test_threaded_entry_requires_dispatcher_address_leases(operation):
-    unleased = BitwiseMemory('entry')
-    with pytest.raises(AssertionError):
-        unleased.binary({1, 2}, {2, 3}, operation, entry_poll=True)
-    memory = BitwiseMemory('entry')
-    result = memory.binary({1, 2}, {2, 3}, operation,
-                           entry_poll=True, caller_leases=True)
-    assert memory.error is None
-    assert memory.values(result) == OPERATIONS[operation][1]({1, 2}, {2, 3})
+def test_threaded_entry_is_correct_with_or_without_dispatcher_leases(operation):
+    # One collector: the entry poll moves no object, so an unleased caller
+    # is as safe as a leased one (item 2 (d)).
+    for caller_leases in (False, True):
+        memory = BitwiseMemory('entry')
+        result = memory.binary({1, 2}, {2, 3}, operation,
+                               entry_poll=True, caller_leases=caller_leases)
+        assert memory.error is None
+        assert memory.values(result) == OPERATIONS[operation][1]({1, 2}, {2, 3})
 
 
 @pytest.mark.parametrize('operation', OPERATIONS)

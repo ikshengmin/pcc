@@ -88,6 +88,7 @@ class Runtime:
             'pcc_gc_frame_leave': lambda s:self.frames.remove(s),
             'pcc_gc_store_root': lambda s,v:self.write(s,0,v),
             'pcc_gc_take_pinned_slot': self.take,
+            'pcc_gc_take_slot': self.take_slot,
             'pcc_gc_note_write_barrier': lambda *args:None,
             'pcc_gc_load_ptr': lambda owner,p:self.read(p,0),
             'pcc_py_gc_minor_graph_lock':lambda:None,
@@ -223,6 +224,10 @@ class Runtime:
         o=self.read(p,0);self.write(p,0,None)
         self.unpin(o)
         if isinstance(o,Obj) and prior:o.flags|=64
+        return o
+    def take_slot(self,p):
+        # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+        o=self.read(p,0);self.write(p,0,None)
         return o
     def register(self,p):h=object();self.handles[h]=p;return h
     def copy_lease(self,d,s):

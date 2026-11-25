@@ -81,7 +81,8 @@ def test_pattern_constructor_all_seven_methods_share_normalized_capture_and_clas
         assert m.objects[captures[2]]['value']==18
         assert fn['entry']==(778 if kind==6 else 777)
     m.cleanup_error=True;m.finish()
-    assert not m.tls and m.pin=={result}
+    # One collector: the finish pins nothing (item 2 (d)).
+    assert not m.tls and m.pin==set()
     assert all(o['leases']==0 for o in m.objects.values())
     assert set(m.objects)==m.reachable(result)|{1,2,3}
 

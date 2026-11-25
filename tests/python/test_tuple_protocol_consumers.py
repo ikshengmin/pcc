@@ -245,6 +245,11 @@ class ConsumerModel:
                 self.obj(value)['pin'] = prior
             self.store(slot, 0, None)
             return value
+        def take_slot(slot):
+            # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
+            value = self.load(slot)
+            self.store(slot, 0, None)
+            return value
         def integer(value, overflow):
             assert self.obj(value)['leases'] or self.obj(value)['immortal']
             self.park('convert')
@@ -304,6 +309,7 @@ class ConsumerModel:
                    pcc_py_gc_minor_graph_unlock=lambda: None,
                    pcc_gc_load_ptr=lambda owner,slot: self.load(slot),
                    pcc_gc_pin=pin, pcc_gc_take_pinned_slot=take,
+                   pcc_gc_take_slot=take_slot,
                    pcc_platform_abort=lambda: pytest.fail('lease invariant abort'),
                    py_tls_exc_swap_slot=swap, py_clear_exception=clear,
                    py_runtime_error_if_unset=lambda helper,message: require(None,helper,message),
