@@ -378,6 +378,6 @@ def test_dict_method_result_owners_native_five_gc(
     assert_owned_program(
         _program(method), 'DICT_METHOD_OWNERS_OK\n', tmp_path,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
-        provenance_probe='2',
+        provenance_probe='2', backends=None,
         emitted_ir_check=_select_dict_program_ir, retain_dump_evidence=True,
     )

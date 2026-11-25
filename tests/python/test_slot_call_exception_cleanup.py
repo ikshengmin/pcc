@@ -737,7 +737,7 @@ def test_two_root_cleanup_error_path_native_five_gc(
     assert_owned_program(
         TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", counted,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
-        provenance_probe="2", backends=(0,),
+        provenance_probe="2", backends=None,
         emitted_ir_check=assert_compiler_two_root_error_edge,
     )
     # This native ABI witness checks NULL slots and the original TLS error
@@ -748,7 +748,7 @@ def test_two_root_cleanup_error_path_native_five_gc(
     assert_owned_program(
         TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tracing,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
-        provenance_probe="2", backends=(0,),
+        provenance_probe="2", backends=None,
         emitted_ir_check=assert_compiler_two_root_error_edge,
     )
 

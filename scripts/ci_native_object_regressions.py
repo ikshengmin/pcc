@@ -125,25 +125,21 @@ def read_receipt(path):
     return json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=unique_pairs)
 
 
-def expected_backends(label):
-    return [0] if label in ("two-root-cleanup", "two-root-tracing") else list(range(5))
-
-
-def verify_executions(record, binary, backends, output, *, strict=False):
-    if strict:
-        assert record["gc_backends"] == backends
-        assert all(type(gc) is int for gc in record["gc_backends"])
+def verify_executions(record, binary, output):
+    assert record["schema"] == "pcc.ownership-regression.v2"
+    assert "gc_backends" not in record
     executions = record["executions"]
-    assert [row["gc_backend"] for row in executions] == backends
-    for row in executions:
-        assert type(row["gc_backend"]) is int
-        assert row["command"] == [str(binary)]
-        assert (row["returncode"], row["stdout"], row["stderr"]) == (0, output, "")
-    return [
-        {"requested_gc_backend": row["gc_backend"],
-         **{key: value for key, value in row.items() if key != "gc_backend"}}
-        for row in executions
-    ]
+    assert len(executions) == 1
+    row = executions[0]
+    assert set(row) == {"command", "returncode", "stdout", "stderr",
+                        "start_ns", "end_ns", "elapsed_ns"}
+    assert type(row["returncode"]) is int
+    assert row["command"] == [str(binary)]
+    assert (row["returncode"], row["stdout"], row["stderr"]) == (0, output, "")
+    assert all(type(row[k]) is int for k in ("start_ns", "end_ns", "elapsed_ns"))
+    assert 0 <= row["start_ns"] <= row["end_ns"]
+    assert row["elapsed_ns"] == row["end_ns"] - row["start_ns"]
+    return executions
 
 
 def verify_common_identity(record, source, binary, runtime, run_id, *, strict=False):
@@ -336,10 +332,10 @@ def verify_program_receipts(directory, runtime, run_id):
         label = labels[0]
         _program, output = expected.pop(label)
         split = label in ("two-root-cleanup", "two-root-tracing")
-        verify_common_identity(record, source, binary, runtime, run_id, strict=split)
+        verify_common_identity(record, source, binary, runtime, run_id, strict=True)
         oracle = record["reference"]
-        if split:
-            assert oracle["command"] == [sys.executable, str(source)]
+        assert oracle["command"] == [sys.executable, str(source)]
+        assert type(oracle["returncode"]) is int
         assert (oracle["returncode"], oracle["stdout"], oracle["stderr"]) == (0, output, "")
         if label in ("two-root-cleanup", "two-root-tracing"):
             name = "gc0" if label == "two-root-cleanup" else "tracing"
@@ -356,7 +352,7 @@ def verify_program_receipts(directory, runtime, run_id):
             if dump.exists():
                 assert not any(item.suffix == ".pidx" or item.name in ("invocation.json", "link.json")
                                for item in dump.iterdir()), "unadmitted indexed inputs"
-        executions = verify_executions(record, binary, expected_backends(label), output, strict=split)
+        executions = verify_executions(record, binary, output)
         results[label] = {"receipt": str(path), **record,
                           "image": verify_native_image(binary), "executions": executions}
     assert not expected, "missing native execution receipts: " + ", ".join(sorted(expected))
@@ -437,8 +433,7 @@ def run(out):
         "timeout_s": TIMEOUT_S,
         "tree_rss_limit_bytes": 17179869184,
         "observed_collector_witness": False,
-        "collector_evidence": "requested_gc_backend records are PCC_GC_BACKEND requests; "
-                              "collector selection is not independently observed",
+        "collector_evidence": "One native execution per distinct witness; no collector selector or telemetry.",
     }
     save(receipt_path, receipt)
     try:

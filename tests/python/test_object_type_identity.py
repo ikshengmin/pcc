@@ -542,6 +542,6 @@ def test_object_identity_native_five_gc(python_program_compiler, request,
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n", tmp_path,
                          python_program_compiler, mode, explicit_owned_runtime,
-                         capfd, provenance_probe="2",
+                         capfd, provenance_probe="2", backends=None,
                          emitted_ir_check=_select_identity_program_ir, retain_dump_evidence=True)
     assert (tmp_path / "compiler-wrapper.stderr").read_text() == ""

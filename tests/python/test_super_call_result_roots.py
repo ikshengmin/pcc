@@ -270,5 +270,5 @@ def test_super_result_native_matches_cpython_under_five_collectors(
     # execution receipts. This fixture cannot provision a runtime or pcc1.
     assert_owned_program(
         NATIVE_SOURCE, "5\nTrue\ncaught\n", tmp_path,
-        compile_python, "pcc0", explicit_owned_runtime, capfd,
+        compile_python, "pcc0", explicit_owned_runtime, capfd, backends=None,
     )

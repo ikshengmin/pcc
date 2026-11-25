@@ -77,15 +77,15 @@ def _receipts(directory, runtime):
         binary.write_bytes(("host-only receipt control; never executed: " + label).encode())
         oracle = {"command": [sys.executable, str(source)],
                   "returncode": 0, "stdout": output, "stderr": ""}
-        backends = gate.expected_backends(label)
         record = {
             "status": "PASS", "run_id": RUN_ID,
             "compiler_fixture_parameter": "pcc0", "compiler_mode": "pcc0",
             "backend": "self", "source_sha256": gate.sha(source),
             "runtime_archive": runtime["path"], "runtime_sha256": runtime["hashes"][""],
             "binary_path": str(binary), "binary_sha256": gate.sha(binary), "reference": oracle,
-            "gc_backends": backends,
-            "executions": [{**oracle, "command": [str(binary)], "gc_backend": gc} for gc in backends],
+            "schema": "pcc.ownership-regression.v2",
+            "executions": [{**oracle, "command": [str(binary)],
+                            "start_ns": 10, "end_ns": 20, "elapsed_ns": 10}],
         }
         if split:
             dump = work / "executable-ir"
@@ -149,7 +149,7 @@ def admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_three_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_seven_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -173,8 +173,7 @@ def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_thr
     assert result["status"] == "PASS" and result["qualifies_stage1"] is False
     assert result["observed_collector_witness"] is False
     assert result["collector_evidence"] == (
-        "requested_gc_backend records are PCC_GC_BACKEND requests; "
-        "collector selection is not independently observed"
+        "One native execution per distinct witness; no collector selector or telemetry."
     )
     assert result["source"] == result["source_after"] == source
     assert result["runtime"] == result["runtime_after"] == runtime
@@ -183,13 +182,10 @@ def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_thr
         "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
         "two-root-tracing", "two-root-slots",
     }
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 23
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 7
     for label, row in result["programs"].items():
-        if label == "two-root-slots":
-            assert len(row["executions"]) == 1
-            assert "requested_gc_backend" not in row["executions"][0]
-        else:
-            assert [item["requested_gc_backend"] for item in row["executions"]] == gate.expected_backends(label)
+        assert len(row["executions"]) == 1
+        assert "requested_gc_backend" not in row["executions"][0]
         assert all("gc_backend" not in item for item in row["executions"])
     assert json.loads((tmp_path / (gate.NAME + ".json")).read_text()) == result
 
@@ -431,6 +427,42 @@ def test_windows_admission_allows_only_named_system_libraries(tmp_path, monkeypa
             gate.verify_native_image(binary)
 
 
+@pytest.mark.parametrize("native_status", (0, 124))
+def test_canonical_shared_helper_runs_one_native_witness_without_selector(tmp_path, monkeypatch, native_status):
+    calls = []
+    archive = tmp_path / "runtime.a"
+    archive.write_bytes(b"host-only archive")
+    monkeypatch.setenv("PCC_GC_BACKEND", "4")
+
+    def execute(command, *, env, timeout):
+        calls.append((command, env, timeout))
+        status = native_status if command[0] == str(tmp_path / "program.out") else 0
+        return subprocess.CompletedProcess(command, status, stdout="ok\n", stderr="")
+
+    def compile_program(source, binary, **options):
+        Path(binary).write_bytes(_elf_image_fixture())
+
+    monkeypatch.setattr(support, "run_process_group_timeout", execute)
+    capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
+    args = ("print('ok')\n", "ok\n", tmp_path, compile_program, "pcc0", archive, capfd)
+    if native_status:
+        with pytest.raises(AssertionError):
+            support.assert_owned_program(*args, backends=None)
+    else:
+        support.assert_owned_program(*args, backends=None)
+    assert len(calls) == 2
+    command, env, timeout = calls[1]
+    assert command == [str(tmp_path / "program.out")]
+    assert "PCC_GC_BACKEND" not in env and env["PATH"] == "" and timeout == 10
+    record = json.loads((tmp_path / "ownership-regression.json").read_text())
+    assert record["schema"] == "pcc.ownership-regression.v2"
+    assert "gc_backends" not in record
+    assert len(record["executions"]) == 1 and "gc_backend" not in record["executions"][0]
+    assert record["status"] == ("NATIVE_EXECUTION_FAILED" if native_status else "PASS")
+    if not native_status:
+        gate.verify_executions(record, tmp_path / "program.out", "ok\n")
+
+
 @pytest.mark.parametrize("fail_gc", (None, 2))
 def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path, monkeypatch, fail_gc):
     calls = []
@@ -481,11 +513,11 @@ def test_super_regression_uses_explicit_owned_helper_without_pcc1(tmp_path, monk
     from tests.python import test_super_call_result_roots as probe
 
     calls = []
-    monkeypatch.setattr(probe, "assert_owned_program", lambda *args: calls.append(args))
+    monkeypatch.setattr(probe, "assert_owned_program", lambda *args, **kwargs: calls.append((args, kwargs)))
     archive, capfd = object(), object()
     probe.test_super_result_native_matches_cpython_under_five_collectors(tmp_path, archive, capfd)
-    assert calls == [(probe.NATIVE_SOURCE, "5\nTrue\ncaught\n", tmp_path,
-                      compile_python, "pcc0", archive, capfd)]
+    assert calls == [((probe.NATIVE_SOURCE, "5\nTrue\ncaught\n", tmp_path,
+                      compile_python, "pcc0", archive, capfd), {"backends": None})]
     tree = ast.parse((ROOT / "tests/python/test_super_call_result_roots.py").read_text())
     native = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                   and node.name == gate.NODES[1].split("::")[1])
@@ -508,7 +540,7 @@ def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch,
     )
     assert calls == [((probe._program(method), "DICT_METHOD_OWNERS_OK\n", tmp_path,
                       compiler, "pcc0", archive, capfd),
-                     {"provenance_probe": "2", "emitted_ir_check": probe._select_dict_program_ir, "retain_dump_evidence": True})]
+                     {"provenance_probe": "2", "backends": None, "emitted_ir_check": probe._select_dict_program_ir, "retain_dump_evidence": True})]
 
 
 def _program_ir(marker="OBJECT_TYPE_IDENTITY_OK"):
@@ -860,7 +892,7 @@ def test_object_regression_selects_its_original_program_ir(tmp_path, monkeypatch
     probe.test_object_identity_native_five_gc(compiler, request, archive, tmp_path, capfd)
     assert calls == [((probe.PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n", tmp_path,
                       compiler, "pcc0", archive, capfd),
-                     {"provenance_probe": "2", "emitted_ir_check": probe._select_identity_program_ir, "retain_dump_evidence": True})]
+                     {"provenance_probe": "2", "backends": None, "emitted_ir_check": probe._select_identity_program_ir, "retain_dump_evidence": True})]
 
 
 def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypatch):
@@ -887,11 +919,11 @@ def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypa
     assert calls == [
         ((probe.TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path / "gc0",
           compiler, "pcc0", archive, capfd),
-         {"provenance_probe": "2", "backends": (0,),
+         {"provenance_probe": "2", "backends": None,
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
         ((lifecycle.TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tmp_path / "tracing",
           compiler, "pcc0", archive, capfd),
-         {"provenance_probe": "2", "backends": (0,),
+         {"provenance_probe": "2", "backends": None,
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
     ]
     assert slots == [(compiler, "pcc0", archive, tmp_path / "slots", capfd)]
@@ -1103,7 +1135,7 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     assert result["tree_rss_limit_bytes"] == 17179869184
     assert result["observed_collector_witness"] is False
     assert len(result["programs"]) == 8
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 24
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 8
     extra = result["programs"]["win64-home-callback"]
     assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is False
     assert len(extra["executions"]) == 1
@@ -1264,9 +1296,7 @@ def test_two_root_split_receipts_fail_closed(tmp_path, monkeypatch, admitted, la
     elif change == "requested-collectors":
         record["gc_backends"] = list(range(5))
     elif change == "boolean-collector":
-        value = bool(record["gc_backends"][0])
-        record["gc_backends"][0] = value
-        record["executions"][0]["gc_backend"] = value
+        record["executions"][0]["gc_backend"] = False
     elif change == "reference-mode":
         record["reference"]["command"] = [sys.executable, str(path.parent / "program.py")]
         record["reference"]["command"].append("cyclic-reference")
@@ -1417,12 +1447,14 @@ def test_two_root_encoded_markers_and_legacy_receipts_keep_distinct_contracts(tm
         if _receipt_label(path) in ("two-root-cleanup", "two-root-tracing"):
             text = (path.parent / "executable-ir/self_backend_input_0.ll").read_text()
             assert "TWO_ROOT_" not in text and r"\54\57\4F\5F\52\4F\4F\54" in text
-        else:
-            record = json.loads(path.read_text())
-            for key in ("run_id", "binary_path", "gc_backends"):
-                record.pop(key)
-            path.write_text(json.dumps(record))
     result = gate.verify_program_receipts(directory, runtime, RUN_ID)
     assert len(result) == 7
     assert result["two-root-cleanup"]["reference"]["command"][-1].endswith("program.py")
     assert result["two-root-tracing"]["reference"]["command"][-1].endswith("program.py")
+    path = next(path for path in paths if _receipt_label(path) == "object-identity")
+    record = json.loads(path.read_text())
+    for key in ("run_id", "binary_path", "schema"):
+        record.pop(key)
+    path.write_text(json.dumps(record))
+    with pytest.raises((AssertionError, KeyError)):
+        gate.verify_program_receipts(directory, runtime, RUN_ID)

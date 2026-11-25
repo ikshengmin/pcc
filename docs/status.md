@@ -277,9 +277,16 @@ in the relevant section or issue and removes the entry.
    death and slot ABI witnesses are intact. Linux: 332 host controls,
    reference executions (including rejection of removed self-edge), and
    emitted IR checks passed. Native cyclic execution remains pending CI.
-   Next: #20 common ownership program receipts for the one collector,
-   removing remaining repeated selector requests while preserving the
-   actual native witnesses and strict receipt guards.
+   #20 common native ownership receipts: the six programs use the v2
+   one-run helper without a selector, plus the unchanged slot probe and
+   Win64 callback. The gate requires current run and binary identity,
+   exact CPython/native commands, integer status, timing and the existing
+   IR/runtime/linked-image checks. It rejects legacy evidence. Linux:
+   503 host controls passed, including inherited-selector removal and
+   negative native status. Actual native executions pending hosted CI.
+   Next: migrate the other callers of the shared ownership helper and
+   native find gate to v2, then remove the temporary legacy helper path.
+   Audit dynamic selector use, not only literal prune matches.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -294,7 +301,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 common ownership receipt one-run protocol: Codex, Linux, 2026-11-25 02:02 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
