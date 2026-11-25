@@ -92,16 +92,15 @@ def _assert_scaffold_object_result_is_published_at_return(
     assert len(calls) == 1
     assert body[calls[0].end():].lstrip().startswith("store ptr " + calls[0].group(1) + ", ptr ")
     assert not re.search(r"\bcall [^\n]*@py_cpy_", body)
-    # Publication's fallible lease checks run before the callee-error check.
-    # Their error target must include argument unpins, not only output roots.
+    # Publication's checks run before the callee-error check. Their error
+    # target must include argument cleanup, not only output roots.
     publication = body[calls[0].end():]
     cleanup_target = re.search(r"label %(scaffold\.arguments\.cleanup[^,\s]+)", publication)
     assert cleanup_target is not None
     cleanup = re.search(r"^" + re.escape(cleanup_target.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
     assert cleanup is not None
-    # The error edge undoes exactly the argument pins the success edge undoes.
-    # Static literals are never pinned; with the provider in view the managed
-    # receiver is, so that case must unpin something.
+    # The error edge undoes exactly the argument owners the success edge
+    # undoes. One collector (item 2 (d)): no argument is pinned.
     continuation = re.search(
         r"br i1 %err\.cmp[^,\n]*, label %" + re.escape(cleanup_target.group(1)) + r", label %([^\s,]+)\n",
         publication,
@@ -109,13 +108,13 @@ def _assert_scaffold_object_result_is_published_at_return(
     assert continuation is not None
     success = re.search(r"^" + re.escape(continuation.group(1)) + r":\n(.*?)(?=^\S|\Z)", body, re.M | re.S)
     assert success is not None
-    cleanup_unpins = re.findall(r"@pcc_gc_unpin\(ptr ([^)]+)\)", cleanup.group(1))
-    success_unpins = re.findall(r"@pcc_gc_unpin\(ptr ([^)]+)\)", success.group(1))
-    assert sorted(cleanup_unpins) == sorted(success_unpins)
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?:un)?pin\(", body)
+    release = r"@pcc_gc_release(?:_known)?\(ptr ([^)]+)\)"
+    cleanup_releases = re.findall(release, cleanup.group(1))
+    success_releases = re.findall(release, success.group(1))
+    assert sorted(cleanup_releases) == sorted(success_releases)
     if zero_arguments:
-        assert not cleanup_unpins
-    else:
-        assert not contextual or cleanup_unpins
+        assert not cleanup_releases
 
 
 @pytest.mark.parametrize("contextual", [False, True])
