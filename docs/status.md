@@ -211,6 +211,13 @@ in the relevant section or issue and removes the entry.
   2026-11-26 a loaded host (load 7.1) gave a 4.2% floor, which no single
   1-3% change can pass. Claude's recommendation: yes.
 
+- P0 (b), asked by Claude 2026-11-26: keep return-address signing on every
+  non-leaf self-compiled AArch64 function (SEC-P1-CFI), or drop it for plain
+  arm64 executables as clang does by default (about 1.3% of a handler
+  request's instructions)? Claude's view: plain arm64 processes on macOS
+  likely run without pointer-authentication keys, so the hint instructions
+  may protect nothing there; not verified.
+
 1. **GC correctness.** Open issues:
    [#7](https://github.com/ikshengmin/pcc/issues/7) (ownership of managed
    boxed-int direct returns) waits for a new reported native owner witness,
@@ -1428,6 +1435,19 @@ in the relevant section or issue and removes the entry.
    in non-leaf functions: clang builds the frame only on the paths that
    call (shrink-wrapping the frame record) and signs no non-leaf return;
    that is the next frame item.
+   (b) Return-address signing, measured on LLVM as a lab (Claude,
+   2026-11-26): the same runtime IR built by clang -O2 with every function
+   marked "sign-return-address"="non-leaf" (module flags alone, and
+   `-mbranch-protection` on IR input, emit no `paciasp`) runs 178242
+   instructions per request against 174771 unsigned (+3471, +2.0%; cycles
+   +1.3%). On the self backend that is about 1.3% of a request. The self
+   backend signs every non-leaf function (S-track SEC-P1-CFI, branch
+   protection module); dropping it for plain arm64 executables, as clang
+   does by default there, is the maintainer's decision. Together with (a),
+   the frame category is worth about 1.5%, so the static-mix estimate (7.9%)
+   overstated it: it counts every duplicated epilogue. The 83k-instruction
+   gap sits in function bodies: register copies, immediates moved before
+   use, `sxtw`, `nop`, unfused compares and unfolded addresses.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
