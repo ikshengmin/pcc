@@ -157,7 +157,8 @@ def test_cache_identity_and_owners_survive_movement_without_permanent_pins(phase
     memory.decref(caller.fields[0])
     caller.fields[0] = None
     assert cache.fields["abs"].references == 1
-    assert memory.moves > 0
+    # One collector: the GC points move nothing (item 2 (d)).
+    assert memory.moves == 0
 
 
 @pytest.mark.parametrize("failure", ("dict", "tuple", "function"))

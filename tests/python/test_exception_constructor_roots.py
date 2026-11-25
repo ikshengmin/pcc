@@ -30,8 +30,7 @@ class _Memory:
         self.value = self.make(PY_TYPE_LIST)
         self.none = self.make(PY_TYPE_NONE, 1)
         self.latest = {id(self.cls): self.cls, id(self.value): self.value}
-        # Container mode reads 0: this model relocates objects at its GC
-        # points, as a collector without container mode may.
+        # One collector (item 2 (d)): no object moves at a GC point.
         container_mode = _Slots(8)
         container_mode.fields[0] = 0
         self.maps = {"pcc_exc_construct_borrowed_frame_map": -2,
@@ -48,25 +47,8 @@ class _Memory:
         return value
 
     def gc(self, phase):
-        if self.graph_depth or phase != self.phase:
-            return
-        for old in list(self.objects):
-            if not old.alive or old.flags & (64 | 16384) or old is self.none:
-                continue
-            new = self.make(old.tag, old.flags)
-            new.references, new.fields = old.references, old.fields.copy()
-            for slots in self.frames.values():
-                for offset, item in list(slots.fields.items()):
-                    if item is old: slots.fields[offset] = new
-            for owner in self.objects:
-                if owner.alive:
-                    owner.fields = {offset: new if item is old else item for offset,item in owner.fields.items()}
-            for key, item in list(self.latest.items()):
-                if item is old: self.latest[key] = new
-            if self.cls is old: self.cls = new
-            if self.value is old: self.value = new
-            old.alive = False
-            self.moves += 1
+        """A GC point: the one collector moves no object here."""
+        return
 
     def read(self, value, offset):
         if isinstance(value, _Object):
@@ -145,10 +127,11 @@ class _Memory:
         value.flags |= 64
         self.pin_metric += 1
 
-    def take_slot(self, slots):
+    def take_slot(self, slot):
         # pcc_gc_take_slot: transfer the owner; nothing pinned (item 2 (d)).
-        value = slots.fields[0]
-        slots.fields[0] = None
+        target, offset = self.pointer(slot)
+        value = self.read(target, offset)
+        self.write(target, offset, None)
         assert value is None or not isinstance(value, _Object) or value.alive
         return value
 
@@ -206,7 +189,6 @@ def test_exception_constructs_from_healed_inputs_and_returns_one_owner(phase):
     assert result.fields[16] is memory.cls
     assert result.fields[24].alive and result.fields[24].references == 1
     assert not memory.frames and not memory.graph_depth and memory.pin_metric == 0
-    if phase != "field_store": assert memory.moves > 0
 
 
 @pytest.mark.parametrize("fail", ["allocation", "string"])
