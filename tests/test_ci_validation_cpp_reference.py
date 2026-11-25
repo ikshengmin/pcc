@@ -1,9 +1,12 @@
 """Reference-qualification protocol controls, not simulated compiler evidence."""
 
+from contextlib import contextmanager
+import hashlib
 import json
 from pathlib import Path
 import subprocess
 import sys
+from types import SimpleNamespace
 
 import pytest
 
@@ -158,3 +161,95 @@ def test_whole_reference_command_inherits_exact_qualified_driver(tmp_path, monke
     reference.main()
     assert calls == [('preflight', '/qualified/clang++-18', 'g++', out, {}),
                      ('suite', 'uv', expected)]
+
+
+def test_reference_admission_path_shares_only_one_pytest_session(tmp_path):
+    from tests.cpp import test_cpp_platform_execution as platform
+
+    first = tmp_path / "first-session"
+    second = tmp_path / "second-session"
+    lock = platform._platform_reference_admission_path
+    assert lock(first, is_worker=False) == first / ".pcc-cpp17-reference.lock"
+    assert lock(first / "popen-gw0", is_worker=True) == lock(first, is_worker=False)
+    assert lock(first / "popen-gw5", is_worker=True) == lock(first, is_worker=False)
+    assert lock(second / "popen-gw0", is_worker=True) != lock(first, is_worker=False)
+
+
+@pytest.mark.parametrize("compile_fails", (False, True))
+def test_platform_reference_receipt_binds_compilation_to_session_admission(
+    tmp_path, monkeypatch, compile_fails
+):
+    # Protocol model only. Actual six-worker compiler processes and receipts
+    # are checked by the unchanged 86-node platform reference gate.
+    from tests.cpp import test_cpp_platform_execution as platform
+
+    run_root = tmp_path / "session"
+    worker_root = run_root / "popen-gw2"
+    case_root = worker_root / "case"
+    case_root.mkdir(parents=True)
+    compiler = tmp_path / "explicit-compiler"
+    compiler.write_bytes(b"reference identity model")
+    program = case_root / "reference" / "program"
+    source = "int cpp_test_entry(){return 42;}"
+    config = SimpleNamespace(workerinput={"workerid": "gw2"})
+    factory = SimpleNamespace(getbasetemp=lambda: worker_root)
+    calls = []
+    active = False
+
+    @contextmanager
+    def admission(path):
+        nonlocal active
+        assert path == run_root / ".pcc-cpp17-reference.lock"
+        assert not active
+        calls.append("enter")
+        active = True
+        try:
+            yield
+        finally:
+            active = False
+            calls.append("leave")
+
+    def compile_reference(units, directory, *, compiler):
+        assert active
+        assert units == (("original.cpp", source),)
+        assert directory == case_root / "reference"
+        assert compiler == str(tmp_path / "explicit-compiler")
+        calls.append("compile")
+        if compile_fails:
+            raise RuntimeError("reference compile failed")
+        return program
+
+    def native_run(binary, directory, expected, owner, target):
+        assert not active
+        assert binary == program
+        assert expected == platform.Execution(42, b"*\x00\x00\x00", b"")
+        assert owner == "external-cpp17-reference"
+        assert target == platform.LINUX_TARGET
+        calls.append(directory.name)
+
+    monkeypatch.setenv("PCC_CPP_ORACLE", str(compiler))
+    monkeypatch.setattr(platform.shutil, "which", lambda requested: requested)
+    monkeypatch.setattr(platform, "native_target", lambda: platform.LINUX_TARGET)
+    monkeypatch.setattr(platform, "exclusive_file_lock", admission)
+    monkeypatch.setattr(platform, "compile_reference_cpp", compile_reference)
+    monkeypatch.setattr(platform, "_record_run", native_run)
+    invoke = platform.test_cpp_platform_explicit_cpp17_reference
+    arguments = (case_root, factory, SimpleNamespace(config=config), "original", source, 42)
+    if compile_fails:
+        with pytest.raises(RuntimeError, match="reference compile failed"):
+            invoke(*arguments)
+        assert calls == ["enter", "compile", "leave"]
+    else:
+        invoke(*arguments)
+        assert calls == ["enter", "compile", "leave", "run-1", "run-2"]
+    row = json.loads((case_root / "reference-compile.json").read_text())
+    assert row["compiler_sha256"] == hashlib.sha256(compiler.read_bytes()).hexdigest()
+    assert row["source_sha256"] == hashlib.sha256(source.encode()).hexdigest()
+    assert row["options"] == ["-std=c++17", "-pedantic-errors", "-O0"]
+    assert row["status"] == ("FAIL" if compile_fails else "COMPILED")
+    if compile_fails:
+        assert row["error"] == "reference compile failed"
+    lease = row["compiler_admission"]
+    assert lease["lock_path"] == str(run_root / ".pcc-cpp17-reference.lock")
+    assert lease["scope"] == "pytest-session"
+    assert lease["wait_started_monotonic_ns"] <= lease["entered_monotonic_ns"] <= lease["completed_monotonic_ns"]

@@ -637,3 +637,30 @@ local pass. The independent Linux Source / cpp / reference lane retains its
 G++ binding and all obligations: artifact `15036234690` records 9 failures
 among 1207 nodes, including CWG2394. No full-source reference or TinyXML2 pass
 follows from changing the dedicated platform comparator.
+
+
+The next hosted run [45663526933](https://github.com/ikshengmin/pcc/actions/runs/45663526933)
+(artifact `15046868002`) confirmed Ubuntu Clang 18.1.3's normative
+capability: the positive native probe returned 42 and the negative was rejected.
+G++ remained a separately labeled mismatch. The reference phase itself hit
+`MEMORY_LIMIT` at 1,281,925,120 bytes (8.35 s), not a language disagreement:
+the peak process sample contained six external Clang drivers, six cc1 children,
+and all six pytest workers. The platform case now acquires the existing portable
+file lock at the common local-xdist session root for identity hashing and
+external compilation only. Both native executions remain outside that lock.
+No workflow resource limit, worker count, case identity, source, compiler
+option or expectation changes. Each compile receipt records its admission
+interval; failures release the same lock and remain failures.
+
+Local Linux G++ 14.2 diagnostic, exact original 86 nodes with
+`pytest -n6 --dist loadgroup -x --maxfail=0 -m integration
+tests/cpp/test_cpp_platform_execution.py::test_cpp_platform_explicit_cpp17_reference`
+under the 90 s / 1 GiB tree guard: completed in 6.64 s with 440,233,984 B peak.
+86 receipts came from all six workers, with one shared lock path and no
+overlapping compiler admission intervals; 170 reference executions agreed.
+The sole compile failure remains G++'s CWG2394 rejection (85 passed, 1 failed).
+Three admission regressions failed on the previous code and passed after this
+change. Whole ordinary C++ plus the CI validation and qualification contracts:
+6290 passed and 49 subtests passed, guard peak 183,455,744 B. These are local
+diagnostic and host-test observations, not a Linux Clang or macOS pass; the
+next hosted cycle must execute all 86 qualified reference nodes.

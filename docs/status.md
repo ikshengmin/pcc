@@ -1251,9 +1251,15 @@ in the relevant section or issue and removes the entry.
    CWG2394. The mandatory platform comparator now selects Clang 18 on
    Linux, with strict positive/negative capability and identity probes
    before all unchanged 86 cases; G++ mismatch remains separate evidence.
-   Local Linux: 441 CI contracts, 6060 ordinary C++ + 49 subtests and 86
-   owned cases passed; G++ 14.2 still 85/86. Next: run the actual hosted
-   Clang gate; independent Source / cpp / reference remains at its 9/1207
+   Hosted run 45663526933 (artifact 15046868002) confirmed Clang 18.1.3's
+   normative capability, but six simultaneous compiler driver/cc1 pairs
+   crossed 1 GiB (1,281,925,120 B). The same six pytest workers now admit
+   one external platform compiler at a time, retaining all 86 node identities,
+   original executions, timeout and cap. Linux G++ 14.2: all 86 admission
+   intervals disjoint, guard completed in 6.64 s at 440,233,984 B; 85/86
+   native references, sole unchanged CWG2394 rejection. Whole ordinary C++
+   plus CI contracts: 6290 tests and 49 subtests passed. Next: hosted Clang
+   86-node gate; independent Source / cpp / reference remains at its 9/1207
    G++ failures, not waived. See [reference qualification](cpp-frontend.md#cpp17-platform-reference-qualification).
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
@@ -1292,7 +1298,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - C++17 platform external-reference compiler process-tree admission: Codex, Linux x86_64, 2026-11-25T17:47Z, area frontend-cpp (platform reference tests only)
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

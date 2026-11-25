@@ -11,9 +11,11 @@ from pathlib import Path
 import shutil
 import struct
 import subprocess
+import time
 
 import pytest
 
+from scripts.file_lock import exclusive_file_lock
 from tests.cpp.owned_execution import (
     Execution,
     assert_exact,
@@ -219,9 +221,17 @@ def test_cpp_platform_owned_native_execution(tmp_path, monkeypatch, name, source
         _record_run(binary, output, expected, artifact.owner, target)
 
 
+def _platform_reference_admission_path(basetemp: Path, *, is_worker: bool) -> Path:
+    # Local xdist places each worker's base under a common session root.
+    # Admit a single external C++ compiler tree there; this is neither a
+    # global host lock nor a reduction in the outer pytest worker count.
+    session_root = basetemp.parent if is_worker else basetemp
+    return session_root / ".pcc-cpp17-reference.lock"
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("name,source,value", CASES, ids=[case[0] for case in CASES])
-def test_cpp_platform_explicit_cpp17_reference(tmp_path, name, source, value):
+def test_cpp_platform_explicit_cpp17_reference(tmp_path, tmp_path_factory, request, name, source, value):
     target = native_target()
     requested = os.environ.get("PCC_CPP_ORACLE")
     assert requested, "set an explicit clang++/g++ reference owner"
@@ -231,20 +241,35 @@ def test_cpp_platform_explicit_cpp17_reference(tmp_path, name, source, value):
         "owner": "external-cpp17-reference", "target": target,
         "compiler_invocation": compiler,
         "compiler_resolved": str(Path(compiler).resolve()),
-        "compiler_sha256": hashlib.sha256(Path(compiler).read_bytes()).hexdigest(),
         "source_sha256": hashlib.sha256(source.encode()).hexdigest(),
         "options": ["-std=c++17", "-pedantic-errors", "-O0"],
     }
-    try:
-        binary = compile_reference_cpp(((name + ".cpp", source),),
-                                       tmp_path / "reference", compiler=compiler)
-    except BaseException as error:
-        receipt.update(status="FAIL", error=str(error))
-        raise
-    else:
-        receipt["status"] = "COMPILED"
-    finally:
-        (tmp_path / "reference-compile.json").write_text(json.dumps(receipt, indent=2))
+    lock_path = _platform_reference_admission_path(
+        tmp_path_factory.getbasetemp(), is_worker=hasattr(request.config, "workerinput")
+    )
+    admission = {
+        "scope": "pytest-session",
+        "lock_path": str(lock_path),
+        "wait_started_monotonic_ns": time.monotonic_ns(),
+    }
+    receipt["compiler_admission"] = admission
+    # Clang's driver and its cc1 child together cross the tree RSS budget
+    # when all six workers compile concurrently. Retain all original cases,
+    # options and executions; serialize only the external compiler owner.
+    with exclusive_file_lock(lock_path):
+        admission["entered_monotonic_ns"] = time.monotonic_ns()
+        try:
+            receipt["compiler_sha256"] = hashlib.sha256(Path(compiler).read_bytes()).hexdigest()
+            binary = compile_reference_cpp(((name + ".cpp", source),),
+                                           tmp_path / "reference", compiler=compiler)
+        except BaseException as error:
+            receipt.update(status="FAIL", error=str(error))
+            raise
+        else:
+            receipt["status"] = "COMPILED"
+        finally:
+            admission["completed_monotonic_ns"] = time.monotonic_ns()
+            (tmp_path / "reference-compile.json").write_text(json.dumps(receipt, indent=2))
     expected = Execution(value & 255, struct.pack("<i", value), b"")
     for attempt in (1, 2):
         output = tmp_path / f"run-{attempt}"
