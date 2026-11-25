@@ -562,3 +562,37 @@ timing/cleanup contracts rather than suppress these failures.
 Measure the next largest actual ARM finalize owner independently.
 No ARM execution, full Stage1/Stage2/Stage3 speedup or fixed point is
 claimed.
+
+### Correct the finalization timing witnesses
+
+The unchanged 168 red host timing fixtures found above are now repaired
+against source `719a8ea1`, without changing any production backend or
+collector code. The 160 failure-path combinations execute the real outer
+emitter, real direct capture/sink factory and real close/revoke path; only
+the active inner tail supplies its existing injected failure. They assert
+the original exception identity, failure/close/capture ordering, the
+incomplete receipt, actual closure of the scratch/fragments, the real
+owner-transfer grant and revocation, and an idle capture after failure.
+The eight genuinely empty module combinations require an empty section
+and undefined-symbol inventory, zero structured instructions, and the
+exact encoder rejection `at least one section is required`. Both timer
+modes still require identical encoded bytes for every nonempty object
+and complete unfiltered phase receipts.
+
+All 176 affected parameter cases pass. The same 11-file adjacent batch
+above, with the explicit native receipt executed separately, passes
+1216 host tests in 41.45 s (90 s / 1 GiB guard COMPLETE, peak 92,024,832 B).
+The actual pcc0 receipt was also attempted against a freshly built,
+strictly verified 192-member source-matched runtime (codegen identity
+`e6755581d14c1e16e9a1003a92beb9dd28d9ec5e0740c2b31af954b4edfeab16`).
+It exposed another independent stale fixture: a temporary standalone
+program tried to import compiler internals via PYTHONPATH, but its
+native executable did not own that module and correctly returned
+`ModuleNotFoundError: No module named 'pcc.backend.indexed_phase_timing'`.
+The fixture now admits the exact unchanged production provider bytes
+under their real dotted name in its local source closure. It runs the
+same program and receipt assertions with no native PYTHONPATH. The
+original exact native node then passed (10.16 s, 222,068,736 B peak,
+original guard COMPLETE). Total 1217 executed passed, no failures; five
+other platform/integration-selected nodes were not run. No native ARM
+or pcc1 qualification is claimed.

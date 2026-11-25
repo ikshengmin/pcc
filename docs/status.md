@@ -1306,15 +1306,18 @@ in the relevant section or issue and removes the entry.
    202,676-event frozen compiler module, five paired host cross-target
    timings 1.430→1.213 s (-15.16%, control-normalized -14.90%, 5/5),
    identical AArch64 PCO; exact changed body executed as x86 ELF.
-   1048 adjacent tests pass; all 168 existing red timing-fixture nodes
-   unchanged against preimage, one native setup unavailable. Next: fix
-   those timing fixtures; measure pairing/trampoline and frame-register/
-   strong-liveness owners independently, and await actual equal-ceiling
-   Stage2/3 CI. No full Stage2/3 speedup or ARM execution claim.
+   All 168 existing red timing-fixture nodes repaired: real scope/capture
+   cleanup, exact empty-object rejection and unchanged valid PCO checks.
+   Also repaired the independent native receipt's missing source provider;
+   1216 adjacent host tests plus one source-matched pcc0 executable receipt
+   pass, five platform/integration nodes not run. Next: measure
+   pairing/trampoline and frame-register/strong-liveness owners
+   independently, and await actual equal-ceiling Stage2/3 CI. No full
+   Stage2/3 speedup or ARM execution claim.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - ARM finalization timing fixture ownership and empty transport: Codex, Linux, 2026-11-25 17:41 UTC, area backend (test_backend_finalize_phase_timing.py only)
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its

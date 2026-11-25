@@ -438,32 +438,57 @@ def test_native_tail_keeps_every_mode_order_and_handoff(monkeypatch, enabled, li
 def test_failure_keeps_original_error_cleanup_and_incomplete_receipt(
     monkeypatch, enabled, failure, phase, error_type, diagnostic_fault,
 ):
+    from pcc.backend import self_backend_aarch64_darwin as emitter
+
     run = _mock_tail(monkeypatch, enabled=enabled, failure=failure,
                      error_type=error_type, diagnostic_fault=diagnostic_fault)
-    # Execute the unchanged production scope owner around the extracted tail.
-    # Its finally blocks close the native sink/capture before releasing active.
-    wrapper = _source_function("_emit_prepared_aarch64_darwin_lines")
-    namespace = dict(run.namespace)
-    namespace.update(
-        # Match the production module so its private relative import resolves.
-        __name__="pcc.backend.self_backend_aarch64_darwin",
-        __package__="pcc.backend",
-        _AARCH64_EMISSION_ACTIVE=False, has_source_debug=lambda functions: False,
-        _NativeAArch64Emission=lambda **kwargs: run.namespace["native_sink"],
-        begin_direct_instruction_capture=lambda **kwargs: run.operations.append("capture_begin"),
-        end_direct_instruction_capture=lambda: run.operations.append("capture_end"),
-        require_direct_instruction_capture_idle=lambda: None,
-        _emit_prepared_aarch64_darwin_lines_active=lambda *args, **kwargs: run.invoke(),
-    )
-    tree = ast.Module(body=[ast.parse("from __future__ import annotations").body[0], wrapper], type_ignores=[])
-    exec(compile(ast.fix_missing_locations(tree), "<production emission scope>", "exec"), namespace)
-    invoke = namespace[wrapper.name]
-    with pytest.raises(error_type) as caught:
-        invoke(types.SimpleNamespace(functions=[]), native_undefined=[], phase_timing=run.timer)
+    # Keep the actual outer factory, fresh capture and sink cleanup. Only the
+    # active body substitutes the extracted failure-injection tail. Its mock
+    # has no live span arena and cannot model the private owner-transfer grant.
+    begin_capture = emitter.begin_direct_instruction_capture
+    end_capture = emitter.end_direct_instruction_capture
+    close_sink = emitter._NativeAArch64Emission.close
+    retained = []
+
+    def begin(**kwargs):
+        run.operations.append("capture_begin")
+        return begin_capture(**kwargs)
+
+    def end():
+        run.operations.append("capture_end")
+        return end_capture()
+
+    def close(sink):
+        run.operations.append("sink_close")
+        return close_sink(sink)
+
+    def active(_prepared, optimize, **kwargs):
+        assert optimize and kwargs["phase_timing"] is run.timer
+        sink = kwargs["native_sink"]
+        carrier = sink._span_owner_transfer
+        assert sink._owned_stack_windows
+        assert carrier is not None and carrier.valid and carrier.owner is sink.fragments.spans
+        retained.append((sink, carrier))
+        return run.invoke()
+
+    with monkeypatch.context() as patch:
+        patch.setattr(emitter, "begin_direct_instruction_capture", begin)
+        patch.setattr(emitter, "end_direct_instruction_capture", end)
+        patch.setattr(emitter._NativeAArch64Emission, "close", close)
+        patch.setattr(emitter, "_emit_prepared_aarch64_darwin_lines_active", active)
+        with pytest.raises(error_type) as caught:
+            emitter._emit_prepared_aarch64_darwin_lines(
+                types.SimpleNamespace(functions=[]), native_undefined=[], phase_timing=run.timer,
+            )
     assert caught.value is run.error
     assert run.operations[0] == "capture_begin"
     assert run.operations[-3:] == [failure, "sink_close", "capture_end"]
-    assert namespace["_AARCH64_EMISSION_ACTIVE"] is False
+    assert emitter._AARCH64_EMISSION_ACTIVE is False
+    assert len(retained) == 1
+    sink, carrier = retained[0]
+    assert sink.fragments.closed and sink.scratch._closed
+    assert not carrier.valid and carrier.owner is None
+    emitter.require_direct_instruction_capture_idle()
     rows = _rows("".join(run.sink.lines))
     expected = []
     if enabled:
@@ -501,7 +526,7 @@ entry:
 def test_real_transport_timing_preserves_encoded_sections(monkeypatch, target, optimize, tables, empty):
     from pcc.backend.self_backend_aarch64_darwin import emit_aarch64_darwin_indexed_transport
     from pcc.backend.self_backend_parse import parse_self_backend_module
-    from pcc.backend.native_object import encode_native_object_from_sections
+    from pcc.backend.native_object import NativeObjectError, encode_native_object_from_sections
 
     monkeypatch.setenv("PCC_PRECISE_STACKMAP_TABLES", "1" if tables else "0")
     monkeypatch.delenv("PCC_SELF_TARGET_PASS_TRANSPORT", raising=False)
@@ -518,7 +543,18 @@ def test_real_transport_timing_preserves_encoded_sections(monkeypatch, target, o
         assert transport.native_finalized
         assert transport.fallback_instruction_count == 0
         sections, undefined = transport.assemble_sections()
-        outcomes.append((sections, undefined, encode_native_object_from_sections(sections, undefined=undefined)))
+        if empty:
+            # Finalization of a truly empty module is valid, but an encoder
+            # must not fabricate an object from an empty section inventory.
+            assert sections == [] and undefined == []
+            assert transport.structured_instruction_count == 0
+            with pytest.raises(NativeObjectError, match="^at least one section is required$") as caught:
+                encode_native_object_from_sections(sections, undefined=undefined)
+            outcomes.append((sections, undefined, str(caught.value)))
+        else:
+            encoded = encode_native_object_from_sections(sections, undefined=undefined)
+            assert sections and encoded
+            outcomes.append((sections, undefined, encoded))
         rows = _rows("".join(sink.lines))
         if enabled:
             _check_finalization_receipts(rows, linux=target == TARGETS[1],
@@ -571,11 +607,20 @@ def test_compiled_receipts_match_same_source_reference(
     assert reference.returncode == 0, reference.stderr
     assert reference.stdout == "finalize receipts preserve sixteen aggregates\n"
     _check_program_receipts(reference.stderr)
+    # The native entry's source closure is local; unlike CPython it must not
+    # import arbitrary compiler internals from PYTHONPATH at runtime. Admit
+    # the exact production module under its real dotted name, not a stub or
+    # a rewritten timer, so both compiler routes compile the same owner.
+    provider = tmp_path / "pcc" / "backend" / "indexed_phase_timing.py"
+    provider.parent.mkdir(parents=True)
+    provider.write_bytes((ROOT / "pcc" / "backend" / "indexed_phase_timing.py").read_bytes())
     binary = tmp_path / "finalize_receipts"
     python_program_compiler(str(source), str(binary), backend="self", runtime_archive=str(pcc_runtime_archive))
+    native_environment = dict(environment)
+    native_environment.pop("PYTHONPATH", None)
     for backend in (0,):
         ran = subprocess.run([str(binary)], capture_output=True, text=True, timeout=20,
-                             env=dict(environment, PCC_GC_BACKEND=str(backend)))
+                             env=dict(native_environment, PCC_GC_BACKEND=str(backend)))
         assert ran.returncode == 0, f"GC{backend}: {ran.stdout}; {ran.stderr}"
         assert ran.stdout == reference.stdout, f"GC{backend}"
         _check_program_receipts(ran.stderr)
