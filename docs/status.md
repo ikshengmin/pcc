@@ -1084,7 +1084,7 @@ in the relevant section or issue and removes the entry.
    stage 3). Bootstrap runs need the maintainer's explicit OK.
 
    Claims:
-   - none
+   - Stage2/3 single-collector worker-budget parity: Codex, Linux, 2026-11-25 16:49 UTC, area selfhost
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
