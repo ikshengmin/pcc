@@ -377,10 +377,8 @@ class ComprehensionLoweringMixin:
         output_lease = None
         if output_slot is not None:
             self._publish_slot_call_owned(output_slot, container, label="comprehension result")
-            output_lease = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(output_slot)],
-                name=self._fresh("comp.result.lease"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            output_lease = ir.Constant(_I64, 0)
             self._slot_call_check_status(output_lease, "comprehension result lease", expr.span)
             container = self.builder.load(output_slot, name=self._fresh("comp.result.current"))
         else:
@@ -483,10 +481,8 @@ class ComprehensionLoweringMixin:
                 else:
                     exact_flags[nm] = prior_exact
         if output_slot is not None:
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(output_slot), output_lease],
-                name=self._fresh("comp.result.lease.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._slot_call_check_status(released, "comprehension result lease release", expr.span)
         else:
             self._gc_unpin(container)

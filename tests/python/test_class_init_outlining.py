@@ -300,8 +300,9 @@ def test_inline_oracle_preserves_constructors_and_root_operations(monkeypatch):
         # A private frame takes the thread-local LIFO entry (c0f47b91).
         assert any(name.startswith("pcc_gc_frame_enter_lifo") for name in calls)
         assert any(name.startswith("pcc_gc_frame_leave_lifo") for name in calls)
-        assert "pcc_gc_foreign_lease_acquire" in calls
-        assert "pcc_gc_foreign_lease_release" in calls
+        # One collector: no address lease is taken (item 2 (d)).
+        assert "pcc_gc_foreign_lease_acquire" not in calls
+        assert "pcc_gc_foreign_lease_release" not in calls
         assert "py_recursion_enter" not in calls
         assert "py_recursion_leave" not in calls
         assert "py_func_new_signature_slots" in calls or "py_func_new_static_def" in calls

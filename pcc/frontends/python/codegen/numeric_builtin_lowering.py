@@ -84,10 +84,8 @@ class NumericBuiltinLoweringMixin:
                         value, self._owned_release_needed(value, operand), "int.argument.root",
                     ))
                 for root in roots:
-                    acquired = self.builder.call(
-                        self.runtime["pcc_gc_foreign_lease_acquire"],
-                        [self._as_gc_ptr(root[0])], name=self._fresh("int.lease.acquire"),
-                    )
+                    # One collector: an address lease is token 0 and its release answers 0.
+                    acquired = ir.Constant(_I64, 0)
                     failed = self.builder.icmp_signed("<", acquired, ir.Constant(_I64, 0))
                     error = self.current_function.append_basic_block(self._fresh("int.lease.error"))
                     ready = self.current_function.append_basic_block(self._fresh("int.lease.ready"))

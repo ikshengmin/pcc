@@ -61,7 +61,8 @@ def test_bytes_decode_publishes_before_error_check_and_cleanup(case):
         loaded=re.search(re.escape(value)+r' = load ptr, ptr (%[-\w.]+)',body[:call.start()])
         assert loaded is not None
         slot=loaded.group(1)
-        assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr '+re.escape(slot)+r'\)',body[:call.start()]) is not None
+        # One collector: no address lease is taken (item 2 (d)).
+        assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr '+re.escape(slot)+r'\)',body[:call.start()]) is None
     assert 'dyn.decode.result' not in body
     assert re.search(r'@pcc_gc_store_root\(ptr %decode.receiver[^\n]*ptr null\)',body) is not None
     if dynamic:

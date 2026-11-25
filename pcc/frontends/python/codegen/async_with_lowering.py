@@ -270,10 +270,8 @@ class AsyncWithLoweringMixin:
             cleanup = self._slot_call_cleanup_block(tuple(roots), target)
             self._try_err_block = cleanup
             self._cpy_operand_cleanup_block = cleanup
-            token = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(context_root)],
-                name=self._fresh("with.user.manager.lease"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            token = ir.Constant(_I64, 0)
             self._slot_call_check_status(token, "context manager lease", stmt.span)
             self._try_err_block = self._slot_call_cleanup_block((), cleanup, ((context_root, token),))
             self._cpy_operand_cleanup_block = self._try_err_block
@@ -289,10 +287,8 @@ class AsyncWithLoweringMixin:
                 _expr, _root, published = self._slot_call_result_sinks.pop()
             if not published:
                 raise L1CodegenError("native __enter__ producer requires an output-slot handoff")
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(context_root), token],
-                name=self._fresh("with.user.manager.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._try_err_block = cleanup
             self._cpy_operand_cleanup_block = cleanup
             self._slot_call_check_status(released, "context manager lease release", stmt.span)

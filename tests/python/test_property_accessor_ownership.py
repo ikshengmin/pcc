@@ -151,11 +151,9 @@ def _owners_and_cfg(body, expected):
                 assert state == 0, (block, state)
         queue.extend((successor, state) for successor in successors)
     assert constructor_states and return_states
-    for stage, role in enumerate(expected):
-        # Resolve lease operands through the same physical alias map.
-        leases = re.findall(r"@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.]+)\)", body)
-        for root in (roots[role][stage], roots["descriptor"][stage]):
-            assert any(original(slot) == root for slot in leases), (role, stage)
+    # One collector: no accessor or descriptor root takes an address lease
+    # (item 2 (d)); the root alone keeps the owner alive.
+    assert "@pcc_gc_foreign_lease_acquire(" not in body, "unexpected address lease"
     # Reporting is now shared by a generated helper. Check each descriptor's
     # actual publication result and its error edge, rather than a former
     # inline-report label or a diagnostic string outside this function body.

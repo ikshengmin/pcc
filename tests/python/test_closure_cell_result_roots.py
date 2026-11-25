@@ -46,8 +46,8 @@ def test_cell_payload_is_published_before_error_probe_or_owner_cleanup(case):
     for produced in matches:
         assert 'store ptr ' + produced.group(1) in produced.group(2), case
     assert 'cell.bound.error' in text
-    assert re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_acquire\(', text)
-    assert re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_release\(', text)
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_(?:acquire|release)\(', text)
     if case == 'class_capture':
         # The method is a closure: its function object passes the ``value``
         # cell as a trailing parameter, read through the published cell

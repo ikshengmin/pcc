@@ -115,7 +115,8 @@ def test_argv_list_and_elements_publish_before_population():
     _assert_immediate_publication(body, "py_list_new")
     _assert_immediate_publication(body, "py_str_new")
     assert re.search(r"call [^\n]*@py_list_append\(", body)
-    assert re.search(r"call [^\n]*@pcc_gc_foreign_lease_acquire\(", body)
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r"call [^\n]*@pcc_gc_foreign_lease_acquire\(", body)
     assert re.search(r"call [^\n]*@pcc_gc_store_root\([^\n]*ptr null", body)
 
 

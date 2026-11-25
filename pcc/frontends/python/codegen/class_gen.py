@@ -6506,9 +6506,8 @@ class ClassLowering:
             parent._emit_attribute_error_if_null(parent.builder.load(output), attr_name, expr.span)
             if not _is_ast_node(expr.ty, (IntType, FloatType, BoolType)):
                 return parent._take_slot_call_root(output)
-            token = parent.builder.call(
-                parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(output)],
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            token = ir.Constant(_I64, 0)
             parent._slot_call_check_status(token, "class attribute unbox lease", expr.span)
             parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, ((output, token),))
             parent._cpy_operand_cleanup_block = parent._try_err_block
@@ -6517,9 +6516,8 @@ class ClassLowering:
                 parent.builder, parent.module, parent.runtime, current, expr.ty,
             )
             parent._emit_post_call_err_check(expr.span)
-            released = parent.builder.call(
-                parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(output), token],
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             parent._try_err_block = cleanup
             parent._cpy_operand_cleanup_block = cleanup
             parent._slot_call_check_status(released, "class attribute unbox release", expr.span)
@@ -6590,9 +6588,8 @@ class ClassLowering:
             for source_root in (class_root, value):
                 parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
                 parent._cpy_operand_cleanup_block = parent._try_err_block
-                token = parent.builder.call(
-                    parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(source_root)],
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 parent._slot_call_check_status(token, "class set-name argument lease", value_expr.span)
                 leases.append((source_root, token))
             parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
@@ -6602,9 +6599,8 @@ class ClassLowering:
             )
             while leases:
                 source_root, token = leases.pop()
-                released = parent.builder.call(
-                    parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(source_root), token],
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 parent._try_err_block = parent._slot_call_cleanup_block((), cleanup, tuple(leases))
                 parent._cpy_operand_cleanup_block = parent._try_err_block
                 parent._slot_call_check_status(released, "class set-name argument release", value_expr.span)
@@ -7679,10 +7675,8 @@ class ClassLowering:
             # Existing mapping hook ABIs accept raw operands. One counted
             # lease keeps the namespace address stable for the entire body;
             # default readers independently acquire values from this owner.
-            token = parent.builder.call(
-                parent.runtime["pcc_gc_foreign_lease_acquire"], [parent._as_gc_ptr(namespace_root)],
-                name=self._fresh("namespace.body.lease"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            token = ir.Constant(_I64, 0)
             parent._slot_call_check_status(token, "prepared namespace lease", cd.span)
             leased_cleanup = parent._slot_call_cleanup_block(
                 (result_root, namespace_root), target, ((namespace_root, token),),
@@ -7703,10 +7697,8 @@ class ClassLowering:
             )
             # The class result stays owned while retiring the mapping lease
             # and namespace root can dispose user objects.
-            released = parent.builder.call(
-                parent.runtime["pcc_gc_foreign_lease_release"], [parent._as_gc_ptr(namespace_root), token],
-                name=self._fresh("namespace.body.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             parent._try_err_block = cleanup
             parent._try_err_block = self._prepared_dataclass_defaults_cleanup(method_objects, cleanup)
             parent._cpy_operand_cleanup_block = parent._try_err_block

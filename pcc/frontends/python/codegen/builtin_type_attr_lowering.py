@@ -119,10 +119,8 @@ class BuiltinTypeAttrLoweringMixin:
                 # The C string is an interior pointer. Keep its string owner
                 # leased through lookup, including receiver lease acquisition,
                 # user callbacks and publication of the returned object.
-                name_token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"],
-                    [self._as_gc_ptr(name_root)], name=self._fresh("getattr.name.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                name_token = ir.Constant(_I64, 0)
                 self._slot_call_check_status(name_token, "getattr name lease", expr.span)
                 self._try_err_block = self._slot_call_cleanup_block(
                     (), cleanup, ((name_root, name_token),),
@@ -140,11 +138,8 @@ class BuiltinTypeAttrLoweringMixin:
                 suffix_args=(name_ptr,), span=expr.span, exception_slot=pending,
             )
             if name_root is not None:
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"],
-                    [self._as_gc_ptr(name_root), name_token],
-                    name=self._fresh("getattr.name.release"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 self._try_err_block = cleanup
                 self._cpy_operand_cleanup_block = cleanup
                 self._slot_call_check_status(released, "getattr name lease release", expr.span)

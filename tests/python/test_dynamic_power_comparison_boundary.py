@@ -103,8 +103,9 @@ def assert_rooted_power(body):
         # The very first instruction after the NEW producer is the root
         # handoff, ahead of all TLS checks, leases and operand cleanup.
         assert root_clear_count(body, slot) > 0, slot
-    assert "@pcc_gc_foreign_lease_acquire" in body
-    assert "@pcc_gc_foreign_lease_release" in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire" not in body
+    assert "@pcc_gc_foreign_lease_release" not in body
     assert "@py_tls_exc_swap_slot" in body
     assert not re.search(r"\bcall\b[^\n]*@py_(?:int_to_i64|int_to_i64_lane|int_value_i64|obj_index_i64)\(", body)
     return handoffs

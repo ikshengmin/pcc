@@ -259,8 +259,9 @@ def test_prepared_namespace_reference_and_ir(tmp_path, monkeypatch, source_text,
                    backend="self", ir_scaffold_mode="on")
     text = output.read_text()
     assert "class.definition.namespace.prepared" in text
-    assert "namespace.body.lease" in text
-    assert "namespace.body.release" in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "namespace.body.lease" not in text
+    assert "namespace.body.release" not in text
 
 
 def _inherited_signature_program(frozen, factory):

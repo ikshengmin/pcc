@@ -48,62 +48,33 @@ def _message_contract(module, converted):
         assert publish.kind == "store" and publish.data[1] == conversion[2].data[0]
         assert roots.slot(publish.data[3]) == message
         inputs.add(obj)
-    release_calls = (_calls(roots, "pcc_gc_foreign_lease_release")
-                     + _calls(roots, "py_cleanup_one_lease_preserving_exception"))
-    after_outer = (outer[0].name, outer[1] + 2)
-    leases = [row for row in _calls(roots, "pcc_gc_foreign_lease_acquire")
-              if roots.slot(roots.args(row[2])[0]) == message
-              and any(roots.slot(roots.args(release[2])[0]) == message
-                      and roots.args(release[2])[1] == row[2].data[0]
-                      and _reaches(roots, after_outer, _position(release))
-                      for release in release_calls)]
-    assert len(leases) == 1
-    lease, token = leases[0], leases[0][2].data[0]
-    _must_precede(roots, _position(lease), _position(utf8))
+    # One collector: the message str never moves, so no address lease guards
+    # its UTF8 interior pointer (item 2 (d)). Its owning root does: the owner
+    # may retire only once the constructor can no longer be reached.
+    for name in ("pcc_gc_foreign_lease_acquire", "pcc_gc_foreign_lease_release",
+                 "py_cleanup_one_lease_preserving_exception"):
+        assert not _calls(roots, name), name
     _must_precede(roots, _position(utf8), _position(outer))
     takes = [row for row in _calls(roots, "pcc_gc_take_pinned_slot")
              if roots.slot(roots.args(row[2])[0]) == output]
     assert len(takes) == 1
-    normal_releases = [row for row in _calls(roots, "pcc_gc_foreign_lease_release")
-                       if roots.slot(roots.args(row[2])[0]) == message
-                       and roots.args(row[2])[1] == token
-                       and _reaches(roots, (row[0].name, row[1] + 1), _position(takes[0]))]
-    assert len(normal_releases) == 1
-    tls = [row for row in _calls(roots, "py_err_occurred")
-           if _reaches(roots, after_outer, _position(row))
-           and _reaches(roots, (row[0].name, row[1] + 1), _position(normal_releases[0]))]
-    assert len(tls) == 1
-    _must_precede(roots, _position(tls[0]), _position(normal_releases[0]), start=after_outer)
-    assert any(ins.kind == "load" and ins.data[0] == roots.args(utf8[2])[0]
-               and _reaches(roots, (lease[0].name, lease[1] + 1), (block.name, index))
-               for block, index, ins in roots.rows), "UTF8 projection must reload after lease acquisition"
-
-    # One scalar lease token protects the interior pointer until constructor
+    # The message owner protects the interior pointer until constructor
     # consumption/publication. Follow normal and error paths from projection,
     # including UTF8/TLS failure before the constructor is reached.
     by_name = {block.name: block for block in roots.blocks}
-    pending = [(utf8[0].name, utf8[1] + 1, False, frozenset(), False)]
+    pending = [(utf8[0].name, utf8[1] + 1, frozenset(), False)]
     seen, transfers, failures = set(), 0, 0
     while pending:
         state = pending.pop()
         if state in seen:
             continue
         seen.add(state)
-        name, offset, released, cleared, output_cleared = state
+        name, offset, cleared, output_cleared = state
         cleared = set(cleared)
         block = by_name[name]
         transferred = False
         for index in range(offset, len(block.instructions)):
             ins = block.instructions[index]
-            if (roots.called(ins, "pcc_gc_foreign_lease_release")
-                    or roots.called(ins, "py_cleanup_one_lease_preserving_exception")):
-                args = roots.args(ins)
-                if roots.slot(args[0]) == message and args[1] == token:
-                    assert not released, "UTF8 lease released twice"
-                    assert not _reaches(roots, (name, index + 1), _position(outer)), (
-                        "UTF8 lease released before constructor consumption"
-                    )
-                    released = True
             retired = []
             if roots.called(ins, "pcc_gc_store_root") and roots.args(ins)[1] == "null":
                 retired.append(roots.slot(roots.args(ins)[0]))
@@ -112,7 +83,10 @@ def _message_contract(module, converted):
             elif roots.called(ins, "py_cleanup_two_roots_preserving_exception"):
                 retired.extend(roots.slot(arg) for arg in roots.args(ins))
             for slot in inputs.intersection(retired):
-                assert released and slot not in cleared, "message owner must retire once after the UTF8 lease"
+                assert slot not in cleared, "message owner must retire once"
+                assert not _reaches(roots, (name, index + 1), _position(outer)), (
+                    "message owner retired before constructor consumption"
+                )
                 cleared.add(slot)
             if output in retired:
                 assert not output_cleared
@@ -120,9 +94,9 @@ def _message_contract(module, converted):
             if (roots.called(ins, "pcc_gc_frame_leave") or roots.called(ins, "pcc_gc_frame_leave_lifo")):
                 slot = roots.slot(roots.args(ins)[0])
                 if slot in inputs:
-                    assert released and slot in cleared, "message frame left before owner/lease cleanup"
+                    assert slot in cleared, "message frame left before owner cleanup"
             if roots.called(ins, "pcc_gc_take_pinned_slot") and roots.slot(roots.args(ins)[0]) == output:
-                assert released and cleared == inputs and not output_cleared
+                assert cleared == inputs and not output_cleared
                 transfers += 1
                 transferred = True
                 break
@@ -130,9 +104,9 @@ def _message_contract(module, converted):
             continue
         successors = _successors(block)
         if successors:
-            pending.extend((target, 0, released, frozenset(cleared), output_cleared) for target in successors)
+            pending.extend((target, 0, frozenset(cleared), output_cleared) for target in successors)
         elif block.terminator.kind in ("ret", "ret_void"):
-            assert released and cleared == inputs and output_cleared, "message error path must dispose all local owners"
+            assert cleared == inputs and output_cleared, "message error path must dispose all local owners"
             failures += 1
     assert transfers and failures
     _temporary_owner_contract(module, "py_exc_new", False, False)
@@ -149,6 +123,29 @@ def test_dynamic_message_keeps_its_utf8_owner_through_constructor(
         namespace["make_value"]("message")
     module, _ = _emit(tmp_path, monkeypatch, source)
     _message_contract(module, converted)
+
+
+def test_message_contract_rejects_owner_retired_before_constructor(tmp_path, monkeypatch):
+    # With no address lease (one collector), the owning root is what keeps
+    # the UTF8 interior pointer valid: clearing it before the constructor
+    # must fail the contract.
+    from tests.owned_ir_validation import verify_ir_text
+
+    source = ("def consume(first, second=None):\n    return first\n"
+              "def make_value(value: str):\n    return consume(ValueError(msg=value))\n")
+    module, text = _emit(tmp_path, monkeypatch, source)
+    _message_contract(module, False)
+    roots = _roots(module)
+    utf8 = _calls(roots, "py_str_utf8")[0]
+    loads = {ins.data[0]: ins.data[3] for _, _, ins in roots.rows if ins.kind == "load"}
+    slot = loads[roots.args(utf8[2])[0]]
+    lines = [line for line in _body(text).splitlines() if "@py_exc_new(" in line]
+    assert len(lines) == 1
+    damaged = text.replace(lines[0], "  call void (ptr, ptr) @pcc_gc_store_root(ptr %" + slot
+                           + ", ptr null)\n" + lines[0], 1)
+    verified = verify_ir_text(damaged)
+    with pytest.raises(AssertionError, match="message owner retired before constructor consumption"):
+        _message_contract(verified, False)
 
 
 @pytest.mark.parametrize("mutation", ("publication", "tls-edge", "direct-argument", "premature-unpin", "duplicate-input-release"))

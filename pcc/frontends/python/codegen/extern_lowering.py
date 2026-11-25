@@ -374,16 +374,9 @@ class ExternScaffoldMixin:
             self._gc_release(value, known_object=True)
 
     def _extern_release_foreign_leases(self, leases):
-        failed = ir.Constant(_I1, 0)
-        for root, acquired in reversed(leases):
-            status = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"],
-                [self._as_gc_ptr(root[0]), acquired],
-                name=self._fresh("extern.lease.release"),
-            )
-            bad = self.builder.icmp_signed("<", status, ir.Constant(_I64, 0))
-            failed = self.builder.or_(failed, bad)
-        return failed
+        # One collector: no foreign-address lease is taken, so none is
+        # released and no release can fail.
+        return ir.Constant(_I1, 0)
 
     def _extern_cleanup_block(self, roots, target, leases=()):
         if not roots and not leases:
@@ -400,6 +393,9 @@ class ExternScaffoldMixin:
         return cleanup
 
     def _extern_check_lease_cleanup(self, failed, roots):
+        if isinstance(failed, ir.Constant) and failed.value == 0:
+            # No lease was taken (one collector), so none can fail to retire.
+            return
         pending = self.builder.call(self.runtime["py_err_occurred"], [])
         clear = self.builder.icmp_signed("==", pending, ir.Constant(_I64, 0))
         error = self.current_function.append_basic_block(self._fresh("extern.lease.cleanup.error"))
@@ -491,37 +487,10 @@ class ExternScaffoldMixin:
                 self._try_err_block = previous
                 self._cpy_operand_cleanup_block = previous_cpy
             arguments.append(value)
-        # Counted leases, separate from Boolean pins, survive a callback that
-        # pins/unpins the same object. Only validated managed projections enter
-        # this API; integer/raw-pointer operands retain their separate contract.
+        # One collector: a managed object never moves while it is referenced,
+        # so a c_str/c_obj projection takes no foreign-address lease (the
+        # runtime answered token 0 for every lease, and its release 0).
         leases = []
-        for index, root, value, ctype in projections:
-            if root is None or ctype not in ("c_str", "c_obj"):
-                continue
-            acquired = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"],
-                [self._as_gc_ptr(root[0])], name=self._fresh("extern.lease.acquire"),
-            )
-            failed = self.builder.icmp_signed("<", acquired, ir.Constant(_I64, 0))
-            error = self.current_function.append_basic_block(self._fresh("extern.lease.acquire.error"))
-            ready = self.current_function.append_basic_block(self._fresh("extern.lease.acquire.ready"))
-            self.builder.cbranch(failed, error, ready)
-            self.builder.position_at_end(error)
-            previous = self._current_try_err_block()
-            target = previous if previous is not None else self._ensure_fn_err_exit()
-            self._try_err_block = self._extern_cleanup_block(tuple(roots), target, tuple(leases))
-            try:
-                overflow = self.current_function.append_basic_block(self._fresh("extern.lease.overflow"))
-                invalid = self.current_function.append_basic_block(self._fresh("extern.lease.invalid"))
-                self.builder.cbranch(self.builder.icmp_signed("==", acquired, ir.Constant(_I64, -2)), overflow, invalid)
-                self.builder.position_at_end(overflow)
-                self._emit_builtin_exception_and_branch("OverflowError", "foreign-address lease count overflow", None)
-                self.builder.position_at_end(invalid)
-                self._emit_builtin_exception_and_branch("RuntimeError", "foreign-address lease requires a stable managed owner", None)
-            finally:
-                self._try_err_block = previous
-            self.builder.position_at_end(ready)
-            leases.append((root, acquired))
         # Pin the complete set before deriving the first interior pointer.
         for root in roots:
             self._extern_repin_root(root)

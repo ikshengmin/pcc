@@ -178,9 +178,10 @@ def test_classinfo_cache_creation_keeps_and_reloads_the_operand(tmp_path, classi
     cache = body.index("@py_exc_builtin_class(")
     predicate = body.index("@py_obj_isinstance(", cache)
     if borrowed:
-        assert body.index("@pcc_gc_borrowed_lease_acquire(") < cache
+        # One collector: no address lease is taken (item 2 (d)).
+        assert "@pcc_gc_borrowed_lease_acquire(" not in body
         assert re.search(r"load ptr, ptr %value.addr", body[cache:predicate])
-        assert "@pcc_gc_foreign_lease_release(" in body[predicate:]
+        assert "@pcc_gc_foreign_lease_release(" not in body
     else:
         assert body.index("@pcc_gc_store_root(") < cache
         assert "@pcc_gc_load_ptr(" in body[cache:predicate]

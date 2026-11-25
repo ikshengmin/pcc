@@ -2061,10 +2061,8 @@ class NativeVirtualThreadLoweringMixin:
             for root in arguments:
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
-                token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
-                    name=self._fresh("vthread.capture.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 self._slot_call_check_status(token, "continuation argument lease")
                 leases.append((root, token))
             self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
@@ -2081,9 +2079,8 @@ class NativeVirtualThreadLoweringMixin:
             self._emit_virtual_thread_spawn_allocation_check(output)
             while leases:
                 root, token = leases.pop()
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_check_status(released, "continuation argument lease release")
@@ -2101,10 +2098,8 @@ class NativeVirtualThreadLoweringMixin:
             for root in arguments:
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
-                token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
-                    name=self._fresh("vthread.generator.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 self._slot_call_check_status(token, "generator argument lease")
                 leases.append((root, token))
             self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
@@ -2125,9 +2120,8 @@ class NativeVirtualThreadLoweringMixin:
             self._emit_virtual_thread_spawn_allocation_check(output)
             while leases:
                 root, token = leases.pop()
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 self._try_err_block = self._slot_call_cleanup_block((), target, tuple(leases))
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_check_status(released, "generator argument lease release")

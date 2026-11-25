@@ -14,8 +14,9 @@ def _assert_immediate_publication(text, runtime):
     for match in calls:
         following = text[match.end():].splitlines()[0]
         assert following.lstrip().startswith('store ptr ' + match.group(1) + ','), following
-    assert '@pcc_gc_foreign_lease_acquire(' in text
-    assert '@pcc_gc_foreign_lease_release(' in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r'\bcall\b[^\n]*@pcc_gc_foreign_lease_acquire\(', text)
+    assert not re.search(r'\bcall\b[^\n]*@pcc_gc_foreign_lease_release\(', text)
 
 
 def _assert_default_root_survives_metadata(text):
@@ -33,7 +34,8 @@ def _assert_default_root_survives_metadata(text):
             break
     assert insertion is not None
     assert kind < insertion[0]
-    assert '@pcc_gc_foreign_lease_acquire(' in later[kind:insertion[0]]
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_acquire(' not in later[kind:insertion[0]]
     assert '@pcc_gc_take_pinned_slot(' not in later[:insertion[1]]
 
 

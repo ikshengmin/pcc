@@ -24,7 +24,8 @@ def test_resume_receiver_branches_emit_verified_owned_ir(body):
                  "def worker(receiver, other):\n    vt.yield_now()\n" + body
                  + "    return slot_operand_probe(receiver.value)\n")
     assert _calls(text, "py_obj_getattr")
-    assert _calls(text, "pcc_gc_foreign_lease_acquire")
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(text, "pcc_gc_foreign_lease_acquire")
     verify_parsed_module(parse_self_backend_module(text))
 
 

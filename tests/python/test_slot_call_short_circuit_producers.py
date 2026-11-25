@@ -30,7 +30,8 @@ def test_short_circuit_moves_owner_without_retesting_selected_operand(expression
     assert copies
     assert all(copy.source.startswith(('%left.addr', '%middle.addr', '%right.addr'))
                for copy in copies)
-    assert _calls(text, 'pcc_gc_foreign_lease_acquire')
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(text, 'pcc_gc_foreign_lease_acquire')
     assert 'call.slot.bool.rhs' in text and 'call.slot.bool.short' in text
     assert 'phi ptr' not in text
 

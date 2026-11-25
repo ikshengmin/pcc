@@ -44,15 +44,16 @@ def test_aliases_are_copied_before_target_replacement(statement):
 
 
 @pytest.mark.parametrize('target', ['values[0]', 'holder.value'])
-def test_container_target_keeps_rhs_address_leased_during_publication(target):
+def test_container_target_publishes_rhs_without_address_lease(target):
     source='''def probe(values, holder):
     TARGET, other = values[0], values[1]
     return slot_args_probe(other)
 '''.replace('TARGET',target)
     text=_probe_function(_emit(source))
-    assert '%unpack.literal.lease' in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '%unpack.literal.lease' not in text
     assert '%unpack.literal.current' in text
-    assert '%unpack.literal.release' in text
+    assert '%unpack.literal.release' not in text
     setter = '@py_obj_setitem(' if target.startswith('values') else '@py_obj_setattr('
     assert setter in text
 

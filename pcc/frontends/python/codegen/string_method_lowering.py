@@ -139,10 +139,8 @@ class StringMethodLoweringMixin:
         # overlapping alias clears the object's legacy Boolean pin flag.
         acquired_leases = list(leases)
         for root in roots[start:]:
-            acquired = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"],
-                [self._as_gc_ptr(root[0])], name=self._fresh("encode.lease.acquire"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            acquired = ir.Constant(_I64, 0)
             failed = self.builder.icmp_signed("<", acquired, ir.Constant(_I64, 0))
             error = self.current_function.append_basic_block(self._fresh("encode.lease.error"))
             ready = self.current_function.append_basic_block(self._fresh("encode.lease.ready"))

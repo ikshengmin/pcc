@@ -47,7 +47,8 @@ def test_guarded_count_publishes_both_results_before_cleanup(context):
             assert re.search(r'@py_obj_call_slots\(ptr [^,]+, ptr [^,]+, ptr [^,]+, ptr ' + re.escape(output) + r'\)', body)
         for lookup in re.finditer(r'(%[-\w.]+) = call ptr[^\n]*@py_obj_getattr\([^\n]*\n([^\n]+)', body):
             assert 'store ptr ' + lookup.group(1) in lookup.group(2)
-        assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr %dyn.count.receiver', body)
+        # One collector: no address lease is taken (item 2 (d)).
+        assert not re.search(r'@pcc_gc_foreign_lease_acquire\(ptr %dyn.count.receiver', body)
         # The common root is reloaded only after receiver retirement; a pointer
         # PHI from the two branches would cross that fallible cleanup interval.
         assert re.search(r'@pcc_gc_store_root\(ptr %dyn.count.receiver[^\n]*ptr null\)', body)

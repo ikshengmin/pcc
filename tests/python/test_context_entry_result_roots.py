@@ -85,7 +85,8 @@ def test_generator_context_uses_rooted_resume_and_shared_unwind(ending):
             assert call.group("next").strip().startswith("store ptr " + call.group("value") + ", ptr ")
     assert "@pcc_gc_root_move(" in body
     assert "@py_tls_exc_swap_slot(" in body
-    assert "@pcc_gc_foreign_lease_acquire(" in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in body
     assert "with.context" in body and "with.err" in body
     assert "contextmanager.outcome" in body
     assert "@py_cpy_" not in body

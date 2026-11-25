@@ -3416,11 +3416,8 @@ class NativeModuleAliasMixin:
                 "py_instance_new", (cls,), result_slot=output, span=span,
             )
             if init_fn is not None:
-                token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"],
-                    [self._as_gc_ptr(output)],
-                    name=self._fresh("native.constructor.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 self._slot_call_check_status(token, "constructor receiver lease", span)
                 self._try_err_block = self._slot_call_cleanup_block(
                     tuple(roots), target, ((output, token),),
@@ -3434,11 +3431,8 @@ class NativeModuleAliasMixin:
                 self._emit_direct_method_call(
                     init_fn, receiver, init_info, "__init__", args,
                 )
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"],
-                    [self._as_gc_ptr(output), token],
-                    name=self._fresh("native.constructor.release"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 self._try_err_block = self._slot_call_cleanup_block(tuple(roots), target)
                 self._cpy_operand_cleanup_block = self._try_err_block
                 self._slot_call_check_status(released, "constructor receiver lease release", span)

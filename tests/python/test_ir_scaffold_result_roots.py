@@ -297,7 +297,8 @@ def _assert_builder_sink_publication_and_cleanup(body, suffix):
     assert store is not None
     slot = store[1]
     check_start, error, success = _pending_exception_edge(publication)
-    assert "@pcc_gc_foreign_lease_release" in publication[:check_start]
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_release" not in publication[:check_start]
     blocks = dict(re.findall(r"^([^\s:]+):\n(.*?)(?=^[^\s:]+:\n|^}|\Z)", body, re.M | re.S))
     assert re.search(r"%scaffold\.current[^\s]* = load ptr, ptr " + re.escape(slot) + r"(?:,|$)",
                      blocks[success], re.M)

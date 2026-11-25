@@ -22,7 +22,7 @@ from pcc.frontends.python.type_infer import infer_module
 
 CASES = (
     ("int-bytes", 'def run(value: int):\n    return value.to_bytes(2, "little", signed=True)\n',
-     ("py_int_to_bytes_args", "pcc_gc_foreign_lease_acquire")),
+     ("py_int_to_bytes_args",)),
     ("int-binding-error", 'def run(value: int):\n    return value.to_bytes(1, length=1)\n',
      ("py_raise",)),
     ("dynamic-clear", 'def run(value):\n    value.clear()\n    return value\n',
@@ -68,6 +68,8 @@ def test_terminal_method_dispatch_keeps_native_protocol(
     for helper in helpers:
         emitted = re.findall(r"\bcall\b[^\n]*@([\w.]+)\(", body[1])
         assert helper in emitted, (case, helper, emitted)
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_(?:foreign|borrowed)_lease_acquire\(", body[1])
     prepared = prepare_module_for_target(
         'target triple = "' + triple + '"\n' + text,
         aggregate_returned_indirect=indirect,

@@ -444,11 +444,8 @@ def emit_isinstance_call_impl(
                 # This physical parameter slot cannot be rebound or captured.
                 # Keep an address lease across classinfo evaluation/callbacks;
                 # the existing caller/parameter roots retain the owner.
-                token = host.builder.call(
-                    host.runtime["pcc_gc_borrowed_lease_acquire"],
-                    [host._as_gc_ptr(source)],
-                    name=host._fresh("isinstance.operand.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 host._slot_call_check_status(token, "isinstance operand lease", expr.span)
                 borrowed_view[0] = (source, token)
                 target = previous_error if previous_error is not None else host._ensure_fn_err_exit()
@@ -488,11 +485,8 @@ def emit_isinstance_call_impl(
         host._cpy_operand_cleanup_block = saved_cpy_cleanup
         if borrowed_view[0] is not None:
             source, token = borrowed_view[0]
-            released = host.builder.call(
-                host.runtime["pcc_gc_foreign_lease_release"],
-                [host._as_gc_ptr(source), token],
-                name=host._fresh("isinstance.operand.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             host._slot_call_check_status(released, "isinstance operand lease release", expr.span)
         if operand_root[0] is not None:
             host._release_rooted_pcc_lifetimes(((operand_root[0], operand_owned[0]),))

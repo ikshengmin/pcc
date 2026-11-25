@@ -127,7 +127,8 @@ main()
     assert (reference.returncode, reference.stdout, reference.stderr) == (0, "OWNED_ROOT_PUBLICATION_OK\n", "")
     output = tmp_path / "publication.ll"
     compile_python(str(source), str(output), emit_llvm_only=True, backend="self")
-    assert "call.slot.publish.lease" in output.read_text()
+    # One collector: a fresh result is published without an address lease (item 2 (d)).
+    assert "call.slot.publish.lease" not in output.read_text()
     binary = tmp_path / "publication"
     compile_python(str(source), str(binary), backend="self",
                    ir_scaffold_mode="on", runtime_archive=str(pcc_runtime_archive))

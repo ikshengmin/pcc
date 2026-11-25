@@ -169,8 +169,8 @@ def _assert_spawn_contract(text, mutate_cleanup=None):
     assert thread_root is not None
     start = next(ins for _, _, ins in rows if called(ins, "py_virtual_thread_start"))
     assert slot(loads[args(start)[0]]) == thread_root
-    assert any(called(ins, "pcc_gc_foreign_lease_acquire")
-               and slot(args(ins)[0]) == thread_root for _, _, ins in rows)
+    # One collector: the started thread's root takes no address lease (item 2 (d)).
+    assert not any(called(ins, "pcc_gc_foreign_lease_acquire") for _, _, ins in rows)
     failure = next(block for block in blocks if block.name.startswith("vthread.start.fail"))
     clear = next(i for i, ins in enumerate(failure.instructions)
                  if called(ins, "pcc_gc_store_root") and args(ins)[1] == "null"

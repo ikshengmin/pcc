@@ -1,4 +1,4 @@
-"""One-argument native type consumes a leased value and returns a NEW owner."""
+"""One-argument native type consumes a rooted value and returns a NEW owner."""
 from __future__ import annotations
 
 import re
@@ -28,7 +28,8 @@ def test_native_type_result_publishes_before_operand_cleanup(site):
         body = '    return take(value=type(item))\n'
     text = _emit(prefix + 'def probe(item):\n' + body)
     _assert_immediate_publication(text, 'py_type_builtin')
-    assert 'call.slot.argument.lease' in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert 'call.slot.argument.lease' not in text
     if site == 'default':
         publication = re.search(r'(%[^ ]+) = call [^\n]*@py_type_builtin\([^\n]*\)\n'
                                 r'  store ptr \1, ptr (%[^ ,\n]+)', text)

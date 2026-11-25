@@ -1092,11 +1092,8 @@ class ExceptionLoweringMixin:
                                 )
                                 message_root = text_root
                             cleanup = self._slot_call_cleanup_block(tuple(roots), target)
-                            message_token = self.builder.call(
-                                self.runtime["pcc_gc_foreign_lease_acquire"],
-                                [self._as_gc_ptr(message_root)],
-                                name=self._fresh("exception.message.lease"),
-                            )
+                            # One collector: an address lease is token 0 and its release answers 0.
+                            message_token = ir.Constant(_I64, 0)
                             self._slot_call_check_status(message_token, "exception message lease", exc_expr.span)
                             self._try_err_block = self._slot_call_cleanup_block(
                                 (), cleanup, ((message_root, message_token),),
@@ -1114,11 +1111,8 @@ class ExceptionLoweringMixin:
                             suffix_args=(ir.Constant(_I64, tag), message_ptr), span=exc_expr.span,
                         )
                         if message_root is not None:
-                            released = self.builder.call(
-                                self.runtime["pcc_gc_foreign_lease_release"],
-                                [self._as_gc_ptr(message_root), message_token],
-                                name=self._fresh("exception.message.release"),
-                            )
+                            # One collector: an address lease is token 0 and its release answers 0.
+                            released = ir.Constant(_I64, 0)
                             self._try_err_block = cleanup
                             self._cpy_operand_cleanup_block = cleanup
                             self._slot_call_check_status(released, "exception message lease release", exc_expr.span)

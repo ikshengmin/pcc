@@ -607,11 +607,8 @@ class AttrStoreLoweringMixin:
                     raise L1CodegenError("attribute payload boxing did not publish a value")
                 # Only the published root is authoritative from this point.
                 # Do not reuse the pre-boxing aggregate across safepoints.
-                token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"],
-                    [self._as_gc_ptr(root)],
-                    name=self._fresh("attribute.store.payload.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(ir.IntType(64), 0)
                 self._slot_call_check_status(token, "attribute payload lease", target.span)
                 leased_cleanup = self._slot_call_cleanup_block(
                     (root,), error, ((root, token),),
@@ -621,11 +618,8 @@ class AttrStoreLoweringMixin:
                 boxed = self.builder.load(root, name=self._fresh("attribute.store.payload.current"))
                 self._emit_attr_store_value(target, boxed, DynType(name="dyn"))
                 self._emit_post_call_err_check(target.span)
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"],
-                    [self._as_gc_ptr(root), token],
-                    name=self._fresh("attribute.store.payload.release"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(ir.IntType(64), 0)
                 # A negative release status leaves the token outstanding.
                 # Keep lease cleanup until the success edge has checked it.
                 self._slot_call_check_status(released, "attribute payload lease release", target.span)

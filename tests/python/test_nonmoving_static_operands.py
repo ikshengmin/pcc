@@ -15,15 +15,16 @@ from tests.python.test_slot_call_operand_roots import _emit as emit_operand, _pr
 from tests.python.test_shared_call_binding import _emit
 
 
-def test_only_proven_publication_omits_address_lease():
+def test_publication_takes_no_address_lease():
     # A bytes literal is a module-static immortal object, as a str literal is
     # (test_static_bytes_literals.py); a float literal is still allocated.
+    # One collector: neither publication takes an address lease (item 2 (d)).
     for expression in ("None", "'static'", "b'static'", "1267650600228229401496703205376"):
         body = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(" + expression + ")\n"))
         assert "call.slot.publish.lease" not in body
         assert "@pcc_gc_note_slot_write_barrier(" in body
     heap = _probe_function(emit_operand("def probe():\n    return slot_operand_probe(1.5)\n"))
-    assert "call.slot.publish.lease" in heap
+    assert "call.slot.publish.lease" not in heap
     dynamic = _probe_function(emit_operand("def probe(value: str):\n    return slot_operand_probe(value)\n"))
     assert any(copy.source.startswith("%value.addr") for copy in
                root_copy_calls(dynamic, local=True, borrowed=True))
@@ -83,8 +84,9 @@ def test_dynamic_and_heap_runtime_inputs_keep_roots_and_leases(expression, label
         "def probe(value):\n    return slot_operand_probe(" + expression + ")\n",
     ))
     assert label in body
-    assert "@pcc_gc_foreign_lease_acquire(" in body
-    assert "@pcc_gc_foreign_lease_release(" in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in body
+    assert "@pcc_gc_foreign_lease_release(" not in body
 
 
 PROGRAM = '''import gc

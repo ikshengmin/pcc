@@ -1983,11 +1983,8 @@ class UserFunctionLoweringMixin:
         previous = self._current_try_err_block()
         target = previous if previous is not None else self._ensure_fn_err_exit()
         saved_cpy = self._cpy_operand_cleanup_block
-        token = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_acquire"],
-            [self._as_gc_ptr(source_root)],
-            name=self._fresh("native.adapter.scalar.lease"),
-        )
+        # One collector: an address lease is token 0 and its release answers 0.
+        token = ir.Constant(_I64, 0)
         self._slot_call_check_status(token, "adapter scalar lease")
         self._try_err_block = self._slot_call_cleanup_block(
             (), target, ((source_root, token),),
@@ -2003,11 +2000,8 @@ class UserFunctionLoweringMixin:
             # A conversion can invoke Python. Select the error edge while
             # its exception is still in TLS, before retiring the lease.
             self._emit_post_call_err_check()
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"],
-                [self._as_gc_ptr(source_root), token],
-                name=self._fresh("native.adapter.scalar.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._try_err_block = target
             self._cpy_operand_cleanup_block = target
             self._slot_call_check_status(released, "adapter scalar lease release")
@@ -2131,11 +2125,8 @@ class UserFunctionLoweringMixin:
                     (), unwind, tuple(leases),
                 )
                 self._cpy_operand_cleanup_block = self._try_err_block
-                token = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"],
-                    [self._as_gc_ptr(root)],
-                    name=self._fresh("native.adapter.argument.lease"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                token = ir.Constant(_I64, 0)
                 self._slot_call_check_status(token, "adapter argument lease")
                 leases.append((root, token))
             self._try_err_block = self._slot_call_cleanup_block(
@@ -2161,11 +2152,8 @@ class UserFunctionLoweringMixin:
             # selected its exception edge before an input lease is retired.
             while leases:
                 root, token = leases.pop()
-                released = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_release"],
-                    [self._as_gc_ptr(root), token],
-                    name=self._fresh("native.adapter.argument.release"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                released = ir.Constant(_I64, 0)
                 self._try_err_block = self._slot_call_cleanup_block(
                     (), unwind, tuple(leases),
                 )
@@ -3016,11 +3004,8 @@ class UserFunctionLoweringMixin:
             self._publish_slot_call_owned(result_root, sig, label="native signature")
             self._emit_post_call_err_check()
             self._guard_cpy_value_not_null(self.builder.load(result_root))
-            token = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"],
-                [self._as_gc_ptr(result_root)],
-                name=self._fresh("func.signature.fill.lease"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            token = ir.Constant(_I64, 0)
             self._slot_call_check_status(token, "signature fill lease")
             self._try_err_block = self._slot_call_cleanup_block(
                 (), tuple_cleanup, ((result_root, token),),
@@ -3051,11 +3036,8 @@ class UserFunctionLoweringMixin:
                 self.runtime["py_tuple_set_item"],
                 [sig, ir.Constant(_I64, 4), defaults],
             )
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"],
-                [self._as_gc_ptr(result_root), token],
-                name=self._fresh("func.signature.fill.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._try_err_block = tuple_cleanup
             self._cpy_operand_cleanup_block = tuple_cleanup
             self._slot_call_check_status(released, "signature fill lease release")
@@ -3358,10 +3340,8 @@ class UserFunctionLoweringMixin:
                 self._release_slot_call_roots((doc,))
                 self._try_err_block = output_cleanup
                 self._cpy_operand_cleanup_block = output_cleanup
-            token = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(output)],
-                name=self._fresh(label + ".publication.lease"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            token = ir.Constant(_I64, 0)
             self._slot_call_check_status(token, "callable publication lease", fd.span)
             self._try_err_block = self._slot_call_cleanup_block(
                 (), output_cleanup, ((output, token),),
@@ -3373,10 +3353,8 @@ class UserFunctionLoweringMixin:
                 self.builder.call(self.runtime["py_incref"], [current])
                 self._gc_pin(current)
                 self.builder.store(current, cache_gv)
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(output), token],
-                name=self._fresh(label + ".publication.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._try_err_block = output_cleanup
             self._cpy_operand_cleanup_block = output_cleanup
             self._slot_call_check_status(released, "callable publication release", fd.span)

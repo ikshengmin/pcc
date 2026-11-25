@@ -131,19 +131,16 @@ def test_constructor_requires_the_corresponding_accessor_slots(property_body):
         _owners_and_cfg(changed, ACCESSORS)
 
 
-def test_property_descriptor_requires_a_lease(property_body):
+def test_property_descriptor_takes_no_lease(property_body):
+    # One collector: the descriptor root takes no address lease (item 2 (d)),
+    # and the checker rejects one put back on that root.
     _old, _slot, root = singleton_disposal(property_body)
-    aliases = pointer_bitcast_aliases(property_body)
-    selected = [match[0] for match in re.finditer(
-        r'@pcc_gc_foreign_lease_acquire\(ptr (%[-\w.$]+)\)', property_body,
-    ) if canonical_pointer(match[1], aliases) == root]
-    assert selected
-    changed = property_body
-    # Acquisitions on the root share one spelling once identity aliases are
-    # gone, so drop every such call rather than one unique occurrence each.
-    for call in sorted(set(selected)):
-        changed = changed.replace(call, call.replace('pcc_gc_foreign_lease_acquire', 'unrelated'))
-    with pytest.raises(AssertionError):
+    assert '@pcc_gc_foreign_lease_acquire(' not in property_body
+    definition = re.search('^  ' + re.escape(root) + ' = alloca ptr\n', property_body, re.M)[0]
+    changed = replace_once(property_body, definition, definition + (
+        '  %reintroduced.lease = call i64 @pcc_gc_foreign_lease_acquire(ptr ' + root + ')\n'
+    ))
+    with pytest.raises(AssertionError, match='unexpected address lease'):
         _owners_and_cfg(changed, ACCESSORS)
 
 

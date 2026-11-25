@@ -8,20 +8,17 @@ from tests.python.test_slot_call_operand_roots import _calls, _emit, _probe_func
 from tests.python.test_explicit_machine_arithmetic_boundaries import _run_native_all_gc
 
 
-def test_append_reuses_stable_parameter_roots_and_keeps_address_leases():
+def test_append_reuses_stable_parameter_roots_without_address_leases():
     body = _probe_function(_emit("def probe(value, item):\n    value.append(item)\n"))
-    leases = _calls(body, "pcc_gc_borrowed_lease_acquire")
-    # The generic getattr still needs a receiver address lease. The exact-list
-    # type guard reads the tag at once through one borrowed load (no gate runs
-    # before it finishes), and the exact-list runtime helper consumes
-    # authoritative slot addresses, protecting/reloading both inputs itself.
-    assert len(leases) == 1
+    # One collector: the generic getattr takes no receiver address lease
+    # (item 2 (d)). The exact-list type guard reads the tag at once through
+    # one borrowed load (no gate runs before it finishes), and the exact-list
+    # runtime helper consumes authoritative slot addresses.
+    assert not _calls(body, "pcc_gc_borrowed_lease_acquire")
     assert _calls(body, "pcc_gc_load_borrowed_ptr") and _calls(body, "py_obj_type_tag")
-    assert all("value.addr" in call for call in leases)
-    assert not any("item.addr" in call for call in leases)
     assert re.search(r"@py_list_append_from_slots\(ptr %value.addr[^,]*, "
                      r"ptr %item.addr[^,]*, i64 3\)", body)
-    assert _calls(body, "pcc_gc_foreign_lease_release")
+    assert not _calls(body, "pcc_gc_foreign_lease_release")
     assert "list.append.receiver.operand" not in body
     assert "list.append.item.operand" not in body
     for call in _calls(body, "pcc_gc_store_root"):

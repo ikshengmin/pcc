@@ -221,10 +221,8 @@ class AssignmentStoreLoweringMixin:
         # Scalar conversion and container/global stores can run arbitrary
         # callbacks. A counted address lease keeps their raw operand valid;
         # the temporary root continues owning it through success or failure.
-        token = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(root)],
-            name=self._fresh("unpack.literal.lease"),
-        )
+        # One collector: an address lease is token 0 and its release answers 0.
+        token = ir.Constant(_I64, 0)
         self._slot_call_check_status(token, "literal assignment lease", lhs.span)
         previous = self._current_try_err_block()
         saved_cpy = self._cpy_operand_cleanup_block
@@ -233,10 +231,8 @@ class AssignmentStoreLoweringMixin:
         try:
             value = self.builder.load(root, name=self._fresh("unpack.literal.current"))
             self._store_unpack_target(lhs, value, value_ty, value_is_owned=False)
-            released = self.builder.call(
-                self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(root), token],
-                name=self._fresh("unpack.literal.release"),
-            )
+            # One collector: an address lease is token 0 and its release answers 0.
+            released = ir.Constant(_I64, 0)
             self._try_err_block = previous
             self._cpy_operand_cleanup_block = saved_cpy
             self._slot_call_check_status(released, "literal assignment lease release", lhs.span)

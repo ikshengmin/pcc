@@ -165,7 +165,8 @@ def test_literal_dynamic_classinfo_uses_one_rooted_runtime_predicate(classinfo):
     operand_slot = canonical_pointer(loads[args[1]], aliases)
     classinfo_slot = canonical_pointer(loads[args[2]], aliases)
     assert 'value.addr' in operand_slot
-    assert '@pcc_gc_borrowed_lease_acquire(ptr ' + operand_slot + ')' in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_borrowed_lease_acquire(' not in body
     assert 'isinstance.classinfo' in classinfo_slot
     takes = [value for value, slot in re.findall(
         r'(%[\w.$]+) = call ptr \(ptr, i64\) @pcc_gc_take_pinned_slot\(ptr (%[\w.$]+),',

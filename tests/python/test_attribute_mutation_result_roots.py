@@ -31,8 +31,8 @@ def test_literal_attribute_mutation_publishes_none_before_operand_cleanup(operat
     assert mutation.start() < retain.start()
     after = body[retain.end():]
     assert re.search(r'\bcall[^\n]*@pcc_gc_store_root\(ptr [^,]+, ptr null\)', after)
-    assert re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_acquire\(', body[:mutation.start()])
-    assert re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_release\(', body[mutation.end():retain.start()])
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r'\bcall[^\n]*@pcc_gc_foreign_lease_(?:acquire|release)\(', body)
     if context == 'lambda':
         check_frames(body)
 

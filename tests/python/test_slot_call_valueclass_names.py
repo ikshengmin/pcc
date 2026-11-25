@@ -39,7 +39,8 @@ def test_payload_name_boxes_into_owned_slot_before_field_work(field, site, tmp_p
         function,
     )
     assert "@py_valuebox_set_field(" in function
-    assert "@pcc_gc_foreign_lease_acquire(" in function
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in function
     if field == "list":
         assert "record.value.root.1" in function
         assert any(copy.source.startswith("%record.value.root.1") for copy in

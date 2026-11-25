@@ -676,8 +676,9 @@ def probe(value: object) -> bool:
 """, strict=True)
     callee = _body(text, "convert")
     assert "@py_obj_as_int_object_args(" in callee
-    assert "@pcc_gc_foreign_lease_acquire(" in callee
-    assert "@pcc_gc_foreign_lease_release(" in callee
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in callee
+    assert "@pcc_gc_foreign_lease_release(" not in callee
     assert "@py_err_occurred(" in callee
     caller = _body(text)
     assert "@user_bridge_handoff_convert(" in caller

@@ -20,7 +20,8 @@ def test_dynamic_operands_are_rooted_and_result_published_before_error_check(tmp
     # Every returned regex result is immediately stored into a registered root.
     call=re.search(r'(%[-.\w]+) = call ptr[^\n]*@py_re_fullmatch\([^\n]*\)\n\s*store ptr \1, ptr (%[-.\w]+)',body)
     assert call
-    assert 're.fullmatch.argument' in body and 'call.slot.argument.lease' in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert 're.fullmatch.argument' in body and 'call.slot.argument.lease' not in body
     assert '@py_cleanup_two_roots_preserving_exception' in body
     assert '@pcc_gc_take_pinned_slot' in body
 
@@ -65,4 +66,5 @@ def test_compile_keyword_source_order_and_assignment_result_are_owned(tmp_path):
     assert 'strict.nolib.stub' not in body
     assert body.index('@user_compile_slots_f(') < body.index('@user_compile_slots_p(')
     assert re.search(r'(%[-.\w]+) = call ptr[^\n]*@py_re_compile_obj\([^\n]*\)\n\s*store ptr \1, ptr %[-.\w]+', body)
-    assert 'call.slot.argument.lease' in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert 'call.slot.argument.lease' not in body

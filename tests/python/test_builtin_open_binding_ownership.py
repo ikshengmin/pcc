@@ -48,13 +48,9 @@ def _owned_open_call(body):
         assert len(loads) == 1, argument
         slot = loads[0].group("slot")
         roots.append(slot)
-        aliases = [slot] + re.findall(
-            r"(?m)^\s*(%[^ ]+) = bitcast ptr " + re.escape(slot) + r" to ptr$", prefix,
-        )
-        assert any(re.search(
-            r"@pcc_gc_foreign_lease_acquire\(ptr " + re.escape(alias) + r"\)", prefix,
-        ) for alias in aliases), slot
     assert len(set(roots)) == 5
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in prefix
     # The returned owner must be published before any potentially parking
     # operation, including a lease, TLS inspection or operand retirement.
     published = re.match(
@@ -128,7 +124,7 @@ def test_open_publishes_before_leases_tls_or_operand_disposal():
     mode = _assert_producer_feeds_slot(body, "mode_value", roots[1])
     assert path < mode < call.start()
     assert output not in roots
-    assert "@pcc_gc_foreign_lease_acquire(" in body
+    assert "@pcc_gc_foreign_lease_acquire(" not in body
     assert "@py_tls_exc_swap_slot(" in body
 
 

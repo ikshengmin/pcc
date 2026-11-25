@@ -1,4 +1,4 @@
-"""Exact small tuple unpacking shares one bounded source-address lease."""
+"""Exact small tuple unpacking reads its source without an address lease."""
 
 import os
 import re
@@ -21,17 +21,14 @@ def test_bounded_unpack_guards_shape_before_extracting_or_activating_iterator_ro
     if count > 8:
         assert "unpack.tuple.lease" not in body
         return
-    leases = re.findall(r"%unpack\.tuple\.lease[^\n]* = call[^\n]*", body)
-    assert len(leases) == 1
-    assert "@pcc_gc_foreign_lease_acquire" in leases[0]
+    # One collector: the source takes no address lease (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire" not in body
     assert "@py_tuple_len(" in body
     assert len(re.findall(r"%unpack\.tuple\.item[^\n]* = call[^\n]*@py_obj_getitem_i64", body)) == count
-    # Every NEW getter result is stored before a call can park. Success retires
-    # the one source lease before joining the target-store phase.
+    # Every NEW getter result is stored before a call can park.
     for match in re.finditer(r"(%unpack\.tuple\.item[^ ]*) = call[^\n]*\n", body):
         next_line = body[match.end():].splitlines()[0]
         assert re.search(r"store ptr " + re.escape(match.group(1)) + r",", next_line)
-    assert "unpack.tuple.unlease" in body
     assert "unpack.tuple.fallback" in body
     assert "unpack.generic.ready" in body
 

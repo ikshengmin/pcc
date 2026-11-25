@@ -10,14 +10,14 @@ from tests.python.test_shared_call_binding import _emit, _function
 
 
 @pytest.mark.parametrize("classinfo", ["(str, classes())", "(classes(), list)"])
-def test_stable_isinstance_parameter_has_one_lease_and_no_extra_owner(classinfo):
-    # Classinfo evaluation can call back and park: the operand keeps an
-    # address lease across it.
+def test_stable_isinstance_parameter_has_no_lease_and_no_extra_owner(classinfo):
+    # Classinfo evaluation can call back and park. The one collector never
+    # moves the operand, so it takes no address lease across that (item 2 (d)).
     body = _function(_emit("def classes():\n    return str\ndef probe(value):\n"
                            "    return isinstance(value, " + classinfo + ")\n"))
-    assert body.count("@pcc_gc_borrowed_lease_acquire(") == 1
-    assert "isinstance.operand.lease" in body and "isinstance.operand.release" in body
-    assert "@py_cleanup_one_lease_preserving_exception(" in body
+    assert "@pcc_gc_borrowed_lease_acquire(" not in body
+    assert "isinstance.operand.lease" not in body and "isinstance.operand.release" not in body
+    assert "@py_cleanup_one_lease_preserving_exception(" not in body
     assert "isinstance.operand" in body
     assert not any("isinstance.operand" in line and ".tmp.root" in line for line in body.splitlines())
 

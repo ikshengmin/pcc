@@ -55,19 +55,17 @@ def probe(value):
     for call in calls:
         stored = re.search(r'store ptr ' + re.escape(call.group(1)) + r', ptr (%[-\w.]+)', call.group(2))
         assert stored is not None
-        after = body[call.end():]
-        # Publication itself leases the output, reloads it for the slot write
-        # barrier and releases that lease; the operand leases are released
-        # before the consumer reloads the output.
+        # Publication reloads the output for the slot write barrier; the
+        # consumer reads it from the same slot, never from the producer's
+        # SSA value. One collector: no address lease is taken or released
+        # around either (item 2 (d)); block layout may place the consumer's
+        # load before the producer's text.
         output = re.escape(stored.group(1))
-        released = re.search(r'@pcc_gc_foreign_lease_release\(ptr (?!' + output + r'[,)])', after)
-        assert released is not None
-        output_reload = re.search(r'%(?!call\.slot\.published)[-\w.]+ = load ptr, ptr ' + output + r'\b', after)
+        output_reload = re.search(r'%(?!call\.slot\.published)[-\w.]+ = load ptr, ptr ' + output + r'\b', body)
         assert output_reload is not None
-        assert released.start() < output_reload.start()
     # An untyped receiver's strip/split family uses its guarded route, whose
     # receiver root is named after the method (strip.receiver, ...).
-    assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr %[\w.]*receiver', body)
+    assert not re.search(r'@pcc_gc_foreign_lease_(?:acquire|release)\(', body)
     assert re.search(r'@pcc_gc_store_root\(ptr %[\w.]*receiver[^\n]*ptr null\)', body)
     assert 'str.result.current' not in body
     if 'limit' in case:

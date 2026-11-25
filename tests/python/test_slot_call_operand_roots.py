@@ -120,19 +120,19 @@ def _assert_attribute_parameter_not_cleared(body, name="value"):
         assert not any(name + ".addr" in call for call in _calls(body, helper)), helper
 
 
-def test_attribute_receiver_reuses_parameter_with_live_lookup_and_leases():
+def test_attribute_receiver_reuses_parameter_with_live_lookup_without_leases():
     source = "def probe(value):\n    return value.data + 1\n"
     before, _ = _attribute_emit(source, before=True)
     after, parsed = _attribute_emit(source)
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
     assert not _calls(before, "pcc_gc_borrowed_lease_acquire")
-    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
-    assert "value.addr" in _calls(after, "pcc_gc_borrowed_lease_acquire")[0]
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
     copies = root_copy_calls(before, local=True, borrowed=True)
     assert len(copies) == 1 and copies[0].source.startswith("%value.addr")
     assert not root_copy_calls(after, local=True, borrowed=True)
     assert not _calls(after, "pcc_gc_root_copy_borrowed_lease")
-    assert _calls(after, "pcc_gc_foreign_lease_release")
+    assert not _calls(after, "pcc_gc_foreign_lease_release")
     _assert_attribute_parameter_not_cleared(after)
     from pcc.backend.self_backend_kernel import get_indexed_function_kernel
     from tests.python.root_slot_contract import RootSlotContract
@@ -165,7 +165,7 @@ def test_attribute_unstable_receivers_keep_the_original_owning_policy(source):
         )
 
 
-def test_attribute_exception_edges_release_lease_without_clearing_parameter():
+def test_attribute_exception_edges_keep_parameter_without_lease():
     source = """def probe(value):
     try:
         return value.data + 1
@@ -175,9 +175,10 @@ def test_attribute_exception_edges_release_lease_without_clearing_parameter():
     before, _ = _attribute_emit(source, before=True)
     after, parsed = _attribute_emit(source)
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
-    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
-    assert _calls(after, "py_cleanup_one_lease_preserving_exception")
-    assert _calls(after, "pcc_gc_foreign_lease_release")
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
+    assert not _calls(after, "py_cleanup_one_lease_preserving_exception")
+    assert not _calls(after, "pcc_gc_foreign_lease_release")
     # The builtin handler uses its existing inline/tag match, not necessarily
     # the generic py_exc_matches helper. Its selected cleanup remains intact.
     assert len(_calls(before, "py_clear_exception")) == len(_calls(after, "py_clear_exception"))
@@ -198,7 +199,8 @@ def test_attribute_alias_keeps_its_owner_and_each_dynamic_lookup():
     before, _ = _attribute_emit(source, before=True)
     after, _ = _attribute_emit(source)
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 2
-    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
     assert any(copy.source.startswith("%alias.addr") for copy in
                root_copy_calls(after, local=True, borrowed=False))
     _assert_attribute_parameter_not_cleared(after)
@@ -228,7 +230,8 @@ def probe(value):
     before, _ = _attribute_emit(source, before=True)
     after, _ = _attribute_emit(source)
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 1
-    assert len(_calls(after, "pcc_gc_borrowed_lease_acquire")) == 1
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
 
 
 def test_actual_packed_relocation_reader_elides_one_receiver_owner():
@@ -278,8 +281,8 @@ def test_actual_packed_relocation_reader_elides_one_receiver_owner():
     assert len(_calls(before, "py_obj_getattr")) == len(_calls(after, "py_obj_getattr")) == 2
     assert len(root_copy_calls(before, local=True, borrowed=True)) == 2
     assert len(root_copy_calls(after, local=True, borrowed=True)) == 1
-    borrowed = _calls(after, "pcc_gc_borrowed_lease_acquire")
-    assert len(borrowed) == 1 and "section.addr" in borrowed[0]
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(after, "pcc_gc_borrowed_lease_acquire")
     assert not _calls(before, "pcc_gc_borrowed_lease_acquire")
     # Count every exact lexical frame, including unchanged call-site-seeded
     # return roots. Prove the specific removed receiver's entry-seeded owner
@@ -294,11 +297,10 @@ def test_actual_packed_relocation_reader_elides_one_receiver_owner():
     assert owners[0].require_owning(copied, allow_lifo=True) == (*copied, 1)
     assert not any(copy.source.startswith("%section.addr")
                    for copy in root_copy_calls(after, local=True, borrowed=True))
-    leases = [ins for _, _, ins in owners[1].rows
-              if owners[1].called(ins, "pcc_gc_borrowed_lease_acquire")]
-    assert len(leases) == 1
-    section = owners[1].slot(owners[1].args(leases[0])[0])
-    assert section not in after_slots, "borrowed parameter must not acquire a second lexical owner"
+    sections = {owners[1].slot(ins.data[3]) for _, _, ins in owners[1].rows
+                if ins.kind == "load" and str(ins.data[3]).startswith("section.addr")}
+    assert sections
+    assert not sections.intersection(after_slots), "borrowed parameter must not acquire a second lexical owner"
     for owner in owners:
         owner.assert_frame_exits(exact_abi=True)
     assert len(_calls(after, "pcc_gc_store_root")) == len(_calls(before, "pcc_gc_store_root")) - 1
@@ -427,7 +429,8 @@ def test_nested_literal_operands_use_slot_producers():
     assert not _calls(_probe_function(text), "py_tuple_set_item")
     assert not _calls(_probe_function(text), "py_tuple_from_list")
     assert not root_copy_calls(text, borrowed=True)
-    assert "call.slot.argument.lease" in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "call.slot.argument.lease" not in text
     # An explicit sequence argument is evaluated completely before set()
     # hashes its first member. In particular, a raising a.__hash__ must not
     # prevent effect() from running. Keep the independent review's exact
@@ -960,8 +963,9 @@ def test_generic_unary_uses_owned_dispatch_without_literal_integer_proof(source)
     assert produced is not None
     assert "store ptr " + produced.group(1) in produced.group(2)
     assert "probe.operand" in produced.group(2)
-    assert _calls(text, "pcc_gc_foreign_lease_acquire")
-    assert _calls(text, "pcc_gc_foreign_lease_release")
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(text, "pcc_gc_foreign_lease_acquire")
+    assert not _calls(text, "pcc_gc_foreign_lease_release")
     assert not _calls(text, "py_int_neg")
     assert not _calls(text, "py_int_to_i64_lane")
 
@@ -1026,8 +1030,9 @@ def test_non_integer_binop_publishes_before_operand_cleanup():
     match = re.search(r"(%[^ ]+) = call ptr[^\n]*@py_obj_add\([^\n]*\n([^\n]+)", text)
     assert match is not None
     assert "store ptr " + match.group(1) in match.group(2)
-    assert _calls(text, "pcc_gc_foreign_lease_acquire")
-    assert _calls(text, "pcc_gc_foreign_lease_release")
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(text, "pcc_gc_foreign_lease_acquire")
+    assert not _calls(text, "pcc_gc_foreign_lease_release")
 
 
 def test_literal_integer_producer_does_not_admit_machine_arithmetic():
@@ -1389,42 +1394,27 @@ def test_runtime_call_pending_exception_keeps_identity_across_cleanup(result_kin
     assert model.successful_releases == list(reversed(model.slots))
 
 
-def test_emitted_runtime_release_failure_keeps_exact_token_in_cleanup(monkeypatch):
-    # This observer requires the owned builder's text records. The native
-    # consumer retains the normal compiler route and is a separate proof.
+def test_emitted_argument_leases_are_constant_and_need_no_cleanup(monkeypatch):
+    # One collector: every argument lease is the constant token 0 and its
+    # release the constant 0 (item 2 (d)), so no lease call, status branch or
+    # lease cleanup is emitted for either operand.
     monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_CAPTURE', '0')
     monkeypatch.setenv('PCC_DIRECT_INDEXED_KERNEL_EMIT', '0')
     checks = []
     original = L1CodeGen._slot_call_check_status
 
     def observe(self, status, operation, span=None):
-        if operation == 'argument lease release':
-            # The release call sits in its own block behind the 0-token test
-            # (a 0 token is the runtime's no-op answer); the checked status
-            # is the phi of that call and the skipped edge's 0.
-            incomings = getattr(status, '_incomings', None)
-            assert incomings, 'release status must join the call and the 0-token edge'
-            called = [value for value, _block in incomings
-                      if not isinstance(value, ir.Constant)]
-            assert len(called) == 1
-            releases = [str(instruction)
-                        for _value, block in incomings for instruction in block.instructions
-                        if '@pcc_gc_foreign_lease_release(' in str(instruction)]
-            assert releases
-            released = releases[-1]
-            assert released.startswith(str(called[0]) + ' = call i64 ')
-            token = re.search(r', i64 ([^)]+)\)$', released).group(1)
-            target = self._current_try_err_block()
-            cleanup_calls = [str(instruction) for instruction in target.instructions
-                             if ('@pcc_gc_foreign_lease_release(' in str(instruction)
-                                 or '@py_cleanup_one_lease_preserving_exception(' in str(instruction))]
-            assert any(line.endswith(', i64 ' + token + ')') for line in cleanup_calls), (
-                released, cleanup_calls,
-            )
-            checks.append(token)
+        if operation in ('argument lease', 'argument lease release'):
+            assert isinstance(status, ir.Constant) and status.value == 0, (operation, status)
+            checks.append(operation)
         return original(self, status, operation, span)
 
     monkeypatch.setattr(L1CodeGen, '_slot_call_check_status', observe)
     text = _emit('def probe(left, right):\n    return slot_operand_probe(left + right)\n')
-    assert _calls(_probe_function(text), 'py_obj_add')
-    assert len(checks) >= 2, 'expected both operand release edges, not a nearby publisher'
+    body = _probe_function(text)
+    assert _calls(body, 'py_obj_add')
+    assert checks.count('argument lease') >= 2 and checks.count('argument lease release') >= 2
+    for helper in ('pcc_gc_foreign_lease_acquire', 'pcc_gc_borrowed_lease_acquire',
+                   'pcc_gc_foreign_lease_release', 'py_cleanup_one_lease_preserving_exception'):
+        assert not _calls(body, helper), helper
+    assert '.lease.inert' not in body

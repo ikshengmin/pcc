@@ -55,8 +55,8 @@ def _assert_lookup_published_before_cleanup(text):
         following = text[lookup.end():].splitlines()[0].strip()
         assert following.startswith("store ptr " + lookup.group(1) + ", ptr "), following
     assert "class.definition.namespace" in text
-    assert "@pcc_gc_foreign_lease_acquire(" in text
-    assert "@pcc_gc_foreign_lease_release(" in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r"\bcall\b[^\n]*@pcc_gc_foreign_lease_(?:acquire|release)\(", text)
     assert "class.name.fallback" in text
     assert "@py_exc_matches(" in text
 
@@ -144,8 +144,9 @@ class Holder(metaclass=Meta):
         following = text[lookup.end():].splitlines()[0].strip()
         assert following.startswith("store ptr " + lookup.group(1) + ", ptr "), following
     assert "class.name.fallback" in text
-    assert "namespace.body.lease" in text
-    assert "namespace.body.release" in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "namespace.body.lease" not in text
+    assert "namespace.body.release" not in text
 
 
 @pytest.mark.parametrize("custom", (False, True), ids=("dict", "custom"))

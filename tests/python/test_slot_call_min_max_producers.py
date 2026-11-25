@@ -38,8 +38,9 @@ def test_iterable_extreme_publishes_owned_result_before_cleanup(name, want_max, 
     call = calls[0]
     following = body[call.end():].splitlines()[0].lstrip()
     assert following.startswith("store ptr " + call.group(1) + ", ptr "), following
-    assert "@pcc_gc_foreign_lease_acquire(" in body
-    assert "@pcc_gc_foreign_lease_release(" in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert "@pcc_gc_foreign_lease_acquire(" not in body
+    assert "@pcc_gc_foreign_lease_release(" not in body
     assert not re.search(r"\bcall\b[^\n]*@py_cpy_", text)
 
 

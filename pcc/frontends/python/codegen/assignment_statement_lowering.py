@@ -317,10 +317,8 @@ def _emit_bounded_tuple_unpack(host, source, items, span, ready):
     """
     previous = host._current_try_err_block()
     saved_cpy = host._cpy_operand_cleanup_block
-    token = host.builder.call(
-        host.runtime["pcc_gc_foreign_lease_acquire"], [host._as_gc_ptr(source)],
-        name=host._fresh("unpack.tuple.lease"),
-    )
+    # One collector: an address lease is token 0 and its release answers 0.
+    token = ir.Constant(_I64, 0)
     host._slot_call_check_status(token, "tuple unpack lease", span)
     try:
         host._try_err_block = host._slot_call_cleanup_block((), previous, ((source, token),))
@@ -363,10 +361,8 @@ def _emit_bounded_tuple_unpack(host, source, items, span, ready):
         matched.add_incoming(ir.Constant(_I1, 0), tagged)
         matched.add_incoming(ir.Constant(_I1, 0), sized)
         matched.add_incoming(ir.Constant(_I1, 1), extracted)
-        released = host.builder.call(
-            host.runtime["pcc_gc_foreign_lease_release"], [host._as_gc_ptr(source), token],
-            name=host._fresh("unpack.tuple.unlease"),
-        )
+        # One collector: an address lease is token 0 and its release answers 0.
+        released = ir.Constant(_I64, 0)
         # The source lease is consumed on both edges. Never release it again
         # if the release status or pending Python exception needs cleanup.
         host._try_err_block = previous

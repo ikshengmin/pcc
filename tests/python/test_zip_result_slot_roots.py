@@ -20,8 +20,9 @@ def _assert_immediate_publication(text, runtime):
     for match in calls:
         following = text[match.end():].splitlines()[0]
         assert following.lstrip().startswith('store ptr ' + match.group(1) + ','), following
-    assert '@pcc_gc_foreign_lease_acquire(' in text
-    assert '@pcc_gc_foreign_lease_release(' in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r'\bcall\b[^\n]*@pcc_gc_foreign_lease_acquire\(', text)
+    assert not re.search(r'\bcall\b[^\n]*@pcc_gc_foreign_lease_release\(', text)
 
 
 EXPRESSIONS = (

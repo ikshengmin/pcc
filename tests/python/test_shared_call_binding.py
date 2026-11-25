@@ -72,7 +72,7 @@ def test_runtime_binding_preserves_return_projection(annotation, value):
     assert body is not None
     assert len(re.findall(r"\bcall [^\n]*@py_obj_call_slots\(", body.group(0))) == 1
     assert not re.search(r"\bcall [^\n]*@user_binding_target\(", body.group(0))
-    assert "@pcc_gc_foreign_lease_acquire(" in body.group(0)
+    assert "@pcc_gc_foreign_lease_acquire(" not in body.group(0)
 
 
 def _function(text, symbol="user_binding_probe"):
@@ -195,7 +195,8 @@ def test_function_metadata_uses_defining_namespace_and_rooted_setters():
     assert calls
     first_argument = calls[0].split(",", 1)[0].split()[-1]
     assert resolve(first_argument) == resolve(constructor.group(1))
-    assert "@pcc_gc_foreign_lease_acquire(" in text
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not re.search(r'\bcall\b[^\n]*@pcc_gc_foreign_lease_acquire\(', text)
 
 
 def test_static_definition_metadata_uses_defining_namespace():

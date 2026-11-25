@@ -70,6 +70,18 @@ _I64 = ir.IntType(64)
 _CSTR = _I8.as_pointer()
 
 
+def _is_known_success(status) -> bool:
+    """A constant non-negative status: its check could branch nowhere."""
+    return (isinstance(status, ir.Constant) and isinstance(status.value, int)
+            and status.value >= 0)
+
+
+def _is_no_lease(token) -> bool:
+    """The no-op lease token 0: every lease under the one collector."""
+    return (isinstance(token, ir.Constant) and isinstance(token.value, int)
+            and token.value == 0)
+
+
 def _slot_call_rejection_detail(expr, pointer: bool, cpython: bool) -> str:
     """Bounded source coordinates and finite state, never operand values."""
     location = "unknown"
@@ -518,6 +530,9 @@ class CallObjectLoweringMixin:
                 self._emit_gc_frame_leave_lifo_for_slot(slot)
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
+        # A token-0 lease (every lease under the one collector) needs no
+        # release on the error edge.
+        leases = tuple(lease for lease in leases if not _is_no_lease(lease[1]))
         borrowed = getattr(self, "_slot_call_borrowed_operands", {})
         roots = tuple(slot for slot in roots
                       if not self._value_is_never_gc_object(slot)
@@ -718,51 +733,22 @@ class CallObjectLoweringMixin:
         return helper
 
     def _slot_call_lease_acquire(self, helper: str, slot, name: str):
-        """A slot call's address lease, or token 0 where every lease is a
-        no-op (pcc_gc_leases_inert: collectors 0-3 once configured, without
-        the provenance probe). There the runtime would return 0 before
-        reading the slot, so the call is skipped, not its effect."""
-        inert_gv = self._declare_external_global("pcc_gc_leases_inert", _I32)
-        inert = self.builder.load(inert_gv, name=self._fresh(name + ".inert"))
-        skip = self.builder.icmp_signed("!=", inert, ir.Constant(_I32, 0),
-                                        name=self._fresh(name + ".inert.set"))
-        entry = self.builder.block
-        lease = self.current_function.append_basic_block(self._fresh(name + ".acquire"))
-        done = self.current_function.append_basic_block(self._fresh(name + ".done"))
-        self.builder.cbranch(skip, done, lease)
-        self.builder.position_at_end(lease)
-        called = self.builder.call(self.runtime[helper], [self._as_gc_ptr(slot)],
-                                   name=self._fresh(name + ".call"))
-        acquired = self.builder.block
-        self.builder.branch(done)
-        self.builder.position_at_end(done)
-        token = self.builder.phi(_I64, name=self._fresh(name))
-        token.add_incoming(ir.Constant(_I64, 0), entry)
-        token.add_incoming(called, acquired)
-        return token
+        """A slot call's address lease: token 0, with no runtime call.
+
+        pcc has one collector (docs/status.md, "One collector"), which never
+        moves an object; every address lease is the no-op token 0 and its
+        release answers 0. The token stays a value so that its consumers keep
+        their shape: a constant 0 makes _slot_call_check_status and
+        _slot_call_cleanup_block emit nothing for it."""
+        return ir.Constant(_I64, 0)
 
     def _slot_call_lease_release(self, slot, token, name: str):
-        """Release a slot-call lease; a 0 token is a no-op the runtime
-        answers with 0 (pcc_gc_foreign_lease_release), so it is not called."""
-        skip = self.builder.icmp_signed("==", token, ir.Constant(_I64, 0),
-                                        name=self._fresh(name + ".lease.none"))
-        entry = self.builder.block
-        release = self.current_function.append_basic_block(self._fresh(name + ".call"))
-        done = self.current_function.append_basic_block(self._fresh(name + ".done"))
-        self.builder.cbranch(skip, done, release)
-        self.builder.position_at_end(release)
-        called = self.builder.call(self.runtime["pcc_gc_foreign_lease_release"],
-                                   [self._as_gc_ptr(slot), token],
-                                   name=self._fresh(name + ".status"))
-        released = self.builder.block
-        self.builder.branch(done)
-        self.builder.position_at_end(done)
-        status = self.builder.phi(_I64, name=self._fresh(name))
-        status.add_incoming(ir.Constant(_I64, 0), entry)
-        status.add_incoming(called, released)
-        return status
+        """Release a slot-call lease: the one collector answers 0."""
+        return ir.Constant(_I64, 0)
 
     def _slot_call_check_status(self, status, operation: str, span=None) -> None:
+        if _is_known_success(status):
+            return
         failed = self.builder.icmp_signed("<", status, ir.Constant(_I64, 0))
         error = self.current_function.append_basic_block(self._fresh("call.slot.error"))
         ready = self.current_function.append_basic_block(self._fresh("call.slot.ready"))
@@ -826,11 +812,8 @@ class CallObjectLoweringMixin:
         # The binder needs an independently owned authoritative slot, not a
         # raw address between operand evaluations. Retire the transfer lease
         # now; the binder will acquire its own counted address lease.
-        released = self.builder.call(
-            self.runtime["pcc_gc_foreign_lease_release"],
-            [self._as_gc_ptr(destination), token],
-            name=self._fresh("call.slot.copy.release"),
-        )
+        # One collector: an address lease is token 0 and its release answers 0.
+        released = ir.Constant(_I64, 0)
         self._slot_call_check_status(released, "operand lease release", span)
 
     def _slot_call_name_source(self, expr):

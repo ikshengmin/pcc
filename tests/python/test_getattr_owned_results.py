@@ -47,8 +47,9 @@ def test_getattr_result_reaches_owned_context(site, name, defaulted):
         assert '@py_exc_matches(' in _function(text)
         assert 'getattr.propagate' in _function(text)
     if name == 'name':
-        assert 'getattr.name.lease' in _function(text)
-        assert 'getattr.name.release' in _function(text)
+        # One collector: no address lease is taken (item 2 (d)).
+        assert 'getattr.name.lease' not in _function(text)
+        assert 'getattr.name.release' not in _function(text)
 
 
 def test_getattr_dynamic_name_validation_follows_all_argument_evaluation():

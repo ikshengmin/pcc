@@ -22,11 +22,13 @@ def test_dynamic_type_arguments_and_result_have_owning_slots(call):
     call_match = re.search(r'(%[^ ]+) = call [^\n]*@py_class_new_from_objects\([^\n]*\)\n', body)
     assert call_match is not None
     previous = body[:call_match.start()]
-    assert previous.count('@pcc_gc_foreign_lease_acquire(') >= 3
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_acquire(' not in previous
     assert previous.count('type.argument') >= 3
     after = body[call_match.end():]
     assert after.splitlines()[0].strip().startswith('store ptr ' + call_match.group(1) + ', ptr ')
-    assert '@pcc_gc_foreign_lease_release(' in after
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_release(' not in after
     assert '@pcc_gc_store_root(' in after
 
 

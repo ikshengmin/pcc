@@ -28,7 +28,8 @@ def test_namespace_string_operand_has_an_owner(name):
     body = _probe(_emit('"module documentation"\ndef take(*, value, **extras):\n    return value\n'
                         'def probe():\n    return take(value=' + name + ')\n'))
     assert '@py_obj_call_slots(' in body
-    assert '@pcc_gc_foreign_lease_acquire(' in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_acquire(' not in body
     assert '@py_cpy_' not in body
 
 

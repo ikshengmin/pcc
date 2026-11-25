@@ -792,14 +792,16 @@ class TypeAbiLoweringMixin:
                     self._slot_call_check_status(status, "valueclass unbox field move")
                     self._slot_call_note_published(destination)
                 else:
-                    token = self.builder.call(self.runtime["pcc_gc_foreign_lease_acquire"], [self._as_gc_ptr(field)])
+                    # One collector: an address lease is token 0 and its release answers 0.
+                    token = ir.Constant(_I64, 0)
                     self._slot_call_check_status(token, "valueclass scalar projection lease")
                     self._try_err_block = self._slot_call_cleanup_block((), field_cleanup, ((field, token),))
                     self._cpy_operand_cleanup_block = self._try_err_block
                     scalar = marshal.marshal_from_object(self.builder, self.module, self.runtime,
                                                          self.builder.load(field), field_ty)
                     self._emit_post_call_err_check(None)
-                    released = self.builder.call(self.runtime["pcc_gc_foreign_lease_release"], [self._as_gc_ptr(field), token])
+                    # One collector: an address lease is token 0 and its release answers 0.
+                    released = ir.Constant(_I64, 0)
                     self._try_err_block = field_cleanup
                     self._cpy_operand_cleanup_block = field_cleanup
                     self._slot_call_check_status(released, "valueclass scalar projection release")

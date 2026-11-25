@@ -118,7 +118,8 @@ def test_i64_fold_publishes_each_item_before_cleanup(name, annotation):
     assert '@py_obj_min_max(' not in body
     assert '@py_obj_getitem(' not in body
     assert '@py_int_to_i64_lane(' in body
-    assert '@pcc_gc_foreign_lease_release(' in body
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_release(' not in body
     assert '@pcc_gc_store_root(' in body
 
 

@@ -931,10 +931,8 @@ class MethodCallFallbackLoweringMixin:
             # Counted leases additionally protect raw ABI arguments across
             # callbacks that clear an aliased object's Boolean pin flag.
             for root in roots:
-                acquired = self.builder.call(
-                    self.runtime["pcc_gc_foreign_lease_acquire"],
-                    [self._as_gc_ptr(root[0])], name=self._fresh("to_bytes.lease.acquire"),
-                )
+                # One collector: an address lease is token 0 and its release answers 0.
+                acquired = ir.Constant(_I64, 0)
                 failed = self.builder.icmp_signed("<", acquired, ir.Constant(ir.IntType(64), 0))
                 error = self.current_function.append_basic_block(self._fresh("to_bytes.lease.error"))
                 ready = self.current_function.append_basic_block(self._fresh("to_bytes.lease.ready"))

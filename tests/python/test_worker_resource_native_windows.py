@@ -528,7 +528,7 @@ def _assert_diagnostic_address_lane(body):
 @pytest.mark.parametrize("target", [
     "x86_64-pc-windows-msvc", "aarch64-unknown-linux-gnu", "arm64-apple-darwin",
 ])
-def test_actual_dispatch_ir_uses_counted_string_leases_and_original_posix_call(tmp_path, monkeypatch, target):
+def test_actual_dispatch_ir_projects_strings_without_leases_and_original_posix_call(tmp_path, monkeypatch, target):
     from pcc.frontends.python.pipeline import compile_python
     from tests.owned_ir_validation import verify_ir_text
     monkeypatch.setenv("PCC_WITH_THREADS", "1")
@@ -548,20 +548,15 @@ def test_actual_dispatch_ir_uses_counted_string_leases_and_original_posix_call(t
     foreign = body.index("@pcc_worker_resource_replace_detailed(")
     assert "alloca [24 x i8]" in body
     projection = body.index("@py_str_utf8(")
-    # The extern lowering leases both string owners before either UTF-8
-    # projection and releases them after the call. The one collector never
-    # moves an object, so the fused-protocol pass answers every lease with its
-    # inert 0 token (pcc/frontends/python/fused_protocol_pass.py): the sites
-    # and their order remain, the runtime calls do not.
-    assert "@pcc_gc_foreign_lease_acquire(" not in body
-    assert "@pcc_gc_foreign_lease_release(" not in body
-    leases = list(re.finditer(r"%extern\.lease\.acquire[\w.]* = add i64 0, 0", body[:foreign]))
-    assert len(leases) == 2 and max(match.start() for match in leases) < projection < foreign
+    # The one collector never moves an object, so the extern lowering takes
+    # no foreign-address lease around the two UTF-8 projections: no lease
+    # call, token, acquisition error or cleanup check is emitted (item 2 (d)).
+    assert "extern.lease" not in body
+    for symbol in ("pcc_gc_foreign_lease_acquire", "pcc_gc_borrowed_lease_acquire",
+                   "pcc_gc_foreign_lease_release", "pcc_gc_leases_inert"):
+        assert symbol not in body
+    assert projection < foreign
     assert body[:foreign].count("@py_str_utf8(") == 2
-    after = body[foreign:]
-    releases = re.findall(r"%extern\.lease\.release[\w.]* = add i64 0, 0",
-                          after[:after.index("extern.lease.cleanup")])
-    assert len(releases) == 2
     call = re.search(r"@pcc_worker_resource_replace_detailed\(ptr (%[\w.]+), ptr (%[\w.]+), i64 (%[\w.]+)\)", body)
     assert call
     traced_call, tagged_bits = _assert_diagnostic_address_lane(body)
@@ -575,7 +570,6 @@ def test_actual_dispatch_ir_uses_counted_string_leases_and_original_posix_call(t
             _assert_diagnostic_address_lane(malformed)
     for value in call.groups()[:2]:
         assert re.search(re.escape(value) + r" = call ptr \(ptr\) @py_str_utf8\(", body[:foreign])
-    assert "extern.lease.acquire.error" in body and "extern.lease.cleanup.error" in body
     assert "@py_obj_setattr" not in body
     assert "worker_resource_host_windows" not in text
 

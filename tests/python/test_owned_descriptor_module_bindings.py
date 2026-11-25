@@ -60,7 +60,8 @@ def probe(path):
     for member in NATIVE_OS_DESCRIPTOR_CONSTANTS:
         assert native_os_descriptor_constant(member,platform) is not None
         assert re.search(r'call i64 \(ptr, ptr, ptr\) @py_module_attr_set[^\n]*@.pyattr\.'+member+r'[, ]',initializer)
-    assert 'pcc_gc_foreign_lease_acquire' in initializer and 'pcc_gc_foreign_lease_release' in initializer
+    # One collector: no address lease is taken (item 2 (d)).
+    assert 'pcc_gc_foreign_lease_acquire' not in initializer and 'pcc_gc_foreign_lease_release' not in initializer
     assert 'strict.nolib.stub' not in text and not re.search(r'\bcall [^\n]*@py_cpy_',text)
 
 

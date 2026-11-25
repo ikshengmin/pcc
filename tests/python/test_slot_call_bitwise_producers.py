@@ -39,8 +39,9 @@ def assert_bitwise_publication(text, operator, count=1):
     for call in calls:
         next_line = text[call.end():].splitlines()[0]
         assert next_line.lstrip().startswith('store ptr ' + call.group(1) + ','), next_line
-    assert _calls(text, 'pcc_gc_foreign_lease_acquire')
-    assert _calls(text, 'pcc_gc_foreign_lease_release')
+    # One collector: no address lease is taken (item 2 (d)).
+    assert not _calls(text, 'pcc_gc_foreign_lease_acquire')
+    assert not _calls(text, 'pcc_gc_foreign_lease_release')
     assert not _calls(text, 'py_int_to_i64_lane')
 
 

@@ -574,16 +574,10 @@ def _assert_rooted_receiver(probe, helper):
     assert loaded is not None, 'receiver was not read from its operand root'
     receiver_root = physical_root(loaded.group(1))
     assert 'receiver' in receiver_root
-    acquired = re.findall(r'call [^\n]*@pcc_gc_foreign_lease_acquire\(ptr ([%@][\w.]+)\)',
-                          probe[:call.start()])
-    assert any(physical_root(slot) == receiver_root for slot in acquired), (
-        'runtime receiver was not protected by its operand root lease'
-    )
+    # One collector: the receiver's operand root alone protects it; no
+    # address lease is taken (item 2 (d)).
+    assert not re.search(r'call [^\n]*@pcc_gc_foreign_lease_(?:acquire|release)\(', probe)
     after_call = probe[call.end():]
-    released = re.findall(r'call [^\n]*@pcc_gc_foreign_lease_release\(ptr ([%@][\w.]+),', after_call)
-    assert any(physical_root(slot) == receiver_root for slot in released), (
-        'runtime receiver lease was not released after mutation'
-    )
     cleared = re.findall(r'call [^\n]*@pcc_gc_store_root\(ptr ([%@][\w.]+), ptr null\)', after_call)
     assert any(physical_root(slot) == receiver_root for slot in cleared), (
         'receiver owner was not retired after mutation'
@@ -634,7 +628,8 @@ def probe():
     assert probe.index('name.dynamic.operand') < rhs_call.start()
     assert rhs_call.start() < probe.index('@py_obj_inplace_op(')
     assert 'import.augassign.input' in probe
-    assert '@pcc_gc_foreign_lease_acquire(' in probe
+    # One collector: no address lease is taken (item 2 (d)).
+    assert '@pcc_gc_foreign_lease_acquire(' not in probe
 
 
 @pytest.mark.parametrize('operator,helper', [

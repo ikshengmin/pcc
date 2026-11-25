@@ -48,7 +48,8 @@ def test_split_abs_result_is_published_and_inputs_are_leased(parameter, expressi
             loaded = re.search(re.escape(argument) + r' = load ptr, ptr (%[-\w.]+)', body[:call.start()])
             assert loaded is not None
             slot = loaded.group(1)
-            assert re.search(r'@pcc_gc_foreign_lease_acquire\(ptr ' + re.escape(slot) + r'\)', body[:call.start()])
+            # One collector: no address lease is taken (item 2 (d)).
+            assert not re.search(r'@pcc_gc_foreign_lease_acquire\(ptr ' + re.escape(slot) + r'\)', body[:call.start()])
             assert re.search(r'@pcc_gc_store_root\(ptr ' + re.escape(slot) + r', ptr null\)', body[call.end():])
 
 
