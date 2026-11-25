@@ -154,7 +154,12 @@ under each item and through Git alone.
 
 **Checkpoint.** Last checkpoint: `7ce5cf663`, validated by
 [run 44358778171](https://github.com/ikshengmin/pcc/actions/runs/44358778171).
-That run is a red baseline. No formal run pending. The latest completed
+That run is a red baseline. Pending push-triggered exact-source validation:
+[run 45663526933](https://github.com/ikshengmin/pcc/actions/runs/45663526933),
+head `1f26ddde4c812c6774c5e457e912fe705828afd2`, observed pending after
+the authorized non-skip result. It includes the worker, reference and
+Stage2 improvements; the earlier run 45643044565 retains its independent
+evidence. Do not dispatch a duplicate; compare actual terminal results. The latest completed
 [checkpoint comparison](investigations/checkpoint-validation-45427972345.md)
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
