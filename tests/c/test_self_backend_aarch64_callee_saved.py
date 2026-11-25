@@ -255,6 +255,7 @@ def _build_and_run(tmp_path, asm_text):
     return subprocess.run([str(exe_path)], capture_output=True, text=True, timeout=60)
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("mode", ["1", "0"])
 def test_callee_saved_allocation_executes_correctly(tmp_path, monkeypatch, mode):
     monkeypatch.setenv("PCC_SELF_CALLEE_SAVED_REGISTERS", mode)

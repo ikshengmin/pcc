@@ -288,6 +288,384 @@
       "nodeid": "tests/rust/test_rust_match_guards.py::test_checked_program_runs_with_owned_compile_assemble_and_link",
       "platforms": ["macos-arm64"],
       "tools": {"macos-arm64": ["rustc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_aarch64_aligned_fixed_block_simd_runtime",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_aarch64_float_cycle_after_ready_copies_keeps_direct_records",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_emits_aarch64_darwin_asm_for_const_return",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_emits_branch_phi_subset",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_emits_direct_call_subset",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_emits_i32_arg_arithmetic_and_call",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_float_nan_constant_keeps_nan_bits_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_materializes_large_local_stack_slots_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_phi_parallel_copy_swap_stages_through_temp",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_resolves_forward_referenced_named_types_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_narrow_negative_constant_zext_and_switch_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_ordered_fcmp_semantics_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_signed_narrow_division_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_signed_narrow_icmp_after_load_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_simple_varargs_stack_lowering_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_runs_unordered_fcmp_semantics_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_small_zero_memset_preserves_every_byte_and_guards[False]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_small_zero_memset_preserves_every_byte_and_guards[True]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": []}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_smin_against_zero_keeps_zero_register",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_aggregate_zeroinitializer_store_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_copysign_intrinsic_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_ctlz_cttz_intrinsics_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_ctpop_intrinsics_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_aggregate_return_to_external_call_chain",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_aggregate_then_pointer_call_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_global_data_symbol",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_heterogeneous_aggregate_call_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_mixed_aggregate_and_fp_call_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_mixed_aggregate_and_scalar_call_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_partial_tail_aggregate_return_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_two_aggregate_call_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_external_two_register_aggregate_return_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_gep_with_large_element_size_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_global_ptr_initializer_with_nonzero_gep_offset_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_inline_gep_call_arg_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_aggregate_phi_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_aggregate_return_and_by_value_arg_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_aggregate_zero_store_beyond_addr_imm_range_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_aggregate_zeroinitializer_return_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_by_value_aggregate_args_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_large_struct_field_gep_offset_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_aggregate_zeroinitializer_store_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_array_alloca_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_array_global_initializers_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_external_mixed_shape_aggregate_transition",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_external_partial_tail_return_to_external_call",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_external_partial_tail_return_to_fp_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_external_partial_tail_return_to_pointer_boundary",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_nested_literal_aggregate_phi_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_small_aggregate_fixed_stack_arg_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_small_aggregate_variadic_stack_arg_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend.py::test_self_backend_supports_struct_pointer_stride_gep_in_ir",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend_aarch64_callee_saved.py::test_callee_saved_allocation_executes_correctly[0]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
+    },
+    {
+      "domain": "shared",
+      "lane": "ordinary",
+      "nodeid": "tests/c/test_self_backend_aarch64_callee_saved.py::test_callee_saved_allocation_executes_correctly[1]",
+      "platforms": ["macos-arm64"],
+      "tools": {"macos-arm64": ["cc"]}
     }
   ]
 }

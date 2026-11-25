@@ -534,3 +534,88 @@ def test_rust_transfers_only_the_two_certified_darwin_executions():
         item["groups"] = ["rust-native-reference"]
     with pytest.raises(ValueError, match="splits xdist group"):
         owners.partition(rows, manifest, "rust", "ordinary", LINUX)
+
+
+def test_darwin_backend_execution_has_exact_host_ownership_not_skip():
+    """Darwin executables require the actual Darwin assembler and ABI.
+    Cross-target pure IR tests stay in the default Linux campaign.
+    """
+    actual, _ = owners.read_manifest(ROOT)
+    files = ("tests/c/test_self_backend.py", "tests/c/test_self_backend_aarch64_callee_saved.py")
+    nodes = []
+    portable = []
+    required_tools = {}
+    for file in files:
+        tree = ast.parse((ROOT / file).read_text())
+        for function in tree.body:
+            if not isinstance(function, ast.FunctionDef) or not function.name.startswith("test_"):
+                continue
+            calls = {node.func.id for node in ast.walk(function)
+                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
+            native = bool(calls & {"_assemble_and_run", "_compile_native_helper", "_build_and_run"})
+            native |= function.name in {
+                "test_self_backend_small_zero_memset_preserves_every_byte_and_guards",
+                "test_self_backend_aarch64_float_cycle_after_ready_copies_keeps_direct_records",
+            }
+            name = file + "::" + function.name
+            if not native:
+                if "_link_object_and_run" in calls:
+                    portable.append(name)
+                continue
+            gates = [mark for mark in function.decorator_list
+                     if isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.pcc_gate"]
+            assert len(gates) == 1 and {kw.arg: ast.literal_eval(kw.value) for kw in gates[0].keywords} == {
+                "platforms": ("darwin",), "machines": ("arm64",)}
+            suffixes = [""]
+            for mark in function.decorator_list:
+                if isinstance(mark, ast.Call) and ast.unparse(mark.func) == "pytest.mark.parametrize":
+                    suffixes = [f"[{value}]" for value in ast.literal_eval(mark.args[1])]
+            nodes.extend(name + suffix for suffix in suffixes)
+            required_tools.update({name + suffix: ["cc"] if calls & {"_assemble_and_run", "_compile_native_helper", "_build_and_run"} else [] for suffix in suffixes})
+    assert len(nodes) == 54 and len(portable) == 3
+    expected = [{"domain": "shared", "lane": "ordinary", "nodeid": node,
+                 "platforms": [MAC], "tools": {MAC: required_tools[node]}} for node in sorted(nodes)]
+    rules = [r for r in actual["overrides"] if r["domain"] == "shared"
+             and r["nodeid"].split("::")[0] in files]
+    assert rules == expected
+    rows = []
+    for node in sorted(nodes + portable):
+        file, function = node.split("::", 1)
+        rows.append({**row(function.split("[", 1)[0], selected=node in portable, lane="ordinary"),
+                     "file": file, "function": function.split("[", 1)[0],
+                     "nodeid": node, "canonical_nodeid": node})
+    # Restrict this model to the two tested files: the full campaign checks
+    # all other exact manifest nodes as well.
+    scoped = {**actual, "overrides": rules}
+    linux = owners.partition(rows, scoped, "shared", "ordinary", LINUX)
+    assert linux["local_nodeids"] == sorted(portable)
+    assert [r["nodeid"] for r in linux["transfers"]] == sorted(nodes)
+    for entry in rows:
+        entry["selected_by_repository"] = True
+    mac = owners.partition(rows, scoped, "shared", "ordinary", MAC, complete=False)
+    assert mac["local_nodeids"] == sorted(nodes)
+    assert owners.additional_campaigns(["shared"], scoped) == [
+        dict(domain="shared", lane="ordinary", platform=MAC, runner="macos-15")]
+
+
+def test_native_host_backend_builds_share_one_worker_without_changing_darwin_owner():
+    """Each compiler subprocess must not create an independent cold build tree."""
+    source = (ROOT / "tests/c/test_self_backend.py").read_text()
+    grouped = 0
+    for function in ast.parse(source).body:
+        if not isinstance(function, ast.FunctionDef) or not function.name.startswith("test_"):
+            continue
+        marks = {ast.unparse(mark.func): mark for mark in function.decorator_list if isinstance(mark, ast.Call)}
+        calls = {ast.unparse(node.func) for node in ast.walk(function) if isinstance(node, ast.Call)}
+        native = bool(calls & {"_compile_units", "_compile_multi_units", "_link_object_and_run", "CEvaluator"})
+        native |= any(call.endswith(".evaluate") or call.endswith(".emit_compiled_units") for call in calls)
+        if native and "pytest.mark.pcc_gate" not in marks:
+            mark = marks["pytest.mark.xdist_group"]
+            assert {kw.arg: ast.literal_eval(kw.value) for kw in mark.keywords} == {
+                "name": "self-backend-host-native"}
+            grouped += 1
+        else:
+            assert "pytest.mark.xdist_group" not in marks or (
+                {kw.arg: ast.literal_eval(kw.value) for kw in marks["pytest.mark.xdist_group"].keywords}
+                != {"name": "self-backend-host-native"})
+    assert grouped == 29

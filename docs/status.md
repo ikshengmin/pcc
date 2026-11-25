@@ -387,8 +387,28 @@ in the relevant section or issue and removes the entry.
    oracle, owned parser/verifier, ordinary PIDX and real ELF emission
    (123,304 bytes, required native symbols verified). 115 oracle tests
    pass; full strict closure on the next hosted SHA remains unqualified.
-   Next: consume strict-closure/checkpoint results, then remaining
-   worker-prior/changed-module and independent Source failures.
+   The subsequent full local closure retained 29 successful module
+   emissions and reproduced the original Windows-platform assertion.
+   Independently replayed all remaining five sections from that exact
+   compiled closure, with source digests checked and the fixed oracle;
+   all 34 original target objects now have local emission evidence.
+   Run `45643044565` exposed a stale ordinary inventory count after six
+   new oracle controls (109 -> 115); corrected all static receipt checks.
+   Actual Linux six-worker ordinary gate: 3765/3765 passed, 76.04 s,
+   peak 1.54 GB under a tightened 3 GiB local limit.
+   #20 shared ordinary Darwin ownership: 51 red tests in two files
+   directly invoke the Apple AArch64 ABI/assembler on Linux; three
+   additional existing Darwin gates had no owner. All 54 now have
+   explicit macos-arm64 campaign obligations, never counted as Linux
+   passes. Pure cross-target IR checks and three portable C native
+   controls stay Linux. Actual inventory 330 nodes (276 Linux, 54
+   transfer); Linux 276/276 with six workers, 11.53 s, under 1 GiB after
+   grouping the 29 host compiler-launching tests to avoid duplicate
+   build trees; prior ungrouped local run hit 1 GiB. 311 CI ownership/
+   coverage/plan controls pass (including the new group contract).
+   Hosted Darwin execution remains pending, not skipped qualification.
+   Next: worker-prior/changed-module and independent Source regressions;
+   do not cancel the in-flight checkpoint to dispatch just these changes.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -403,7 +423,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 Darwin native test ownership: Codex, Linux, 2026-11-25T15:18Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

@@ -280,6 +280,7 @@ def _compile_native_helper(source: str, obj_path):
     )
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_emits_aarch64_darwin_asm_for_const_return(tmp_path):
     ev, compiled_units = _compile_units(
         "int main(void) { return 42; }\n",
@@ -298,6 +299,7 @@ def test_self_backend_emits_aarch64_darwin_asm_for_const_return(tmp_path):
     assert run.returncode == 42
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_phi_parallel_copy_swap_stages_through_temp(tmp_path):
     """Regression: paired phis on a back-edge form a parallel-copy swap.
 
@@ -342,6 +344,7 @@ def test_self_backend_phi_parallel_copy_swap_stages_through_temp(tmp_path):
     assert run.returncode == 35
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_smin_against_zero_keeps_zero_register(tmp_path):
     """Regression: ``llvm.smin(x, 0)`` lowers to ``movz w10,#0; cmp w9,w10;
     csel w11,w9,w10,le``. The ``_fold_zero_compare_immediate`` peephole used to
@@ -1771,8 +1774,7 @@ entry:
 
 # Darwin executable
 # AArch64 execution
-@pytest.mark.pcc_gate(probe=lambda: not (platform.machine() != "arm64"))
-@pytest.mark.pcc_gate(probe=lambda: not (sys.platform != "darwin"))
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 @pytest.mark.parametrize("optimize", [False, True])
 def test_self_backend_small_zero_memset_preserves_every_byte_and_guards(tmp_path, optimize):
     import platform
@@ -7235,6 +7237,7 @@ bb0:
     assert "  movz x14, #3, lsl #0" in literal_lines
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_emits_direct_call_subset(tmp_path):
     source = "int helper(void) { return 5; }\n" "int main(void) { return helper(); }\n"
     ev, compiled_units = _compile_units(source, tmp_path)
@@ -7252,6 +7255,7 @@ def test_self_backend_emits_direct_call_subset(tmp_path):
     assert run.returncode == 5
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_emits_i32_arg_arithmetic_and_call(tmp_path):
     source = (
         "int add(int a, int b) { return a + b; }\n"
@@ -7273,6 +7277,7 @@ def test_self_backend_emits_i32_arg_arithmetic_and_call(tmp_path):
     assert run.returncode == 5
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_emits_branch_phi_subset(tmp_path):
     source = (
         "int max2(int a, int b) { if (a < b) return b; return a; }\n"
@@ -7298,6 +7303,7 @@ def test_self_backend_emits_branch_phi_subset(tmp_path):
     assert run.returncode == 7
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_emits_object_file(tmp_path):
     ev, compiled_units = _compile_units(
         "int main(void) { return 11; }\n",
@@ -7312,6 +7318,7 @@ def test_self_backend_emits_object_file(tmp_path):
     assert run.returncode == 11
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_can_execute_via_evaluate(tmp_path):
     source = (
         "int max2(int a, int b) { if (a < b) return b; return a; }\n"
@@ -7328,6 +7335,7 @@ def test_self_backend_can_execute_via_evaluate(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 @pytest.mark.parametrize("optimize", [0, 1])
 def test_self_backend_layout_aware_branches_keep_semantics(tmp_path, optimize):
     # Conditional branches fall through to whichever edge is laid out next;
@@ -7386,6 +7394,7 @@ def _deny_external_compiler_owners(monkeypatch):
     monkeypatch.setattr(subprocess, "Popen", checked_popen)
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_evaluate_does_not_publish_llvm_native_cache(
     tmp_path, monkeypatch
 ):
@@ -7458,6 +7467,7 @@ def test_self_backend_emitter_failure_does_not_fallback_to_llvm(tmp_path, monkey
         )
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_emit_obj_failure_does_not_fallback_to_llvm(tmp_path, monkeypatch):
     import pcc.frontends.c.evaluator.c_evaluator as c_evaluator
 
@@ -7478,6 +7488,7 @@ def test_self_backend_emit_obj_failure_does_not_fallback_to_llvm(tmp_path, monke
     assert not obj_path.exists()
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_multi_tu_internal_symbol_collisions(tmp_path):
     ev, compiled_units = _compile_multi_units(
         [
@@ -7503,6 +7514,7 @@ def test_self_backend_supports_multi_tu_internal_symbol_collisions(tmp_path):
     assert run.returncode == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_i64_call_and_casts(tmp_path):
     source = (
         "long addl(long a, long b) { return a + b; }\n"
@@ -7519,6 +7531,7 @@ def test_self_backend_supports_i64_call_and_casts(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_void_call_and_pointer_store(tmp_path):
     source = (
         "void setp(int *p) { *p = 9; }\n"
@@ -7535,6 +7548,7 @@ def test_self_backend_supports_void_call_and_pointer_store(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_pointer_return_and_load(tmp_path):
     source = (
         "int *id(int *p) { return p; }\n"
@@ -7551,6 +7565,7 @@ def test_self_backend_supports_pointer_return_and_load(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_keeps_byte_local_store_from_corrupting_neighbor_pointer_slot(
     tmp_path,
 ):
@@ -7573,6 +7588,7 @@ def test_self_backend_keeps_byte_local_store_from_corrupting_neighbor_pointer_sl
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_simple_global_scalar(tmp_path):
     source = "int g = 7; int main(void) { return g - 7; }\n"
 
@@ -7586,6 +7602,7 @@ def test_self_backend_supports_simple_global_scalar(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_local_array_indexing(tmp_path):
     source = "int main(void) { int a[2]; a[1] = 4; return a[1] - 4; }\n"
 
@@ -7599,6 +7616,7 @@ def test_self_backend_supports_local_array_indexing(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_simple_struct_field(tmp_path):
     source = (
         "struct S { int x; }; int main(void) { struct S s; s.x = 3; return s.x - 3; }\n"
@@ -7614,6 +7632,7 @@ def test_self_backend_supports_simple_struct_field(tmp_path):
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_aarch64_aligned_fixed_block_simd_runtime(tmp_path):
     def copy_probe(size: int) -> str:
         tail_offset = size - 8
@@ -7701,6 +7720,7 @@ entry:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_resolves_forward_referenced_named_types_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7800,6 +7820,7 @@ target datalayout = "e-m:o-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-n32:
     assert asm_text == "\n"
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_struct_pointer_stride_gep_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7898,6 +7919,7 @@ bb0:
     assert re.search(r"add x\d+, x9, x10", asm_text)
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_struct_field_gep_offset_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7926,6 +7948,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_array_global_initializers_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7952,6 +7975,7 @@ bb0:
     assert run.returncode == 6
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_aggregate_zeroinitializer_store_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -7974,6 +7998,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_by_value_aggregate_args_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8014,6 +8039,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_aggregate_return_and_by_value_arg_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8065,6 +8091,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_aggregate_phi_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8145,6 +8172,7 @@ merge:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_literal_aggregate_phi_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8209,6 +8237,7 @@ merge:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_aggregate_zeroinitializer_return_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8240,6 +8269,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_small_aggregate_variadic_stack_arg_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8272,6 +8302,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_inline_gep_call_arg_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8298,6 +8329,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_small_aggregate_fixed_stack_arg_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8339,6 +8371,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_ctlz_cttz_intrinsics_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8372,6 +8405,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_ctpop_intrinsics_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8398,6 +8432,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_copysign_intrinsic_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8421,6 +8456,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_array_alloca_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8445,6 +8481,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_aggregate_zeroinitializer_store_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8465,6 +8502,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_large_aggregate_zero_store_beyond_addr_imm_range_in_ir(
     tmp_path,
 ):
@@ -8487,6 +8525,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_gep_with_large_element_size_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -8512,6 +8551,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_global_ptr_initializer_with_nonzero_gep_offset_in_ir(
     tmp_path,
 ):
@@ -9545,6 +9585,7 @@ def test_self_backend_aarch64_folds_zero_test_branch():
     ]
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_unordered_fcmp_semantics_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9595,6 +9636,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_ordered_fcmp_semantics_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9621,6 +9663,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_narrow_negative_constant_zext_and_switch_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9659,6 +9702,7 @@ fail_switch:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_signed_narrow_icmp_after_load_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9688,6 +9732,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_signed_narrow_division_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9778,6 +9823,7 @@ bb0:
     assert "movz x0, #0" in asm_text
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_runs_simple_varargs_stack_lowering_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9820,6 +9866,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_local_string_literal(tmp_path):
     source = 'int main(void) { char *s = "hi"; return s[0] - 104; }\n'
 
@@ -9833,6 +9880,7 @@ def test_self_backend_supports_local_string_literal(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_global_string_pointer_init(tmp_path):
     source = 'char *s = "hi"; int main(void) { return s[1] - 105; }\n'
 
@@ -9846,6 +9894,7 @@ def test_self_backend_supports_global_string_pointer_init(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_double_call_and_int_casts(tmp_path):
     source = (
         "double sum2(int a, int b) { return (double)a + (double)b; }\n"
@@ -9862,6 +9911,7 @@ def test_self_backend_supports_double_call_and_int_casts(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_float_call_and_int_casts(tmp_path):
     source = (
         "float sum2f(int a, int b) { return (float)a + (float)b; }\n"
@@ -9878,6 +9928,7 @@ def test_self_backend_supports_float_call_and_int_casts(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_double_compare(tmp_path):
     source = (
         "int gt2(int a, int b) { double da = (double)a; double db = (double)b; return da > db; }\n"
@@ -9894,6 +9945,7 @@ def test_self_backend_supports_double_compare(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_indirect_function_pointer_call(tmp_path):
     source = (
         "typedef int (*binop_t)(int, int);\n"
@@ -9912,6 +9964,7 @@ def test_self_backend_supports_indirect_function_pointer_call(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_fixed_stack_args_beyond_x7(tmp_path):
     source = (
         "int pick9(int a, int b, int c, int d, int e, int f, int g, int h, int i) { return i; }\n"
@@ -9928,6 +9981,7 @@ def test_self_backend_supports_fixed_stack_args_beyond_x7(tmp_path):
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_materializes_large_local_stack_slots_in_ir(tmp_path):
     ir_text = """
 target triple = "arm64-apple-darwin23.6.0"
@@ -9951,6 +10005,7 @@ entry:
     assert run.returncode == 42
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_large_struct_assignment_by_memory_copy(tmp_path):
     source = (
         "struct Triple { long a; long b; long c; };\n"
@@ -9973,6 +10028,7 @@ def test_self_backend_supports_large_struct_assignment_by_memory_copy(tmp_path):
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_global_data_symbol(tmp_path):
     helper_obj = tmp_path / "helper_global.o"
     _compile_native_helper("int extg = 7;\n", helper_obj)
@@ -9996,6 +10052,7 @@ def test_self_backend_supports_external_global_data_symbol(tmp_path):
     assert run.returncode == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_small_struct_argument_by_value(tmp_path):
     source = (
         "struct Pair { int a; int b; };\n"
@@ -10013,6 +10070,7 @@ def test_self_backend_supports_small_struct_argument_by_value(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_small_struct_return_by_value(tmp_path):
     source = (
         "struct Pair { int a; int b; };\n"
@@ -10030,6 +10088,7 @@ def test_self_backend_supports_small_struct_return_by_value(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_single_word_struct_return_by_value(tmp_path):
     source = (
         "struct One { int a; };\n"
@@ -10047,6 +10106,7 @@ def test_self_backend_supports_single_word_struct_return_by_value(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_two_register_struct_argument_by_value(tmp_path):
     source = (
         "struct Pair64 { long a; long b; };\n"
@@ -10064,6 +10124,7 @@ def test_self_backend_supports_two_register_struct_argument_by_value(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_two_register_struct_return_by_value(tmp_path):
     source = (
         "struct Quad { int a; int b; int c; int d; };\n"
@@ -10081,6 +10142,7 @@ def test_self_backend_supports_two_register_struct_return_by_value(tmp_path):
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_partial_tail_two_register_struct_argument_by_value(
     tmp_path,
 ):
@@ -10100,6 +10162,7 @@ def test_self_backend_supports_partial_tail_two_register_struct_argument_by_valu
     assert result == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_supports_partial_tail_two_register_struct_return_by_value(
     tmp_path,
 ):
@@ -10119,6 +10182,7 @@ def test_self_backend_supports_partial_tail_two_register_struct_return_by_value(
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_mixed_aggregate_and_scalar_call_boundary(
     tmp_path,
 ):
@@ -10148,6 +10212,7 @@ def test_self_backend_supports_external_mixed_aggregate_and_scalar_call_boundary
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_mixed_aggregate_and_fp_call_boundary(tmp_path):
     helper_obj = tmp_path / "helper_fp.o"
     _compile_native_helper(
@@ -10175,6 +10240,7 @@ def test_self_backend_supports_external_mixed_aggregate_and_fp_call_boundary(tmp
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_two_aggregate_call_boundary(tmp_path):
     helper_obj = tmp_path / "helper_two_agg.o"
     _compile_native_helper(
@@ -10202,6 +10268,7 @@ def test_self_backend_supports_external_two_aggregate_call_boundary(tmp_path):
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_aggregate_then_pointer_call_boundary(tmp_path):
     helper_obj = tmp_path / "helper_agg_ptr.o"
     _compile_native_helper(
@@ -10229,6 +10296,7 @@ def test_self_backend_supports_external_aggregate_then_pointer_call_boundary(tmp
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_partial_tail_aggregate_return_boundary(
     tmp_path,
 ):
@@ -10258,6 +10326,7 @@ def test_self_backend_supports_external_partial_tail_aggregate_return_boundary(
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_two_register_aggregate_return_boundary(
     tmp_path,
 ):
@@ -10287,6 +10356,7 @@ def test_self_backend_supports_external_two_register_aggregate_return_boundary(
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_heterogeneous_aggregate_call_boundary(tmp_path):
     helper_obj = tmp_path / "helper_pair_triple.o"
     _compile_native_helper(
@@ -10316,6 +10386,7 @@ def test_self_backend_supports_external_heterogeneous_aggregate_call_boundary(tm
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_external_aggregate_return_to_external_call_chain(
     tmp_path,
 ):
@@ -10347,6 +10418,7 @@ def test_self_backend_supports_external_aggregate_return_to_external_call_chain(
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_external_partial_tail_return_to_external_call(
     tmp_path,
 ):
@@ -10378,6 +10450,7 @@ def test_self_backend_supports_nested_external_partial_tail_return_to_external_c
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_external_mixed_shape_aggregate_transition(
     tmp_path,
 ):
@@ -10413,6 +10486,7 @@ def test_self_backend_supports_nested_external_mixed_shape_aggregate_transition(
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_external_partial_tail_return_to_fp_boundary(
     tmp_path,
 ):
@@ -10444,6 +10518,7 @@ def test_self_backend_supports_nested_external_partial_tail_return_to_fp_boundar
     assert result == 0
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_supports_nested_external_partial_tail_return_to_pointer_boundary(
     tmp_path,
 ):
@@ -10493,6 +10568,7 @@ bb0:
     assert "  csel x13, x10, x11, ne" in asm_text
 
 
+@pytest.mark.pcc_gate(platforms=("darwin",), machines=("arm64",))
 def test_self_backend_float_nan_constant_keeps_nan_bits_in_ir(tmp_path):
     # LLVM writes a floating constant with no exact decimal form as the DOUBLE
     # bit pattern even for a `float` operand. The indexed materializer used to
@@ -10528,6 +10604,7 @@ bb0:
     assert run.returncode == 0
 
 
+@pytest.mark.xdist_group(name="self-backend-host-native")
 def test_self_backend_runs_c_float_nan_builtin_as_math_h_nan(tmp_path):
     # `NAN` in utils/fake_libc_include/math.h expands to `__builtin_nanf("")`
     # and `isnan` to `__builtin_isnan`; the own preprocessor drops system
