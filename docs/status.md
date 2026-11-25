@@ -270,9 +270,16 @@ in the relevant section or issue and removes the entry.
    329 host receipt/model checks passed, including the combined Win64
    admission control. Actual native slot execution remains unverified
    (the restored Linux environment lost its runtime archive).
-   Next: #20 common ownership program receipts and independent cyclic
-   collection witness. Preserve immediate death and cyclic collection
-   under the current collector.
+   #20 cyclic lifetime witness: the native and CPython source now both
+   create a self-cycle and disable automatic collection, require no
+   callbacks after the producer joins, then require weakref/finalizer
+   order and no repetition on the next collection. The separate immediate
+   death and slot ABI witnesses are intact. Linux: 332 host controls,
+   reference executions (including rejection of removed self-edge), and
+   emitted IR checks passed. Native cyclic execution remains pending CI.
+   Next: #20 common ownership program receipts for the one collector,
+   removing remaining repeated selector requests while preserving the
+   actual native witnesses and strict receipt guards.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -287,7 +294,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 two-root cyclic collection witness: Codex, Linux, 2026-11-25 01:03 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

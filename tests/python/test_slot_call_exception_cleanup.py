@@ -702,6 +702,15 @@ def test_two_root_cleanup_program_reference_and_error_edge(tmp_path):
     (tmp_path / "two-root-cleanup.ll").write_text(_assert_two_root_program_error_edge())
 
 
+def test_two_root_cyclic_program_reference_and_error_edge(tmp_path):
+    from tests.python.two_root_lifecycle_support import TRACING_TWO_ROOT_PROGRAM
+
+    assert_reference_program(TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tmp_path)
+    (tmp_path / "two-root-cyclic-cleanup.ll").write_text(
+        _assert_two_root_program_error_edge(TRACING_TWO_ROOT_PROGRAM),
+    )
+
+
 @pytest.mark.integration
 @pytest.mark.parametrize("python_program_compiler", ("pcc0", "pcc1"), indirect=True)
 def test_two_root_cleanup_error_path_native_five_gc(
@@ -713,9 +722,8 @@ def test_two_root_cleanup_error_path_native_five_gc(
         assert_two_root_slots_native,
     )
 
-    # Preserve the original immediate-death witness on GC0. GC1-GC4 have
-    # no reference counts: their release postcondition and collection death
-    # are separate observations, not alternative acceptable event orders.
+    # Immediate reference-counted death and cyclic collection are separate
+    # observations under the same collector, not alternative event orders.
     (tmp_path / "two-root-cleanup.ll").write_text(_assert_two_root_program_error_edge())
     (tmp_path / "two-root-tracing-cleanup.ll").write_text(
         _assert_two_root_program_error_edge(TRACING_TWO_ROOT_PROGRAM),
@@ -740,8 +748,7 @@ def test_two_root_cleanup_error_path_native_five_gc(
     assert_owned_program(
         TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tracing,
         python_program_compiler, mode, explicit_owned_runtime, capfd,
-        provenance_probe="2", backends=(1, 2, 3, 4),
-        reference_arguments=("cyclic-reference",),
+        provenance_probe="2", backends=(0,),
         emitted_ir_check=assert_compiler_two_root_error_edge,
     )
 

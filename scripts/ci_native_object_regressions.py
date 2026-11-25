@@ -126,9 +126,7 @@ def read_receipt(path):
 
 
 def expected_backends(label):
-    return [0] if label == "two-root-cleanup" else (
-        [1, 2, 3, 4] if label == "two-root-tracing" else list(range(5))
-    )
+    return [0] if label in ("two-root-cleanup", "two-root-tracing") else list(range(5))
 
 
 def verify_executions(record, binary, backends, output, *, strict=False):
@@ -340,9 +338,8 @@ def verify_program_receipts(directory, runtime, run_id):
         split = label in ("two-root-cleanup", "two-root-tracing")
         verify_common_identity(record, source, binary, runtime, run_id, strict=split)
         oracle = record["reference"]
-        arguments = ["cyclic-reference"] if label == "two-root-tracing" else []
         if split:
-            assert oracle["command"] == [sys.executable, str(source), *arguments]
+            assert oracle["command"] == [sys.executable, str(source)]
         assert (oracle["returncode"], oracle["stdout"], oracle["stderr"]) == (0, output, "")
         if label in ("two-root-cleanup", "two-root-tracing"):
             name = "gc0" if label == "two-root-cleanup" else "tracing"

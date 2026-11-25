@@ -20,6 +20,23 @@ from tests.python import two_root_lifecycle_support as lifecycle
 ROOT = Path(__file__).resolve().parents[2]
 
 
+def test_cyclic_program_reference_and_early_death_guard(tmp_path):
+    import subprocess
+    import sys
+
+    source = tmp_path / "cycle.py"
+    program = lifecycle.TRACING_TWO_ROOT_PROGRAM
+    source.write_text(program)
+    result = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10)
+    assert (result.returncode, result.stdout, result.stderr) == (0, "TWO_ROOT_TRACING_CLEANUP_OK\n", "")
+    # Removing the self edge makes the object die before explicit collection,
+    # which must fail rather than accidentally passing as a cyclic witness.
+    source.write_text(program.replace("self.cycle = self", "self.cycle = None"))
+    result = subprocess.run([sys.executable, str(source)], capture_output=True, text=True, timeout=10)
+    assert result.returncode != 0
+    assert "assert events == []" in result.stderr
+
+
 def _runtime_postcondition(omit=None):
     source = ROOT / "pcc/runtime/py/py_cleanup_runtime.py"
     helper = next(node for node in ast.parse(source.read_text()).body

@@ -1,9 +1,9 @@
-"""Count-free lifecycle and native cleanup-slot witnesses for one error edge.
+"""Cyclic lifecycle and native cleanup-slot witnesses for one error edge.
 
 PEP 442's cyclic-isolate sequence is the reference for collection death:
-weak callbacks, finalizers, resurrection check, then disposal. CPython's
-reference run alone makes Token cyclic; tracing-native runs remain acyclic.
-The original GC0 program separately retains its immediate-death assertions.
+weak callbacks, finalizers, resurrection check, then disposal. Both
+engines execute the same cyclic program. The separate immediate-death
+program retains its reference-counting assertions.
 """
 
 import hashlib
@@ -16,11 +16,9 @@ from tests.python.owned_regression_support import _record_execution
 
 
 TRACING_TWO_ROOT_PROGRAM = '''import gc
-import sys
 import threading
 import weakref
 
-REFERENCE_CYCLE = len(sys.argv) > 1 and sys.argv[1] == "cyclic-reference"
 events = []
 references = []
 handled = []
@@ -29,8 +27,7 @@ selected = ValueError("two-root selected")
 
 class Token:
     def __init__(self):
-        if REFERENCE_CYCLE:
-            self.cycle = self
+        self.cycle = self
     def __del__(self):
         events.append("finalizer")
         gc.collect()
@@ -66,13 +63,13 @@ def produce():
         failures.append(str(error))
 
 def main():
-    if REFERENCE_CYCLE:
-        gc.disable()
+    gc.disable()
     worker = threading.Thread(target=produce)
     worker.start()
     worker.join()
     assert failures == [], failures
     assert handled == [True]
+    assert events == [], events
     # No referent was loaded into this observing thread. The producer's
     # stack is gone; its strong operands cannot be diagnostic aliases here.
     gc.collect()

@@ -75,8 +75,7 @@ def _receipts(directory, runtime):
         source.write_text(program, encoding="utf-8")
         binary = work / "program.out"
         binary.write_bytes(("host-only receipt control; never executed: " + label).encode())
-        arguments = ["cyclic-reference"] if label == "two-root-tracing" else []
-        oracle = {"command": [sys.executable, str(source), *arguments],
+        oracle = {"command": [sys.executable, str(source)],
                   "returncode": 0, "stdout": output, "stderr": ""}
         backends = gate.expected_backends(label)
         record = {
@@ -150,7 +149,7 @@ def admitted(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("stage_status", ("PASS", "FAIL"))
-def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_six_executions(tmp_path, monkeypatch, admitted, stage_status):
+def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_three_executions(tmp_path, monkeypatch, admitted, stage_status):
     source, runtime = admitted
     path = tmp_path / "stage1.json"
     stage = json.loads(path.read_text())
@@ -184,7 +183,7 @@ def test_gate_reuses_terminal_runtime_and_records_split_lifetimes_and_twenty_six
         "object-identity", "super-result", "dict-copy-result", "dict-pop-result", "two-root-cleanup",
         "two-root-tracing", "two-root-slots",
     }
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 26
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 23
     for label, row in result["programs"].items():
         if label == "two-root-slots":
             assert len(row["executions"]) == 1
@@ -892,7 +891,7 @@ def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypa
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
         ((lifecycle.TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tmp_path / "tracing",
           compiler, "pcc0", archive, capfd),
-         {"provenance_probe": "2", "backends": (1, 2, 3, 4), "reference_arguments": ("cyclic-reference",),
+         {"provenance_probe": "2", "backends": (0,),
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
     ]
     assert slots == [(compiler, "pcc0", archive, tmp_path / "slots", capfd)]
@@ -1104,7 +1103,7 @@ def test_win64_extension_reuses_admission_in_one_existing_gate_call(
     assert result["tree_rss_limit_bytes"] == 17179869184
     assert result["observed_collector_witness"] is False
     assert len(result["programs"]) == 8
-    assert sum(len(row["executions"]) for row in result["programs"].values()) == 27
+    assert sum(len(row["executions"]) for row in result["programs"].values()) == 24
     extra = result["programs"]["win64-home-callback"]
     assert extra["compiler_mode"] == "host-pcc0" and extra["observed_collector_witness"] is False
     assert len(extra["executions"]) == 1
@@ -1270,8 +1269,7 @@ def test_two_root_split_receipts_fail_closed(tmp_path, monkeypatch, admitted, la
         record["executions"][0]["gc_backend"] = value
     elif change == "reference-mode":
         record["reference"]["command"] = [sys.executable, str(path.parent / "program.py")]
-        if label == "two-root-cleanup":
-            record["reference"]["command"].append("cyclic-reference")
+        record["reference"]["command"].append("cyclic-reference")
     elif change == "native-cycle":
         record["executions"][0]["command"].append("cyclic-reference")
     elif change == "missing-ir":
@@ -1427,4 +1425,4 @@ def test_two_root_encoded_markers_and_legacy_receipts_keep_distinct_contracts(tm
     result = gate.verify_program_receipts(directory, runtime, RUN_ID)
     assert len(result) == 7
     assert result["two-root-cleanup"]["reference"]["command"][-1].endswith("program.py")
-    assert result["two-root-tracing"]["reference"]["command"][-1] == "cyclic-reference"
+    assert result["two-root-tracing"]["reference"]["command"][-1].endswith("program.py")
