@@ -16,6 +16,7 @@ import re
 import pytest
 
 from pcc.frontends.go import GoDiagnostic, UnsupportedGo, compile_go
+from tests.go.reference_build_cache import reference_build_slot
 from tests.go.owned_execution import Execution, compile_owned, compile_reference, run, write_artifact
 from tests.go.owned_execution import compile_reference_rejection
 from tests.go.test_execution import forbid_external_compiler, units
@@ -423,7 +424,8 @@ def test_retained_original_pointer_order_diagnostic(tmp_path, monkeypatch):
     binary = directory / 'observer'
     command = [os.environ['PCC_GO_REFERENCE'], 'test', '-c', '-p=2', '-o', str(binary),
                str(directory / 'pointers.go'), str(directory / 'observer_test.go')]
-    build = subprocess.run(command, cwd=directory, env=env, capture_output=True, timeout=60)
+    with reference_build_slot(env['GOCACHE']):
+        build = subprocess.run(command, cwd=directory, env=env, capture_output=True, timeout=60)
     (directory / 'build.stdout').write_bytes(build.stdout)
     (directory / 'build.stderr').write_bytes(build.stderr)
     assert build.returncode == 0, (build.stdout, build.stderr)

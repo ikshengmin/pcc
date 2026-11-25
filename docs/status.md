@@ -830,9 +830,14 @@ in the relevant section or issue and removes the entry.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
    No full test execution or owned map/goroutine storage.
+   Go CI next: rerun all source lanes, starting with the cold-cache six-worker
+   integration batch from run 45619704293. Four simultaneous Go reference
+   builds crossed the 1 GiB tree cap; builds sharing a cache now take turns.
+   The new overlap regression failed before and passed after; 48 focused
+   protocol tests and two native owned ELF controls passed on Linux. The
+   hosted Go 1.27.3 integration and whole-language verdicts are pending.
 
    Claims:
-   - Go reference cold-cache build coordination (45619704293): Codex, Linux x86_64, 2026-11-25 15:14 UTC, area frontend-go
    - TinyXML2 generic virtual destructor exception specifications (explicit destruction): Codex, Linux, 2026-11-25 15:15 UTC, area frontend-cpp
    - Java native static blocks and blank-final initialization: Codex, Linux x86_64, 2026-11-25 15:18 UTC, area frontend-java
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the

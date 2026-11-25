@@ -14,6 +14,7 @@ import re
 import subprocess
 
 from pcc.frontends.go import DEFAULT_TARGET, GO_MAIN_SYMBOL, compile_go_sources, function_symbol
+from tests.go.reference_build_cache import reference_build_slot
 
 
 @dataclass(frozen=True)
@@ -197,7 +198,8 @@ def _reference_build(paths, sources, directory, *, compiler, cache, gopath=None,
         command[0] = str(executable)
         receipt['compiler_sha256'] = hashlib.sha256(executable.read_bytes()).hexdigest()
         record()
-        result = subprocess.run(command, cwd=directory, env=env, capture_output=True, timeout=60)
+        with reference_build_slot(cache):
+            result = subprocess.run(command, cwd=directory, env=env, capture_output=True, timeout=60)
     except subprocess.TimeoutExpired as error:
         fail('timeout', error.stdout or b'', error.stderr or b'', error)
     except OSError as error:

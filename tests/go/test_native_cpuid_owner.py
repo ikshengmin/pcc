@@ -8,6 +8,7 @@ import pytest
 from pcc.frontends.go import DEFAULT_TARGET, function_symbol
 from pcc.frontends.go.source_plan import GoSourcePlanError
 from scripts.go_std_closure import FIXTURE
+from tests.go.reference_build_cache import reference_build_slot
 from tests.go.owned_execution import run
 from tests.go.test_execution import forbid_external_compiler
 
@@ -164,8 +165,9 @@ def _original_asm_control(tmp_path, source):
            "GOENV": "off", "GOWORK": "off", "GO111MODULE": "off", "GOPROXY": "off",
            "GOSUMDB": "off", "CGO_ENABLED": "0", "GOOS": "linux", "GOARCH": "amd64",
            "GOAMD64": "v1", "GOMAXPROCS": "2"}
-    subprocess.run([str(go), "build", "-p=2", "-o", str(reference), "."],
-                   cwd=original, env=env, check=True, capture_output=True, timeout=35)
+    with reference_build_slot(env['GOCACHE']):
+        subprocess.run([str(go), "build", "-p=2", "-o", str(reference), "."],
+                       cwd=original, env=env, check=True, capture_output=True, timeout=35)
     return reference
 
 

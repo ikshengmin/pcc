@@ -225,3 +225,46 @@ def test_positive_api_hashes_and_executes_same_cwd_path_resolved_tool(tmp_path, 
     assert receipt['command'][0] == str(chosen.resolve())
     assert receipt['compiler_sha256'] == hashlib.sha256(chosen.read_bytes()).hexdigest()
     assert receipt['classification'] == 'native_build_succeeded'
+
+
+def test_shared_cache_admits_only_one_oracle_build_but_other_cache_proceeds(tmp_path, monkeypatch):
+    """A cold GOCACHE is a shared compiler resource, not an xdist/owned-code lock."""
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    compiler = tmp_path / 'mock-go'
+    compiler.write_bytes(b'reference protocol stand-in; not a semantic oracle')
+    first_inside, release = Event(), Event()
+    second_started, second_inside = Event(), Event()
+    shared = tmp_path / 'shared-cache'
+    other = tmp_path / 'other-cache'
+
+    def simulate(command, *, cwd, **kw):
+        if cwd.name == 'first':
+            first_inside.set()
+            assert release.wait(10), 'test did not release first compiler'
+        elif cwd.name == 'second':
+            second_inside.set()
+        Path(command[command.index('-o') + 1]).write_bytes(cwd.name.encode())
+        return subprocess.CompletedProcess(command, 0, b'', b'')
+
+    def build(name, cache):
+        if name == 'second':
+            second_started.set()
+        binary = execution.compile_reference((('main.go', 'package main; func main() {}'),),
+                                             tmp_path / name, compiler=compiler, cache=cache)
+        return binary.read_bytes()
+
+    monkeypatch.setattr(execution.subprocess, 'run', simulate)
+    with ThreadPoolExecutor(max_workers=3) as workers:
+        first = workers.submit(build, 'first', shared)
+        try:
+            assert first_inside.wait(5)
+            second = workers.submit(build, 'second', shared)
+            assert second_started.wait(5)
+            assert workers.submit(build, 'unrelated', other).result(timeout=5) == b'unrelated'
+            assert not second_inside.wait(0.2), 'two builds entered the same reference cache'
+        finally:
+            release.set()
+        assert first.result(timeout=5) == b'first'
+        assert second.result(timeout=5) == b'second'

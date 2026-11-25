@@ -20,6 +20,8 @@ import sys
 
 import pytest
 
+from tests.go.reference_build_cache import reference_build_slot
+
 DARWIN_TARGET = 'arm64-apple-darwin'
 UNAVAILABLE = (None if sys.platform == 'darwin' and platform.machine() == 'arm64'
                else 'requires an arm64 Darwin host for owned Mach-O execution')
@@ -91,8 +93,9 @@ def run_reference_go_function(units, function, tmp_path):
     env = dict(os.environ, GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off', GOWORK='off',
                GO111MODULE='off', CGO_ENABLED='0', GOCACHE=os.environ.get('PCC_GO_REFERENCE_CACHE') or str(tmp_path / 'cache'))
     names = [name for name, _ in units] + ['observer_main.go']
-    subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *names],
-                   cwd=directory, env=env, check=True, capture_output=True, timeout=120)
+    with reference_build_slot(os.environ.get('PCC_GO_REFERENCE_CACHE')):
+        subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *names],
+                       cwd=directory, env=env, check=True, capture_output=True, timeout=120)
     run = subprocess.run([str(directory / 'reference')], capture_output=True, timeout=10, check=True)
     assert len(run.stdout) == 8, run
     return int.from_bytes(run.stdout, 'little')
@@ -106,6 +109,7 @@ def reference_rejection(units, tmp_path):
         (directory / name).write_text(text)
     env = dict(os.environ, GOTOOLCHAIN='local', GOPROXY='off', GOSUMDB='off', GOWORK='off',
                GO111MODULE='off', CGO_ENABLED='0', GOCACHE=os.environ.get('PCC_GO_REFERENCE_CACHE') or str(tmp_path / 'cache'))
-    run = subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *[name for name, _ in units]],
-                         cwd=directory, env=env, capture_output=True, timeout=120)
+    with reference_build_slot(os.environ.get('PCC_GO_REFERENCE_CACHE')):
+        run = subprocess.run([REFERENCE, 'build', '-o', str(directory / 'reference'), *[name for name, _ in units]],
+                             cwd=directory, env=env, capture_output=True, timeout=120)
     return run.returncode, run.stderr.decode('utf-8', 'replace')
