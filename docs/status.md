@@ -635,6 +635,22 @@ in the relevant section or issue and removes the entry.
    pcc1 and Linux. One native program (object returns,
    generator yields, extern text, a finalizer, an exception) matches
    CPython.
+   (d), step 4b, first batch (Claude, local Mac, `6986377bb`, `03ce9e54c`):
+   15 runtime modules (the C-API method and regex entries, dict
+   materialization, file, listdir, os.walk, tuple iteration and import
+   results; the str UTF-8, builtins cache, file lock, buffer and
+   virtual-thread GC pins) take through `pcc_gc_take_slot` with no prior
+   read, pin or graph lock; each compiles alone. Test models follow the one
+   collector: the shared slot model (`test_set_call_slot_roots.Memory`) and
+   the buffer model reach their collection points without moving objects,
+   their users assert no movement, models provide `pcc_gc_take_slot`, and
+   owner models expect no finish pin. Host pcc0, by node id against HEAD,
+   the 100-odd test files naming those modules or models match. Not run:
+   two compile-heavy files that exceed a 2.5 GiB tree cap
+   (`test_native_container_builtin_error_paths.py`,
+   `test_py_multi_file_bootstrap_shim.py`), the four heavy qualification
+   files, integration, pcc1 and Linux. Remaining 4b: 23 modules, from
+   `py_os_mkdir` (4 sites) to `py_class` (93).
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
@@ -789,7 +805,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) 4b runtime takes, first batch (15 small modules): Claude, macOS, 2026-11-25T14:57Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
