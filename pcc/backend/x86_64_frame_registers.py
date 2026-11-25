@@ -345,6 +345,48 @@ def _block_of(block_first: list[int], line_index: int) -> int:
     return low
 
 
+def _solve_frame_liveness(
+    successors: list[list[int]], uses: list[int], kills: list[int],
+    live_in: list[int], live_out: list[int],
+) -> None:
+    """Least fixed point of the frame use/kill equations, starting at zero.
+
+    An entering-set change can affect only its predecessors. Queue every
+    block in the original reverse order once, then revisit only affected
+    blocks. A queued flag bounds pending work even for self/duplicate edges.
+    The interference pass also consumes live_out, so update it on every
+    visit even when this block kills every newly live successor bit.
+    """
+    block_count = len(successors)
+    predecessors: list[list[int]] = []
+    pending: list[int] = []
+    queued = [True] * block_count
+    block_id = 0
+    while block_id < block_count:
+        predecessors.append([])
+        pending.append(block_id)
+        block_id += 1
+    block_id = 0
+    while block_id < block_count:
+        for successor in successors[block_id]:
+            predecessors[successor].append(block_id)
+        block_id += 1
+    while pending:
+        block_id = pending.pop()
+        queued[block_id] = False
+        out = 0
+        for successor in successors[block_id]:
+            out |= live_in[successor]
+        entering = uses[block_id] | (out & ~kills[block_id])
+        live_out[block_id] = out
+        if entering != live_in[block_id]:
+            live_in[block_id] = entering
+            for predecessor in predecessors[block_id]:
+                if not queued[predecessor]:
+                    pending.append(predecessor)
+                    queued[predecessor] = True
+
+
 def keep_frame_slots_in_registers(
     lines: list[str], func, plan, *, windows: bool,
 ) -> list[str]:
@@ -579,20 +621,7 @@ def keep_frame_slots_in_registers(
     block_first.clear()
     live_in = [0] * block_count
     live_out = [0] * block_count
-    changed = True
-    while changed:
-        changed = False
-        block_id = block_count - 1
-        while block_id >= 0:
-            out = 0
-            for successor in successors[block_id]:
-                out |= live_in[successor]
-            entering = uses[block_id] | (out & ~kills[block_id])
-            live_out[block_id] = out
-            if entering != live_in[block_id]:
-                live_in[block_id] = entering
-                changed = True
-            block_id -= 1
+    _solve_frame_liveness(successors, uses, kills, live_in, live_out)
 
     entry_live = live_in[0]
     live_in.clear()

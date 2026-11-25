@@ -303,35 +303,16 @@ class _CountedSuccessors(list):
 
 @pytest.fixture(scope="module")
 def _production_frame_liveness():
-    # Execute the production recurrence without constructing thousands of
-    # unrelated frame/assembly fixtures. Keep the original AST unmodified;
-    # the full-pass tests above and below also exercise its actual caller.
-    tree = ast.parse(inspect.getsource(keep_frame_slots_in_registers))
-    function = tree.body[0]
-    starts = [
-        index for index, statement in enumerate(function.body)
-        if isinstance(statement, ast.Assign)
-        and len(statement.targets) == 1
-        and isinstance(statement.targets[0], ast.Name)
-        and statement.targets[0].id == "live_in"
-    ]
-    assert len(starts) == 1
-    statements = function.body[starts[0]:starts[0] + 4]
-    assert [statement.targets[0].id for statement in statements[:3]] == [
-        "live_in", "live_out", "changed",
-    ]
-    assert isinstance(statements[3], ast.While)
-    assert isinstance(statements[3].test, ast.Name)
-    assert statements[3].test.id == "changed"
-    code = compile(ast.Module(body=statements, type_ignores=[]),
-                   "<production frame-register liveness>", "exec")
-
+    # Execute the real production solver rather than reconstructing a loop
+    # from its source shape. The full-pass tests also exercise its caller.
     def solve(successors, uses, kills):
+        from pcc.backend.x86_64_frame_registers import _solve_frame_liveness
+
         counted = _CountedSuccessors(successors)
-        context = dict(block_count=len(successors), successors=counted,
-                       uses=list(uses), kills=list(kills))
-        exec(code, {"__builtins__": {}}, context)
-        return context["live_in"], context["live_out"], counted.visits
+        live_in = [0] * len(counted)
+        live_out = [0] * len(counted)
+        _solve_frame_liveness(counted, list(uses), list(kills), live_in, live_out)
+        return live_in, live_out, counted.visits
 
     return solve
 
@@ -370,25 +351,24 @@ def test_frame_liveness_matches_full_sweep_for_all_two_block_two_bit_graphs(
             actual = _production_frame_liveness(successors, uses, kills)
             reference = _full_sweep_liveness_reference(successors, uses, kills)
             assert actual[:2] == reference[:2], (successors, uses, kills)
-            assert reference[2] - actual[2] in (0, len(successors))
 
 
 def test_frame_liveness_matches_full_sweep_for_seeded_multiblock_graphs(
     _production_frame_liveness,
 ):
     randomizer = random.Random(0xF12A)
-    for _ in range(512):
+    for case in range(512):
         blocks = randomizer.randrange(1, 13)
         successors = [
             [randomizer.randrange(blocks) for _ in range(randomizer.randrange(4))]
             for _ in range(blocks)
         ]
-        uses = [randomizer.getrandbits(8) for _ in range(blocks)]
-        kills = [randomizer.getrandbits(8) for _ in range(blocks)]
+        width = 4096 if case % 32 == 0 else 8
+        uses = [randomizer.getrandbits(width) for _ in range(blocks)]
+        kills = [randomizer.getrandbits(width) for _ in range(blocks)]
         actual = _production_frame_liveness(successors, uses, kills)
         reference = _full_sweep_liveness_reference(successors, uses, kills)
         assert actual[:2] == reference[:2], (successors, uses, kills)
-        assert reference[2] - actual[2] in (0, blocks)
 
 
 @pytest.mark.parametrize("successors, uses, kills, expected_in, expected_out", [
@@ -402,8 +382,25 @@ def test_out_only_changes_keep_fresh_live_out_without_an_extra_sweep(
 ):
     actual = _production_frame_liveness(successors, uses, kills)
     reference = _full_sweep_liveness_reference(successors, uses, kills)
-    assert actual == (expected_in, expected_out, 2 * len(successors))
+    # Includes one predecessor-index read per block, the initial reverse
+    # processing, and exactly one requeued predecessor. Duplicate edges do
+    # not duplicate work, and an out-only change does not enqueue anyone.
+    assert actual == (expected_in, expected_out, 2 * len(successors) + 1)
     assert reference == (expected_in, expected_out, 3 * len(successors))
+
+
+@pytest.mark.parametrize("blocks", [32, 128, 512])
+def test_frame_liveness_predecessor_chain_visits_scale_linearly(
+    _production_frame_liveness, blocks,
+):
+    # Reverse iteration propagates this demand just one block per complete
+    # sweep. The predecessor worklist needs only one visit per propagation.
+    successors = [[]] + [[block - 1] for block in range(1, blocks)]
+    uses = [1 << 4095] + [0] * (blocks - 1)
+    live_in, live_out, visits = _production_frame_liveness(successors, uses, [0] * blocks)
+    assert live_in == [1 << 4095] * blocks
+    assert live_out == [0] + [1 << 4095] * (blocks - 1)
+    assert visits == 3 * blocks - 1
 
 
 def test_out_only_cycle_preserves_a_store_read_on_the_back_edge():

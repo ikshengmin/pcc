@@ -596,3 +596,133 @@ original exact native node then passed (10.16 s, 222,068,736 B peak,
 original guard COMPLETE). Total 1217 executed passed, no failures; five
 other platform/integration-selected nodes were not run. No native ARM
 or pcc1 qualification is claimed.
+
+## Generated x86 backend: frame-register block liveness scheduling
+
+The frame promotion pass is a separate textual backend owner before
+scratch retarget/copy forwarding. On the two real frozen indexed modules
+above, capture the input to `keep_frame_slots_in_registers`, including its
+original scalar/alloca slot descriptors, frame size and platform area,
+hidden-result flag, stack-map location/reload records and shared immutable
+location-tuple identities. Use the same source and PIDX hashes as the
+shared-copy investigation. The original frame pass at 5f101c61 and at
+claim 2361ebec has SHA-256
+35af615a9f1f5b9109843001f5fb5cab7ddb46565bc96a1cfd92e94b4363f55d.
+The capture contains 66 functions, 155,980 pre-frame assembly lines, 10,379
+nominal value slots, 1,780 allocas and 14,621 safepoints. An adapter
+preserves the exact field values read by the pass and the shared identity
+groups (1,795 tuples containing 110,453 distinct entries; 847,665 entries
+if each record's tuple is walked again). Compact corpus: 6,390,312 bytes,
+SHA-256 ff21d3d214ec4b6862c84363bef9085fcad8f6300781a8a0980121a049356e40.
+Expected frame output (before retarget/copy and marker expansion):
+5,276,726 bytes, SHA-256
+d00c0e95abfd7fb4d86008aedf777e209de3f970c4f4c6f04eab299f7f586ac7.
+
+**Attribution before changing code.** Execute the unchanged actual frame
+pass module in a host helper and a native ELF helper linked against the
+same source-verified historical runtime as the preceding native copy
+experiment. The field projection is qualified by identical output from
+all 66 real emitter calls and from the host/native helpers; the unused
+Win64 `outgoing_size` import in this Linux-only helper has its exact
+historical expression and constant. Native uninstrumented frame time
+5.036 s, host 0.543 s; native separate root inventory 0.232 s (4.61% of
+whole), so the repeated root tuple traversal is not the main owner.
+A scratch build of the same pass with nine coarse phase clocks, also
+producing the exact expected output, measured:
+
+| Phase | Native time |
+| --- | ---: |
+| Metadata/root setup | 0.291 s |
+| Parse and access scan | 0.704 s |
+| Overlap/CFG | 0.153 s |
+| Depth and weights | 0.268 s |
+| Block-event association | 0.215 s |
+| **Liveness fixed point** | **3.199 s** |
+| Interference | 0.223 s |
+| Register choice | 0.181 s |
+| Rewrite | 0.145 s |
+
+Inclusive frame time in this instrumented helper: 5.412 s; the fixed
+point is 59.1%. These are Linux native helper measurements over the
+frozen real program shapes, not per-phase Windows or whole-bootstrap timing.
+
+On the exact same CFG/uses/kills for every function, a host counting
+oracle executed both old reverse sweeps and the predecessor worklist.
+It compared every live-in and live-out bitset and retained the original
+frame output: 527,724 old block evaluations versus 99,440 worklist
+evaluations (-81.16%). The production solver now uses the latter schedule.
+The dataflow equations, candidates, interference, coloring, root
+retirement and register saves/restores are unchanged. A change to a
+successor's live-in only invalidates predecessors; pending membership
+bounds each block to one queue entry; each visit refreshes live-out even
+when the local kill masks all of the entering-set changes. The temporary
+predecessor and queue arrays retire at helper return, before interference.
+
+**Repro and control.** On the historical source/runtime described above,
+compile two helpers with `compile_python_multi` (owned self backend,
+x86_64-unknown-linux-gnu, explicit matched runtime archive). The four
+module names are `frame_bench`, `pcc.backend.x86_64_frame_registers`,
+`pcc.backend.x86_64_frame_registers_control` (exact unchanged original
+frame pass), and `pcc.backend.self_backend_win64_abi` (unused exact
+`outgoing_size` projection). The input adapter reconstructs each function
+from the frozen line/metadata projection; shared root location tuples
+must reuse the same object identity. Use `PCC_PYTHON_IR_PASSES=off
+PCC_DIRECT_INDEXED_KERNEL_CAPTURE=0 PCC_DIRECT_INDEXED_KERNEL_EMIT=0`
+and the original 90 s / 1 GiB guard, plus performance lock. For each
+function time the actual arm's `keep_frame_slots_in_registers` call and
+then the unchanged control's same call on the same original lines/facts,
+using `time.perf_counter_ns()`. Check equality and join each output's
+lines with newline, functions with U+001E. Run native binaries with
+`PATH=/nonexistent PCC_HOST_PYTHON=/usr/bin/false PCC_HOST_PCC=/usr/bin/false
+PCC_RUNTIME_CC=/usr/bin/false`, alternating five pairs. The candidate source
+hash is 49ecc87dd70875bbbca2010aced97a8c09b914b351e591059b1054dc3fec2567.
+
+The compact input uses U+001E-separated functions, each with six U+001F
+fields: header (frame bytes, platform bytes, vararg bit, hidden-result
+offset or -1, group count), value-slot rows, alloca rows, location groups,
+record group/reload references, and original newline-separated assembly.
+Numeric row fields use comma separators and rows use semicolons. Each
+slot row records offset, ptr bit, int bit, width, slot size and value-slot
+size. Groups are assigned in first-occurrence identity order while
+visiting the original plan records; each reference row contains its
+group index followed by every reload source/destination pair. Reconstruct
+the tuple once per group, not once per reference.
+
+| Measure | Reverse sweep median | Predecessor worklist median | Candidate wins |
+| --- | ---: | ---: | ---: |
+| Frame owner | 4.902 s | 2.665 s | 5/5 |
+| Unchanged original control | 5.072 s | 5.030 s | 3/5 |
+| Whole helper (both + I/O) | 11.353 s | 8.928 s | 5/5 |
+| Process-tree RSS median | 91.54 MB | 93.12 MB | 1/5 |
+
+Raw owner reduction 45.63%; pairwise normalization against the unchanged
+control gives reductions of 43.46%, 48.88%, 46.96%, 44.35%, 48.06%
+(median 46.96%). All ten runs produced the exact expected frame output
+hash. The new predecessor/queue storage increases whole-helper median
+peak by 1.58 MB (1.7%); maximum measured candidate peak 95,682,560 bytes,
+against the unchanged 1 GiB guard. The two arm builds also completed
+within the original guard (18.64 s / 335,372,288 B and 18.66 s /
+348,971,008 B). This is a measured owner improvement with a bounded
+memory cost, not evidence about whole Stage2 RSS.
+
+The test-first predecessor-chain witness was red before adding the actual
+production solver. The revised direct solver tests retain the independent
+full-sweep live-in/live-out reference across 4,096 exhaustive two-bit
+graphs and 512 seeded graphs, including 4,096-bit values, cycles, duplicate
+edges and out-only updates. The reverse-propagation chain at n/4n/16n
+(32/128/512 blocks) has exactly 3n-1 successor-array visits, including
+predecessor construction. The original private-temporary retirement
+tracer and real owned ELF original-vs-rewritten pointer-loop execution
+remain active. All 126 focused tests and 15 subtests pass (2.31 s,
+81,670,144 B peak). Executing the complete emitter with both frozen
+PIDX inputs after the change produced the same two PCO hashes as the
+shared-copy investigation (including stack maps).
+
+The complete ordinary x86 batch (the same selection as the earlier
+shared-copy comparison) gives 1,421 passing nodes, one already known
+register-homes failure across the pointer-retirement marker, 15 passing
+subtests and four deselected, in 24.41 s with 141,537,280-byte peak. The base
+immediately before the new solver had 1,418 passing nodes and the same
+one failure; the three new scale cases all pass. The unchanged red is
+recorded, not waived. Full native Stage2/Stage3 and hosted/macOS execution
+remain open; this candidate changes the measured frame owner only.

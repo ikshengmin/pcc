@@ -1379,14 +1379,19 @@ in the relevant section or issue and removes the entry.
    cleanup, exact empty-object rejection and unchanged valid PCO checks.
    Also repaired the independent native receipt's missing source provider;
    1216 adjacent host tests plus one source-matched pcc0 executable receipt
-   pass, five platform/integration nodes not run. Next: measure
-   pairing/trampoline and frame-register/strong-liveness owners
-   independently, and await actual equal-ceiling Stage2/3 CI. No full
-   Stage2/3 speedup or ARM execution claim.
+   pass, five platform/integration nodes not run. Native x86 frame
+   promotion now solves the same liveness equations with a predecessor
+   worklist: actual 66-function graph evaluations 527,724→99,440, native
+   owner 4.902→2.665 s (-45.63%, normalized -46.96%, 5/5), exact frame
+   text and packed objects. Helper median peak +1.58 MB under unchanged
+   1 GiB guard; 126 focused and 1,421 ordinary x86 tests pass, one known
+   pointer-retirement register-home witness still red. Next: remaining
+   pairing/trampoline and frontend/backend owners, actual equal-ceiling
+   Stage2/3 CI. No full Stage2/3 speedup or ARM execution claim.
    [Phase investigation](investigations/stage2-worker-budget-parity-45643044565.md).
 
    Claims:
-   - Stage2 x86 frame-register predecessor liveness worklist: Codex, Linux x86-64, 2026-11-25T17:52Z, area backend
+   - none
 9. **Then: review this mechanism.** Maintainer decision of 2026-11-22: once
    pcc's kernel is stable, the "推进" mechanism in AGENTS.md and this work
    order are reviewed again. The trigger is the fixed point meeting its
