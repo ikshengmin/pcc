@@ -857,6 +857,20 @@ in the relevant section or issue and removes the entry.
    first; it changes no other agent's order. Each candidate still needs
    its ceiling recorded first and an `ab --control-arm` result, and it
    avoids the files of active item 2 claims.
+   (c) profile at `0b71d1214` (local Mac, load 4-7): w1 21.7 us of
+   processor time a request, of which the collector's root operations
+   20%, allocation 6.6%. The profile is flat. The cache-line padding the
+   one-collector cleanup removed is restored (`b234eea64`): 46 layout
+   conflicts to 13, no measurable change. Candidate in progress, ceiling
+   recorded first: `pcc_gc_load_ptr`, `pcc_gc_load_borrowed_ptr` and
+   `pcc_gc_resolve_owned_ptr` are plain loads (or the identity) since the
+   collectors that move objects were removed, but stay calls, with an
+   entry poll that only a moving collector needed. Their self time is
+   about 1.0 us of 21.7 us at w1 (4.6%) and 1.8 of 31.8 us at w4 (5.8%),
+   plus the two flag loads of the AArch64 short path at each program load.
+   The fused-protocol pass, which runs for every program and runtime
+   module, lowers them to a load; deleting the pass in item 2 (d)(3) moves
+   this lowering into code generation.
    Next, in order: (a) four-carrier measurement: `web_frameworks_app.py`
    fixes `carrier_count=1` and the runner records one carrier, so add a
    carrier count to the app and runner and a four-process aiohttp
@@ -878,7 +892,7 @@ in the relevant section or issue and removes the entry.
    function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - (c) handler gap to asyncio; first: restore the cache-line padding of freestanding_gc_state.py that the one-collector cleanup removed: Claude, local Mac, 2026-11-25T16:12Z, area runtime-gc (files: freestanding_gc_state.py, scripts/one_collector/cleanup_declarations.py)
+   - (c) handler gap to asyncio; now: the three load helpers become plain loads in the fused-protocol pass: Claude, local Mac, 2026-11-25T16:12Z, area runtime-codegen (files: pcc/frontends/python/fused_protocol_pass.py and its tests; not a file of the (d) 4b batch)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
