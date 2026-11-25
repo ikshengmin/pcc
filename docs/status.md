@@ -732,9 +732,18 @@ in the relevant section or issue and removes the entry.
        35.2 us at w4, so no added cost shows. `table` gave 52,094 (60% of
        asyncio) at w1 and 86,098 at w4 under load 7.3, while the A/B median
        of the same arm was 121,972: the w4 table figure is not a result.
+       Again on 2026-11-25 (Claude, local Mac, at the user's request), arm
+       `gc0-latest` = `0b71d1214` against `gc0-head` with control
+       `gc0-head-b`, five pairs, load 7.3 on 12 cores: w1 52,923 to 55,124
+       req/s (+4.2%, 5/5 pairs, floor 7.3%), w4 137,646 to 139,821 (+1.6%,
+       3/5, floor 8.1%), both inconclusive by the rule. Processor time a
+       request: 23.5 to 21.9 us at w1 (-6.8%) and 31.9 to 30.7 us at w4
+       (-3.8%), the direction of the emitted-protocol removal in (d). Against
+       the recorded asyncio figures (taken on 2026-11-24 under other load):
+       63% at w1 and 53% at w4.
        Next: the same `ab` with `--pairs 10` on an idle host (arms
-       `gc0-head`, `gc0-head-b`, `gc0-master` exist under `PCC_PERF_HOME`).
-       Platform macOS.
+       `gc0-head`, `gc0-head-b`, `gc0-master`, `gc0-latest` exist under
+       `PCC_PERF_HOME`). Platform macOS.
    (b) Tests that still name removed entry points.
        `scripts/one_collector/prune_tests.py report` lists them from the
        tracked `removed.json` (what the removal took, against `90f4345db`),
