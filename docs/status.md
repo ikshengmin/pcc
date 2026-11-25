@@ -1448,6 +1448,22 @@ in the relevant section or issue and removes the entry.
    overstated it: it counts every duplicated epilogue. The 83k-instruction
    gap sits in function bodies: register copies, immediates moved before
    use, `sxtw`, `nop`, unfused compares and unfolded addresses.
+   P0 exact ranking (Claude, 2026-11-26; supersedes the static-mix
+   estimate): lldb single-stepped 200000 instructions of the handler's
+   main thread (one worker) for the self runtime and for the clang -O2
+   runtime of the same IR, every executed instruction classified, the
+   clang run scaled to equal work by the instructions both spend in the
+   shared self-compiled program code (ratio 1.388). At equal work self runs
+   200000 and clang 144062; self's excess by class: register copies +10709
+   (19.1% of the gap), other ALU +8078 (14.4%), pointer authentication and
+   bti +7826 (14.0%; self signs every framed function), `sxtw` +5423 (9.7%),
+   callee-saved saves and restores +5389 (9.6%), frame records +4771 (8.5%),
+   compares +3352 (6.0%), unconditional branches +3023 (5.4%), `nop` +2726
+   (4.9%), stores, immediates, conditional branches, global addresses and
+   stack slots 3-4% each; clang executes more loads and libSystem code.
+   Order: `sxtw` folding and the loop-separator `nop` (together about 15%,
+   peephole-sized), then register copies, then frames; signing waits on
+   the maintainer.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
