@@ -856,11 +856,18 @@ in the relevant section or issue and removes the entry.
    The new overlap regression failed before and passed after; 48 focused
    protocol tests and two native owned ELF controls passed on Linux. The
    hosted Go 1.27.3 integration and whole-language verdicts are pending.
+   Java CI next: native scalar static blocks and blank-final initialization of
+   already admitted primitive-array owners use the existing class guard, shared
+   DA/DU flow, and lexical root retirement. Linux host: 706 focused ordinary
+   tests and 2 lane-registry checks passed; JDK and managed native execution
+   remain CI obligations. The v1 envelope, runtime ABI and #13 gate are unchanged.
+   Run 45619704293's Commons Numbers and ZXing gates still require nominal static
+   reference storage and class construction after #13; the six JDK-only failed
+   nodes retain the normative conformance obligations, not a changed oracle.
 
    Claims:
    - Rust original no_std core source resolution (45619704293): Codex, Linux x86_64, 2026-11-25 15:29 UTC, area frontend-rust
    - TinyXML2 generic virtual destructor exception specifications (explicit destruction): Codex, Linux, 2026-11-25 15:15 UTC, area frontend-cpp
-   - Java native static blocks and blank-final initialization: Codex, Linux x86_64, 2026-11-25 15:18 UTC, area frontend-java
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

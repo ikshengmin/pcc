@@ -23,7 +23,7 @@ from pathlib import Path
 
 import pytest
 
-from pcc.frontends.java import JavaError, UnsupportedJava, analyze_class_sources, compile_source
+from pcc.frontends.java import JavaError, UnsupportedJava, analyze_class_sources, compile_source, compile_sources
 from pcc.frontends.java.source_class_initialization import (
     CLASS_INITIALIZATION_REQUIREMENTS,
     ClassInitializationObligation,
@@ -157,9 +157,73 @@ def test_reference_typed_blank_finals_keep_the_static_reference_boundary():
     assert caught.value.code == "java.unsupported.static-initialization"
 
 
-@pytest.mark.parametrize("text", [PROGRAMS[0][1], original("static{int y=1;}")])
-def test_native_domain_still_rejects_static_initialization(text, monkeypatch):
+NATIVE_INITIALIZERS = [
+    PROGRAMS[0], PROGRAMS[1], PROGRAMS[3], PROGRAMS[4], PROGRAMS[5], PROGRAMS[7],
+    ("empty-class-storage", original("static{int y=1;}")),
+    ("ordered-fields", original("static final int X;static{X=40;}static final int Y=X+2;", "return Y;")),
+    ("conditional-assignment", original(
+        "static final int X;static{boolean b=true;if(b){X=42;}else{X=7;}}", "return X;")),
+    ("nested-assignment", original("static final int X;static{{X=42;}}", "return X;")),
+    ("assignment-expression", original("static final int X;static{int y=(X=42);}", "return X;")),
+]
+
+# This is also consumed by the owned shared-runtime ABI integration test.
+STATIC_BLOCK_OWNERS = original(
+    "static final int N;static final int[] DATA;"
+    "static{boolean b=true;if(b){N=41;}else{N=0;}int[] tmp={20,21};DATA=tmp;}"
+    "static final int[] ALIAS=DATA;", "DATA[0]=N;return ALIAS[0]+1;")
+
+
+@pytest.mark.parametrize("name,text", NATIVE_INITIALIZERS + [("static-block-owners", STATIC_BLOCK_OWNERS)],
+                         ids=[row[0] for row in NATIVE_INITIALIZERS] + ["static-block-owners"])
+def test_native_domain_emits_static_initialization(name, text, monkeypatch):
     forbid_bytecode_or_external_owner(monkeypatch)
+    compiled = compile_source(text, filename="ArrayExample.java")
+    assert compiled.managed_runtime
+    assert compiled.emit_object().startswith(b"\x7fELF")
+    module = str(compiled.module)
+    assert "pcc_rt_java_class_enter" in module
+    assert "pcc_rt_java_class_publish" in module
+
+
+@pytest.mark.parametrize("name,text,message", INVALID[:11], ids=[row[0] for row in INVALID[:11]])
+def test_native_static_initializer_rejects_invalid_source(name, text, message):
+    with pytest.raises(JavaError) as caught:
+        compile_source(text, filename="ArrayExample.java")
+    assert not isinstance(caught.value, UnsupportedJava)
+
+
+@pytest.mark.parametrize("members,message", [
+    ("static final int X;static{boolean b=true;if(b){X=1;}}", "definitely assigned"),
+    ("static final int X;static{for(int i=0;i<2;i++){X=i;}X=42;}", "definitely unassigned"),
+    ("static final int X;static{boolean b=true; if(b){X=1;} X=42;}", "definitely unassigned"),
+])
+def test_native_blank_static_final_requires_da_du_on_every_path(members, message):
+    with pytest.raises(JavaError, match=message) as caught:
+        compile_source(original(members), filename="ArrayExample.java")
+    assert not isinstance(caught.value, UnsupportedJava)
+
+
+def test_native_static_block_guard_is_not_called_for_a_folded_constant_read():
+    compiled = compile_sources({
+        "Cold.java": "class Cold{static final int K=42;static{int x=K;}}",
+        "Main.java": "class Main{static int run(){return Cold.K;}}",
+    }, entry_class="Main")
+    guard = "__pcc_java_static_" + "Cold".encode().hex() + "_initialize"
+    assert guard in str(compiled.module)
+    assert guard not in str(compiled.module.globals[compiled.entry_symbol])
+
+
+def test_native_blank_array_cannot_use_different_extent_proofs_on_two_paths():
+    text = original("static final int[] A;static{boolean b=true;"
+                    "if(b){A=new int[]{42};}else{A=new int[]{1,2};}}", "return A[0];")
+    with pytest.raises(UnsupportedJava, match="common proven extent") as caught:
+        compile_source(text)
+    assert caught.value.code == "java.unsupported.static-initialization"
+
+
+@pytest.mark.parametrize("text", [PROGRAMS[2][1], PROGRAMS[6][1], PROGRAMS[8][1]])
+def test_native_static_initializer_keeps_unimplemented_callback_and_early_read_boundary(text):
     with pytest.raises(UnsupportedJava) as caught:
         compile_source(text, filename="ArrayExample.java")
     assert caught.value.code == "java.unsupported.static-initialization"
@@ -170,4 +234,7 @@ def test_native_domain_still_rejects_static_initialization(text, monkeypatch):
                      "select an existing development JDK with PCC_JAVA_RAW_REFERENCE")
 @pytest.mark.xdist_group(name="java-class-initialization-reference")
 def test_static_initializer_originals_against_selected_jdk_only(tmp_path, request):
-    check_originals_reference(tmp_path, request, PROGRAMS, [], INVALID, source_input=Path(__file__))
+    additional = [row for row in NATIVE_INITIALIZERS if row[0] not in dict(PROGRAMS)]
+    check_originals_reference(tmp_path, request,
+                              PROGRAMS + additional + [("static-block-owners", STATIC_BLOCK_OWNERS)],
+                              [], INVALID, source_input=Path(__file__))

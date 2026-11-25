@@ -137,10 +137,20 @@ and [class initialization](https://docs.oracle.com/javase/specs/jls/se21/html/jl
 Primitive `static final` constant-variable fields are checked and inlined, including
 byte/short/char assignment-constant narrowing, field access, simple-name forward
 reference restrictions and cross-class dependencies. Every initializer is checked:
-`final` alone does not establish a constant variable. Nonconstant or cyclic static
-initialization, mutable fields and blank finals require the shared initialization
-contract and are rejected, even when unused. No Java storage or initialization
-substitute is synthesized. Character literals represent one unsigned UTF-16 code
+`final` alone does not establish a constant variable. Native static blocks and
+blank-final scalar/previously supported primitive-array fields now share the
+existing active-use class guard, with textual initialization order and the
+ordinary control-flow DA/DU checker across all blocks. Array stores transfer
+an owning handle or clone an existing rooted alias; block-local roots retire
+when the block completes. Folded constants still do not initialize their class.
+Assignments with no common proved array extent, managed exceptions, callbacks
+during initialization, cyclic/early qualified nonconstant reads, mutable static
+fields and nominal reference layouts stay explicit boundaries. This is a
+frontend-only extension of the existing bounded primitive-array path, not
+promotion of the v1 tuple envelope or the #13 described-layout gate.
+Focused host source/owned-IR evidence only; managed native, whole-project and
+reference execution acceptance remain pending CI.
+No Java storage or initialization substitute is synthesized. Character literals represent one unsigned UTF-16 code
 unit, with ordinary/octal Java escapes; Unicode-escape translation remains gated.
 
 Initialized `final` boolean/integral locals and `final` parameters preserve their

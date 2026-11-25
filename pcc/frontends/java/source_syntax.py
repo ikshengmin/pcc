@@ -132,7 +132,7 @@ class SourceClass:
     token: Token | None = None
     instance_initializers: tuple[Node, ...] = ()
     initialization_steps: tuple = ()
-    # Class model only: `static { ... }` blocks in textual order; each block's
+    # `static { ... }` blocks in textual order; each block's
     # value is the number of fields declared before it (JLS 8.7, 12.4.2).
     static_initializers: tuple[Node, ...] = ()
     static_imports: tuple[tuple[Token, ...], ...] = ()
@@ -143,6 +143,8 @@ class SourceClass:
     # (None for the implicit Object) and `implements` InterfaceTypes.
     superclass: object = None
     interfaces: tuple = ()
+    # Checked synthetic native class-initialization body, never an exported method.
+    native_initializer: SourceMethod | None = None
 
     @property
     def package(self):
@@ -335,6 +337,7 @@ class SourceParser:
         self.position = 0
         self.class_model = class_model
         self.inferred_initializer_depth = 0
+        self.static_initializer_depth = 0
 
     def peek(self, distance=0):
         return self.tokens[min(self.position + distance, len(self.tokens) - 1)]
@@ -701,15 +704,16 @@ class SourceParser:
                 members.append(self.class_declaration(mods, package, imports, static_imports,
                                                       enclosing=program, enclosing_names=(*enclosing_names, name)))
                 continue
-            if not self.class_model and mods == {"static"} and self.peek().text == "{":
-                self.peek().error("source method results require boolean, integral primitives or void",
-                                  code="java.unsupported.static-initialization")
-            if self.class_model and self.peek().text == "{":
+            if self.peek().text == "{" and (self.class_model or mods == {"static"}):
                 self.require_no_override("an initializer")
                 if mods == {"static"}:
                     # JLS 8.7: checked in a static context and retained as a
-                    # class-initialization step (source_class_initialization).
-                    initializer = self.block()
+                    # class-initialization step by both semantic owners.
+                    self.static_initializer_depth += 1
+                    try:
+                        initializer = self.block()
+                    finally:
+                        self.static_initializer_depth -= 1
                     initializer.value = len(fields)
                     static_initializers.append(initializer)
                     continue
@@ -782,9 +786,10 @@ class SourceParser:
                     if instance and "final" in mods and not (isinstance(field_type, ArrayType) and initialized):
                         result.error("final instance fields require constructor definite-unassignment semantics",
                                      code="java.unsupported.final-instance-fields")
-                    if not initialized and not instance and not self.class_model:
-                        # The class model checks blank static finals against
-                        # its static initializers (JLS 8.3.1.2, 16.8).
+                    if not initialized and not instance and not self.class_model and isinstance(field_type, NamedType):
+                        # Nominal/String reference storage is a separate shared
+                        # layout gate. Primitive and existing array blank finals
+                        # are checked across their class initialization.
                         method_name.error("blank final fields require shared Java class initialization", code="java.unsupported.static-initialization")
                     initializer = self.declarator_initializer(field_type, field=True) if initialized else None
                     field = SourceField(method_name, field_type, initializer, frozenset(mods), owner, len(fields))
@@ -1191,11 +1196,11 @@ class SourceParser:
                     node = Node("receiver_field", member, member.text)
         elif token.text == "null":
             node = Node("null", token)
-        elif not self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
+        elif not self.class_model and not self.static_initializer_depth and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
             # The native array domain admits only top-level local initializers.
             token.error("array creation expressions require shared NullPointerException/NegativeArraySizeException "
                         "support and managed root ownership", code="java.unsupported.array-storage")
-        elif self.class_model and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
+        elif (self.class_model or self.static_initializer_depth) and token.text == "new" and self.peek().text in ARRAY_COMPONENTS:
             node = self.primitive_array_creation(token)
         elif (token.text == "new" and
               re.fullmatch(r"[A-Za-z_$][A-Za-z0-9_$]*", self.peek().text) and

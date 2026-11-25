@@ -13,7 +13,10 @@ from .floating_semantics import converted_constant, floating_binary, floating_li
 from .diagnostics import UnsupportedJava
 from .source_local_inference import LocalInferenceAnalyzer
 from .source_native_arrays import MAX_INITIALIZER_COMPONENTS, NativeArrayAnalyzer
-from .source_native_statics import StaticBinding, analyze_array_field, before_runtime_field, read_only_initializer
+from .source_native_statics import (
+    StaticBinding, analyze_array_field, analyze_blank_array_store, analyze_static_blocks,
+    before_runtime_field, read_only_initializer,
+)
 from .source_native_references import reference, resolve_named
 from .source_blank_final import check_blank_final_locals
 from .source_static_constructors import check_static_constructor_declarations
@@ -84,6 +87,11 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         self.method = None
         self.scopes = []
         self.controls = []
+        self.constant_locals = {}
+        self.blank_static_bindings = {}
+        self.native_initializer_state = None
+        self.native_initializer_assigned = set()
+        self.current_native_initializer = None
 
     def check_constructor_declarations(self):
         check_static_constructor_declarations(self.program)
@@ -108,8 +116,19 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             if field.token.text in self.fields:
                 field.token.error("duplicate field name " + field.token.text)
             self.fields[field.token.text] = field
+            if self.native_array_domain and field.initializer is None:
+                field.native_storage = StaticBinding(field, "blank")
+                self.blank_static_bindings[field.token.text] = field.native_storage
 
     def evaluate_field(self, field):
+        if self.native_array_domain and self.native_initializer_state is None and (
+                self.program.static_initializers or self.blank_static_bindings):
+            # A reference from another class may request an initializer
+            # before SourceProject's normal traversal reaches this owner.
+            analyze_static_blocks(self)
+            return field.constant
+        if self.native_array_domain and field.initializer is None:
+            return None
         if isinstance(field.dtype, NamedType):
             return self.evaluate_string_constant_field(field)
         state = self.field_states.get(field.token.text)
@@ -119,13 +138,16 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             field.token.error("cyclic field initialization requires the shared Java initialization contract", code="java.unsupported.cyclic-initialization")
         self.field_states[field.token.text] = "evaluating"
         previous = self.current_field
+        previous_scopes = self.scopes
         self.current_field = field
+        self.scopes = []  # Field declarations never see a block's local variables.
+        assigned = set(self.native_initializer_assigned)
         try:
             if self.native_array_domain and isinstance(field.dtype, ArrayType):
-                analyze_array_field(self, field, MAX_INITIALIZER_COMPONENTS)
+                analyze_array_field(self, field, MAX_INITIALIZER_COMPONENTS, assigned)
                 self.field_states[field.token.text] = "complete"
                 return None
-            self.expression(field.initializer, set())
+            self.expression(field.initializer, assigned)
             self.assignment_value(field.initializer, field.dtype)
             if field.initializer.constant is None:
                 if self.native_array_domain and read_only_initializer(field.initializer):
@@ -138,6 +160,7 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             return field.constant
         finally:
             self.current_field = previous
+            self.scopes = previous_scopes
 
     def evaluate_string_constant_field(self, field):
         """JLS 4.12.4/15.29 String constant variables, folded to source units.
@@ -239,11 +262,27 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         for scope in reversed(self.scopes):
             if token.text in scope:
                 return self.require_completed_local(scope[token.text], token)
+        binding = self.blank_static_assignment(token.text)
+        if binding is not None:
+            return binding
         field = (self.project.simple_field(self, token.text, token) if self.project is not None
                  else self.fields.get(token.text))
         if field is not None:
             token.error("cannot assign a final constant field " + token.text)
         token.error("undefined local variable " + token.text)
+
+    def blank_static_assignment(self, name):
+        # Only a simple-name assignment from the declaring class's own static
+        # block may bind a blank final. The normal local lookup wins first.
+        if self.current_native_initializer is not None and self.current_field is None:
+            return self.blank_static_bindings.get(name)
+        return None
+
+    def flow_variables(self):
+        variables = set(self.method.locals if self.method else ())
+        if self.native_initializer_state == "active":
+            variables.update(self.blank_static_bindings.values())
+        return variables
 
     def require_int(self, node):
         if node.dtype not in INTEGRAL:
@@ -327,9 +366,9 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         # Only actual constant expressions get vacuous outcomes. Assignment,
         # increment and method invocation are never constant expressions.
         if node.constant is True:
-            return set(assigned), set(self.method.locals if self.method else ())
+            return set(assigned), self.flow_variables()
         if node.constant is False:
-            return set(self.method.locals if self.method else ()), set(assigned)
+            return self.flow_variables(), set(assigned)
         if node.kind == "group":
             return self.truth_states(node.children[0], assigned)
         if node.kind == "unary" and node.value == "!":
@@ -370,6 +409,8 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
         binding = (next((scope[target.value] for scope in reversed(self.scopes)
                          if target.value in scope), None) if target.kind == "name" else None)
         self.require_completed_local(binding, target.token)
+        if binding is None and target.kind == "name":
+            binding = self.blank_static_assignment(target.value)
         if binding is None:
             if target.kind == "name":
                 # An unparenthesized qualified expression name is not initially
@@ -387,7 +428,7 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             node.token.error("field and array expression writes require the next variable-access domain",
                              code="java.unsupported.assignment-expression-target")
         node.symbol = binding
-        if self.native_array_domain:
+        if self.native_array_domain and not isinstance(binding, StaticBinding):
             self.reject_array_reassignment(node)
         if binding.dtype not in NUMERIC | {"boolean"}:
             node.token.error("reference expression writes require the next variable-access domain",
@@ -402,6 +443,8 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
 
     def check_assignment(self, node, assigned, rhs):
         if node.symbol.is_final and not (node.symbol.is_blank_final and node.value == "="):
+            if isinstance(node.symbol, StaticBinding):
+                node.token.error("cannot assign a final static field " + node.symbol.name)
             node.token.error("cannot assign an initialized final local or final parameter: " + node.symbol.name)
         if node.value != "=" and node.symbol not in assigned:
             node.token.error("local variable is not definitely assigned: " + node.symbol.name)
@@ -478,6 +521,17 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             if (self.current_field is not None and "." not in op and field.owner == self.program.name
                     and field.ordinal >= self.current_field.ordinal):
                 node.token.error("illegal forward or self reference in a static field initializer")
+            if self.native_initializer_state == "active" and field.owner == self.program.name:
+                block = self.current_native_initializer
+                if (self.current_field is None and block is not None and "." not in op
+                        and field.ordinal >= block.value):
+                    node.token.error("illegal forward reference in a static initializer")
+                blank = self.blank_static_bindings.get(field.token.text)
+                if blank is not None and blank not in assigned:
+                    if "." in op:
+                        node.token.error("qualified read before native static initialization needs default-field values",
+                                         code="java.unsupported.static-initialization")
+                    node.token.error("blank static final field " + blank.name + " is not definitely assigned before this read")
             node.symbol, node.dtype = field, field.dtype
             node.constant = self.project.analyzers[field.owner].evaluate_field(field)
             if self.native_array_domain and field.native_storage is not None:
@@ -493,6 +547,9 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                       else select_method(self.methods, node))
             if method is None:
                 node.token.error("unresolved same-class static method " + str(op))
+            if self.current_native_initializer is not None and self.current_field is None:
+                node.token.error("static initializer calls require managed exception and initialization propagation",
+                                 code="java.unsupported.static-initialization")
             node.dtype, node.symbol = method.result, method
             return
         if kind == "conditional":
@@ -651,12 +708,17 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
                              code="java.unsupported.runtime-statements")
         elif kind == "assign":
             node.symbol = self.lookup(node.token)
-            if self.native_array_domain:
-                self.reject_array_reassignment(node)
-            self.check_assignment(node, assigned, node.children)
+            if isinstance(node.symbol, StaticBinding) and isinstance(node.symbol.dtype, ArrayType):
+                analyze_blank_array_store(self, node, assigned, MAX_INITIALIZER_COMPONENTS)
+            else:
+                if self.native_array_domain and not isinstance(node.symbol, StaticBinding):
+                    self.reject_array_reassignment(node)
+                self.check_assignment(node, assigned, node.children)
         elif kind == "expression":
             self.expression(node.children[0], assigned)
         elif kind == "return":
+            if self.current_native_initializer is not None:
+                node.token.error("return is not permitted in a static initializer")
             if self.method.result == "void":
                 if node.children:
                     node.token.error("void method cannot return a value")
@@ -734,7 +796,7 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             outgoing = self.statement(body, assigned)
             self.controls.pop()
             test_paths = loop["continue"] + ([outgoing] if outgoing is not None else [])
-            test_state = set.intersection(*test_paths) if test_paths else set(self.method.locals)
+            test_state = set.intersection(*test_paths) if test_paths else self.flow_variables()
             _, when_false = self.condition(condition, test_state)
             paths = loop["break"] + ([when_false] if test_paths and condition.constant is not True else [])
             assigned = set.intersection(*paths) if paths else None
@@ -754,7 +816,7 @@ class SourceAnalyzer(NativeArrayAnalyzer, LocalInferenceAnalyzer):
             outgoing = self.statement(body, when_true)
             if update is not None:
                 paths = loop["continue"] + ([outgoing] if outgoing is not None else [])
-                state = set.intersection(*paths) if paths else set(self.method.locals)
+                state = set.intersection(*paths) if paths else self.flow_variables()
                 self.statement(update, state)
             self.controls.pop()
             paths = loop["break"] + ([] if condition.constant is True else [when_false])

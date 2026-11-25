@@ -98,19 +98,24 @@ def test_managed_reference_native_abi_restores_real_roots(tmp_path,monkeypatch):
         from tests.java.test_source_native_arrays import STATIC_FIELD_ORIGINAL
         from tests.java.test_source_constants import FORMER_STATIC_ARRAY
         from tests.java.test_source_static_member_classes import FORMER_NESTED_STATIC
+        from tests.java.test_source_static_initializers import STATIC_BLOCK_OWNERS
         executables = [exe]
         cases = [(label, {"ArrayExample.java": original}, "ArrayExample", 1)
                  for label, original in [*CLASS_ORIGINALS[:2], STATIC_FIELD_ORIGINAL]]
         cases += [("active-owner", {"Constants.java": FORMER_STATIC_ARRAY}, "Constants", 1),
-                  ("passive-nested-owner", FORMER_NESTED_STATIC, "p.Outer", 0)]
+                  ("passive-nested-owner", FORMER_NESTED_STATIC, "p.Outer", 0),
+                  ("static-block-owners", {"ArrayExample.java": STATIC_BLOCK_OWNERS}, "ArrayExample", 2)]
         for label, inputs, owner, roots in cases:
             compilation=compile_sources(inputs, entry_class=owner)
             assert compilation.managed_runtime
+            collect = "pcc_rt_managed_collect();" if label == "static-block-owners" else ""
             observer_text = ("extern int "+compilation.entry_symbol+"(void);"
+                "extern long pcc_rt_managed_collect(void);"
                 "extern long pcc_gc_scheduler_root_count(void);int main(void){"
                 "long initial=pcc_gc_scheduler_root_count();"
+                "if("+compilation.entry_symbol+"()!=42)return 66;"+collect+
                 "return ("+compilation.entry_symbol+"()==42 && "
-                +compilation.entry_symbol+"()==42 && pcc_gc_scheduler_root_count()==initial+"+str(roots)+")?0:66;}")
+                "pcc_gc_scheduler_root_count()==initial+"+str(roots)+")?0:66;}")
             path=tmp_path/(label+".o"); path.write_bytes(compilation.emit_object())
             client=evaluator.compile_translation_units([TranslationUnit("observe.c","observe.c",observer_text)],
                 use_system_cpp=False,use_compile_cache=False)

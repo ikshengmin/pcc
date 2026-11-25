@@ -115,7 +115,6 @@ def test_unused_static_array_is_not_dropped_when_its_class_is_active(monkeypatch
 
 @pytest.mark.parametrize("text,message", [
     (original("static int VALUE=42;", "return 42;"), "mutable static fields"),
-    (original("static final int VALUE;", "return 42;"), "blank final fields"),
     (original("static final int VALUE=f();", "return 42;", helpers="static int f(){return 7;}"), "nonconstant static initialization"),
     (original("static final boolean VALUE=false&&f();", "return 42;", helpers="static boolean f(){return true;}"), "nonconstant static initialization"),
     (original("static final int VALUE=Constants.VALUE;", "return 42;"), "cyclic field initialization"),
@@ -124,13 +123,23 @@ def test_unused_static_array_is_not_dropped_when_its_class_is_active(monkeypatch
     # without storage (test_source_string_constant_fields.py); other declared
     # String typing remains an explicit gap.
     (original('static String MESSAGE="unchanged";', "return 42;"), "reference fields require shared Java storage"),
-    (original("static { int value=42; }", "return 42;"), "source method results"),
 ])
 def test_runtime_or_lexical_boundaries_do_not_drop_original_declarations(text, message, monkeypatch):
     from pcc.frontends.java.source_lowering import SourceLowerer
     monkeypatch.setattr(SourceLowerer, "lower", lambda *args: pytest.fail("runtime-dependent declaration reached IR"))
     with pytest.raises(UnsupportedJava, match=message):
         compile_source(text)
+
+
+def test_former_blank_field_boundary_is_a_definite_assignment_error():
+    with pytest.raises(JavaError, match="not definitely assigned by a static initializer") as caught:
+        compile_source(original("static final int VALUE;", "return 42;"))
+    assert not isinstance(caught.value, UnsupportedJava)
+
+
+def test_former_static_block_boundary_emits_a_class_initialization_guard():
+    result = compile_source(original("static { int value=42; }", "return 42;"))
+    assert result.managed_runtime and "pcc_rt_java_class_enter" in str(result.module)
 
 
 PROJECT = {

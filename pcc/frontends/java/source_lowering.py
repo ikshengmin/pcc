@@ -120,14 +120,7 @@ class SourceLowerer:
             self.method = method
             self.builder = ir.IRBuilder(self.function.append_basic_block("entry"))
             self.references.begin_frame()
-            # Parameters borrow handles for the call. All other reference
-            # locals own exactly one root (initially null) until frame exit.
-            self.slots = {binding: (self.arrays.handle_slot(self.builder) if reference(binding.dtype)
-                                    else self.builder.alloca(self.scalar_type(binding.dtype),
-                                                             name="local_" + str(binding.slot)))
-                          for binding in method.locals}
-            self.array_slots = [self.slots[binding] for binding in method.locals[len(method.parameters):]
-                                if reference(binding.dtype)]
+            self.prepare_local_slots(method)
             for argument, binding in zip(self.function.args, method.locals):
                 self.builder.store(self.from_abi(argument, binding.dtype), self.slots[binding])
             self.statics.trigger(method.owner)
@@ -141,6 +134,16 @@ class SourceLowerer:
         return JavaCompilation(self.module, self.program.name, entry,
                                tuple((method.token.text, method.descriptor) for method in self.program.methods),
                                tuple(self.functions), managed_runtime=self.arrays.used)
+
+    def prepare_local_slots(self, method):
+        # Parameters borrow handles for the call. All other reference
+        # locals own exactly one root (initially null) until lexical retirement.
+        self.slots = {binding: (self.arrays.handle_slot(self.builder) if reference(binding.dtype)
+                                else self.builder.alloca(self.scalar_type(binding.dtype),
+                                                         name="local_" + str(binding.slot)))
+                      for binding in method.locals}
+        self.array_slots = [self.slots[binding] for binding in method.locals[len(method.parameters):]
+                            if reference(binding.dtype)]
 
     def array_index(self, node):
         # Bounds are proved in sema, but an expression such as Other.a.length
@@ -248,7 +251,7 @@ class SourceLowerer:
         raise AssertionError("unlowered typed source expression " + kind)
 
     def assignment(self, node, rhs):
-        slot = self.slots[node.symbol]
+        slot = self.statics.slot(node.symbol)
         old = None
         if node.value == "=":
             value = self.coerce(self.expression(rhs[0]), node.symbol.dtype)
@@ -307,7 +310,10 @@ class SourceLowerer:
                 self.builder.store(self.coerce(self.expression(node.children[0]), node.symbol.dtype), self.slots[node.symbol])
             return
         if kind == "assign":
-            self.assignment(node, node.children)
+            if isinstance(node.symbol, StaticBinding) and isinstance(node.symbol.dtype, ArrayType):
+                self.statics.store_reference(node.symbol, node.children[0])
+            else:
+                self.assignment(node, node.children)
             return
         if kind == "expression":
             child, = node.children

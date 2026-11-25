@@ -51,8 +51,6 @@ CAPABILITIES = [
     ("class Diagnostic{static Object run(){return null;}}", "source-dependency", "requires supplied source for Object"),
     ("class Diagnostic{static int[] values;}", "array-storage", "array fields require"),
     ("class Diagnostic{static int value;}", "static-initialization", "mutable static fields"),
-    ("class Constants{static { int value=42; }static int run(){return 42;}}", "static-initialization", "source method results"),
-    ("class Diagnostic{static final int value;}", "static-initialization", "blank final fields"),
     ("class Diagnostic{static final int value=f();static int f(){return 42;}}", "static-initialization", "nonconstant static initialization"),
     ("class Diagnostic{static final int value=Diagnostic.value;}", "cyclic-initialization", "cyclic field initialization"),
     (original("return 1/0;"), "arithmetic-exception", "ArithmeticException"),
@@ -72,6 +70,17 @@ def test_null_original_is_an_invalid_int_result_not_an_unavailable_reference_exp
     with pytest.raises(JavaError, match="integer value required") as caught:
         compile_source(original("return null;"))
     assert type(caught.value) is JavaError
+
+
+def test_former_static_block_diagnostic_now_reaches_owned_ir():
+    source = "class Constants{static { int value=42; }static int run(){return 42;}}"
+    assert "pcc_rt_java_class_publish" in str(compile_source(source).module)
+
+
+def test_former_blank_static_field_diagnostic_is_an_ordinary_error():
+    with pytest.raises(JavaError, match="not definitely assigned by a static initializer") as caught:
+        compile_source("class Diagnostic{static final int value;}")
+    assert type(caught.value) is JavaError and caught.value.code is None
 
 
 # The original inputs are retained verbatim as acceptance controls now that

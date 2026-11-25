@@ -21,9 +21,15 @@ class FlowPoint:
 
 
 class BlankFinalFlow:
-    def __init__(self, method):
-        self.bits = {binding: 1 << index for index, binding in enumerate(
-            binding for binding in method.locals if binding.is_blank_final)}
+    def __init__(self, method, *, static_bindings=None):
+        # A class initialization has the same must property across all blocks.
+        # Static fields are created before those blocks, not regenerated at a
+        # local scope's entry or on a loop backedge (JLS 16.8).
+        self.class_initializer = static_bindings is not None
+        self.static_bindings = frozenset(static_bindings or ())
+        bindings = [binding for binding in method.locals if binding.is_blank_final]
+        bindings.extend(static_bindings or ())
+        self.bits = {binding: 1 << index for index, binding in enumerate(bindings)}
         self.universe = (1 << len(self.bits)) - 1
         self.points = []
         self.writes = []
@@ -100,8 +106,11 @@ class BlankFinalFlow:
             yes, no = self.condition(node.children[0], incoming)
             return self.point(self.expression(node.children[1], yes),
                               self.expression(node.children[2], no))
-        if node.kind not in {"bool", "integer", "floating", "char", "name", "call",
-                             "group", "cast", "unary", "binary", "mutation"}:
+        supported = {"bool", "integer", "floating", "char", "name", "call",
+                     "group", "cast", "unary", "binary", "mutation"}
+        if self.class_initializer:
+            supported |= {"null", "array_initializer", "array_new", "array_access", "array_length", "array_place"}
+        if node.kind not in supported:
             node.token.error("blank final locals require flow rules for this expression domain",
                              code="java.unsupported.blank-final-local")
         for child in node.children:
@@ -189,6 +198,13 @@ class BlankFinalFlow:
                     self.edge(self.statement(update, continuation), head)
             self.edge(when_false, exit_point)
             return exit_point
+        if kind == "enhanced_for" and self.class_initializer:
+            _, expression, body = node.children
+            head = self.point(self.expression(expression, incoming))
+            exit_point = self.point(head)
+            self.targets[id(node)] = {"break": exit_point, "continue": head}
+            self.edge(self.statement(body, head), head)
+            return exit_point
         if kind in {"break", "continue"}:
             self.edge(incoming, self.targets[id(node.control_target)][kind])
             return None
@@ -220,7 +236,8 @@ class BlankFinalFlow:
                         work.append(successor)
         for index, node, bit in self.writes:
             if not before[index] & bit:
-                node.token.error("blank final local is not definitely unassigned before this assignment: "
+                category = "static field" if node.symbol in self.static_bindings else "local"
+                node.token.error("blank final " + category + " is not definitely unassigned before this assignment: "
                                  + node.symbol.name)
 
 

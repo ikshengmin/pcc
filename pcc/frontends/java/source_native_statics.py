@@ -2,9 +2,10 @@
 
 JLS 8.3.2, 8.3.3, 12.4.1 and 12.4.2. Only the supplied ordinary-static
 class domain participates. Runtime fields are initialized in textual order,
-never at link time. The bounded first lane has no Java callbacks during class
-initialization. It admits constant primitive array initializers, immutable
-aliases to prior initialized arrays, and pure reads of prior own class fields.
+never at link time. The bounded lane has no Java callbacks during class
+initialization. It admits scalar statements in static blocks, blank-final
+stores, existing primitive array initialization, and aliases to rooted arrays
+with a common proven extent. It does not extend the shared object ABI.
 It does not infer a superclass initializer, a null length, or an exception ABI.
 """
 from dataclasses import dataclass
@@ -12,6 +13,10 @@ from dataclasses import dataclass
 from pcc.ir.compat import ir
 
 from .integer_semantics import wrap_integer
+from .source_blank_final import BlankFinalFlow
+from .source_class_initialization import ordered_static_steps
+from .source_native_references import reference
+from .source_syntax import Node, SourceMethod
 from .source_types import ArrayType
 
 
@@ -28,6 +33,14 @@ class StaticBinding:
     @property
     def name(self):
         return self.field.token.text
+
+    @property
+    def is_final(self):
+        return True
+
+    @property
+    def is_blank_final(self):
+        return self.field.initializer is None
 
 
 def gap(token, reason):
@@ -66,6 +79,9 @@ def before_runtime_field(analyzer, field, node):
         # and other class initializers can execute user code. Neither proves
         # that this field already contains its final, non-null binding.
         gap(node.token, "runtime field initializer requires a previously initialized field of the same class")
+    block = analyzer.current_native_initializer
+    if current is None and block is not None and (field.owner != analyzer.program.name or field.ordinal >= block.value):
+        gap(node.token, "static block requires a previously initialized field of the same class")
 
 
 def read_only_initializer(node):
@@ -82,37 +98,111 @@ def read_only_initializer(node):
     return False
 
 
-def analyze_array_field(analyzer, field, maximum):
-    term = ungroup(field.initializer)
-    dtype = field.dtype
+def analyze_static_array_value(analyzer, dtype, initializer, assigned, maximum, *, declaration):
+    """Check a value for an existing native primitive-array owner slot."""
+    term = ungroup(initializer)
     if term.kind not in {"array_initializer", "array_new"}:
-        analyzer.expression(field.initializer, set())
-        analyzer.assignment_value(field.initializer, dtype)
-        if term.kind != "name" or not isinstance(term.symbol, StaticBinding) or term.symbol.length is None:
-            gap(term.token, "static array alias requires an earlier, non-null initialized array field")
-        field.native_storage = StaticBinding(field, "alias", term.symbol.length)
-        return
+        analyzer.expression(initializer, assigned)
+        analyzer.assignment_value(initializer, dtype)
+        binding = term.symbol if term.kind == "name" else None
+        length = (binding.length if isinstance(binding, StaticBinding) else
+                  analyzer.method.array_lengths.get(binding) if analyzer.method is not None else None)
+        if length is None or declaration and not isinstance(binding, StaticBinding):
+            gap(term.token, "static array alias requires an earlier, non-null initialized array with a proven extent")
+        return "alias", length
     if term.value != dtype:
         term.token.error("incompatible primitive array component type")
     if term.kind == "array_new":
         dim, = term.children
-        analyzer.expression(dim, set())
+        analyzer.expression(dim, assigned)
         if dim.dtype not in {"byte", "short", "char", "int"}:
             dim.token.error("array dimension must promote to int")
-        length = proven_index(dim, None)
-        if length is None or not read_only_initializer(dim) or not 0 <= length <= maximum:
+        length = proven_index(dim, analyzer.method)
+        if length is None or declaration and not read_only_initializer(dim) or not 0 <= length <= maximum:
             gap(dim.token, "static array dimension requires a bounded proven nonnegative length")
     else:
         length = len(term.children)
         if length > maximum:
             gap(term.token, "static array initializer exceeds the bounded component count")
         for component in term.children:
-            analyzer.expression(component, set())
+            analyzer.expression(component, assigned)
             analyzer.assignment_value(component, dtype.component)
-            if not read_only_initializer(component):
+            if declaration and not read_only_initializer(component):
                 gap(component.token, "static array initializer with user effects requires managed exception/initialization propagation")
     term.dtype = dtype
-    field.native_storage = StaticBinding(field, "array", length)
+    return "array", length
+
+
+def analyze_array_field(analyzer, field, maximum, assigned):
+    mode, length = analyze_static_array_value(analyzer, field.dtype, field.initializer,
+                                             assigned, maximum, declaration=True)
+    field.native_storage = StaticBinding(field, mode, length)
+
+
+def analyze_blank_array_store(analyzer, node, assigned, maximum):
+    binding = node.symbol
+    if node.value != "=":
+        node.token.error("cannot assign a final static array with a compound operation")
+    _, length = analyze_static_array_value(analyzer, binding.dtype, node.children[0],
+                                           assigned, maximum, declaration=False)
+    # A static slot's proven length is used by every subsequent native read,
+    # including reads in separate methods. Never let one control-flow path
+    # silently replace another path's extent proof.
+    if binding.length is not None and binding.length != length:
+        gap(node.token, "blank static array assignments require a common proven extent")
+    binding.length = length
+    assigned.add(binding)
+
+
+def analyze_static_blocks(analyzer):
+    """Check the actual native class-initialization body using ordinary sema.
+
+    All blocks share one DA/DU universe, with lexical local scopes at each
+    block. Nonconstant field declarations retain the existing no-callback
+    expression contract and execute interleaved with those blocks.
+    """
+    program = analyzer.program
+    if (not analyzer.native_array_domain or analyzer.native_initializer_state is not None
+            or not (program.static_initializers or analyzer.blank_static_bindings)):
+        return
+    analyzer.native_initializer_state = "active"
+    body = Node("block", program.token, children=list(program.static_initializers))
+    method = SourceMethod(program.token, "void", (), body, owner=program.name,
+                          modifiers=frozenset({"static"}))
+    previous = analyzer.method, analyzer.scopes, analyzer.controls, analyzer.constant_locals
+    analyzer.method = method
+    analyzer.scopes, analyzer.controls, analyzer.constant_locals = [{}], [], {}
+    analyzer.reset_native_arrays(method)
+    method.static_block_locals = {}
+    blanks = set(analyzer.blank_static_bindings.values())
+    assigned = set()
+    try:
+        for step in ordered_static_steps((*program.fields, *program.static_initializers)):
+            analyzer.native_initializer_assigned = assigned
+            if hasattr(step, "ordinal"):
+                analyzer.evaluate_field(step)
+                continue
+            analyzer.current_native_initializer = step
+            start = len(method.locals)
+            try:
+                outgoing = analyzer.statement(step, assigned)
+            finally:
+                analyzer.current_native_initializer = None
+            if outgoing is None:
+                step.token.error("static initializer must be able to complete normally")
+            method.static_block_locals[id(step)] = tuple(method.locals[start:])
+            assigned = outgoing & blanks
+        if blanks or any(binding.is_blank_final for binding in method.locals):
+            BlankFinalFlow(method, static_bindings=tuple(analyzer.blank_static_bindings.values())).check(body)
+        for binding in analyzer.blank_static_bindings.values():
+            if binding not in assigned:
+                binding.field.token.error("blank static final field " + binding.name
+                                          + " is not definitely assigned by a static initializer")
+        program.native_initializer = method
+        analyzer.native_initializer_state = "complete"
+    finally:
+        analyzer.native_initializer_assigned = set()
+        analyzer.method, analyzer.scopes, analyzer.controls, analyzer.constant_locals = previous
 
 
 def start_node(analyzer, original):
@@ -159,9 +249,9 @@ class NativeStatics:
         lower = self.lower
         for program in lower.programs:
             fields = [f for f in program.fields if f.native_storage is not None]
-            if not fields:
+            if not fields and not program.static_initializers:
                 continue
-            lower.arrays.require_target(fields[0].token)
+            lower.arrays.require_target(fields[0].token if fields else program.static_initializers[0].token)
             lower.arrays.used = True
             owner = program.name
             name = "__pcc_java_static_" + owner.encode().hex()
@@ -205,11 +295,29 @@ class NativeStatics:
         state = lower.builder.bitcast(self.states[self.initializing], lower.references.pointer)
         return lower.builder.call(fn, [state, ir.Constant(lower.i32, int(ok))])
 
+    def store_reference(self, binding, initializer):
+        """Publish the existing owning handle to a one-assignment static slot."""
+        lower = self.lower
+        b = lower.builder
+        slot = self.slots[binding]
+        term = ungroup(initializer)
+        if term.kind in {"array_initializer", "array_new"}:
+            # The field is not visible until after the complete initializer;
+            # the same temporary-root handoff is used for block stores.
+            temporary = lower.arrays.handle_slot(b)
+            lower.arrays.allocate_initializer(binding.field.token, binding.dtype, term, temporary)
+            b.store(b.load(temporary), slot)
+            b.store(ir.Constant(lower.references.pointer, None), temporary)
+        else:
+            b.store(lower.references.own(initializer), slot)
+
     def emit_initializer(self, program):
         lower = self.lower
         owner = self.initializing = program.name
         fn = lower.function = self.guards[owner]
-        lower.method = None
+        lower.method = program.native_initializer
+        lower.result_type = "void"
+        lower.control_blocks = {}
         lower.slots = {}
         lower.array_slots = []
         lower.builder = b = ir.IRBuilder(fn.append_basic_block("entry"))
@@ -225,22 +333,22 @@ class NativeStatics:
         b.position_at_end(notnew)
         b.cbranch(b.icmp_signed("==", status, ir.Constant(lower.i32, 0)), done, failed)
         b.position_at_end(todo)
-        for f in program.fields:
-            binding = f.native_storage
+        if lower.method is not None:
+            lower.prepare_local_slots(lower.method)
+        for step in ordered_static_steps((*program.fields, *program.static_initializers)):
+            if not hasattr(step, "ordinal"):
+                lower.statement(step)
+                # Each static block has its own lexical root retirement.
+                lower.arrays.drop_all([lower.slots[binding] for binding in lower.method.static_block_locals[id(step)]
+                                       if reference(binding.dtype)])
+                continue
+            binding = step.native_storage
             if binding is None:
                 continue
-            slot = self.slots[binding]
-            if binding.mode == "array":
-                # JLS 10.6/8.3.2: root the fresh allocation while filling it,
-                # publish to the Java field only after the initializer ends.
-                temporary = lower.arrays.handle_slot(b)
-                lower.arrays.allocate_initializer(f.token, f.dtype, ungroup(f.initializer), temporary)
-                b.store(b.load(temporary), slot)
-                b.store(ir.Constant(lower.references.pointer, None), temporary)
-            elif binding.mode == "alias":
-                b.store(lower.references.own(f.initializer), slot)
+            if isinstance(binding.dtype, ArrayType):
+                self.store_reference(binding, step.initializer)
             else:
-                b.store(lower.coerce(lower.expression(f.initializer), f.dtype), slot)
+                b.store(lower.coerce(lower.expression(step.initializer), step.dtype), self.slots[binding])
         completed = self.publish(True)
         b.cbranch(b.icmp_signed("==", completed, ir.Constant(lower.i32, 0)), done, failed)
         b.position_at_end(failed)

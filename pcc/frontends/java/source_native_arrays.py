@@ -182,6 +182,9 @@ class NativeArrayAnalyzer:
         if node.kind == "array_initializer":
             node.token.error("array initializers are admitted only in top-level array local declarations",
                              code="java.unsupported.array-storage")
+        if node.kind == "array_new":
+            node.token.error("array creation needs a declaration or static field store with native root ownership",
+                             code="java.unsupported.array-storage")
         return False
 
     def native_array_store(self, node, assigned):

@@ -275,12 +275,17 @@ def _textual_position(item):
     return (item.ordinal, 1) if _is_field(item) else (item.value, 0)
 
 
+def ordered_static_steps(items):
+    """Shared JLS 12.4.2 step-9 source order, including successive static blocks."""
+    return tuple(sorted((item for item in items if not _is_field(item) or item.initializer is not None),
+                        key=_textual_position))
+
+
 def class_initialization_plan(program, recorded):
     """Step-9 steps (initialized fields and static blocks) in textual order,
     the static slots they initialize (including blank finals) and the shared
     obligation."""
-    steps = tuple(sorted((item for item in recorded if not _is_field(item) or item.initializer is not None),
-                         key=_textual_position))
+    steps = ordered_static_steps(recorded)
     if not steps:
         return (), (), ()
     fields = sorted((item for item in recorded if _is_field(item)), key=lambda field: field.ordinal)

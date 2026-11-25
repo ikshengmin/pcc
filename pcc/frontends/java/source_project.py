@@ -10,6 +10,7 @@ remain explicit unsupported domains.
 from .diagnostics import UnsupportedJava
 from .source_sema import SourceAnalyzer
 from .source_native_references import reference, resolve_named
+from .source_native_statics import analyze_static_blocks
 from .source_types import DECLARED, select_method
 from .source_member_types import StaticMemberTypes
 
@@ -288,6 +289,7 @@ class SourceProject(StaticMemberTypes):
 
     def analyze(self):
         for analyzer in self.analyzers.values():
+            analyze_static_blocks(analyzer)
             for field in analyzer.program.fields:
                 analyzer.evaluate_field(field)
         for analyzer in self.analyzers.values():
