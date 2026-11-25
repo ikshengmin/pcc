@@ -190,6 +190,11 @@ class _Flow:
                             'pcc_gc_root_move') and len(args) == 2:
                 for destination in _tokens(args[0]):
                     self._edge('*' + destination, {'*' + token for token in _tokens(args[1])})
+            elif (callee == 'pcc_gc_root_copy_local' and len(args) == 3
+                  and args[2] in ('i64 0', 'i64 1')):
+                # The private-root copy retains the exact source value.
+                for destination in _tokens(args[0]):
+                    self._edge('*' + destination, {'*' + token for token in _tokens(args[1])})
             elif callee in ('pcc_gc_load_ptr', 'pcc_gc_load_borrowed_ptr') and len(args) == 2 and result:
                 self._edge(result, {'*' + token for token in _tokens(args[1])})
             elif ((callee == 'pcc_gc_take_pinned_slot' and len(args) == 2)
@@ -197,8 +202,8 @@ class _Flow:
                 # Compiled code takes through pcc_gc_take_slot; runtime
                 # modules still use pcc_gc_take_pinned_slot (item 2 (d)).
                 self._edge(result, {'*' + token for token in _tokens(args[0])})
-            elif callee == 'pcc_gc_retain' and len(args) == 1 and result:
-                # An owned reference to the same object: incref, return the argument.
+            elif callee in ('pcc_gc_retain', 'pcc_gc_resolve_owned_ptr') and len(args) == 1 and result:
+                # Retain/resolution of an owned value preserves object identity.
                 self._edge(result, _tokens(args[0]))
         # Address aliases also name the same root contents.
         for destination, sources in tuple(self.edges.items()):
@@ -231,6 +236,30 @@ class _Flow:
         return bool(self.ancestors(argument, rooted=rooted) & identities)
 
 
+def _loaded_method_self_flag(body, flow, argument, slot):
+    """Require the exact null-test of this load_method's out_self slot."""
+    assigned = {}
+    for line in body.splitlines():
+        match = re.match(r'\s*(%[^=]+?)\s*=\s*(.*)', line)
+        if match:
+            tokens = _tokens(match[1])
+            if len(tokens) == 1:
+                assigned[next(iter(tokens))] = match[2]
+    flag = _tokens(argument)
+    if len(flag) != 1:
+        return False
+    extension = re.fullmatch(r'zext i1 (.+) to i64', assigned.get(next(iter(flag)), ''))
+    if extension is None:
+        return False
+    condition = _tokens(extension[1])
+    if len(condition) != 1:
+        return False
+    comparison = re.fullmatch(r'icmp ne ptr (.+), null', assigned.get(next(iter(condition)), ''))
+    if comparison is None:
+        return False
+    return flow.reaches(comparison[1], {'*' + token for token in _tokens(slot)})
+
+
 def _dynamic_attribute_call(section, body, attribute, *, receiver=None):
     flow = _Flow(body)
     names = _literal_symbols(section, attribute)
@@ -239,6 +268,12 @@ def _dynamic_attribute_call(section, body, attribute, *, receiver=None):
                 and flow.reaches(args[1], names)
                 and (receiver is None or flow.reaches(args[0], receiver))):
             for _output, sink, operands, _ in flow.calls:
+                if (callee == 'py_obj_load_method' and len(args) == 3
+                        and sink == 'py_obj_call_loaded_method' and len(operands) == 4
+                        and flow.reaches(operands[0], {result})
+                        and flow.reaches(operands[1], flow.ancestors(args[0]))
+                        and _loaded_method_self_flag(body, flow, operands[3], args[2])):
+                    return result
                 if (sink in ('py_obj_call', 'py_obj_call_method', 'py_obj_call_method_kwargs',
                              'py_obj_call_slots', 'py_obj_call_slots_sync') and operands
                         and flow.reaches(operands[0], {result}, rooted='_slots' in sink)):

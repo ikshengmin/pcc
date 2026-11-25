@@ -824,3 +824,38 @@ def _check_real_three_argument_method_bindings_use_both_signature_representation
             helper(section, body, symbol)
     return {"static": static, "constructor": constructor, "ir_bytes": output.stat().st_size,
             "ir_sha256": hashlib.sha256(section.encode()).hexdigest(), "native_execution": False}
+
+
+@pytest.mark.parametrize('damage', ('none', 'wrong_attribute', 'detached_callable',
+                                    'detached_receiver', 'detached_flag', 'copy_wrong_source'))
+def test_loaded_method_local_root_protocol_preserves_real_binding(damage):
+    pool = _Pool()
+    name = pool.name('call')
+    pool.name('other')
+    body = f"""
+  store ptr %owner, ptr %owner_root
+  %status = call i64 @pcc_gc_root_copy_local(ptr %receiver_root, ptr %owner_root, i64 1)
+  %receiver = load ptr, ptr %receiver_root
+  %method = call ptr (ptr, ptr, ptr) @py_obj_load_method(ptr %receiver, ptr {name}, ptr %out_self)
+  store ptr %method, ptr %method_root
+  %bound = load ptr, ptr %out_self
+  %has_self = icmp ne ptr %bound, null
+  %flag = zext i1 %has_self to i64
+  %callee = load ptr, ptr %method_root
+  %receiver2 = load ptr, ptr %receiver_root
+  call ptr (ptr, ptr, ptr, i64) @py_obj_call_loaded_method(ptr %callee, ptr %receiver2, ptr %args, i64 %flag)
+"""
+    replacements = {
+        'wrong_attribute': (name, pool.name('other')),
+        'detached_callable': ('ptr %callee, ptr %receiver2', 'ptr %foreign, ptr %receiver2'),
+        'detached_receiver': ('ptr %callee, ptr %receiver2', 'ptr %callee, ptr %foreign'),
+        'detached_flag': ('i64 %flag)', 'i64 1)'),
+        'copy_wrong_source': ('ptr %owner_root, i64 1', 'ptr %other_root, i64 1'),
+    }
+    if damage != 'none':
+        old, new = replacements[damage]
+        body = body.replace(old, new)
+        with pytest.raises(AssertionError):
+            oracle._dynamic_attribute_call(pool.declarations, body, 'call', receiver={'%owner'})
+    else:
+        oracle._dynamic_attribute_call(pool.declarations, body, 'call', receiver={'%owner'})

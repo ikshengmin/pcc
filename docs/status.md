@@ -374,8 +374,21 @@ in the relevant section or issue and removes the entry.
    the ordinary representation (16 modules), compressed input totals
    1,549,152–2,036,400 bytes; final evidence JSON stays below 955 KiB.
    Not a hosted Stage1 or native-pcc1 gate qualification.
-   Next: native prior/changed-module and remaining source regressions;
-   inspect the current checkpoint before requesting a new one.
+   #20 worker prior strict-closure: hosted ARM artifact
+   `15029055172` (run `45619704293`) failed at the actual Windows-platform
+   owned method binding oracle, not memory or timeout:
+   `_declare_external_function: no bound owned attribute call`.
+   The current generated IR uses private root copy, loaded-method call
+   and an out-self null-test. The oracle now tracks those exact paths,
+   rejects detached callable/receiver/flag/copy source and still checks
+   the actual symbol, not a substring. Linux strict closure at
+   `e6e59a52` produced and whole-verified 796,825,537 bytes of IR.
+   Replayed the exact failing Windows-platform section through the fixed
+   oracle, owned parser/verifier, ordinary PIDX and real ELF emission
+   (123,304 bytes, required native symbols verified). 115 oracle tests
+   pass; full strict closure on the next hosted SHA remains unqualified.
+   Next: consume strict-closure/checkpoint results, then remaining
+   worker-prior/changed-module and independent Source failures.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -390,7 +403,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 strict closure failure: Codex, Linux, 2026-11-25T14:58Z, area selfhost
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
