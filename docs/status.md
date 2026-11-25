@@ -1412,6 +1412,22 @@ in the relevant section or issue and removes the entry.
    copies (coalescing) and immediate operands, then frameless functions,
    then the peepholes; each change measured with `instr` and gated by the
    native and bootstrap checks.
+   P0 technique log (each entry: mechanism, platforms, measured effect).
+   (a) Frameless atomic leaves (Claude, 2026-11-26): `_is_frameless_leaf`
+   (shared by the AArch64 Darwin and Linux backends) also admits
+   atomicrmw, store atomic, fence and a cmpxchg read through its one
+   following extractvalue, all of which lower to registers only, so such a
+   leaf drops its frame record and pointer authentication. Measured with
+   `instr` (load 7.3): 268344 -> 267730 instructions per request (-0.23%,
+   inside the 0.86% run spread), cycles +1.75%: few hot helpers are leaves,
+   because most call another function or reach a thread-local through
+   `_tlv_get_addr`. Not merged; the patch and its test are kept outside the
+   repository for A1, after which thread-local users such as the container
+   lock become leaves. The x86-64 backend (Linux, Windows) keeps its own
+   frame rules and needs the same check. The frame category's weight sits
+   in non-leaf functions: clang builds the frame only on the paths that
+   call (shrink-wrapping the frame record) and signs no non-leaf return;
+   that is the next frame item.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).

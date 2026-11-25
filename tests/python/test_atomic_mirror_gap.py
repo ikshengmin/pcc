@@ -158,17 +158,16 @@ def test_pcc_unsafe_atomic_surface_is_pinned():
     [
         (
             "py_gc_backend.py",
+            # Its 64-bit atomic stores and compare-exchanges went with
+            # collectors 1-4; the remaining forms are still explicit.
             (
                 "load atomic i32",
                 "store atomic i32",
                 "atomicrmw add ptr",
                 "load atomic i64",
-                "store atomic i64",
-                "cmpxchg ptr",
                 " monotonic",
                 " acquire",
                 " release",
-                " acq_rel acquire",
             ),
         ),
         ("py_gc_telemetry.py", ("load atomic i32", " monotonic")),

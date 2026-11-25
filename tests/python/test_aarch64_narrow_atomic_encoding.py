@@ -106,9 +106,10 @@ def test_direct_narrow_atomic_word_matches_text_without_fallback(mnemonic, base)
 def test_invalid_narrow_direct_register_cannot_publish_a_word(mnemonic):
     begin_direct_instruction_capture()
     try:
-        line = emitted_memory_instruction_line(mnemonic, "x3", "x6")
-        assert len(borrow_direct_instruction_records()) == 0
+        # The emitter now refuses the x register itself, before any word or
+        # text exists; nothing is captured either way.
         with pytest.raises(EncodeError):
-            assemble_text(line)
+            emitted_memory_instruction_line(mnemonic, "x3", "x6")
+        assert len(borrow_direct_instruction_records()) == 0
     finally:
         end_direct_instruction_capture()

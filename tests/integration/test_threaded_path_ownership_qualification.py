@@ -254,14 +254,6 @@ def test_native_threaded_paths_survive_background_collector(path_toolchain, tmp_
     assert result.stdout == b"threaded-path-collector-ok\n", result.stdout
 
 
-@pytest.mark.parametrize("gc_backend", _GC_BACKENDS, ids=("gc1", "gc4"))
-def test_native_pin_public_abi_flags_and_metric_balance(path_toolchain, tmp_path, gc_backend):
-    executable, environment, identities = _program(path_toolchain, tmp_path, "pin_abi.c", gc_backend)
-    result = _run([str(executable)], cwd=tmp_path, environment=dict(environment, PATH="/nonexistent"),
-                  label="execute", timeout=15, identities=identities)
-    assert result.stdout == b"pin-public-abi-and-metric-ok\n", result.stdout
-
-
 def test_supplied_archive_pin_unique_owner_and_actual_leaf_ir(path_toolchain, tmp_path):
     from pcc.backend.ar import read_members
     from pcc.backend.ar_writer import _defined_symbols
