@@ -16,7 +16,6 @@ from pcc.backend import BackendUnavailable
 from pcc.backend import self_backend_x86_64_linux as x86
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_context import build_closed_world_context
-from pcc.frontends.python.pipeline_frontend_worker_execution import _concrete_direct_indexed_target
 from pcc.frontends.python.type_infer import infer_module
 
 _SOURCE = """
@@ -35,7 +34,7 @@ print(f('3'), g({'a': 1}, 'b'))
 """
 
 
-def _direct_module(tmp_path, monkeypatch):
+def _direct_module(tmp_path, monkeypatch, triple):
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_CAPTURE", "1")
     monkeypatch.setenv("PCC_DIRECT_INDEXED_KERNEL_EMIT", "1")
     monkeypatch.setenv("PCC_DIRECT_INLINE_ERROR_EDGE_CAPTURE", "1")
@@ -46,8 +45,11 @@ def _direct_module(tmp_path, monkeypatch):
     typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
     codegen._strict_no_libpython = True
+    codegen.module.triple = triple
     codegen.generate(typed)
-    return codegen._direct_indexed_module
+    module = codegen._direct_indexed_module
+    assert module.triple == triple
+    return module
 
 
 def _function_body(asm, name):
@@ -57,7 +59,7 @@ def _function_body(asm, name):
 
 @pytest.mark.parametrize("triple", ["x86_64-unknown-linux-gnu", "x86_64-pc-windows-msvc"])
 def test_every_inline_edge_branches_after_its_check(tmp_path, monkeypatch, triple):
-    module = _concrete_direct_indexed_target(_direct_module(tmp_path, monkeypatch), triple)
+    module = _direct_module(tmp_path, monkeypatch, triple)
     edge_counts = {}
     edge_targets = {}
     for function in module.functions:
@@ -96,8 +98,7 @@ def test_every_inline_edge_branches_after_its_check(tmp_path, monkeypatch, tripl
 
 
 def test_shared_emitter_refuses_edges_it_cannot_emit(tmp_path, monkeypatch):
-    module = _concrete_direct_indexed_target(
-        _direct_module(tmp_path, monkeypatch), "x86_64-unknown-linux-gnu")
+    module = _direct_module(tmp_path, monkeypatch, "x86_64-unknown-linux-gnu")
     monkeypatch.setattr(x86, "_emit_indexed_error_edge", None)
     with pytest.raises(BackendUnavailable, match="does not support inline error edges"):
         x86._emit_x86_64_module("", module=module)
@@ -110,7 +111,7 @@ def test_real_module_object_matches_two_pass_assembler(tmp_path, monkeypatch, tr
     from pcc.backend import x86_64_asm_driver as assembler
     from tests.python.test_x86_64_parse_buffer_publication import _two_pass
 
-    module = _concrete_direct_indexed_target(_direct_module(tmp_path, monkeypatch), triple)
+    module = _direct_module(tmp_path, monkeypatch, triple)
     windows = "windows" in triple
     asm = x86._emit_x86_64_module("", windows=windows, module=module)
     objects = []

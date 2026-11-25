@@ -16,7 +16,6 @@ from pcc.backend.precise_stackmap import PRECISE_STACKMAP_TABLES_ENV
 from pcc.backend import target_objects
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_context import build_closed_world_context
-from pcc.frontends.python.pipeline_frontend_worker_execution import _concrete_direct_indexed_target
 from pcc.frontends.python.type_infer import infer_module
 
 _EDGES = """
@@ -89,8 +88,13 @@ def _direct_module(source, monkeypatch, triple):
     typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
     codegen._strict_no_libpython = True
+    # Lower under the requested ABI; rebinding an already concrete capture
+    # would compare host-target IR with the foreign backend.
+    codegen.module.triple = triple
     codegen.generate(typed)
-    return _concrete_direct_indexed_target(codegen._direct_indexed_module, triple)
+    module = codegen._direct_indexed_module
+    assert module.triple == triple
+    return module
 
 
 @pytest.mark.parametrize("tables", ["0", "1"], ids=["default", "stack-map-tables"])

@@ -345,7 +345,6 @@ def test_indexed_decoder_bound_precedes_materialization(monkeypatch, raw_modules
 def test_real_frontend_inline_witness_is_not_a_text_projection(tmp_path, monkeypatch):
     from pcc.frontends.python.codegen.layer1 import L1CodeGen
     from pcc.frontends.python.pipeline_context import build_closed_world_context
-    from pcc.frontends.python.pipeline_frontend_worker_execution import _concrete_direct_indexed_target
     from pcc.frontends.python.type_infer import infer_module
     from tests.python.two_root_lifecycle_support import TRACING_TWO_ROOT_PROGRAM
 
@@ -361,10 +360,11 @@ def test_real_frontend_inline_witness_is_not_a_text_projection(tmp_path, monkeyp
     typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
     codegen._strict_no_libpython = True
+    codegen.module.triple = "x86_64-unknown-linux-gnu"
     codegen.module._direct_indexed_retain_text = False
     assert codegen._generate_initial_module() == ""
-    module = _concrete_direct_indexed_target(codegen._direct_indexed_module,
-                                            "x86_64-unknown-linux-gnu")
+    module = codegen._direct_indexed_module
+    assert module.triple == "x86_64-unknown-linux-gnu"
     assert sum(len(get_indexed_function_kernel(function).error_edge_scalars)
                for function in module.functions) > 0
     raw = _raw(tmp_path, module)

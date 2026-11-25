@@ -18,7 +18,6 @@ from pcc.backend.self_backend_aarch64_darwin import (
 from pcc.backend.self_backend_prepare import prepare_parsed_module_for_target
 from pcc.frontends.python.codegen.layer1 import L1CodeGen
 from pcc.frontends.python.pipeline_context import build_closed_world_context
-from pcc.frontends.python.pipeline_frontend_worker_execution import _concrete_direct_indexed_target
 from pcc.frontends.python.type_infer import infer_module
 
 
@@ -34,8 +33,10 @@ def test_inline_edge_conditions_reuse_slots_across_call_sites(tmp_path, monkeypa
     typed = infer_module(modules[-1], external_exports=exports, derived_class_map=derived)
     codegen = L1CodeGen(typed, emit_cpy_main_exitcode=False, ir_scaffold_mode="on")
     codegen._strict_no_libpython = True
+    codegen.module.triple = "arm64-apple-darwin"
     codegen.generate(typed)
-    module = _concrete_direct_indexed_target(codegen._direct_indexed_module, "arm64-apple-darwin")
+    module = codegen._direct_indexed_module
+    assert module.triple == "arm64-apple-darwin"
     prepared = prepare_parsed_module_for_target(
         module,
         aggregate_returned_indirect=_aggregate_returned_indirect,

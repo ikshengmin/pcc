@@ -486,8 +486,22 @@ in the relevant section or issue and removes the entry.
    [#19](https://github.com/ikshengmin/pcc/issues/19) has matching hosted
    native callback evidence as recorded in Checkpoint above.
 
+   #20 cross-target indexed witnesses: six local Windows x86 red nodes
+   generated Linux IR first, then asked the placeholder-only target binder
+   to change its concrete ABI. All four fixture callers now select and
+   assert the target before lowering, including actual PE text/streamed
+   object, inline-edge and two-pass object parity and the Darwin slot-reuse
+   and x86 lifecycle witnesses. 17 affected tests pass (7.13 s,
+   119,037,952-byte peak, original 90 s / 1 GiB guard). The expanded
+   84-node batch retains six pre-existing lifecycle negative-test failures
+   (the unchanged file alone gives 62 pass / the same six fail); the
+   earlier verifier rejection is a separate witness task. Next: stale
+   SymbolMeta controls (weak field), remaining negative verifier witnesses,
+   and other independent CI failures. No production target or verifier
+   behavior was changed.
+
    Claims:
-   - #20 x86 and cross-target indexed fixture target before lowering: Codex, Linux x86-64, 2026-11-25T17:20Z, area backend
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
