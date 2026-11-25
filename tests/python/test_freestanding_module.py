@@ -562,9 +562,13 @@ def test_freestanding_process_entry_extern_requires_exact_c_abi(tmp_path):
 
 
 def test_freestanding_rejects_managed_runtime_and_allows_verified_local_calls(tmp_path):
+    from pcc.frontends.python.codegen.errors import L1CodegenError
+
+    # Code generation may refuse the managed construct before the IR
+    # verifier sees it; either way the module is rejected.
     with pytest.raises(
-        pipeline.PyPipelineError,
-        match="managed-runtime reference|outside its verified closure",
+        (pipeline.PyPipelineError, L1CodegenError),
+        match="managed-runtime reference|outside its verified closure|require the managed runtime",
     ):
         _compile_freestanding(
             tmp_path,
@@ -630,22 +634,6 @@ def test_freestanding_verified_local_gc_callback_address_is_not_an_external_esca
         "%" + re.escape(call[4][1][1]) + r" = bitcast [^\n]*@pcc_gc_local_callback to ptr",
         _function_body(ir_text, "pcc_gc_local_callback_probe"),
     )
-
-
-def test_freestanding_allows_exact_readonly_gc_runtime_abi_import(tmp_path):
-    ir_text = _compile_freestanding(
-        tmp_path,
-        "from pcc.extern import c_abi_export, c_int64, extern\n"
-        "__pcc_freestanding__ = True\n"
-        "metric = extern(\n"
-        "    'pcc_gc_backend4_fragmentation_score', (), c_int64\n"
-        ")\n"
-        "@c_abi_export('read_fragmentation')\n"
-        "def read_fragmentation() -> i64:\n"
-        "    return metric()\n",
-    )
-    body = _function_body(ir_text, 'read_fragmentation')
-    _assert_call(ir_text, "read_fragmentation", "pcc_gc_backend4_fragmentation_score", "i64")
 
 
 def test_freestanding_allows_only_registered_gc_cross_object_abi_imports(tmp_path):
@@ -801,9 +789,11 @@ def test_freestanding_readonly_gc_registry_is_a_static_pcc1_import():
     assert "is_freestanding_gc_readonly_runtime_import" in (
         exports["pcc.frontends.python.codegen.runtime_abi"]
     )
+    # The one collector has no read-only metric queries left to admit; a
+    # removed collector's metric is not admitted.
     assert freestanding_readonly_gc_runtime_imports(
         "metric = extern('pcc_gc_relocation_set_size', (), c_int64)"
-    ) == {"pcc_gc_relocation_set_size"}
+    ) == set()
 
 
 def test_freestanding_cross_object_gc_registry_is_a_static_pcc1_import():
@@ -876,7 +866,9 @@ def test_freestanding_accepts_generated_abi_constants_as_compile_time_scaffold(
         python_library=True,
     )
     ir_text = out.read_text(encoding="utf-8")
-    assert _function(ir_text, "pcc_gc_tracing_is_sweep_candidate").ret_type.bits == 64
+    # pcc_gc_clear_container_metadata compares against the generated
+    # PY_TYPE_* constants.
+    assert _function(ir_text, "pcc_gc_clear_container_metadata") is not None
     managed_calls = [
         line
         for line in ir_text.splitlines()

@@ -603,19 +603,24 @@ class Graph:
     def __del__(self):
         global released
         released += 1
+class LinkError(Exception):
+    pass
 def _validate_minos(value):
     return value
 def prepare_executable_object(objects, *, archives, semantic_manifest, _consume_inputs,
-                              _source_view=False, archive_selections=None):
+                              _source_view=False, archive_selections=None,
+                              required_symbols=(), runtime_main=False):
     return Graph()
-def _prepare_executable_image(merged, *, entry, minos, identifier, link_receipt=None):
+def _prepare_executable_image(merged, *, entry, minos, identifier, link_receipt=None,
+                              export_symbols=(), host_import_symbols=()):
     return (b"prepared", identifier)
 def _finish_executable_image(plan, identifier, phase_callback):
     gc.collect()
     assert released == 1
     assert plan[1] == identifier
     return b"image"
-''' + inspect.getsource(macho_exec.link_executable) + "\n" +
+''' + inspect.getsource(macho_exec._validated_symbol_inventory) + "\n" +
+                      inspect.getsource(macho_exec.link_executable) + "\n" +
                       inspect.getsource(macho_exec._prepare_executable_inputs) + '''
 def main():
     assert link_executable([], identifier=b"custom") == b"image"

@@ -193,7 +193,11 @@ def test_owned_darwin_object_uses_indirect_hfa_and_mixed_scalar_registers(tmp_pa
     text_section = next(section for section in obj.sections() if section["sectname"].rstrip(b"\0") == b"__text")
     code = data[text_section["offset"]:text_section["offset"] + text_section["size"]]
     words = [word[0] for word in struct.iter_unpack("<I", code)]
-    assert sum(word & 0xFFFFFC1F == 0xD63F0000 for word in words) == 6
+    # A pointer the program computed (raw_address) is called with blr; a
+    # constant global_addr() callee is a direct call to that same symbol.
+    assert sum(word & 0xFFFFFC1F == 0xD63F0000 for word in words) == 1
+    for name in ("ffi_pair", "ffi_rect", "ffi_mixed", "ffi_pointer", "ffi_sink"):
+        assert "  bl _" + name + "\n" in asm, name
     # CGRect's recursively nested four f64 lanes go through d0..d3, including
     # the return, rather than four integer coordinate parameters or an sret.
     for index in range(4):
@@ -222,13 +226,18 @@ def probe(fn: i64, destination: i64, obj, make) -> None:
     body = next(part for part in text.split("define ") if "@user_managed_call_probe(" in part).split("\n}", 1)[0]
     lines = body.splitlines()
     foreign = next(i for i, line in enumerate(lines) if "call i64 (ptr, { ptr, i64 }) %" in line)
-    producer = next(i for i, line in enumerate(lines) if "@py_obj_call(" in line)
+    producer = next(i for i, line in enumerate(lines) if "@py_obj_call" in line)
+    # obj is rooted before the make() callback can run a collection.
     assert any("@pcc_gc_store_root(" in line for line in lines[:producer])
-    assert any("@pcc_gc_load_ptr(" in line for line in lines[producer:foreign])
-    assert any("@pcc_gc_pin(" in line for line in lines[producer:foreign])
+    # The one collector does not move objects: the call reads its operands
+    # back from their root slots (pcc_gc_load_ptr or its lowered null-slot
+    # select) instead of pinning them.
+    assert any("@pcc_gc_load_ptr(" in line or ".pcc.slot = select" in line
+               for line in lines[producer:foreign])
     store = next(i for i in range(foreign + 1, len(lines)) if "store i64 %abi.result" in lines[i])
-    unpin = next(i for i in range(foreign + 1, len(lines)) if "@pcc_gc_unpin(" in lines[i])
-    assert foreign < store < unpin
+    release = next(i for i in range(foreign + 1, len(lines))
+                   if "@pcc_gc_release_known(" in lines[i] or "@pcc_gc_store_root(" in lines[i])
+    assert foreign < store < release
     assert "abi.argument.cleanup" in body
     assert "abi.argument" in body
 

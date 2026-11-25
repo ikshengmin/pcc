@@ -563,8 +563,19 @@ def validate_freestanding_ir(
     if allowed_external_symbols is None:
         allowed_external_symbols = set()
     defined_symbols = []
+    # Data symbols (``@name = ... global ...``), such as global_addr()
+    # targets. A verified call-pointer intrinsic given such a constant
+    # address prints as ``call ... @name(``, but it calls through a data
+    # address the source named explicitly; it is not a pcc.extern function.
+    data_symbols = []
     for raw_line in ir_text.splitlines():
         stripped = raw_line.strip()
+        if (
+            stripped.startswith("@")
+            and " = " in stripped
+            and (" global " in stripped or " constant " in stripped)
+        ):
+            data_symbols.append(stripped[1:].split(" = ", 1)[0].strip('"'))
         if not stripped.startswith("define ") or "@" not in stripped:
             continue
         after_at = stripped.split("@", 1)[1]
@@ -656,6 +667,10 @@ def validate_freestanding_ir(
             if (
                 "__pcc_verified_indirect_call__" in allowed_external_symbols
                 and "@" not in stripped
+            ):
+                continue
+            if "__pcc_verified_indirect_call__" in allowed_external_symbols and any(
+                "@" + symbol + "(" in stripped for symbol in data_symbols
             ):
                 continue
             if any(

@@ -47,8 +47,10 @@ def test_inventory_distinguishes_producer_words_from_text_reencoding(tmp_path, m
     i64 = ir.IntType(64)
     function = ir.Function(module, ir.FunctionType(i64, [i64]), name="probe")
     builder = ir.IRBuilder(function.append_basic_block("entry"))
-    # Bitwise operations still enter the late text encoder, even though its
-    # result leaves no final assembler fallback. That is NOT zero projection.
+    # Producers now emit every word directly; a bitwise operation no longer
+    # enters the late text encoder (checked 2026-11-26 with and/or/xor,
+    # shifts, mul/div/rem, extensions, fp conversion and select). The tool
+    # must report that as zero text re-encoding, not as missing data.
     builder.ret(builder.and_(function.args[0], ir.Constant(i64, 7)))
     root = tmp_path / "inputs"
     root.mkdir()
@@ -60,8 +62,8 @@ def test_inventory_distinguishes_producer_words_from_text_reencoding(tmp_path, m
     assert result["status"] == "COMPLETE"
     assert result["fallback"] == 0
     assert result["direct"] > 0
-    assert result["text_encoded"] > 0
-    assert result["text_opcodes"]["and"] >= 1
+    assert result["text_encoded"] == 0
+    assert result["text_opcodes"] == {}
     assert result["direct"] + result["text_encoded"] == result["structured"]
     assert result["bootstrap_source_sha256"]
     assert json.loads(output.read_text()) == result

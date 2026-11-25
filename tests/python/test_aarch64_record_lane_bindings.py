@@ -223,9 +223,10 @@ def test_bound_record_consumers_match_assembly_and_native_sections(target, optim
     )
     if not optimize:
         assert transport.native_finalized
-    # The existing dynamic GEP emits one textual shifted-register ADD;
-    # binding its type-span record does not change that transport route.
-    assert transport.fallback_instruction_count == (1 if shape == "addresses" else 0)
+    # Every instruction is structured now, the dynamic GEP's shifted-register
+    # ADD included; the byte comparison below and the ``lsl #3`` search keep
+    # that ADD checked.
+    assert transport.fallback_instruction_count == 0
     assert transport.assemble_sections() == assemble_file(assembly)
     if shape == "addresses":
         assert re.search(r"^  add x\d+, x\d+, #88$", assembly, re.M), assembly

@@ -181,3 +181,32 @@ entry:
 '''
     with pytest.raises(pipeline.PyPipelineError, match="managed-runtime"):
         pipeline_freestanding.validate_freestanding_ir(escaped, set())
+
+
+_DATA_ADDRESS_CALL = '''\
+@ffi_pair = external global i8
+declare { double, double } @declared({ double, double })
+define void @probe() {
+entry:
+  %r = call { double, double } ({ double, double }) @ffi_pair({ double, double } zeroinitializer)
+  ret void
+}
+'''
+
+
+def test_verified_call_pointer_may_target_a_global_addr_data_symbol():
+    # call_c_abi(global_addr("ffi_pair"), ...) prints as a call to the data
+    # symbol: admitted only with the fixed-signature call-pointer marker.
+    pipeline_freestanding.validate_freestanding_ir(
+        _DATA_ADDRESS_CALL, {"__pcc_verified_indirect_call__"},
+    )
+    with pytest.raises(pipeline.PyPipelineError, match="outside its verified closure"):
+        pipeline_freestanding.validate_freestanding_ir(_DATA_ADDRESS_CALL, set())
+    # A declared function (a pcc.extern binding) is not a data address.
+    declared = _DATA_ADDRESS_CALL.replace(
+        "({ double, double }) @ffi_pair(", "({ double, double }) @declared(",
+    )
+    with pytest.raises(pipeline.PyPipelineError, match="outside its verified closure"):
+        pipeline_freestanding.validate_freestanding_ir(
+            declared, {"__pcc_verified_indirect_call__"},
+        )

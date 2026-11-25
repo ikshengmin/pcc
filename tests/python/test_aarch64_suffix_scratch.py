@@ -218,6 +218,10 @@ def _owned_reload_case(*, nonempty=(), plan_type=None, incomplete=False, target=
     sink.barrier_depth = 0
     sink.structured_count = sink.direct_count = 0
     sink.move_count = sink.unscaled_count = sink.fragment_record_count = 0
+    sink.call_count = 0
+    # Unoptimized emission publishes each fragment as it is produced, as
+    # _NativeAArch64Emission.__init__ sets for optimize=False.
+    sink.collecting_optimized = False
     sink.events = []
 
     class Builder:

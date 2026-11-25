@@ -153,7 +153,9 @@ def test_preflight_failure_poison_is_retained_without_completion(tmp_path, monke
     monkeypatch.setenv('PCC_DEBUG_SELF_IR_INVOCATION', token)
     context = {'directory':str(tmp_path), 'invocation':token, 'index':0,
                'module':'oversized', 'attempt':'b'*32}
-    module = codec.ParsedModule('x'*receipts.LIMIT, (), ())
+    # Compact capture preflights the decoded work bound; a string at the 2 MiB
+    # on-disk limit now passes it and fails later, at codec-wire-size.
+    module = codec.ParsedModule('x'*(codec._COMPACT_DECODED_LIMIT + 1), (), ())
     assert receipts.begin_capture(module, context, ()) is None
     marker = tmp_path/'indexed-capture-failed'
     initial = marker.read_bytes()

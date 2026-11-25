@@ -79,7 +79,8 @@ _WORKER_PREIMAGE = r'''def run_emit_worker(
             with open(asm_path, "w", encoding="utf-8") as stream:
                 stream.write(asm_text)
             if cc:
-                subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
+                if not write_aarch64_linux_reference_object(target_id, asm_text, obj_path):
+                    subprocess.run([cc, "-c", asm_path, "-o", obj_path], check=True)
             result_payload = obj_path
         with open(result_path, "w", encoding="utf-8") as stream:
             stream.write(target_id + "\n")
@@ -144,8 +145,11 @@ class _Harness:
         if route in ("assembly", "external"):
             self.obj = "/private/output.s"
         self.cc = "private-cc" if route in ("external", "native_cc") else ""
+        # AArch64 Linux encodes its own object (assemble_encode); the external
+        # assembler route remains for x86-64 Linux text.
         self.target = {
             "macho": "self-aarch64-darwin-v0", "coff": "self-x86_64-windows-v0",
+            "external": "self-x86_64-linux-v0",
         }.get(route, "self-aarch64-linux-v0")
         self.packed = None if route == "absent" else self._packed
         self.texts = {self.input: SOURCE}

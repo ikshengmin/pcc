@@ -47,7 +47,9 @@ def test_typed_c_abi_export_supports_structural_f64_pair_argument_and_return(
         for line in ir_text.splitlines()
         if "pcc_shift_f64_pair" in line and line.startswith("define ")
     )
-    assert "define { double, double } @pcc_shift_f64_pair({ double, double }" in definition
+    # The printer may spell the default linkage explicitly ("define external").
+    signature = definition.replace("define external ", "define ", 1)
+    assert "define { double, double } @pcc_shift_f64_pair({ double, double }" in signature
 
     build = subprocess.run(
         ["clang", "-c", str(llvm_ir), "-o", str(obj)],
