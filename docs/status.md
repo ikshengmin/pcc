@@ -805,7 +805,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - none
+   - (d) 4b runtime takes, second batch (py_dunder, py_os_mkdir, py_module_attrs_runtime, py_exc_tls, py_list, py_obj_stubs, py_int_convert, py_set, py_tuple): Claude, macOS, 2026-11-25T16:24Z, area runtime-codegen
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
