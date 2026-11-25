@@ -1356,6 +1356,17 @@ in the relevant section or issue and removes the entry.
    offset folds into the load. Proposed order: frameless leaves and tail
    calls, then compare/branch fusion and extension removal, then nops,
    branch chains and address folding, each measured with `instr`.
+   P0 (the user made this P0 on 2026-11-26): the self AArch64 backend's
+   code generation. The runtime IR given to clang is already after pcc's own
+   passes (lowered root reads, phis). Three runtime builds of that IR, same
+   self-compiled handler, three runs each: self 269956 instructions per
+   request, 58944 cycles, 58394 req/s; LLVM code generation only (clang -O2
+   with `-Xclang -disable-llvm-optzns`) 186681, 42513, 78370 req/s; LLVM IR
+   optimization and code generation 174341, 40267, 89047 req/s (asyncio
+   about 87k). Of the 95.6k instructions, about 83k (87%) come from code
+   generation and 12k (13%) from IR optimization: fix the backend's
+   instruction selection, frame lowering and machine-level peephole, not
+   the IR. The handler program itself is still self-compiled in all three.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
