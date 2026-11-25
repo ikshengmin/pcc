@@ -858,6 +858,7 @@ in the relevant section or issue and removes the entry.
    hosted Go 1.27.3 integration and whole-language verdicts are pending.
 
    Claims:
+   - Rust original no_std core source resolution (45619704293): Codex, Linux x86_64, 2026-11-25 15:29 UTC, area frontend-rust
    - TinyXML2 generic virtual destructor exception specifications (explicit destruction): Codex, Linux, 2026-11-25 15:15 UTC, area frontend-cpp
    - Java native static blocks and blank-final initialization: Codex, Linux x86_64, 2026-11-25 15:18 UTC, area frontend-java
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
