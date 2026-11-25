@@ -398,8 +398,18 @@ in the relevant section or issue and removes the entry.
    backend-specific sweep internals and their unreferenced C fixture are
    removed. CPython and actual Linux pcc0 native executions passed at
    `ff41b4af` with its verified runtime; pcc1 remains pending CI.
-   Next: migrate remaining (b) lifetime tests and CI selectors. Do not
-   wait for the maintainer's local Mac.
+   #9 public migration probe at `65a949cf`: using the unchanged
+   constructor/weakref_resurrection_boundary.py fixture and matched
+   Linux pcc0 runtime, five modes match CPython exactly (plain, self-cycle,
+   downstream, child-first, parent-first). Parent-cycle differs: CPython
+   child-weak, parent-finalize, child-finalize; PCC child-weak,
+   child-finalize, parent-finalize. The six-thread-mode singleton oracle
+   cannot compile as written: Subject.__del__ may_park implicit dunder
+   is not statically resumable. Neither failed check was suppressed,
+   and the original tests remain intact. #9 stays open.
+   Next: migrate other independent (b) lifetime tests; investigate the
+   parent-cycle order in runtime-gc and the may_park frontend boundary
+   separately, respecting active claims. Do not wait for the local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -580,7 +590,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (b) public weakref resurrection witnesses: Codex, Linux, 2026-11-25T07:07Z, area checkpoint
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
