@@ -321,7 +321,16 @@ in the relevant section or issue and removes the entry.
    inventory and its controls (including stale and missing-node rejection).
    All 394 affected ordinary tests passed on Linux; full six-worker
    execution remains for CI, not qualified by collection.
-   Next: inspect hosted worker-prior execution failures separately.
+   #20 Worker prior execution at `487f31f7`: default six workers,
+   3789 nodes collected, 3099 passed before three tuple-factory failures.
+   The model required obsolete initialized-publication callbacks, although
+   the live factory publishes its registered owning output directly and
+   tracks only cycle-capable tuples. Removed that obsolete model hook;
+   ownership conservation, tracking, error preservation and transaction
+   counts remain checked. All 14 model tests and both native pcc0 tests
+   (lifetime and concurrent collection) pass with the rebuilt matched
+   runtime; both programs also pass CPython.
+   Next: run the worker gate to locate the next actual failure.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -336,7 +345,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior execution: Codex, Linux, 2026-11-25T09:58Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

@@ -1,4 +1,4 @@
-"""Execute the tuple factory against moving roots and ownership conservation."""
+"""Execute the live tuple factory against registered roots and ownership conservation."""
 from collections import Counter
 from pathlib import Path
 
@@ -22,7 +22,7 @@ class TupleFactoryMemory:
         self.locked = False
         self.fresh = None
         self.epoch = 0
-        self.tracked = self.published = self.disposals = self.stores = 0
+        self.tracked = self.disposals = self.stores = 0
         self.output = self.stack(8)
         self.memory[self.output] = None
         self.frames[self.output] = 1
@@ -52,7 +52,7 @@ class TupleFactoryMemory:
             'pcc_gc_note_store': self.note_store,
             'pcc_gc_note_slot_write_barrier': self.barrier,
             '_tuple_item_can_participate_in_cycle': self.cycle_child,
-            'py_gc_track': self.track, 'pcc_gc_publish_initialized': self.publish,
+            'py_gc_track': self.track,
             'py_err_occurred': lambda: self.pending is not None,
             'py_exc_new': lambda kind, text: text, 'py_raise_owned': self.raise_error,
             'py_tls_exc_swap_slot': self.swap, 'py_clear_exception': self.clear_error,
@@ -180,11 +180,6 @@ class TupleFactoryMemory:
         assert obj in self.objects and all(self.load(s, 0) is None for s in self.source_slots)
         self.tracked += 1
 
-    def publish(self, obj):
-        self.boundary()
-        assert obj in self.objects and all(self.load(s, 0) is None for s in self.source_slots)
-        self.published += 1
-
     def raise_error(self, error):
         self.pending = error
 
@@ -223,13 +218,13 @@ class TupleFactoryMemory:
 
 @pytest.mark.parametrize('backend', (0,))
 @pytest.mark.parametrize('values', [('a',), ('a', 'b', 'a'), ('a',) * 8, ('a',) * 17, ('cycle', 'a')])
-def test_tuple_factory_transfers_each_owner_with_movement_and_tracking(values, backend):
+def test_tuple_factory_transfers_each_owner_with_tracking(values, backend):
     m = TupleFactoryMemory(values, backend)
     assert m.ns['py_tuple_from_owned_roots'](m.sources, len(values), m.output) == 0
     assert m.load(m.output, 0) in m.objects
     assert all(m.load(slot, 0) is None for slot in m.source_slots)
     assert m.owned() == m.children
-    assert m.tracked == int('cycle' in values) and m.published == 1
+    assert m.tracked == int('cycle' in values)
     assert m.stores == (len(values) if backend else 0)
     assert m.transactions == (len(values) + 7) // 8
     assert m.resolutions == (len(values) if backend else 0)
@@ -246,7 +241,7 @@ def test_tuple_factory_failure_preserves_sources_and_selected_exception(backend,
     assert all(m.load(slot, 0) in m.children for slot in m.source_slots)
     assert m.owned() == m.children and m.frames == m.initial_frames and not m.leases
     assert m.pending == (pending or 'tuple: out of memory')
-    assert m.tracked == m.published == 0 and m.disposals == (failure == 'lease')
+    assert m.tracked == 0 and m.disposals == (failure == 'lease')
 
 
 @pytest.mark.parametrize('count', [0, -1, 134217729])
