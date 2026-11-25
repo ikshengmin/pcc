@@ -165,9 +165,9 @@ def test_published_frame_flags_match_their_components(frame_flag_program, backen
         assert (inactive, walk_state) == (0, 1)
 
 
-@pytest.mark.parametrize("backend", range(1, 5), ids=lambda backend: f"gc{backend}")
-def test_the_stack_walk_cannot_be_turned_off(frame_flag_program, backend):
+def test_the_stack_walk_cannot_be_turned_off(frame_flag_program):
     # "0" once made mapped frames register; the walk is now the only root
-    # source of a published table's frames, so the value is ignored.
-    flags = _run(frame_flag_program, backend, PCC_GC_STACKMAP_ROOTS="0")
-    assert flags == [1, backend, 0, 0, 1]
+    # source of a published table's frames, so the value is ignored. The one
+    # collector publishes the same flags with and without it.
+    flags = _run(frame_flag_program, 0, PCC_GC_STACKMAP_ROOTS="0")
+    assert flags == _run(frame_flag_program, 0) == [1, 0, 0, 1, 1]
