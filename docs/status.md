@@ -512,7 +512,7 @@ in the relevant section or issue and removes the entry.
    No assembler/symbol behavior changed.
 
    Claims:
-   - none
+   - #20 owned Windows reader adapter import closure: Codex, Linux, 2026-11-25T17:39Z, area selfhost (worker_resource_reader test only)
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
