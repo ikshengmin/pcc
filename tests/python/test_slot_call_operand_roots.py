@@ -1197,33 +1197,22 @@ def _check_slot_call_rejection_bounds_source_and_never_formats_arbitrary_values(
     assert "callee=not-call" in detail
 
 
-class _LeaseEdgeSelected(Exception):
+class _RuntimeErrorEdgeSelected(Exception):
     """Stop the synchronous control-flow model at its generated error edge."""
 
 
-class _LeaseCallModel:
-    """Run the production emitter with eager calls and modeled error edges.
+class _RootCallModel:
+    """Execute the live nonmoving emitter's root and exception boundaries."""
 
-    Lease acquire/release execute the real runtime bodies in the existing
-    metadata model. Only the requested one-shot failure is injected; a rejected
-    release does NOT consume its token. This is not a native-runtime failure
-    reproduction or a model of the IR backend.
-    """
+    _slot_call_lease_acquire = L1CodeGen._slot_call_lease_acquire
+    _slot_call_lease_release = L1CodeGen._slot_call_lease_release
+    _slot_call_check_status = L1CodeGen._slot_call_check_status
 
-    def __init__(self, *, token_kind, fail_release=0, fail_acquire=0, pending=False):
+    def __init__(self, *, pending, count):
         from types import SimpleNamespace
-        from tests.python.test_foreign_address_leases import Model
 
-        self.memory = Model()
-        self.slots = tuple(self.memory.object(1000 + index * 100,
-                           node=token_kind != 2) for index in range(3))
-        if token_kind == 0:
-            for slot in self.slots:
-                self.memory.store(slot, 0, 0)
-        self.token_kind = token_kind
-        self.fail_release, self.fail_acquire = fail_release, fail_acquire
-        self.release_attempts = self.acquire_attempts = 0
-        self.successful_releases = []
+        self.slots = tuple(object() for _ in range(count))
+        self.values = {slot: object() for slot in self.slots}
         self.original = object()
         self.pending = self.original if pending else None
         self.outer_seen = None
@@ -1231,16 +1220,12 @@ class _LeaseCallModel:
         self.runtime_called = False
         self._try_err_block = self.outer
         self._cpy_operand_cleanup_block = self.outer
-        self._slot_call_borrowed_operands = {id(self.slots[1]): self.slots[1]}
+        self._slot_call_borrowed_operands = {id(self.slots[-1]): self.slots[-1]}
         self.builder = SimpleNamespace(call=lambda fn, args, **kwargs: fn(*args),
-                                       load=lambda slot, **kwargs: self.memory.load(slot))
+                                       load=lambda slot, **kwargs: self.values[slot])
         self.module = SimpleNamespace(globals={"py_tls_exc_swap_slot": self.swap})
-        self.runtime = {
-            "pcc_gc_foreign_lease_acquire": self.acquire,
-            "pcc_gc_borrowed_lease_acquire": self.acquire,
-            "pcc_gc_foreign_lease_release": self.release,
-            "py_obj_add": self.produce,
-        }
+        # No lease helper is supplied: the production emitter must not call it.
+        self.runtime = {"py_obj_add": self.produce}
         self.exception_owner = None
 
     def _current_try_err_block(self):
@@ -1255,28 +1240,9 @@ class _LeaseCallModel:
     def _value_is_never_gc_object(self, slot):
         return False
 
-    def acquire(self, slot):
-        self.acquire_attempts += 1
-        if self.acquire_attempts == self.fail_acquire:
-            return -2
-        token = self.memory.acquire(slot)
-        assert token == self.token_kind
-        return token
-
-    def release(self, slot, token):
-        self.release_attempts += 1
-        if self.release_attempts == self.fail_release:
-            # Deliberate transient refusal. Do not call the runtime body or
-            # consume its counters. Cleanup must retry this exact slot/token.
-            return -3
-        assert self.memory.release(slot, token) == 0
-        assert slot not in self.successful_releases
-        self.successful_releases.append(slot)
-        return 0
-
     def produce(self, *values):
         self.runtime_called = True
-        assert len(values) == len(self.slots)
+        assert values == tuple(self.values[slot] for slot in self.slots)
         return 17
 
     def _publish_slot_call_owned(self, slot, value, label):
@@ -1290,108 +1256,42 @@ class _LeaseCallModel:
 
     def _slot_call_cleanup_block(self, roots, target, leases=()):
         assert roots == ()
-        if not leases:
-            return target
-
-        def cleanup():
-            selected = self.pending
-            for slot, token in reversed(leases):
-                assert self.release(slot, token) == 0
-                # Simulate a cleanup callback replacing TLS. The enclosing
-                # exception-preserving cleanup must restore the selected one.
-                self.pending = object()
-            self.pending = selected
-            target()
-        return cleanup
+        assert all(isinstance(token, ir.Constant) and token.value == 0
+                   for _, token in leases)
+        return target
 
     def outer(self):
         self.outer_seen = self.pending
-        assert self.memory.active() == 0, "outer root retirement still has a live lease"
-        raise _LeaseEdgeSelected
-
-    def _slot_call_lease_acquire(self, helper, slot, name):
-        # The emitted gate calls whenever leases are not inert (GC4, or an
-        # unconfigured runtime); the model runs that call.
-        return self.runtime[helper](slot)
-
-    def _slot_call_lease_release(self, slot, token, name):
-        # A 0 token is the runtime's own no-op answer: the emitted release
-        # tests it and does not call.
-        if token == 0:
-            return 0
-        return self.runtime["pcc_gc_foreign_lease_release"](slot, token)
-
-    def _slot_call_check_status(self, status, operation, span):
-        if status < 0:
-            if self.pending is None:
-                self.pending = self.original
-            self._try_err_block()
+        raise _RuntimeErrorEdgeSelected
 
     def _emit_post_call_err_check(self, span):
         if self.pending is not None:
             self._try_err_block()
 
 
-@pytest.mark.parametrize("token_kind", (0, 1, 2))
-@pytest.mark.parametrize("fail_release", (0, 1, 2, 3))
+@pytest.mark.parametrize("count", (1, 3))
+@pytest.mark.parametrize("pending", (False, True))
 @pytest.mark.parametrize("result_kind", ("scalar", "object", "iteration"))
-def test_runtime_call_retires_lease_only_on_success(token_kind, fail_release, result_kind):
-    model = _LeaseCallModel(token_kind=token_kind, fail_release=fail_release)
+def test_runtime_call_preserves_root_and_exception_owners(count, pending, result_kind):
+    model = _RootCallModel(pending=pending, count=count)
     outer, cpy = model._try_err_block, model._cpy_operand_cleanup_block
     kwargs = ({"result_slot": object()} if result_kind == "object" else
               {"exception_slot": object()} if result_kind == "iteration" else {})
-    if token_kind == 0:
-        # Every token is the no-op 0: no release is called, so none can be
-        # refused, and the call completes.
-        result = L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
-        assert result == (None if result_kind == "object" else 17)
-        assert model.release_attempts == 0 and model.successful_releases == []
-        assert model.memory.active() == 0
-        assert model._try_err_block is outer and model._cpy_operand_cleanup_block is cpy
-        assert model.runtime_called
-        assert model.output == (17 if result_kind == "object" else None)
-        return
-    if fail_release:
-        with pytest.raises(_LeaseEdgeSelected):
+    before = dict(model.values)
+    if pending and result_kind != "iteration":
+        with pytest.raises(_RuntimeErrorEdgeSelected):
             L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
         assert model.outer_seen is model.original
-        assert model.release_attempts == 4
     else:
         result = L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
         assert result == (None if result_kind == "object" else 17)
-        assert model.release_attempts == 3
-    assert model.memory.active() == 0
-    assert model.successful_releases == list(reversed(model.slots))
+        if result_kind == "iteration":
+            assert model.pending is None
+            assert model.exception_owner is (model.original if pending else None)
+    assert model.values == before
     assert model._try_err_block is outer and model._cpy_operand_cleanup_block is cpy
     assert model.runtime_called
     assert model.output == (17 if result_kind == "object" else None)
-
-
-@pytest.mark.parametrize("fail_acquire", (1, 2, 3))
-def test_runtime_call_partial_acquisition_keeps_only_successful_prefix(fail_acquire):
-    model = _LeaseCallModel(token_kind=1, fail_acquire=fail_acquire)
-    with pytest.raises(_LeaseEdgeSelected):
-        L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots)
-    assert model.successful_releases == list(reversed(model.slots[:fail_acquire - 1]))
-    assert not model.runtime_called
-    assert model.outer_seen is model.original
-    assert model.memory.active() == 0
-
-
-@pytest.mark.parametrize("result_kind", ("scalar", "object", "iteration"))
-def test_runtime_call_pending_exception_keeps_identity_across_cleanup(result_kind):
-    model = _LeaseCallModel(token_kind=1, pending=True)
-    kwargs = ({"result_slot": object()} if result_kind == "object" else
-              {"exception_slot": object()} if result_kind == "iteration" else {})
-    if result_kind == "iteration":
-        L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
-        assert model.pending is None and model.exception_owner is model.original
-    else:
-        with pytest.raises(_LeaseEdgeSelected):
-            L1CodeGen._slot_call_runtime_call(model, "py_obj_add", model.slots, **kwargs)
-        assert model.outer_seen is model.original
-    assert model.memory.active() == 0
-    assert model.successful_releases == list(reversed(model.slots))
 
 
 def test_emitted_argument_leases_are_constant_and_need_no_cleanup(monkeypatch):

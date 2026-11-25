@@ -330,7 +330,14 @@ in the relevant section or issue and removes the entry.
    counts remain checked. All 14 model tests and both native pcc0 tests
    (lifetime and concurrent collection) pass with the rebuilt matched
    runtime; both programs also pass CPython.
-   Next: run the worker gate to locate the next actual failure.
+   #20 at `6f7fd8a4`: six-worker gate now reaches 3267 passed
+   before failing the operand call model's deleted mode-lease functions.
+   Replace the obsolete 42 synthetic lease-token/retry permutations with
+   12 actual constant-token emitter cases for one/three owning and borrowed
+   operands, scalar/object/iteration results and exact pending exceptions.
+   Keep real emitted IR checks and update the fixed inventory (3759 nodes,
+   87 files). Linux: 381 affected ordinary checks passed, no skipped cases.
+   Next: rerun the worker gate and fix the next failure.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -345,7 +352,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 worker prior next failure: Codex, Linux, 2026-11-25T10:54Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
