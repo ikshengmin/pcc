@@ -742,28 +742,41 @@ in the relevant section or issue and removes the entry.
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
    the header/ABI freeze.
-   Next for (d), in order, each with its tests rewritten in the same
-   change: (1) done above; (2) the runtime sources: pin/unpin and barrier
-   calls outside the take protocol done above; their lease calls move into
-   (4) with the take-protocol pins, because root-copy tokens are released
-   through the same `pcc_gc_foreign_lease_release`;
-   (3) delete the fused-protocol pass after (4) (its test file
-   named to the maintainer first); (4) `pcc_gc_root_copy_lease`,
-   `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
-   lease-free forms, in four committed parts: (4a) a `pcc_gc_take_slot`
-   (load, clear, return; the one collector never sets the pin bit, so a
-   prior is always 0) and code generation emits it with no prior read,
-   `pin_slot_for_take` or root-pin lock; (4b) the runtime's take callers
-   (108 takes, 249 pins, 35 reasserts in 28 files) switch to it in file
-   batches with their test models; (4c) the runtime's leases (about 190
-   foreign-lease and 68 root-copy calls) become token-free in file batches
-   with their models; (4d) the then-unused ABI functions go, the C header's
-   exports only after the maintainer's answer; (5) remove the runtime's `pcc_gc_backend()` with its
-   lowering (`unsafe_lowering.py`, `extern_lowering.py`, `runtime_abi.py`,
-   `pipeline_freestanding.py`) and the worker env prefix's
-   `PCC_GC_BACKEND=0`; (6) the closed-young analysis (a GC3 frontend
-   analysis, unrelated to the one collector's generations) and the
-   per-collector options of `scripts/pcc_perf.py`.
+   Next for (d): the plan Claude runs without asking between units
+   (the user, 2026-11-26: "你这么继续继续的有点需要我参与。能plan一下吗").
+   Done: steps 1, 2 (pins outside the take protocol), 4a, 4b batches 1-2.
+   Units, in order, each one claim, commit and push (runtime first, then
+   its test models, then the status result):
+   (U1) 4b batch 3: py_obj, py_coroutine, py_obj_ops_compare, py_tempfile
+        (30 sites).
+   (U2) 4b batch 4: py_exc_traceback, py_format_runtime, py_threading,
+        py_protocol_runtime (49).
+   (U3) 4b batch 5: py_exc_objects, py_gen, py_os_path (76).
+   (U4) 4b batch 6: py_func, py_obj_ops_dispatch (80).
+   (U5) 4b batch 7: py_class (93); then the runtime no longer calls
+        pin, unpin, reassert, take_pinned_slot or pin_slot_for_take.
+   (U6) 4c design: a token-free root copy (`pcc_gc_root_copy*` returning
+        a status only) beside the lease forms, emitted by code generation.
+   (U7-U10) 4c batches: the runtime's 193 foreign/borrowed lease calls
+        (38 files) and 101 root-copy calls, smallest files first, the same
+        way as 4b; their test models drop lease tokens.
+   (U11) 4d: delete the then-uncalled ABI functions from the runtime,
+        `runtime_abi.py`, the effect contracts and (after the user's
+        answer) `py_runtime.h`.
+   (U12) step 3: delete the fused-protocol pass and
+        `tests/python/test_fused_protocol_pass.py` (after the user's answer).
+   (U13) step 5: `pcc_gc_backend()` and `PCC_GC_BACKEND` (8 references).
+   (U14) step 6: the closed-young analysis and the per-collector options
+        of `scripts/pcc_perf.py`.
+   Per unit: rewrite (codemod, then by hand); compile each edited runtime
+   module alone; run the test files naming the edited modules or models,
+   one stream under `scripts/run_process_tree_sample.py` (2.5 GiB tree
+   cap), with HEAD's failing nodes as the baseline; models follow the one
+   collector (no movement, `pcc_gc_take_slot`, no pin); no file has a new
+   failing node. Not run per the user: integration suites; also pcc1,
+   Linux and the heavy files that exceed the cap. Claude stops and asks
+   only for: a behavior change it cannot attribute to a model, deleting a
+   test file or a public header export, or a file another agent claims.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
