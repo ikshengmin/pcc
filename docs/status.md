@@ -1050,7 +1050,7 @@ in the relevant section or issue and removes the entry.
    function profile taken before this fix against `nm` before using it.
 
    Claims:
-   - none
+   - (c) A2 root-store short path: Claude, macOS, 2026-11-25T17:27Z, area backend (AArch64 only: self_backend_aarch64_gc_calls.py and its tests; no file shared with the x86 claim)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
