@@ -137,7 +137,7 @@ PROFILES = {
 EVIDENCE_LIMIT = 16 * 1024 * 1024
 RECEIPT_NAMES = {
     "qualification.json", "command.json", "result.json", "runtime-identity.json",
-    "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json",
+    "live.jsonl", "junit.xml", "ownership-regression.json", "execution.json", "native.json",
     "darwin-resource-handles.json", "native-worker-clock.json", "reference.json",
     "float-callback-cleanup.json", "build.json",
     "gc0-late-weakref-owned.json", "candidate-revalidation.json",

@@ -447,9 +447,9 @@ def test_canonical_shared_helper_runs_one_native_witness_without_selector(tmp_pa
     args = ("print('ok')\n", "ok\n", tmp_path, compile_program, "pcc0", archive, capfd)
     if native_status:
         with pytest.raises(AssertionError):
-            support.assert_owned_program(*args, backends=None)
+            support.assert_owned_program(*args)
     else:
-        support.assert_owned_program(*args, backends=None)
+        support.assert_owned_program(*args)
     assert len(calls) == 2
     command, env, timeout = calls[1]
     assert command == [str(tmp_path / "program.out")]
@@ -463,8 +463,8 @@ def test_canonical_shared_helper_runs_one_native_witness_without_selector(tmp_pa
         gate.verify_executions(record, tmp_path / "program.out", "ok\n")
 
 
-@pytest.mark.parametrize("fail_gc", (None, 2))
-def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path, monkeypatch, fail_gc):
+@pytest.mark.parametrize("fail_native", (False, True))
+def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path, monkeypatch, fail_native):
     calls = []
     archive = tmp_path / "runtime.a"
     archive.write_bytes(b"host-only archive")
@@ -472,7 +472,7 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
 
     def execute(command, *, env, timeout):
         calls.append((command, env, timeout))
-        rc = 124 if env.get("PCC_GC_BACKEND") == str(fail_gc) else 0
+        rc = 124 if fail_native and command[0] == str(tmp_path / "program.out") else 0
         return subprocess.CompletedProcess(command, rc, stdout="ok\n", stderr="")
 
     def compile_program(source, binary, **options):
@@ -484,7 +484,7 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
     monkeypatch.setattr(support, "run_process_group_timeout", execute)
     capfd = SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err=""))
     args = ("print('ok')\n", "ok\n", tmp_path, compile_program, "pcc0", archive, capfd)
-    if fail_gc is None:
+    if not fail_native:
         support.assert_owned_program(*args)
     else:
         with pytest.raises(AssertionError):
@@ -493,14 +493,14 @@ def test_shared_helper_runs_absolute_native_paths_with_no_host_fallback(tmp_path
     for gc, (command, env, timeout) in enumerate(calls[1:]):
         assert command == [str(tmp_path / "program.out")]
         assert Path(command[0]).is_absolute()
-        assert env["PCC_GC_BACKEND"] == str(gc) and env["PATH"] == ""
+        assert "PCC_GC_BACKEND" not in env and env["PATH"] == ""
         assert env["PCC_HOST_PYTHON"] == "/nonexistent/host-python"
         assert env["PCC_HOST_PCC"] == "/nonexistent/host-pcc"
         assert env["PCC_TEST_NO_NATIVE_PROVISIONING"] == env["PCC_NO_AUTO_PCC1"] == "1"
         assert "LC_ALL" not in env and timeout == 10
     record = json.loads((tmp_path / "ownership-regression.json").read_text())
-    assert record["status"] == ("PASS" if fail_gc is None else "NATIVE_EXECUTION_FAILED")
-    assert len(record["executions"]) == (5 if fail_gc is None else 3)
+    assert record["status"] == ("PASS" if not fail_native else "NATIVE_EXECUTION_FAILED")
+    assert len(calls) == 2 and len(record["executions"]) == 1
     linkage = record["linkage"]
     assert linkage["schema"] == "pcc.owned-image-linkage.v1"
     assert linkage["format"] == "static-elf64" and linkage["libraries"] == []
@@ -517,7 +517,7 @@ def test_super_regression_uses_explicit_owned_helper_without_pcc1(tmp_path, monk
     archive, capfd = object(), object()
     probe.test_super_result_native_matches_cpython_under_five_collectors(tmp_path, archive, capfd)
     assert calls == [((probe.NATIVE_SOURCE, "5\nTrue\ncaught\n", tmp_path,
-                      compile_python, "pcc0", archive, capfd), {"backends": None})]
+                      compile_python, "pcc0", archive, capfd), {})]
     tree = ast.parse((ROOT / "tests/python/test_super_call_result_roots.py").read_text())
     native = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
                   and node.name == gate.NODES[1].split("::")[1])
@@ -540,7 +540,7 @@ def test_dict_regressions_reuse_the_explicit_owned_helper(tmp_path, monkeypatch,
     )
     assert calls == [((probe._program(method), "DICT_METHOD_OWNERS_OK\n", tmp_path,
                       compiler, "pcc0", archive, capfd),
-                     {"provenance_probe": "2", "backends": None, "emitted_ir_check": probe._select_dict_program_ir, "retain_dump_evidence": True})]
+                     {"provenance_probe": "2", "emitted_ir_check": probe._select_dict_program_ir, "retain_dump_evidence": True})]
 
 
 def _program_ir(marker="OBJECT_TYPE_IDENTITY_OK"):
@@ -681,7 +681,7 @@ def test_input_ir_uses_one_compile_and_survives_original_failure(tmp_path, monke
         backend = env.get("PCC_GC_BACKEND")
         executions.append(backend)
         assert timeout == 10
-        return subprocess.CompletedProcess(command, 1 if failure == "native" and backend == "1" else 0,
+        return subprocess.CompletedProcess(command, 1 if failure == "native" and command[0] == str(tmp_path / "program.out") else 0,
                                            stdout="ok\n", stderr="")
 
     monkeypatch.setattr(support, "run_process_group_timeout", execute)
@@ -716,7 +716,7 @@ def test_input_ir_uses_one_compile_and_survives_original_failure(tmp_path, monke
         assert not (tmp_path / "executable-ir-dump.json").exists()
         return
     evidence = json.loads((tmp_path / "executable-ir-dump.json").read_text())
-    assert record["gc_backends"] == list(range(5))
+    assert "gc_backends" not in record
     assert record["source_sha256"] == gate.sha(tmp_path / "program.py")
     assert record["runtime_sha256"] == gate.sha(archive)
     if failure in ("compile-before-dump", "compile-after-dump"):
@@ -728,7 +728,7 @@ def test_input_ir_uses_one_compile_and_survives_original_failure(tmp_path, monke
     else:
         assert evidence["status"] == "DUMP_FILES_RETAINED"
         assert record["status"] == ("NATIVE_EXECUTION_FAILED" if failure else "PASS")
-        assert executions == ([None, "0", "1"] if failure else [None, "0", "1", "2", "3", "4"])
+        assert executions == [None, None]
 
 
 @pytest.mark.parametrize("limit", ("module", "total"))
@@ -892,7 +892,7 @@ def test_object_regression_selects_its_original_program_ir(tmp_path, monkeypatch
     probe.test_object_identity_native_five_gc(compiler, request, archive, tmp_path, capfd)
     assert calls == [((probe.PROGRAM, "OBJECT_TYPE_IDENTITY_OK\n", tmp_path,
                       compiler, "pcc0", archive, capfd),
-                     {"provenance_probe": "2", "backends": None, "emitted_ir_check": probe._select_identity_program_ir, "retain_dump_evidence": True})]
+                     {"provenance_probe": "2", "emitted_ir_check": probe._select_identity_program_ir, "retain_dump_evidence": True})]
 
 
 def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypatch):
@@ -919,11 +919,11 @@ def test_two_root_regression_reuses_the_explicit_owned_helper(tmp_path, monkeypa
     assert calls == [
         ((probe.TWO_ROOT_PROGRAM, "TWO_ROOT_CLEANUP_EXCEPTION_OK\n", tmp_path / "gc0",
           compiler, "pcc0", archive, capfd),
-         {"provenance_probe": "2", "backends": None,
+         {"provenance_probe": "2",
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
         ((lifecycle.TRACING_TWO_ROOT_PROGRAM, "TWO_ROOT_TRACING_CLEANUP_OK\n", tmp_path / "tracing",
           compiler, "pcc0", archive, capfd),
-         {"provenance_probe": "2", "backends": None,
+         {"provenance_probe": "2",
           "emitted_ir_check": lifecycle.assert_compiler_two_root_error_edge}),
     ]
     assert slots == [(compiler, "pcc0", archive, tmp_path / "slots", capfd)]

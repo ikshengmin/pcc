@@ -206,7 +206,7 @@ def test_ir_receipt_is_from_one_executable_compile_and_missing_dump_fails(
         Path(output).write_bytes(b"native image")
 
     def execution(directory, label, command, environment):
-        executions.append(environment["PCC_GC_BACKEND"])
+        executions.append(environment.get("PCC_GC_BACKEND"))
         return oracle
 
     monkeypatch.setattr(owned, "assert_reference_program", reference)
@@ -221,9 +221,9 @@ def test_ir_receipt_is_from_one_executable_compile_and_missing_dump_fails(
         owned.assert_owned_program("pass\n", "OK\n", tmp_path, compiler, "pcc1", archive,
                                    SimpleNamespace(readouterr=lambda: SimpleNamespace(out="", err="")), **kwargs)
         assert seen == [["actual executable input"]]
-        assert executions == ["0", "1", "2", "3", "4"]
+        assert executions == [None]
         receipt = json.loads((tmp_path / "ownership-regression.json").read_text())
-        assert receipt["gc_backends"] == list(range(5))
+        assert "gc_backends" not in receipt
         assert set(receipt["executable_input_ir"]) == {"self_backend_input_0.ll"}
     else:
         with pytest.raises(AssertionError, match="no self-backend IR receipt"):

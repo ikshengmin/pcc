@@ -1030,7 +1030,7 @@ def test_default_profile_runs_gc_after_verified_runtime_and_stops_on_failure(tmp
 def test_gc_receipts_are_retained_without_native_artifacts(tmp_path):
     work = tmp_path / "work/gc-sweep/tests"
     work.mkdir(parents=True)
-    names = ["ownership-regression.json", "gc0-late-weakref-owned.json",
+    names = ["ownership-regression.json", "native.json", "gc0-late-weakref-owned.json",
              "candidate-revalidation.json"]
     for name in names:
         (work / name).write_text('{"returncode": 0}\n')

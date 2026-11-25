@@ -289,9 +289,14 @@ in the relevant section or issue and removes the entry.
    checks bind the current run, absolute binary, typed status and timing;
    the seven find/length modules, Stage1 provenance and budget are intact.
    Linux: 340 host/reference/IR checks passed, four native nodes pending.
-   Next: migrate remaining shared ownership helper callers and receipt
-   retention, then remove the temporary legacy selector path. Audit
-   dynamic selector use, not only literal prune matches.
+   #20 shared ownership helper: all 133 direct call sites now run the
+   native program once, without a backend parameter or repeated five-GC
+   loop. macOS receipt retention includes native.json without dropping
+   independent evidence. Linux: 620 focused host checks passed; this is
+   test migration, not native runtime qualification.
+   Next: recover a source-matched Linux runtime archive and run the
+   remaining native regression nodes; compare the latest hosted results.
+   Continue (b) with obsolete-only tests removed and live coverage kept.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -306,7 +311,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 shared ownership one-run migration: Codex, Linux, 2026-11-25T03:03Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

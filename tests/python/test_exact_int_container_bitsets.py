@@ -130,5 +130,5 @@ def test_container_bitsets_owned_native(
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(
         PROGRAM, "CONTAINER_BITSETS_OK\n", bitsets_project,
-        python_program_compiler, mode, bitsets_owned_runtime, capfd, backends=None,
+        python_program_compiler, mode, bitsets_owned_runtime, capfd,
     )

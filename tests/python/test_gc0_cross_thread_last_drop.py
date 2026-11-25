@@ -85,5 +85,5 @@ def test_gc0_cross_thread_last_drop_native(
     mode = request.node.callspec.params["python_program_compiler"]
     assert_owned_program(
         PROGRAM, EXPECTED, tmp_path, python_program_compiler, mode,
-        explicit_owned_runtime, capfd, backends=(0,),
+        explicit_owned_runtime, capfd,
     )

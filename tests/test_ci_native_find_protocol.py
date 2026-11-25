@@ -146,7 +146,6 @@ def test_native_find_gate_selection_identity_and_fail_closed_receipts(tmp_path, 
                     program, expected, directory,
                     compile_fixture, mode, state["archive"],
                     types.SimpleNamespace(readouterr=lambda: types.SimpleNamespace(out="", err="")),
-                    backends=None,
                 )
             record = json.loads((directory / "ownership-regression.json").read_text())
             if mode == "pcc1":

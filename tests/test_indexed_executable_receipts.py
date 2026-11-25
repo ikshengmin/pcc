@@ -344,7 +344,7 @@ def test_indexed_capture_keeps_one_compile_and_original_failure(tmp_path, monkey
         backend = env.get("PCC_GC_BACKEND")
         executions.append(backend)
         assert timeout == 10
-        return subprocess.CompletedProcess(command, 1 if failure == "native" and backend == "1" else 0,
+        return subprocess.CompletedProcess(command, 1 if failure == "native" and command[0] == str(tmp_path / "program.out") else 0,
                                            stdout="ok\n", stderr="")
 
     monkeypatch.setattr(support, "run_process_group_timeout", execute)
@@ -370,8 +370,7 @@ def test_indexed_capture_keeps_one_compile_and_original_failure(tmp_path, monkey
     assert len(calls) == 1 and os.environ.get("PCC_DEBUG_SELF_IR_INVOCATION") == before
     record = json.loads((tmp_path / "ownership-regression.json").read_text())
     assert executions == ([None] if failure in ("before", "after", "diagnostic-write")
-                          else [None, "0", "1"] if failure == "native"
-                          else [None, "0", "1", "2", "3", "4"])
+                          else [None, None])
     if failure in ("before", "after", "diagnostic-write"):
         assert record["error"] == "ValueError: original compiler error"
     else:

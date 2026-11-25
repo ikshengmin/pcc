@@ -505,5 +505,5 @@ def test_bound_find_and_str_len_owned_native(
     source, expected, _ = _write_native_find_and_str_len_suite(tmp_path)
     assert_owned_program(
         source.read_text(encoding="utf-8"), expected, tmp_path,
-        python_program_compiler, mode, find_owned_runtime, capfd, backends=None,
+        python_program_compiler, mode, find_owned_runtime, capfd,
     )

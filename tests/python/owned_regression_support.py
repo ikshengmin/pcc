@@ -363,19 +363,11 @@ def assert_owned_program(
     capfd,
     *,
     provenance_probe=None,
-    backends=tuple(range(5)),
     reference_arguments=(),
     emitted_ir_check=None,
     retain_dump_evidence=False,
 ):
     assert not retain_dump_evidence or emitted_ir_check is not None
-    # None is the canonical single-collector receipt, without any selector.
-    # Legacy callers remain distinct until their own receipts are migrated.
-    canonical = backends is None
-    backends = (None,) if canonical else tuple(backends)
-    if not canonical:
-        assert backends and len(backends) == len(set(backends))
-        assert all(type(backend) is int and 0 <= backend < 5 for backend in backends)
     source, oracle = assert_reference_program(
         program, expected, directory, arguments=reference_arguments,
     )
@@ -397,10 +389,7 @@ def assert_owned_program(
         "reference": oracle,
         "executions": [],
     }
-    if canonical:
-        receipt["schema"] = "pcc.ownership-regression.v2"
-    else:
-        receipt["gc_backends"] = list(backends)
+    receipt["schema"] = "pcc.ownership-regression.v2"
     receipt_path = directory / "ownership-regression.json"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
     dump, ir_attempted, compiler_started = None, False, False
@@ -468,32 +457,28 @@ def assert_owned_program(
     receipt["linkage"] = linkage
     receipt["libpython"] = linkage["libpython"]
     receipt["binary_sha256"] = linkage["binary_sha256"]
-    for backend in backends:
-        environment = dict(
-            os.environ,
-            PCC_TEST_NO_NATIVE_PROVISIONING="1",
-            PCC_NO_AUTO_PCC1="1",
-            PCC_HOST_PYTHON="/nonexistent/host-python",
-            PCC_HOST_PCC="/nonexistent/host-pcc",
-            PATH="",
-        )
-        environment.pop("LC_ALL", None)
-        if canonical:
-            environment.pop("PCC_GC_BACKEND", None)
-        else:
-            environment["PCC_GC_BACKEND"] = str(backend)
-        if provenance_probe is not None:
-            environment["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = provenance_probe
-        result = _record_execution(
-            directory, "native" if canonical else f"gc{backend}", [str(binary)], environment,
-        )
-        receipt["executions"].append(result if canonical else {"gc_backend": backend, **result})
-        matches = all(result[key] == oracle[key] for key in (
-            "returncode", "stdout", "stderr",
-        ))
-        if not matches:
-            receipt["status"] = "NATIVE_EXECUTION_FAILED"
-        receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
-        assert matches, (compiler_mode, backend, result)
+    environment = dict(
+        os.environ,
+        PCC_TEST_NO_NATIVE_PROVISIONING="1",
+        PCC_NO_AUTO_PCC1="1",
+        PCC_HOST_PYTHON="/nonexistent/host-python",
+        PCC_HOST_PCC="/nonexistent/host-pcc",
+        PATH="",
+    )
+    environment.pop("LC_ALL", None)
+    environment.pop("PCC_GC_BACKEND", None)
+    if provenance_probe is not None:
+        environment["PCC_GC_REFCOUNT_PROVENANCE_PROBE"] = provenance_probe
+    result = _record_execution(
+        directory, "native", [str(binary)], environment,
+    )
+    receipt["executions"].append(result)
+    matches = all(result[key] == oracle[key] for key in (
+        "returncode", "stdout", "stderr",
+    ))
+    if not matches:
+        receipt["status"] = "NATIVE_EXECUTION_FAILED"
+    receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
+    assert matches, (compiler_mode, result)
     receipt["status"] = "PASS"
     receipt_path.write_text(json.dumps(receipt, indent=2) + "\n")
