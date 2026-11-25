@@ -542,14 +542,33 @@ in the relevant section or issue and removes the entry.
    root reload (`_emit_root_pin_lock`), the extern prior-pin read and
    `pcc_gc_take_pinned_slot`, and pin-named bookkeeping (`pinned_arg_temps`,
    `_pinned_gc_rooted_local_names`, the `ret.shared.unpin` label).
+   (d), step 2, first part (Claude, local Mac, `1e892971b`): the runtime
+   sources no longer call `pcc_gc_pin`, `pcc_gc_unpin` or a store barrier
+   outside the pin/prior/take protocol: 166 pin/unpin calls and the barrier
+   calls in 32 modules, 38 extern bindings, and the code that only fed them
+   (the C-API buffer release lease scan, the module-state stability query).
+   The fused pass already dropped each call, so behavior is unchanged. The
+   249 pin/unpin calls in functions that read a prior pin bit, keep a pin
+   array or hand off through `pcc_gc_take_pinned_slot` stay for step (4):
+   75 test files model take_pinned_slot and assert that pin. Each edited
+   module compiles alone. Host pcc0, by node id against HEAD, all 326 test
+   files naming a changed module or pin/unpin: one test file rewritten
+   (module-state registration takes no pin), no other difference (three
+   compile-heavy nodes failed once and pass alone). Native integration of
+   the 47 lease-slice files with the source-matched archive: 236 pass and
+   the same 19 nodes fail. Runs were single-stream under
+   `scripts/run_process_tree_sample.py` with a 2.75 GiB tree cap, after an
+   earlier oversubscribed local run (six streams of six workers) pushed the
+   Mac into swap. pcc1 and Linux were not run.
    Correction: `pcc_gc_backend4_auto_step_pending` is the one collector's
    live automatic-collection request (young and full collections are
    scheduled through it), not a leftover; it may only be renamed, before
    the header/ABI freeze.
    Next for (d), in order, each with its tests rewritten in the same
-   change: (1) done above; (2) the runtime sources drop their own
-   pin/unpin/lease/barrier calls (about 700 in about 45 files, in file
-   batches, each module compiled alone first);
+   change: (1) done above; (2) the runtime sources: pin/unpin and barrier
+   calls outside the take protocol done above; their lease calls move into
+   (4) with the take-protocol pins, because root-copy tokens are released
+   through the same `pcc_gc_foreign_lease_release`;
    (3) delete the fused-protocol pass (its test file named to the
    maintainer first); (4) `pcc_gc_root_copy_lease`,
    `pcc_gc_pin_slot_for_take` and `pcc_gc_take_pinned_slot` become
@@ -678,7 +697,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) runtime pin/unpin/lease/barrier calls: Claude, macOS, 2026-11-25T13:01Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
