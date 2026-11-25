@@ -23,7 +23,6 @@ import weakref
 from pcc.extern import c_int64, c_obj, extern
 preserve = extern("weakref_invalidate_preserves_pending", (c_obj,), c_int64)
 tls_clear = extern("weakref_callback_tls_is_clear", (), c_int64)
-gc_backend = extern("pcc_gc_backend", (), c_int64)
 events = []
 error_refs = []
 error_events = []
@@ -80,11 +79,10 @@ def main():
     assert preserve(target) == 1
     assert ref() is None
     assert tls_clear() == 1
-    # GC0 disposes the callback's last error owner inside py_clear_exception,
-    # reentering the weakref boundary before the outer sentinel is restored.
-    if gc_backend() == 0:
-        assert error_events == ["outer", "inner"]
-    # Count-free collectors may retire the unowned exception later instead.
+    # The single reference-counting collector disposes the callback's last
+    # error owner inside py_clear_exception, reentering the weakref boundary
+    # before the outer sentinel is restored.
+    assert error_events == ["outer", "inner"]
     for index in range(4):
         gc.collect()
     assert error_events == ["outer", "inner"]
@@ -97,7 +95,7 @@ main()
 
 @pytest.mark.integration
 @pytest.mark.parametrize('provenance_probe', ('0', '2'))
-def test_weakref_pending_exception_pcc0_native_five_gc(
+def test_weakref_pending_exception_pcc0_native_single_collector(
     provenance_probe, explicit_owned_runtime, tmp_path, capfd,
 ):
     from pcc.backend.owned_object_emit import emit_owned_object
@@ -145,26 +143,24 @@ def test_weakref_pending_exception_pcc0_native_five_gc(
     assert binary.is_file(), 'Compiler did not emit an executable'
     receipt['binary_sha256'] = hashlib.sha256(binary.read_bytes()).hexdigest()
     receipt['status'] = 'RUNNING'
-    for backend in (0,):
-        environment = dict(
-            os.environ,
-            PCC_GC_BACKEND=str(backend),
-            PCC_GC_REFCOUNT_PROVENANCE_PROBE=provenance_probe,
-            PCC_TEST_NO_NATIVE_PROVISIONING='1',
-            PCC_NO_AUTO_PCC1='1',
-            PCC_HOST_PYTHON='/nonexistent/host-python',
-            PCC_HOST_PCC='/nonexistent/host-pcc',
-            PATH='',
-        )
-        result = _record_execution(
-            tmp_path, f'gc{backend}', [str(binary)], environment,
-        )
-        receipt['executions'].append({'gc_backend': backend, **result})
-        observed = (result['returncode'], result['stdout'], result['stderr'])
-        expected = (0, 'WEAKREF_PENDING_EXCEPTION_OK\n', '')
-        if observed != expected:
-            receipt['status'] = 'NATIVE_EXECUTION_FAILED'
-        receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
-        assert observed == expected, (backend, provenance_probe, result)
+    environment = dict(
+        os.environ,
+        PCC_GC_REFCOUNT_PROVENANCE_PROBE=provenance_probe,
+        PCC_TEST_NO_NATIVE_PROVISIONING='1',
+        PCC_NO_AUTO_PCC1='1',
+        PCC_HOST_PYTHON='/nonexistent/host-python',
+        PCC_HOST_PCC='/nonexistent/host-pcc',
+        PATH='',
+    )
+    result = _record_execution(
+        tmp_path, 'single-collector', [str(binary)], environment,
+    )
+    receipt['executions'].append({'collector': 'single', **result})
+    observed = (result['returncode'], result['stdout'], result['stderr'])
+    expected = (0, 'WEAKREF_PENDING_EXCEPTION_OK\n', '')
+    if observed != expected:
+        receipt['status'] = 'NATIVE_EXECUTION_FAILED'
+    receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')
+    assert observed == expected, (provenance_probe, result)
     receipt['status'] = 'PASS'
     receipt_path.write_text(json.dumps(receipt, indent=2) + '\n')

@@ -570,9 +570,20 @@ in the relevant section or issue and removes the entry.
    sweep modes exercised retired collector-specific candidate and worker
    protocols; existing generator finalization, pending-error and resurrection
    checks remain untouched.
-   Next: migrate other independent (b) lifetime tests; investigate the
-   parent-cycle order in runtime-gc and the may_park frontend boundary
-   separately, respecting active claims. Do not wait for the local Mac.
+   (b) weakref pending exception: the old conservative-root scenario
+   caused eight failures under the single collector. Retained 15 current
+   source-body cases (success, raised error, allocation/registration
+   failure, nested callbacks and TLS restoration), removed only duplicate
+   conservative scenarios and retired relocation witnesses. The two owned
+   C/PCC native tests now assert immediate nested error disposal
+   unconditionally, with both provenance probes and no collector selector.
+   Linux at `cf372804`, fresh verified 192-member runtime: all 17 passed, including actual
+   native output and clean TLS. The prune report no longer marks this
+   model file. Adjacent instance-finalizer tests still depend on removed
+   lease-freeze/thaw models; migrate those independently, not by skipping.
+   Next: other independent (b) lifetime tests; investigate the parent-cycle
+   order in runtime-gc and the may_park frontend boundary separately.
+   Do not wait for the local Mac.
 
    (d), first slice: the fused-protocol pass scans its lines without `re`.
    Native pcc1 runs the pass, and its owned regex engine rejected the
@@ -839,7 +850,6 @@ in the relevant section or issue and removes the entry.
 
    Claims:
    - (d) 4b runtime takes, second batch (py_dunder, py_os_mkdir, py_module_attrs_runtime, py_exc_tls, py_list, py_obj_stubs, py_int_convert, py_set, py_tuple): Claude, macOS, 2026-11-25T16:24Z, area runtime-codegen
-   - (b) weakref pending-exception single-collector witnesses: Codex, Linux, 2026-11-25T17:08Z, area runtime-gc (test files and existing native fixture only)
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific
