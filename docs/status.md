@@ -294,8 +294,17 @@ in the relevant section or issue and removes the entry.
    loop. macOS receipt retention includes native.json without dropping
    independent evidence. Linux: 620 focused host checks passed; this is
    test migration, not native runtime qualification.
-   Next: recover a source-matched Linux runtime archive and run the
-   remaining native regression nodes; compare the latest hosted results.
+   Linux native verification at `a3831872`: owned threaded atomic archive
+   (192 verified members) built in 61.1 s, peak tree RSS 529 MiB. Actual
+   pcc0-compiled C handle retention/release (2 nodes), cross-thread final
+   release, bound find/str length and container bitsets all passed with
+   their reference checks. Two-root cleanup failed twice before execution:
+   indexed codec preflight for module 2 estimates 2,105,543 bytes against
+   the existing 2,097,152-byte limit; missing link manifest is downstream.
+   No limit changed. These results predate Claude’s subsequent codegen
+   edits; no pcc1 or latest-master native qualification is claimed.
+   Next: resolve indexed receipt preflight on the exact two-root input
+   without widening the bound, then rerun actual lifecycle witnesses.
    Continue (b) with obsolete-only tests removed and live coverage kept.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
@@ -311,7 +320,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 source-matched Linux runtime and native regressions: Codex, Linux, 2026-11-25T03:28Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
