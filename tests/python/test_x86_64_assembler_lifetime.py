@@ -261,13 +261,16 @@ def test_compact_pending_difference_preserves_frozen_value_contract(field, chang
 
 def test_compact_symbol_metadata_preserves_mutable_fields_and_equality():
     record = assembler._SymbolMeta()
-    assert record == assembler._SymbolMeta(False, elf.STT_NOTYPE, None)
+    assert record == assembler._SymbolMeta(global_=False, weak=False, type=elf.STT_NOTYPE, size=None)
     assert not hasattr(record, "__dict__")
     record.global_ = True
+    record.weak = True
     record.type = elf.STT_FUNC
     record.size = 6
-    assert record == assembler._SymbolMeta(True, elf.STT_FUNC, 6)
-    assert replace(record, size=9) == assembler._SymbolMeta(True, elf.STT_FUNC, 9)
+    assert record == assembler._SymbolMeta(global_=True, weak=True, type=elf.STT_FUNC, size=6)
+    assert replace(record, weak=False) != record
+    assert replace(record, size=9) == assembler._SymbolMeta(
+        global_=True, weak=True, type=elf.STT_FUNC, size=9)
     with pytest.raises(TypeError):
         hash(record)
     with pytest.raises(AttributeError):
@@ -390,9 +393,10 @@ def test_undefined_symbol_discovery_does_not_copy_all_defined_names(monkeypatch)
     assert elf.emit_relocatable(obj) == expected
 
 
-def test_temporary_labels_do_not_allocate_default_symbol_metadata():
+@pytest.mark.parametrize("directive, binding", [("globl", elf.STB_GLOBAL), ("weak", elf.STB_WEAK)])
+def test_temporary_labels_do_not_allocate_default_symbol_metadata(directive, binding):
     count = 4096
-    text = '.intel_syntax noprefix\n.text\n.globl probe\n.type probe, @function\nprobe:\n'
+    text = f'.intel_syntax noprefix\n.text\n.{directive} probe\n.type probe, @function\nprobe:\n'
     text += ''.join('.Ltemporary_' + str(index) + ':\n' for index in range(count))
     text += '  ret\n.size probe, .-probe\n'
     sections, _order, symbols, labels = assembler._encode_file(text, assembler._OperandParseCache())
@@ -403,9 +407,13 @@ def test_temporary_labels_do_not_allocate_default_symbol_metadata():
     assert set(symbols) == {'probe'}
     assert len(labels) == count + 1
     assert sections['.text'].size == 1
-    assert symbols['probe'] == assembler._SymbolMeta(True, elf.STT_FUNC, 1)
+    assert symbols['probe'] == assembler._SymbolMeta(
+        global_=True, weak=binding == elf.STB_WEAK, type=elf.STT_FUNC, size=1)
     obj = assembler.assemble_file(text)
     assert [symbol.name for symbol in obj.symbols] == ['', 'probe']
+    symbol = obj.symbols[1]
+    assert (symbol.binding, symbol.type, symbol.size) == (binding, elf.STT_FUNC, 1)
+    assert elf.parse_relocatable(elf.emit_relocatable(obj)) == obj
 
 
 @pytest.mark.parametrize('declarations_first', [True, False])

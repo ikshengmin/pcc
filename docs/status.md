@@ -500,8 +500,19 @@ in the relevant section or issue and removes the entry.
    and other independent CI failures. No production target or verifier
    behavior was changed.
 
+   #20 x86 assembler symbol metadata: two old positional test constructors
+   no longer matched the weak field that the real metadata carries. Tests
+   now name every field, include weak equality/replace and exercise both
+   global and weak declarations with 4,096 temporary labels (one metadata
+   record, unchanged ELF binding and serialized round trip). Source-matched
+   192-member runtime: all 182 related non-integration tests pass,
+   including execution of the C weak-definition fixture (3.87 s,
+   101,351,424-byte peak); eight integration nodes not run. Next: remaining
+   lifecycle negative-witness target IDs and independent CI failures.
+   No assembler/symbol behavior changed.
+
    Claims:
-   - #20 x86 SymbolMeta explicit weak field and binding controls: Codex, Linux x86-64, 2026-11-25T17:28Z, area backend
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
