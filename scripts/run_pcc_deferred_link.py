@@ -305,8 +305,8 @@ def _indexed_emit_floor_bytes(sidecar: Path, *, assembly_only: bool) -> int:
         ) // 1_000_000
     else:
         from pcc.frontends.python.deferred_frontend_schedule import indexed_pco_floor_bytes
-        raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
-        return indexed_pco_floor_bytes(payload_bytes, 0 if raw_gc == "0" else -1)
+        # pcc has one collector, number 0; PCC_GC_BACKEND is no longer read.
+        return indexed_pco_floor_bytes(payload_bytes, 0)
     if floor > _INDEXED_EMIT_FLOOR_CAP_BYTES:
         return _INDEXED_EMIT_FLOOR_CAP_BYTES
     return floor

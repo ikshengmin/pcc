@@ -21,9 +21,7 @@ class DiagnosticAbort(BaseException):
 @pytest.fixture
 def counters(monkeypatch):
     values = {metric: 100 + metric for metric in timing._GC_COUNTER_IDS}
-    values["backend"] = 4
     monkeypatch.setattr(timing.sys.implementation, "name", "pcc")
-    monkeypatch.setattr(timing, "_pcc_gc_backend", lambda: values["backend"])
     monkeypatch.setattr(timing, "_pcc_gc_telemetry", lambda metric: values[metric])
     return values
 
@@ -74,7 +72,6 @@ def test_host_does_not_query_or_substitute_collectors(monkeypatch):
     def forbidden(*args):
         raise AssertionError("host code must not query native telemetry")
 
-    monkeypatch.setattr(timing, "_pcc_gc_backend", forbidden)
     monkeypatch.setattr(timing, "_pcc_gc_telemetry", forbidden)
     sink = io.StringIO()
     monkeypatch.setattr(timing.sys, "stderr", sink)
@@ -122,13 +119,13 @@ def test_wrapped_event_counters_do_not_hide_wide_accounting(counters, metric, en
     assert "gc_allocations_delta" not in row and "gc_relocation_forwards_delta" not in row
 
 
-@pytest.mark.parametrize("change", ("backend", "token", "missing", "reset"))
+# A collector switch between snapshots was a case here; pcc has one collector
+# and the snapshot's collector field is always 0 (item 2 (d), one collector).
+@pytest.mark.parametrize("change", ("token", "missing", "reset"))
 def test_unmatched_or_reset_snapshots_never_fabricate_deltas(counters, change):
     timer = timing.CoarsePhaseTiming()
     if change != "missing":
         timer._gc_begin("artifact_link", 10)
-    if change == "backend":
-        counters["backend"] = 0
     if change == "reset":
         counters[5] = counters[32] = counters[33] = 0
     row = dict(part.split("=", 1) for part in timer._gc_complete(
@@ -145,10 +142,11 @@ def test_snapshot_reads_fixed_scalar_metrics_without_reset_or_inventory(counters
     native_calls = {node.func.id for node in ast.walk(tree)
                     if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
                     and node.func.id.startswith("_pcc_gc_")}
-    assert native_calls == {"_pcc_gc_backend", "_pcc_gc_telemetry"}
+    # The one collector's number is the record's constant collector field.
+    assert native_calls == {"_pcc_gc_telemetry"}
     assert "gc.get_stats" not in Path(timing.__file__).read_text()
     assert timing.CoarsePhaseTiming()._gc_snapshot() == [
-        counters["backend"], *(counters[metric] for metric in timing._GC_COUNTER_IDS),
+        0, *(counters[metric] for metric in timing._GC_COUNTER_IDS),
     ]
 
 
@@ -164,8 +162,8 @@ def test_native_closed_world_exports_new_scalar_fields_and_methods():
     bindings = {node.target.id: node.value for node in source.body
                 if isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name)}
     from pcc.frontends.python.codegen.runtime_abi import RUNTIME_SIGNATURES
-    for alias, symbol in (("_pcc_gc_backend", "pcc_gc_backend"),
-                          ("_pcc_gc_telemetry", "pcc_gc_telemetry")):
+    assert "_pcc_gc_backend" not in bindings  # no collector selector query
+    for alias, symbol in (("_pcc_gc_telemetry", "pcc_gc_telemetry"),):
         declaration = bindings[alias]
         assert declaration.func.id == "extern" and declaration.args[0].value == symbol
         assert str(RUNTIME_SIGNATURES[symbol][0]) == "i64"
@@ -182,7 +180,7 @@ def test_snapshot_native_lowering_calls_owned_runtime_directly(tmp_path):
     text = output.read_text()
     direct_backend = bool(re.search(r'call i64 (?:\([^\n]*?\) )?@"?pcc_gc_backend"?\(', text))
     direct_telemetry = bool(re.search(r'call i64 (?:\([^\n]*?\) )?@"?pcc_gc_telemetry"?\(', text))
-    assert direct_backend, "native module must call the process backend getter directly"
+    assert not direct_backend, "the one collector needs no collector selector query"
     assert direct_telemetry, "native module must call the i64 telemetry ABI directly"
     imported_host = "@PyImport_ImportModule" in text
     assert not imported_host, "native diagnostic must not import a host module"

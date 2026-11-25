@@ -37,6 +37,10 @@ _PCO_LEGACY_BASE = _GIB // 4
 _PCO_LEGACY_PER_SIDECAR_MB = 13 * _GIB // 100
 _PCO_CAP = 6 * _GIB
 _MAX_WIDTH = 12
+# pcc has one collector (number 0, docs/status.md "One collector"): its
+# floors apply and recorded class keys keep the number. The legacy
+# constants remain for callers that still pass another collector.
+_ONE_COLLECTOR = 0
 
 
 def _call_node_score(payload: bytes) -> int:
@@ -185,9 +189,7 @@ def run_pco_commands(commands, sidecars, oversized, safe_jobs):
             run_worker_processes(safe_commands, safe_jobs)
         return
     sizes = [os.path.getsize(path) for path in sidecars]
-    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
-    gc_backend = 0 if raw_gc == "0" else -1
-    floors = [indexed_pco_floor_bytes(size, gc_backend) for size in sizes]
+    floors = [indexed_pco_floor_bytes(size, _ONE_COLLECTOR) for size in sizes]
     order = sorted(range(len(commands)), key=lambda index: (-sizes[index], index))
     run_weighted_worker_processes(
         [commands[index] for index in order],
@@ -224,9 +226,8 @@ def _resource_width_and_budget(fallback_width):
 
 
 def _pco_resource_tasks(sidecars, primary_count=0):
-    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0") or "0")
-    cost = ([_PCO_BASE, _PCO_PER_SIDECAR_MB] if raw_gc == "0"
-            else [_PCO_LEGACY_BASE, _PCO_LEGACY_PER_SIDECAR_MB])
+    raw_gc = str(_ONE_COLLECTOR)
+    cost = [_PCO_BASE, _PCO_PER_SIDECAR_MB]
     tasks = []
     for index, path in enumerate(sidecars):
         tasks.append({
@@ -321,11 +322,7 @@ def run_frontend_pco_commands(
         return
     floors, order = _frontend_floors_and_order(frontend_commands, manifests)
     pool = _budgeted_width_and_budget()
-    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
-    if raw_gc == "0":
-        pco_floor = (_PCO_BASE, _PCO_PER_SIDECAR_MB, _PCO_CAP)
-    else:
-        pco_floor = (_PCO_LEGACY_BASE, _PCO_LEGACY_PER_SIDECAR_MB, _PCO_CAP)
+    pco_floor = (_PCO_BASE, _PCO_PER_SIDECAR_MB, _PCO_CAP)
     run_chained_worker_processes(
         [frontend_commands[index] for index in order],
         [floors[index] for index in order],
@@ -361,18 +358,16 @@ def _frontend_floors_and_order(commands, manifests):
         scores.append(_call_node_score(payload))
         module_names.append(_manifest_module_name(lines, index))
         exports_paths.append(lines[3])
-    raw_gc = str(os.environ.get("PCC_GC_BACKEND", "0"))
-    gc_backend = 0 if raw_gc == "0" else -1
     closures = None
-    if gc_backend == 0 and exports_paths and all(
+    if exports_paths and all(
         path == exports_paths[0] for path in exports_paths
     ) and all(module_names):
         closures = export_closure_bytes(exports_paths[0], module_names)
     if closures is None:
-        floors = [indexed_frontend_floor_bytes(size, gc_backend) for size in sizes]
+        floors = [indexed_frontend_floor_bytes(size, _ONE_COLLECTOR) for size in sizes]
     else:
         floors = [
-            indexed_frontend_floor_bytes(sizes[position], gc_backend, closures[position])
+            indexed_frontend_floor_bytes(sizes[position], _ONE_COLLECTOR, closures[position])
             for position in range(len(sizes))
         ]
     order = sorted(

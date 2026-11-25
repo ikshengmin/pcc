@@ -12,7 +12,6 @@ import time
 from pcc.extern import c_int64, extern
 
 
-_pcc_gc_backend: "extern" = extern("pcc_gc_backend", (), c_int64)
 _pcc_gc_telemetry: "extern" = extern("pcc_gc_telemetry", (c_int64,), c_int64)
 
 # These are existing O(1) scalar getters, never heap/root inventories. The
@@ -325,12 +324,9 @@ class CoarsePhaseTiming:
             if sys.implementation.name != "pcc":
                 self.gc_unavailable = True
                 return []
-            # Annotated externs lower to direct native runtime calls.
-            backend = _pcc_gc_backend()
-            if backend < 0 or backend > 4:
-                self.gc_unavailable = True
-                return []
-            values = [backend]
+            # Annotated externs lower to direct native runtime calls. The
+            # record keeps its collector field: pcc has one collector, 0.
+            values = [0]
             for metric in _GC_COUNTER_IDS:
                 values.append(_pcc_gc_telemetry(metric))
             return values

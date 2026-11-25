@@ -377,19 +377,32 @@ in the relevant section or issue and removes the entry.
    decide alike. A pcc-compiled program running the pass matches CPython
    (local Mac; the same program with the former module failed as pcc1 did).
    pcc1 was not rebuilt: bootstrap needs the maintainer's OK.
-   Next for (d): stop emitting the pin/unpin, lease and barrier calls at
-   their code generation sites and in runtime sources, then delete the
-   pass; remove `pcc_gc_backend()` and the `PCC_GC_BACKEND` reads (58 in 20
-   files at `7ec14d388`); remove the closed-young analysis and the
-   per-collector options of `scripts/pcc_perf.py`.
-   An unpublished slice on Claude's Mac (2026-11-25, stopped at the usage
-   limit) makes the compiler stop reading `PCC_GC_BACKEND` and calling
-   `pcc_gc_backend()` (`pipeline_frontend_workers.py`,
-   `deferred_frontend_schedule.py`, `indexed_phase_timing.py`; class keys
-   keep `0`). Left before it can land: rewrite the env-parametrized cases in
-   `test_deferred_frontend_schedule.py` and the `_pcc_gc_backend` patches in
-   `test_macho_merge_phase_timing.py`, then rerun the covering files. Every
-   generated module still polls `pcc_gc_backend4_auto_step_pending`.
+   (d), second slice: the compiler stops reading `PCC_GC_BACKEND` and
+   calling `pcc_gc_backend()`. `pipeline_frontend_workers.py`
+   (`_worker_collector`, recorded class keys), `deferred_frontend_schedule.py`
+   (frontend and PCO floors, class keys), `indexed_phase_timing.py` (the
+   snapshot's collector field) and `scripts/run_pcc_deferred_link.py` (the
+   PCO emit floor) take the one collector, 0; recorded keys keep `|0`, so
+   existing priors keep their keys. Tests that varied the variable now set
+   a stale value, or none, and expect the one collector's costs and keys;
+   the deferred-link floor test no longer holds the one collector's PCO
+   floor to the PCO peaks of collectors 1-4 (its own 392-worker corpus
+   check stays). Local Mac, host pcc0: the ordinary nodes of the 61 files
+   that cover these modules, 2606 passed, with 62 nodes deselected that
+   fail identically at HEAD (stale stubs, host resource admission, and the
+   collector 1-4 cases of the prune list). A native program built from the
+   two modules gave collector 0 and an available 17-value snapshot with the
+   variable unset, `0` and `3`. Integration nodes and Linux were not run.
+   Next for (d): the worker env prefix still passes `PCC_GC_BACKEND=0` to
+   children (`worker_env` in `pipeline_frontend_workers.py`), which the
+   runtime ignores; every generated module still polls
+   `pcc_gc_backend4_auto_step_pending`; then stop emitting the pin/unpin,
+   lease and barrier calls and delete the fused pass; then remove the
+   runtime's `pcc_gc_backend()` with its lowering (`unsafe_lowering.py`,
+   `extern_lowering.py`, `runtime_abi.py`, `pipeline_freestanding.py`);
+   then the closed-young analysis and the per-collector options of
+   `scripts/pcc_perf.py`. `rg -c 'PCC_GC_BACKEND|pcc_gc_backend\(' pcc
+   scripts --glob '!*.md'`: 77 in 36 files, mostly harness scripts.
 
    The first tests-only (b) slice is admitted unqualified: the maintainer
    said “同意合入” and asked Codex to continue. The exact test patch of
@@ -509,7 +522,7 @@ in the relevant section or issue and removes the entry.
    locals, the owner-thread fast path for counts and container locks.
 
    Claims:
-   - (d) compiler reads of PCC_GC_BACKEND: Claude, macOS, 2026-11-25T01:43Z, area runtime-codegen
+   - none
 3. **pcc-gateway throughput: handler against asyncio, server against
    aiohttp.** Maintainer addition of 2026-11-23: the native request path as
    a whole, beyond what one collector owns, at two levels. Collector-specific

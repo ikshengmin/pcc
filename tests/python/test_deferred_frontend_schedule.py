@@ -180,8 +180,21 @@ def test_budgeted_frontend_rejects_unknown_commands_before_launch(tmp_path, monk
     assert not calls
 
 
-@pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
-def test_auto_pco_describes_lazy_inputs_and_preserves_command_ownership(tmp_path, monkeypatch, gc_backend):
+# The runtime no longer reads PCC_GC_BACKEND and neither does the scheduler
+# (item 2 (d), one collector): a stale value, or none, leaves the one
+# collector's costs and class keys.
+_STALE_COLLECTOR_ENV = [None, "0", "3", "unknown"]
+
+
+def _set_stale_collector_env(monkeypatch, value):
+    if value is None:
+        monkeypatch.delenv("PCC_GC_BACKEND", raising=False)
+    else:
+        monkeypatch.setenv("PCC_GC_BACKEND", value)
+
+
+@pytest.mark.parametrize("stale_env", _STALE_COLLECTOR_ENV)
+def test_auto_pco_describes_lazy_inputs_and_preserves_command_ownership(tmp_path, monkeypatch, stale_env):
     sizes = [1000000, 60000000, 14000000, 1000000]
     sidecars = []
     for index, size in enumerate(sizes):
@@ -190,7 +203,7 @@ def test_auto_pco_describes_lazy_inputs_and_preserves_command_ownership(tmp_path
             stream.truncate(size)
         sidecars.append(str(path))
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
-    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    _set_stale_collector_env(monkeypatch, stale_env)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", str(6 * 1073741824))
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
     calls = _capture_resource_pool(monkeypatch)
@@ -202,11 +215,9 @@ def test_auto_pco_describes_lazy_inputs_and_preserves_command_ownership(tmp_path
     assert [task["input_path"] for task in tasks] == sidecars
     assert all(not task["input_ready"] and task["depends_on"] == -1 for task in tasks)
     assert all(task["report_path"] == path + ".pco-rss" for task, path in zip(tasks, sidecars))
-    expected_cost = ([scheduler._PCO_BASE, scheduler._PCO_PER_SIDECAR_MB]
-                     if gc_backend == "0" else
-                     [scheduler._PCO_LEGACY_BASE, scheduler._PCO_LEGACY_PER_SIDECAR_MB])
+    expected_cost = [scheduler._PCO_BASE, scheduler._PCO_PER_SIDECAR_MB]
     assert all(task["input_cost"] == expected_cost for task in tasks)
-    assert all(task["class"].endswith("|" + gc_backend) for task in tasks)
+    assert all(task["class"].endswith("|0") for task in tasks)
     calls.clear()
     with pytest.raises(ValueError, match="inventory mismatch"):
         scheduler.run_pco_commands(["a"], sidecars, 0, 1)
@@ -317,8 +328,8 @@ def test_export_closure_bytes_follow_dependency_closure(tmp_path):
     assert scheduler.export_closure_bytes(str(legacy), ["a"]) is None
 
 
-@pytest.mark.parametrize("gc_backend", ["0", "3"])
-def test_legacy_frontend_cost_model_reads_export_closure(tmp_path, monkeypatch, gc_backend):
+@pytest.mark.parametrize("stale_env", _STALE_COLLECTOR_ENV)
+def test_frontend_cost_model_reads_export_closure(tmp_path, monkeypatch, stale_env):
     exports = tmp_path / "native_exports.json"
     names = ["root", "leaf"]
     _write_indexed_exports(
@@ -339,24 +350,21 @@ def test_legacy_frontend_cost_model_reads_export_closure(tmp_path, monkeypatch, 
             + ["1", str(index)]
         ) + "\n")
         manifests.append(str(manifest))
-    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    _set_stale_collector_env(monkeypatch, stale_env)
     floors, _order = scheduler._frontend_floors_and_order(["a", "b"], manifests)
-    if gc_backend == "0":
-        expected = [
-            scheduler.indexed_frontend_floor_bytes(sizes[0], 0, 5000000),
-            scheduler.indexed_frontend_floor_bytes(sizes[1], 0, 2000000),
-        ]
-    else:
-        expected = [scheduler.indexed_frontend_floor_bytes(size, -1) for size in sizes]
+    expected = [
+        scheduler.indexed_frontend_floor_bytes(sizes[0], 0, 5000000),
+        scheduler.indexed_frontend_floor_bytes(sizes[1], 0, 2000000),
+    ]
     assert sorted(floors) == sorted(expected)
 
 
-@pytest.mark.parametrize("gc_backend", ["0", "1", "2", "3", "4", "unknown"])
-def test_auto_describes_each_assigned_ast_for_measured_pool(tmp_path, monkeypatch, gc_backend):
+@pytest.mark.parametrize("stale_env", _STALE_COLLECTOR_ENV)
+def test_auto_describes_each_assigned_ast_for_measured_pool(tmp_path, monkeypatch, stale_env):
     sizes = [1400, 700, 10, 10]
     commands, manifests = _frontend_commands(tmp_path, sizes)
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", "auto")
-    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    _set_stale_collector_env(monkeypatch, stale_env)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
     calls = _capture_resource_pool(monkeypatch)
@@ -368,7 +376,7 @@ def test_auto_describes_each_assigned_ast_for_measured_pool(tmp_path, monkeypatc
     for index, task in enumerate(tasks):
         assert task["inputs"][2:4] == [sizes[index], sizes[index]]
         assert task["inputs"][-2:] == [(tmp_path / "exports.json").stat().st_size, 1]
-        assert "|module-indexed|" + gc_backend + "|" in task["class"]
+        assert "|module-indexed|0|" in task["class"]
         assert task["estimate_bytes"] == 0 and task["source_identity"]
         assert task["report_path"] == manifests[index] + ".rss"
 
@@ -429,16 +437,16 @@ main()
         assert result.stdout.strip() == "admission-ok"
 
 
-@pytest.mark.parametrize("gc_backend", ["0", "3"])
+@pytest.mark.parametrize("stale_env", _STALE_COLLECTOR_ENV)
 @pytest.mark.parametrize("raw,width", [("auto", 12), ("2", 2)])
 def test_budgeted_chain_keeps_each_pco_dependent_on_its_frontend(
-    tmp_path, monkeypatch, gc_backend, raw, width,
+    tmp_path, monkeypatch, stale_env, raw, width,
 ):
     """A missing PCO input remains deferred until its own producer completes."""
     commands, manifests = _frontend_commands(tmp_path, [100, 1400, 700])
     sidecars = [str(tmp_path / ("s" + str(index) + ".pidx")) for index in range(3)]
     monkeypatch.setenv("PCC_PY_FRONTEND_JOBS", raw)
-    monkeypatch.setenv("PCC_GC_BACKEND", gc_backend)
+    _set_stale_collector_env(monkeypatch, stale_env)
     monkeypatch.setenv("PCC_WORKER_TREE_BUDGET_BYTES", "8589934592")
     monkeypatch.setattr(scheduler, "parallel_cpu_budget", lambda: 12)
     calls = _capture_resource_pool(monkeypatch)
@@ -454,7 +462,7 @@ def test_budgeted_chain_keeps_each_pco_dependent_on_its_frontend(
     assert [task["depends_on"] for task in tasks[3:]] == [0, 1, 2]
     assert [task["input_path"] for task in tasks[3:]] == sidecars
     assert all(not task["input_ready"] for task in tasks[3:])
-    assert all(task["class"].endswith("|" + gc_backend) for task in tasks[3:])
+    assert all(task["class"].endswith("|0") for task in tasks[3:])
 
 
 def test_unbudgeted_chained_call_keeps_the_two_phases_in_order(monkeypatch):

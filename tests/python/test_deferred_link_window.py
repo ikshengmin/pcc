@@ -259,13 +259,18 @@ def test_worker_floor_tracks_ast_size_and_caps():
     assert 2 * tool._worker_floor_bytes(4_400_000) <= 7 * gib
 
 
-@pytest.mark.parametrize("gc_backend", [1, 2, 3, 4])
+# PCC_GC_BACKEND is no longer read (item 2 (d), one collector): a stale
+# value, or none, leaves the one collector's floor.
+@pytest.mark.parametrize("stale_env", [None, "0", "3"])
 def test_indexed_emit_floor_uses_exact_sidecar_bytes_and_covers_measured_peaks(
-    tmp_path: Path, monkeypatch, gc_backend,
+    tmp_path: Path, monkeypatch, stale_env,
 ):
-    # Retain the historical envelope for collectors without the new complete
-    # GC0 calibration. GC0's 392-worker corpus has its own stronger check.
-    monkeypatch.setenv("PCC_GC_BACKEND", str(gc_backend))
+    from pcc.frontends.python.deferred_frontend_schedule import indexed_pco_floor_bytes
+
+    if stale_env is None:
+        monkeypatch.delenv("PCC_GC_BACKEND", raising=False)
+    else:
+        monkeypatch.setenv("PCC_GC_BACKEND", stale_env)
     tool = _load_tool()
     samples = (
         ("tiny", 17_038, False, 28_327_936),
@@ -286,7 +291,13 @@ def test_indexed_emit_floor_uses_exact_sidecar_bytes_and_covers_measured_peaks(
             sidecar,
             assembly_only=assembly_only,
         )
-        assert floor >= int(measured_peak * 1.05) + 100_000_000
+        if assembly_only:
+            assert floor >= int(measured_peak * 1.05) + 100_000_000
+        else:
+            # The PCO peaks here were the envelope of collectors 1-4, which
+            # are gone. The one collector's PCO floor is checked against its
+            # own 392-worker corpus in test_deferred_frontend_schedule.py.
+            assert floor == indexed_pco_floor_bytes(size, 0)
 
 
 def test_indexed_frontend_floor_covers_the_complete_v48_boundary_samples():

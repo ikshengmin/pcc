@@ -12,7 +12,10 @@ from pcc.extern import c_int64, extern
 
 _native_current_rss_bytes = extern("pcc_os_current_rss_bytes", (), c_int64)
 _native_peak_rss_bytes = extern("pcc_os_peak_rss_bytes", (), c_int64)
-_native_gc_backend = extern("pcc_gc_backend", (), c_int64)
+# pcc has one collector (number 0, docs/status.md "One collector"). Worker
+# cost models and recorded execution-class keys keep that number, so priors
+# recorded before the selector's removal keep their keys.
+_ONE_COLLECTOR = 0
 
 
 _TRUE_VALUES = ("1", "true", "yes", "on")
@@ -136,14 +139,9 @@ def _worker_peak_rss_bytes() -> int:
 
 
 def _worker_collector() -> int:
-    if sys.implementation.name == "pcc":
-        return _native_gc_backend()
-    # Host projection for a command which will start a native worker. Native
-    # callers above read the actual runtime selector, not its initial env hint.
-    value = str(os.environ.get("PCC_GC_BACKEND", "0"))
-    if value not in ("0", "1", "2", "3", "4"):
-        raise FrontendWorkerContractError("invalid worker collector identity")
-    return int(value)
+    # Host and native workers run the same one collector; the runtime no
+    # longer reads PCC_GC_BACKEND, so neither does this projection.
+    return _ONE_COLLECTOR
 
 
 def _resident_coordinator_reserve(configured_floor: int, observed_rss: int) -> int:
@@ -1043,7 +1041,7 @@ def resource_tasks_for_commands(commands):
                 "class": (
                     os.path.dirname(roots_path) + "|" + owner
                     + "|preload-delta|full-graph|"
-                    + str(os.environ.get("PCC_GC_BACKEND", "0"))
+                    + str(_ONE_COLLECTOR)
                     + "|" + identities[0]
                 ),
                 "inputs": [_artifact_size(exports_path), _artifact_size(roots_path), len(roots)],
@@ -1090,7 +1088,7 @@ def resource_tasks_for_commands(commands):
         execution_class = (
             os.path.dirname(path) + "|" + owner + "|" + manifest["job_kind"]
             + "|" + ("module-indexed" if len(indices) == 1 else "full-graph")
-            + "|" + str(os.environ.get("PCC_GC_BACKEND", "0"))
+            + "|" + str(_ONE_COLLECTOR)
             + "|" + str(os.environ.get("PCC_PYTHON_IR_PASSES", ""))
             + "|" + str(os.environ.get("PCC_DIRECT_INDEXED_SIDECAR", ""))
             + "|" + str(os.environ.get("PCC_DIRECT_INDEXED_KERNEL_RELEASE_FRONTEND", ""))

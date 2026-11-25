@@ -27,7 +27,8 @@ def forbid_gc_sampling(monkeypatch):
     def forbidden(*args):
         reads.append(args)
         raise AssertionError("time-only child must never read GC telemetry")
-    monkeypatch.setattr(timing, "_pcc_gc_backend", forbidden)
+    # Telemetry is the only native GC read left; the collector selector query
+    # is gone (item 2 (d), one collector).
     monkeypatch.setattr(timing, "_pcc_gc_telemetry", forbidden)
     yield
     # The observer catches BaseException: raising alone would be a false pass.
