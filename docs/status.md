@@ -925,7 +925,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - none
+   - TinyXML2 generic file-scope static function linkage: Codex, Linux x86_64, 2026-11-25 16:10 UTC, area frontend-cpp
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:
