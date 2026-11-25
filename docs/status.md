@@ -273,6 +273,11 @@ in the relevant section or issue and removes the entry.
    Next: #20 common ownership program receipts and independent cyclic
    collection witness. Preserve immediate death and cyclic collection
    under the current collector.
+   #20 on the local Mac at `25a309945`: the named CI-contract files and the
+   shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
+   host-only model controls failed only on macOS, from the gate's
+   Linux/Windows host assertion (since `0df9b0b6a`); they now give the gate
+   a supported host (test-only; 307 passed). Linux hosted lanes unrun.
    #12 Windows ordinary collection: the Linux profiling engine imports
    fcntl only while enabling/disabling the perf event; synthetic record
    decoding remains importable without it. Linux: 35 non-integration
@@ -282,7 +287,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 test_ci_native_object_regressions contract nodes: Claude, local Mac, 2026-11-25 00:38Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

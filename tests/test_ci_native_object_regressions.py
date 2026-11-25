@@ -103,6 +103,18 @@ def _receipts(directory, runtime):
     return paths
 
 
+class _SupportedHost:
+    """The gate module's ``sys`` reporting a Linux host; all else forwards."""
+
+    platform = "linux"
+
+    def __init__(self, base):
+        self._base = base
+
+    def __getattr__(self, name):
+        return getattr(self._base, name)
+
+
 @pytest.fixture
 def admitted(tmp_path, monkeypatch):
     archive = tmp_path / "libpy_runtime_pcc_py.a"
@@ -118,6 +130,10 @@ def admitted(tmp_path, monkeypatch):
     (tmp_path / "input.py").write_text("host-only source input", encoding="utf-8")
     monkeypatch.setattr(gate, "ROOT", tmp_path)
     monkeypatch.setattr(gate, "TEST_INPUTS", ("input.py",))
+    # The gate runs only on its Linux and Windows CI hosts. These are host-only
+    # model controls (every native step is stubbed), so the gate sees a
+    # supported host on any machine; nothing else in the process does.
+    monkeypatch.setattr(gate, "sys", _SupportedHost(gate.sys))
     monkeypatch.setenv("GITHUB_SHA", source["commit"])
     monkeypatch.setattr(gate, "source_identity", lambda: copy.deepcopy(source))
     monkeypatch.setattr(gate, "runtime_identity", lambda path: copy.deepcopy(runtime))
