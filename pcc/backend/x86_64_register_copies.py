@@ -351,6 +351,22 @@ def _scratch_dead_from(lines: list[str], start: int, scratch_mask: int) -> bool:
     return False
 
 
+def _retarget_destination(lines: list[str], index: int, scratch: str) -> str:
+    """Destination of a full-width copy following a scratch definition."""
+    if index + 1 < len(lines):
+        copy = _parse_two_operands(lines[index + 1])
+        if (
+            copy is not None
+            and copy[0] == "mov"
+            and copy[2] == scratch
+            and _REG_WIDTH.get(copy[1], 0) == 8
+            and copy[1] not in ("rsp", "rbp")
+            and _scratch_dead_from(lines, index + 2, 1 << _REG_BASE[scratch])
+        ):
+            return copy[1]
+    return ""
+
+
 def retarget_scratch_definitions(lines: list[str]) -> list[str]:
     """``op r10, src`` + ``mov reg, r10`` -> ``op reg, src`` when r10 is dead.
 
@@ -374,16 +390,9 @@ def retarget_scratch_definitions(lines: list[str]) -> list[str]:
                 and definition[0] in _SCRATCH_DEFINITIONS
                 and (definition[1] == "r10" or definition[1] == "r11")
             ):
-                copy = _parse_two_operands(lines[index + 1])
-                if (
-                    copy is not None
-                    and copy[0] == "mov"
-                    and copy[2] == definition[1]
-                    and _REG_WIDTH.get(copy[1], 0) == 8
-                    and copy[1] not in ("rsp", "rbp")
-                    and _scratch_dead_from(lines, index + 2, 1 << _REG_BASE[definition[1]])
-                ):
-                    out.append("  " + definition[0] + " " + copy[1] + ", " + definition[2])
+                destination = _retarget_destination(lines, index, definition[1])
+                if destination:
+                    out.append("  " + definition[0] + " " + destination + ", " + definition[2])
                     index += 2
                     continue
         out.append(line)
@@ -392,6 +401,21 @@ def retarget_scratch_definitions(lines: list[str]) -> list[str]:
 
 
 def forward_register_copies(lines: list[str]) -> list[str]:
+    return _forward_register_copies(lines, False)
+
+
+def retarget_and_forward_register_copies(lines: list[str]) -> list[str]:
+    """Run the retarget and forward passes without parsing the input twice.
+
+    Retargeting still proves scratch death from the original, unmodified
+    instructions, just as the separate retarget pass does. A removed
+    adjacent copy has no effects or control-flow boundary; keep its index
+    until dead-move selection rather than constructing another line list.
+    """
+    return _forward_register_copies(lines, True)
+
+
+def _forward_register_copies(lines: list[str], retarget_scratch: bool) -> list[str]:
     """Forward register copies inside blocks, then drop dead register moves.
 
     Each line is parsed once: its mnemonic and first two operands, the
@@ -403,7 +427,7 @@ def forward_register_copies(lines: list[str]) -> list[str]:
     copied = False
     reads_of = [0] * count
     writes_of = [0] * count
-    # 1: a droppable move; 2: dropped already (a self-move).
+    # 1: a droppable move; 2: dropped already (a self-move or retargeted copy).
     droppable = [0] * count
     labels: dict[str, int] = {}
     ends: list[int] = []
@@ -419,7 +443,11 @@ def forward_register_copies(lines: list[str]) -> list[str]:
     value_widths = [0] * 16
     constants = 0
     index = 0
+    retargeted_copy = -1
     while index < count:
+        if index == retargeted_copy:
+            index += 1
+            continue
         line = lines[index]
         if not line.startswith("  "):
             if line.endswith(":"):
@@ -461,6 +489,16 @@ def forward_register_copies(lines: list[str]) -> list[str]:
                     second_text = line[comma + 2:after]
                     tail = line[after:]
                     operands = 3
+        retargeted = False
+        if (retarget_scratch and operands == 2
+                and (first_text == "r10" or first_text == "r11")
+                and mnemonic in _SCRATCH_DEFINITIONS):
+            destination = _retarget_destination(lines, index, first_text)
+            if destination:
+                first_text = destination
+                retargeted = True
+                retargeted_copy = index + 1
+                droppable[retargeted_copy] = 2
         packed = _effects(mnemonic, first_text, second_text, operands)
         if packed < 0:
             if copies or constants:
@@ -565,7 +603,7 @@ def forward_register_copies(lines: list[str]) -> list[str]:
                     copies += 1
                 sources[target] = source
                 widths[target] = _REG_WIDTH[first_text]
-        if changed:
+        if changed or retargeted:
             if not copied:
                 out = list(lines)
                 copied = True
@@ -594,7 +632,7 @@ def forward_register_copies(lines: list[str]) -> list[str]:
     else:
         dead = None
     if dead is None:
-        # Still drop the self-moves.
+        # Still drop the self-moves and already retargeted copies.
         dead = droppable
         dropped = 0
         index = 0

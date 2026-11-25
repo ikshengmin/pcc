@@ -77,7 +77,7 @@ from .x86_64_frame_registers import (
     CALLEE_SAVED_AREA_SIZE,
     keep_frame_slots_in_registers,
 )
-from .x86_64_register_copies import forward_register_copies, retarget_scratch_definitions
+from .x86_64_register_copies import retarget_and_forward_register_copies
 
 _WINDOWS_ABI = False
 _WINDOWS_SCRATCH_BASE = 0
@@ -3545,7 +3545,7 @@ def _emit_function(
         # A second round drops the jumps the first one left falling into
         # their own target.
         lines = _thread_x86_jumps(_thread_x86_jumps(lines))
-        lines = forward_register_copies(retarget_scratch_definitions(lines))
+        lines = retarget_and_forward_register_copies(lines)
         lines = expand_pointer_retirements(lines)
     lines.append(stack_map_plan.end_label + ":")
     lines.append(f".size {symbol}, .-{symbol}")

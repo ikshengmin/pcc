@@ -395,3 +395,56 @@ def test_cyclic_forwarding_matches_reference_with_flags_and_barriers(monkeypatch
             expected = forward_register_copies(lines)
         assert actual == expected
     assert forward_register_copies(fixtures[0]) == [".Lloop:", "  jmp .Lloop"]
+
+
+@pytest.mark.parametrize("lines", [
+    [],
+    ["  mov r10, rdi", "  mov rax, r10", "  ret"],
+    ["  mov r10, rdi", "  mov r11, r10", "  mov rax, r11", "  ret"],
+    ["  lea r11, [r11 + rcx*8]", "  mov rbx, r11", "  ret"],
+    ["  movzx r10, WORD PTR [r11]", "  mov r12, r10", "  mov r10, 7",
+     "  mov r11, r10", "  mov rax, r11", "  ret"],
+    ["  mov r10, rdi", "  mov ebx, r10d", "  mov r11, rsp", "  mov rbp, r11", "  ret"],
+    ["  mov r10, rdi", "  mov rax, r10", ".Lnext:", "  add rax, r10", "  ret"],
+    [".Lloop:", "  mov r10, rbx", "  mov r12, r10", "  mov r10, 0",
+     "  test r12, r12", "  jne .Lloop", "  ret"],
+    ["  mov r10, rbx", "  mov rax, r10", "  mov r10, 0", "  jmp .Lunknown"],
+    ["  mov r10, rbx", "  mov rax, r10", "  mov r10, 0", "  jmp rax"],
+    ["  mov r10, rbx", "  mov rax, r10", "  lock xadd QWORD PTR [r13], r10", "  ret"],
+    ["  mov r10, rbx", "  mov rax, r10", "  pcc_retire_pointer_register r10", "  ret"],
+    ["  mov r10, rbx", "  mov rdi, r10", "  .loc 1 2 3", "  call g", "  ret"],
+])
+def test_shared_scan_matches_sequential_passes(lines):
+    original = list(lines)
+    expected = forward_register_copies(copies.retarget_scratch_definitions(lines))
+    assert copies.retarget_and_forward_register_copies(lines) == expected
+    assert lines == original
+
+
+def test_shared_scan_matches_sequential_passes_for_mixed_blocks():
+    rng = Random(37)
+    chunks = [
+        ["  mov r10, rbx", "  mov r11, r10"],
+        ["  mov r11, r10", "  mov rax, r11"],
+        ["  mov r10, 0", "  mov rax, r10"],
+        ["  mov eax, r10d"],
+        ["  movsx r11, BYTE PTR [r10]", "  mov rbx, r11"],
+        ["  lea r10, [r12 + r11*8]", "  mov r12, r10"],
+        ["  mov r10, r10"],
+        ["  mov r11, r11"],
+        ["  cmp rbx, 0", "  jne .Lloop"],
+        ["  call g"],
+        ["  jmp .Ldone"],
+        ["  pcc_retire_pointer_register r12"],
+        ["  mov QWORD PTR [r10 + 4], r11"],
+        ["  .loc 1 2 3"],
+        ["  xor r10, r10"],
+        ["  xor r11, r11"],
+    ]
+    for _ in range(250):
+        lines = [".Lloop:"]
+        for _ in range(rng.randint(1, 18)):
+            lines.extend(rng.choice(chunks))
+        lines.extend([".Ldone:", "  ret"])
+        expected = forward_register_copies(copies.retarget_scratch_definitions(lines))
+        assert copies.retarget_and_forward_register_copies(lines) == expected, lines

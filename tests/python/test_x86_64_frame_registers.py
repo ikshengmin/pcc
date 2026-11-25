@@ -430,13 +430,13 @@ def test_pointer_last_read_retires_storage_after_copy_not_before_call():
 
 
 def test_pointer_retirement_survives_final_copy_peepholes_without_changing_flags():
-    from pcc.backend.x86_64_register_copies import forward_register_copies, retarget_scratch_definitions
+    from pcc.backend.x86_64_register_copies import retarget_and_forward_register_copies
     body = ["  mov QWORD PTR [rbp - 8], rdi", "  cmp rsi, 7",
             "  mov r10, QWORD PTR [rbp - 8]", "  sete sil", "  mov rdi, r10", "  call consume"]
     marked = keep_frame_slots_in_registers(PROLOGUE + body + EPILOGUE,
                                            _func((8, PTR)), _plan(), windows=False)
     assert "  pcc_retire_pointer_register rbx" in marked
-    final = expand_pointer_retirements(forward_register_copies(retarget_scratch_definitions(marked)))
+    final = expand_pointer_retirements(retarget_and_forward_register_copies(marked))
     assert "  mov ebx, 0" in final
     assert not any("pcc_retire_" in line for line in final)
     compare, flag_use = final.index("  cmp rsi, 7"), final.index("  sete sil")
