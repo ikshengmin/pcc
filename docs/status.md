@@ -159,8 +159,10 @@ That run is a red baseline. No formal run pending. The latest completed
 keeps that baseline: candidate `7ec14d388` has exact test regressions
 [#19](https://github.com/ikshengmin/pcc/issues/19) and
 [#20](https://github.com/ikshengmin/pcc/issues/20). #19's fix landed at
-`6c1c280f`; matching hosted evidence is not yet green
-([run 45447422239](https://github.com/ikshengmin/pcc/actions/runs/45447422239)).
+`6c1c280f`; matched [macOS ARM64 job 138802215009](https://github.com/ikshengmin/pcc/actions/runs/45447422239/job/138802215009)
+passed. Artifact 14968387872 confirms the exact callback node (1 passed,
+0 skipped), with direct and threaded native output equal to CPython and
+the matching runtime identity. This does not qualify the entire run.
 Stopped areas: the affected single-collector test and CI paths, except fixes
 for #20. The two Go diagnostics and Rust integration node from #10/#11 passed;
 the revised Go index native integration witness was not reached. #12 still
@@ -271,11 +273,16 @@ in the relevant section or issue and removes the entry.
    Next: #20 common ownership program receipts and independent cyclic
    collection witness. Preserve immediate death and cyclic collection
    under the current collector.
-   [#19](https://github.com/ikshengmin/pcc/issues/19) is fixed in source;
-   matching hosted evidence is still pending.
+   #12 Windows ordinary collection: the Linux profiling engine imports
+   fcntl only while enabling/disabling the perf event; synthetic record
+   decoding remains importable without it. Linux: 35 non-integration
+   tests passed, including missing-fcntl import/decoder and ioctl cleanup
+   on exception. Windows collection still needs hosted verification.
+   [#19](https://github.com/ikshengmin/pcc/issues/19) has matching hosted
+   native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #12 Windows ordinary collection import: Codex, Linux, 2026-11-25 00:04 UTC, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State

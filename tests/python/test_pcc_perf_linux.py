@@ -32,6 +32,34 @@ def _ring(data, *, tail=0, capacity=128):
     return mapping
 
 
+def test_synthetic_ring_import_does_not_require_fcntl(monkeypatch):
+    # Windows has no fcntl module. Load the real engine with that module
+    # explicitly unavailable, then execute the platform-independent decoder.
+    monkeypatch.setitem(sys.modules, "fcntl", None)
+    spec = importlib.util.spec_from_file_location("_pcc_task_clock_no_fcntl", MODULE)
+    engine = importlib.util.module_from_spec(spec)
+    monkeypatch.setitem(sys.modules, spec.name, engine)
+    spec.loader.exec_module(engine)
+    assert engine._read_frozen_ring(_ring(_sample())) == [
+        engine.TaskSample(0x2000, 7, 9, 500_000),
+    ]
+
+
+def test_enabled_disables_event_after_body_exception(monkeypatch):
+    from types import SimpleNamespace
+
+    calls = []
+    monkeypatch.setitem(sys.modules, "fcntl", SimpleNamespace(
+        ioctl=lambda fd, operation: calls.append((fd, operation)),
+    ))
+    with pytest.raises(RuntimeError, match="body"):
+        with RING._enabled(17):
+            assert calls == [(17, RING.PERF_EVENT_IOC_ENABLE)]
+            raise RuntimeError("body")
+    assert calls == [(17, RING.PERF_EVENT_IOC_ENABLE),
+                     (17, RING.PERF_EVENT_IOC_DISABLE)]
+
+
 def test_task_clock_sample_header_and_payload_decode_across_wrap():
     expected = [RING.TaskSample(0x2000, 7, 9, 500_000),
                 RING.TaskSample(0x2001, 7, 9, 1_000_000)]

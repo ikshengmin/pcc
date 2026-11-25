@@ -7,7 +7,6 @@ child. It does not accept an external PID or infer a CPU distribution.
 from __future__ import annotations
 
 import ctypes
-import fcntl
 import hashlib
 import mmap
 import os
@@ -220,6 +219,9 @@ def _task_ring(tid: int, period: int, data_pages: int = RING_PAGES, *, precise_c
 
 @contextmanager
 def _enabled(fd: int):
+    # Keep deterministic record decoding importable on non-POSIX hosts.
+    import fcntl
+
     fcntl.ioctl(fd, PERF_EVENT_IOC_ENABLE)
     try:
         yield
