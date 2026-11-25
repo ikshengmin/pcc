@@ -341,12 +341,6 @@ _backend4_zpage_note_forwarding_removed = extern(
     "pcc_gc_backend4_zpage_note_forwarding_removed", (c_ptr,), c_void
 )
 pcc_gc_step = extern("pcc_gc_step", (c_int64,), c_int64)
-pcc_gc_note_slot_write_barrier = extern(
-    "pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void
-)
-pcc_gc_note_write_barrier = extern(
-    "pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void
-)
 _promote_young_if_known = extern(
     "pcc_gc_generational_promote_young_if_known", (c_ptr,), c_void
 )

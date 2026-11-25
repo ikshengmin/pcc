@@ -217,11 +217,6 @@ pcc_gc_note_frame_leave_lifo = extern(
     (c_ptr,),
     c_void,
 )
-pcc_gc_note_write_barrier = extern(
-    "pcc_gc_note_write_barrier",
-    (c_ptr, c_ptr),
-    c_void,
-)
 pcc_gc_object_is_known_no_lock = extern(
     "pcc_gc_object_is_known_no_lock",
     (c_ptr,),
@@ -1699,7 +1694,6 @@ def _py_gc_callbacks_ensure():
         if ptr_is_null(callbacks) != 0:
             return null()
         global_store_ptr("py_gc_callbacks", callbacks)
-        pcc_gc_pin(callbacks)
     return callbacks
 
 

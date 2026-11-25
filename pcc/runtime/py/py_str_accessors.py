@@ -70,7 +70,6 @@ from pcc.unsafe import (
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
 py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 
 
 @c_abi_export("py_str_check")
@@ -2098,20 +2097,13 @@ def _str_concat_subclasses(a, b):
     left = py_str_exact_copy(a)
     if ptr_is_null(left) != 0:
         return null()
-    pcc_gc_pin(left)
     right = py_str_exact_copy(b)
     if ptr_is_null(right) != 0:
-        pcc_gc_unpin(left)
         py_decref(left)
         return null()
-    pcc_gc_pin(right)
     result = py_str_concat(left, right)
-    pcc_gc_pin(result)
-    pcc_gc_unpin(right)
     py_decref(right)
-    pcc_gc_unpin(left)
     py_decref(left)
-    pcc_gc_unpin(result)
     return result
 
 

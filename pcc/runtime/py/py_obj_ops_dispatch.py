@@ -108,7 +108,6 @@ pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 py_clear_exception = extern("py_clear_exception", (), c_void)
@@ -3255,12 +3254,10 @@ def _py_sync_signature_parameter(names, kinds, has_defaults, defaults, index: in
     formal = py_str_new(name, name_len)
     if ptr_is_null(formal):
         return 0
-    pcc_gc_pin(formal)
     py_tuple_set_item(names, index, formal)
     py_tuple_set_item(kinds, index, py_int_from_i64(0))
     py_tuple_set_item(has_defaults, index, global_load_ptr("py_True"))
     py_tuple_set_item(defaults, index, default)
-    pcc_gc_unpin(formal)
     py_decref(formal)
     return 1
 
@@ -3274,13 +3271,9 @@ def _py_sync_signature_captures(captures, count: int, first, first_len: int, fir
     threading-only kwargs transport. NULL on allocation failure.
     """
     names = py_tuple_new(count)
-    pcc_gc_pin(names)
     kinds = py_tuple_new(count)
-    pcc_gc_pin(kinds)
     has_defaults = py_tuple_new(count)
-    pcc_gc_pin(has_defaults)
     defaults = py_tuple_new(count)
-    pcc_gc_pin(defaults)
     signature = null()
     wrapper = null()
     if ptr_is_null(names) == 0 and ptr_is_null(kinds) == 0 and ptr_is_null(has_defaults) == 0 and ptr_is_null(defaults) == 0:
@@ -3293,10 +3286,8 @@ def _py_sync_signature_captures(captures, count: int, first, first_len: int, fir
             )
         if complete != 0:
             signature = py_tuple_new(5)
-            pcc_gc_pin(signature)
             if ptr_is_null(signature) == 0:
                 magic = py_str_new(cstr("__pcc_func_signature_v1__"), 25)
-                pcc_gc_pin(magic)
                 if ptr_is_null(magic) == 0:
                     py_tuple_set_item(signature, 0, magic)
                     py_tuple_set_item(signature, 1, names)
@@ -3304,23 +3295,15 @@ def _py_sync_signature_captures(captures, count: int, first, first_len: int, fir
                     py_tuple_set_item(signature, 3, has_defaults)
                     py_tuple_set_item(signature, 4, defaults)
                     wrapper = py_tuple_new(2)
-                    pcc_gc_pin(wrapper)
                     if ptr_is_null(wrapper) == 0:
                         py_tuple_set_item(wrapper, 0, captures)
                         py_tuple_set_item(wrapper, 1, signature)
-                pcc_gc_unpin(magic)
                 py_decref(magic)
-    pcc_gc_unpin(signature)
     py_decref(signature)
-    pcc_gc_unpin(defaults)
     py_decref(defaults)
-    pcc_gc_unpin(has_defaults)
     py_decref(has_defaults)
-    pcc_gc_unpin(kinds)
     py_decref(kinds)
-    pcc_gc_unpin(names)
     py_decref(names)
-    pcc_gc_unpin(wrapper)
     return wrapper
 
 

@@ -69,7 +69,6 @@ pcc_gc_load_ptr = extern("pcc_gc_load_ptr", (c_ptr, c_ptr), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
-pcc_gc_note_write_barrier = extern("pcc_gc_note_write_barrier", (c_ptr, c_ptr), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_scheduler_root_register_handle = extern("pcc_gc_scheduler_root_register_handle", (c_ptr,), c_ptr)
 pcc_gc_scheduler_root_unregister_handle = extern("pcc_gc_scheduler_root_unregister_handle", (c_ptr,), c_void)
@@ -609,7 +608,6 @@ def _module_cache(create: int):
         cache = py_dict_new()
         if ptr_is_null(cache):
             return null()
-        pcc_gc_pin(cache)
         global_store_ptr("pcc_module_attrs_cache", cache)
     return cache
 
@@ -664,7 +662,6 @@ def _module_ensure(module_name):
     if ptr_is_null(attrs):
         py_decref(key)
         return null()
-    pcc_gc_pin(attrs)
     py_dict_set(cache, key, attrs)
     py_decref(key)
     py_decref(attrs)

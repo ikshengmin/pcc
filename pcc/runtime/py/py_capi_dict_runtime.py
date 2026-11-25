@@ -52,7 +52,6 @@ from pcc.unsafe import (
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -134,7 +133,6 @@ def PyDict_GetItem(dict, key):
     if ptr_is_null(item):
         return null()
     # py_dict_get returns owned; CPython PyDict_GetItem returns borrowed.
-    pcc_gc_pin(item)
     py_decref(item)
     return item
 
@@ -159,7 +157,6 @@ def PyDict_GetItemWithError(dict, key):
     item = py_dict_get(dict, key)
     if ptr_is_null(item):
         return null()
-    pcc_gc_pin(item)
     py_decref(item)
     return item
 

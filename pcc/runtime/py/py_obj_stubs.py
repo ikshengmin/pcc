@@ -115,7 +115,6 @@ py_int_to_str_obj = extern("py_int_to_str_obj", (c_ptr,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
 py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
 py_user_str_dispatch = extern("py_user_str_dispatch", (c_ptr,), c_ptr)
@@ -4966,12 +4965,8 @@ def py_obj_repr(o):
         exact = py_str_exact_copy(o)
         if ptr_is_null(exact) != 0:
             return null()
-        pcc_gc_pin(exact)
         result = _obj_repr_str(exact, 0)
-        pcc_gc_pin(result)
-        pcc_gc_unpin(exact)
         py_decref(exact)
-        pcc_gc_unpin(result)
         return result
     exc_base = py_exc_builtin_class(0)  # PY_EXC_BASE
     if not ptr_is_null(exc_base):

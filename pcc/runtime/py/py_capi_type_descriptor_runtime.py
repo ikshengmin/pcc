@@ -67,7 +67,6 @@ py_err_occurred = extern("py_err_occurred", (), c_int64)
 py_runtime_error_if_unset = extern(
     "py_runtime_error_if_unset", (c_ptr, c_ptr), c_ptr
 )
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 py_func_new_named = extern("py_func_new_named", (c_ptr, c_ptr, c_ptr), c_ptr)
 pcc_capi_is_type_object = extern("pcc_capi_is_type_object", (c_ptr,), c_int64)
 pcc_capi_cext_type_for_object = extern("pcc_capi_cext_type_for_object", (c_ptr,), c_ptr)
@@ -278,7 +277,6 @@ def _method_descriptor(method) -> c_ptr:
     py_decref(captures)
     if ptr_is_null(descriptor):
         return null()
-    pcc_gc_pin(descriptor)
     store_ptr(cache, i * 16, method)
     store_ptr(cache, i * 16 + 8, descriptor)
     py_incref(descriptor)
@@ -310,7 +308,6 @@ def _data_descriptor(definition, name, is_getset: int) -> c_ptr:
     )
     if ptr_is_null(descriptor):
         return null()
-    pcc_gc_pin(descriptor)
     store_ptr(cache, i * 16, definition)
     store_ptr(cache, i * 16 + 8, descriptor)
     py_incref(descriptor)
@@ -372,7 +369,6 @@ def _richcompare_descriptor(type_obj, name) -> c_ptr:
     py_decref(captures)
     if ptr_is_null(descriptor):
         return null()
-    pcc_gc_pin(descriptor)
     store_ptr(cache, i * 24, slot)
     store_i64(cache, i * 24 + 8, op)
     store_ptr(cache, i * 24 + 16, descriptor)

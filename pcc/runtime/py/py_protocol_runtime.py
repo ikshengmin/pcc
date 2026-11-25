@@ -108,7 +108,6 @@ pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), 
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_publish_owned_root = extern("pcc_gc_publish_owned_root", (c_ptr,), c_int64)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -1093,10 +1092,8 @@ def _divmod_pack(q, r) -> c_ptr:
     out = py_tuple_new(2)
     if ptr_is_null(out) != 0:
         return _protocol_require_result(null(), cstr("divmod"), cstr("divmod result allocation failed"))
-    pcc_gc_pin(out)
     py_tuple_set_item(out, 0, q)
     py_tuple_set_item(out, 1, r)
-    pcc_gc_unpin(out)
     return out
 
 
@@ -1111,10 +1108,8 @@ def _divmod_numeric(a, b, at: int, bt: int) -> c_ptr:
         q = py_int_floordiv(a, b)
         if ptr_is_null(q) != 0:
             return _protocol_require_result(null(), cstr("divmod"), cstr("integer quotient allocation failed"))
-        pcc_gc_pin(q)
         r = py_int_mod(a, b)
         if ptr_is_null(r) != 0:
-            pcc_gc_unpin(q)
             py_decref(q)
             return _protocol_require_result(null(), cstr("divmod"), cstr("integer remainder allocation failed"))
     else:
@@ -1126,21 +1121,14 @@ def _divmod_numeric(a, b, at: int, bt: int) -> c_ptr:
         parts = stack_alloc(16)
         _float_div_mod(av, bv, parts)
         q = py_float_from_f64(load_f64(parts, 0))
-        pcc_gc_pin(q)
         r = py_float_from_f64(load_f64(parts, 8))
         if ptr_is_null(q) != 0 or ptr_is_null(r) != 0:
-            pcc_gc_unpin(q)
             py_decref(q)
             py_decref(r)
             return _protocol_require_result(null(), cstr("divmod"), cstr("float divmod result allocation failed"))
-    pcc_gc_pin(r)
     out = _divmod_pack(q, r)
-    pcc_gc_pin(out)
-    pcc_gc_unpin(r)
     py_decref(r)
-    pcc_gc_unpin(q)
     py_decref(q)
-    pcc_gc_unpin(out)
     return out
 
 
@@ -1536,7 +1524,6 @@ pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", 
 pcc_gc_store_ptr_plan_init = extern("pcc_gc_store_ptr_plan_init", (c_ptr, c_ptr, c_int64), c_void)
 pcc_gc_store_ptr_plan_commit_locked = extern("pcc_gc_store_ptr_plan_commit_locked", (c_ptr, c_ptr, c_ptr, c_ptr), c_int64)
 pcc_gc_store_ptr_plan_finish = extern("pcc_gc_store_ptr_plan_finish", (c_ptr,), c_void)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 pcc_gc_backend = extern("pcc_gc_backend", (), c_int64)

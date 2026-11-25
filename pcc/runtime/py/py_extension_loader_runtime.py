@@ -59,8 +59,6 @@ pcc_capi_module_from_def = extern("pcc_capi_module_from_def", (c_ptr,), c_ptr)
 pcc_capi_module_run_exec_slots = extern(
     "pcc_capi_module_run_exec_slots", (c_ptr, c_ptr), c_int32
 )
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
 py_err_occurred = extern("py_err_occurred", (), c_int64)

@@ -33,9 +33,6 @@ class _Memory:
         self.allocations = []
         self.fail_allocation = None
         self.freed = []
-        self.known = set()
-        self.known_checks = []
-        self.pinned = []
         self.decrefs = []
         self.attributes = []
         self.errors = []
@@ -56,8 +53,8 @@ class _Memory:
             PyMem_Calloc=self.calloc,
             PyMem_Free=self.free,
             PyErr_NoMemory=lambda: self.errors.append("NoMemory"),
-            pcc_gc_object_is_known_stable=self.is_known,
-            pcc_gc_pin=self.pinned.append,
+            # One collector (item 2 (d)): a registered module is neither
+            # queried for stability nor pinned, so neither name is provided.
             pcc_runtime_module_class=lambda: self.module_class,
             py_instance_new=self.new_module,
             py_instance_setattr=lambda *args: self.attributes.append(args),
@@ -115,15 +112,10 @@ class _Memory:
         ptr.alive = False
         self.freed.append(ptr)
 
-    def is_known(self, module):
-        self.known_checks.append(module)
-        return int(module in self.known)
-
     def new_module(self, cls):
         assert cls is self.module_class
         module = object()
         self.modules.append(module)
-        self.known.add(module)
         return module
 
     def definition(self, size=16):
@@ -161,15 +153,11 @@ def test_registration_allocates_all_four_pointer_slots_and_preserves_chain():
     assert memory.freed == []
 
 
-@pytest.mark.parametrize("kind", ["null", "tagged", "unknown", "known"])
-def test_registration_preserves_module_pin_conditions(kind):
+@pytest.mark.parametrize("kind", ["null", "tagged", "object"])
+def test_registration_records_every_module_kind_without_a_pin(kind):
     memory = _Memory()
     module = None if kind == "null" else 1 if kind == "tagged" else object()
-    if kind == "known":
-        memory.known.add(module)
     assert memory.register(module, None, None) == 0
-    assert memory.known_checks == ([module] if kind in ("unknown", "known") else [])
-    assert memory.pinned == ([module] if kind == "known" else [])
     assert memory.find(module) is memory.load(memory.head, 0)
     assert memory.ns["PyModule_GetState"](module) is None
 
@@ -183,12 +171,10 @@ def test_failed_record_allocation_does_not_publish_or_take_ownership(existing):
     fields = dict(head.fields) if head is not None else None
     memory.fail_allocation = len(memory.allocations) + 1
     module, definition, state = object(), memory.definition(), _Block(16)
-    memory.known.add(module)
-    memory.known_checks.clear()
     assert memory.register(module, definition, state) == -1
     assert memory.load(memory.head, 0) is head
     assert (dict(head.fields) if head is not None else None) == fields
-    assert memory.known_checks == memory.pinned == memory.decrefs == memory.freed == []
+    assert memory.decrefs == memory.freed == []
     assert memory.errors == []
     assert state.alive
 
@@ -243,7 +229,6 @@ def test_module_creation_allocates_state_then_complete_record():
     state = memory.ns["PyModule_GetState"](module)
     assert state.size == 40 and state.fields == {}
     assert node.fields == {0: module, 8: definition, 16: state, 24: None}
-    assert memory.pinned == [module]
     assert memory.errors == memory.freed == []
     assert memory.attributes == [(module, "__name__", "bounds_demo")]
 
@@ -261,7 +246,7 @@ def test_module_creation_allocation_failure_releases_only_owned_state(failure):
     assert len(memory.freed) == failure - 1
     if memory.freed:
         assert memory.freed[0].size == 40 and not memory.freed[0].alive
-    assert memory.pinned == memory.known_checks == memory.attributes == []
+    assert memory.attributes == []
 
 
 @pytest.mark.parametrize("size", [0, -1])

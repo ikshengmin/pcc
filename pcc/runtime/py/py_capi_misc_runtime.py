@@ -55,7 +55,6 @@ py_raise = extern("py_raise", (c_ptr,), c_void)
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 free_c = extern("free", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
 
@@ -119,7 +118,6 @@ def PyBuffer_Release(view) -> None:
     internal = load_ptr(view, 72)  # Py_buffer.internal
     if not ptr_is_null(internal):
         lease_owner = load_ptr(internal, 16)
-        view_owner = load_ptr(internal, 24)
         if not ptr_is_null(lease_owner):
             pcc_py_gc_minor_graph_lock()
             node = global_load_ptr("pcc_capi_buffer_lease_head")
@@ -133,19 +131,6 @@ def PyBuffer_Release(view) -> None:
                     global_store_ptr("pcc_capi_buffer_lease_head", nxt)
                 else:
                     store_ptr(previous, 32, nxt)
-            scan = global_load_ptr("pcc_capi_buffer_lease_head")
-            owner_still_leased: int = 0
-            view_still_leased: int = 0
-            while not ptr_is_null(scan):
-                if ptr_eq(load_ptr(scan, 16), lease_owner) or ptr_eq(load_ptr(scan, 24), lease_owner):
-                    owner_still_leased = 1
-                if ptr_eq(load_ptr(scan, 16), view_owner) or ptr_eq(load_ptr(scan, 24), view_owner):
-                    view_still_leased = 1
-                scan = load_ptr(scan, 32)
-            if owner_still_leased == 0:
-                pcc_gc_unpin(lease_owner)
-            if ptr_eq(view_owner, lease_owner) == 0 and view_still_leased == 0:
-                pcc_gc_unpin(view_owner)
             pcc_py_gc_minor_graph_unlock()
     obj = load_ptr(view, 8)  # Py_buffer.obj at offset 8 (buf at 0)
     if not ptr_is_null(obj):
@@ -204,7 +189,6 @@ py_str_mod = extern("py_str_mod", (c_ptr, c_ptr), c_ptr)
 py_class_new_builtin = extern("py_class_new_builtin", (c_ptr, c_ptr, c_int64, c_ptr, c_int64), c_ptr)
 PyLong_FromLong = extern("PyLong_FromLong", (c_int64,), c_ptr)
 PyUnicode_FromString = extern("PyUnicode_FromString", (c_ptr,), c_ptr)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 py_obj_setattr = extern("py_obj_setattr", (c_ptr, c_ptr, c_ptr), c_int64)
 py_dict_set = extern("py_dict_set", (c_ptr, c_ptr, c_ptr), c_int64)
 
@@ -221,7 +205,6 @@ def _sys_flags_class() -> c_ptr:
     cls = py_class_new_builtin(cstr("sys.flags"), null(), 0, null(), 0)
     if ptr_is_null(cls):
         return null()
-    pcc_gc_pin(cls)
     zero = PyLong_FromLong(0)
     if not ptr_is_null(zero):
         # py_obj_setattr takes a C string name, not a py str object.

@@ -100,7 +100,6 @@ py_int_from_f64_exact = extern("py_int_from_f64_exact", (c_double,), c_ptr)
 py_str_new = extern("py_str_new", (c_ptr, c_int64), c_ptr)
 py_str_payload = extern("py_str_payload", (c_ptr,), c_ptr)
 py_str_exact_copy = extern("py_str_exact_copy", (c_ptr,), c_ptr)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 py_str_check = extern("py_str_check", (c_ptr,), c_int64)
 py_str_utf8 = extern("py_str_utf8", (c_ptr,), c_ptr)
 py_str_byte_len = extern("py_str_byte_len", (c_ptr,), c_int64)
@@ -2191,7 +2190,6 @@ define_global_i32("pcc_format_callback_owned_map", _FORMAT_SLOT_COUNT)
 pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), c_int64)
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 
@@ -2369,12 +2367,8 @@ def _format_value(value, spec):
         exact = py_str_exact_copy(value)
         if ptr_is_null(exact) != 0:
             return null()
-        pcc_gc_pin(exact)
         result = _format_str_value(exact, text, length)
-        pcc_gc_pin(result)
-        pcc_gc_unpin(exact)
         py_decref(exact)
-        pcc_gc_unpin(result)
         return result
     # object.__format__ rejects any non-empty spec.
     state = _buffer_new(96)

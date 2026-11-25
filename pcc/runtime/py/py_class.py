@@ -1988,12 +1988,10 @@ def _object_new_signature_formal(names, kinds, has_defaults, defaults, index: in
     name_obj = py_str_new(name, strlen(name))
     if ptr_is_null(name_obj) != 0:
         return False
-    pcc_gc_pin(name_obj)
     py_tuple_set_item(names, index, name_obj)
     py_tuple_set_item(kinds, index, py_int_from_i64(kind))
     py_tuple_set_item(has_defaults, index, py_bool_from_bit(0))
     py_tuple_set_item(defaults, index, global_load_ptr("py_None"))
-    pcc_gc_unpin(name_obj)
     py_decref(name_obj)
     return py_err_occurred() == 0
 
@@ -2007,13 +2005,9 @@ def _object_member_captures(first) -> c_ptr:
     # *args and **kwargs. Use its existing signature format, without a
     # builtin-only keyword or argument transport.
     names = py_tuple_new(3)
-    pcc_gc_pin(names)
     kinds = py_tuple_new(3)
-    pcc_gc_pin(kinds)
     has_defaults = py_tuple_new(3)
-    pcc_gc_pin(has_defaults)
     defaults = py_tuple_new(3)
-    pcc_gc_pin(defaults)
     signature = null()
     wrapper = null()
     valid: int = 0
@@ -2024,43 +2018,30 @@ def _object_member_captures(first) -> c_ptr:
                     valid = 1
     if valid != 0:
         signature = py_tuple_new(5)
-        pcc_gc_pin(signature)
         if ptr_is_null(signature) == 0:
             magic = py_str_new(cstr("__pcc_func_signature_v1__"), 25)
             if ptr_is_null(magic) == 0:
-                pcc_gc_pin(magic)
                 py_tuple_set_item(signature, 0, magic)
                 py_tuple_set_item(signature, 1, names)
                 py_tuple_set_item(signature, 2, kinds)
                 py_tuple_set_item(signature, 3, has_defaults)
                 py_tuple_set_item(signature, 4, defaults)
-                pcc_gc_unpin(magic)
                 py_decref(magic)
                 wrapper = py_tuple_new(2)
-                pcc_gc_pin(wrapper)
                 if ptr_is_null(wrapper) == 0:
                     empty = py_tuple_new(0)
                     if ptr_is_null(empty) == 0:
-                        pcc_gc_pin(empty)
                         py_tuple_set_item(wrapper, 0, empty)
                         py_tuple_set_item(wrapper, 1, signature)
-                        pcc_gc_unpin(empty)
                         py_decref(empty)
                     else:
-                        pcc_gc_unpin(wrapper)
                         py_decref(wrapper)
                         wrapper = null()
-    pcc_gc_unpin(signature)
     py_decref(signature)
-    pcc_gc_unpin(defaults)
     py_decref(defaults)
-    pcc_gc_unpin(has_defaults)
     py_decref(has_defaults)
-    pcc_gc_unpin(kinds)
     py_decref(kinds)
-    pcc_gc_unpin(names)
     py_decref(names)
-    pcc_gc_unpin(wrapper)
     return wrapper
 
 
@@ -4017,20 +3998,17 @@ def _object_ne_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     if _object_call_check(slots, cstr("__ne__"), 0, 1) == 0:
         receiver = load_ptr(slots, 0)
         other = _object_call_arg(slots, 0)
-        pcc_gc_pin(other)
         equal = null()
         cls = _object_receiver_class(receiver)
         if ptr_is_null(cls) == 0:
             method = py_class_getattr(cls, cstr("__eq__"))
             if ptr_is_null(method) == 0:
-                pcc_gc_pin(method)
                 pair = py_tuple_new(2)
                 if ptr_is_null(pair) == 0:
                     py_tuple_set_item(pair, 0, receiver)
                     py_tuple_set_item(pair, 1, other)
                     equal = py_obj_call(method, pair, null())
                     py_decref(pair)
-                pcc_gc_unpin(method)
                 py_decref(method)
         elif ptr_eq(receiver, other) != 0:
             equal = py_bool_from_bit(1)
@@ -4044,7 +4022,6 @@ def _object_ne_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
                 py_decref(equal)
                 if py_err_occurred() == 0:
                     result = py_bool_from_bit(1 if truth == 0 else 0)
-        pcc_gc_unpin(other)
         py_decref(other)
     _object_call_release(slots)
     return result
@@ -4102,9 +4079,7 @@ def _object_typed_error(head, value, tail):
     shown = py_obj_type_name(value)
     if ptr_is_null(shown) != 0:
         return null()
-    pcc_gc_pin(shown)
     _object_type_error(head, py_str_utf8(shown), tail)
-    pcc_gc_unpin(shown)
     py_decref(shown)
     return null()
 
@@ -4289,25 +4264,19 @@ def _object_namespace_add(namespace, name, value, wrap: int) -> int:
     """Store NEW ``value`` (consumed) under ``name``; ``wrap`` 1 makes it a classmethod."""
     if ptr_is_null(value) != 0:
         return -1
-    pcc_gc_pin(value)
     stored = value
     if wrap != 0:
         stored = py_classmethod_new(value)
-        pcc_gc_unpin(value)
         py_decref(value)
         if ptr_is_null(stored) != 0:
             return -1
-        pcc_gc_pin(stored)
     status: int = -1
     key = py_str_new(name, strlen(name))
     if ptr_is_null(key) == 0:
-        pcc_gc_pin(key)
         py_dict_set(namespace, key, stored)
         if py_err_occurred() == 0:
             status = 0
-        pcc_gc_unpin(key)
         py_decref(key)
-    pcc_gc_unpin(stored)
     py_decref(stored)
     return status
 
@@ -4317,7 +4286,6 @@ def _object_namespace_build():
     namespace = py_dict_new()
     if ptr_is_null(namespace) != 0:
         return null()
-    pcc_gc_pin(namespace)
     # Each entry appears directly in py_func_new_bound so the port compiler
     # passes its code address (a function value through a helper would be
     # boxed as an object).
@@ -4327,8 +4295,6 @@ def _object_namespace_build():
     if ptr_is_null(self_captures) != 0 or ptr_is_null(cls_captures) != 0:
         status = -1
     else:
-        pcc_gc_pin(self_captures)
-        pcc_gc_pin(cls_captures)
         status = status | _object_namespace_add(namespace, cstr("__init__"), py_func_new_bound(_object_init_entry, self_captures, cstr("__init__"), null()), 0)
         status = status | _object_namespace_add(namespace, cstr("__repr__"), py_func_new_bound(_object_repr_entry, self_captures, cstr("__repr__"), null()), 0)
         status = status | _object_namespace_add(namespace, cstr("__str__"), py_func_new_bound(_object_str_entry, self_captures, cstr("__str__"), null()), 0)
@@ -4350,8 +4316,6 @@ def _object_namespace_build():
         status = status | _object_namespace_add(namespace, cstr("__dir__"), py_func_new_bound(_object_dir_entry, self_captures, cstr("__dir__"), null()), 0)
         status = status | _object_namespace_add(namespace, cstr("__init_subclass__"), py_func_new_bound(_object_init_subclass_entry, cls_captures, cstr("__init_subclass__"), null()), 1)
         status = status | _object_namespace_add(namespace, cstr("__subclasshook__"), py_func_new_bound(_object_subclasshook_entry, cls_captures, cstr("__subclasshook__"), null()), 1)
-        pcc_gc_unpin(cls_captures)
-        pcc_gc_unpin(self_captures)
     if ptr_is_null(self_captures) == 0:
         py_decref(self_captures)
     if ptr_is_null(cls_captures) == 0:
@@ -4361,7 +4325,6 @@ def _object_namespace_build():
         status = status | _object_namespace_add(namespace, cstr("__new__"), _object_new_cached(root_class), 0)
     doc = cstr("The base class of the class hierarchy.\n\nWhen called, it accepts no arguments and returns a new featureless\ninstance that has no instance attributes and cannot be given any.\n")
     status = status | _object_namespace_add(namespace, cstr("__doc__"), py_str_new(doc, strlen(doc)), 0)
-    pcc_gc_unpin(namespace)
     if status != 0:
         py_decref(namespace)
         return _class_require_result(null(), cstr("object namespace"),
@@ -4393,11 +4356,9 @@ def _object_namespace():
     if ptr_is_null(namespace) != 0:
         pcc_mutex_unlock(mutex)
         return null()
-    pcc_gc_pin(namespace)
     pcc_py_gc_minor_graph_lock()
     pcc_gc_store_root(global_addr("pcc_object_namespace"), namespace)
     pcc_py_gc_minor_graph_unlock()
-    pcc_gc_unpin(namespace)
     py_decref(namespace)
     pcc_mutex_unlock(mutex)
     return pcc_gc_load_ptr(null(), global_addr("pcc_object_namespace"))
@@ -4744,7 +4705,6 @@ def _member_receiver_error(kind: int, owner, name, receiver):
     shown = py_obj_type_name(receiver)
     if ptr_is_null(shown) != 0:
         return null()
-    pcc_gc_pin(shown)
     parts = stack_alloc(7 * C_POINTER_SIZE)
     store_ptr(parts, 0, cstr("descriptor '"))
     store_ptr(parts, C_POINTER_SIZE, name)
@@ -4761,7 +4721,6 @@ def _member_receiver_error(kind: int, owner, name, receiver):
         store_ptr(parts, 5 * C_POINTER_SIZE, py_str_utf8(shown))
         store_ptr(parts, 6 * C_POINTER_SIZE, cstr("' object"))
     _super_raise_message(3, parts, 7)
-    pcc_gc_unpin(shown)
     py_decref(shown)
     return null()
 
@@ -4858,7 +4817,6 @@ def _exception_add_note_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     if (_exception_member_receiver(slots, 1, cstr("add_note")) != 0
             and _member_call_check(slots, cstr("BaseException"), cstr("add_note"), 1, 1) == 0):
         note = _object_call_arg(slots, 0)
-        pcc_gc_pin(note)
         receiver = load_ptr(slots, 0)
         if _object_is_str(note) == 0:
             _object_typed_error(cstr("add_note() argument must be str, not "), note, cstr(""))
@@ -4882,23 +4840,18 @@ def _exception_add_note_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
                 if missing != 0:
                     created = py_list_new(0)
                     if ptr_is_null(created) == 0:
-                        pcc_gc_pin(created)
                         py_list_append(created, note)
                         if py_err_occurred() == 0 and py_instance_setattr(receiver, cstr("__notes__"), created) == 0:
                             result = _object_new_ref(global_load_ptr("py_None"))
-                        pcc_gc_unpin(created)
                         py_decref(created)
             else:
-                pcc_gc_pin(notes)
                 if _member_tag(notes) == PY_TYPE_LIST:
                     py_list_append(notes, note)
                     if py_err_occurred() == 0:
                         result = _object_new_ref(global_load_ptr("py_None"))
                 else:
                     py_raise_owned(py_exc_new(3, cstr("Cannot add note: __notes__ is not a list")))
-                pcc_gc_unpin(notes)
                 py_decref(notes)
-        pcc_gc_unpin(note)
         py_decref(note)
     _object_call_release(slots)
     return result
@@ -5019,19 +4972,15 @@ def _dict_update_call(slots, name, maximum_error_name) -> int:
     storage = _dict_member_storage(load_ptr(slots, 0), 1, name)
     if ptr_is_null(storage) != 0:
         return -1
-    pcc_gc_pin(storage)
     status: int = 0
     if given == 1:
         source = _object_call_arg(slots, 0)
-        pcc_gc_pin(source)
         status = _dict_update_from(storage, source, name)
-        pcc_gc_unpin(source)
         py_decref(source)
     if status == 0 and _member_call_keywords(slots) != 0:
         py_dict_update(storage, load_ptr(slots, 2 * C_POINTER_SIZE))
         if py_err_occurred() != 0:
             status = -1
-    pcc_gc_unpin(storage)
     return status
 
 
@@ -5102,13 +5051,11 @@ def _dict_delitem_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
     storage = _dict_member_storage(load_ptr(slots, 0), 0, cstr("__delitem__"))
     if ptr_is_null(storage) == 0 and _member_call_check(slots, cstr("dict"), cstr("__delitem__"), 0, 1) == 0:
         key = _object_call_arg(slots, 0)
-        pcc_gc_pin(key)
         if py_dict_del(storage, key) < 0:
             if py_err_occurred() == 0:
                 _dict_key_error(key)
         elif py_err_occurred() == 0:
             result = _object_new_ref(global_load_ptr("py_None"))
-        pcc_gc_unpin(key)
         py_decref(key)
     _object_call_release(slots)
     return result
@@ -5170,8 +5117,6 @@ def _dict_compare(args, name, negate: int):
     storage = _dict_member_storage(load_ptr(slots, 0), 0, name)
     if ptr_is_null(storage) == 0 and _member_call_check(slots, cstr("dict"), name, 0, 1) == 0:
         other_value = _object_call_arg(slots, 0)
-        pcc_gc_pin(other_value)
-        pcc_gc_pin(storage)
         other = _dict_like_storage(other_value)
         if ptr_is_null(other) != 0:
             if py_err_occurred() == 0:
@@ -5182,8 +5127,6 @@ def _dict_compare(args, name, negate: int):
                 if negate != 0:
                     equal = 1 if equal == 0 else 0
                 result = py_bool_from_bit(1 if equal != 0 else 0)
-        pcc_gc_unpin(storage)
-        pcc_gc_unpin(other_value)
         py_decref(other_value)
     _object_call_release(slots)
     return result
@@ -5227,16 +5170,12 @@ def _dict_ge_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
 
 def _dict_copy_of(storage):
     """A NEW exact dict with ``storage``'s items."""
-    pcc_gc_pin(storage)
     fresh = py_dict_new()
     if ptr_is_null(fresh) == 0:
-        pcc_gc_pin(fresh)
         py_dict_update(fresh, storage)
-        pcc_gc_unpin(fresh)
         if py_err_occurred() != 0:
             py_decref(fresh)
             fresh = null()
-    pcc_gc_unpin(storage)
     return fresh
 
 
@@ -5248,14 +5187,11 @@ def _dict_union(args, name, reflected: int):
     storage = _dict_member_storage(load_ptr(slots, 0), 0, name)
     if ptr_is_null(storage) == 0 and _member_call_check(slots, cstr("dict"), name, 0, 1) == 0:
         other_value = _object_call_arg(slots, 0)
-        pcc_gc_pin(other_value)
-        pcc_gc_pin(storage)
         other = _dict_like_storage(other_value)
         if ptr_is_null(other) != 0:
             if py_err_occurred() == 0:
                 result = _object_new_ref(global_load_ptr("py_NotImplemented"))
         else:
-            pcc_gc_pin(other)
             first = storage
             second = other
             if reflected != 0:
@@ -5263,15 +5199,10 @@ def _dict_union(args, name, reflected: int):
                 second = storage
             result = _dict_copy_of(first)
             if ptr_is_null(result) == 0:
-                pcc_gc_pin(result)
                 py_dict_update(result, second)
-                pcc_gc_unpin(result)
                 if py_err_occurred() != 0:
                     py_decref(result)
                     result = null()
-            pcc_gc_unpin(other)
-        pcc_gc_unpin(storage)
-        pcc_gc_unpin(other_value)
         py_decref(other_value)
     _object_call_release(slots)
     return result
@@ -5335,7 +5266,6 @@ def _dict_setdefault_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
                                                          _member_call_given(slots),
                                                          _member_call_keywords(slots)) == 0:
         key = _object_call_arg(slots, 0)
-        pcc_gc_pin(key)
         result = py_dict_get(storage, key)
         if ptr_is_null(result) != 0 and py_err_occurred() == 0:
             if _member_call_given(slots) == 2:
@@ -5346,7 +5276,6 @@ def _dict_setdefault_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
             if py_err_occurred() != 0:
                 py_decref(result)
                 result = null()
-        pcc_gc_unpin(key)
         py_decref(key)
     _object_call_release(slots)
     return result
@@ -5361,7 +5290,6 @@ def _dict_pop_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
                                                          _member_call_given(slots),
                                                          _member_call_keywords(slots)) == 0:
         key = _object_call_arg(slots, 0)
-        pcc_gc_pin(key)
         result = py_dict_get(storage, key)
         if ptr_is_null(result) == 0:
             py_dict_del(storage, key)
@@ -5373,7 +5301,6 @@ def _dict_pop_entry(captures: c_ptr, args: c_ptr) -> c_ptr:
                 result = _object_call_arg(slots, 1)
             else:
                 _dict_key_error(key)
-        pcc_gc_unpin(key)
         py_decref(key)
     _object_call_release(slots)
     return result
@@ -5454,7 +5381,6 @@ def _builtin_namespace_build(index: int):
     namespace = py_dict_new()
     if ptr_is_null(namespace) != 0:
         return null()
-    pcc_gc_pin(namespace)
     # Each entry appears directly in py_func_new_bound so the port compiler
     # passes its code address (a function value through a helper would be
     # boxed as an object).
@@ -5463,7 +5389,6 @@ def _builtin_namespace_build(index: int):
     if ptr_is_null(captures) != 0:
         status = -1
     else:
-        pcc_gc_pin(captures)
         if index == 0:
             status = status | _object_namespace_add(namespace, cstr("__init__"), py_func_new_bound(_exception_init_entry, captures, cstr("__init__"), null()), 0)
             status = status | _object_namespace_add(namespace, cstr("__str__"), py_func_new_bound(_exception_str_entry, captures, cstr("__str__"), null()), 0)
@@ -5499,9 +5424,7 @@ def _builtin_namespace_build(index: int):
             status = status | _object_namespace_add(namespace, cstr("update"), py_func_new_bound(_dict_update_entry, captures, cstr("update"), null()), 0)
             status = status | _object_namespace_add(namespace, cstr("clear"), py_func_new_bound(_dict_clear_entry, captures, cstr("clear"), null()), 0)
             status = status | _object_namespace_add(namespace, cstr("copy"), py_func_new_bound(_dict_copy_entry, captures, cstr("copy"), null()), 0)
-        pcc_gc_unpin(captures)
         py_decref(captures)
-    pcc_gc_unpin(namespace)
     if status != 0:
         py_decref(namespace)
         return _class_require_result(null(), cstr("builtin namespace"),
@@ -5540,11 +5463,9 @@ def _builtin_namespace(index: int):
     if ptr_is_null(namespace) != 0:
         pcc_mutex_unlock(mutex)
         return null()
-    pcc_gc_pin(namespace)
     pcc_py_gc_minor_graph_lock()
     pcc_gc_store_root(slot, namespace)
     pcc_py_gc_minor_graph_unlock()
-    pcc_gc_unpin(namespace)
     py_decref(namespace)
     pcc_mutex_unlock(mutex)
     return pcc_gc_load_ptr(null(), slot)

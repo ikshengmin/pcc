@@ -46,7 +46,6 @@ py_tuple_new = extern("py_tuple_new", (c_int64,), c_ptr)
 py_tuple_set_item = extern("py_tuple_set_item", (c_ptr, c_int64, c_ptr), c_void)
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
 py_raise_owned = extern("py_raise_owned", (c_ptr,), c_void)
@@ -243,7 +242,6 @@ def PySequence_Fast_GET_SIZE(obj) -> int:
 def PySequence_Fast_ITEMS(obj) -> c_ptr:
     # PyTupleObject stores its items inline at offset 24; PyListObject stores
     # a pointer at offset 32 (length@16, capacity@24, items-pointer@32).
-    pcc_gc_pin(obj)
     if PyList_Check(obj) != 0:
         return load_ptr(obj, 32)
     return ptr_add(obj, 24)

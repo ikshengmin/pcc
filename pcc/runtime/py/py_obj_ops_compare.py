@@ -2610,7 +2610,6 @@ def _sorted_release_list(items) -> None:
         py_list_set(items, index, null())
         index = index + 1
     store_i64(items, 16, 0)
-    pcc_gc_unpin(items)
     py_decref(items)
 
 

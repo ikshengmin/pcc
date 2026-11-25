@@ -60,7 +60,6 @@ pcc_gc_foreign_lease_acquire = extern("pcc_gc_foreign_lease_acquire", (c_ptr,), 
 pcc_gc_foreign_lease_release = extern("pcc_gc_foreign_lease_release", (c_ptr, c_int64), c_int64)
 pcc_gc_root_copy_borrowed_lease = extern("pcc_gc_root_copy_borrowed_lease", (c_ptr, c_ptr), c_int64)
 pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int64)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_gc_store_root = extern("pcc_gc_store_root", (c_ptr, c_ptr), c_void)
 pcc_gc_store_ptr = extern("pcc_gc_store_ptr", (c_ptr, c_ptr, c_ptr), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
@@ -114,7 +113,6 @@ pcc_gc_free_object_memory = extern(
 )
 pcc_gc_load_ptr  = extern("pcc_gc_load_ptr",  (c_ptr, c_ptr),           c_ptr)
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_py_gc_minor_graph_lock = extern("pcc_py_gc_minor_graph_lock", (), c_void)
 pcc_py_gc_minor_graph_unlock = extern("pcc_py_gc_minor_graph_unlock", (), c_void)
@@ -775,7 +773,6 @@ def py_enumerate_list(iterable, start: int):
         )
         py_decref(load_ptr(it_slot, 0))
         return null()
-    pcc_gc_pin(out)
 
     index: int = start
     done: int = 0
@@ -789,7 +786,6 @@ def py_enumerate_list(iterable, start: int):
                     py_clear_exception()
                 else:
                     py_decref(load_ptr(it_slot, 0))
-                    pcc_gc_unpin(out)
                     py_decref(out)
                     return null()
             done = 1
@@ -804,10 +800,8 @@ def py_enumerate_list(iterable, start: int):
                 )
                 py_decref(load_ptr(item_slot, 0))
                 py_decref(load_ptr(it_slot, 0))
-                pcc_gc_unpin(out)
                 py_decref(out)
                 return null()
-            pcc_gc_pin(pair)
             index_obj = py_int_from_i64(index)
             if ptr_is_null(index_obj) != 0:
                 _require_result(
@@ -816,10 +810,8 @@ def py_enumerate_list(iterable, start: int):
                     cstr("enumerate could not allocate an index object"),
                 )
                 py_decref(load_ptr(item_slot, 0))
-                pcc_gc_unpin(pair)
                 py_decref(pair)
                 py_decref(load_ptr(it_slot, 0))
-                pcc_gc_unpin(out)
                 py_decref(out)
                 return null()
             store_ptr(index_slot, 0, index_obj)
@@ -830,18 +822,14 @@ def py_enumerate_list(iterable, start: int):
             py_decref(load_ptr(item_slot, 0))
             py_list_append(out, pair)
             if py_err_occurred() != 0:
-                pcc_gc_unpin(pair)
                 py_decref(pair)
                 py_decref(load_ptr(it_slot, 0))
-                pcc_gc_unpin(out)
                 py_decref(out)
                 return null()
-            pcc_gc_unpin(pair)
             py_decref(pair)
             index = index + 1
 
     py_decref(load_ptr(it_slot, 0))
-    pcc_gc_unpin(out)
     return out
 
 

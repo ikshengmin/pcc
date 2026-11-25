@@ -129,11 +129,7 @@ def _message_part(message, part):
         if not ptr_is_null(part):
             py_decref(part)
         return null()
-    pcc_gc_pin(message)
-    pcc_gc_pin(part)
     joined = py_str_concat(message, part)
-    pcc_gc_unpin(part)
-    pcc_gc_unpin(message)
     py_decref(part)
     py_decref(message)
     return joined
@@ -148,9 +144,7 @@ def _raised_class_instance(slot, base):
     args = py_tuple_new(0)
     if ptr_is_null(args):
         return _take_pending_exception()
-    pcc_gc_pin(args)
     value = py_obj_call(pcc_gc_load_ptr(null(), slot), args, null())
-    pcc_gc_unpin(args)
     py_decref(args)
     if ptr_is_null(value):
         return _take_pending_exception()
@@ -158,7 +152,6 @@ def _raised_class_instance(slot, base):
         return value
     if py_isinstance(value, base) != 0 and _instance_like(value) != 0:
         return value
-    pcc_gc_pin(value)
     message = _message_part(
         py_str_new(cstr("calling "), 8), py_obj_repr(pcc_gc_load_ptr(null(), slot)),
     )
@@ -166,20 +159,15 @@ def _raised_class_instance(slot, base):
         message, py_str_new(cstr(" should have returned an instance of BaseException, not "), 56),
     )
     value_type = py_type_builtin(value)
-    pcc_gc_unpin(value)
     py_decref(value)
     if ptr_is_null(value_type):
         message = _message_part(message, null())
     else:
-        pcc_gc_pin(value_type)
         message = _message_part(message, py_obj_repr(value_type))
-        pcc_gc_unpin(value_type)
         py_decref(value_type)
     if ptr_is_null(message):
         return _take_pending_exception()
-    pcc_gc_pin(message)
     error = py_exc_new_with_value(3, message)   # PY_EXC_TYPEERROR
-    pcc_gc_unpin(message)
     py_decref(message)
     return error
 
@@ -306,7 +294,6 @@ def py_raise_rooted(borrowed, owned) -> None:
     py_tls_exc_swap_slot(owned)
 
 pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
-pcc_gc_unpin = extern("pcc_gc_unpin", (c_ptr,), c_void)
 pcc_gc_take_pinned_slot = extern("pcc_gc_take_pinned_slot", (c_ptr, c_int64), c_ptr)
 pcc_gc_frame_enter = extern("pcc_gc_frame_enter", (c_ptr, c_ptr), c_void)
 pcc_gc_frame_leave = extern("pcc_gc_frame_leave", (c_ptr,), c_void)

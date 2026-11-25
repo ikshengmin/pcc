@@ -129,7 +129,6 @@ pcc_gc_root_copy_lease = extern("pcc_gc_root_copy_lease", (c_ptr, c_ptr), c_int6
 pcc_gc_root_copy_lease_prepare_locked = extern("pcc_gc_root_copy_lease_prepare_locked", (c_ptr, c_ptr, c_int64, c_ptr), c_int64)
 pcc_gc_root_copy_lease_finish = extern("pcc_gc_root_copy_lease_finish", (c_ptr,), c_void)
 pcc_gc_resolve_root_slot_unlocked = extern("pcc_gc_resolve_root_slot_unlocked", (c_ptr, c_int64), c_ptr)
-pcc_gc_note_slot_write_barrier = extern("pcc_gc_note_slot_write_barrier", (c_ptr, c_ptr, c_ptr), c_void)
 py_tls_exc_swap_slot = extern("py_tls_exc_swap_slot", (c_ptr,), c_void)
 pcc_platform_abort = extern("pcc_platform_abort", (), c_void)
 pcc_mutex_new = extern("pcc_mutex_new", (), c_ptr)
@@ -478,7 +477,6 @@ def py_func_new_static_def(
         atomic_rmw_i32("or", current, 12, 16777216, "relaxed")
     if ptr_is_null(cache) == 0:
         py_incref(current)
-        pcc_gc_pin(current)
         store_ptr(cache, 0, current)
     if pcc_gc_foreign_lease_release(output_slot, token) != 0:
         py_runtime_error_if_unset(cstr("function construction"), cstr("callable publication release failed"))
@@ -730,7 +728,6 @@ def py_func_attach_code_metadata(func, signature, name) -> int:
             py_decref(names)
             py_decref(kinds)
             return -1
-        pcc_gc_pin(code_class)
         global_store_ptr("py_func_code_class_cache", code_class)
     code = py_instance_new(code_class)
     if ptr_is_null(code):

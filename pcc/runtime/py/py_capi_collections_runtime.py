@@ -38,7 +38,6 @@ from pcc.unsafe import (
 
 py_incref = extern("py_incref", (c_ptr,), c_void)
 py_decref = extern("py_decref", (c_ptr,), c_void)
-pcc_gc_pin = extern("pcc_gc_pin", (c_ptr,), c_void)
 py_exc_new = extern("py_exc_new", (c_int64, c_ptr), c_ptr)
 py_raise = extern("py_raise", (c_ptr,), c_void)
 # py_raise increfs; a caller that created the exception must release it.
@@ -90,7 +89,6 @@ def PyTuple_GetItem(obj, index: int):
         _raise_collection(7, cstr("tuple index out of range"))
         return null()
     # py_tuple_get returns owned; PyTuple_GetItem returns borrowed.
-    pcc_gc_pin(item)
     py_decref(item)
     return item
 
@@ -196,7 +194,6 @@ def PyList_GetItem(obj, index: int):
         _raise_collection(7, cstr("list index out of range"))
         return null()
     # py_list_get returns owned; PyList_GetItem returns borrowed.
-    pcc_gc_pin(item)
     py_decref(item)
     return item
 
@@ -284,7 +281,6 @@ def PyBytes_AsString(obj):
     if _is_exact_type(obj, 17) == 0:
         _raise_collection(3, cstr("expected bytes"))
         return null()
-    pcc_gc_pin(obj)
     return ptr_add(obj, 24)
 
 
@@ -304,7 +300,6 @@ def PyBytes_AsStringAndSize(obj, buffer, length) -> int:
                 _raise_collection(2, cstr("embedded null byte"))
                 return -1
             index = index + 1
-    pcc_gc_pin(obj)
     store_ptr(buffer, 0, data)
     if not ptr_is_null(length):
         store_i64(length, 0, size)
