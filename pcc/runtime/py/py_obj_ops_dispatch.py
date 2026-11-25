@@ -4473,7 +4473,10 @@ def py_obj_getattr(o, name):
         return _raise_attribute_error(o, name)
 
     tag: int = load_i32(o, 8)
-    pcc_diagnostics_runtime_log_event_code(7, 5, tag, 0, o)
+    # The log function's own first test, made here: with the log off (the
+    # common case) no call is made.
+    if atomic_load_i32(global_addr("pcc_diagnostics_runtime_log_fast_state"), 0, "relaxed") != 0:
+        pcc_diagnostics_runtime_log_event_code(7, 5, tag, 0, o)
 
     # A pcc instance is never a C-API type object, list, lock or str, so the
     # hooks below cannot answer for it; C-extension objects carry tags from

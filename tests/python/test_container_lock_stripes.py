@@ -24,7 +24,7 @@ KERNEL = Path(__file__).resolve().parents[2] / "pcc/runtime/py/freestanding_thre
 NAMES = ("_container_stripe_index", "_container_stripe_word", "_container_stripe",
          "_container_enter", "_container_acquire", "_container_exit",
          "pcc_container_lock", "pcc_container_unlock", "pcc_container_lock_pair",
-         "pcc_container_unlock_pair", "pcc_container_lock_held",
+         "pcc_container_unlock_pair",
          "pcc_thread_graph_lock_acquire", "pcc_thread_graph_lock_acquire_for")
 REGISTERED = 1 << 49
 SCHEDULER = 1 << 48
@@ -133,11 +133,9 @@ def test_a_holder_is_no_park_and_marked_until_it_releases():
     word = kernel.stripe(0x10000)
     assert kernel.memory[word] == 1
     assert kernel.state == REGISTERED | HELD | 1
-    assert kernel.ns["pcc_container_lock_held"]() == 1
     kernel.unlock(0x10000)
     assert kernel.memory[word] == 0 and kernel.state == REGISTERED
     assert ("release", word, "release") in kernel.events
-    assert kernel.ns["pcc_container_lock_held"]() == 0
 
 
 def test_one_object_always_takes_one_stripe_and_stripes_are_128_bytes_apart():
@@ -151,20 +149,33 @@ def test_one_object_always_takes_one_stripe_and_stripes_are_128_bytes_apart():
     assert len(seen) == 64
 
 
+def test_a_free_stripe_is_taken_by_one_cas_without_a_read():
+    kernel = Kernel()
+    word = kernel.stripe(0x20000)
+    kernel.on_spin = lambda key: pytest.fail("a free stripe needs no spin read")
+    kernel.lock(0x20000)
+    assert kernel.memory[word] == 1
+    cas = [event for event in kernel.events if isinstance(event, tuple) and event[0] == "cas"]
+    assert cas == [("cas", word, True, "acquire")]
+
+
 def test_a_waiter_spins_reading_until_the_holder_releases():
+    # The entry CAS fails once on a held stripe; the waiter then only reads
+    # until the word looks free, so it does not take the holder's line again.
     kernel = Kernel()
     word = kernel.stripe(0x20000)
     kernel.memory[word] = 1
 
     def holder_releases(key):
         assert key == word
-        assert not [event for event in kernel.events if isinstance(event, tuple) and event[0] == "cas"]
+        cas_so_far = [event for event in kernel.events if isinstance(event, tuple) and event[0] == "cas"]
+        assert cas_so_far == [("cas", word, False, "acquire")]
         kernel.memory[key] = 0
     kernel.on_spin = holder_releases
     kernel.lock(0x20000)
     assert kernel.memory[word] == 1
     cas = [event for event in kernel.events if isinstance(event, tuple) and event[0] == "cas"]
-    assert cas == [("cas", word, True, "acquire")]
+    assert cas == [("cas", word, False, "acquire"), ("cas", word, True, "acquire")]
 
 
 def test_a_second_container_lock_aborts():

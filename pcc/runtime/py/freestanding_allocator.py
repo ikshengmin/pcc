@@ -2786,6 +2786,10 @@ def _object_magazine_class(usable: i64) -> i64:
 
 @c_abi_export("pcc_allocator_object_magazine_limit")
 def _object_magazine_limit(usable: i64) -> i64:
+    # 32768 // usable is at least 256 up to 128 bytes, so the clamp below
+    # answers 256 there; the common small cells skip the division.
+    if usable <= 128:
+        return 256
     limit: i64 = 32768 // usable
     if limit > 256:
         limit = 256

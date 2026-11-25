@@ -1186,6 +1186,31 @@ in the relevant section or issue and removes the entry.
        calls, and the diagnostics-log call `py_obj_getattr` makes while the
        log is off; about 1.2 us of json's 6.8 (self-time guess). Parts in
        `py_list.py` wait for the (d) 4b claim.
+   J1 result (Claude, 2026-11-26, local Mac, arms of 9de68e502 with and
+   without the change): the container lock takes a free stripe with one
+   CAS and spins reading only when it is held; `py_obj_getattr` tests the
+   log word before calling the log; the magazine limit answers 256 up to
+   128 bytes without a division. Instructions per handler request, from
+   `/usr/bin/time -l` over 1000 minus 200 requests, three runs each: base
+   272672, control 272530 (-0.05%), J1 268808 (-1.4%; runs within 0.2%);
+   cycles 62301, 61176 and 57919. `prim --against`: list_append -5.3% at
+   w1 and w4, attr -4.1% at w1, both beyond their control; json -2.1%
+   within noise. The handler rate `ab` was invalid (host load 8.6, control
+   floor 14.6%), so the evidence is the instruction count and the
+   primitives. Merged on the user's instruction to do J1. Measurement
+   from now on: check the load before a run; report instructions and
+   cycles per request (load moves cycles, hardly instructions) with a
+   control arm; a rate `ab` only on a quiet host. Correctness: the
+   container-lock races, shared containers and virtual-thread park and
+   carrier tests (47), allocator and magazine tests (31), the stripe-lock
+   model (17, which failed on master on the removed
+   `pcc_container_lock_held` and now pins the CAS-first acquire) and a new
+   getattr log test pass. Unrun: nodes that need a current pcc1, and three
+   that fail on master because they call the removed `pcc_gc_set_backend`
+   or `pcc_container_lock_held`:
+   `test_list_container_lock_races.py::test_list_lock_is_the_container_lock_without_the_probe`,
+   `test_virtual_thread_pcc_py_carriers.py::test_threaded_pcc_python_archive_runs_persistent_carriers_and_pin_metrics`,
+   `test_gc_object_cell_fast_paths.py::test_object_cell_fast_paths_publish_and_retire_exact_cells`.
    J2. Fewer root stores and release chains in code generation: 104 of the
        304 calls per request clear a slot that is already empty.
    J3. TaskScope (5x CPython), `time.perf_counter` (7x), `str.encode` (5x).
@@ -1234,7 +1259,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - (c) J1 json hot-path overheads: Claude, macOS, 2026-11-25T17:53Z, area runtime-gc (py_list, py_list_set_slice, py_class, py_gc_backend, freestanding_allocator, freestanding_thread_kernel_pthread, py_obj_ops_dispatch, py_runtime_log, py_dict, freestanding_gc_root_operations and their tests; not py_obj)
+   - none
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:

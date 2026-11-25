@@ -1283,6 +1283,10 @@ def _container_enter() -> None:
 
 
 def _container_acquire(word) -> None:
+    # An uncontended stripe is one CAS on a straight path; a held stripe
+    # spins as before, reading until it looks free and then trying the CAS.
+    if atomic_cas_i32(word, 0, 0, 1, "acquire", "relaxed") == 0:
+        return
     acquired: int = 0
     while acquired == 0:
         if atomic_load_i32(word, 0, "relaxed") == 0:
@@ -1338,6 +1342,10 @@ def pcc_container_lock(obj) -> None:
         global_addr("pcc_container_lock_stripes"),
         (((address >> 4) ^ (address >> 13)) & 63) * 128,
     )
+    # As _container_acquire: one CAS when the stripe is free, the spin loop
+    # only when it is held.
+    if atomic_cas_i32(word, 0, 0, 1, "acquire", "relaxed") == 0:
+        return
     acquired: int = 0
     while acquired == 0:
         if atomic_load_i32(word, 0, "relaxed") == 0:
