@@ -4,6 +4,8 @@ N4659 [class.ctor], [class.base.init], [dcl.init], [over.match.ctor].
 Out-of-class bodies and delayed in-class bodies share scalar/pointer member
 initialization and declared C1 calls for class members. Nontrivial member
 lifetimes require explicit D1s and a closed construction proof over all effects.
+Selected non-throwing C1 declarations carry their own exception specification;
+definitions with unowned escaping effects cannot yet enforce termination.
 In-class definitions additionally require the shared external-ODR
 linkage contract before emission. No base-object C2, unwind, copy, or dynamic
 initialization semantics are synthesized.
@@ -13,6 +15,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.declarators import DeclaratorParser, QualifiedName, parse_qualified_name
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.exception_specifications import parse_exception_specification
 from pcc.frontends.cpp.members import mangle_member
 from pcc.frontends.cpp.sema import Scope, Symbol, resolve_overload
 from pcc.frontends.cpp.types import (
@@ -84,6 +87,7 @@ def parse_constructor(parser, definition=None, *, explicit=False):
         parser._expect("(")
         parser._parameter_clause(params, parameter_symbols, defaults=default_arguments)
         parser._expect(")")
+        exception_specification = parse_exception_specification(parser)
     finally:
         parser.scope = parent
     if outside and any(default_arguments):
@@ -106,6 +110,12 @@ def parse_constructor(parser, definition=None, *, explicit=False):
             raise CppDiagnostic("cpp.unsupported.enum-linkage", "constructor signatures with internal-linkage enum types require ABI support", name.coord)
     defaulted = parser._peek().value == "="
     if defaulted:
+        if exception_specification is not None:
+            # [dcl.fct.def.default]: compare the implicit *declaration*
+            # specification, not whether the generated body proves closed.
+            # The explicit defaulted case needs that separate owner.
+            raise CppDiagnostic("cpp.unsupported.exceptions",
+                                "explicitly defaulted constructor exception specifications require implicit declaration semantics", name.coord)
         if outside:
             raise CppDiagnostic("cpp.unsupported.inline-member-functions",
                                 "defaulting after the first declaration requires user-provided special-member semantics", name.coord)
@@ -122,6 +132,9 @@ def parse_constructor(parser, definition=None, *, explicit=False):
             raise CppDiagnostic("cpp.invalid-defaulted-constructor",
                                 "a defaulted default constructor must have no parameters or default arguments", name.coord)
         parser._expect(";")
+    if parser._peek().value == "try":
+        raise CppDiagnostic("cpp.unsupported.exceptions",
+                            "constructor function-try-blocks require unwinding", parser._peek().coord)
     inline_definition = not outside and not defaulted and parser._peek().value != ";"
     if outside and parser._peek().value not in (":", "{"):
         raise CppDiagnostic("cpp.member-definition-required", "out-of-class constructor declaration requires a body", name.coord)
@@ -133,6 +146,11 @@ def parse_constructor(parser, definition=None, *, explicit=False):
             raise CppDiagnostic("cpp.no-matching-member", "constructor definition does not match a declaration", name.coord)
         if previous.defined:
             raise CppDiagnostic("cpp.redefinition", "constructor is already defined", name.coord)
+        # A user-provided constructor with no specification is potentially
+        # throwing ([except.spec]/3), unlike a destructor.
+        if previous.nonthrowing != bool(exception_specification):
+            raise CppDiagnostic("cpp.conflicting-exception-specification",
+                                "constructor declarations have different exception specifications", name.coord)
         symbol = previous
         symbol.defined = True
     else:
@@ -146,6 +164,8 @@ def parse_constructor(parser, definition=None, *, explicit=False):
         symbol.constructor_user_provided = not defaulted
         symbol.constructor_defaulted = defaulted
         symbol.constructor_defaulted_on_first_declaration = defaulted
+        symbol.constructor_exception_specification = exception_specification
+        symbol.nonthrowing = bool(exception_specification)
         symbol.constructor_trivial = False
         symbol.constructor_deleted = False
         symbol.method_static = False
@@ -370,14 +390,26 @@ def bind_constructor_body(parser, definition, symbol, parameter_scope, declarati
     finally:
         parser.scope = parent
         parser.member_function, parser.this_symbol, parser.return_type = previous_member, previous_this, previous_return
+    finish_construction_body(symbol, body, construction_calls, selected_destructors, coord)
+    return c_ast.FuncDef(declaration, None, body, coord)
+
+
+def finish_construction_body(symbol, body, construction_calls, selected_destructors, coord):
+    """One effect owner for bound C1 definitions and replayed class Patterns."""
     closed = closed_construction_body(body, construction_calls)
     if selected_destructors and not closed:
         raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                             "unknown construction effects require partial member exception cleanup", coord)
+    if symbol.nonthrowing and not closed:
+        # A noexcept declaration is valid even if its definition can throw.
+        # Merely emitting the original call would lose std::terminate on an
+        # escaping exception. Until the shared EH owner exists, keep this
+        # capability boundary rather than certify it from the declaration.
+        raise CppDiagnostic("cpp.unsupported.exceptions",
+                            "non-throwing constructor body needs runtime enforcement of escaping exceptions", coord)
     require_deferred_construction_proof(symbol, closed)
     symbol.closed_construction_body = closed
     symbol.closed_normal_body = call_free_body(body)
-    return c_ast.FuncDef(declaration, None, body, coord)
 
 
 
@@ -554,21 +586,29 @@ def unbound_construction_proofs(parser):
                                 symbol.closed_construction_required)
 
 
+def construction_cannot_escape(selected):
+    """A semantic C1 promise or a separately proved construction body."""
+    return (getattr(selected, "nonthrowing", False)
+            or getattr(selected, "closed_construction_body", False))
+
+
 def closed_construction_body(body, construction_calls):
     """Prove exact generated member C1 chains, including every argument effect.
 
     Expanded defaults, scalar stores and the completed body are all visited.
-    A permitted C1 node never hides its address/argument descendants. Names,
-    prototypes and ordinary user calls cannot establish this proof. This is
-    shared with reserved placement construction. The older call-free
-    closed_normal_body remains separate metadata, not a chain proof.
+    An exact selected C1 with a non-throwing declaration can establish its
+    own invocation edge; an ordinary potentially-throwing declaration alone
+    cannot. Neither hides the address, default or argument descendants.
+    This is shared with reserved placement construction. The older
+    call-free closed_normal_body remains separate metadata, not a chain proof.
     """
     pending = [body]
     while pending:
         node = pending.pop()
         if isinstance(node, c_ast.FuncCall):
             selected = construction_calls.get(node)
-            if (selected is not None and not hasattr(selected, "closed_construction_body")
+            if (selected is not None and not construction_cannot_escape(selected)
+                    and not hasattr(selected, "closed_construction_body")
                     and getattr(selected, "class_template_instance", None) is not None
                     and not getattr(selected, "defined", False)):
                 # A pending class template C1 (instantiated after this caller)
@@ -577,7 +617,7 @@ def closed_construction_body(body, construction_calls):
                 # carries one only when its own call required the proof
                 # (constructor_call, member cleanup).
                 selected.closed_construction_required = node.coord
-            if selected is None or not (getattr(selected, "closed_construction_body", False)
+            if selected is None or not (construction_cannot_escape(selected)
                                         or getattr(selected, "closed_construction_required", None) is not None):
                 return False
         pending.extend(child for _name, child in node.children())
@@ -625,7 +665,7 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
     from pcc.frontends.cpp.member_initialization import requires_destruction
     member_cleanup = any(requires_destruction(member.dtype) for member in dtype.definition.members)
     register_pending_construction(parser, selected)
-    if member_cleanup and not getattr(selected, "closed_construction_body", False):
+    if member_cleanup and not construction_cannot_escape(selected):
         if pending_construction_body(selected):
             # Its body (a class template instantiation or a later definition
             # in this unit) proves or rejects the same chain when it is bound.
@@ -633,7 +673,7 @@ def constructor_call(parser, dtype, arguments, address, coord, require_closed=Fa
         else:
             raise CppDiagnostic("cpp.unsupported.destructor-subobjects",
                                 "member-owning constructor call requires a bound closed-construction proof", coord)
-    if require_closed and not getattr(selected, 'closed_construction_body', False):
+    if require_closed and not construction_cannot_escape(selected):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'unknown constructor effects need exception/cleanup integration', coord)
     if direct_list:

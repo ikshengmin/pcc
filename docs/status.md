@@ -968,13 +968,21 @@ in the relevant section or issue and removes the entry.
    definitions and internal inline semantics independent of specifier order.
    6033 C++ ordinary tests and 49 subtests passed; 11 new owned ELF
    programs match g++ 14.2. Unchanged TinyXML2 advances past `1199:9`
-   and `2310:1` to `tinyxml2.cpp:2580:1`, the XMLPrinter constructor:
-   `cpp.unsupported.destructor-subobjects`, unknown construction effects
-   need partial member exception cleanup. Next C++ unit: shared constructor
-   exception/partial-subobject cleanup ownership (constructors are not
-   implicitly non-throwing), not a fixture-specific exemption. Native pcc1
-   still stops at the parser's no-libpython stub; no upstream executable
-   or full C++ integration pass.
+   and `2310:1` to `tinyxml2.cpp:2580:1`. The generic user-provided C1
+   exception-specification owner now admits matching non-throwing ordinary
+   and class-template constructor declarations, including separately defined
+   member C1s; definitions with unowned escaping effects stay rejected.
+   Linux host pcc0: 6060 ordinary tests and 49 subtests passed; five native
+   ELF/C++17 G++ reference programs agree byte for byte. Unchanged TinyXML2
+   still stops at `2580:1`, `cpp.unsupported.destructor-subobjects`:
+   XMLPrinter constructs two DynArray members, then its Push call reaches a
+   potentially allocating EnsureCapacity. No declared non-throwing contract
+   qualifies this edge. Next C++: shared owned exception propagation,
+   partial-subobject cleanup and matching deallocation; not an additional
+   package-specific effect proof. See the
+   [C1 frontier investigation](investigations/tinyxml2-explicit-virtual-destructor-effects.md).
+   Native pcc1 still stops at the parser's no-libpython stub; no upstream
+   executable or full C++ integration pass.
    The opt-in Go source probe reached `internal/bytealg/bytealg.go:9:2`; no dependency-closure executable exists.
    See the
    [closure audit](investigations/go-math-bits-original-closure-frontier.md).
@@ -1004,7 +1012,7 @@ in the relevant section or issue and removes the entry.
    neither an external token nor a caller-provided crate named core waives it.
 
    Claims:
-   - C++ constructor exception specifications and partial-subobject cleanup: Codex, Linux x86_64, 2026-11-25T16:32Z, area frontend-cpp
+   - none
 5. **NumPy extension chain (Linux first) and the value model.** NumPy: the
    "numpy through uv locks" section below and allstoalls#153, #155. Value
    model (project-intent pillar 3): allstoalls#172, #178, #182. Platform:

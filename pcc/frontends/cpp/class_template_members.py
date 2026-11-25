@@ -7,6 +7,7 @@ owners; projection and external-ODR linkage use the ordinary member machinery.
 """
 
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.exception_specifications import parse_exception_specification
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.templates import dependent
 from pcc.frontends.cpp.types import ConstType, PointerType, ReferenceType, contains_array, contains_function, is_enum_type, unqualified
@@ -147,6 +148,7 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
         parser._expect('(')
         parser._parameter_clause(params, parameter_symbols, check_lowering=False)
         parser._expect(')')
+        exception_specification = parse_exception_specification(parser) if constructor else None
     finally:
         parser.class_template_signature = previous_signature
         parser.scope = parent
@@ -199,6 +201,8 @@ def parse_signature(parser, owner, name, result_type, static=False, constructor=
         if any(item.parameters == symbol.parameters for item in owner.constructors.overloads):
             raise CppDiagnostic('cpp.redeclaration', 'constructor redeclared in its class', name.coord)
         symbol.constructor = True
+        symbol.constructor_exception_specification = exception_specification
+        symbol.nonthrowing = bool(exception_specification)
         symbol.class_owner, symbol.owner = owner.injected, owner.member_scope
         symbol.access = owner.method_definition.access
         symbol.method_static = symbol.method_const = False
@@ -319,6 +323,8 @@ def declare_instances(parser, owner, definition, arguments):
             if any(item.parameters == symbol.parameters for item in definition.constructors.overloads):
                 raise CppDiagnostic('cpp.redeclaration', 'constructor signatures coincide after substitution', origin.coord)
             symbol.constructor = True
+            symbol.constructor_exception_specification = origin.constructor_exception_specification
+            symbol.nonthrowing = origin.nonthrowing
             symbol.class_owner, symbol.owner = definition.dtype, definition.scope
             symbol.access = origin.access
             symbol.method_static = symbol.method_const = False
@@ -423,7 +429,7 @@ def instantiate_body(parser, context):
     from copy import deepcopy
     from pcc.frontends.c.ast import c_ast
     from pcc.frontends.cpp.parser import Expression
-    from pcc.frontends.cpp.constructors import lower_member_initializers, call_free_body
+    from pcc.frontends.cpp.constructors import lower_member_initializers, finish_construction_body
     from pcc.frontends.cpp.lifetimes import AutomaticLifetimes
     record, symbol = context.record, context.symbol
     fields = ('return_type', 'member_function', 'this_symbol', 'current_function', 'scope',
@@ -483,15 +489,7 @@ def instantiate_body(parser, context):
     declaration.definition_linkage = 'external_odr'
     symbol.defined = True
     if getattr(symbol, 'constructor', False):
-        from pcc.frontends.cpp.constructors import closed_construction_body
-        closed = closed_construction_body(body, construction_calls)
-        if selected_destructors and not closed:
-            raise CppDiagnostic('cpp.unsupported.destructor-subobjects',
-                                'unknown construction effects require partial member exception cleanup', symbol.coord)
-        from pcc.frontends.cpp.constructors import require_deferred_construction_proof
-        require_deferred_construction_proof(symbol, closed)
-        symbol.closed_construction_body = closed
-        symbol.closed_normal_body = call_free_body(body)
+        finish_construction_body(symbol, body, construction_calls, selected_destructors, symbol.coord)
     return c_ast.FuncDef(declaration, None, body, symbol.coord)
 
 

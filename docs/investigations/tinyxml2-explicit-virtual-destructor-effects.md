@@ -185,3 +185,51 @@ Reproduce with the exact host project test above, not a modified fixture.
 This is not a new passed upstream executable. The next blocker requires
 the generic constructor/partial construction exception owner; a
 user-provided constructor has no implicit non-throwing guarantee.
+
+## User-provided C1 exception specifications (2026-11-25)
+
+The next slice implements the declaration rule, not a project-specific proof.
+N4659 [except.spec]/1–3 makes an ordinary user-provided constructor potentially
+throwing when no specifier is supplied. Its explicit non-throwing contract
+permits a generated C1 edge even when the definition is in another TU. The
+existing chain proof still traverses the actual receiver, argument and default
+expressions. PCC definitions with otherwise unowned escaping calls do not get
+an automatic exception-safety certificate from their own `noexcept` token;
+that would require runtime termination. Primary template declarations carry the
+same specification into concrete C1s, where the same check owns the body.
+
+Linux pcc0, CPython 3.15.0, G++ 14.2.0, base `f8069a0c` plus this C1 patch:
+
+- `tests/cpp/test_cpp_constructor_exception_specifications.py`: the new
+  ordinary contract controls exposed 21 failures before the fix; all 28
+  ordinary controls pass afterwards. Five same-input owned ELF and G++
+  integration programs pass (1.36 s), including separately defined owning
+  and member C1s, concrete template C1s, overload selection and reserved
+  placement. Both arms return 42, stdout `2a000000` (hex), empty stderr.
+  The placement oracle explicitly includes real `<new>`; it does not serve
+  as PCC's allocation implementation.
+- Entire ordinary C++ run: 6060 passed, 49 subtests passed (44.72 s test time,
+  47.12 s sampled guarded process-tree time), peak RSS 196943872 bytes; the
+  original 90 s / 1 GiB limits remain. Command:
+  `uv run python -m pytest -q -n0 --override-ini=addopts= tests/cpp -m 'not integration'`.
+- The unchanged project host test again rejects `tinyxml2.cpp:2580:1` with
+  `cpp.unsupported.destructor-subobjects: unknown construction effects require
+  partial member exception cleanup`. SHA256 remains
+  `95f64e4cb06c9e147d5b12e8860c88898944858dfbc38fed92ebf918f1436554`.
+  Neither the original project executable nor native pcc1 is qualified.
+
+The actual remaining exception edge is not a destructor exception-specification
+case. `XMLPrinter::XMLPrinter` first constructs `_stack` and `_buffer`, then
+calls `_buffer.Push(0)`; `DynArray::EnsureCapacity` has an allocating `new T[...]`
+path. Neither function has a non-throwing declaration. The initial capacity in
+this particular constructor does not authorize a source-shape exception waiver.
+The shared backend/runtime exception owner is missing: IR can describe invoke
+and landingpad, but the owned emitters do not implement the exception transfer,
+and the Mach-O executable linker does not synthesize unwind-handler metadata.
+The next bounded shared implementation must execute actual propagation and
+cleanup: track completed subobjects in declaration order, destroy just those
+in reverse order on an exceptional edge (N4659 [except.ctor]/3), never call
+the unfinished outer D1, and honor matching new-expression deallocation.
+Caller frames, escaping `noexcept` termination, and concrete target unwind ABI
+need corresponding native/reference tests. A backend without that owner must
+keep the present rejection; no external EH fallback or altered upstream source.

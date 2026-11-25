@@ -13,6 +13,7 @@ from pcc.frontends.c.ast import c_ast
 from pcc.frontends.cpp.classes import is_class_type, require_complete
 from pcc.frontends.cpp.declarators import QualifiedName, _scope_separator
 from pcc.frontends.cpp.diagnostics import CppDiagnostic
+from pcc.frontends.cpp.exception_specifications import parse_exception_specification
 from pcc.frontends.cpp.members import mangle_member
 from pcc.frontends.cpp.sema import Scope, Symbol
 from pcc.frontends.cpp.types import PointerType, unqualified
@@ -57,20 +58,6 @@ def parse_parameters(parser, definition, name, *, check_lowering=True):
     finally:
         parser.scope = parent
     return parameter_scope, exception_specification
-
-
-def parse_exception_specification(parser):
-    """[except.spec]/1-2: None retains the implicit special-member rule."""
-    if parser._peek().value == "noexcept":
-        return parser._declaration_noexcept()
-    if parser._peek().value == "throw":
-        token = parser.cursor.take()
-        parser._expect("(")
-        if not parser._accept(")"):
-            raise CppDiagnostic("cpp.invalid-exception-specification",
-                                "C++17 permits only the empty throw() specification", token.coord)
-        return True
-    return None
 
 
 def subobject_destructor_nonthrowing(dtype):

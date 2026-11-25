@@ -9,7 +9,7 @@
   "inventory": {
     "chapters_complete": false,
     "features_complete": false,
-    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is the explicit XMLNode destructor effect proof; no owned project executable exists.",
+    "notes": "Incomplete source-oriented C++17 feature inventory, not an official run-pass suite denominator. Supported rows describe bounded capabilities and retain their actually executed historical compiler revisions; matching source bytes do not qualify execution on a later integrated master. Only the constructor scalar-direct evidence triplet and passed entry were renewed from retained bdb execution to replace a stale unit-file binding; all other published evidence remains historical. New DMI/placement/cstddef/decltype/nullptr/SysV-varargs/postfix scopes do not establish native pcc1, full bootstrap, five-GC, NumPy or complete C++17 acceptance. Known external-reference failures and missing native prerequisites remain explicit below. Current unchanged Linux pcc0 TinyXML2 frontier is XMLPrinter constructor partial-subobject exception cleanup at tinyxml2.cpp:2580:1; no owned project executable exists.",
     "qualification_nonpasses": [
       {
         "nodeid": "tests/cpp/test_cpp_c_object_linkage.py::test_c_objects_execute_against_explicit_cpp17_reference[internal-const-does-not-share-c-name]",
@@ -465,6 +465,16 @@
       "id": "stmt.dcl",
       "title": "Declaration statement",
       "url": "https://timsong-cpp.github.io/cppwp/n4659/stmt.dcl"
+    },
+    {
+      "id": "class.ctor",
+      "title": "class.ctor",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/class.ctor"
+    },
+    {
+      "id": "except.ctor",
+      "title": "except.ctor",
+      "url": "https://timsong-cpp.github.io/cppwp/n4659/except.ctor"
     }
   ],
   "features": [
@@ -4681,6 +4691,61 @@
         "cpp.file-static-functions.linux.unit",
         "cpp.file-static-functions.linux.program",
         "cpp.file-static-functions.linux.differential"
+      ]
+    },
+    {
+      "id": "cpp.constructors.exception-specifications",
+      "title": "C++17 user-provided constructor exception specifications",
+      "chapter_ids": [
+        "class.ctor",
+        "except.spec",
+        "except.ctor",
+        "class.base.init"
+      ],
+      "scope": "Explicit noexcept, supported integral constant-expression noexcept(expr), and throw() on ordinary user-provided and class-template C1 declarations/definitions. No implicit non-throwing promise from a user-written body; out-of-class contracts match and selected overload identity owns the contract. The exact generated C1 may use a non-throwing declaration from another TU, but receiver, arguments and defaults still need the enclosing effect proof. Unknown effects in a new non-throwing PCC definition require unavailable termination support; no new arbitrary call proof. Linux host-pcc0/self evidence with G++14.2 for normal initialization/destruction only. Explicitly defaulted C1 specifications, arbitrary dependent specifications, ordinary function noexcept execution, exception propagation/unwinding/termination, constructor failure cleanup, native pcc1 and unchanged TinyXML2 remain unqualified.",
+      "implementation": {
+        "status": "supported",
+        "source_revision": "sha256:4a0c3644c5d01df1804ee76160b3a23224d0917bbfd6c9b205c9cefbf9230ac4",
+        "sources": [
+          {
+            "path": "pcc/frontends/cpp/class_template_members.py",
+            "sha256": "89454e721b3bfb801d7a4fbc2207a135e8c0f11b8e1dc3109842576f97031bd3"
+          },
+          {
+            "path": "pcc/frontends/cpp/constructors.py",
+            "sha256": "f3699ac88877dfa5d2868e9a946e84afac03d574eb9bc6fb2a851515694dead9"
+          },
+          {
+            "path": "pcc/frontends/cpp/destructors.py",
+            "sha256": "b92f2fa754d694d20252c1b2cb94f477e84a83d14ea0382303c68628f348b4bf"
+          },
+          {
+            "path": "pcc/frontends/cpp/exception_specifications.py",
+            "sha256": "dc63ff05481a30bd7189f140feeccd58f52db2cd24dfc442178f21574b58c2fb"
+          },
+          {
+            "path": "pcc/frontends/cpp/member_placement_patterns.py",
+            "sha256": "63febe1a5b8a61a28f932b478331f1f961e578e4032fb8d82f8ee3537928ea03"
+          },
+          {
+            "path": "pcc/frontends/cpp/parser.py",
+            "sha256": "0e0b775fd0885fe974043b08736b2d9ca2c12e62102d0e5b1cd9519a151b8e11"
+          }
+        ]
+      },
+      "tests": [
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_user_provided_c1_contract_is_not_implicit",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_matching_c1_definitions_keep_contract_and_independent_body_proof",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_unowned_effects_and_invalid_declarations_fail_closed",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17[declared-composite-c1-across-tus]",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_reserved_placement_can_call_declared_nonthrowing_c1_across_tus"
+      ],
+      "diagnostics": [],
+      "evidence": [
+        "cpp.constructors.exception-specifications.linux.unit",
+        "cpp.constructors.exception-specifications.linux.program",
+        "cpp.constructors.exception-specifications.linux.differential"
       ]
     }
   ],
@@ -10621,6 +10686,131 @@
         "kind": "raw_process_streams"
       },
       "verification_note": "input_sha256 is the SHA256 of the canonical sorted JSON map of original TU filenames to exact source SHA256. Reference includes its labeled external result observer; identical original program bytes."
+    },
+    {
+      "source_revision": "sha256:4a0c3644c5d01df1804ee76160b3a23224d0917bbfd6c9b205c9cefbf9230ac4",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructor_exception_specifications.py",
+        "sha256": "0ab98abff766685cfbd50a51a568238e442d06e3930d89d9d557e49cddee3992"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "id": "cpp.constructors.exception-specifications.linux.unit",
+      "test_id": "tests/cpp/test_cpp_constructor_exception_specifications.py::test_user_provided_c1_contract_is_not_implicit",
+      "kind": "unit",
+      "purpose": "unit",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_user_provided_c1_contract_is_not_implicit",
+        "-m",
+        "not integration"
+      ],
+      "actual": {
+        "exit_code": 0,
+        "stdout_sha256": "2636c415f629f0b89d7dd00207c432147ea16c2c170e98bd68e35c48ceb376bb",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "verification_note": "Unit passed within the complete 6060-node ordinary C++ run (49 subtests); stream hashes refer to that aggregate run; command is reproduction."
+    },
+    {
+      "source_revision": "sha256:4a0c3644c5d01df1804ee76160b3a23224d0917bbfd6c9b205c9cefbf9230ac4",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructor_exception_specifications.py",
+        "sha256": "0ab98abff766685cfbd50a51a568238e442d06e3930d89d9d557e49cddee3992"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17[declared-composite-c1-across-tus]",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17[declared-composite-c1-across-tus]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "e18d8c089eae355383c63b7ba87cbb2571a1d0b3893a71498a14a1483b188a3b",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.constructors.exception-specifications.linux.program",
+      "kind": "program"
+    },
+    {
+      "source_revision": "sha256:4a0c3644c5d01df1804ee76160b3a23224d0917bbfd6c9b205c9cefbf9230ac4",
+      "source": {
+        "path": "tests/cpp/test_cpp_constructor_exception_specifications.py",
+        "sha256": "0ab98abff766685cfbd50a51a568238e442d06e3930d89d9d557e49cddee3992"
+      },
+      "mode": "pcc0",
+      "platform": "linux-x86_64",
+      "backend": "self",
+      "gc": "not_applicable",
+      "command_kind": "reproduction",
+      "outcome": "passed",
+      "test_id": "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17[declared-composite-c1-across-tus]",
+      "purpose": "runtime",
+      "command": [
+        "uv",
+        "run",
+        "python",
+        "-m",
+        "pytest",
+        "-q",
+        "-n0",
+        "--override-ini=addopts=",
+        "tests/cpp/test_cpp_constructor_exception_specifications.py::test_c1_contract_programs_match_cpp17[declared-composite-c1-across-tus]",
+        "-m",
+        "integration"
+      ],
+      "input_sha256": "e18d8c089eae355383c63b7ba87cbb2571a1d0b3893a71498a14a1483b188a3b",
+      "actual": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "id": "cpp.constructors.exception-specifications.linux.differential",
+      "kind": "differential",
+      "reference": {
+        "name": "G++",
+        "version": "14.2.0",
+        "platform": "linux-x86_64",
+        "role": "external_reference",
+        "kind": "native_execution",
+        "input_sha256": "e18d8c089eae355383c63b7ba87cbb2571a1d0b3893a71498a14a1483b188a3b"
+      },
+      "expected": {
+        "exit_code": 42,
+        "stdout_sha256": "e8a4b2ee7ede79a3afb332b5b6cc3d952a65fd8cffb897f5d18016577c33d7cc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "comparison": {
+        "kind": "raw_process_streams"
+      },
+      "verification_note": "input_sha256 is the SHA256 of the canonical sorted JSON TU-name to original source SHA256 map (no whitespace). Identical original program TUs; reference includes its labeled result observer."
     }
   ]
 }

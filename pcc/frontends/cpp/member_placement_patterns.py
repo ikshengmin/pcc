@@ -85,7 +85,7 @@ def check_concrete_initializer(parser, dtype, arguments, kind, coord):
     """
     from pcc.frontends.cpp.types import unqualified, ReferenceType
     from pcc.frontends.cpp.classes import is_class_type
-    from pcc.frontends.cpp.constructors import is_copy_constructor
+    from pcc.frontends.cpp.constructors import is_copy_constructor, construction_cannot_escape
     from pcc.frontends.cpp.inheritance import is_proper_base
     from pcc.frontends.cpp.sema import resolve_overload
     from pcc.frontends.cpp.default_constructors import require_usable
@@ -110,7 +110,7 @@ def check_concrete_initializer(parser, dtype, arguments, kind, coord):
             or any(is_class_type(arg.dtype) for arg in arguments)):
         raise CppDiagnostic('cpp.unsupported.placement-definition-initialization',
                             'definition-time defaults or class/reference conversions are not qualified', coord)
-    if not getattr(selected, 'closed_construction_body', False):
+    if not construction_cannot_escape(selected):
         raise CppDiagnostic('cpp.unsupported.placement-constructor-effects',
                             'definition-time constructor effects are not yet proved', coord)
 

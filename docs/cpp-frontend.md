@@ -564,3 +564,29 @@ unproved potentially-throwing D1. Tests distinguish a genuine
 expression evaluation, constructor/deallocation exception specifications,
 implicit virtual D1 synthesis, throw/catch, unwinding and the runtime
 termination path are not qualified by this change.
+
+### User-provided constructor exception specifications
+
+The D1 and C1 declaration owners now share the special-member exception
+specifier grammar (N4659 [except.spec]/1–3). A user-provided C1 without a
+specifier is potentially throwing, regardless of its bound body's proof.
+The supported `noexcept`, integral constant-expression `noexcept(expr)`
+and `throw()` forms are retained on inline, out-of-class, and instantiated
+class-template constructors. The definition must match the declared effective
+specification; the selected overload carries its own contract.
+
+The existing construction-effect owner may accept an exact generated C1
+invocation from its non-throwing declaration (including a definition in a
+separate TU). It still examines receiver, argument and expanded-default
+expressions; unknown calls there are not protected by the C1 declaration.
+Ordinary bodies and concretely replayed template bodies share the same check.
+A new non-throwing C1 definition whose body can escape through an unowned
+call is explicitly unsupported until runtime termination and unwinding are
+implemented. This is not a new exception propagation ABI, nor a proof that
+an arbitrary potentially-throwing declaration is non-throwing.
+
+Explicitly defaulted C1 specifications, more general dependent specifications,
+ordinary noexcept function definitions and calls, throw/catch, partially
+constructed object cleanup on an exceptional edge and actual termination
+remain separate obligations. The unchanged TinyXML2 constructor still has
+an unknown, potentially allocating call after its two class-member C1s.
