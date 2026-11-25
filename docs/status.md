@@ -303,9 +303,16 @@ in the relevant section or issue and removes the entry.
    the existing 2,097,152-byte limit; missing link manifest is downstream.
    No limit changed. These results predate Claude’s subsequent codegen
    edits; no pcc1 or latest-master native qualification is claimed.
-   Next: resolve indexed receipt preflight on the exact two-root input
-   without widening the bound, then rerun actual lifecycle witnesses.
-   Continue (b) with obsolete-only tests removed and live coverage kept.
+   At `9fbd2648`, a fresh source-matched archive after the codegen lease
+   slice confirms the two-root immediate executable really prints
+   TWO_ROOT_CLEANUP_EXCEPTION_OK and exits 0. A separate direct native
+   cyclic witness also matches CPython. The full indexed gate still fails:
+   module 2 conservative prefix is now 2,148,240 bytes against 2 MiB.
+   Do not promote either direct result to indexed-gate PASS.
+   Next: retain the indexed gate failure as a separate backend issue;
+   advance (b) on independent obsolete test migrations while the collector
+   codegen slice remains claimed. The two-root evidence needs a generic
+   bounded representation change, not another replay or relaxed guard.
    #20 on the local Mac at `25a309945`: the named CI-contract files and the
    shared frame tests pass. `tests/test_ci_native_object_regressions.py`'s
    host-only model controls failed only on macOS, from the gate's
@@ -320,7 +327,7 @@ in the relevant section or issue and removes the entry.
    native callback evidence as recorded in Checkpoint above.
 
    Claims:
-   - #20 indexed two-root evidence preflight: Codex, Linux, 2026-11-25T05:07Z, area checkpoint
+   - none
 2. **One collector: finish.** Maintainer decisions of 2026-11-24: pcc has
    one collector, the features of the former collectors 1-4 enter it, and
    the redundant collectors and the selector go, with no option left. State
