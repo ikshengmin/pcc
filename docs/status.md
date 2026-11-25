@@ -1331,7 +1331,7 @@ in the relevant section or issue and removes the entry.
    4 nodes (`fallback_instruction_count` is 0; the test expects 1).
 
    Claims:
-   - none
+   - open item (1) of the generator re-entrance result: the failing generator and virtual-thread IR tests (terminal_clear_activation, method_owned_result, result_lexical_root, vthread_lowering_ownership, frame_take_group's promoted owner): Claude, macOS, 2026-11-25T20:40Z, area frontend-python (those test files and tests/python/root_slot_contract.py; code generation only if a test shows a real missing root)
 4. **Source-language frontends**, in parallel with item 2 (different files;
    only heavy gates and shared runtime publication are serialized). Targets
    and each project's current first blocker:
